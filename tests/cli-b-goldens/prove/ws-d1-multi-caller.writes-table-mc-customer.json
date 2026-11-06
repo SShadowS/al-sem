@@ -65,6 +65,13 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "table": {
+        "app": "D1 Multi Caller",
+        "appId": "11111111-0000-0000-0000-00000000d01a",
+        "id": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "name": "MC Customer",
+        "number": 50101
       }
     },
     "routine": {
@@ -76,9 +83,12 @@
       },
       "display": "CallerA",
       "objectDisplay": "Codeunit D1 Multi Caller",
+      "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
+      "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
+      "signature": "()",
       "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "2.4.0"
+  "schemaVersion": "2.8.0"
 }

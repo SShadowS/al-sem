@@ -79,6 +79,19 @@ pub enum SliceQuestion {
     Ui,
 }
 
+impl SliceQuestion {
+    /// The question's sites, as an answer names them (`error sites`).
+    #[must_use]
+    pub fn site_noun(&self) -> &'static str {
+        match self {
+            SliceQuestion::Errors => "error sites",
+            SliceQuestion::Writes { .. } => "write sites",
+            SliceQuestion::Commits => "COMMIT sites",
+            SliceQuestion::Ui => "UI sites",
+        }
+    }
+}
+
 /// `--site <file:line>`: a source file (a path suffix, matched at a `/`
 /// boundary, ASCII case-insensitive) and a 1-based line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1054,6 +1067,53 @@ pub(crate) fn compute_slice(
 /// every one with a route).
 pub const HUMAN_SITES: usize = 5;
 
+/// How many other reachable sites (outside the filter) the human answer
+/// names; the rest are counted (§4.3).
+pub const OTHER_SITES: usize = 5;
+
+/// A site's operation as the other-sites line names it: the op as written,
+/// `(implicit error)` after an implicit one, else the effect type.
+fn site_op(s: &SliceSite) -> String {
+    match (&s.op_name, s.effect_type) {
+        (Some(o), "ERROR_IMPLICIT") => format!("{o} (implicit error)"),
+        (Some(o), _) => o.clone(),
+        (None, t) => t.to_string(),
+    }
+}
+
+/// The other reachable sites (outside the filter) as JSON
+/// (`payload.result.otherSites[]`, §4.3).
+#[must_use]
+pub fn other_sites_value(slice: &SliceOut) -> serde_json::Value {
+    serde_json::Value::Array(
+        slice
+            .sites
+            .iter()
+            .filter(|s| !matches!(s.outcome, Outcome::Match { .. }))
+            .map(|s| {
+                let mut m = serde_json::Map::new();
+                m.insert("type".into(), s.effect_type.into());
+                if let Some(o) = &s.op_name {
+                    m.insert("op".into(), o.clone().into());
+                }
+                if let Some(t) = &s.table {
+                    m.insert("table".into(), t.clone().into());
+                }
+                m.insert("file".into(), s.file.clone().into());
+                m.insert(
+                    "line".into(),
+                    s.line.map(crate::engine::line_base::shown).into(),
+                );
+                m.insert("routine".into(), s.owner.clone().into());
+                if let Outcome::Undecided(r) = s.outcome {
+                    m.insert("undecided".into(), r.into());
+                }
+                serde_json::Value::Object(m)
+            })
+            .collect(),
+    )
+}
+
 fn location(file: Option<&str>, line: Option<u32>) -> String {
     match (file, line) {
         (Some(f), Some(l)) => format!("{f}:{}", crate::engine::line_base::shown(l)),
@@ -1312,18 +1372,48 @@ pub fn human_lines(
             matching.len() - shown
         ));
     }
-    // The other reachable sites, and what blocks a `no`.
-    let others = slice.sites.len() - matching.len();
+    // Output validation V2 (§4.3, F18): the other reachable sites, outside
+    // the filter, named (up to `OTHER_SITES` with op kind and place, the rest
+    // counted), and the input that shows their routes.
+    let others: Vec<&SliceSite> = slice
+        .sites
+        .iter()
+        .filter(|s| !matches!(s.outcome, Outcome::Match { .. }))
+        .collect();
     let undecided = slice.undecided();
     let blocked: usize = undecided.iter().map(|(_, v)| v.len()).sum();
-    if others > 0 {
-        let mut s = format!("  other sites: {} reachable", others);
+    if !others.is_empty() {
+        let named: Vec<String> = others
+            .iter()
+            .take(OTHER_SITES)
+            .map(|s| format!("{} at {}", site_op(s), location(s.file.as_deref(), s.line)))
+            .collect();
+        let mut s = format!(
+            "  other reachable {} (outside the filter): {} — {}",
+            slice.request.question.site_noun(),
+            others.len(),
+            named.join("; ")
+        );
+        if others.len() > OTHER_SITES {
+            s.push_str(&format!("; … +{}", others.len() - OTHER_SITES));
+        }
         if blocked > 0 {
             s.push_str(&format!(
-                ", {blocked} of them undecided (they block a \"no\")"
+                " ({blocked} of them undecided: they block a \"no\")"
             ));
         }
         lines.push(s);
+        lines.push(format!(
+            "  to see their routes: {}",
+            match (
+                &slice.request.op,
+                others.iter().find_map(|s| s.op_name.as_deref())
+            ) {
+                (Some(_), Some(op)) => format!("op: \"{op}\", or no op"),
+                (Some(_), None) => "no op".to_string(),
+                _ => "the same question without the filter".to_string(),
+            }
+        ));
     }
     if slice.literal_dead > 0 {
         lines.push(format!(

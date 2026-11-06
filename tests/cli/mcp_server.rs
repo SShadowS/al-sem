@@ -467,7 +467,7 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(env["summary"]["routinesListed"], 1, "{env}");
         assert_eq!(
             env["summary"]["routines"][0]["routine"],
-            "Codeunit Explain Post::PostOrder"
+            "Codeunit \"Explain Post\"::PostOrder"
         );
 
         // A stdout over the inline cap: the same bytes, as a file.
@@ -965,9 +965,22 @@ fn status_checks_the_disk_against_the_published_revision() {
         e["check"]["checkedRevision"]["inputsStamp"], env["revision"]["inputsStamp"],
         "{st}"
     );
+    // Output validation V2 (§4.5, F22): the headline says how hard it
+    // checked. Discrimination (2026-11-06): `strength` set to "hashed" for
+    // every check fails the cached headline below; restored, it passes.
+    assert_eq!(e["check"]["strength"], "size-and-time", "{st}");
     assert!(
         st["headline"].as_str().unwrap().starts_with(&format!(
-            "cross-app engine for {w}: FRESH: no input changed since generation 1 (checked just now: 4 files, "
+            "cross-app engine for {w}: FRESH: no change seen since generation 1 (size and modification time, just now; verify: true hashes every input)."
+        )),
+        "{st}"
+    );
+    let st = s.call(30, "alsem_status", json!({"verify": true}))["structuredContent"].clone();
+    let hashed = st["engines"][0]["check"]["filesHashed"].as_u64().unwrap();
+    assert!(hashed > 0, "precondition: the verify check hashed: {st}");
+    assert!(
+        st["headline"].as_str().unwrap().starts_with(&format!(
+            "cross-app engine for {w}: FRESH: no input changed since generation 1 (every input hashed just now: {hashed} inputs)."
         )),
         "{st}"
     );

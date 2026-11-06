@@ -3,6 +3,7 @@
   "diagnostics": [
     {
       "kind": "routine-not-found",
+      "nearest": [],
       "selector": "NoSuchRoutine"
     }
   ],

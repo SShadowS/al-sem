@@ -1,9 +1,9 @@
-test scope: workspace 0 [Test] procedures; 1 test app — TU Production Tests (<root>/Test, auto-discovered; 2 tests loaded; production app loaded as local source, tier localApproximate); skipped: TU Production Tests FR (no source)
+run first (app "TU Production Tests"): codeunits 50850 — a superset: whole codeunits, for the 1 selected test procedure on a local path; selection complete
+test scope: workspace 0 [Test] procedures; 1 test app — TU Production Tests (<root>/Test, auto-discovered; 2 tests loaded; production app loaded as local source, tier local (projection: approximate)); skipped: TU Production Tests FR (no source)
 production bytes: the same in the production and test universes
-changed: 1 routine (Codeunit TU Core::Audited — reached)
-run first — local path, 1 test in 1 codeunit:
-  Codeunit 50850 TU Core Tests: 1 test, 4 hops (first: PostUpdatesQty; via Codeunit TU Core::Post → Table TU Item::OnAfterModifyEvent → Codeunit TU Subscribers::OnItemModified → Codeunit TU Core::Audited)
-selection complete: yes
+changed: 1 routine (Codeunit "TU Core"::Audited — tests with a modeled path)
+tests on a local path: 1 test in 1 codeunit (code paths first, then UI navigation; then by tier and hops):
+  Codeunit 50850 TU Core Tests: 1 test; first [local] 4 hops (first: PostUpdatesQty; via Codeunit "TU Core"::Post → Table "TU Item"::OnAfterModifyEvent → Codeunit "TU Subscribers"::OnItemModified → Codeunit "TU Core"::Audited)
+selection complete
 next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run "AL: Download symbols"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve
-run first: codeunit filter 50850  (the 1 test on a local path)
 this is static reachability, not coverage: a reached test may not exercise the changed lines

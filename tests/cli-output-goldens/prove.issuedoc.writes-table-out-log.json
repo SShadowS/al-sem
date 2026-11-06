@@ -75,6 +75,13 @@
           "notResolved": 1,
           "openWorld": 1
         }
+      },
+      "table": {
+        "app": "Out Ws",
+        "appId": "a0a00001-0000-4000-8000-0000000000a1",
+        "id": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+        "name": "Out Log",
+        "number": 50101
       }
     },
     "routine": {
@@ -86,9 +93,12 @@
       },
       "display": "IssueDoc",
       "objectDisplay": "Codeunit Out Issue Document",
+      "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+      "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+      "signature": "(var Record \"Out Doc\")",
       "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.4.0"
+  "schemaVersion": "2.8.0"
 }

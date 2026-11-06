@@ -1,8 +1,11 @@
 --- touches field 2 "Amount" of FT Item (08080808-0000-4000-8000-000000000081/table/50800) ---
   field: Decimal, Normal
-  searched: 11 workspace routine bodies, 0 dependency routine bodies (scope: every routine body); not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)
+  searched: 11 workspace routine bodies, 0 dependency routine bodies (scope: every routine body); not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded); dynamic field numbers (1 site not matched)
   consumers: 23 sites in 5 routines of 3 objects — uses: read 4, write 5 (1 also read), validate 1, filter 3, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 2; records: temporary 1, persistent 3, caller-dependent 17, unknown 2; candidates: 3 (table-not-resolved 2, recordref-table-unknown 1)
+    confirmed named references: 21 sites; numeric candidates (RecordRef.Field by number): 2 sites — a numeric reference does not break on a rename (it may on a renumbering)
   note: 1 site uses RecordRef.Field with a number that is not a literal (any field; not matched)
+  filters: 3 sites
+  not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed as declared keys
   declared keys: key 2 (Amount, Unit Price)
   Codeunit FT Consumers: 19 sites in 3 routines (read 2, write 4, validate 1, filter 3, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 2)
     ByNumberUnknown ws:src/FTFields.al:97 by-number [unknown, Field, candidate: recordref-table-unknown]
@@ -15,6 +18,6 @@
   Page FT Card: 1 site in 1 routine (read 1)
     OnAfterGetRecord ws:src/FTFields.al:169 read [persistent, implicit-access]
   Table FT Item: 3 sites in 1 routine (read 1, write 1, rule 1)
-    OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access]
-    OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access]
-    OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField]
+    Amount::OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access]
+    Amount::OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access]
+    Amount::OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField]

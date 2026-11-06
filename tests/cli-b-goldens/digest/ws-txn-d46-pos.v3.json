@@ -175,6 +175,9 @@
           },
           "display": "OnInstallAppPerCompany",
           "objectDisplay": "Codeunit Install Handler",
+          "qualifiedDisplay": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
+          "selector": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d"
         },
         "scopedGuaranteesFolded": 5,
@@ -368,6 +371,9 @@
           },
           "display": "DoSetup",
           "objectDisplay": "Codeunit Install Handler",
+          "qualifiedDisplay": "Codeunit \"Install Handler\"::DoSetup",
+          "selector": "Codeunit \"Install Handler\"::DoSetup",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
         },
         "scopedGuaranteesFolded": 5,
@@ -561,6 +567,9 @@
           },
           "display": "DoUpgrade",
           "objectDisplay": "Codeunit Upgrade Handler",
+          "qualifiedDisplay": "Codeunit \"Upgrade Handler\"::DoUpgrade",
+          "selector": "Codeunit \"Upgrade Handler\"::DoUpgrade",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e"
         },
         "scopedGuaranteesFolded": 5,
@@ -772,6 +781,9 @@
           },
           "display": "OnUpgradePerCompany",
           "objectDisplay": "Codeunit Upgrade Handler",
+          "qualifiedDisplay": "Codeunit \"Upgrade Handler\"::OnUpgradePerCompany",
+          "selector": "Codeunit \"Upgrade Handler\"::OnUpgradePerCompany",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5"
         },
         "scopedGuaranteesFolded": 5,
@@ -831,23 +843,31 @@
     "pathCap": 1,
     "routines": {
       "r:53e646d7d9ee": {
-        "display": "Codeunit Install Handler::OnInstallAppPerCompany",
+        "display": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
         "file": "ws:src/InstallCU.al",
+        "selector": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d"
       },
       "r:612095b110cb": {
-        "display": "Codeunit Upgrade Handler::OnUpgradePerCompany",
+        "display": "Codeunit \"Upgrade Handler\"::OnUpgradePerCompany",
         "file": "ws:src/UpgradeCU.al",
+        "selector": "Codeunit \"Upgrade Handler\"::OnUpgradePerCompany",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5"
       },
       "r:8d477f67a4a4": {
-        "display": "Codeunit Install Handler::DoSetup",
+        "display": "Codeunit \"Install Handler\"::DoSetup",
         "file": "ws:src/InstallCU.al",
+        "selector": "Codeunit \"Install Handler\"::DoSetup",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
       },
       "r:949a0d11aa24": {
-        "display": "Codeunit Upgrade Handler::DoUpgrade",
+        "display": "Codeunit \"Upgrade Handler\"::DoUpgrade",
         "file": "ws:src/UpgradeCU.al",
+        "selector": "Codeunit \"Upgrade Handler\"::DoUpgrade",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e"
       }
     },
@@ -859,5 +879,5 @@
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

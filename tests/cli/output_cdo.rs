@@ -539,13 +539,19 @@ fn cdo_every_spilled_answer_carries_a_small_summary() {
 /// Raised 2026-11-06 (F1, record operations raise their table's platform
 /// events) from 1,250,000 / 720,000: IssueReminder's cone now holds the
 /// subscribers of the table events it raises, its digest measured 1,293,230
-/// bytes whole and 744,546 core (+3.5%). The owner's ratchet: this raise
-/// needs his confirmation.
+/// bytes whole and 744,546 core (+3.5%). The owner's ratchet: confirmed by
+/// the owner on 2026-11-06.
+///
+/// Raised again 2026-11-06 (output validation V3, digest 3.1.0: routine rows
+/// gain `signature`, `member`, `selector`, `handle`, and every display is the
+/// one routine display) from 1,310,000 / 760,000: IssueReminder measured
+/// 1,347,484 bytes whole and 798,800 core (+4.2% / +7.3%). The owner's
+/// ratchet: accepted by the owner on 2026-11-06 as the new budget.
 #[test]
 fn cdo_digest_json_fits_its_size_budgets() {
     let Some(a) = cdo_answers() else { return };
-    const WHOLE: usize = 1_310_000;
-    const CORE: usize = 760_000;
+    const WHOLE: usize = 1_380_000;
+    const CORE: usize = 820_000;
     fn strip(v: &mut Value) {
         match v {
             Value::Object(m) => {
@@ -559,7 +565,7 @@ fn cdo_digest_json_fits_its_size_budgets() {
     for label in ["IssueReminder", "RunReportID"] {
         let doc = &a.answers[&format!("{label} digest json")].stdout;
         let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
-        assert_eq!(v["schemaVersion"], "3.0.0", "{label}");
+        assert_eq!(v["schemaVersion"], "3.1.0", "{label}");
         strip(&mut v);
         let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
         eprintln!(
@@ -703,10 +709,17 @@ const RENDERED: &[(&str, &str)] = &[
 /// human IR 113 / 30,687, RR 123 / 35,392). A number may go down freely; up
 /// only by editing it here with the reason. The plan's targets hold under
 /// every one: explain ≤ 150 lines, query effects ≤ 100, touches ≤ 20.
+///
+/// Raised 2026-11-06 by output validation V3 (spec 2026-11-06 §2.1: every
+/// occurrence of an overloaded name prints its full parameter types, names
+/// are AL-quoted, dependency objects carry their number): measured explain
+/// IR 136 lines / 39,169 B, RR 145 / 45,058; digest human IR 120 / 36,991,
+/// RR 126 / 42,077 (of RR's explain growth, 5,295 B are parameter lists,
+/// ~700 B dependency numbers, ~670 B quotes). Lines did not grow.
 fn ratchet(label: &str, call: &str) -> Budget {
     let (lines, bytes) = match (label, call) {
-        ("IssueReminder", "explain human") => (140, 35_500),
-        ("RunReportID", "explain human") => (150, 39_936),
+        ("IssueReminder", "explain human") => (140, 43_000),
+        ("RunReportID", "explain human") => (150, 49_500),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
         ("RunReportID", "query effects human") => (80, 27_000),
@@ -715,7 +728,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // touches now lists its 2 code callers through Document Sending
         // Profile with folded witnesses, and the configured count (16 lines,
         // 3,683 B on 2026-11-06; before 11 / 2.2 KB).
-        ("RunReportID", "query touches human") => (20, 4_100),
+        // Output validation V2: the tier words (`[via-dependency]`,
+        // `[via-configuration]` and why a configured caller is a candidate)
+        // add ~100 B (4,201 B on 2026-11-06).
+        ("RunReportID", "query touches human") => (20, 4_400),
         (_, "query touches human") => (20, 3_000),
         (_, "prove may-commit human") => (20, 2_000),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
@@ -726,8 +742,8 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // (17 lines, 7,366 B).
         ("RunReportID", "prove writes-table data-exch human") => (20, 8_200),
         (_, "prove writes-table data-exch human") => (30, 3_000),
-        ("IssueReminder", "digest human") => (125, 34_000),
-        ("RunReportID", "digest human") => (135, 39_000),
+        ("IssueReminder", "digest human") => (125, 40_700),
+        ("RunReportID", "digest human") => (135, 46_300),
         (_, "digest human") => (30, 2_500),
         _ => (150, 40 * 1024),
     };
@@ -820,6 +836,17 @@ fn cdo_human_outputs_are_clean_and_within_their_ratchets() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Output validation V3 (§2.1, §12.1): every CDO workspace routine's
+/// `selector` and display, and every `selector` in the CDO rendering
+/// goldens, resolve to their own stable id (`cli_selector_round_trip`).
+#[test]
+fn cdo_selectors_round_trip() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    crate::cli_selector_round_trip::cdo_round_trip(&ws);
+}
+
 /// The inline cap's margin (MCP output plan item T): IssueReminder's and
 /// RunReportID's default explain card must arrive inline, under the 40 KiB
 /// cap with at least 1 KiB to spare, and under the client's character
@@ -827,6 +854,11 @@ fn cdo_human_outputs_are_clean_and_within_their_ratchets() {
 /// 2026-11-05, a 3,289-byte margin; IssueReminder 32,433, 8,527). A card
 /// that grows into the margin fails here: shorten the card, do not raise
 /// the cap without the owner.
+///
+/// The cap is TEMPORARILY 48 KiB (owner decision 2026-11-06): output
+/// validation V3's one routine display grew RunReportID's card to 45,058
+/// bytes (IssueReminder 39,169). It goes back to 40 KiB in V5 (spec
+/// 2026-11-06 §7.5/§7.7, path dedup).
 #[test]
 fn cdo_explain_cards_stay_inline_with_a_margin() {
     let Some(a) = cdo_answers() else { return };
@@ -1101,7 +1133,8 @@ fn cdo_write_lines_have_a_path_or_a_reason() {
         .copied()
         .collect::<Vec<_>>()
         .join("\n");
-    if !block.contains("path (re-enters workspace code beyond Codeunit Reminder-Issue::OnRun")
+    if !block
+        .contains("path (re-enters workspace code beyond Codeunit \"Reminder-Issue\" (393)::OnRun")
         || !block.contains("→ QueueMailCombined")
     {
         failures.push(format!(

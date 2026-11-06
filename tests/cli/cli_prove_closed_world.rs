@@ -167,6 +167,36 @@ fn closed_world_waives_only_fully_loaded_interface_sites() {
         "precondition: the open world blocks on the interface: {open}"
     );
     assert!(open.get("assumptions").is_none(), "{open}");
+    // Output validation V2 (§4.4): the open-world `unknown` names the input
+    // that removes its blockers. Interface open world is the coverage's only
+    // reason here, so `closedWorld` removes the coverage blocker too, and the
+    // line says it removes every blocker (the closed-world answer below is a
+    // `no`). Discrimination (2026-11-06): see the V2 fix commit.
+    assert!(
+        kinds(&open).contains(&"coverage-incomplete".to_string()),
+        "precondition: the coverage blocks too: {open}"
+    );
+    let id = id_of("UseLogger");
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "prove",
+            "ws",
+            id.as_str(),
+            "writes-table:G24 T",
+            "--format",
+            "human",
+        ])
+        .current_dir(t.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let human = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        human.contains("re-analysis under an assumption: closedWorld: true")
+            && human.contains("removes every blocker of this answer (")
+            && !human.contains("stay: coverage incomplete"),
+        "{human}"
+    );
     let closed = prove("UseLogger", "writes-table:G24 T", true);
     assert_eq!(closed["answer"], "no", "closed world: {closed}");
     assert_eq!(closed["assumptions"], serde_json::json!(["closed-world"]));

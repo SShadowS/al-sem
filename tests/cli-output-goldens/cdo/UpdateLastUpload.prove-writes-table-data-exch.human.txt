@@ -1,6 +1,6 @@
---- Codeunit CDO Telemetry::UpdateLastUpload ---
-  question: writes-table:Data Exch. — existing effects (what the routine and its callees already do)
+--- Codeunit "CDO Telemetry"::UpdateLastUpload ---
+  question: writes-table:Data Exch. (table 1220, Base Application) — existing effects (what the routine and its callees already do)
   answer:   no
-  coverage: complete
+  analysis complete
   assumptions: loaded-subscribers
   limits: none

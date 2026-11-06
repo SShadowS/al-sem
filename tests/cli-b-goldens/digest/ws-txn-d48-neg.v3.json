@@ -71,6 +71,9 @@
           },
           "display": "SendOnce",
           "objectDisplay": "Codeunit D48 Sender Neg",
+          "qualifiedDisplay": "Codeunit \"D48 Sender Neg\"::SendOnce",
+          "selector": "Codeunit \"D48 Sender Neg\"::SendOnce",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d481:Codeunit:50000#87be6e12ef6d9ff4dbfc63ca7c99925ef35263973d450e98dcb316037967511b"
         },
         "scopedGuaranteesFolded": 0,
@@ -130,8 +133,10 @@
     "pathCap": 1,
     "routines": {
       "r:863a2e85c8d4": {
-        "display": "Codeunit D48 Sender Neg::SendOnce",
+        "display": "Codeunit \"D48 Sender Neg\"::SendOnce",
         "file": "ws:src/D48Neg.Codeunit.al",
+        "selector": "Codeunit \"D48 Sender Neg\"::SendOnce",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d481:Codeunit:50000#87be6e12ef6d9ff4dbfc63ca7c99925ef35263973d450e98dcb316037967511b"
       }
     },
@@ -143,5 +148,5 @@
     },
     "workspaceFingerprint": "17fbcaab4eb174ec9f7c2e3d53f24d2fc8c3bbf94cf005e47d7c9d3069575c4a"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

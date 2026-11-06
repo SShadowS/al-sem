@@ -355,6 +355,7 @@ mod tests {
             var_assignments: vec![],
             condition_references: vec![],
             enclosing_member: None,
+            member_detail: None,
             originating_object: None,
             enclosing_member_range: None,
             entry_temp_guard_receiver: None,

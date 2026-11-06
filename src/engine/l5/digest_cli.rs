@@ -27,7 +27,7 @@ use crate::engine::gate::format_json::{
 };
 use crate::engine::gate::run::analyzer_diagnostics_of_view;
 use crate::engine::l4::effect_lattice::TempStateKind;
-use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified, temp_state_str};
+use crate::engine::l4::effect_query_cli::{OwnerIndex, temp_state_str};
 use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l5::conditionality::EffectConditionality;
@@ -216,6 +216,9 @@ pub enum ChangedRootsDiagnostic {
     },
     SelectorUnmatched {
         selector: String,
+        /// V3 §2.4: the nearest workspace names, or where the name is found
+        /// only in dependency code.
+        hints: crate::engine::l5::selector_index::SelectorHints,
     },
     SelectorAmbiguous {
         selector: String,
@@ -225,6 +228,11 @@ pub enum ChangedRootsDiagnostic {
         /// its stable id; JSON `candidateRoutines`. Empty when the model has
         /// no row for a candidate.
         routines: Vec<String>,
+        /// V3 §2.4: per candidate, its display with its complete parameter
+        /// list, its declaration and the selector that picks it alone (JSON
+        /// `candidateSelectors`). Empty when the model has no row for a
+        /// candidate.
+        listed: Vec<crate::engine::l5::selector_index::AmbiguousCandidate>,
     },
     DiffFileUnmatched {
         file: String,
@@ -694,6 +702,55 @@ pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
     }
 }
 
+/// An entry's routine as a header and a summary row name it: the one
+/// routine display (V3 §2.1, with the member's caption), else (the model
+/// has no row for it) its owner-qualified name.
+fn entry_display(
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    e: &DigestEntryFull,
+) -> String {
+    cx.names
+        .display_with(&e.routine_id, true)
+        .unwrap_or_else(|| {
+            crate::engine::l4::effect_query_cli::owner_qualified(
+                &e.object_display,
+                &e.routine_display,
+            )
+        })
+}
+
+/// The workspace app's member triggers as a member-form selector matches
+/// them (V3 §2.1, [`crate::engine::l5::selector_index::resolve_member_selector`]),
+/// owners from `owners` (the model's, #78).
+pub(crate) fn member_rows<'m>(
+    resolved: &'m Model,
+    owners: &'m OwnerIndex<'_>,
+) -> impl Iterator<Item = crate::engine::l5::selector_index::MemberRow<'m>> + 'm {
+    resolved
+        .workspace
+        .routines
+        .iter()
+        .filter(move |r| resolved.routine_role(r) == crate::program::model::role::Role::Primary)
+        .filter_map(move |r| {
+            let member = r.enclosing_member.as_deref()?;
+            Some(crate::engine::l5::selector_index::MemberRow {
+                id: &r.stable_routine_id,
+                owner_display: owners.object_display(&r.stable_routine_id),
+                member,
+                member_kind: r.member_detail.as_ref().map_or_else(
+                    || {
+                        crate::engine::l5::routine_rollup::infer_member_kind(
+                            &r.object_type,
+                            &r.name,
+                        )
+                    },
+                    |d| d.kind,
+                ),
+                routine: &r.name,
+            })
+        })
+}
+
 /// The model's primary app guid, the routine-selector scope of
 /// [`resolve_changed_roots`].
 pub fn primary_guid_of(resolved: &Model) -> Option<&str> {
@@ -738,6 +795,12 @@ pub fn resolve_changed_roots(
         }
     }
 
+    // V3 §2.4: the one display's names, for a failed selector's hints and
+    // candidates; built on first need.
+    let names = std::cell::LazyCell::new(|| {
+        crate::engine::l5::routine_rollup::RoutineNames::new(resolved, &[])
+    });
+
     // Output step 1b: stable id -> model row, for a selector's parameter list
     // and an ambiguity's candidate labels; built on first need.
     let rows = std::cell::LazyCell::new(|| {
@@ -762,9 +825,26 @@ pub fn resolve_changed_roots(
                 })
             });
         }
+        // V3 §2.1: a member form (`Object."Field"::Trigger`,
+        // `Object.action(Name)::OnAction`), the display of a member trigger,
+        // when nothing above matched (so no selector that resolved before
+        // resolves differently).
+        if matches.is_empty()
+            && let Some(ids) = crate::engine::l5::selector_index::resolve_member_selector(
+                base,
+                member_rows(resolved, owners),
+            )
+        {
+            matches = ids;
+        }
         if matches.is_empty() {
             diagnostics.push(ChangedRootsDiagnostic::SelectorUnmatched {
                 selector: selector.clone(),
+                hints: crate::engine::l5::selector_index::selector_hints(
+                    &names,
+                    |id| owners.object_display(id),
+                    selector,
+                ),
             });
         } else if matches.len() >= 2 {
             // candidates = `<owner>::<display>` (display falls back to the id)
@@ -787,10 +867,21 @@ pub fn resolve_changed_roots(
                         .map(|r| crate::engine::l5::selector_index::candidate_label(label, r))
                 })
                 .collect();
+            let listed: Vec<crate::engine::l5::selector_index::AmbiguousCandidate> = matches
+                .iter()
+                .filter_map(|id| {
+                    crate::engine::l5::selector_index::AmbiguousCandidate::of(&names, id)
+                })
+                .collect();
             diagnostics.push(ChangedRootsDiagnostic::SelectorAmbiguous {
                 selector: selector.clone(),
                 routines: if routines.len() == candidates.len() {
                     routines
+                } else {
+                    Vec::new()
+                },
+                listed: if listed.len() == candidates.len() {
+                    listed
                 } else {
                     Vec::new()
                 },
@@ -2601,18 +2692,26 @@ pub(crate) fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> s
         | ChangedRootsDiagnostic::DiffFileNotAl { file } => {
             m.insert("file".into(), file.clone().into());
         }
-        ChangedRootsDiagnostic::SelectorUnmatched { selector } => {
+        ChangedRootsDiagnostic::SelectorUnmatched { selector, hints } => {
             m.insert("selector".into(), selector.clone().into());
+            m.extend(crate::engine::l5::selector_index::hints_json(hints));
         }
         ChangedRootsDiagnostic::SelectorAmbiguous {
             selector,
             candidates,
             routines,
+            listed,
         } => {
             m.insert("selector".into(), selector.clone().into());
             m.insert("candidates".into(), candidates.clone().into());
             if !routines.is_empty() {
                 m.insert("candidateRoutines".into(), routines.clone().into());
+            }
+            if !listed.is_empty() {
+                m.insert(
+                    "candidateSelectors".into(),
+                    listed.iter().map(|c| c.selector.clone()).collect(),
+                );
             }
         }
         ChangedRootsDiagnostic::FileAmbiguous { file, candidates }
@@ -2654,11 +2753,43 @@ pub(crate) fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> Stri
         | ChangedRootsDiagnostic::DiffFileUnmatched { file }
         | ChangedRootsDiagnostic::DiffFileDeleted { file }
         | ChangedRootsDiagnostic::DiffFileNotAl { file } => escape_controls(file),
-        ChangedRootsDiagnostic::SelectorUnmatched { selector } => escape_controls(selector),
+        ChangedRootsDiagnostic::SelectorUnmatched { selector, hints } => {
+            // V3 §2.4: the hints on the one line.
+            let lines = crate::engine::l5::selector_index::hint_lines(hints, &[]);
+            format!(
+                "{} ({})",
+                escape_controls(selector),
+                escape_controls(&lines.join("; "))
+            )
+        }
+        ChangedRootsDiagnostic::SelectorAmbiguous {
+            selector, listed, ..
+        } if !listed.is_empty() => {
+            // V3 §2.4: each candidate's full display and declaration, and
+            // the ready value of their selectors.
+            let each: Vec<String> = listed
+                .iter()
+                .map(|c| match c.at.is_empty() {
+                    true => c.display.clone(),
+                    false => format!("{} at {}", c.display, c.at),
+                })
+                .collect();
+            let value: Vec<String> = listed
+                .iter()
+                .map(|c| serde_json::Value::from(c.selector.as_str()).to_string())
+                .collect();
+            format!(
+                "{} (candidates: {}); routines: [{}]",
+                escape_controls(selector),
+                list(&each),
+                value.join(", ")
+            )
+        }
         ChangedRootsDiagnostic::SelectorAmbiguous {
             selector,
             candidates,
             routines,
+            ..
         } => {
             let shown = if routines.is_empty() {
                 candidates
@@ -2921,11 +3052,16 @@ pub fn project_digest_document(
     // considered is `partial` (reason `no-test-code`, items `no-test-code`,
     // was `complete` / `no-path`), and sibling test apps digest does not load
     // add `test-apps-not-loaded` and `testAppsNotLoaded` (opt-in block).
+    // 3.1.0 (output validation V3, §2.1, additive): every routine `display`
+    // is the one display (member, AL quoting, the parameter types of an
+    // overloaded name, a dependency object's number); routine rows and
+    // summary rows gain `signature`, `member`, `selector` and `handle`, and
+    // summary rows `stableId`.
     let compact = v3.as_ref().is_some_and(|v| v.compact);
     let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
         "schemaVersion".into(),
-        if v3.is_some() { "3.0.0" } else { "2.2.0" }.into(),
+        if v3.is_some() { "3.1.0" } else { "2.2.0" }.into(),
     );
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
@@ -2988,16 +3124,12 @@ pub fn format_digest_human_v3(
     changed: &[ChangedRootsDiagnostic],
 ) -> String {
     use crate::engine::l5::routine_rollup as rr;
-    // Each root's block ends with the signatures of the overloads its paths
-    // named by short handles (MCP output step 2); none before the first.
-    let _ = cx.take_legend(true);
     let mut text = if entries.is_empty() {
         "digest: no changed roots resolved\n".to_string()
     } else {
         let mut lines: Vec<String> = Vec::new();
         for (entry, r) in entries.iter().zip(rollups) {
-            let display = owner_qualified(&entry.object_display, &entry.routine_display);
-            lines.push(format!("--- {display} ---"));
+            lines.push(format!("--- {} ---", entry_display(cx, entry)));
             let mut body: Vec<String> = rr::header_lines(r, entry, &[]);
             if entry.effects.is_empty() {
                 body.push("effects: none".to_string());
@@ -3021,7 +3153,6 @@ pub fn format_digest_human_v3(
             body.extend(rr::workspace_gap_lines(r, entry, opts));
             body.extend(rr::dependency_gap_lines(r, opts));
             body.extend(diagnostic_lines(entry, opts.detail));
-            body.extend(cx.take_legend(opts.detail));
             lines.extend(body.into_iter().map(|l| format!("  {l}")));
             lines.push(String::new());
         }
@@ -3163,20 +3294,54 @@ fn digest_entry_summary(
     r: &crate::engine::l5::routine_rollup::RoutineRollup,
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     counts_only: bool,
+    answers: Option<&(Vec<serde_json::Value>, Vec<String>)>,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
     for f in &e.effects {
         *by_type.entry(f.effect_type.as_str()).or_default() += 1;
     }
+    // V3 §2.1 (3.1.0): the one display, and the stable id, signature,
+    // member and selector that tell overloads and member triggers apart.
     let mut v = json!({
-        "routine": owner_qualified(&e.object_display, &e.routine_display),
+        "routine": entry_display(cx, e),
+        "stableId": e.routine_id,
         "coverage": e.coverage_status,
         "coverageReasons": e.coverage_reasons,
         "effects": e.effects.len(),
         "effectsByType": by_type,
         "summary": r.totals.to_json(),
     });
+    for (k, x) in cx.names.identity_json(&e.routine_id) {
+        if k != "display" {
+            v[k] = x;
+        }
+    }
+    // Output validation V2 (§5.2, F42): the asked-for `writesTables`
+    // verdicts on the row, counts-only or not: what the caller asked for by
+    // name is never only in the full document.
+    if let Some((values, _)) = answers {
+        v["tableAnswers"] = json!(
+            values
+                .iter()
+                .map(|a| {
+                    let blockers = a["blockedBy"].as_array().map_or(0, Vec::len);
+                    let mut t = json!({
+                        "table": {"name": a["table"]},
+                        "answer": a.get("answer").cloned().unwrap_or(serde_json::Value::Null),
+                        "blockers": blockers,
+                    });
+                    if let Some(b) = a["blockedBy"].as_array().and_then(|b| b.first()) {
+                        t["firstBlocker"] = json!({"kind": b["kind"], "detail": b["detail"]});
+                    }
+                    if let Some(e) = a.get("error") {
+                        t["error"] = e.clone();
+                    }
+                    t
+                })
+                .collect::<Vec<_>>()
+        );
+    }
     if !counts_only {
         let (own, dep) = r.may_write_names(cx);
         let take = |s: Vec<String>| s.into_iter().take(SUMMARY_NAMES).collect::<Vec<_>>();
@@ -3214,6 +3379,26 @@ pub fn digest_summary(
     roots_requested: usize,
     changed_roots_diagnostics: usize,
 ) -> serde_json::Value {
+    digest_summary_with(
+        entries,
+        rollups,
+        cx,
+        roots_requested,
+        changed_roots_diagnostics,
+        None,
+    )
+}
+
+/// [`digest_summary`] with each row's `--writes-table` answers
+/// (`tableAnswers`, output validation V2 §5.2).
+pub(crate) fn digest_summary_with(
+    entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    roots_requested: usize,
+    changed_roots_diagnostics: usize,
+    table_answers: Option<&crate::engine::l5::prove::TableAnswers>,
+) -> serde_json::Value {
     use serde_json::json;
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
     let build = |counts_only: bool, routines: usize| {
@@ -3221,7 +3406,15 @@ pub fn digest_summary(
             .iter()
             .zip(rollups)
             .take(routines)
-            .map(|(e, r)| digest_entry_summary(e, r, cx, counts_only))
+            .map(|(e, r)| {
+                digest_entry_summary(
+                    e,
+                    r,
+                    cx,
+                    counts_only,
+                    table_answers.and_then(|t| t.get(&e.routine_id)),
+                )
+            })
             .collect();
         let mut v = json!({
             "kind": "digest",
@@ -3616,12 +3809,13 @@ fn digest_view(
         .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
         .collect();
     // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let summary = digest_summary(
+    let summary = digest_summary_with(
         &entries,
         &rollups,
         &rollup_cx,
         changed_roots.roots.len() + query_diagnostics.len(),
         changed_roots.diagnostics.len(),
+        (!writes_tables.is_empty()).then_some(&table_answers),
     );
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
@@ -3704,6 +3898,29 @@ fn digest_view(
         render.opts(),
         &changed_roots.diagnostics,
     ));
+    // Output validation V2 (§4.7, F27): a change mode says first what it
+    // computed. The digest does not compare the diff's lines with the
+    // working tree (impact does), so it says so.
+    if (diff_text.is_some() || changed_files.is_some()) && !entries.is_empty() {
+        human_text.insert_str(
+            0,
+            &format!(
+                "computed: current effects of the {} {} touches, in the working tree ({}); no \
+                 before/after computed — alsem_impact with base compares two revisions\n",
+                crate::engine::l5::routine_rollup::plural(entries.len(), "routine", "routines"),
+                if diff_text.is_some() {
+                    "this diff"
+                } else {
+                    "these files"
+                },
+                if diff_text.is_some() {
+                    "whether the diff's lines match it is not checked here"
+                } else {
+                    "every routine in the files"
+                }
+            ),
+        );
+    }
     if let Some(t) = &test_coverage {
         human_text.push_str(&t.human_line());
         human_text.push('\n');
@@ -3713,7 +3930,7 @@ fn digest_view(
         if let Some((_, lines)) = table_answers.get(&e.routine_id) {
             human_text.push_str(&format!(
                 "table answers for {}:\n",
-                owner_qualified(&e.object_display, &e.routine_display)
+                entry_display(&rollup_cx, e)
             ));
             for l in lines {
                 human_text.push_str(&format!("  {l}\n"));
@@ -4316,7 +4533,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "other effect kinds at 2 places: FUTURE_KIND at ws:src/A.al:5 (unknown); \
+                "other effect kinds at 2 places: FUTURE_KIND at ws:src/A.al:5 (condition not resolved); \
                  FUTURE_KIND beyond Codeunit Base Poster::OnRun"
                     .to_string()
             ]
@@ -4522,11 +4739,15 @@ mod tests {
             D::FileUnmatched {
                 file: s("src/a.al"),
             },
-            D::SelectorUnmatched { selector: s("Foo") },
+            D::SelectorUnmatched {
+                selector: s("Foo"),
+                hints: Default::default(),
+            },
             D::SelectorAmbiguous {
                 selector: s("Bar"),
                 candidates: vec![s("c1"), s("c2")],
                 routines: Vec::new(),
+                listed: Vec::new(),
             },
             D::DiffFileUnmatched {
                 file: s("src/b.al"),
@@ -4569,7 +4790,9 @@ mod tests {
         ];
         let lines = concat!(
             "changed-roots: file-unmatched src/a.al\n",
-            "changed-roots: selector-unmatched Foo\n",
+            "changed-roots: selector-unmatched Foo (nearest names: no close match; selector forms: ",
+            "Object::Routine, Object::Routine(<parameter types>), Object.\"Field\"::Trigger, ",
+            "Object.action(Name)::OnAction, or a stable id)\n",
             "changed-roots: selector-ambiguous Bar (candidates: c1, c2)\n",
             "changed-roots: diff-file-unmatched src/b.al\n",
             "changed-roots: diff-file-ambiguous x/y.al (candidates: ws:x/y.al, ws:y.al); ",

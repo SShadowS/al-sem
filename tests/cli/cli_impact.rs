@@ -146,12 +146,20 @@ fn a_diff_is_accounted_first_then_each_routine() {
     let (human, err, code) = impact(&ws, &["--diff", "-"], Some(DIFF));
     assert_eq!(code, 0, "{err}");
     let lines: Vec<&str> = human.lines().collect();
-    assert!(
-        lines[0].starts_with("impact of a diff (2 files)"),
+    // Output validation V2 (§4.7): the computation first, then the
+    // comparison line.
+    assert_eq!(
+        lines[0],
+        "computed: current effects of the 1 routine this diff touches, in the working tree \
+         (the diff's lines match it: yes); no before/after computed — pass base for that",
         "{human}"
     );
     assert!(
-        lines[1].starts_with("input: 1 changed routine resolved"),
+        lines[1].starts_with("impact of a diff (2 files)"),
+        "{human}"
+    );
+    assert!(
+        lines[2].starts_with("input: 1 changed routine resolved"),
         "{human}"
     );
     assert!(
@@ -166,12 +174,12 @@ fn a_diff_is_accounted_first_then_each_routine() {
     assert_eq!(tot["objectDeclaration"]["byKind"]["field"], 2);
     assert_eq!(tot["unmapped"]["byReason"]["not-al"], 2);
     let r = &v["roots"][0];
-    assert_eq!(r["display"], "Codeunit TU Core::Calc");
+    assert_eq!(r["display"], "Codeunit \"TU Core\"::Calc");
     assert_eq!(r["status"], "changed");
     assert_eq!(r["up"]["callers"]["count"], 1);
     assert_eq!(
         r["up"]["callers"]["first"][0]["display"],
-        "Codeunit TU Core::Post"
+        "Codeunit \"TU Core\"::Post"
     );
     assert_eq!(r["tests"]["status"], "reached");
     assert!(v["input"]["mismatches"].as_array().unwrap().is_empty());
@@ -222,7 +230,7 @@ fn without_a_base_the_status_says_what_the_diff_shows() {
             .as_array()
             .unwrap()
             .iter()
-            .find(|r| r["display"] == format!("Codeunit TU Core::{name}"))
+            .find(|r| r["display"] == format!("Codeunit \"TU Core\"::{name}"))
             .unwrap_or_else(|| panic!("no root {name}: {v:#}"))["status"]
             .as_str()
             .unwrap()
@@ -238,7 +246,7 @@ fn without_a_base_the_status_says_what_the_diff_shows() {
     assert_eq!(code, 0, "{err}");
     assert!(
         human.contains(
-            "Codeunit TU Core::Audited (ws:src/Core.al:36) — new in this diff (its header is an added line, none of its lines removed)"
+            "Codeunit \"TU Core\"::Audited (ws:src/Core.al:36) — new in this diff (its header is an added line, none of its lines removed)"
         ),
         "{human}"
     );
@@ -442,8 +450,8 @@ fn base_lists_and_resolves_untracked_and_unstaged() {
         .iter()
         .map(|r| r["display"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"Codeunit TU Extra::Fresh"), "{names:?}");
-    assert!(names.contains(&"Codeunit TU Core::Calc"), "{names:?}");
+    assert!(names.contains(&"Codeunit \"TU Extra\"::Fresh"), "{names:?}");
+    assert!(names.contains(&"Codeunit \"TU Core\"::Calc"), "{names:?}");
 }
 
 /// Spec §12.1's refused combinations: two modes, `--diff-root` without
@@ -560,13 +568,17 @@ pub(crate) fn cdo_impact_ratchets() {
     // two fewer routines fit the 40 KiB budget. +682 on the integration with
     // F1 and field-writers (`integrate/outval-r1-fixes`, each alone kept
     // +679): the text before the cut grew, so one more routine falls past
-    // the budget.
-    assert!(human.contains("  … +682 routines"), "{human}");
+    // the budget. +683 since output validation V3 (the one routine display:
+    // AL quotes, overloads' parameter types): the text before the cut grew.
+    // +688 since output validation V2 (the reach split by tier, kind and
+    // context, the code-callers line, the run line first): each routine's
+    // block grew, so five fewer fit the budget.
+    assert!(human.contains("  … +688 routines"), "{human}");
 
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
     let r = &v["roots"][0];
     assert_eq!(
-        r["up"]["callers"]["first"][0]["display"], "Codeunit CDO Telemetry::QueueUpload",
+        r["up"]["callers"]["first"][0]["display"], "Codeunit \"CDO Telemetry\"::QueueUpload",
         "{r:#}"
     );
     assert_eq!(r["tests"]["status"], "reached");

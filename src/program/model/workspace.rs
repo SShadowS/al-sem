@@ -640,6 +640,15 @@ pub struct ModelRoutine {
     /// (it has only `#[derive(Debug, Clone)]`), so this never reaches an R0–R3 golden.
     /// (RE-3 / RE-4)
     pub enclosing_member: Option<String>,
+    /// Output validation V3 (§2.1): what kind of member `enclosing_member` names
+    /// and its caption, for the one routine display
+    /// (`Page X.action(Name "Caption")::OnAction`, `Table X."Field"::OnValidate`).
+    /// `None` exactly when `enclosing_member` is `None`, and for a symbol-only
+    /// row (the display then infers the kind from the trigger name,
+    /// [`crate::engine::l5::routine_rollup::infer_member_kind`]). A plain fact
+    /// read from the IR at assembly, in every build profile (a few bytes per
+    /// member trigger).
+    pub member_detail: Option<MemberDetail>,
     /// StableObjectId of the object that DECLARES this trigger (the object decl in
     /// scope at assembly — the EXTENSION object for an extension-declared trigger).
     /// Honest metadata; the AL CPU-profile frame carries no extension identity, so this
@@ -704,6 +713,53 @@ pub struct CardText {
     /// the asserts in its own body, not in the helpers it calls); `None` for
     /// any other routine.
     pub own_asserts: Option<usize>,
+}
+
+/// A member trigger's member (output validation V3, §2.1): its kind and its
+/// caption as the source declares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberDetail {
+    /// `field`, `action`, `dataitem`, `control` or `element`.
+    pub kind: &'static str,
+    /// The member's first `Caption` literal (a table field's or an action's);
+    /// `None` when it declares none or the member kind carries none here.
+    pub caption: Option<String>,
+}
+
+/// The member of member trigger `rix` of object `o` (V3 §2.1): an action when
+/// one of `o.actions` holds the trigger, a dataitem when the trigger has a
+/// dataitem source table, else the kind the trigger name and object type say
+/// ([`crate::engine::l5::routine_rollup::infer_member_kind`]); a table field's
+/// caption from `o.fields`.
+fn member_detail_of(
+    o: &al_syntax::ir::ObjectDecl,
+    rix: usize,
+    ir_routine: &al_syntax::ir::RoutineDecl,
+    object_type: &str,
+    member: &str,
+) -> MemberDetail {
+    if let Some(a) = o.actions.iter().find(|a| a.triggers.contains(&rix)) {
+        return MemberDetail {
+            kind: "action",
+            caption: a.caption.first().cloned(),
+        };
+    }
+    if ir_routine.dataitem_source_table.is_some() {
+        return MemberDetail {
+            kind: "dataitem",
+            caption: None,
+        };
+    }
+    let kind = crate::engine::l5::routine_rollup::infer_member_kind(object_type, &ir_routine.name);
+    let caption = (kind == "field")
+        .then(|| {
+            o.fields
+                .iter()
+                .find(|f| f.name.eq_ignore_ascii_case(member))
+                .and_then(|f| f.caption.first().cloned())
+        })
+        .flatten();
+    MemberDetail { kind, caption }
 }
 
 /// A page action as `alsem explain` shows it (from `al_syntax::ir::ActionDecl`).
@@ -2067,6 +2123,10 @@ fn project_ir(
                     },
                 )
             });
+            // V3 §2.1: the member's kind and caption, for the routine display.
+            let member_detail = enclosing_member
+                .as_deref()
+                .map(|m| member_detail_of(o, rix, ir_routine, object_type, m));
             // Intent-evidence §4.4: the card text, from the IR still in hand.
             let card_text = needs.card_text.then(|| {
                 Box::new(card_text_of(
@@ -2124,6 +2184,7 @@ fn project_ir(
                 var_assignments,
                 condition_references,
                 enclosing_member,
+                member_detail,
                 originating_object,
                 enclosing_member_range,
                 entry_temp_guard_receiver,

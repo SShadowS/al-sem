@@ -162,6 +162,9 @@
           },
           "display": "SendAfterModify",
           "objectDisplay": "Codeunit D47 Sender",
+          "qualifiedDisplay": "Codeunit \"D47 Sender\"::SendAfterModify",
+          "selector": "Codeunit \"D47 Sender\"::SendAfterModify",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-0000000d4701:Codeunit:50000#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf"
         },
         "scopedGuaranteesFolded": 1,
@@ -222,8 +225,10 @@
     "pathCap": 1,
     "routines": {
       "r:abe6856afc01": {
-        "display": "Codeunit D47 Sender::SendAfterModify",
+        "display": "Codeunit \"D47 Sender\"::SendAfterModify",
         "file": "ws:src/Sender.Codeunit.al",
+        "selector": "Codeunit \"D47 Sender\"::SendAfterModify",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-0000000d4701:Codeunit:50000#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf"
       }
     },
@@ -235,5 +240,5 @@
     },
     "workspaceFingerprint": "0d6c610dea8d73d6142bb6b9375463620d7e10a84ead5599d3040ada0008b395"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

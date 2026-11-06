@@ -113,12 +113,15 @@
           "line": 36,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Calls Post\"::PreviewPost",
         "doc": null,
         "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#7ed6f166e5191f834fed0fe3277ca6c5e998fbc7d82f551f688cb5509239d9ab",
         "name": "PreviewPost",
         "object": "Calls Post",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Calls Post\"::PreviewPost",
+        "signature": "(var Record \"Calls Order\")"
       },
       "rules": {
         "callers": [],
@@ -132,7 +135,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/cfff78bb88a97eb35ce6e713a17fe8241650331986179593fdf3515aad6efe57/rule0",
-            "in": "Codeunit Calls Checks::CheckPreview",
+            "in": "Codeunit \"Calls Checks\"::CheckPreview",
             "kind": "Error",
             "message": {
               "args": [],
@@ -171,7 +174,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
-            "in": "Table Calls Order::OnModify",
+            "in": "Table \"Calls Order\"::OnModify",
             "kind": "Error",
             "message": {
               "args": [],

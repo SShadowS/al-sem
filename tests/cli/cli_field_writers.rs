@@ -115,7 +115,7 @@ fn bare_writes_through_the_implicit_record_are_writers() {
         "Normalize",
         "ExtSet",
         "OnAction",
-        "Codeunit FW Code::Qualified",
+        "Codeunit \"FW Code\"::Qualified",
     ] {
         assert!(
             routines.iter().any(|r| r.contains(name)),

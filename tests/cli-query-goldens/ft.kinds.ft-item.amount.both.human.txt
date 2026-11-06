@@ -1,9 +1,12 @@
 --- touches field 2 "Amount" of FT Item (08080808-0000-4000-8000-000000000081/table/50800) ---
   field: Decimal, Normal
-  searched: 6 workspace routine bodies, 0 dependency routine bodies (scope: Codeunit FT Consumers::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body: local 4, through dependency code 0, only through an open site 0; 0 more without a body in the model)); not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)
+  searched: 6 workspace routine bodies, 0 dependency routine bodies (scope: Codeunit "FT Consumers"::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body, by tier: local 4, via-dependency 0, via-hub 0; 0 more without a body in the model)); not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)
   consumers: 19 sites in 2 routines of 2 objects — uses: read 3, write 4 (1 also read), validate 1, filter 2, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 1; records: temporary 1, caller-dependent 17, unknown 1
+    confirmed named references: 18 sites; numeric candidates (RecordRef.Field by number): 1 site — a numeric reference does not break on a rename (it may on a renumbering)
   note: the solve graph is the resolved call graph: calls not resolved, and dependency code deeper than one routine, are not followed
   note: 3 routines in the reverse cone may also be called by apps outside the program
+  filters: 2 sites
+  not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed as declared keys
   declared keys: key 2 (Amount, Unit Price)
   Codeunit FT Consumers: 16 sites in 1 routine (read 2, write 3, validate 1, filter 2, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 1)
     Kinds ws:src/FTFields.al:68 read+write [caller-dependent, access, down]
@@ -14,6 +17,6 @@
     Kinds ws:src/FTFields.al:73 key-use [caller-dependent, SetCurrentKey, down]
     … +10 sites — --all lists them
   Table FT Item: 3 sites in 1 routine (read 1, write 1, rule 1)
-    OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access, down]
-    OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access, down]
-    OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField, down]
+    Amount::OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access, down]
+    Amount::OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access, down]
+    Amount::OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField, down]

@@ -1,62 +1,63 @@
+computed: current effects of the 3 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
 --- Codeunit D8PostingChain::PostSalesDoc ---
-  summary — writes: may write 3 tables (3 owned by this app, 0 by dependencies); caller-dependent: none
+  summary — writes: may write 3 tables (3 owned by this app, 0 by dependencies): Sales Header (Modify at :10), Sales Line (ModifyAll at :12), Audit Entry (Insert)
     transaction, UI and errors: commits: may (1 site); errors at 4 places
     other effects: events: 1 (1 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: may — 1 site in workspace code; 0 commit-bearing entry points:
-    COMMIT at ws:src/subscriber.al:11 (unknown)
-      path: PostSalesDoc → OnAfterPostSalesDoc → [event] D8BadSubscriber::HandlePosted
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
+    COMMIT at ws:src/subscriber.al:11 (condition not resolved)
+      path: PostSalesDoc → OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
   writes in workspace code (3 tables; operation counts are the cone's retained representative operations, at least that many):
     Audit Entry: Insert 1 — known persistent
       Insert at ws:src/subscriber.al:10
-      path: PostSalesDoc → OnAfterPostSalesDoc → [event] D8BadSubscriber::HandlePosted
+      path: PostSalesDoc → OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
     Sales Header: Modify 2 — known persistent
       Modify at ws:src/posting.al:10
       path: PostSalesDoc (in the routine itself)
     Sales Line: ModifyAll 1 — known persistent
       ModifyAll at ws:src/posting.al:12
       path: PostSalesDoc (in the routine itself)
-  events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond entry points
-  errors at 4 places: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional-on-success); ERROR_IMPLICIT at ws:src/posting.al:10 (unconditional-on-success); ERROR_IMPLICIT at ws:src/posting.al:15 (unconditional-on-success); ERROR_IMPLICIT at ws:src/subscriber.al:10 (unknown)
+  events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond dependency calls
+  errors at 4 places: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional on success); ERROR_IMPLICIT at ws:src/posting.al:10 (unconditional on success); ERROR_IMPLICIT at ws:src/posting.al:15 (unconditional on success); ERROR_IMPLICIT at ws:src/subscriber.al:10 (condition not resolved)
 
 --- Codeunit D8PostingChain::OnAfterPostSalesDoc ---
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Audit Entry (Insert)
     transaction, UI and errors: commits: may (1 site); errors at 1 place
     other effects: events: 1 (1 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: may — 1 site in workspace code; 0 commit-bearing entry points:
-    COMMIT at ws:src/subscriber.al:11 (unknown)
-      path: OnAfterPostSalesDoc → [event] D8BadSubscriber::HandlePosted
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
+    COMMIT at ws:src/subscriber.al:11 (condition not resolved)
+      path: OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Audit Entry: Insert 1 — known persistent
       Insert at ws:src/subscriber.al:10
-      path: OnAfterPostSalesDoc → [event] D8BadSubscriber::HandlePosted
-  events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond entry points
-  errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unknown)
+      path: OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
+  events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond dependency calls
+  errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (condition not resolved)
   diagnostics: evidence-unavailable 1 (--detail lists each with its operation)
 
 --- Codeunit D8BadSubscriber::HandlePosted ---
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Audit Entry (Insert at :10)
     transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
-    COMMIT at ws:src/subscriber.al:11 (unconditional-on-success)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
+    COMMIT at ws:src/subscriber.al:11 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Audit Entry: Insert 1 — known persistent
       Insert at ws:src/subscriber.al:10
       path: HandlePosted (in the routine itself)
-  events: 0 raised in workspace code; 0 more only beyond entry points
-  errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unconditional-on-success)
+  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unconditional on success)

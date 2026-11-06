@@ -1,6 +1,6 @@
 --- Codeunit D8BadSubscriber::HandlePosted vs Sales Line (11111111-0000-0000-0000-00000000d80a/table/37) ---
   scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
-  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart below
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart, before the caller list
   up: 1 of 2 transitive callers touches it through other branches, 1 does not, 0 unknown; not touching: Codeunit D8PostingChain::OnAfterPostSalesDoc
-    +2 Codeunit D8PostingChain::PostSalesDoc: 1 touch (1 on a persistent record, 0 on possibly persistent records, 0 on temporary records); first [ModifyAll] write at ws:src/posting.al:12 in Codeunit D8PostingChain::PostSalesDoc
   through dependency code: not applicable (no dependency code loaded)
+    +2 Codeunit D8PostingChain::PostSalesDoc: 1 touch (1 on a persistent record, 0 on possibly persistent records, 0 on temporary records); first [ModifyAll] write at ws:src/posting.al:12 in Codeunit D8PostingChain::PostSalesDoc

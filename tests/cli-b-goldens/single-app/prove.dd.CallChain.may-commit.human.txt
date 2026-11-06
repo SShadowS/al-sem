@@ -1,11 +1,13 @@
---- Codeunit Ws Work::CallChain ---
+--- Codeunit "Ws Work"::CallChain ---
   question: may-commit — existing effects (what the routine and its callees already do)
-  answer:   unknown — no matching effect observed; coverage incomplete
+  answer:   unknown (blocked by: call not resolved 1, coverage incomplete 1) — no matching effect was found in the analyzed cone
+  plain reading: no matching effect was found in the analyzed cone; unknown because of call not resolved 1, coverage incomplete 1
+  not established: that it never commits
   blockedBy: 2 blockers in 2 kinds
-    coverage-incomplete: 1
+    coverage incomplete: 1
       coverage status: partial
-    unresolved-callsite: 1
+    call not resolved: 1
       Lib.Outer in CallChain
-  coverage: incomplete — 1 call not resolved (0 in this workspace); top: Lib.Outer ×1
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  analysis partial — 1 call not resolved (0 in this workspace); top: Lib.Outer ×1
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

@@ -3,7 +3,7 @@
   answer:   yes
   evidence: 1 effect
     [COMMIT] at ws:src/subscriber.al:11
-      conditionality: unconditional-on-success
-  coverage: complete
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+      condition: unconditional on success
+  analysis complete
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

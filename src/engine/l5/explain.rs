@@ -72,8 +72,9 @@ use crate::engine::l5::rollup::classify_detail;
 use crate::engine::l5::routine_rollup::{
     FAMILIES, OTHER_KINDS, RenderOpts, RollupCx, RollupTotals, RoutineRollup, TableWrites,
     beyond_lines, caller_dependent_lines, caps, class_json, commit_lines, crossing_key,
-    dependency_gap_lines, event_lines, family_of, fold, header_lines, is_group, kind_lines,
-    literal_dead_lines, no_path_lines, plural as rf_plural, temporary_lines, workspace_write_lines,
+    dependency_gap_lines, event_lines, family_of, fold, format_routine, header_lines, is_group,
+    kind_lines, literal_dead_lines, no_path_lines, plural as rf_plural, temporary_lines,
+    workspace_write_lines,
 };
 use crate::engine::l5::rules_index::{FieldWriters, RulesIndex, WriteSite, Writer as IndexWriter};
 use crate::engine::session::{Cell, explain_plan};
@@ -213,9 +214,14 @@ struct FieldAnswer {
     table: String,
     table_id: String,
     field: String,
+    number: i64,
     captions: Vec<String>,
     /// Per writer (stable id, in id order): its write sites, in anchor order.
     writers: BTreeMap<String, Vec<(WriteKind, PAnchor)>>,
+    /// `(searched, not searched)`, from `field_touches::search_words`.
+    search: (String, String),
+    /// References that may write, not confirmed: each `kind at file:line`.
+    candidates: Vec<String>,
 }
 
 /// What `resolve` hands to `compute`.
@@ -513,6 +519,24 @@ impl Job for ExplainJob<'_> {
     }
 }
 
+/// A page action as the one display names it (V3 §2.1):
+/// `Page "CDO E-Mail Templates".action(ExportTemplateAction "Export Template")`.
+fn action_display(object_type: &str, object: &str, action: &str, caption: Option<&str>) -> String {
+    use crate::engine::l5::routine_rollup::{MemberPart, format_member, format_object};
+    format!(
+        "{}{}",
+        format_object(object_type, object, None),
+        format_member(
+            &MemberPart {
+                kind: "action",
+                name: action,
+                caption,
+            },
+            true
+        )
+    )
+}
+
 /// `selectors` in input order, each once.
 fn distinct(selectors: &[String]) -> Vec<&String> {
     let mut seen = HashSet::new();
@@ -545,6 +569,35 @@ pub(crate) fn ambiguity_text(
     )
 }
 
+/// The first line of an unmatched routine selector's failure (V3 §2.4),
+/// explain's and prove's: a stable id that names no routine, else a name.
+pub(crate) fn unmatched_line(prefix: &str, selector: &str) -> String {
+    if selector.contains('#') && !selector.contains("::") {
+        format!("{prefix}no routine in the loaded program has the stable id '{selector}'")
+    } else {
+        format!("{prefix}no routine in the loaded program is named '{selector}'")
+    }
+}
+
+/// A dependency app's guid in a failure's text, named from the loaded
+/// apps' rows (V3 §2.4: the resolve step has no app names).
+fn name_apps(text: &str, apps: &[Value]) -> String {
+    let mut out = text.to_string();
+    for a in apps {
+        if let (Some(g), Some(n)) = (a["appId"].as_str(), a["name"].as_str()) {
+            out = out.replace(
+                &format!("found only in {}:", g.to_ascii_lowercase()),
+                &format!("found only in {n}:"),
+            );
+            out = out.replace(
+                &format!("; {}:", g.to_ascii_lowercase()),
+                &format!("; {n}:"),
+            );
+        }
+    }
+    out
+}
+
 /// `--routine`'s diagnostic for one changed-roots diagnostic: prove's
 /// `routine-not-found` / `routine-ambiguous` wording (G42).
 fn selector_diagnostic(selector: &str, d: &ChangedRootsDiagnostic) -> Diagnostic {
@@ -552,6 +605,7 @@ fn selector_diagnostic(selector: &str, d: &ChangedRootsDiagnostic) -> Diagnostic
         ChangedRootsDiagnostic::SelectorAmbiguous {
             candidates,
             routines,
+            listed,
             ..
         } => {
             let mut json = json!({
@@ -562,15 +616,42 @@ fn selector_diagnostic(selector: &str, d: &ChangedRootsDiagnostic) -> Diagnostic
             if !routines.is_empty() {
                 json["candidateRoutines"] = json!(routines);
             }
+            // V3 §2.4: every candidate's selector, ready for `routines`.
+            if !listed.is_empty() {
+                json["candidateSelectors"] = json!(
+                    listed
+                        .iter()
+                        .map(|c| c.selector.clone())
+                        .collect::<Vec<_>>()
+                );
+            }
+            let human = if listed.is_empty() {
+                ambiguity_text("explain: ", selector, candidates, routines)
+            } else {
+                crate::engine::l5::selector_index::ambiguity_lines("explain: ", selector, listed)
+                    .join("\n")
+            };
+            Diagnostic { json, human }
+        }
+        ChangedRootsDiagnostic::SelectorUnmatched { hints, .. } => {
+            // V3 §2.4: the nearest names (or where the name is found only in
+            // dependency code) and the selector forms. A dependency app is
+            // named by guid here and by name at render (`name_apps`).
+            let mut json = json!({ "kind": "routine-not-found", "selector": selector });
+            if let Value::Object(m) = &mut json {
+                m.extend(crate::engine::l5::selector_index::hints_json(hints));
+            }
+            let mut lines = vec![unmatched_line("explain: ", selector)];
+            lines.extend(
+                crate::engine::l5::selector_index::hint_lines(hints, &[])
+                    .into_iter()
+                    .map(|l| format!("  {l}")),
+            );
             Diagnostic {
                 json,
-                human: ambiguity_text("explain: ", selector, candidates, routines),
+                human: lines.join("\n"),
             }
         }
-        ChangedRootsDiagnostic::SelectorUnmatched { .. } => Diagnostic {
-            json: json!({ "kind": "routine-not-found", "selector": selector }),
-            human: format!("explain: no routine of the program has the id or name '{selector}'"),
-        },
         other => Diagnostic {
             json: changed_roots_diagnostic_to_value(other),
             human: changed_roots_diagnostic_human(other),
@@ -657,6 +738,34 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
         sites.sort_by(|a, b| anchor_key(&a.1).cmp(&anchor_key(&b.1)).then(a.0.cmp(&b.0)));
         sites.dedup_by(|a, b| a.0 == b.0 && anchor_key(&a.1) == anchor_key(&b.1));
     }
+    // Output validation V2 (§4.2, F17): what was searched (the helper the
+    // touches field mode prints), and the references that may write but are
+    // not confirmed writers: `RecordRef.Field` by number and `TransferFields`
+    // copies, from the same field-use index.
+    let touches = crate::engine::l4::field_touches::field_touches(model, mt, mf, &|_| true);
+    let search = crate::engine::l4::field_touches::search_words(
+        &touches.coverage,
+        touches.coverage.dependency_bodies > 0,
+    );
+    let candidates: Vec<String> = touches
+        .sites
+        .iter()
+        .filter_map(|s| {
+            use crate::program::body::record_op::FieldUse;
+            let kind = if s.uses.contains(&FieldUse::ByNumber) {
+                "RecordRef.Field by number"
+            } else if s.uses.contains(&FieldUse::CopyCandidate) {
+                "TransferFields copy"
+            } else {
+                return None;
+            };
+            Some(format!(
+                "{kind} at {}:{}",
+                s.anchor.source_unit_id,
+                s.anchor.start_line + 1
+            ))
+        })
+        .collect();
     Resolved {
         roots: writers.keys().cloned().collect(),
         diagnostics: vec![],
@@ -664,8 +773,11 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
             table: mt.name.clone(),
             table_id: mt.id.clone(),
             field: mf.name.clone(),
+            number: mf.field_number,
             captions: mf.captions.clone(),
             writers,
+            search,
+            candidates,
         }),
         unresolved: false,
     }
@@ -863,6 +975,8 @@ impl WriteFields {
 struct Indexes<'m> {
     model: &'m Model,
     data: &'m IndexData,
+    /// The one routine display (V3 §2.1).
+    names: &'m crate::engine::l5::routine_rollup::RoutineNames<'m>,
 }
 
 /// The objects a raw `RunObject` value names (`Codeunit "Post"`,
@@ -1025,8 +1139,12 @@ impl IndexData {
 }
 
 impl<'m> Indexes<'m> {
-    fn over(model: &'m Model, data: &'m IndexData) -> Indexes<'m> {
-        Indexes { model, data }
+    fn over(
+        model: &'m Model,
+        data: &'m IndexData,
+        names: &'m crate::engine::l5::routine_rollup::RoutineNames<'m>,
+    ) -> Indexes<'m> {
+        Indexes { model, data, names }
     }
 
     fn row(&self, i: usize) -> &'m ModelRoutine {
@@ -1174,10 +1292,10 @@ impl<'m> Indexes<'m> {
         (r.object_type.as_str(), name)
     }
 
-    /// `<Type> <Object>::<Routine>`.
+    /// The one routine display of row `i` as a list row prints it (V3
+    /// §2.1: no member caption; the card header has it).
     fn qualified(&self, i: usize) -> String {
-        let (t, n) = self.object_of(i);
-        owner_qualified(&object_display(t, n), &self.row(i).name)
+        format_routine(&self.names.parts_of(self.row(i)), false)
     }
 
     /// Breadth-first from `start`, over `adj`: each reached row with the row
@@ -1219,6 +1337,219 @@ fn path_names(
         at = *next;
     }
     out
+}
+
+/// What a routine itself changes (output validation V2, §5.1, F75): the
+/// object globals it assigns and its own record operations that write, or
+/// "none". One line, for the callers' context section.
+fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str) -> String {
+    let Some(r) = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.stable_routine_id == root)
+    else {
+        return "own state changes: not known (no body in the model)".to_string();
+    };
+    let globals: BTreeSet<String> = r
+        .variables
+        .iter()
+        .filter(|v| v.scope.as_deref() == Some("global"))
+        .map(|v| v.name.to_ascii_lowercase())
+        .collect();
+    // The global as the assignment writes it (the model folds names).
+    let mut set: BTreeMap<String, String> = BTreeMap::new();
+    for a in &r.var_assignments {
+        let head = a
+            .lhs_name
+            .split(['.', '['])
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
+        if globals.contains(&head.to_ascii_lowercase()) {
+            set.entry(head.to_ascii_lowercase())
+                .or_insert_with(|| head.to_string());
+        }
+    }
+    let set: Vec<String> = set.into_values().collect();
+    let kind = model
+        .workspace
+        .objects
+        .iter()
+        .find(|o| o.id == r.object_id)
+        .map_or("object".to_string(), |o| o.object_type.to_ascii_lowercase());
+    let writes: Vec<String> = r
+        .record_operations
+        .iter()
+        .filter(|o| {
+            matches!(
+                o.op.as_str(),
+                "Insert" | "Modify" | "ModifyAll" | "Delete" | "DeleteAll" | "Rename" | "Validate"
+            )
+        })
+        .map(|o| format!("{} on {}", o.op, o.record_variable_name))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut parts = Vec::new();
+    if !set.is_empty() {
+        parts.push(format!(
+            "sets {} {kind} {} ({})",
+            set.len(),
+            if set.len() == 1 { "global" } else { "globals" },
+            set.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    parts.push(if writes.is_empty() {
+        "no record write of its own".to_string()
+    } else {
+        format!("record writes of its own: {}", writes.join(", "))
+    });
+    format!("own state changes: {}", parts.join("; "))
+}
+
+/// The routine's direct callees in source order, at most [`CALLS_SHOWN`]
+/// named (output validation V2, §9.1, F55): `calls: X (:181), Y (:190); +2
+/// more`. Builtins and unresolved calls are not routines and are left out.
+fn calls_line(
+    model: &crate::program::model::workspace::Model,
+    names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
+    root: &str,
+) -> Option<String> {
+    let routines = &model.workspace.routines;
+    let r = routines.iter().find(|r| r.stable_routine_id == root)?;
+    let stable_of: HashMap<&str, &str> = routines
+        .iter()
+        .map(|x| (x.id.as_str(), x.stable_routine_id.as_str()))
+        .collect();
+    // A callee in the routine's own object prints as `::Name` (the header
+    // names the object); one elsewhere by its whole display.
+    let own: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = routines
+        .iter()
+        .filter(|x| x.object_id == r.object_id)
+        .map(|x| (x.stable_routine_id.as_str(), x))
+        .collect();
+    let to_of: HashMap<&str, &str> = model
+        .calls
+        .edges
+        .iter()
+        .filter(|e| e.from == r.id)
+        .filter_map(|e| Some((e.callsite_id.as_str(), e.to.as_deref()?)))
+        .collect();
+    let mut sites: Vec<&crate::program::body::features::PCallSite> = r.call_sites.iter().collect();
+    sites.sort_by_key(|c| (c.source_anchor.start_line, c.source_anchor.start_column));
+    let mut seen = HashSet::new();
+    let mut items: Vec<(String, String, u32)> = Vec::new();
+    for c in sites {
+        let Some(to) = to_of.get(c.id.as_str()) else {
+            continue;
+        };
+        let Some(stable) = stable_of.get(to) else {
+            continue;
+        };
+        if !seen.insert(*stable) {
+            continue;
+        }
+        let display = names.display(stable);
+        let (object, rest) = match (own.get(stable), display.split_once("::")) {
+            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => {
+                (String::new(), rest.to_string())
+            }
+            (_, Some((o, rest))) => (o.to_string(), rest.to_string()),
+            _ => (String::new(), display.clone()),
+        };
+        items.push((object, rest, c.source_anchor.start_line + 1));
+    }
+    if items.is_empty() {
+        return Some("calls: none (no call to a routine; builtins aside)".to_string());
+    }
+    let more = items.len().saturating_sub(CALLS_SHOWN);
+    items.truncate(CALLS_SHOWN);
+    // An object prints once for a run of its routines (`Codeunit "X": A
+    // (:1), B (:2)`); the card's own object as `this object:`.
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (object, rest, line) in &items {
+        let label = if object.is_empty() {
+            "this object".to_string()
+        } else {
+            object.clone()
+        };
+        let item = format!("{rest} (:{line})");
+        match groups.last_mut() {
+            Some((l, v)) if *l == label => v.push(item),
+            _ => groups.push((label, vec![item])),
+        }
+    }
+    let shown: Vec<String> = groups
+        .into_iter()
+        .map(|(l, v)| format!("{l}: {}", v.join(", ")))
+        .collect();
+    Some(format!(
+        "calls: {}{}",
+        shown.join("; "),
+        if more > 0 {
+            format!("; +{more} more")
+        } else {
+            String::new()
+        }
+    ))
+}
+
+/// How many direct callees explain's `calls:` line names.
+/// (§9.1 says at most 5; 3 keeps a large card under the client budget.)
+const CALLS_SHOWN: usize = 3;
+
+/// The `ChangeCompany` calls in a routine's workspace cone (output
+/// validation V2, §9.1, F75): the routine's own body and every workspace
+/// routine its resolved calls reach, each `file:line` (1-based). The analysis
+/// tracks no company per record (§10), so a write in such a cone prints
+/// "target company: not established by this analysis".
+fn change_company_sites(
+    model: &crate::program::model::workspace::Model,
+    root: &str,
+) -> Vec<String> {
+    let routines = &model.workspace.routines;
+    let Some(start) = routines.iter().position(|r| r.stable_routine_id == root) else {
+        return Vec::new();
+    };
+    let by_id: HashMap<&str, usize> = routines
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.id.as_str(), i))
+        .collect();
+    let mut out_edges: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &model.calls.edges {
+        if let Some(to) = &e.to {
+            out_edges
+                .entry(e.from.as_str())
+                .or_default()
+                .push(to.as_str());
+        }
+    }
+    let mut seen = HashSet::from([start]);
+    let mut queue = VecDeque::from([start]);
+    let mut sites = BTreeSet::new();
+    while let Some(i) = queue.pop_front() {
+        let r = &routines[i];
+        for c in &r.call_sites {
+            let t = c.callee_text.to_ascii_lowercase();
+            if t == "changecompany" || t.ends_with(".changecompany") {
+                sites.insert(format!(
+                    "{}:{}",
+                    c.source_anchor.source_unit_id,
+                    c.source_anchor.start_line + 1
+                ));
+            }
+        }
+        for to in out_edges.get(r.id.as_str()).into_iter().flatten() {
+            if let Some(&j) = by_id.get(to)
+                && seen.insert(j)
+            {
+                queue.push_back(j);
+            }
+        }
+    }
+    sites.into_iter().collect()
 }
 
 /// One card's callers through dependency code under `--callers-context`
@@ -1268,32 +1599,14 @@ fn through_dependency_card(
         &roots,
         &crate::program::impact_graph::reverse::WalkOptions::default(),
     );
-    let objects: HashMap<&str, &str> = model
-        .workspace
-        .objects
-        .iter()
-        .map(|o| (o.id.as_str(), o.name.as_str()))
-        .collect();
-    let by_stable: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = model
-        .workspace
-        .routines
-        .iter()
-        .map(|r| (r.stable_routine_id.as_str(), r))
-        .collect();
+    // V3 §2.1/§2.2: the one routine display, from the model row, else from
+    // the graph node's declared names.
+    let names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
     let name = |n: u32| -> String {
         g.stable_id(n)
-            .and_then(|s| by_stable.get(s.as_str()).copied())
-            .map_or_else(
-                || g.display(n),
-                |r| {
-                    format!(
-                        "{} {}::{}",
-                        r.object_type,
-                        objects.get(r.object_id.as_str()).unwrap_or(&"?"),
-                        r.name
-                    )
-                },
-            )
+            .and_then(|s| names.display_with(&s, false))
+            .or_else(|| crate::engine::l5::routine_rollup::graph_display(g, n, Some(model)))
+            .unwrap_or_else(|| g.display(n))
     };
     let code: Vec<&dep_callers::DepCaller> = answer
         .callers
@@ -1412,7 +1725,10 @@ fn render(
             &built
         }
     };
-    let ix = Indexes::over(model, &indexes.ix);
+    // W2-2: one rollup context for every card (names, the operation index);
+    // its routine names (V3 §2.1) are the cards' too.
+    let rcx = RollupCx::new(model, apps);
+    let ix = Indexes::over(model, &indexes.ix, &rcx.names);
     // The walk is this run's own: its memo and expansion budget start empty
     // whatever earlier runs over the same indexes did.
     let cross = CrossRules::over(model, &indexes.cross);
@@ -1429,10 +1745,6 @@ fn render(
         )
     });
     let cards_span = span("explain", "explain.cards");
-    // W2-2: one rollup context for every card (names, the operation index).
-    // Paths name overloads by short handles; each card ends with their
-    // signatures (MCP output step 2).
-    let rcx = RollupCx::new(model, apps);
     // (anchor sort key, routine id, JSON, human text) per card.
     type Rendered = (Option<(String, u32, u32)>, String, Value, String);
     let mut cards: Vec<Rendered> = resolved
@@ -1472,23 +1784,87 @@ fn render(
                     .unwrap_or(human.len());
                 human.insert_str(at, &format!("    {line}\n"));
             }
+            // Output validation V2 (§5.1, F29, F75): the routine's own state
+            // changes, the target company of its writes, and the callers'
+            // context section lead the card, right after its header lines.
+            let after_header = |h: &str| {
+                h.find("\n  scope: ")
+                    .and_then(|i| h[i + 1..].find('\n').map(|j| i + 1 + j + 1))
+                    .unwrap_or(h.len())
+            };
+            let mut lead: Vec<String> = Vec::new();
+            // §9.1 (F55): the direct callees first, and the short route to
+            // the UI effect the card names (a callee list alone does not say
+            // how the routine reaches it).
+            if let Some(l) = calls_line(model, &rcx.names, rid) {
+                lead.push(l);
+            }
+            if let Some(e) = entry.and_then(|e| {
+                e.effects
+                    .iter()
+                    .filter(|f| {
+                        // UI, not an error (UI_ERROR is the errors family).
+                        f.effect_type.starts_with("UI_")
+                            && f.effect_type != "UI_ERROR"
+                            && !f.literal_unreachable
+                    })
+                    .find(|f| f.via_paths.iter().any(|p| !p.is_empty()))
+            }) && let Some(p) = e
+                .via_paths
+                .iter()
+                .filter(|p| !p.is_empty())
+                .min_by_key(|p| p.len())
+            {
+                // A short route (§9.1): each hop by its name, an overloaded
+                // routine's parameter list left out (the card's sections
+                // carry the full displays).
+                let route: Vec<String> = rcx
+                    .path_line(rid, p)
+                    .split(" → ")
+                    .map(|hop| {
+                        // The routine's name: no object, no parameter list.
+                        let name = hop.rfind("::").map_or(hop, |i| &hop[i + 2..]);
+                        name.split('(').next().unwrap_or(name).trim().to_string()
+                    })
+                    .collect();
+                // The routine and the last hops before the effect (a long
+                // route elides its middle; `detail` and prove print it whole).
+                const ROUTE_TAIL: usize = 2;
+                let route = if route.len() > ROUTE_TAIL + 1 {
+                    format!(
+                        "{} → … → {}",
+                        route[0],
+                        route[route.len() - ROUTE_TAIL..].join(" → ")
+                    )
+                } else {
+                    route.join(" → ")
+                };
+                // The place prints on the card's UI line; here the route.
+                lead.push(format!("UI route: {} via {route}", e.effect_type));
+            }
+            let writes =
+                entry.is_some_and(|e| e.effects.iter().any(|f| f.effect_type.starts_with("DB_")));
+            if writes {
+                let sites = change_company_sites(model, rid);
+                if !sites.is_empty() {
+                    json["targetCompany"] = json!({"established": false, "changeCompany": sites});
+                    lead.push(format!(
+                        "target company: not established by this analysis (ChangeCompany at {})",
+                        sites.join(", ")
+                    ));
+                }
+            }
             // `--callers-context` (agent-tasks §6.6): the callers' context
-            // section, before `next:`.
+            // section.
             if let Some((value, lines)) = callers.get(rid) {
                 json["callersContext"] = value.clone();
-                let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
-                let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
-                human.insert_str(at, &text);
+                lead.push(own_state_changes(model, rid));
+                lead.extend(lines.iter().cloned());
             }
-            // The overloads this card's paths named, with their signatures.
-            let legend: String = rcx
-                .take_legend(opts.detail)
-                .iter()
-                .map(|l| format!("  {l}\n"))
-                .collect();
-            if !legend.is_empty() {
-                let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
-                human.insert_str(at, &legend);
+            if !lead.is_empty() {
+                let at = after_header(&human);
+                let text: String = lead.iter().map(|l| format!("  {l}\n")).collect();
+                human.insert_str(at, &text);
             }
             (card.sort_key.clone(), rid.clone(), json, human)
         })
@@ -1570,7 +1946,7 @@ fn render(
         human.push_str("explain: no routine resolved\n");
     }
     for d in &resolved.diagnostics {
-        human.push_str(&d.human);
+        human.push_str(&name_apps(&d.human, apps));
         human.push('\n');
     }
     let summary = explain_summary(&cards, resolved.diagnostics.len());
@@ -1697,15 +2073,50 @@ fn field_json(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -
         "caption": caption.clone().ok().flatten(),
         "captionArms": caption.err().unwrap_or_default(),
         "writers": writers,
+        // Output validation V2 (§4.2, additive): the search and the
+        // reference candidates beside the confirmed writers.
+        "fieldNumber": f.number,
+        "searched": {"searched": f.search.0, "notSearched": f.search.1},
+        "referenceCandidates": f.candidates,
     })
 }
 
 fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -> String {
-    let mut out = format!("field: {}.{}", f.table, f.field);
+    // Output validation V2 (§4.2, F17): a count with its search, never a
+    // bare `0`; confirmed writers and reference candidates counted apart.
+    let quote = |s: &str| {
+        if s.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            s.to_string()
+        } else {
+            format!("\"{s}\"")
+        }
+    };
+    let mut out = format!(
+        "field: {}.{} (field {}",
+        quote(&f.table),
+        quote(&f.field),
+        f.number
+    );
     if let Ok(Some(c)) = one_text(&f.captions) {
-        out.push_str(&format!(" (caption \"{c}\")"));
+        out.push_str(&format!(", caption \"{c}\""));
     }
-    out.push_str(&format!(": {} writer(s)\n", f.writers.len()));
+    out.push_str(")\n");
+    let (searched, not_searched) = &f.search;
+    if f.writers.is_empty() {
+        out.push_str(&format!(
+            "  confirmed writers: {}\n",
+            crate::engine::vocab::none_observed(searched, not_searched)
+        ));
+    } else {
+        out.push_str(&format!("  confirmed writers: {}\n", f.writers.len()));
+    }
+    let kind_words = |k: WriteKind| match k {
+        WriteKind::Assign => {
+            "assignment (changes the record in memory; persisted by whoever modifies or inserts it)"
+        }
+        WriteKind::Validate => "Validate (also runs the field's OnValidate)",
+        WriteKind::ModifyAll => "ModifyAll (a set-based write to the database)",
+    };
     for (id, sites) in writers_by_anchor(f) {
         let display = ix
             .rows_of(id.as_str())
@@ -1713,9 +2124,9 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
             .map_or_else(|| id.clone(), |&i| ix.qualified(i));
         let at: Vec<String> = sites
             .iter()
-            .map(|(k, a)| format!("{} at {}", k.as_str(), anchor_human(a)))
+            .map(|(k, a)| format!("{} at {}", kind_words(*k), anchor_human(a)))
             .collect();
-        out.push_str(&format!("  {display}: {}\n", at.join(", ")));
+        out.push_str(&format!("    {display} — {}\n", at.join(", ")));
         for (_, a) in sites {
             let (_, site) = index_site(entry, id, a);
             let rules = site.map_or(&[][..], |s| s.rules.as_slice());
@@ -1739,6 +2150,32 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
             }
         }
     }
+    out.push_str(&format!(
+        "  references that may write, not confirmed (kinds: RecordRef.Field by number, \
+         TransferFields copies): {}\n",
+        if f.candidates.is_empty() {
+            "none observed (search below)".to_string()
+        } else {
+            let mut s = format!("{}: ", f.candidates.len());
+            s.push_str(
+                &f.candidates
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+            if f.candidates.len() > 5 {
+                s.push_str(&format!("; … +{}", f.candidates.len() - 5));
+            }
+            s
+        }
+    ));
+    out.push_str("  writer kinds searched: assignment, Validate, ModifyAll\n");
+    out.push_str(&format!(
+        "  searched: {searched}; not searched: {not_searched}\n"
+    ));
+    out.push_str("  reads, filters and validations: alsem_query_touches with table and field\n");
     out.push('\n');
     out
 }
@@ -1964,7 +2401,7 @@ impl Card {
             ));
         }
         let doc = text.and_then(|t| t.doc.clone());
-        let routine = json!({
+        let mut routine = json!({
             "id": rid,
             "name": name,
             "objectType": object_type,
@@ -1973,7 +2410,19 @@ impl Card {
             "doc": doc,
             "anchor": anchor.as_ref().map(anchor_json),
         });
-        let title = owner_qualified(&object_display(object_type, object_name), &name);
+        // V3 §2.1 (additive): the one display, `signature`, `member`,
+        // `selector` and the JSON-only `handle`.
+        for (k, v) in ix.names.identity_json(rid) {
+            routine[k] = v;
+        }
+        let handle = rcx.handle(rid);
+        if !handle.is_empty() {
+            routine["handle"] = json!(handle);
+        }
+        let title = match first {
+            Some(i) => format_routine(&ix.names.parts_of(ix.row(i)), true),
+            None => owner_qualified(&object_display(object_type, object_name), &name),
+        };
 
         // Own rules, every row's, by anchor.
         let mut own: Vec<PRule> = rows
@@ -2441,12 +2890,8 @@ impl Card {
                         "anchor": anchor_json(&a.anchor),
                     }),
                     format!(
-                        "reached from page action {} on {}{} (RunObject = {raw}) at {}",
-                        a.name,
-                        object_display(&page.object_type, &page.name),
-                        caption
-                            .map(|c| format!(" (caption \"{c}\")"))
-                            .unwrap_or_default(),
+                        "reached from page action {} (RunObject = {raw}) at {}",
+                        action_display(&page.object_type, &page.name, &a.name, caption.as_deref()),
                         anchor_human(&a.anchor)
                     ),
                 ));
@@ -2486,12 +2931,8 @@ impl Card {
                         "anchor": anchor_json(&a.anchor),
                     }),
                     format!(
-                        "reached from page action {} on {}{} at {}",
-                        a.name,
-                        object_display(ot, on),
-                        caption
-                            .map(|c| format!(" (caption \"{c}\")"))
-                            .unwrap_or_default(),
+                        "reached from page action {} at {}",
+                        action_display(ot, on, &a.name, caption.as_deref()),
                         anchor_human(&a.anchor)
                     ),
                 ));
@@ -2732,7 +3173,9 @@ impl Card {
             }
         }
         let mut header = header_lines(&rollup, full, &counted);
-        header[0] = totals.human();
+        header[0] = totals.human(&crate::engine::l5::routine_rollup::writes_summary(
+            &rollup, full,
+        ));
         if !notes.is_empty() {
             header.insert(
                 4,

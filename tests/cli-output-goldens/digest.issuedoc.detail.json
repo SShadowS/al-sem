@@ -39,7 +39,7 @@
         },
         "crossings": {
           "c:1249372dd091": {
-            "boundary": "Codeunit Base Poster::OnRun",
+            "boundary": "Codeunit \"Base Poster\" (70100)::OnRun",
             "id": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "prefix": {
               "hops": []
@@ -52,7 +52,7 @@
             ]
           },
           "c:c01248383de2": {
-            "boundary": "Codeunit Base Calc::OnRun",
+            "boundary": "Codeunit \"Base Calc\" (70101)::OnRun",
             "id": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
             "prefix": {
               "hops": []
@@ -741,6 +741,9 @@
           },
           "display": "IssueDoc",
           "objectDisplay": "Codeunit Out Issue Document",
+          "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+          "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+          "signature": "(var Record \"Out Doc\")",
           "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
         },
         "scopedGuaranteesFolded": 15,
@@ -777,7 +780,7 @@
             "count": 16,
             "mostBeyond": {
               "enteredAt": "ws:src/OutIssueDocument.Codeunit.al:15",
-              "entryPoint": "Codeunit Base Poster::OnRun",
+              "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
               "tables": 14
             },
             "ownedByApp": 1
@@ -840,38 +843,52 @@
     "pathCap": 1,
     "routines": {
       "r:06ab280a2dc1": {
-        "display": "Codeunit Base Poster::OnRun",
+        "display": "Codeunit \"Base Poster\" (70100)::OnRun",
         "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+        "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "signature": "()",
         "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
       },
       "r:4bb5b37bce93": {
-        "display": "Codeunit Base Poster::PostDocument",
+        "display": "Codeunit \"Base Poster\" (70100)::PostDocument",
         "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+        "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359",
+        "signature": "()",
         "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359"
       },
       "r:5e210a1999b4": {
-        "display": "Codeunit Base Calc::OnRun",
+        "display": "Codeunit \"Base Calc\" (70101)::OnRun",
         "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+        "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+        "signature": "()",
         "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
       },
       "r:7071c74c2510": {
-        "display": "Codeunit Out Sender::Notify",
+        "display": "Codeunit \"Out Sender\"::Notify",
         "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "selector": "Codeunit \"Out Sender\"::Notify",
+        "signature": "(Code[20])",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50112#89d7d58959f82b9a52b9e50ac4702efe227d481b434efcd82e742862b8b0cf40"
       },
       "r:aeacadfe0cb1": {
-        "display": "Codeunit Out Log Mgt::WriteLog",
+        "display": "Codeunit \"Out Log Mgt\"::WriteLog",
         "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+        "signature": "(Text[100])",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
       },
       "r:c2e74b0ee44d": {
-        "display": "Codeunit Base Calc::UpdatePrice",
+        "display": "Codeunit \"Base Calc\" (70101)::UpdatePrice",
         "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+        "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#594160f9d6d30e76f443d25bf35b3e9630c5f2607cdf99bbffbb3550b4740eee",
+        "signature": "(Code[20])",
         "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#594160f9d6d30e76f443d25bf35b3e9630c5f2607cdf99bbffbb3550b4740eee"
       },
       "r:ff993179486b": {
-        "display": "Codeunit Out Issue Document::IssueDoc",
+        "display": "Codeunit \"Out Issue Document\"::IssueDoc",
         "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "signature": "(var Record \"Out Doc\")",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
       }
     },
@@ -909,5 +926,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

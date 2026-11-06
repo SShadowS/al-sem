@@ -1,36 +1,37 @@
---- Codeunit Normal Handler::DoSetup ---
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+computed: current effects of the 2 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+--- Codeunit "Normal Handler"::DoSetup ---
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): My Setup (Insert at :34)
     transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
-    COMMIT at ws:src/NormalCU.al:36 (unconditional-on-success)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
+    COMMIT at ws:src/NormalCU.al:36 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     My Setup: Insert 1 — known persistent
       Insert at ws:src/NormalCU.al:34
       path: DoSetup (in the routine itself)
-  events: 0 raised in workspace code; 0 more only beyond entry points
+  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (conditional)
 
---- Codeunit Normal Handler::RunSetup ---
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+--- Codeunit "Normal Handler"::RunSetup ---
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): My Setup (Insert at :34)
     transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
-    COMMIT at ws:src/NormalCU.al:36 (unconditional-on-success)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
+    COMMIT at ws:src/NormalCU.al:36 (unconditional on success)
       path: RunSetup → DoSetup
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     My Setup: Insert 1 — known persistent
       Insert at ws:src/NormalCU.al:34
       path: RunSetup → DoSetup
-  events: 0 raised in workspace code; 0 more only beyond entry points
+  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (conditional)

@@ -51,9 +51,27 @@ impl TierPick {
     fn words(self) -> &'static str {
         match self {
             TierPick::Local => "local path",
-            TierPick::Dependency => "local or through-dependency path",
-            TierPick::All => "any path, open sites included",
+            TierPick::Dependency => "local or via-dependency path",
+            TierPick::All => "any path, via-hub included",
         }
+    }
+}
+
+/// The relation of a test's path (§8.1): `UI navigation` when any hop is a
+/// page the path opens (a bare page object between routines: the page's
+/// lifecycle edge), else `code`.
+fn relation(t: &Value) -> &'static str {
+    let nav = t["path"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .skip(1)
+        .filter_map(Value::as_str)
+        .any(|h| (h.starts_with("Page ") || h.starts_with("PageExtension ")) && !h.contains("::"));
+    if nav {
+        crate::engine::vocab::RELATION_NAVIGATION
+    } else {
+        crate::engine::vocab::RELATION_CODE
     }
 }
 
@@ -230,6 +248,8 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             .map(|r| s(r, "status").to_string())
             .unwrap_or_else(|| "not-analyzed".to_string());
         let mut out = json!({"stableId": id, "display": c["display"], "status": best,
+                             // §8.1, §8.3 (additive): the test-status words.
+                             "testStatus": crate::engine::vocab::test_status(&best),
                              "nearestTestedCaller": Value::Null});
         if let Some(r) = per.iter().find(|r| r.get("nearest").is_some()) {
             out["nearest"] =
@@ -261,14 +281,19 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         "throughDependency" => 1,
         _ => 2,
     };
+    // Output validation V2 (§3.3, F13): code paths before UI-navigation ones,
+    // then tier, hops, codeunit, name.
+    let rel_rank = |t: &Value| usize::from(relation(t) != crate::engine::vocab::RELATION_CODE);
     tests.sort_by(|a, b| {
         (
+            rel_rank(a),
             tier_rank(s(a, "tier")),
             u(a, "hops"),
             a["codeunitId"].as_i64().unwrap_or(i64::MAX),
             s(a, "display"),
         )
             .cmp(&(
+                rel_rank(b),
                 tier_rank(s(b, "tier")),
                 u(b, "hops"),
                 b["codeunitId"].as_i64().unwrap_or(i64::MAX),
@@ -399,6 +424,76 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         )
     });
 
+    // Run first, grouped per codeunit (first-seen order of the ranked list).
+    let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
+    for t in &picked {
+        let key = format!(
+            "Codeunit {} {}",
+            t["codeunitId"]
+                .as_i64()
+                .map_or_else(String::new, |n| n.to_string()),
+            t["codeunit"].as_str().unwrap_or("")
+        );
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, v)) => v.push(t),
+            None => groups.push((key, vec![t])),
+        }
+    }
+    // A group's tests by tier (§3.3): `local 0, via-dependency 18`.
+    let tiers_of = |v: &[&Value]| -> Vec<(&'static str, usize)> {
+        ["local", "via-dependency", "via-hub"]
+            .into_iter()
+            .map(|w| {
+                (
+                    w,
+                    v.iter()
+                        .filter(|t| crate::engine::vocab::tier_key(s(t, "tier")) == w)
+                        .count(),
+                )
+            })
+            .collect()
+    };
+    let codeunit_ids: Vec<String> = groups
+        .iter()
+        .filter_map(|(_, v)| v[0]["codeunitId"].as_i64().map(|n| n.to_string()))
+        .collect();
+    let test_apps: Vec<String> = parts
+        .iter()
+        .filter(|p| p.result.is_ok())
+        .map(|p| s(&p.app, "name").to_string())
+        .collect();
+    // §9.5 (F63): what to run, first, in the test app's terms.
+    let run_line = if picked.is_empty() {
+        format!("run first: no test with a modeled {}", opts.tier.words())
+    } else {
+        format!(
+            "run first ({}): codeunits {} — a superset: whole codeunits, for the {} on a {}",
+            if test_apps.is_empty() {
+                "the workspace app".to_string()
+            } else {
+                format!("app \"{}\"", test_apps.join("\", \""))
+            },
+            codeunit_ids.join("|"),
+            n_of(
+                picked.len(),
+                "selected test procedure",
+                "selected test procedures"
+            ),
+            opts.tier.words()
+        )
+    } + &if complete {
+        "; selection complete".to_string()
+    } else {
+        format!(
+            "; then the whole suite (selection incomplete: {})",
+            fallback
+                .iter()
+                .map(|f| s(f, "reason").to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
     if opts.json {
         let run_first: Vec<Value> = shown
             .iter()
@@ -406,7 +501,10 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 json!({"stableId": t["stableId"], "codeunitId": t["codeunitId"], "codeunit": t["codeunit"],
                        "procedure": t["procedure"], "file": t["file"], "tier": t["tier"],
                        "class": t["class"], "hops": t["hops"], "reaches": [t["reaches"]],
-                       "path": t["path"]})
+                       "path": t["path"],
+                       // §3.3, §8.3 (additive): the §8.1 words beside `tier`.
+                       "pathTier": crate::engine::vocab::tier_key(s(t, "tier")),
+                       "relation": relation(t)})
             })
             .collect();
         let doc = json!({
@@ -432,6 +530,15 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             "runFirstTotal": picked.len(),
             "tier": match opts.tier { TierPick::Local => "local", TierPick::Dependency => "dependency", TierPick::All => "all" },
             "byTier": by_tier,
+            // §3.3 (additive): each codeunit group's tests by tier.
+            "groups": groups.iter().map(|(_, v)| json!({
+                "codeunitId": v[0]["codeunitId"], "codeunit": v[0]["codeunit"],
+                "tests": v.len(),
+                "tiers": tiers_of(v).into_iter()
+                    .map(|(k, n)| (k.to_string(), json!(n)))
+                    .collect::<serde_json::Map<String, Value>>(),
+            })).collect::<Vec<_>>(),
+            "runFirstLine": run_line,
             "requiredFallback": fallback,
             "selectionComplete": complete,
             "next": next,
@@ -446,7 +553,13 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     }
 
     let mut out: Vec<String> = Vec::new();
-    out.push(scope_text);
+    if !changed.is_empty() {
+        out.push(run_line.clone());
+    }
+    out.push(scope_text.replace(
+        "tier localApproximate",
+        "tier local (projection: approximate)",
+    ));
     if !any_scope {
         out.push(format!(
             "test scope: none — no [Test] procedure in the workspace app, and {}. No test was considered. This does not mean no tests are needed.",
@@ -474,7 +587,13 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     let shown_changed: Vec<String> = changed_out
         .iter()
         .take(8)
-        .map(|c| format!("{} — {}", s(c, "display"), s(c, "status")))
+        .map(|c| {
+            format!(
+                "{} — {}",
+                s(c, "display"),
+                crate::engine::vocab::test_status(s(c, "status"))
+            )
+        })
         .collect();
     out.push(format!(
         "changed: {} ({}{})",
@@ -486,42 +605,28 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             String::new()
         }
     ));
-    // Run first, grouped per codeunit.
-    let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
-    for t in &picked {
-        let key = format!(
-            "Codeunit {} {}",
-            t["codeunitId"]
-                .as_i64()
-                .map_or_else(String::new, |n| n.to_string()),
-            t["codeunit"].as_str().unwrap_or("")
-        );
-        match groups.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, v)) => v.push(t),
-            None => groups.push((key, vec![t])),
-        }
-    }
     if picked.is_empty() {
+        // §3.3: the nearest test is labelled with its tier and as not a
+        // focused test.
         let nearest = changed_out
             .iter()
             .find_map(|c| c.get("nearest").cloned())
             .map(|n| {
                 format!(
-                    "; nearest test: {} ({} hops, {})",
-                    s(&n, "test"),
-                    n["hops"],
+                    "; nearest [{}]: {} ({} hops) (not a focused test)",
                     match s(&n, "tier") {
-                        "throughDependency" => "through dependency code",
-                        "onlyOpen" => "only over open sites",
-                        _ => "local",
-                    }
+                        "" => "local",
+                        t => crate::engine::vocab::tier_key(t),
+                    },
+                    s(&n, "test"),
+                    n["hops"]
                 )
             })
             .unwrap_or_default();
-        out.push(format!("run first — {}: none{nearest}", opts.tier.words()));
+        out.push(format!("tests on a {}: none{nearest}", opts.tier.words()));
     } else {
         out.push(format!(
-            "run first — {}, {} in {}:",
+            "tests on a {}: {} in {} (code paths first, then UI navigation; then by tier and hops):",
             opts.tier.words(),
             n_of(picked.len(), "test", "tests"),
             n_of(groups.len(), "codeunit", "codeunits")
@@ -535,9 +640,31 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 .skip(1)
                 .filter_map(|p| p.as_str().map(str::to_string))
                 .collect();
+            // §3.3 (F13): the group's tier distribution when its tests
+            // differ in tier, its representative path's tier and relation.
+            let tiers: Vec<(&str, usize)> = tiers_of(v);
+            let mixed = tiers.iter().filter(|(_, n)| *n > 0).count() > 1;
+            let dist = if mixed {
+                format!(
+                    ": {}",
+                    tiers
+                        .iter()
+                        .map(|(w, n)| format!("{w} {n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else {
+                String::new()
+            };
+            let nav = if relation(first) == crate::engine::vocab::RELATION_NAVIGATION {
+                "; this witness requires UI navigation; invocation of the action is not established"
+            } else {
+                ""
+            };
             out.push(format!(
-                "  {k}: {}, {} (first: {}; via {})",
+                "  {k}: {}{dist}; first [{}] {} (first: {}; via {}){nav}",
                 n_of(v.len(), "test", "tests"),
+                crate::engine::vocab::tier_key(s(first, "tier")),
                 n_of(u(first, "hops"), "hop", "hops"),
                 first["procedure"].as_str().unwrap_or(s(first, "display")),
                 path.join(" → ")
@@ -562,7 +689,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 .any(|r| r["throughDependency"]["sameness"] == json!(true))
         });
         out.push(format!(
-            "through dependency code: {}{}",
+            "[via-dependency] {}{}",
             n_of(thr, "test", "tests"),
             if same {
                 " — effectively the suite's posting tests, not specific to this change"
@@ -572,10 +699,10 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         ));
     }
     if complete {
-        out.push("selection complete: yes".into());
+        out.push("selection complete".into());
     } else {
         out.push(format!(
-            "selection complete: no — run the whole suite as well (requiredFallback): {}",
+            "selection incomplete — run the whole suite as well (requiredFallback): {}",
             fallback
                 .iter()
                 .map(|f| s(f, "detail").to_string())
@@ -586,20 +713,6 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     if let Some(n) = &next {
         out.push(n.clone());
     }
-    if !picked.is_empty() {
-        let mut ids: Vec<String> = Vec::new();
-        for (_, v) in &groups {
-            if let Some(n) = v[0]["codeunitId"].as_i64() {
-                ids.push(n.to_string());
-            }
-        }
-        out.push(format!(
-            "run first: codeunit filter {}  (the {} on a {})",
-            ids.join("|"),
-            n_of(picked.len(), "test", "tests"),
-            opts.tier.words()
-        ));
-    }
     out.push(
         "this is static reachability, not coverage: a reached test may not exercise the changed lines"
             .into(),
@@ -607,5 +720,52 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     Rendered {
         text: out.join("\n") + "\n",
         exit,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Output validation V2 (§3.3, F13): a code path ranks ahead of a path
+    /// that needs UI navigation, whatever their tiers: a `local` test whose
+    /// path opens a page comes after a `via-dependency` code path. Hand-stated
+    /// parts (two reached tests of one root, the navigation one with the
+    /// better tier and fewer hops). Discrimination (2026-11-06): see the
+    /// commit message.
+    #[test]
+    fn code_paths_rank_before_navigation_paths() {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Codeunit X::R"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 1,
+        });
+        let nav = json!({"stableId": "t1", "codeunitId": 50001, "codeunit": "Nav Tests",
+            "procedure": "OpensPage", "tier": "local", "hops": 2, "reaches": "r1",
+            "display": "Codeunit Nav Tests::OpensPage",
+            "path": ["Codeunit Nav Tests::OpensPage", "Page Card", "Page Card.action(Go)::OnAction", "Codeunit X::R"]});
+        let code = json!({"stableId": "t2", "codeunitId": 50002, "codeunit": "Code Tests",
+            "procedure": "CallsIt", "tier": "throughDependency", "hops": 5, "reaches": "r1",
+            "display": "Codeunit Code Tests::CallsIt",
+            "path": ["Codeunit Code Tests::CallsIt", "Codeunit Dep (9)::Run", "Codeunit X::R"]});
+        let part = Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({"roots": [{"stableId": "r1", "status": "reached"}],
+                              "tests": [nav, code]})),
+        };
+        let r = render(
+            &roots,
+            &[part],
+            RenderOpts {
+                tier: TierPick::All,
+                max_tests: None,
+                json: true,
+            },
+        );
+        let v: Value = serde_json::from_str(&r.text).unwrap();
+        let first = &v["runFirst"][0];
+        assert_eq!(first["stableId"], "t2", "{v:#}");
+        assert_eq!(first["relation"], "code", "{v:#}");
+        assert_eq!(v["runFirst"][1]["relation"], "UI navigation", "{v:#}");
     }
 }

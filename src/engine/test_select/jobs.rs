@@ -89,15 +89,21 @@ impl Job for RootsJob<'_> {
                 .map(|o| o.name.clone())
                 .unwrap_or_default()
         };
+        // V3 §2.1: each root by the one routine display, with its parts.
+        let routine_names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
         let roots: Vec<Value> = changed
             .roots
             .iter()
             .map(|id| {
                 let r = ws.routines.iter().find(|r| &r.stable_routine_id == id);
-                json!({
+                let mut v = json!({
                     "stableId": id,
                     "display": r.map(|r| format!("{} {}::{}", r.object_type, object_name(&r.object_id), r.name)),
-                })
+                });
+                for (k, x) in routine_names.identity_json(id) {
+                    v[k] = x;
+                }
+                v
             })
             .collect();
         let primary = primary_guid_of(model).map(str::to_string);

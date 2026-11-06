@@ -243,12 +243,13 @@ fn b3d_a_count_preserving_table_swap_shows_both() {
     );
 }
 
-/// A call moved from one overload to another names each by its short
-/// handle (`Note/1`, `Note/2`, MCP output step 2), so the removed call and
-/// the added one never print alike.
+/// A call moved from one overload to another names each by its parameter
+/// types (V3 §2.1; was the short handle `Note/1`, `Note/2`), so the removed
+/// call and the added one never print alike.
 ///
-/// Break: label a callee by its display alone (`Names::display` in
-/// `own_keys`) → both read `calls Codeunit FX Core::Note`.
+/// Break: label a callee without its parameter list (no stable id marked
+/// overloaded in `RoutineNames::new`) → both read `calls Codeunit "FX
+/// Core"::Note`.
 #[test]
 fn a_call_moved_between_overloads_names_each_overload() {
     let base = r#"codeunit 50810 "FX Core"
@@ -275,8 +276,8 @@ fn a_call_moved_between_overloads_names_each_overload() {
     assert_eq!(
         got,
         pairs(&[
-            ("added", "calls Codeunit FX Core::Note/2"),
-            ("removed", "calls Codeunit FX Core::Note/1"),
+            ("added", "calls Codeunit \"FX Core\"::Note(Text, Integer)"),
+            ("removed", "calls Codeunit \"FX Core\"::Note(Text)"),
         ])
     );
 }
@@ -362,17 +363,17 @@ fn b4_a_deleted_routine_is_listed_with_its_base_callers() {
     let v = impact(&r, &[]);
     let deleted = v["deleted"].as_array().unwrap();
     assert_eq!(deleted.len(), 1, "{v:#}");
-    assert_eq!(deleted[0]["display"], "Codeunit FX Core::Gone");
+    assert_eq!(deleted[0]["display"], "Codeunit \"FX Core\"::Gone");
     assert_eq!(deleted[0]["baseCallers"]["count"], 1);
     assert_eq!(
         deleted[0]["baseCallers"]["first"][0]["display"],
-        "Codeunit FX Core::Caller"
+        "Codeunit \"FX Core\"::Caller"
     );
     // The caller lost its callee.
     let caller = root(&v, "Caller");
     assert_eq!(
         own(caller),
-        pairs(&[("removed", "calls Codeunit FX Core::Gone")])
+        pairs(&[("removed", "calls Codeunit \"FX Core\"::Gone")])
     );
 }
 
@@ -445,7 +446,12 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|r| r["display"] == "Codeunit FX Core::Over")
+        // V3 §2.1: an overloaded name prints its parameter types.
+        .filter(|r| {
+            r["display"]
+                .as_str()
+                .is_some_and(|d| d.starts_with("Codeunit \"FX Core\"::Over("))
+        })
         .collect();
     assert_eq!(overs.len(), 2);
     for o in overs {
@@ -459,11 +465,11 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
     }
     let deleted = v["deleted"].as_array().unwrap();
     assert_eq!(deleted.len(), 2, "{v:#}");
-    assert!(
-        deleted
-            .iter()
-            .all(|d| d["display"] == "Codeunit FX Core::Over")
-    );
+    assert!(deleted.iter().all(|d| {
+        d["display"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("Codeunit \"FX Core\"::Over("))
+    }));
 }
 
 /// A workspace in a subfolder of its repository (as CDO's `Cloud`): the
@@ -526,7 +532,7 @@ fn a_renamed_routine_is_deleted_and_added() {
     assert_eq!(root(&v, "NewName")["status"], "added");
     let deleted = v["deleted"].as_array().unwrap();
     assert_eq!(deleted.len(), 1);
-    assert_eq!(deleted[0]["display"], "Codeunit FX Core::OldName");
+    assert_eq!(deleted[0]["display"], "Codeunit \"FX Core\"::OldName");
 }
 
 /// B-6: a second run with the same key reads the cache (no base build);
@@ -806,10 +812,10 @@ pub(crate) fn cdo_impact_base_ratchets() {
             .unwrap()
             .iter()
             .filter(|r| {
-                r["display"]
-                    .as_str()
-                    .is_some_and(|d| d.ends_with(&format!("::{name}")))
-                    && r["delta"]["own"].is_array()
+                // V3 §2.1: an overloaded name carries its parameter types.
+                r["display"].as_str().is_some_and(|d| {
+                    d.ends_with(&format!("::{name}")) || d.contains(&format!("::{name}("))
+                }) && r["delta"]["own"].is_array()
             })
             .flat_map(own)
             .collect()
@@ -834,15 +840,15 @@ pub(crate) fn cdo_impact_base_ratchets() {
         changes("FileExists"),
         pairs(&[(
             "added",
-            "calls Codeunit CDO Azure Blob Storage::ResolvePath"
+            "calls Codeunit \"CDO Azure Blob Storage\"::ResolvePath"
         )])
     );
     let init = changes("InitNewEntry");
     for want in [
-        ("added", "calls Table CDO E-Mail Log::InitNewEntryCore"),
-        ("removed", "calls Table CDO E-Mail Log::SetTo"),
-        ("removed", "calls Table CDO E-Mail Log::SetCc"),
-        ("removed", "calls Table CDO E-Mail Log::SetBcc"),
+        ("added", "calls Table \"CDO E-Mail Log\"::InitNewEntryCore"),
+        ("removed", "calls Table \"CDO E-Mail Log\"::SetTo"),
+        ("removed", "calls Table \"CDO E-Mail Log\"::SetCc"),
+        ("removed", "calls Table \"CDO E-Mail Log\"::SetBcc"),
     ] {
         assert!(
             init.contains(&(want.0.to_string(), want.1.to_string())),

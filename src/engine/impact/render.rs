@@ -85,10 +85,11 @@ fn u(v: &Value, k: &str) -> usize {
     v.get(k).and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
-/// A routine's display with its short handle (`Codeunit X::F/2`): two
-/// overloads never print alike.
+/// A routine's display (V3 §2.1: the one display prints an overloaded
+/// name's parameter types, so two overloads never print alike; the short
+/// `handle` stays in JSON only).
 fn named(v: &Value) -> String {
-    format!("{}{}", s(v, "display"), s(v, "handle"))
+    s(v, "display").to_string()
 }
 
 fn short(c: &str) -> String {
@@ -268,7 +269,15 @@ fn effects_clause(e: &Value) -> String {
     let writes = u(w, "count");
     let unresolved = u(e, "unresolvedTableWrites");
     if writes == 0 && unresolved == 0 {
-        parts.push("no observed write that may persist".to_string());
+        // §8.1 negative certainty: the routine's summary does not carry its
+        // cone's completeness here, so the absence states its search.
+        parts.push(format!(
+            "writes that may persist: {}",
+            crate::engine::vocab::none_observed(
+                "the cone through every resolved call",
+                "calls not resolved"
+            )
+        ));
     } else {
         let mut x = format!(
             "may write {} ({} owned by this app, {} by dependencies)",
@@ -297,9 +306,17 @@ fn effects_clause(e: &Value) -> String {
     } else {
         ""
     };
+    // §8.1 negative certainty for an absence (the JSON keeps its answer).
+    let answer = match s(c, "answer") {
+        "none" => crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED.to_string(),
+        "no observed" => crate::engine::vocab::none_observed(
+            "the cone through every resolved call",
+            "calls not resolved",
+        ),
+        a => a.to_string(),
+    };
     parts.push(format!(
-        "commits: {} ({at_least}{})",
-        s(c, "answer"),
+        "commits: {answer} ({at_least}{})",
         plural(u(c, "ownSites"), "own commit site", "own commit sites")
     ));
     let kinds = &e["kinds"];
@@ -326,86 +343,152 @@ fn effects_clause(e: &Value) -> String {
 /// over open sites)`). An open-site (hub) witness is a possibility, not a
 /// path: round-1 c20 printed a `run:report` hub's witness as a plain one.
 fn node_short(n: &Value) -> String {
-    let tier = match s(n, "tier") {
-        "throughDependency" => ", through dependency code",
-        "onlyOpen" => ", only over open sites",
-        _ => "",
-    };
+    // §8.1: the tier first, in its own words.
     format!(
-        "{} ({}{tier})",
+        "[{}] {} ({})",
+        crate::engine::vocab::tier_key(s(n, "tier")),
         s(n, "display"),
         plural(u(n, "hops"), "hop", "hops")
     )
 }
 
-/// The entry-kind name in human words, plural.
-fn entry_words(kind: &str, n: usize) -> String {
-    let (one, many) = match kind {
-        "page-action" => ("page action", "page actions"),
-        "api-page" => ("API page", "API pages"),
-        "web-service-exposed" => ("web service", "web services"),
-        "job-queue-entrypoint" => ("job queue entry point", "job queue entry points"),
-        "background-start" => ("background start", "background starts"),
-        "report-trigger" => ("report trigger", "report triggers"),
-        "trigger-page" => ("page trigger", "page triggers"),
-        "trigger-table" => ("table trigger", "table triggers"),
-        "event-subscriber" => ("event subscriber", "event subscribers"),
-        "install-codeunit" => ("install codeunit", "install codeunits"),
-        "upgrade-codeunit" => ("upgrade codeunit", "upgrade codeunits"),
-        "onrun-codeunit" => ("codeunit OnRun", "codeunit OnRuns"),
-        "test-procedure" => ("test procedure", "test procedures"),
-        other => (other, other),
-    };
-    plural(n, one, many)
-}
+/// The reach share at which a reach's lists fold (§3.2: entries reached
+/// over navigation or hubs against the program's entries; start at 50%).
+const FOLD_SHARE_PERCENT: usize = 50;
 
-/// The "reached from" clause of an up summary (a root's or the union's).
-fn reached_clause(up: &Value, detail: bool) -> String {
-    let mut parts = Vec::new();
-    for e in up["entries"].as_array().into_iter().flatten() {
-        let kind = s(e, "kind");
-        let n = u(e, "count");
-        let first: Vec<String> = e["first"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .take(if detail { 10 } else { 1 })
-            .map(|f| {
-                if kind == "page-action" {
-                    let caption = f["caption"]
-                        .as_str()
-                        .map(|c| format!("\"{c}\""))
-                        .or_else(|| f["action"].as_str().map(|a| format!("action {a}")));
-                    match caption {
-                        Some(c) => format!("{c} on {}", node_short(f)),
-                        None => node_short(f),
-                    }
+/// The lines of a reach beyond the code callers (output validation V2,
+/// §3.2, F12): ancestors by tier; entries by kind and by execution context
+/// (contexts overlap and are never summed); the first entry per kind, or,
+/// when the reach is broad (its entries are at least
+/// [`FOLD_SHARE_PERCENT`] of the program's), a fold line naming the trigger
+/// and its measure; the hubs on the paths in the §8.1 form.
+fn reach_lines(up: &Value, detail: bool, indent: &str) -> Vec<String> {
+    use crate::engine::vocab;
+    let mut out = Vec::new();
+    let a = &up["ancestors"];
+    out.push(format!(
+        "{indent}reached beyond it: {} — by tier: local {}, via-dependency {}, via-hub {}",
+        plural(u(a, "total"), "ancestor", "ancestors"),
+        thousands(u(a, "local")),
+        thousands(u(a, "throughDependency")),
+        thousands(u(a, "onlyOpen"))
+    ));
+    let entries: Vec<&Value> = up["entries"].as_array().into_iter().flatten().collect();
+    if entries.is_empty() {
+        out.push(format!(
+            "{indent}  entries among them: none (no page action, API page, job, trigger, \
+             subscriber or test reaches it)"
+        ));
+        return out;
+    }
+    // By kind (§8.1 words; the legacy buckets that name one kind are added,
+    // and a node in two legacy buckets may count twice until the entries are
+    // classified disjointly) and by context.
+    let mut kinds: Vec<(&str, usize, usize)> = Vec::new();
+    let mut contexts: Vec<(&str, usize)> = Vec::new();
+    for e in &entries {
+        let (kind, ctx) = vocab::entry_key(s(e, "kind"));
+        match kinds.iter_mut().find(|(k, _, _)| *k == kind) {
+            Some(x) => {
+                x.1 += u(e, "count");
+                x.2 += u(e, "onlyOpen");
+            }
+            None => kinds.push((kind, u(e, "count"), u(e, "onlyOpen"))),
+        }
+        if let Some(c) = ctx {
+            match contexts.iter_mut().find(|(k, _)| *k == c) {
+                Some(x) => x.1 += u(e, "count"),
+                None => contexts.push((c, u(e, "count"))),
+            }
+        }
+    }
+    out.push(format!(
+        "{indent}  entries among them, by kind (counted per legacy bucket: an entry in two \
+         buckets counts in both): {}",
+        kinds
+            .iter()
+            .map(|(k, n, open)| {
+                let open = if *open > 0 {
+                    format!(" (via-hub {})", thousands(*open))
                 } else {
-                    node_short(f)
-                }
+                    String::new()
+                };
+                format!("{} {}{open}", vocab::entry_kind_plural(k), thousands(*n))
             })
-            .collect();
-        let open = u(e, "onlyOpen");
-        let words = if open > 0 {
-            format!(
-                "{} ({} only over open sites)",
-                entry_words(kind, n),
-                thousands(open)
-            )
-        } else {
-            entry_words(kind, n)
-        };
-        parts.push(if first.is_empty() {
-            words
-        } else {
-            format!("{words} (first: {})", first.join("; "))
-        });
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    if !contexts.is_empty() {
+        out.push(format!(
+            "{indent}  by context (contexts may overlap; not summed): {}",
+            contexts
+                .iter()
+                .map(|(c, n)| format!("{c} {}", thousands(*n)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
-    if parts.is_empty() {
-        "no entry in its cone (no page action, API page, job, trigger, subscriber or test reaches it)".into()
-    } else {
-        parts.join(", ")
+    let program = u(up, "programEntries");
+    let reached = u(up, "entryBuckets");
+    let share = (reached * 100).checked_div(program).map(|p| p.min(100));
+    match share {
+        Some(p) if p >= FOLD_SHARE_PERCENT && !detail => out.push(format!(
+            "{indent}  broad navigation reach ({p}% of the program's entries; list folded) — \
+             detail: true lists one representative per kind and tier"
+        )),
+        _ => {
+            // One line per kind: two legacy buckets of one kind (codeunit
+            // OnRun and background starts) print the first one's witnesses.
+            let mut printed: Vec<&str> = Vec::new();
+            for e in &entries {
+                let kind = vocab::entry_key(s(e, "kind")).0;
+                if printed.contains(&kind) {
+                    continue;
+                }
+                printed.push(kind);
+                let firsts: Vec<String> = e["first"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(if detail { 10 } else { 1 })
+                    .map(node_short)
+                    .collect();
+                if !firsts.is_empty() {
+                    out.push(format!(
+                        "{indent}    first {}: {}",
+                        vocab::entry_key(s(e, "kind")).0,
+                        firsts.join("; ")
+                    ));
+                }
+            }
+        }
     }
+    let hubs: Vec<String> = up["hubs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|h| {
+            let at = s(h, "at");
+            vocab::hub(s(h, "kind"), None, (!at.is_empty()).then_some(at))
+        })
+        .collect();
+    if !hubs.is_empty() {
+        let cap = if detail { hubs.len() } else { 3 };
+        out.push(format!(
+            "{indent}  hubs on these paths: {}{}",
+            hubs.iter()
+                .take(cap)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            if hubs.len() > cap {
+                format!(", … +{} (detail: true lists them)", hubs.len() - cap)
+            } else {
+                String::new()
+            }
+        ));
+    }
+    out
 }
 
 /// The external clause (`external: public; friend`), empty when none.
@@ -473,25 +556,25 @@ fn tests_clause(rt: &Value) -> String {
             // Over many changed routines one walk labels each test with its
             // NEAREST changed routine (test selection's own rule), so this
             // routine's tests are counted under another one.
-            "tests: reached (each test is counted under its nearest changed routine; this one's are counted under others)".into()
+            "tests: tests with a modeled path (each test is counted under its nearest changed routine; this one's are counted under others)".into()
         }
         "reached" => {
             let n = &rt["nearest"];
             format!(
-                "tests: {} reach it ({} by a local path); nearest {} ({}, {})",
+                "tests: tests with a modeled path: {} ({} by a local path); nearest {} ({}, {})",
                 thousands(total),
                 thousands(u(rt, "local")),
                 s(n, "test"),
                 match s(n, "tier") {
-                    "throughDependency" => "through dependency code",
-                    "onlyOpen" => "only over open sites",
-                    _ => "local",
+                    "" => "local",
+                    t => crate::engine::vocab::tier_key(t),
                 },
                 plural(u(n, "hops"), "hop", "hops")
             )
         }
         "not-in-projection" | "not-loaded" => {
-            let how = if st == "not-loaded" {
+            let st = crate::engine::vocab::test_status(st);
+            let how = if st == "not loaded" {
                 "the test universe has no body for it"
             } else {
                 "no test universe has it"
@@ -512,9 +595,9 @@ fn tests_clause(rt: &Value) -> String {
                 ),
             }
         }
-        "no-known-path" => "tests: no test reaches it (its cone is complete)".into(),
+        "no-known-path" => "tests: no modeled path (its cone is complete)".into(),
         "analysis-incomplete" => {
-            "tests: no test reaches it, but its cone is incomplete (not proof that none does)"
+            "tests: analysis partial — no modeled path found, but its cone is incomplete (not proof that none does)"
                 .into()
         }
         _ => "tests: not analyzed".into(),
@@ -829,6 +912,28 @@ pub fn render(
     }
 
     let mut out: Vec<String> = Vec::new();
+    // Output validation V2 (§4.7, F27): a change mode's first line states
+    // the computation performed, and whether the diff matched the source.
+    match (cmp.source, delta) {
+        ("diff", Err(_)) => out.push(format!(
+            "computed: current effects of the {} this diff touches, in the working tree (the \
+             diff's lines match it: {}); no before/after computed — pass base for that",
+            plural(roots.len(), "routine", "routines"),
+            if mismatches.is_empty() {
+                "yes".to_string()
+            } else {
+                format!(
+                    "no, {} at uncertain positions; routines placed by name",
+                    plural(mismatches.len(), "file", "files")
+                )
+            }
+        )),
+        ("base", Err(e)) if e != "not asked" => out.push(format!(
+            "computed: base {} given; before/after not computed ({e})",
+            cmp.requested_ref.as_deref().unwrap_or("")
+        )),
+        _ => {}
+    }
     out.push(comparison_line(cmp, files));
     if let Ok(d) = delta {
         out.push(base_clause(&d.block));
@@ -1060,11 +1165,8 @@ pub fn render(
     // 3. The whole change.
     if let Ok(up) = up {
         let un = &up["union"];
-        tail.push(format!(
-            "the whole change is reached from: {}; {}",
-            reached_clause(un, false),
-            plural(u(&un["ancestors"], "total"), "ancestor", "ancestors")
-        ));
+        tail.push("the whole change:".to_string());
+        tail.extend(reach_lines(un, false, "  "));
     }
     if let Ok(d) = delta {
         before_after_tail(&mut tail, d, opts);
@@ -1205,10 +1307,9 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
         } else if s(up, "status") == "not-in-graph" {
             out.push("      reached from: not in the sited graph (no caller is known)".into());
         } else {
-            out.push(format!(
-                "      reached from: {}",
-                reached_clause(up, opts.detail)
-            ));
+            // Output validation V2 (§3.2, F12): code callers first, then the
+            // reach beyond them split by tier, kind and context, lists folded
+            // when the reach is broad, the hubs named.
             let c = &up["callers"];
             let first: Vec<String> = c["first"]
                 .as_array()
@@ -1220,20 +1321,22 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
                     None => s(f, "display").to_string(),
                 })
                 .collect();
-            let a = &up["ancestors"];
-            out.push(format!(
-                "      callers: {}{}; {} (local {}, through dependency code {}, only over open sites {})",
-                plural(u(c, "count"), "routine", "routines"),
-                if first.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (first: {})", first.join("; "))
-                },
-                plural(u(a, "total"), "ancestor", "ancestors"),
-                thousands(u(a, "local")),
-                thousands(u(a, "throughDependency")),
-                thousands(u(a, "onlyOpen"))
-            ));
+            out.push(if u(c, "count") == 0 {
+                "      reached by code callers: no — no code caller found in the analyzed graph \
+                 (every candidate decided)"
+                    .to_string()
+            } else {
+                format!(
+                    "      reached by code callers: {}{}",
+                    plural(u(c, "count"), "routine", "routines"),
+                    if first.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (nearest: {})", first.join("; "))
+                    }
+                )
+            });
+            out.extend(reach_lines(up, opts.detail, "      "));
             let p = &up["eventPublishers"];
             if u(p, "count") > 0 {
                 out.push(format!(
@@ -1390,8 +1493,34 @@ fn tests_line(d: &Value) -> String {
             }
         }
     }
+    // Output validation V2 (§9.5, F63): what to run first, in the test
+    // app's terms, then the selection's completeness and the fallback.
+    let run = if codeunits.is_empty() {
+        "run first: no test with a modeled path".to_string()
+    } else {
+        format!(
+            "run first ({}): codeunits {} — a superset: whole codeunits, for the {} tests with a \
+             modeled path ({} by a local path)",
+            if apps.is_empty() {
+                "the workspace".to_string()
+            } else {
+                format!("app \"{}\"", apps.join("\", \""))
+            },
+            codeunits.join("|"),
+            thousands(total),
+            thousands(u(by, "local"))
+        )
+    };
     format!(
-        "tests: workspace {} [Test]; {} ({}); {} reach changed routines ({} by a local path); selection complete: {}{}",
+        "tests: {run}; {}; workspace {} [Test]; {} ({})",
+        if complete {
+            "selection complete".to_string()
+        } else {
+            format!(
+                "then the whole suite (selection incomplete: {})",
+                reasons.join(", ")
+            )
+        },
         u(&d["scope"], "workspaceTests"),
         plural(apps.len(), "test app", "test apps"),
         if apps.is_empty() {
@@ -1399,18 +1528,6 @@ fn tests_line(d: &Value) -> String {
         } else {
             apps.join(", ")
         },
-        thousands(total),
-        thousands(u(by, "local")),
-        if complete {
-            "yes".to_string()
-        } else {
-            format!("no — run the whole suite as well ({})", reasons.join(", "))
-        },
-        if codeunits.is_empty() {
-            String::new()
-        } else {
-            format!("; run first: codeunit filter {}", codeunits.join("|"))
-        }
     )
 }
 

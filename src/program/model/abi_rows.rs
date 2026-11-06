@@ -251,6 +251,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         // capture (E1) is a native-parser-only signal, so these are always `None` for a
         // projected dep routine. Additive: `ModelRoutine` is not `Serialize`-derived.
         enclosing_member: None,
+        member_detail: None,
         originating_object: None,
         enclosing_member_range: None,
         // Not built here: `append_dependency_rows` gives a symbol-only row its

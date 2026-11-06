@@ -34,9 +34,12 @@
       },
       "display": "CallerA",
       "objectDisplay": "Codeunit D1 Multi Caller",
+      "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
+      "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
+      "signature": "()",
       "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
     },
     "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
   },
-  "schemaVersion": "2.4.0"
+  "schemaVersion": "2.8.0"
 }

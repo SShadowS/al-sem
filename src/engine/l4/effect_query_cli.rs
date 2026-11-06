@@ -97,8 +97,17 @@ use crate::program::resolve::full::LoadedDependencies;
 /// or unclassified row moves to that family's bucket (`summary.reads`, …) and
 /// out of `summary.callerDependent` / `summary.temporary` / `byTable`; a
 /// caller-dependent row adds `parameterPosition` (1-based) and
-/// `parameterName` (additive; `tempState` keeps the 0-based index).
-const QUERY_SCHEMA_VERSION: &str = "3.6.0";
+/// `parameterName` (additive; `tempState` keeps the 0-based index). 3.7.0
+/// (output validation V3, §2.1, additive): every routine object gains
+/// `qualifiedDisplay` (the one routine display: member, AL quoting, an
+/// overloaded name's parameter types), `signature`, `member` and `selector`;
+/// `display` keeps the routine's name. 3.8.0 (output validation V2, §5.2
+/// F61, §9.3 F74, additive): `query effects` adds
+/// `payload.result.scope.families` (`reads`, `locks`, `validate`, `writes`,
+/// `beyondDependencyCalls`, each `{depth, inventory, reasons, blockers}`);
+/// `touches --field` splits its inventory (`fieldSummary.confirmed`,
+/// `fieldSummary.numericCandidates`) and adds `filters`.
+const QUERY_SCHEMA_VERSION: &str = "3.8.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1027,11 +1036,43 @@ pub fn resolve_routine_selector<'a>(
     let bare: Vec<&ModelRoutine> = routines()
         .filter(|r| r.name.to_lowercase() == want)
         .collect();
+    // V3 §2.1: a member form (`Object."Field"::Trigger`,
+    // `Object.action(Name)::OnAction`), the one display of a member trigger.
+    let member: Vec<&ModelRoutine> = if qualified.is_empty() {
+        let owner_display = |r: &ModelRoutine| object_display(&r.object_type, object_name(r));
+        let rows = routines().filter_map(|r| {
+            Some(crate::engine::l5::selector_index::MemberRow {
+                id: &r.stable_routine_id,
+                owner_display: owner_display(r),
+                member: r.enclosing_member.as_deref()?,
+                member_kind: r.member_detail.as_ref().map_or_else(
+                    || {
+                        crate::engine::l5::routine_rollup::infer_member_kind(
+                            &r.object_type,
+                            &r.name,
+                        )
+                    },
+                    |d| d.kind,
+                ),
+                routine: &r.name,
+            })
+        });
+        match crate::engine::l5::selector_index::resolve_member_selector(selector, rows) {
+            Some(ids) => routines()
+                .filter(|r| ids.contains(&r.stable_routine_id))
+                .collect(),
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
 
     // Most specific non-empty tier wins; an ambiguity inside a tier does NOT
     // fall through to a looser tier (that would answer a different question).
     let hits = if !qualified.is_empty() {
         qualified
+    } else if !member.is_empty() {
+        member
     } else {
         bare
     };
@@ -1079,12 +1120,22 @@ pub struct RoutineRef {
     pub file: String,
     pub line: u32,
     pub column: u32,
+    /// The one routine display without the member's caption (V3 §2.1).
+    pub canonical: String,
+    /// [`Self::canonical`] without its object: what a line grouped under
+    /// the object prints (`"Table No."::OnValidate`, `Note(Text)`).
+    pub in_object: String,
+    /// The one routine display with the member's caption (headers).
+    pub header: String,
+    /// The JSON identity fields (`signature`, `member`, `selector`).
+    pub identity: serde_json::Map<String, Value>,
 }
 
 impl RoutineRef {
-    /// The one header rule, [`owner_qualified`], for this routine (#78).
+    /// The one routine display (V3 §2.1) as a list row prints it (no
+    /// member caption).
     pub fn qualified(&self) -> String {
-        owner_qualified(&self.object_display, &self.display)
+        self.canonical.clone()
     }
 }
 
@@ -1094,6 +1145,7 @@ impl RoutineRef {
 pub struct RoutineJoin<'a> {
     by_id: HashMap<&'a str, &'a ModelRoutine>,
     declaring: DeclaringObjects<'a>,
+    names: crate::engine::l5::routine_rollup::RoutineNames<'a>,
 }
 
 impl<'a> RoutineJoin<'a> {
@@ -1102,7 +1154,13 @@ impl<'a> RoutineJoin<'a> {
         RoutineJoin {
             by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
             declaring: DeclaringObjects::new(&ws.objects),
+            names: crate::engine::l5::routine_rollup::RoutineNames::new(resolved, &[]),
         }
+    }
+
+    /// The one routine display's names (V3 §2.1).
+    pub fn names(&self) -> &crate::engine::l5::routine_rollup::RoutineNames<'a> {
+        &self.names
     }
 
     /// Join an internal routine id to its renderable identity. `None` for an id
@@ -1119,7 +1177,11 @@ impl<'a> RoutineJoin<'a> {
     }
 
     pub fn of(&self, r: &ModelRoutine) -> RoutineRef {
+        use crate::engine::l5::routine_rollup::format_routine;
         let object_name = self.declaring.of(r).map_or("", |o| o.name.as_str());
+        let parts = self.names.parts_of(r);
+        let mut identity = self.names.identity_json(&r.stable_routine_id);
+        identity.remove("display");
         RoutineRef {
             display: r.name.clone(),
             object_display: object_display(&r.object_type, object_name),
@@ -1127,6 +1189,10 @@ impl<'a> RoutineJoin<'a> {
             file: r.source_anchor.source_unit_id.clone(),
             line: r.source_anchor.start_line,
             column: r.source_anchor.start_column,
+            canonical: format_routine(&parts, false),
+            in_object: crate::engine::l5::routine_rollup::split_display(&parts).1,
+            header: format_routine(&parts, true),
+            identity,
         }
     }
 }
@@ -1284,12 +1350,12 @@ impl<'a> OperationJoin<'a> {
     }
 }
 
-/// The human name of a row's table: a RecordRef's "table decided at run
-/// time" (Q4) is said only where the receiver is one; any other unresolved
-/// table is "table not resolved".
+/// The human name of a row's table (§8.1 target resolution): a RecordRef's
+/// "table not resolved (RecordRef)" (Q4) is said only where the receiver is
+/// one; any other unresolved table is "table not resolved".
 fn unresolved_label(record_ref: bool) -> &'static str {
     if record_ref {
-        "a RecordRef (table decided at run time)"
+        "a RecordRef (table not resolved: RecordRef)"
     } else {
         "table not resolved"
     }
@@ -1315,13 +1381,21 @@ fn origin_human(origin: Option<&OperationRef>, operation_id: &str) -> String {
     }
 }
 
+/// A routine's JSON: `display` (its name, as before) and `objectDisplay`,
+/// plus (V3 §2.1, 3.7.0) `qualifiedDisplay` (the one display), `signature`,
+/// `member` and `selector`.
 fn routine_ref_json(rr: &RoutineRef) -> Value {
-    json!({
+    let mut v = json!({
         "display": rr.display,
         "objectDisplay": rr.object_display,
+        "qualifiedDisplay": rr.header,
         "stableId": rr.stable_id,
         "anchor": { "file": rr.file, "line": shown(rr.line), "column": rr.column },
-    })
+    });
+    for (k, x) in &rr.identity {
+        v[k] = x.clone();
+    }
+    v
 }
 
 /// [`temp_state_str`]'s text for a state that depends on the routine's own
@@ -1503,18 +1577,118 @@ fn selector_failure_doc<T>(
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
+    selector_failure_doc_with(
+        kind,
+        selector_field,
+        selector,
+        resolution,
+        deps,
+        alsem_ver,
+        deterministic,
+        serde_json::Map::new(),
+        None,
+    )
+}
+
+/// A routine selector's failure document (V3 §2.4): an unmatched one with
+/// the nearest workspace names (or where the name is found only in
+/// dependency code) and the selector forms; an ambiguous one with every
+/// candidate's complete parameter list and a ready `routines: [...]` value.
+#[allow(clippy::too_many_arguments)]
+fn routine_failure_doc(
+    kind: &str,
+    selector_field: &str,
+    selector: &str,
+    resolution: &Resolution<&ModelRoutine>,
+    model: &Model,
+    deps: &LoadedDependencies,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> QueryRunResult {
+    use crate::engine::l5::selector_index as si;
+    let names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
+    let (extra, human) = match resolution {
+        Resolution::Ambiguous(labels) => {
+            // Each label ends `(stable id <id>)` (`candidate_label`).
+            let listed: Vec<si::AmbiguousCandidate> = labels
+                .iter()
+                .filter_map(|l| {
+                    let id = l.rsplit_once("(stable id ")?.1.strip_suffix(')')?;
+                    si::AmbiguousCandidate::of(&names, id)
+                })
+                .collect();
+            if listed.len() != labels.len() {
+                (serde_json::Map::new(), None)
+            } else {
+                let mut m = serde_json::Map::new();
+                m.insert(
+                    "candidateSelectors".into(),
+                    listed.iter().map(|c| c.selector.clone()).collect(),
+                );
+                let lines =
+                    si::ambiguity_lines(&format!("{kind}: {selector_field} "), selector, &listed);
+                (m, Some(format!("{}\n", lines.join("\n"))))
+            }
+        }
+        _ => {
+            let owners = OwnerIndex::build(model);
+            let hints = si::selector_hints(&names, |id| owners.object_display(id), selector);
+            let mut lines = vec![crate::engine::l5::explain::unmatched_line(
+                &format!("{kind}: {selector_field}: "),
+                selector,
+            )];
+            lines.extend(
+                si::hint_lines(&hints, &deps.apps)
+                    .into_iter()
+                    .map(|l| format!("  {l}")),
+            );
+            (
+                si::hints_json(&hints),
+                Some(format!("{}\n", lines.join("\n"))),
+            )
+        }
+    };
+    selector_failure_doc_with(
+        kind,
+        selector_field,
+        selector,
+        resolution,
+        deps,
+        alsem_ver,
+        deterministic,
+        extra,
+        human,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn selector_failure_doc_with<T>(
+    kind: &str,
+    selector_field: &str,
+    selector: &str,
+    resolution: &Resolution<T>,
+    deps: &LoadedDependencies,
+    alsem_ver: &str,
+    deterministic: bool,
+    extra: serde_json::Map<String, Value>,
+    human_text: Option<String>,
+) -> QueryRunResult {
     let candidates: Vec<String> = match resolution {
         Resolution::Ambiguous(c) => c.clone(),
         _ => Vec::new(),
     };
-    let payload = json!({
-        selector_field: {
-            "selector": selector,
-            "resolution": resolution.label(),
-            "candidates": candidates,
-        }
+    let mut block = json!({
+        "selector": selector,
+        "resolution": resolution.label(),
+        "candidates": candidates,
     });
-    let human = if candidates.is_empty() {
+    if let Value::Object(m) = &mut block {
+        m.extend(extra);
+    }
+    let payload = json!({ selector_field: block });
+    let human = if let Some(h) = human_text {
+        h
+    } else if candidates.is_empty() {
         format!("{kind}: {selector_field} {selector:?} matched no {selector_field}\n")
     } else {
         let mut s = format!("{kind}: {selector_field} {selector:?} is AMBIGUOUS:\n");
@@ -1720,11 +1894,12 @@ fn render_query_touches_body(
         Some(sel) => match resolve_routine_selector(substrate.resolved(), &join.declaring, sel) {
             Resolution::Resolved(r) => Some(r),
             other => {
-                return selector_failure_doc(
+                return routine_failure_doc(
                     "query.touches",
                     "from",
                     sel,
                     &other,
+                    substrate.resolved(),
                     deps,
                     alsem_ver,
                     deterministic,
@@ -1807,12 +1982,86 @@ fn render_query_touches_body(
                 }),
             );
             human.push_str(&format!("--- touches {table_label} ---\n"));
+            // Output validation V2 (§4.6, F23): the routine count is
+            // transitive; the sites that touch the table directly are counted
+            // apart, workspace and dependency sites apart, and listed (a listed
+            // line is a site, never a routine header).
+            let resolved = substrate.resolved();
+            let names = crate::engine::l5::routine_rollup::RoutineNames::new(resolved, &[]);
+            let unknown = is_unknown_table(&table.id);
+            let mut ws_sites: Vec<(String, u32, String, String)> = Vec::new();
+            let mut ws_routines: BTreeSet<&str> = BTreeSet::new();
+            let mut dep_sites = 0usize;
+            for r in &resolved.workspace.routines {
+                let primary = is_primary_routine(resolved, r);
+                for o in &r.record_operations {
+                    let hit = match o.table_id.as_deref() {
+                        Some(t) => t == table.id || (unknown && is_unknown_table(t)),
+                        None => unknown,
+                    };
+                    if !hit {
+                        continue;
+                    }
+                    if primary {
+                        ws_routines.insert(r.stable_routine_id.as_str());
+                        ws_sites.push((
+                            o.source_anchor.source_unit_id.clone(),
+                            o.source_anchor.start_line + 1,
+                            o.op.clone(),
+                            names.display(&r.stable_routine_id),
+                        ));
+                    } else {
+                        dep_sites += 1;
+                    }
+                }
+            }
+            ws_sites.sort();
+            if let Some(up) = payload.get_mut("up") {
+                up["directSites"] = json!({
+                    "workspaceSites": ws_sites.len(),
+                    "workspaceRoutines": ws_routines.len(),
+                    "dependencySites": dep_sites,
+                });
+            }
             human.push_str(&format!(
-                "  workspace-global: {} it (per operation, one routine into dependency code: a \
-                 routine whose only touch is deeper in dependency code{unseen} is not listed)\n",
-                plural(routines.len(), "routine touches", "routines touch"),
+                "  transitively: {} it (through workspace or dependency sites; per operation, one \
+                 routine into dependency code: a routine whose only touch is deeper in dependency \
+                 code{unseen} is not counted)\n",
+                plural(
+                    routines.len(),
+                    "workspace routine touches",
+                    "workspace routines touch"
+                ),
             ));
-            let shown_n = fold_len(routines.len(), GLOBAL_LIST_CAP, all);
+            human.push_str(&format!(
+                "  directly: {} in {} and {} touch it{}\n",
+                plural(ws_sites.len(), "workspace site", "workspace sites"),
+                plural(ws_routines.len(), "routine", "routines"),
+                plural(dep_sites, "dependency site", "dependency sites"),
+                if unknown {
+                    " — table not resolved: each such site's table is decided by a value the \
+                     analysis does not resolve, and an unresolved write can be any table"
+                } else {
+                    ""
+                }
+            ));
+            let shown_sites = fold_len(ws_sites.len(), GLOBAL_LIST_CAP, all);
+            for (file, line, op, who) in &ws_sites[..shown_sites] {
+                human.push_str(&format!("    [{op}] at {file}:{line} in {who}\n"));
+            }
+            if shown_sites < ws_sites.len() {
+                human.push_str(&format!(
+                    "    … +{} — all: true lists them, and every routine\n",
+                    plural(ws_sites.len() - shown_sites, "site", "sites")
+                ));
+            }
+            let shown_n = if all { routines.len() } else { 0 };
+            if all {
+                human.push_str(&format!(
+                    "  routines that touch it transitively ({}):\n",
+                    routines.len()
+                ));
+            }
             for &ix in &routines[..shown_n] {
                 let internal = query.bundle().routine_id(ix);
                 match join.get(internal) {
@@ -1827,8 +2076,8 @@ fn render_query_touches_body(
             }
             if shown_n < routines.len() {
                 human.push_str(&format!(
-                    "    … +{} — --all lists them\n",
-                    plural(routines.len() - shown_n, "routine", "routines")
+                    "  the {} that touch it transitively: --all lists them\n",
+                    plural(routines.len(), "routine", "routines")
                 ));
             }
         }
@@ -1851,7 +2100,7 @@ fn render_query_touches_body(
                 );
                 human.push_str(&format!(
                     "--- {} vs {table_label} ---\n  not answerable: routine has no db-effect row\n",
-                    rr.qualified()
+                    rr.header
                 ));
                 let summary = touches_summary(&payload);
                 return QueryRunResult {
@@ -1869,7 +2118,7 @@ fn render_query_touches_body(
                 };
             };
 
-            human.push_str(&format!("--- {} vs {table_label} ---\n", rr.qualified()));
+            human.push_str(&format!("--- {} vs {table_label} ---\n", rr.header));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
             human.push_str(&format!(
                 "{}{}\n",
@@ -1942,8 +2191,9 @@ const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into depen
 /// [`TOUCHES_SCOPE_LINE`] when the capability cone was read (wave 3a): the
 /// writes beyond each dependency entry point follow the whole cone.
 const TOUCHES_SCOPE_LINE_CONE: &str = "  scope: dependency code: full cone for physical writes, \
-     grouped per entry point; per-operation detail one routine deep; temporary-record touches \
-     persist nothing but use the table's schema and run its triggers; lines are 1-based\n";
+     grouped per dependency routine entered; per-operation detail one routine deep; \
+     temporary-record touches persist nothing but use the table's schema and run its triggers; \
+     lines are 1-based\n";
 
 /// The default human list cap for touches (spec §3.8 rule 4's shape: the cap,
 /// or every item when there are at most a quarter more). `--all` lists all.
@@ -1975,7 +2225,7 @@ fn temp_note(t: &TempStateKind) -> String {
     match t {
         TempStateKind::Known(false) => String::new(),
         TempStateKind::Known(true) => " (temporary record)".to_string(),
-        TempStateKind::Unknown => " (temp state unknown)".to_string(),
+        TempStateKind::Unknown => " (temp state not resolved)".to_string(),
         TempStateKind::ParameterDependent(i) if *i == RECEIVER_PARAM_INDEX => {
             " (caller-dependent: Rec)".to_string()
         }
@@ -2134,9 +2384,9 @@ fn counts_human(c: &TouchCounts) -> String {
     )];
     let pp = match (c.temp_state_unknown, c.caller_dependent) {
         (0, 0) => String::new(),
-        (_, 0) => " (temp state unknown)".to_string(),
+        (_, 0) => " (temp state not resolved)".to_string(),
         (0, _) => " (caller-dependent)".to_string(),
-        (u, d) => format!(" (temp state unknown {u}, caller-dependent {d})"),
+        (u, d) => format!(" (temp state not resolved {u}, caller-dependent {d})"),
     };
     parts.push(format!(
         "{} on {}{pp}",
@@ -2166,7 +2416,7 @@ fn absence_reasons(
     let mut out = Vec::new();
     if not_resolved > 0 {
         let refs = if not_resolved_ref > 0 {
-            format!(", {not_resolved_ref} of them on a RecordRef (table decided at run time)")
+            format!(", {not_resolved_ref} of them on a RecordRef (table not resolved: RecordRef)")
         } else {
             String::new()
         };
@@ -2184,7 +2434,11 @@ fn absence_reasons(
         let at = if entry_points > 0 {
             format!(
                 " at {}",
-                plural(entry_points, "entry point", "entry points")
+                plural(
+                    entry_points,
+                    "dependency routine entered",
+                    "dependency routines entered"
+                )
             )
         } else {
             String::new()
@@ -2330,11 +2584,12 @@ fn render_touches_down(
     if !touches_down {
         human.push_str(&if beyond_n > 0 {
             "  down: no indexed touch (per operation, one routine into dependency code); the \
-             whole cone may write it beyond dependency entry points (below)\n"
+             whole cone may write it beyond dependency calls (below)\n"
                 .to_string()
         } else if reasons.is_empty() {
-            "  down: no — no operation in this routine's cone touches the table (the cone stays \
-             in workspace code, every call resolved, no table left unresolved)\n"
+            "  down: no (every candidate decided) — no operation in this routine's cone touches \
+             the table (the cone stays in workspace code, every call resolved, no table left \
+             unresolved)\n"
                 .to_string()
         } else {
             "  down: unknown — no indexed touch observed (per operation, one routine into \
@@ -2404,7 +2659,7 @@ fn render_touches_down(
     // On a miss with no `beyond` answer the operations are a reason above.
     if not_resolved > 0 && !is_unknown_table(table_id) && (touches_down || beyond_n > 0) {
         let refs = if not_resolved_ref > 0 {
-            format!(", {not_resolved_ref} of them on a RecordRef (table decided at run time)")
+            format!(", {not_resolved_ref} of them on a RecordRef (table not resolved: RecordRef)")
         } else {
             String::new()
         };
@@ -2433,13 +2688,21 @@ fn render_touches_down(
         if shown_n < points.len() {
             text.push_str(&format!(
                 "; … +{} — --all lists them",
-                plural(points.len() - shown_n, "entry point", "entry points")
+                plural(
+                    points.len() - shown_n,
+                    "dependency routine entered",
+                    "dependency routines entered"
+                )
             ));
         }
         human.push_str(&format!(
-            "  beyond dependency entry points (the whole cone, literal arguments followed): may \
-             write it beyond {}: {text} — alsem prove <routine> writes-table:<table> gives the path\n",
-            plural(beyond_n, "entry point", "entry points")
+            "  beyond dependency calls (the whole cone, literal arguments followed): may write it \
+             beyond {}: {text} — alsem prove <routine> writes-table:<table> gives the path\n",
+            plural(
+                beyond_n,
+                "dependency routine entered",
+                "dependency routines entered"
+            )
         ));
     }
 }
@@ -2456,7 +2719,7 @@ const UP_RELATION: &str = "code-calls";
 const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (calls, object runs and \
      the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a \
      caller opens (alsem tests and impact follow it); paths through dependency code are listed \
-     apart below\n";
+     apart, before the caller list\n";
 
 /// `up`: the solve graph's callers ([`render_touches_up_solve`]), then the
 /// callers through dependency code ([`render_through_dependency`]).
@@ -2472,6 +2735,7 @@ fn render_touches_up(
     payload: &mut Map<String, Value>,
     human: &mut String,
 ) {
+    let mut solve = String::new();
     render_touches_up_solve(
         cx,
         rix,
@@ -2480,11 +2744,19 @@ fn render_touches_up(
         all,
         list_callers,
         payload,
-        human,
+        &mut solve,
     );
+    let mut thr = String::new();
     if let Some(Value::Object(up)) = payload.get_mut("up") {
-        render_through_dependency(cx, rix, through, all, list_callers, up, human);
+        render_through_dependency(cx, rix, through, all, list_callers, up, &mut thr);
     }
+    // Output validation V2 (§5.1, c17): the via-dependency and
+    // via-configuration callers come before the caller list, which can be
+    // hundreds of lines long.
+    let at = solve.find("\n    ").map_or(solve.len(), |i| i + 1);
+    human.push_str(&solve[..at]);
+    human.push_str(&thr);
+    human.push_str(&solve[at..]);
 }
 
 /// `up.throughDependency` (query schema 3.5.0; design r2 §3.2, §6, §9): the
@@ -2583,7 +2855,13 @@ fn render_through_dependency(
         g.stable_id(n)
             .and_then(|s| by_stable.get(s.as_str()).copied())
             .and_then(|r| cx.join.get(&r.id))
-            .map_or_else(|| g.display(n), |x| x.qualified())
+            .map_or_else(
+                || {
+                    crate::engine::l5::routine_rollup::graph_display(g, n, Some(cx.resolved))
+                        .unwrap_or_else(|| g.display(n))
+                },
+                |x| x.qualified(),
+            )
     };
     let mut listed: Vec<(&DepCaller, String)> = answer
         .callers
@@ -2653,7 +2931,7 @@ fn render_through_dependency(
     } else {
         let mut line = format!(
             "  through dependency code (potential callers by code calls, path feasibility not \
-             checked): {} more workspace {}",
+             checked): {} more workspace {} [via-dependency]",
             code.len(),
             if code.len() == 1 { "caller" } else { "callers" }
         );
@@ -2664,8 +2942,9 @@ fn render_through_dependency(
                 .map(|(e, a, n)| format!("{e}: {a} {n}"))
                 .collect();
             line.push_str(&format!(
-                "; {} more only through configured dispatch, configuration-dependent, including \
-                 custom responses ({})",
+                "; {} more only through configured dispatch [via-configuration] (candidates: \
+                 the binding lives in data the analysis has not read), including custom \
+                 responses ({})",
                 configured.len(),
                 arms.join(", ")
             ));
@@ -2685,9 +2964,9 @@ fn render_through_dependency(
             "    +{} {}{label}{}\n",
             c.hops.len(),
             if c.tier == DepTier::Configured {
-                "[configured] "
+                "[via-configuration] "
             } else {
-                ""
+                "[via-dependency] "
             },
             dep_callers::witness_human(c, &name, all)
         )
@@ -3116,11 +3395,12 @@ fn render_query_effects_body(
         match resolve_routine_selector(substrate.resolved(), &join.declaring, routine_selector) {
             Resolution::Resolved(r) => r,
             other => {
-                return selector_failure_doc(
+                return routine_failure_doc(
                     "query.effects",
                     "routine",
                     routine_selector,
                     &other,
+                    substrate.resolved(),
                     deps,
                     alsem_ver,
                     deterministic,
@@ -3153,7 +3433,7 @@ fn render_query_effects_body(
         });
         let human = format!(
             "--- effects of {} ---\n  not answerable: routine has no db-effect row\n",
-            rr.qualified()
+            rr.header
         );
         return QueryRunResult {
             json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
@@ -3453,6 +3733,46 @@ fn render_query_effects_body(
         });
     }
 
+    // Output validation V2 (§5.2, F61; query 3.8.0, additive): the scope of
+    // each operation family as a structured object, readable without the
+    // human text or the MCP envelope.
+    let (call_not_resolved, open_world) = beyond.as_ref().map_or((0, 0), |b| {
+        let open = b
+            .entry
+            .unresolved
+            .iter()
+            .filter(|u| u.open_world == Some(true))
+            .count();
+        (b.entry.unresolved.len() - open, open)
+    });
+    let one_deep = |what: &str| {
+        json!({
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [format!("dependency code deeper than one routine is not inventoried for {what}")],
+            "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
+        })
+    };
+    let mut families = serde_json::Map::new();
+    families.insert("reads".into(), one_deep("reads"));
+    families.insert("locks".into(), one_deep("locks"));
+    families.insert("validate".into(), one_deep("validations"));
+    families.insert("writes".into(), one_deep("writes"));
+    if beyond.is_some() {
+        families.insert(
+            "beyondDependencyCalls".into(),
+            json!({
+                "depth": "wholeCone",
+                "inventory": if call_not_resolved + open_world == 0 { "exhaustive" } else { "notExhaustive" },
+                "reasons": if call_not_resolved + open_world == 0 {
+                    json!([])
+                } else {
+                    json!(["calls not resolved and open-world interface dispatches may reach writes the cone does not list"])
+                },
+                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
+            }),
+        );
+    }
     let payload = json!({
         "routine": {
             "selector": routine_selector,
@@ -3462,31 +3782,127 @@ fn render_query_effects_body(
         "effectCount": effects.len(),
         "summary": summary,
         "effects": rows,
+        "result": {"scope": {"families": families}},
     });
 
     // Human (design §4.5): summary first, then the buckets; every row with
     // --all.
-    let mut human = format!("--- effects of {} ---\n", rr.qualified());
-    let mut parts = vec![format!(
-        "writes that may persist {} on {} ({known} known persistent, {unknown_temp} temp state unknown)",
-        count("writes"),
-        plural(ntables("writes"), "table", "tables")
-    )];
+    let mut human = format!("--- effects of {} ---\n", rr.header);
+    // Output validation V2 (§4.1, F14): a caller-dependent write is a write
+    // risk; with no may-persist write the summary leads with it and its
+    // condition, then the absence of any other write.
+    let conditional: Vec<String> = by_table("callerDependent")
+        .iter()
+        .map(|(id, rows)| {
+            let first = &effects[rows[0]];
+            let at = match ops.get(first.operation_id, &join) {
+                Some(o) => format!("{}:{}", o.file, shown(o.line)),
+                None => "outside the workspace".to_string(),
+            };
+            let kinds: BTreeSet<&str> = rows.iter().map(|&i| effects[i].op).collect();
+            let name = tables.get(id).unwrap_or(id);
+            let condition = match first.temp_state {
+                TempStateKind::ParameterDependent(i) if *i == RECEIVER_PARAM_INDEX => {
+                    "when Rec is not temporary (Rec is temporary only when its caller's record \
+                     is)"
+                    .to_string()
+                }
+                TempStateKind::ParameterDependent(i) => {
+                    let pname = routine
+                        .parameters
+                        .iter()
+                        .find(|p| p.index == *i)
+                        .map(|p| format!(", {}", p.name))
+                        .unwrap_or_default();
+                    format!(
+                        "when the record its caller passes (parameter {}{pname}) is not temporary",
+                        i + 1
+                    )
+                }
+                _ => "when the record its caller passes is not temporary".to_string(),
+            };
+            format!(
+                "may modify persistent {name} records ({} at {at}) {condition}",
+                kinds.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        })
+        .collect();
+    let write_search = if beyond.is_some() {
+        crate::engine::vocab::none_observed(
+            "every operation one dependency routine deep, and the whole cone beyond dependency \
+             calls",
+            "calls not resolved",
+        )
+    } else {
+        crate::engine::vocab::none_observed(
+            "every operation one dependency routine deep",
+            "dependency code deeper than one routine",
+        )
+    };
+    let mut parts = Vec::new();
+    if count("writes") > 0 {
+        parts.push(format!(
+            "writes that may persist {} on {} ({known} not temporary, {unknown_temp} temp state \
+             not resolved)",
+            count("writes"),
+            plural(ntables("writes"), "table", "tables")
+        ));
+        parts.extend(conditional.iter().cloned());
+    } else if !conditional.is_empty() {
+        // The absence of any other write holds only when nothing is written
+        // beyond a dependency call either (that part follows when it is).
+        parts.push(if beyond_tables.is_empty() {
+            format!(
+                "{}; otherwise it changes a temporary record; no other write that may persist: {}",
+                conditional.join("; "),
+                write_search
+            )
+        } else {
+            format!(
+                "{}; otherwise it changes a temporary record",
+                conditional.join("; ")
+            )
+        });
+    } else if beyond_tables.is_empty() {
+        parts.push(format!("writes that may persist: {write_search}"));
+    }
     if !beyond_writes.is_empty() {
         parts.push(format!(
-            "writes beyond dependency entry points on {} through {} ({} only there)",
+            "writes beyond dependency calls on {} through {} ({} only there)",
             plural(beyond_tables.len(), "table", "tables"),
-            plural(beyond_writes.len(), "entry point", "entry points"),
+            plural(
+                beyond_writes.len(),
+                "dependency routine entered",
+                "dependency routines entered"
+            ),
             beyond_tables.difference(&own_write_tables).count()
         ));
     }
-    for (key, label) in [
-        ("callerDependent", "caller-dependent writes"),
-        ("locks", "locks"),
-        ("validate", "validate"),
-        ("reads", "reads"),
-        ("unclassified", "unclassified"),
-    ] {
+    if count("callerDependent") > 0 {
+        parts.push(format!(
+            "caller-dependent writes {} on {}",
+            count("callerDependent"),
+            plural(ntables("callerDependent"), "table", "tables")
+        ));
+    }
+    // §9.2 (F57): `locks:` and `reads:` always print, with their scope, so
+    // a lock question never depends on a missing line meaning zero. The
+    // counts include every temp class and unresolved-table operations (F15).
+    for (key, label) in [("locks", "locks"), ("reads", "reads")] {
+        parts.push(if count(key) > 0 {
+            format!(
+                "{label} {} on {}",
+                count(key),
+                plural(ntables(key), "table", "tables")
+            )
+        } else {
+            format!(
+                "{label}: none observed (one dependency routine deep; deeper dependency {label} \
+                 are not inventoried)"
+            )
+        });
+    }
+    for (key, label) in [("validate", "validate"), ("unclassified", "unclassified")] {
         if count(key) > 0 {
             parts.push(format!(
                 "{label} {} on {}",
@@ -3505,7 +3921,7 @@ fn render_query_effects_body(
     }
     // Q4: RecordRef operations first, then the rest of "table not resolved".
     for (record_ref, label) in [
-        (true, "on a RecordRef (table decided at run time)"),
+        (true, "on a RecordRef (table not resolved: RecordRef)"),
         (false, "table not resolved"),
     ] {
         if let Some(b) = unresolved.get(&record_ref) {
@@ -3527,12 +3943,14 @@ fn render_query_effects_body(
         human.push_str(
             "  coverage: per operation, one routine into dependency code; operations and routes \
              the root's literal arguments rule out are listed and marked (alsem explain and \
-             prove drop them); writes beyond dependency entry points follow the whole cone with \
+             prove drop them); writes beyond dependency calls follow the whole cone with \
              literal arguments, as alsem explain does; lines are 1-based\n",
         );
+        // §5.2 (F61): the depth and inventory of each operation family.
         human.push_str(&format!(
-            "  scope: dependency code: full cone for physical writes, grouped per entry point; \
-             per-operation detail one routine deep; temporary records are not writes{}\n",
+            "  scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; \
+             writes beyond dependency calls: whole cone, grouped per dependency routine entered; \
+             writes to temporary records do not directly persist those records{}\n",
             dependencies_clause(deps, all)
         ));
     } else {
@@ -3541,8 +3959,9 @@ fn render_query_effects_body(
              arguments are listed (alsem explain and prove drop them); lines are 1-based\n",
         );
         human.push_str(&format!(
-            "  scope: per operation, one routine into dependency code (alsem explain and prove \
-             follow the whole cone); temporary records are not writes{}\n",
+            "  scope: reads, locks, validate, writes: one dependency routine deep, not exhaustive \
+             beyond (alsem explain and prove follow the whole cone); writes to temporary records \
+             do not directly persist those records{}\n",
             dependencies_clause(deps, all)
         ));
     }
@@ -3775,7 +4194,7 @@ fn render_query_effects_body(
     // Q4: "RecordRef" only where the receiver is one; every other operation
     // on an unresolved table is "table not resolved".
     for (record_ref, label) in [
-        (true, "on a RecordRef (table decided at run time)"),
+        (true, "on a RecordRef (table not resolved: RecordRef)"),
         (false, "table not resolved"),
     ] {
         if let Some(b) = unresolved.get(&record_ref) {
@@ -3819,7 +4238,12 @@ fn render_query_effects_body(
         // do (1-based, with its name), never the raw 0-based index.
         let temp = match caller_dependent_words(e.temp_state, &routine.parameters) {
             Some(w) => w,
-            None => format!("temp {}", temp_state_str(e.temp_state)),
+            // §8.1 temp-state words (V2); JSON keeps `tempState`.
+            None => match e.temp_state {
+                TempStateKind::Known(true) => "temporary".to_string(),
+                TempStateKind::Known(false) => "not temporary".to_string(),
+                _ => "temp state not resolved".to_string(),
+            },
         };
         human.push_str(&format!(
             "    [{}] on {} via {}, {temp} — {}{mark}\n",
@@ -4178,11 +4602,12 @@ fn render_field_touches(
                 Some(field_scope(model, q, sited, r, ask.direction, &join))
             }
             other => {
-                return selector_failure_doc(
+                return routine_failure_doc(
                     KIND,
                     "from",
                     sel,
                     &other,
+                    model,
                     deps,
                     alsem_ver,
                     deterministic,
@@ -4250,30 +4675,18 @@ fn render_field_touches(
         .iter()
         .map(|(k, w)| json!({"kind": k, "what": w}))
         .collect();
-    let mut not_searched_human: Vec<String> = vec![
-        "CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level)"
-            .to_string(),
-    ];
+    // The human sentence is `field_touches::search_words` (one helper with
+    // `explain --field`, output validation V2 §4.2).
     if cross_app {
         not_searched.push(json!({"kind": "dependency-code-not-demanded",
             "what": "dependency code the workspace does not call is not loaded"}));
-        not_searched_human.push("dependency code the workspace does not call (not loaded)".into());
     } else {
         not_searched.push(json!({"kind": "dependency-code",
             "what": "no dependency code is loaded (single-app, or no dependency)"}));
-        not_searched_human.push("dependency code (none loaded)".into());
     }
     if cov.dependency_without_body > 0 {
         not_searched.push(json!({"kind": "routines-without-body",
             "routines": cov.dependency_without_body}));
-        not_searched_human.push(format!(
-            "{} known by symbols only",
-            plural(
-                cov.dependency_without_body,
-                "dependency routine",
-                "dependency routines"
-            )
-        ));
     }
     let scope_label = match &scope {
         None => "every routine body".to_string(),
@@ -4291,9 +4704,8 @@ fn render_field_touches(
                 if sc.up_engine == "reverse-walk" {
                     let tier_n = |t: Tier| sc.tiers.values().filter(|x| **x == t).count();
                     parts.push(format!(
-                        "its callers by the reverse walk ({} with a body: local {}, through \
-                         dependency code {}, only through an open site {}; {} more without a body \
-                         in the model)",
+                        "its callers by the reverse walk ({} with a body, by tier: local {}, \
+                         via-dependency {}, via-hub {}; {} more without a body in the model)",
                         plural(sc.up, "routine", "routines"),
                         tier_n(Tier::Local),
                         tier_n(Tier::ThroughDependency),
@@ -4539,7 +4951,14 @@ fn render_field_touches(
             "byNumberNotLiteral": cov.by_number_not_literal,
             "fieldIndexSites": cov.field_index_sites,
             "declaredKeys": keys_json.len(),
+            // §9.3 (F74, 3.8.0): the two inventories, and the filters.
+            "confirmed": {"sites": sites.iter().filter(|(s, _, _)| !s.uses.contains(&FieldUse::ByNumber)).count()},
+            "numericCandidates": {"sites": sites.iter().filter(|(s, _, _)| s.uses.contains(&FieldUse::ByNumber)).count()},
         }),
+    );
+    payload.insert(
+        "filters".into(),
+        json!({"sites": sites.iter().filter(|(s, _, _)| s.uses.contains(&FieldUse::Filter)).count()}),
     );
     payload.insert("fieldTouches".into(), Value::Array(site_json));
     payload.insert("declaredKeys".into(), Value::Array(keys_json));
@@ -4567,24 +4986,28 @@ fn render_field_touches(
         "  field: {}, {}\n",
         field.data_type, field.field_class
     ));
+    // Output validation V2 (§9.3 field mode, F74): one search sentence (the
+    // helper `explain --field` uses too), confirmed named references and
+    // numeric candidates as two inventories, and `filters:` always.
+    let (searched_w, not_searched_w) = ft::search_words(cov, cross_app);
     human.push_str(&format!(
-        "  searched: {}, {} (scope: {scope_label}); not searched: {}\n",
-        plural(
-            cov.workspace_bodies,
-            "workspace routine body",
-            "workspace routine bodies"
-        ),
-        plural(
-            cov.dependency_bodies,
-            "dependency routine body",
-            "dependency routine bodies"
-        ),
-        not_searched_human.join("; ")
+        "  searched: {searched_w} (scope: {scope_label}); not searched: {not_searched_w}\n"
     ));
+    let numeric: Vec<&ft::FieldSite<'_>> = sites
+        .iter()
+        .map(|(s, _, _)| s)
+        .filter(|s| s.uses.contains(&FieldUse::ByNumber))
+        .copied()
+        .collect();
+    let filters = sites
+        .iter()
+        .filter(|(s, _, _)| s.uses.contains(&FieldUse::Filter))
+        .count();
     if site_list.is_empty() {
-        human.push_str(
-            "  consumers: no indexed consumer observed, which is not proof of absence:\n",
-        );
+        human.push_str(&format!(
+            "  consumers: {}, which is not proof of absence:\n",
+            crate::engine::vocab::none_observed(&searched_w, &not_searched_w)
+        ));
         for (_, text) in &reasons {
             human.push_str(&format!("    {text}\n"));
         }
@@ -4620,10 +5043,33 @@ fn render_field_touches(
             uses_h.join(", "),
             temp_h.join(", "),
         ));
+        human.push_str(&format!(
+            "    confirmed named references: {}; numeric candidates (RecordRef.Field by number): {}{}\n",
+            plural(site_list.len() - numeric.len(), "site", "sites"),
+            plural(numeric.len(), "site", "sites"),
+            if numeric.is_empty() {
+                ""
+            } else {
+                " — a numeric reference does not break on a rename (it may on a renumbering)"
+            }
+        ));
         for (_, text) in reasons.iter().skip(1) {
             human.push_str(&format!("  note: {text}\n"));
         }
     }
+    human.push_str(&format!(
+        "  filters: {}\n",
+        if filters == 0 {
+            crate::engine::vocab::none_observed(&searched_w, &not_searched_w)
+        } else {
+            plural(filters, "site", "sites")
+        }
+    ));
+    human.push_str(
+        "  not a complete rename inventory: page and report columns, CalcFormula and \
+         TableRelation are not searched (the compiler finds them); keys holding the field are \
+         listed as declared keys\n",
+    );
     if !answer.declared_keys.is_empty() {
         let keys: Vec<String> = answer
             .declared_keys
@@ -4667,13 +5113,15 @@ fn render_field_touches(
             }
             if let Some(side) = side {
                 match scope.as_ref().and_then(|sc| sc.tiers.get(&s.routine_ix)) {
-                    Some(t) if *side == "up" => extra.push(format!("up, {}", t.as_str())),
+                    Some(t) if *side == "up" => {
+                        extra.push(format!("up, {}", crate::engine::vocab::tier(*t)))
+                    }
                     _ => extra.push((*side).to_string()),
                 }
             }
             human.push_str(&format!(
                 "    {} {}:{} {} [{}]\n",
-                rr.display,
+                rr.in_object,
                 s.anchor.source_unit_id,
                 shown(s.anchor.start_line),
                 uses_text(&s.uses),

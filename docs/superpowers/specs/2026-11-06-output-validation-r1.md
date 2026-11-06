@@ -854,6 +854,10 @@ envelope says `outcome: no-routine-changed`.
 
 ## 7. Size and dedup of large answers (V5)
 
+V5 restores the MCP default inline cap of 40 KiB that V3 raised to 48 KiB on 2026-11-06
+(the one routine display grew RunReportID's CDO explain card to 45,058 bytes; §7.5 and §7.7's
+path dedup bring it back under).
+
 ### 7.1 Touches `callers: true` (F38)
 
 **Current** c17: 961 lines, 320 KB; every caller line repeats `12 touches (12 on persistent

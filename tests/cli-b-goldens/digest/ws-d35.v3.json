@@ -75,6 +75,9 @@
           },
           "display": "OnBeforePrintSafe",
           "objectDisplay": "Codeunit D35 Demo",
+          "qualifiedDisplay": "Codeunit \"D35 Demo\"::OnBeforePrintSafe",
+          "selector": "Codeunit \"D35 Demo\"::OnBeforePrintSafe",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93"
         },
         "scopedGuaranteesFolded": 0,
@@ -196,6 +199,9 @@
           },
           "display": "OnAfterPostDirect",
           "objectDisplay": "Codeunit D35 Demo",
+          "qualifiedDisplay": "Codeunit \"D35 Demo\"::OnAfterPostDirect",
+          "selector": "Codeunit \"D35 Demo\"::OnAfterPostDirect",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f"
         },
         "scopedGuaranteesFolded": 3,
@@ -315,6 +321,9 @@
           },
           "display": "PersistAudit",
           "objectDisplay": "Codeunit D35 Demo",
+          "qualifiedDisplay": "Codeunit \"D35 Demo\"::PersistAudit",
+          "selector": "Codeunit \"D35 Demo\"::PersistAudit",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#a48ec94ff9566709129af3e35f12ad569c376df0c9883faaebb98023a0e9da4a"
         },
         "scopedGuaranteesFolded": 3,
@@ -434,6 +443,9 @@
           },
           "display": "NonSubscriberCommit",
           "objectDisplay": "Codeunit D35 Demo",
+          "qualifiedDisplay": "Codeunit \"D35 Demo\"::NonSubscriberCommit",
+          "selector": "Codeunit \"D35 Demo\"::NonSubscriberCommit",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#c937f452b226f2394cc4c00d2efb29e7f15730196e2230b656bab5c00ec98d1a"
         },
         "scopedGuaranteesFolded": 3,
@@ -559,6 +571,9 @@
           },
           "display": "OnAfterValidateTransitive",
           "objectDisplay": "Codeunit D35 Demo",
+          "qualifiedDisplay": "Codeunit \"D35 Demo\"::OnAfterValidateTransitive",
+          "selector": "Codeunit \"D35 Demo\"::OnAfterValidateTransitive",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050"
         },
         "scopedGuaranteesFolded": 3,
@@ -616,28 +631,38 @@
     "pathCap": 1,
     "routines": {
       "r:03b944ecefab": {
-        "display": "Codeunit D35 Demo::OnAfterPostDirect",
+        "display": "Codeunit \"D35 Demo\"::OnAfterPostDirect",
         "file": "ws:src/Codeunit.al",
+        "selector": "Codeunit \"D35 Demo\"::OnAfterPostDirect",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f"
       },
       "r:3fc48f1ed374": {
-        "display": "Codeunit D35 Demo::NonSubscriberCommit",
+        "display": "Codeunit \"D35 Demo\"::NonSubscriberCommit",
         "file": "ws:src/Codeunit.al",
+        "selector": "Codeunit \"D35 Demo\"::NonSubscriberCommit",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#c937f452b226f2394cc4c00d2efb29e7f15730196e2230b656bab5c00ec98d1a"
       },
       "r:587a02fcde0c": {
-        "display": "Codeunit D35 Demo::PersistAudit",
+        "display": "Codeunit \"D35 Demo\"::PersistAudit",
         "file": "ws:src/Codeunit.al",
+        "selector": "Codeunit \"D35 Demo\"::PersistAudit",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#a48ec94ff9566709129af3e35f12ad569c376df0c9883faaebb98023a0e9da4a"
       },
       "r:88277d8dd76e": {
-        "display": "Codeunit D35 Demo::OnBeforePrintSafe",
+        "display": "Codeunit \"D35 Demo\"::OnBeforePrintSafe",
         "file": "ws:src/Codeunit.al",
+        "selector": "Codeunit \"D35 Demo\"::OnBeforePrintSafe",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93"
       },
       "r:e2e0d2172cfd": {
-        "display": "Codeunit D35 Demo::OnAfterValidateTransitive",
+        "display": "Codeunit \"D35 Demo\"::OnAfterValidateTransitive",
         "file": "ws:src/Codeunit.al",
+        "selector": "Codeunit \"D35 Demo\"::OnAfterValidateTransitive",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050"
       }
     },
@@ -649,5 +674,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

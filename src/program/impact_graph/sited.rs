@@ -238,6 +238,16 @@ pub struct SitedGraph {
     /// The source-cased names of each local routine node (workspace and
     /// local-source apps): what a test-selection answer prints.
     local_names: HashMap<u32, LocalName>,
+    /// Output validation V3 §2.2: each routine node's declared name (the
+    /// node key holds it lowercased), `None` for a node the program graph
+    /// has no routine for, and each object's declared name, so a dependency
+    /// routine prints `Codeunit "Job Queue Dispatcher" (448)::HandleRequest`
+    /// rather than its key.
+    routine_names: Vec<Option<crate::program::str_pool::SharedStr>>,
+    object_names: HashMap<crate::program::node::ObjectNodeId, crate::program::str_pool::SharedStr>,
+    /// The declared enclosing member of a routine node with source (the key
+    /// holds it lowercased).
+    member_names: HashMap<u32, crate::program::str_pool::SharedStr>,
     /// The platform's table-event publishers (`OnAfterModifyEvent`, …: the
     /// synthetic publishers a subscriber binds to), ascending.
     platform_publishers: Vec<u32>,
@@ -278,9 +288,79 @@ pub struct LocalName {
     /// other routine of its object has its name
     /// ([`crate::engine::l5::routine_rollup::overload_short`]).
     pub handle: Box<str>,
+    /// Its parameter types (`(Integer, var Text)`), only when another
+    /// routine of its object and member has its name (V3 §2.1: the one
+    /// display prints an overloaded name's parameter list); empty otherwise.
+    pub signature: Box<str>,
+}
+
+/// A routine node's names for the one routine display (output validation
+/// V3, §2.2): the object's kind and declared name, its number, whether its
+/// app is the workspace's, the enclosing member (declared for a node with
+/// source, else lowercased: the key keeps no declared case), the routine's
+/// declared name and, for an overloaded local routine, its parameter types.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeName<'g> {
+    pub object_kind: &'static str,
+    pub object_name: &'g str,
+    pub object_number: Option<i64>,
+    pub primary: bool,
+    pub member: Option<&'g str>,
+    /// `member` is the declared spelling (not the key's lowercase).
+    pub member_declared: bool,
+    pub routine: &'g str,
+    /// `(T1, T2)` when the name is overloaded, else empty.
+    pub signature: &'g str,
 }
 
 impl SitedGraph {
+    /// A routine node's declared names (V3 §2.2); `None` for an object or a
+    /// hub node, or a routine the program graph does not hold.
+    #[must_use]
+    pub fn node_name(&self, ix: u32) -> Option<NodeName<'_>> {
+        let Key::Routine(r) = self.nodes.get(ix as usize)? else {
+            return None;
+        };
+        let routine = self.routine_names.get(ix as usize)?.as_deref()?;
+        Some(NodeName {
+            object_kind: crate::program::graphify_export::object_kind_str(r.object.kind),
+            object_name: self.object_names.get(&r.object).map_or("", |s| &**s),
+            object_number: match r.object.key {
+                crate::program::node::ObjKey::Id(n) => Some(n),
+                crate::program::node::ObjKey::Name(_) => None,
+            },
+            primary: r.object.app == self.primary_app,
+            member: self
+                .member_names
+                .get(&ix)
+                .map(|s| &**s)
+                .or(r.enclosing_member_lc.as_deref()),
+            member_declared: self.member_names.contains_key(&ix),
+            routine,
+            signature: self.local_names.get(&ix).map_or("", |l| &*l.signature),
+        })
+    }
+
+    /// An object node's `(kind, declared name, number, primary)` (V3 §2.2);
+    /// `None` for a routine or a hub node, or an object with no declared
+    /// name in the graph.
+    #[must_use]
+    pub fn object_node_name(&self, ix: u32) -> Option<(&'static str, &str, Option<i64>, bool)> {
+        let Key::Object(o) = self.nodes.get(ix as usize)? else {
+            return None;
+        };
+        let name = self.object_names.get(o)?;
+        Some((
+            crate::program::graphify_export::object_kind_str(o.kind),
+            &**name,
+            match o.key {
+                crate::program::node::ObjKey::Id(n) => Some(n),
+                crate::program::node::ObjKey::Name(_) => None,
+            },
+            o.app == self.primary_app,
+        ))
+    }
+
     /// A local routine's source-cased names ([`LocalName`]).
     #[must_use]
     pub fn local_name(&self, ix: u32) -> Option<&LocalName> {
@@ -725,8 +805,26 @@ impl SitedBuilder {
         let mut stable: Vec<StableEntry> = Vec::new();
         let mut local_names: HashMap<u32, LocalName> = HashMap::new();
         let mut platform_publishers: Vec<u32> = Vec::new();
+        let mut routine_names: Vec<Option<crate::program::str_pool::SharedStr>> = vec![None; n];
+        let mut member_names: HashMap<u32, crate::program::str_pool::SharedStr> = HashMap::new();
+        let mut object_names: HashMap<
+            crate::program::node::ObjectNodeId,
+            crate::program::str_pool::SharedStr,
+        > = HashMap::new();
         for (i, k) in self.nodes.iter().enumerate() {
             let f = &mut flags[i];
+            // V3 §2.2: the declared names, for every routine and object node.
+            let named = match k {
+                Key::Routine(r) => Some(&r.object),
+                Key::Object(o) => Some(o),
+                Key::Hub(_) => None,
+            };
+            if let Some(o) = named
+                && !object_names.contains_key(o)
+                && let Some(x) = obj_of(o)
+            {
+                object_names.insert(o.clone(), x.name.clone());
+            }
             match k {
                 Key::Hub(h) => {
                     *f |= flag::HUB;
@@ -769,6 +867,7 @@ impl SitedBuilder {
                     else {
                         continue;
                     };
+                    routine_names[i] = Some(node.name.clone());
                     if matches!(
                         node.publisher_kind,
                         Some(crate::program::resolve::event::PublisherKind::Platform)
@@ -794,6 +893,7 @@ impl SitedBuilder {
                                     .map(|(_, p)| Box::from(p))
                                     .unwrap_or_default(),
                                 handle: Box::default(),
+                                signature: Box::default(),
                             },
                         );
                     }
@@ -817,6 +917,9 @@ impl SitedBuilder {
                         };
                     }
                     if let Some((m, _)) = inp.surface.get_with_path(r) {
+                        if let Some(member) = &m.enclosing_member {
+                            member_names.insert(i as u32, member.clone());
+                        }
                         let id = super::stable_routine_id(graph, r, node, m);
                         let parts = split_stable_id(&id);
                         debug_assert!(parts.is_some(), "a stable id is object#hex: {id}");
@@ -861,6 +964,7 @@ impl SitedBuilder {
                 }
             }
             let mut handles: Vec<(u32, String)> = Vec::new();
+            let mut signatures: Vec<(u32, String)> = Vec::new();
             for members in groups.values().filter(|m| m.len() > 1) {
                 let shapes: Vec<(u32, OverloadShape<'_>)> = members
                     .iter()
@@ -869,6 +973,21 @@ impl SitedBuilder {
                             return None;
                         };
                         let (m, path) = inp.surface.get_with_path(r)?;
+                        // V3 §2.1: the parameter list the one display prints,
+                        // as `selector_index::signature_text` writes it.
+                        let types: Vec<String> = m
+                            .params
+                            .iter()
+                            .map(|p| {
+                                let ty = p.ty.as_deref().unwrap_or("");
+                                if p.by_ref {
+                                    format!("var {ty}")
+                                } else {
+                                    ty.to_string()
+                                }
+                            })
+                            .collect();
+                        signatures.push((i, format!("({})", types.join(", "))));
                         Some((
                             i,
                             OverloadShape {
@@ -898,6 +1017,11 @@ impl SitedBuilder {
             for (i, h) in handles {
                 if let Some(l) = local_names.get_mut(&i) {
                     l.handle = h.into();
+                }
+            }
+            for (i, s) in signatures {
+                if let Some(l) = local_names.get_mut(&i) {
+                    l.signature = s.into();
                 }
             }
         }
@@ -963,6 +1087,9 @@ impl SitedBuilder {
             rev_off,
             rev_sites,
             local_names,
+            routine_names,
+            object_names,
+            member_names,
             platform_publishers,
             configured_arms: self.configured_arms,
             catalog: inp.facts.catalog.clone(),

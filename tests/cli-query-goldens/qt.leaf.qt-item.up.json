@@ -19,6 +19,9 @@
         },
         "display": "Leaf",
         "objectDisplay": "Codeunit QT Touches",
+        "qualifiedDisplay": "Codeunit \"QT Touches\"::Leaf",
+        "selector": "Codeunit \"QT Touches\"::Leaf",
+        "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#aa1df0d029d17a4b31887859cffdc77988c363725d462953c4f1bb6251038dbe"
       },
       "selector": "Leaf"
@@ -60,6 +63,9 @@
                 },
                 "display": "WriteItem",
                 "objectDisplay": "Codeunit QT Touches",
+                "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+                "selector": "Codeunit \"QT Touches\"::WriteItem",
+                "signature": "(var Record \"QT Item\")",
                 "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
               }
             },
@@ -75,6 +81,9 @@
             },
             "display": "Top1",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Top1",
+            "selector": "Codeunit \"QT Touches\"::Top1",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#1f3271c0e735418a755ca4072577d57566edc2b9600df19a7ce141051b5699fa"
           },
           "witnessCount": 1
@@ -106,6 +115,9 @@
                 },
                 "display": "Top2",
                 "objectDisplay": "Codeunit QT Touches",
+                "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
+                "selector": "Codeunit \"QT Touches\"::Top2",
+                "signature": "()",
                 "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#f1e7fa13c469792bb96767705a35f70e5624e0a8a87e957bcfe5598c2906b0ce"
               }
             },
@@ -121,6 +133,9 @@
             },
             "display": "Top2",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
+            "selector": "Codeunit \"QT Touches\"::Top2",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#f1e7fa13c469792bb96767705a35f70e5624e0a8a87e957bcfe5598c2906b0ce"
           },
           "witnessCount": 2
@@ -152,6 +167,9 @@
                 },
                 "display": "Top2",
                 "objectDisplay": "Codeunit QT Touches",
+                "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
+                "selector": "Codeunit \"QT Touches\"::Top2",
+                "signature": "()",
                 "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#f1e7fa13c469792bb96767705a35f70e5624e0a8a87e957bcfe5598c2906b0ce"
               }
             },
@@ -167,6 +185,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "witnessCount": 7
@@ -187,6 +208,9 @@
             },
             "display": "Top3",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Top3",
+            "selector": "Codeunit \"QT Touches\"::Top3",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#267355f87c453a8c1b481343df9ca1711610ada2d53c5089d8b4b7bbeedfe059"
           }
         }
@@ -202,5 +226,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.8.0"
 }

@@ -7,6 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (what misleads: tiers, verdict words and the evidence a hazard needs, output validation V2)
+
+Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md`
+§3, §4, the V2 parts of §5 and §9, the word table §8.1 approved by the owner on
+2026-11-06) found answers where a possibility read as a fact, a conditional write read as
+"no", and a filtered "no" hid what did match. Now:
+
+- **One word table** (`src/engine/vocab.rs`): tiers `local` / `via-dependency` /
+  `via-configuration` / `via-hub`, printed `[tier]` at the start of a witness; the closed
+  lists of entry kinds, execution contexts, blocker kinds and hub kinds (`[hub
+  Codeunit.Run of a variable at …]`, never `h:run:codeunit`); "dependency call" and
+  "dependency routine entered" for the dependency boundary (never "entry point");
+  `analysis complete` / `analysis partial (…)` for completeness; the test-status words;
+  and the negative-certainty words `no (every candidate decided)` / `none observed
+  (searched: …; not searched: …)` / `unknown (blocked by: …)` for every absence verdict.
+  `tests/cli/output_vocabulary.rs` fails when any fixture answer prints a replaced word.
+- **prove, callers' context** (F10, F19–F21, F79): only hub-mediated witnesses print
+  `established witnesses: none` and `candidates over a hub: N` (by context, which may
+  overlap), the answer line names the hub sites on the candidate paths, each witness line
+  starts with its tier. An `unknown` prints `plain reading:`, `not established:` (in the
+  question's terms) and `re-analysis under an assumption: assumeNoDependents: true` with
+  what it removes and what stays (`removes every blocker of this answer` only when it
+  does); `detail: true` on `callers-intercept-errors` prints one uncaught route. JSON:
+  `establishedWitnesses`, `candidateWitnesses {count, byTier}`, evidence `pathTier`.
+- **prove, existing effects**: an `unknown` names its blockers (`unknown (blocked by: …)`),
+  the plain reading, `not established: that it never commits` and, for open-world
+  interface dispatches, `re-analysis under an assumption: closedWorld: true`.
+- **A filtered negative** (F18) says what it filtered and lists up to 5 other reachable
+  sites outside the filter with how to see their routes; JSON `result.filter`,
+  `result.otherSites[]`, and the summary carries the filter.
+- **A conditional write leads** (F14): explain, digest and query effects summaries say
+  "may modify persistent T records (Modify at :24) when Rec is not temporary; otherwise
+  it changes a temporary record; no other write (every candidate decided)". Tables are
+  named when 3 or fewer (F56).
+- **explain**: the direct callees in source order and the route to the UI effect lead the
+  card (F55); with `callersContext` the routine's own state changes and the callers'
+  context section come right after the header, each `yes` with its first witness and
+  each `unknown` with its blockers and the input that removes one (F29, F75); a write in a
+  cone that calls `ChangeCompany` prints `target company: not established by this
+  analysis` (F75); `showSource` on a declaration shows its first statement (F48);
+  field mode prints `confirmed writers` with its search, reference candidates apart, the
+  writer kinds searched (F17).
+- **query effects**: `locks:` and `reads:` always print, with their depth (F57); the
+  scope line states each operation family's depth, and JSON adds
+  `payload.result.scope.families` (F61).
+- **query touches**: table mode counts the routines that touch the table transitively and
+  the workspace and dependency sites that touch it directly, and lists sites (F23);
+  field mode separates confirmed references from numeric candidates and always prints
+  `filters:` (F74); the via-dependency and via-configuration callers come before the
+  caller list.
+- **impact** (F12, F27): code callers first (`reached by code callers: no — … (every
+  candidate decided)`), then the reach by tier, by entry kind and by execution context,
+  folded when the reach covers half the program's entries, with the hubs named; a change
+  mode's first line says what was computed and whether the diff matched; the tests line
+  starts with what to run (F63).
+- **tests** (F13, F63): the answer starts with what to run, in the test app's terms
+  (whole codeunits, a superset) and whether the whole suite must follow; every group
+  shows its tier distribution and its representative path's tier and relation; code paths
+  rank before UI-navigation ones; the nearest test with no local path is labelled "not a
+  focused test". JSON `runFirst[].relation`, `runFirst[].pathTier`, `groups[].tiers`,
+  `changed[].testStatus`.
+- **status** (F22): the headline says how hard it checked (`every input hashed just now:
+  594 inputs` vs `size and modification time, just now`); `check.strength`.
+- **digest**: the envelope summary rows carry `tableAnswers` for `writesTables` (F42),
+  counts-only or not; a change mode says what was computed (F27).
+- Schemas: prove 2.8.0 unfiltered / 2.9.0 filtered, query 3.8.0, explain `al-sem.explain/4`
+  (additive), status `statusVersion` 2 (additive), tests and impact version 1 (additive);
+  digest 3.1.0 unchanged (the envelope summary changed, not the document).
+
+### Changed (one name for every routine, and selectors that help the next call: output validation V3)
+
+Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md`
+§2, findings F1–F4, F6–F8) found the same routine printed under several names. Now:
+
+- **One routine display** (`routine_rollup::format_routine`, next to `handle`), used by
+  explain, digest (headers, summary rows, routine table), query effects and touches
+  (headers, caller lists, field-mode rows), prove (header, paths, callers' context),
+  impact and tests. The parameter types print on every occurrence of a name that is
+  overloaded in its object (`Codeunit "CDO Log Management"::CreateSMTPLogEntries(Record
+  "CDO E-Mail Template Line", RecordRef, …)`), and on no other; human paths print them
+  instead of the `/n` short handle, which stays in JSON as `handle` (the overload legend
+  lines are gone). A member trigger names its member: `Table "CDO E-Mail Job"."Table
+  No."::OnValidate`, `Page "CDO E-Mail Templates".action(ExportTemplateAction "Export
+  Template")::OnAction` (the caption in headers only, not on path hops). Object, member
+  and routine names are quoted only when AL needs quotes.
+- **Dependency routines by name** (F4): `Codeunit "Job Queue Dispatcher" (448)::HandleRequest`
+  rather than `Codeunit 448::handlerequest`. The sited graph keeps each node's declared
+  object and routine name (and a local member's), so reverse walks and test paths print
+  them; a dependency table field member takes its declared case from the model's tables.
+- **JSON identity fields**: routine rows gain `signature` (the parameter types), `member`
+  (`{kind, name, caption}`) and `selector` (the form that resolves to that one stable id;
+  the stable id for a dependency routine), and `handle` where a routine has one. Digest
+  3.1.0 (summary rows also gain `stableId`; an entry's `routine` gains `qualifiedDisplay`,
+  `display` keeps the routine name); query 3.7.0 (routine objects gain
+  `qualifiedDisplay`, `display` keeps the routine name); prove 2.6.0 unfiltered / 2.7.0
+  filtered (2.5.0 was already the filtered number); explain stays `al-sem.explain/4`
+  (additive). `ModelRoutine` gains `member_detail` (the member's kind and caption, read at
+  assembly).
+- **prove names the target as resolved** (F6, §2.3): `payload.result.table` (`{id, name,
+  number, app, appId}`, and `tables` when a name or number names several) for
+  `writes-table`, `payload.result.event` (`{name, kind, publishers}`; no publisher when
+  only subscriptions name the event) for `publishes-event`; the question line reads
+  `writes-table:CDO E-Mail Job (table 6175283, this app)`. Part of prove 2.6.0/2.7.0.
+- **The MCP default inline cap is 48 KiB for now** (owner decision 2026-11-06; was 40 KiB):
+  the one display grew RunReportID's CDO explain card to 45,058 bytes (IssueReminder
+  39,169). Temporary: V5's path dedup (spec §7.5/§7.7) brings it back to 40 KiB.
+- **The CDO digest size budget is 1,380,000 / 820,000 bytes** (whole / core; owner's
+  ratchet, accepted 2026-11-06 as the new budget; was 1,310,000 / 760,000): digest 3.1.0's
+  routine rows carry `signature`, `member`, `selector` and `handle`. IssueReminder measured
+  1,347,484 / 798,800.
+- **Member selectors** (§2.1): every tool reads `Object."Field"::Trigger`,
+  `Object.Field::Trigger` and `Object.action(Name)::OnAction` (a caption after the name is
+  ignored), after the forms that resolved before, so no selector resolves differently. A
+  round-trip test resolves every workspace routine's `selector` and display on the golden
+  fixtures and on CDO (gated), and every `selector` written in the fixture and CDO goldens,
+  to its own stable id.
+- **Selector failures help the next call** (F7, F8): an unmatched selector lists at most 5
+  workspace names whose edit distance is at most 0.4 of the longer name (nearest first,
+  then those of the asked object; "no close match" when none), or says the name is found
+  only in a dependency app (selectors are scoped to the workspace), then the selector
+  forms. An ambiguous one lists each candidate with its complete parameter list and
+  declaration, what it adds to the first, and a ready `routines: [...]` value of their
+  selectors (JSON `candidateSelectors`, `nearest`, `foundOnlyIn`). explain, prove, digest
+  and query print them.
+
 ### Fixed (tests no longer fill /tmp: a cached temp folder was never deleted)
 
 `output_cdo::cdo_answers` kept its CDO dependency-source dump (~12,000 files) in a
@@ -326,8 +451,8 @@ call-graph export spec, flagged `unraisedPublisher`, not a choice for cost; `pro
   `derived_only_matches_raw_fold_on_cdo`'s pinned recursive-member count 784 → 1,027 (the
   raw-fold oracle agrees; recursive SCCs 70 → 106: subscribers that write the table they
   subscribe to re-raise its events); the digest size budget (owner's ratchet T-W2-15) raised 1,250,000 / 720,000 →
-  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), which needs the
-  owner's confirmation.
+  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), confirmed by the
+  owner on 2026-11-06.
 
 ### Fixed (the macOS build compiles again)
 

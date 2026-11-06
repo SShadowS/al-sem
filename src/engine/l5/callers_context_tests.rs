@@ -709,6 +709,110 @@ fn a_witness_only_through_a_hub_is_listed_but_not_a_yes() {
     assert_eq!(answer(&v), "unknown", "{v:#}");
 }
 
+/// Output validation V2 (§3.1, F10): a witness that passes a hub is a
+/// candidate, never evidence. The human answer prints `established
+/// witnesses: none` before it, labels the candidate count, starts the
+/// witness line with its tier and names the hub with its site; the JSON
+/// counts the two classes apart. Discrimination (2026-11-06): counting every
+/// witness as established in `format_human` (`let established =
+/// a.witness_count;`) fails this test; restored, it passes.
+#[test]
+fn a_hub_witness_is_a_candidate_never_an_established_witness() {
+    let runner = "codeunit 50112 \"Pw Runner\"\n{\n    Access = Internal;\n    trigger OnRun()\n    var\n        \
+                  Target: Codeunit \"Pw Target\";\n    begin\n        Target.R();\n    end;\n}\n";
+    let c = cu(
+        50110,
+        "C1",
+        "    local procedure P(Id: Integer)\n    var\n        Rec: Record \"Pw Rec\";\n    begin\n        \
+         Rec.Modify();\n        Codeunit.Run(Id);\n    end;\n",
+    );
+    let w = ws(&[
+        ("Rec.al", TABLE),
+        ("Target.al", TARGET),
+        ("Runner.al", runner),
+        ("C.al", &c),
+    ]);
+    let (v, human) = prove_both(
+        w.path(),
+        "Pw Target::R",
+        "callers-have-pending-writes",
+        true,
+    );
+    let r = &v["payload"]["result"];
+    let candidates = r["candidateWitnesses"]["count"].as_u64().unwrap();
+    assert!(candidates >= 1, "precondition: a hub witness: {r:#}");
+    assert_eq!(r["establishedWitnesses"], 0, "{r:#}");
+    assert_eq!(r["evidence"][0]["pathTier"], "via-hub", "{r:#}");
+    assert!(human.contains("  established witnesses: none\n"), "{human}");
+    assert!(
+        human.contains(&format!("  candidates over a hub: {candidates}")),
+        "{human}"
+    );
+    assert!(human.contains("    [via-hub] pending-write: "), "{human}");
+    assert!(
+        human.contains("without a hub was established in the analyzed graph")
+            && human.contains("[hub Codeunit.Run of a variable at ws:src/C.al:"),
+        "{human}"
+    );
+    assert!(!human.contains("onlyOpen"), "{human}");
+}
+
+/// Output validation V2 (§4.4, F19): an `unknown` stays `unknown` and names
+/// the input that removes a blocker kind, saying `removes every blocker of
+/// this answer` only when it does; otherwise it names what stays. R is
+/// public (external callers) and its one caller subscribes to an event
+/// nobody raises (hidden callers): `assumeNoDependents` removes the first
+/// kind only. Discrimination (2026-11-06): printing `removes every blocker`
+/// whatever stays (`if true` in `reanalysis_line`) fails the second half;
+/// restored, it passes.
+#[test]
+fn an_unknown_names_the_assumption_and_what_it_removes() {
+    let w = ws(&[("Rec.al", TABLE), ("Target.al", TARGET)]);
+    let (v, human) = prove_both(
+        w.path(),
+        "Pw Target::R",
+        "callers-have-pending-writes",
+        false,
+    );
+    assert_eq!(answer(&v), "unknown", "{v:#}");
+    assert!(
+        human.contains("answer:   unknown (blocked by: external callers 1)"),
+        "{human}"
+    );
+    assert!(human.contains("  plain reading: no pending write was found in the analyzed callers"));
+    assert!(human.contains("  not established: that no caller has a write pending"));
+    assert!(
+        human.contains(
+            "re-analysis under an assumption: assumeNoDependents: true — assumes no other app \
+             calls this routine; removes every blocker of this answer (external callers 1)"
+        ),
+        "{human}"
+    );
+    // Two kinds: the assumption removes one, the other stays.
+    let p = "codeunit 50119 \"Pw Pub\"\n{\n    Access = Internal;\n    [IntegrationEvent(false, false)]\n    \
+             procedure OnSomething()\n    begin\n    end;\n}\n";
+    let s = "codeunit 50120 \"Pw Sub\"\n{\n    Access = Internal;\n    \
+             [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Pw Pub\", 'OnSomething', '', false, false)]\n    \
+             local procedure Handle()\n    var\n        Target: Codeunit \"Pw Target\";\n    begin\n        \
+             Target.R();\n    end;\n}\n";
+    let (v, human) = intercept(&[("P.al", p), ("S.al", s)], false);
+    assert_eq!(answer(&v), "unknown", "{v:#}");
+    let b = blocked(&v);
+    assert!(
+        b.contains(&"external-callers".to_string()) && b.contains(&"hidden-callers".to_string()),
+        "precondition: two kinds: {b:?}"
+    );
+    assert!(
+        human.contains("removes external callers 1; stay: hidden callers 1"),
+        "{human}"
+    );
+    assert!(!human.contains("removes every blocker"), "{human}");
+    assert!(
+        human.contains("  not established: that no caller turns this error into false"),
+        "{human}"
+    );
+}
+
 #[test]
 fn a_started_codeunits_commit_ui_and_error_are_not_the_starters() {
     // F3 decision: effects beyond a background start run in another session,

@@ -332,6 +332,9 @@ fn human_headers_name_the_owning_object() {
     let w = ws.to_str().unwrap();
     let id = stable_id_of(ws, "src/a_Table.al", "OnInsert");
     let header = format!("{TABLE_OWNER}::OnInsert");
+    // V3 §2.1: digest and prove print the one routine display (AL quotes);
+    // fingerprint (not in V3's scope) keeps the owner display.
+    let v3_header = "Table \"OD Item\"::OnInsert";
 
     let (digest, code) = alsem_text(&[
         "digest",
@@ -344,7 +347,7 @@ fn human_headers_name_the_owning_object() {
     ]);
     assert_eq!(code, 0, "{digest}");
     assert!(
-        digest.lines().any(|l| l == format!("--- {header} ---")),
+        digest.lines().any(|l| l == format!("--- {v3_header} ---")),
         "{digest}"
     );
 
@@ -374,7 +377,7 @@ fn human_headers_name_the_owning_object() {
     ]);
     assert_eq!(code, 0, "{prove}");
     assert!(
-        prove.lines().any(|l| l == format!("--- {header} ---")),
+        prove.lines().any(|l| l == format!("--- {v3_header} ---")),
         "{prove}"
     );
 }
@@ -1395,12 +1398,18 @@ fn a_parameter_list_selects_one_overload() {
     }
     let (out, err, code) = alsem_out(&["prove", w, "Persist", "may-commit", "--format", "human"]);
     assert_eq!(code, 2, "{out}{err}");
+    // V3 §2.4: each candidate's complete display and declaration, and the
+    // ready value of the three selectors.
     assert!(
-        out.contains("Codeunit Sel A::Persist(Text, Integer) at ws:src/a.al:13"),
+        out.contains("Codeunit \"Sel A\"::Persist(Text, Integer) at ws:src/a.al:13"),
         "{out}"
     );
     assert!(
-        out.contains("<owner>::<routine>(<parameter types>)"),
+        out.contains(
+            "all 3: routines: [\"Codeunit \\\"Sel A\\\"::Persist(Integer)\", \
+             \"Codeunit \\\"Sel A\\\"::Persist(Code[20], var Record \\\"Ov Table\\\")\", \
+             \"Codeunit \\\"Sel A\\\"::Persist(Text, Integer)\"]"
+        ),
         "{out}"
     );
 

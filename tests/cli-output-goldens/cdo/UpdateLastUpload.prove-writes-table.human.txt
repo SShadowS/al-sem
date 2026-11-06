@@ -1,10 +1,10 @@
---- Codeunit CDO Telemetry::UpdateLastUpload ---
-  question: writes-table:CDO Setup — existing effects (what the routine and its callees already do)
+--- Codeunit "CDO Telemetry"::UpdateLastUpload ---
+  question: writes-table:CDO Setup (table 6175281, this app) — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 1 effect
     [DB_MODIFY] at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48
-      conditionality: unconditional-on-success
+      condition: unconditional on success
       path: UpdateLastUpload (in the routine itself)
-  coverage: complete
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  analysis complete
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

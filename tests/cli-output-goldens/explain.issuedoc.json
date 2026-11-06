@@ -66,7 +66,7 @@
         "commits": "may",
         "crossings": [
           {
-            "boundary": "Codeunit Base Poster::OnRun",
+            "boundary": "Codeunit \"Base Poster\" (70100)::OnRun",
             "key": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "prefix": [],
             "sites": [
@@ -76,11 +76,11 @@
               "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
             ],
             "targets": [
-              "Codeunit Base Poster::OnRun"
+              "Codeunit \"Base Poster\" (70100)::OnRun"
             ]
           },
           {
-            "boundary": "Codeunit Base Calc::OnRun",
+            "boundary": "Codeunit \"Base Calc\" (70101)::OnRun",
             "key": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
             "prefix": [],
             "sites": [
@@ -90,7 +90,7 @@
               "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
             ],
             "targets": [
-              "Codeunit Base Calc::OnRun"
+              "Codeunit \"Base Calc\" (70101)::OnRun"
             ]
           }
         ],
@@ -370,7 +370,7 @@
             "fieldCaptions": {},
             "fieldOps": [],
             "fields": {
-              "Codeunit Out Log Mgt::WriteLog": [
+              "Codeunit \"Out Log Mgt\"::WriteLog": [
                 "Entry No.",
                 "Message"
               ]
@@ -401,7 +401,7 @@
             "fieldCaptions": {},
             "fieldOps": [],
             "fields": {
-              "Codeunit Out Issue Document::IssueDoc": [
+              "Codeunit \"Out Issue Document\"::IssueDoc": [
                 "Status"
               ]
             },
@@ -463,7 +463,7 @@
               "app": "a0a00001-0000-4000-8000-0000000000a1",
               "conditional": false,
               "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50115#3d62c09f85109c26633ebda45b73c39253717f79f193717e2c4326d374ce2e6f",
-              "routine": "Codeunit Out Subscribers::LogIssued",
+              "routine": "Codeunit \"Out Subscribers\"::LogIssued",
               "rules": []
             }
           ],
@@ -548,12 +548,15 @@
           "line": 3,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Out Issue Document\"::IssueDoc",
         "doc": null,
         "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
         "name": "IssueDoc",
         "object": "Out Issue Document",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "signature": "(var Record \"Out Doc\")"
       },
       "rules": {
         "callers": [],
@@ -628,7 +631,7 @@
           "count": 16,
           "mostBeyond": {
             "enteredAt": "ws:src/OutIssueDocument.Codeunit.al:15",
-            "entryPoint": "Codeunit Base Poster::OnRun",
+            "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
             "tables": 14
           },
           "ownedByApp": 1

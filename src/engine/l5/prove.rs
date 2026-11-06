@@ -166,6 +166,11 @@ pub struct ProveObligations {
     pub world: World,
     pub waived_rows: usize,
     pub coverage_closed_by_assumption: bool,
+    /// The coverage is partial only through interface open world (its one
+    /// reason): a closed world would close it too (output validation V2,
+    /// the `re-analysis under an assumption:` line names it among what
+    /// `closedWorld` removes).
+    pub coverage_open_world_only: bool,
     /// The answer holds only in `world`: the strict world answers differently
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
@@ -341,6 +346,13 @@ fn compute_obligations(
         world,
         waived_rows,
         coverage_closed_by_assumption,
+        coverage_open_world_only: !complete
+            && entry.coverage_status == "partial"
+            && !entry.coverage_reasons.is_empty()
+            && entry
+                .coverage_reasons
+                .iter()
+                .all(|r| r == INTERFACE_OPEN_WORLD),
         answer_relies_on_world: false,
         relies_on_loaded_subscribers: false,
     }
@@ -1402,6 +1414,14 @@ pub struct ProveDocumentArgs<'a> {
     /// document is [`PROVE_SLICE_SCHEMA_VERSION`]. `None`: the document is
     /// byte-identical to an unfiltered one.
     pub slice: Option<&'a crate::engine::l5::prove_slice::SliceOut>,
+    /// V3 §2.1 (2.6.0): the root's one display and identity fields, added to
+    /// `payload.routine` (`qualifiedDisplay`, `signature`, `member`,
+    /// `selector`, `handle`). Empty for the no-root document.
+    pub routine_identity: serde_json::Map<String, serde_json::Value>,
+    /// V3 §2.3 (2.6.0): the question's target as resolved,
+    /// `payload.result.table` / `payload.result.event` (and `tables` when a
+    /// name or number names several).
+    pub resolved_target: serde_json::Map<String, serde_json::Value>,
 }
 
 /// W2-0b: a group path's structured witness (`groupWitness`): per hop the
@@ -1436,13 +1456,161 @@ pub(crate) fn group_witness_value(
     })
 }
 
+/// The target of a `writes-table` or `publishes-event` question as resolved
+/// (output validation V3, §2.3): the JSON fields for `payload.result`
+/// (`table: {id, name, number, app, appId}`, plus `tables` when the name or
+/// number names more than one; `event: {name, kind, publishers}`) and the
+/// question as the human answer line prints it
+/// (`writes-table:CDO E-Mail Job (table 6175283, this app)`). Any other
+/// question: no field, the question as typed.
+fn resolved_target(
+    model: &crate::program::model::workspace::Model,
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    question: &ProveQuestion,
+    question_text: &str,
+) -> (serde_json::Map<String, serde_json::Value>, String) {
+    use serde_json::json;
+    let mut out = serde_json::Map::new();
+    let primary = model.primary_app.as_ref().map(|p| p.app_guid.as_str());
+    let app_words = |guid: &str| {
+        if primary.is_some_and(|p| p.eq_ignore_ascii_case(guid)) {
+            "this app".to_string()
+        } else {
+            cx.app_label(guid)
+        }
+    };
+    match question {
+        ProveQuestion::WritesTable { table } => {
+            let q = table.trim();
+            let mut hits: Vec<&crate::program::model::workspace::ModelTable> = model
+                .workspace
+                .tables
+                .iter()
+                .filter(|t| {
+                    !t.is_extension_stub
+                        && (t.name.eq_ignore_ascii_case(q)
+                            || t.id.rsplit('/').next().is_some_and(|n| n == q))
+                })
+                .collect();
+            hits.sort_by(|a, b| a.id.cmp(&b.id));
+            hits.dedup_by(|a, b| a.id == b.id);
+            let row = |t: &crate::program::model::workspace::ModelTable| {
+                json!({
+                    "id": t.id,
+                    "name": t.name,
+                    "number": t.table_number,
+                    "app": cx.app_label(&t.app_guid),
+                    "appId": t.app_guid,
+                })
+            };
+            let Some(first) = hits.first() else {
+                return (out, question_text.to_string());
+            };
+            out.insert("table".into(), row(first));
+            let human = if hits.len() == 1 {
+                format!(
+                    "writes-table:{} (table {}, {})",
+                    first.name,
+                    first.table_number,
+                    app_words(&first.app_guid)
+                )
+            } else {
+                out.insert("tables".into(), hits.iter().map(|t| row(t)).collect());
+                let each: Vec<String> = hits
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} (table {}, {})",
+                            t.name,
+                            t.table_number,
+                            app_words(&t.app_guid)
+                        )
+                    })
+                    .collect();
+                format!(
+                    "writes-table:{q} ({} tables: {})",
+                    hits.len(),
+                    each.join("; ")
+                )
+            };
+            (out, human)
+        }
+        ProveQuestion::PublishesEvent { event } => {
+            let q = event.trim();
+            let mut name: Option<&str> = None;
+            let mut kind: Option<&str> = None;
+            let mut publishers: Vec<(String, String)> = Vec::new();
+            for e in &model.events.graph.events {
+                // A symbol synthesized from a subscription whose publisher
+                // the program does not hold (`unknown/…`) names no publisher.
+                if !e.event_name.eq_ignore_ascii_case(q)
+                    || e.publisher_object_id.starts_with("unknown")
+                {
+                    continue;
+                }
+                name.get_or_insert(e.event_name.as_str());
+                kind.get_or_insert(e.event_kind.as_str());
+                let (id, display) = match &e.publisher_stable_routine_id {
+                    Some(s) => (s.clone(), cx.qualified(s)),
+                    None => (
+                        e.publisher_object_id.clone(),
+                        cx.object_display(&e.publisher_object_id),
+                    ),
+                };
+                if !publishers.iter().any(|(i, _)| *i == id) {
+                    publishers.push((id, display));
+                }
+            }
+            let Some(name) = name else {
+                out.insert(
+                    "event".into(),
+                    json!({"name": q, "kind": null, "publishers": []}),
+                );
+                return (
+                    out,
+                    format!(
+                        "publishes-event:{q} (no loaded publisher declares it; only subscriptions \
+                         name it)"
+                    ),
+                );
+            };
+            publishers.sort();
+            out.insert(
+                "event".into(),
+                json!({
+                    "name": name,
+                    "kind": kind,
+                    "publishers": publishers
+                        .iter()
+                        .map(|(id, d)| json!({"stableId": id, "display": d}))
+                        .collect::<Vec<_>>(),
+                }),
+            );
+            const SHOWN: usize = 3;
+            let mut by: Vec<String> = publishers
+                .iter()
+                .take(SHOWN)
+                .map(|(_, d)| d.clone())
+                .collect();
+            if publishers.len() > SHOWN {
+                by.push(format!("+{} more", publishers.len() - SHOWN));
+            }
+            (
+                out,
+                format!("publishes-event:{name} (published by {})", by.join(", ")),
+            )
+        }
+        _ => (out, question_text.to_string()),
+    }
+}
+
 /// prove's document `schemaVersion`.
-pub const PROVE_SCHEMA_VERSION: &str = "2.4.0";
+pub const PROVE_SCHEMA_VERSION: &str = "2.8.0";
 
 /// A filtered prove document's `schemaVersion` (agent-tasks E1, additive:
 /// `payload.filter`, `payload.slice`, slice-shaped evidence rows). An
 /// unfiltered document keeps [`PROVE_SCHEMA_VERSION`], byte for byte (E-5).
-pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.5.0";
+pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.9.0";
 
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
@@ -1462,11 +1630,14 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         deterministic,
         pointers,
         slice,
+        routine_identity,
+        resolved_target,
     } = args;
 
     // result sub-object
     let mut result_obj = serde_json::Map::new();
     result_obj.insert("answer".into(), prove_result.answer.as_str().into());
+    result_obj.extend(resolved_target);
 
     // evidence — only when present (and non-empty)
     if let Some(ref indices) = prove_result.evidence
@@ -1560,6 +1731,13 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         if !ev.is_empty() {
             result_obj.insert("evidence".into(), serde_json::Value::Array(ev));
         }
+        // Output validation V2 (§4.3, additive): the filter is part of the
+        // verdict, and the other reachable sites are listed beside it.
+        result_obj.insert("filter".into(), s.request.to_value());
+        result_obj.insert(
+            "otherSites".into(),
+            crate::engine::l5::prove_slice::other_sites_value(s),
+        );
     }
 
     // blockedBy — only when present (and non-empty)
@@ -1601,6 +1779,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     routine_ref.insert("display".into(), routine_display.into());
     routine_ref.insert("objectDisplay".into(), object_display.into());
     routine_ref.insert("stableId".into(), routine_stable_id.into());
+    routine_ref.extend(routine_identity);
 
     // payload
     let mut payload = serde_json::Map::new();
@@ -1648,6 +1827,17 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // 2.5.0 (agent-tasks E1, additive, filtered documents only): `payload.
     // filter`, `payload.slice`, and evidence rows that are the slice's sites
     // (`evidence.{file, line}` kept); an unfiltered document stays 2.4.0.
+    // 2.6.0 unfiltered / 2.7.0 filtered (output validation V3, additive; the
+    // spec's "2.5.0" was already the filtered number): `payload.routine`
+    // gains `qualifiedDisplay` (the one display), `signature`, `member`,
+    // `selector` and `handle`; `payload.result.table` (and `tables`) for
+    // `writes-table`, `payload.result.event` for `publishes-event`.
+    // 2.8.0 unfiltered / 2.9.0 filtered (output validation V2, additive;
+    // the spec's "2.5.0" and "2.6.0" were taken by E1 and V3): the callers'
+    // context result gains `establishedWitnesses`, `candidateWitnesses`
+    // (`{count, byTier}`) and each evidence row `pathTier` (the §8.1 word
+    // beside the legacy `tier`); a filtered result gains `result.filter`
+    // and `result.otherSites[]`.
     let version = if slice.is_some() {
         PROVE_SLICE_SCHEMA_VERSION
     } else {
@@ -1684,8 +1874,15 @@ pub fn format_prove_human(
     use crate::engine::l5::routine_rollup::{is_group, no_path_reason, plural};
     let mut lines: Vec<String> = Vec::new();
 
-    // Routine header
-    let routine_header = owner_qualified(object_display, routine_display);
+    // Routine header: the one display (V3 §2.1) when the root is known.
+    let routine_header = match paths {
+        Some(p) => {
+            p.cx.names
+                .display_with(p.root, true)
+                .unwrap_or_else(|| owner_qualified(object_display, routine_display))
+        }
+        None => owner_qualified(object_display, routine_display),
+    };
     lines.push(format!("--- {} ---", routine_header));
     // Agent-tasks §5: the six older questions are about the routine's
     // EXISTING effects; the callers' context ones say so on their own line.
@@ -1703,14 +1900,37 @@ pub fn format_prove_human(
     // evidence is an absence the obligations block: say so; `yes` and `no`
     // print bare, `no` followed by its coverage and assumptions below.
     let no_evidence = prove_result.evidence.as_ref().is_none_or(Vec::is_empty);
+    let blockers: &[ProveBlocker] = prove_result.blocked_by.as_deref().unwrap_or(&[]);
+    let kinds = blocker_kind_counts(blockers);
     lines.push(match &prove_result.answer {
         // (`paths` is `None` only for the no-root document: nothing was
-        // looked at there.)
+        // looked at there.) Output validation V2 (§8.1): an `unknown` names
+        // its blockers in the negative-certainty form, never softened.
+        ProveAnswer::Unknown if paths.is_some() && !kinds.is_empty() => format!(
+            "  answer:   unknown (blocked by: {}) — {}",
+            named_kinds(&kinds, 3),
+            if no_evidence {
+                "no matching effect was found in the analyzed cone"
+            } else {
+                "matching effects exist, none established on every success path"
+            }
+        ),
         ProveAnswer::Unknown if no_evidence && paths.is_some() => {
-            "  answer:   unknown — no matching effect observed; coverage incomplete".to_string()
+            "  answer:   unknown — no matching effect was found in the analyzed cone".to_string()
         }
         a => format!("  answer:   {}", a.as_str()),
     });
+    // §4.4 (F19, F21): on `unknown`, the plain reading, what the answer does
+    // not establish, and every input that removes a blocker kind.
+    if prove_result.answer == ProveAnswer::Unknown && paths.is_some() {
+        lines.extend(unknown_lines(
+            question,
+            &kinds,
+            no_evidence,
+            &prove_result.obligations,
+            paths.is_some_and(|p| p.detail),
+        ));
+    }
 
     let asked_table = match parse_question(question) {
         Some(ProveQuestion::WritesTable { table }) => Some(table),
@@ -1797,7 +2017,10 @@ pub fn format_prove_human(
                     .or_default()
                     .0
                     .push(if eff.conditionality != "unknown" {
-                        format!("{place} ({})", eff.conditionality)
+                        format!(
+                            "{place} ({})",
+                            crate::engine::vocab::condition(eff.conditionality)
+                        )
                     } else {
                         place
                     });
@@ -1805,7 +2028,10 @@ pub fn format_prove_human(
             }
             lines.push(row);
             if eff.conditionality != "unknown" {
-                lines.push(format!("      conditionality: {}", eff.conditionality));
+                lines.push(format!(
+                    "      condition: {}",
+                    crate::engine::vocab::condition(eff.conditionality)
+                ));
             }
             let Some(p) = paths else {
                 continue;
@@ -1888,13 +2114,6 @@ pub fn format_prove_human(
                 listed.join("; ")
             ));
         }
-        if let Some(p) = paths {
-            lines.extend(
-                p.cx.take_legend(p.detail)
-                    .into_iter()
-                    .map(|l| format!("  {l}")),
-            );
-        }
     }
 
     // Blockers
@@ -1913,6 +2132,120 @@ pub fn format_prove_human(
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// The blocker kinds of an answer in the §8.1 words with their counts,
+/// largest first (ties by word): `[(key, words, count)]`.
+fn blocker_kind_counts(blockers: &[ProveBlocker]) -> Vec<(&'static str, String, usize)> {
+    let mut by: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for b in blockers {
+        *by.entry(b.kind).or_default() += 1;
+    }
+    let mut v: Vec<(&'static str, String, usize)> = by
+        .into_iter()
+        .map(|(k, n)| (k, crate::engine::vocab::blocker(k), n))
+        .collect();
+    v.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.cmp(&b.1)));
+    v
+}
+
+/// At most `cap` blocker kinds named with their counts, the rest counted.
+fn named_kinds(kinds: &[(&'static str, String, usize)], cap: usize) -> String {
+    let mut s = kinds
+        .iter()
+        .take(cap)
+        .map(|(_, w, n)| format!("{w} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if kinds.len() > cap {
+        let more = kinds.len() - cap;
+        s.push_str(&format!(
+            ", and {more} more {}",
+            if more == 1 { "kind" } else { "kinds" }
+        ));
+    }
+    s
+}
+
+/// What an existing-effects `unknown` does not establish (§4.4), in the
+/// question's terms.
+fn not_established_effect(question: &str) -> String {
+    match parse_question(question) {
+        Some(ProveQuestion::MayCommit) => "that it never commits".to_string(),
+        Some(ProveQuestion::CommitsOnSuccessPath) => {
+            "that it commits on every success path, or that it never does".to_string()
+        }
+        Some(ProveQuestion::ReachesUi) => "that it never shows UI".to_string(),
+        Some(ProveQuestion::ThrowsError) => "that it never raises an error".to_string(),
+        Some(ProveQuestion::WritesTable { table }) => format!("that it never writes {table}"),
+        Some(ProveQuestion::PublishesEvent { event }) => format!("that it never raises {event}"),
+        None => "the asked conclusion".to_string(),
+    }
+}
+
+/// The lines after an existing-effects `unknown` (§4.4): the plain reading,
+/// `not established:`, and `re-analysis under an assumption:` for every
+/// input that removes a blocker kind (`closedWorld: true` removes the
+/// open-world interface dispatches), with what it removes and what stays.
+fn unknown_lines(
+    question: &str,
+    kinds: &[(&'static str, String, usize)],
+    no_evidence: bool,
+    o: &ProveObligations,
+    detail: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if !kinds.is_empty() {
+        out.push(format!(
+            "  plain reading: {}; unknown because of {}",
+            if no_evidence {
+                "no matching effect was found in the analyzed cone"
+            } else {
+                "the matching effects found do not hold on every success path"
+            },
+            named_kinds(kinds, 3)
+        ));
+    }
+    out.push(format!(
+        "  not established: {}",
+        not_established_effect(question)
+    ));
+    if kinds.iter().any(|(k, _, _)| *k == "open-world-dispatch") && o.world != World::Closed {
+        // A closed world also closes the coverage when interface open world
+        // is its only reason (`compute_obligations`'
+        // `coverage_closed_by_assumption`).
+        let coverage_too = o.coverage_open_world_only;
+        let stay: Vec<(&'static str, String, usize)> = kinds
+            .iter()
+            .filter(|(k, _, _)| {
+                *k != "open-world-dispatch" && !(coverage_too && *k == "coverage-incomplete")
+            })
+            .cloned()
+            .collect();
+        let removed: Vec<String> = kinds
+            .iter()
+            .filter(|k| !stay.contains(k))
+            .map(|(_, w, n)| format!("{w} {n}"))
+            .collect();
+        let removes = if stay.is_empty() {
+            format!(
+                "removes every blocker of this answer ({})",
+                removed.join(", ")
+            )
+        } else {
+            format!(
+                "removes {}; stay: {}",
+                removed.join(", "),
+                named_kinds(&stay, if detail { stay.len() } else { 3 })
+            )
+        };
+        out.push(format!(
+            "  re-analysis under an assumption: closedWorld: true — only if the deployment has no \
+             other implementations of these interfaces; it changes the assumption, not what runs; \
+             {removes}"
+        ));
+    }
+    out
 }
 
 /// How many evidence rows of one effect type the default prints as places
@@ -2004,6 +2337,7 @@ fn blocker_lines(blockers: &[ProveBlocker], detail: bool) -> Vec<String> {
         let total = items.len();
         // Where the call sites are, when any blocker of the kind has one (a
         // coverage or routine-not-found blocker names no place).
+        let kind = crate::engine::vocab::blocker(kind);
         out.push(if at[0] + at[1] > 0 {
             format!(
                 "    {kind}: {} ({})",
@@ -2060,10 +2394,11 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
             ws(pointers.map_or(0, |p| p.workspace_open_world))
         ));
     }
+    // §8.1 completeness: always with its subject.
     let mut coverage = if o.coverage_complete {
-        "coverage: complete".to_string()
+        "analysis complete".to_string()
     } else {
-        "coverage: incomplete".to_string()
+        "analysis partial".to_string()
     };
     if !parts.is_empty() {
         coverage.push_str(&format!(" — {}", parts.join(", ")));
@@ -2083,19 +2418,17 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
     }
     let assumptions = match o.assumption() {
         Some(label) => format!("assumptions: {label}"),
-        None if o.world != World::Closed => "assumptions: none (default world; --closed-world \
-             assumes the loaded interface implementations)"
+        None if o.world != World::Closed => "assumptions: none (default world: an interface \
+             call may reach an implementation that is not loaded)"
             .to_string(),
-        None => {
-            "assumptions: none (--closed-world asked; the answer does not rely on it)".to_string()
-        }
+        None => "assumptions: none (closedWorld asked; the answer does not rely on it)".to_string(),
     };
     let mut limits = Vec::new();
     if o.analysis_gaps > 0 {
         limits.push(plural(o.analysis_gaps, "analysis gap", "analysis gaps"));
     }
     if o.cone_truncated {
-        limits.push("cone-truncated".to_string());
+        limits.push("cone truncated".to_string());
     }
     let limits = if limits.is_empty() {
         "limits: none".to_string()
@@ -2454,6 +2787,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             world: World::Strict,
             waived_rows: 0,
             coverage_closed_by_assumption: false,
+            coverage_open_world_only: false,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
         };
@@ -2462,31 +2796,57 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         // the selector names no routine, or several. Exit 2 stays the
         // no-root code digest and fingerprint share.
         use crate::engine::l5::digest_cli::ChangedRootsDiagnostic;
+        let apps = cx.view().target().dependencies().apps;
         let blocker = match changed_roots.diagnostics.iter().find_map(|d| match d {
             ChangedRootsDiagnostic::SelectorAmbiguous {
                 candidates,
                 routines,
+                listed,
                 ..
-            } => Some((candidates, routines)),
+            } => Some((candidates, routines, listed)),
             _ => None,
         }) {
-            Some((candidates, routines)) => ProveBlocker {
+            // V3 §2.4: each candidate with its complete parameter list and
+            // the ready `routines` value.
+            Some((candidates, routines, listed)) => ProveBlocker {
                 kind: "routine-ambiguous",
-                detail: crate::engine::l5::explain::ambiguity_text(
+                detail: if listed.is_empty() {
+                    crate::engine::l5::explain::ambiguity_text(
+                        "",
+                        routine_selector,
+                        candidates,
+                        routines,
+                    )
+                } else {
+                    crate::engine::l5::selector_index::ambiguity_lines("", routine_selector, listed)
+                        .join("\n    ")
+                },
+                anchor: None,
+            },
+            // V3 §2.4: the nearest names (or where the name is found only in
+            // dependency code) and the selector forms.
+            None => {
+                let hints = changed_roots.diagnostics.iter().find_map(|d| match d {
+                    ChangedRootsDiagnostic::SelectorUnmatched { hints, .. } => Some(hints),
+                    _ => None,
+                });
+                let mut lines = vec![crate::engine::l5::explain::unmatched_line(
                     "",
                     routine_selector,
-                    candidates,
-                    routines,
-                ),
-                anchor: None,
-            },
-            None => ProveBlocker {
-                kind: "routine-not-found",
-                detail: format!(
-                    "no routine of the program has the id or name '{routine_selector}'"
-                ),
-                anchor: None,
-            },
+                )];
+                if let Some(h) = hints {
+                    lines.extend(
+                        crate::engine::l5::selector_index::hint_lines(h, &apps)
+                            .into_iter()
+                            .map(|l| format!("      {l}")),
+                    );
+                }
+                ProveBlocker {
+                    kind: "routine-not-found",
+                    detail: lines.join("\n"),
+                    anchor: None,
+                }
+            }
         };
         let dummy_result = ProveResult {
             answer: ProveAnswer::Unknown,
@@ -2515,6 +2875,8 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             deterministic,
             pointers: None,
             slice: None,
+            routine_identity: serde_json::Map::new(),
+            resolved_target: serde_json::Map::new(),
         });
 
         let human_text = format_prove_human(
@@ -2665,6 +3027,27 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         .map(|s| filtered_result(entry, &prove_result, s));
     let prove_result = filtered.unwrap_or(prove_result);
 
+    // W2-6: the human answer's paths read the model's names (and, W2-7, the
+    // loaded apps' names); V3 §2.1: so do the root's identity fields.
+    let dependencies = cx.view().target().dependencies();
+    let rollup_cx =
+        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
+    let mut routine_identity = rollup_cx.names.identity_json(root_id);
+    if let Some(d) = routine_identity.remove("display") {
+        routine_identity.insert("qualifiedDisplay".into(), d);
+    }
+    let handle = rollup_cx.handle(root_id);
+    if !handle.is_empty() {
+        routine_identity.insert("handle".into(), handle.into());
+    }
+    // V3 §2.3: the question's target as resolved.
+    let (resolved_target, question_human) = resolved_target(
+        cx.view().model(),
+        &rollup_cx,
+        &parsed_question,
+        question_text,
+    );
+
     // Project document
     cx.view().census_output();
     let json_text = project_prove_document(ProveDocumentArgs {
@@ -2682,13 +3065,10 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         deterministic,
         pointers: Some(&pointers),
         slice: slice.as_ref(),
+        routine_identity,
+        resolved_target,
     });
 
-    // W2-6: the human answer's paths read the model's names (and, W2-7, the
-    // loaded apps' names).
-    let dependencies = cx.view().target().dependencies();
-    let rollup_cx =
-        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
     let paths = HumanPaths {
         cx: &rollup_cx,
         root: root_id,
@@ -2713,12 +3093,18 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             Some(&paths),
         ),
     };
+    // V3 §2.3: the question line names the target as resolved.
+    let human_text = human_text.replacen(
+        &format!("  question: {question_text} "),
+        &format!("  question: {question_human} "),
+        1,
+    );
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
 
-    let summary = serde_json::json!({
+    let mut summary = serde_json::json!({
         "kind": "prove",
-        "routine": owner_qualified(&entry.object_display, &entry.routine_display),
+        "routine": rollup_cx.qualified(root_id),
         "question": question_text,
         "answer": prove_result.answer.as_str(),
         "evidence": match &slice {
@@ -2728,6 +3114,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         "blockedBy": prove_result.blocked_by.as_ref().map_or(0, Vec::len),
         "obligations": obligations_to_value(&prove_result.obligations),
     });
+    // §4.3: a filtered answer's summary carries its filter, so a reader of
+    // `answer: "no"` reads what it is "no" about.
+    if let Some(s) = &slice {
+        summary["filter"] = s.request.to_value();
+        summary["otherSites"] = serde_json::json!(
+            s.sites
+                .iter()
+                .filter(|x| !matches!(
+                    x.outcome,
+                    crate::engine::l5::prove_slice::Outcome::Match { .. }
+                ))
+                .count()
+        );
+    }
     Ok(ProveRunResult {
         json_text,
         human_text,
@@ -2836,27 +3236,37 @@ fn format_prove_slice_human(
         slice.request.label()
     ));
     let matching = slice.matching().count();
+    // Output validation V2 (§4.3): the filter is part of the verdict.
+    let filtered = match &slice.request.op {
+        Some(op) => format!("{op} site"),
+        None => format!("site {}", slice.request.label()),
+    };
+    let kinds = blocker_kind_counts(result.blocked_by.as_deref().unwrap_or(&[]));
     lines.push(match result.answer {
         ProveAnswer::Yes => format!(
             "  answer:   yes — {} reachable from {header} ({STATIC_LABEL})",
             plural(matching, "matching site", "matching sites")
         ),
         ProveAnswer::No => format!(
-            "  answer:   no — no reachable site matches, and every one was decided ({STATIC_LABEL})"
+            "  answer:   no — no {filtered} is reachable (every candidate decided; \
+             {STATIC_LABEL})"
         ),
         ProveAnswer::Unknown => format!(
-            "  answer:   unknown — no matching site observed, and some sites or the coverage \
-             cannot rule one out ({STATIC_LABEL})"
+            "  answer:   unknown (blocked by: {}) — no {filtered} was found reachable, and some \
+             sites or the analysis cannot rule one out ({STATIC_LABEL})",
+            named_kinds(&kinds, 3)
         ),
     });
+    if result.answer == ProveAnswer::Unknown {
+        lines.extend(unknown_lines(
+            question,
+            &kinds,
+            true,
+            &result.obligations,
+            paths.detail,
+        ));
+    }
     lines.extend(human_lines(slice, paths.cx, paths.root, paths.detail));
-    lines.extend(
-        paths
-            .cx
-            .take_legend(paths.detail)
-            .into_iter()
-            .map(|l| format!("  {l}")),
-    );
     if let Some(blockers) = &result.blocked_by
         && !blockers.is_empty()
     {
@@ -2874,6 +3284,10 @@ pub(crate) struct RootHeader {
     object_display: String,
     /// The declaration's unit and 0-based line.
     anchor: Option<(String, u32)>,
+    /// The one routine display (V3 §2.1, with the member's caption).
+    qualified: String,
+    /// The JSON identity fields (`signature`, `member`, `selector`).
+    identity: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The root's header off the model (the routine row with that stable id).
@@ -2887,11 +3301,20 @@ pub(crate) fn root_header(
         .iter()
         .find(|r| r.stable_routine_id == stable_id);
     let object = row.and_then(|r| model.workspace.objects.iter().find(|o| o.id == r.object_id));
+    let names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
+    let object_display =
+        object.map_or_else(String::new, |o| format!("{} {}", o.object_type, o.name));
+    let routine_display = row.map_or_else(|| stable_id.to_string(), |r| r.name.clone());
+    let mut identity = names.identity_json(stable_id);
+    identity.remove("display");
     RootHeader {
         stable_id: stable_id.to_string(),
-        routine_display: row.map_or_else(|| stable_id.to_string(), |r| r.name.clone()),
-        object_display: object
-            .map_or_else(String::new, |o| format!("{} {}", o.object_type, o.name)),
+        qualified: names
+            .display_with(stable_id, true)
+            .unwrap_or_else(|| owner_qualified(&object_display, &routine_display)),
+        identity,
+        routine_display,
+        object_display,
         anchor: row.map(|r| {
             (
                 r.source_anchor.source_unit_id.clone(),
@@ -2959,6 +3382,9 @@ fn callers_document(
     routine_ref.insert("display".into(), header.routine_display.clone().into());
     routine_ref.insert("objectDisplay".into(), header.object_display.clone().into());
     routine_ref.insert("stableId".into(), header.stable_id.clone().into());
+    // V3 §2.1 (2.5.0, additive): the one display and its parts.
+    routine_ref.insert("qualifiedDisplay".into(), header.qualified.clone().into());
+    routine_ref.extend(header.identity.clone());
     let mut payload = serde_json::Map::new();
     payload.insert("question".into(), job.question_text.into());
     payload.insert("questionScope".into(), "callers-context".into());
@@ -2981,7 +3407,7 @@ fn callers_document(
     env.insert("payload".into(), serde_json::Value::Object(payload));
     env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
     let json_text = serialize_document_value(serde_json::Value::Object(env));
-    let routine = owner_qualified(&header.object_display, &header.routine_display);
+    let routine = header.qualified.clone();
     let human_text = format_human(&routine, a, job.detail);
     let summary = serde_json::json!({
         "kind": "prove",
@@ -2990,6 +3416,9 @@ fn callers_document(
         "questionScope": "callers-context",
         "answer": a.answer.as_str(),
         "evidence": a.witness_count,
+        // §3.1: established witnesses and candidates over a hub, apart.
+        "establishedWitnesses": a.witness_count - a.open_witness_count,
+        "candidateWitnesses": a.open_witness_count,
         "blockedBy": a.blocked_counts.values().sum::<usize>(),
     });
     ProveRunResult {
@@ -3754,11 +4183,11 @@ mod tests {
              --detail lists every one)",
             "{text}"
         );
-        assert_eq!(lines[1], "    coverage-incomplete: 1", "no place: {text}");
+        assert_eq!(lines[1], "    coverage incomplete: 1", "no place: {text}");
         assert_eq!(lines[2], "      coverage status: partial", "{text}");
         assert_eq!(
             lines[3],
-            "    open-world-dispatch: 5 (2 in this workspace, 2 in dependency code, 1 not placed)",
+            "    interface dispatch (open world): 5 (2 in this workspace, 2 in dependency code, 1 not placed)",
             "{text}"
         );
         assert_eq!(

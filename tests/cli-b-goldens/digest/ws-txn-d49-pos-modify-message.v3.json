@@ -160,6 +160,9 @@
           },
           "display": "ModifyThenMessage",
           "objectDisplay": "Codeunit D49 Sender",
+          "qualifiedDisplay": "Codeunit \"D49 Sender\"::ModifyThenMessage",
+          "selector": "Codeunit \"D49 Sender\"::ModifyThenMessage",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-0000000d4901:Codeunit:50000#62ac09d40ac27912236d1c7a1170a332ba0d8e8605d00dda84e62c8f20a35dfe"
         },
         "scopedGuaranteesFolded": 1,
@@ -220,8 +223,10 @@
     "pathCap": 1,
     "routines": {
       "r:ca7839a9d9e5": {
-        "display": "Codeunit D49 Sender::ModifyThenMessage",
+        "display": "Codeunit \"D49 Sender\"::ModifyThenMessage",
         "file": "ws:src/Sender.Codeunit.al",
+        "selector": "Codeunit \"D49 Sender\"::ModifyThenMessage",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-0000000d4901:Codeunit:50000#62ac09d40ac27912236d1c7a1170a332ba0d8e8605d00dda84e62c8f20a35dfe"
       }
     },
@@ -233,5 +238,5 @@
     },
     "workspaceFingerprint": "e098e48fbdfcefab8d69f8ae58dcd79175c85fe80556a3eaa5f3fd8cbac40957"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

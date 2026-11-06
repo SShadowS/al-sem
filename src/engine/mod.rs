@@ -39,3 +39,5 @@ pub mod snapshot;
 pub mod source_excerpt;
 pub mod switch_dump;
 pub mod test_select;
+/// The output word table (output validation §8.1).
+pub mod vocab;

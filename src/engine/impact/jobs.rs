@@ -251,6 +251,8 @@ impl Job for MainJob<'_> {
             .flat_map(|a| a.mismatched())
             .filter_map(|f| f.workspace_file.as_ref().map(|w| format!("ws:{w}")))
             .collect();
+        // V3 §2.1: each root by the one routine display, with its parts.
+        let routine_names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
         let roots: Vec<Value> = changed
             .roots
             .iter()
@@ -279,14 +281,18 @@ impl Job for MainJob<'_> {
                 } else {
                     "changed"
                 };
-                json!({
+                let mut v = json!({
                     "stableId": id,
                     "display": r.map(|r| format!("{} {}::{}", r.object_type,
                         object_name.get(r.object_id.as_str()).copied().unwrap_or(""), r.name)),
                     "anchor": span.map(|s| json!({"file": s.source_unit_id, "line": s.anchor_line + 1})),
                     "status": status,
                     "changedLines": accounting.as_ref().map(|_| json!({"body": lines.body, "signature": lines.signature})),
-                })
+                });
+                for (k, x) in routine_names.identity_json(id) {
+                    v[k] = x;
+                }
+                v
             })
             .collect();
         let primary = primary_guid_of(model).map(str::to_string);

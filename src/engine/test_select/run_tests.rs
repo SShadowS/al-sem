@@ -152,7 +152,7 @@ fn through_dependency_sameness_is_said() {
     .text;
     assert!(
         human.contains(
-            "through dependency code: 1 test — effectively the suite's posting tests, not specific to this change"
+            "[via-dependency] 1 test — effectively the suite's posting tests, not specific to this change"
         ),
         "{human}"
     );

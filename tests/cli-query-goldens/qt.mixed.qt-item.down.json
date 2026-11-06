@@ -47,6 +47,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -71,6 +74,9 @@
               },
               "display": "Mixed",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+              "selector": "Codeunit \"QT Touches\"::Mixed",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
             }
           },
@@ -95,6 +101,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -119,6 +128,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -138,6 +150,9 @@
         },
         "display": "Mixed",
         "objectDisplay": "Codeunit QT Touches",
+        "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+        "selector": "Codeunit \"QT Touches\"::Mixed",
+        "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
       },
       "selector": "Mixed"
@@ -151,5 +166,5 @@
       "selector": "QT Item"
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.8.0"
 }

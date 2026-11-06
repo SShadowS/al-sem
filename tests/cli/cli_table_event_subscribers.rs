@@ -315,7 +315,45 @@ fn a_table_event_witness_goes_through_the_subscriber() {
     assert!(
         paths
             .iter()
-            .any(|p| p.contains("[event] TE Subscribers::AfterModify")),
+            .any(|p| p.contains("[event] Codeunit \"TE Subscribers\"::AfterModify")),
         "{stdout}"
+    );
+}
+
+/// Output validation V3 §2.3 (F6): a `writes-table` question asked by the
+/// table's NUMBER names the table as resolved, in the JSON
+/// (`payload.result.table`) and on the human question line.
+///
+/// Discrimination (2026-11-06): dropping `result_obj.extend(resolved_target)`
+/// in `project_prove_document` fails at "the JSON names the table";
+/// restored, passes.
+#[test]
+fn prove_names_the_table_it_resolved() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace(dir.path());
+    let w = ws.to_str().unwrap();
+    let run = |format: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args([
+                "prove",
+                w,
+                "TE Callers::ModifyTrue",
+                "writes-table:50610",
+                "--format",
+                format,
+            ])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("spawn alsem");
+        String::from_utf8_lossy(&out.stdout).replace('\r', "")
+    };
+    let v: serde_json::Value = serde_json::from_str(&run("json")).unwrap();
+    let t = &v["payload"]["result"]["table"];
+    assert_eq!(t["name"], "W Modify", "the JSON names the table: {v}");
+    assert_eq!(t["number"], 50610, "{v}");
+    let human = run("human");
+    assert!(
+        human.contains("question: writes-table:W Modify (table 50610, this app)"),
+        "{human}"
     );
 }

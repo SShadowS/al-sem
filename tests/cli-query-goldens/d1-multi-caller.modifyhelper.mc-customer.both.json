@@ -45,6 +45,9 @@
               },
               "display": "ModifyHelper",
               "objectDisplay": "Codeunit D1 Multi Caller",
+              "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+              "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+              "signature": "(var Record \"MC Customer\")",
               "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
             }
           },
@@ -64,6 +67,9 @@
         },
         "display": "ModifyHelper",
         "objectDisplay": "Codeunit D1 Multi Caller",
+        "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+        "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+        "signature": "(var Record \"MC Customer\")",
         "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
       },
       "selector": "ModifyHelper"
@@ -93,5 +99,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.8.0"
 }

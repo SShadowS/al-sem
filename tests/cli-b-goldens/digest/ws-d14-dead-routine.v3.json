@@ -38,6 +38,9 @@
           },
           "display": "DeadHelper",
           "objectDisplay": "Codeunit D14EntryPoints",
+          "qualifiedDisplay": "Codeunit D14EntryPoints::DeadHelper",
+          "selector": "Codeunit D14EntryPoints::DeadHelper",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7753483aea24994460cd48f690bd81e349e60e667a799b1cffc587c66d9f9a90"
         },
         "scopedGuaranteesFolded": 0,
@@ -111,6 +114,9 @@
           },
           "display": "LiveHelper",
           "objectDisplay": "Codeunit D14EntryPoints",
+          "qualifiedDisplay": "Codeunit D14EntryPoints::LiveHelper",
+          "selector": "Codeunit D14EntryPoints::LiveHelper",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7d7107f8fc84808468c4f81939860ce3e9b1e5ceaddb4b1e74ebbc2f55898f82"
         },
         "scopedGuaranteesFolded": 0,
@@ -184,6 +190,9 @@
           },
           "display": "OnRun",
           "objectDisplay": "Codeunit D14EntryPoints",
+          "qualifiedDisplay": "Codeunit D14EntryPoints::OnRun",
+          "selector": "Codeunit D14EntryPoints::OnRun",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
         },
         "scopedGuaranteesFolded": 0,
@@ -243,16 +252,22 @@
       "r:5ef0dce1522f": {
         "display": "Codeunit D14EntryPoints::DeadHelper",
         "file": "ws:src/codeunit.al",
+        "selector": "Codeunit D14EntryPoints::DeadHelper",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7753483aea24994460cd48f690bd81e349e60e667a799b1cffc587c66d9f9a90"
       },
       "r:c3197e700491": {
         "display": "Codeunit D14EntryPoints::LiveHelper",
         "file": "ws:src/codeunit.al",
+        "selector": "Codeunit D14EntryPoints::LiveHelper",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#7d7107f8fc84808468c4f81939860ce3e9b1e5ceaddb4b1e74ebbc2f55898f82"
       },
       "r:d068d3cfa0af": {
         "display": "Codeunit D14EntryPoints::OnRun",
         "file": "ws:src/codeunit.al",
+        "selector": "Codeunit D14EntryPoints::OnRun",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
       }
     },
@@ -264,5 +279,5 @@
     },
     "workspaceFingerprint": "27982e562e0f7d50b80b3135bd69215672059411d7f470a27618b9037ee83d05"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

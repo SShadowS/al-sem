@@ -28,6 +28,9 @@
             },
             "display": "CallerA",
             "objectDisplay": "Codeunit D1 Multi Caller",
+            "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
+            "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
+            "signature": "()",
             "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
           }
         },
@@ -55,6 +58,9 @@
             },
             "display": "ModifyHelper",
             "objectDisplay": "Codeunit D1 Multi Caller",
+            "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+            "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+            "signature": "(var Record \"MC Customer\")",
             "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
           }
         },
@@ -65,6 +71,65 @@
       }
     ],
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "families": {
+          "beyondDependencyCalls": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "wholeCone",
+            "inventory": "exhaustive",
+            "reasons": []
+          },
+          "locks": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for locks"
+            ]
+          },
+          "reads": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for reads"
+            ]
+          },
+          "validate": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for validations"
+            ]
+          },
+          "writes": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for writes"
+            ]
+          }
+        }
+      }
+    },
     "routine": {
       "resolution": "resolved",
       "routine": {
@@ -75,6 +140,9 @@
         },
         "display": "CallerA",
         "objectDisplay": "Codeunit D1 Multi Caller",
+        "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
+        "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
       },
       "selector": "CallerA"
@@ -151,5 +219,5 @@
       }
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.8.0"
 }

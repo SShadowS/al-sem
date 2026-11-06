@@ -71,6 +71,9 @@
           },
           "display": "JustFetch",
           "objectDisplay": "Codeunit D47 Sender",
+          "qualifiedDisplay": "Codeunit \"D47 Sender\"::JustFetch",
+          "selector": "Codeunit \"D47 Sender\"::JustFetch",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-0000000d4703:Codeunit:50000#6c737101e21cd197b3b5e801d215066718f65229b241140d55cedc0d907404ba"
         },
         "scopedGuaranteesFolded": 0,
@@ -130,8 +133,10 @@
     "pathCap": 1,
     "routines": {
       "r:7614785d0209": {
-        "display": "Codeunit D47 Sender::JustFetch",
+        "display": "Codeunit \"D47 Sender\"::JustFetch",
         "file": "ws:src/Sender.Codeunit.al",
+        "selector": "Codeunit \"D47 Sender\"::JustFetch",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-0000000d4703:Codeunit:50000#6c737101e21cd197b3b5e801d215066718f65229b241140d55cedc0d907404ba"
       }
     },
@@ -143,5 +148,5 @@
     },
     "workspaceFingerprint": "9a26de0865bbcbff926a04804ba7498aecbc802ada68e2c5c834dbc7c66ddbd9"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }
