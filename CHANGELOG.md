@@ -73,7 +73,13 @@ byte-identical.
   goldens gain `error-implicit` facts / `ERROR_IMPLICIT` effects and the counts and hashes
   that follow; where the one-row-per-kind outputs list one site, the new site can become
   the representative and the old one moves to `moreSites`, and an inherited error's
-  shortest witness can change. Hand-held oracles moved with them: the l2cap vectors (+4
+  shortest witness can change. The CDO rendering goldens (`tests/cli-output-goldens/cdo/`,
+  re-minted with `CDO_WS` + `REGEN_TEMP_GOLDENS=1`) move the same way: IssueReminder's errors
+  194 → 301 places, `UpdateLastUpload` (a statement `Modify` at `CDOTelemetry.Codeunit.al:48`)
+  "UI and errors: none observed" → "errors at 1 place"; a dependency entry point can gain a
+  real call site its write group had folded into "at least" (`CreateEDocumentLog` at
+  `CDOeDocumentsDispatcher.Codeunit.al:308`), and explain's write lines gain "fields … assigns"
+  from the field-writers fix. Hand-held oracles moved with them: the l2cap vectors (+4
   facts), the r3a3 vectors (+13), the R3a-3 manifest matrix (+130 direct, +46 inherited),
   the R3a-5 matrix (`totalCrossAppInheritedFacts` 1 → 2) and the split records
   (`REMINT_SPLIT_RECORDS=1`, RECORD explains) and the policy facts oracle

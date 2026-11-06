@@ -10,14 +10,14 @@
         "interface-open-world",
         "object-run-unresolved"
       ],
-      "effects": 666,
+      "effects": 788,
       "effectsByType": {
         "BACKGROUND_TASK": 4,
         "COMMIT": 17,
         "DB_DELETE": 28,
         "DB_INSERT": 50,
         "DB_MODIFY": 29,
-        "ERROR_IMPLICIT": 110,
+        "ERROR_IMPLICIT": 232,
         "ERROR_THROW": 116,
         "EVENT_PUBLISH": 93,
         "FILE": 5,
@@ -90,9 +90,9 @@
         "entryPoints": {
           "atLeast": true,
           "count": 43,
-          "sites": 53,
+          "sites": 54,
           "withWrites": 12,
-          "withWritesSites": 14
+          "withWritesSites": 15
         },
         "events": {
           "distinct": 524,
@@ -105,7 +105,7 @@
         },
         "kinds": {
           "backgroundTasks": 3,
-          "errors": 194,
+          "errors": 301,
           "file": 4,
           "http": 20,
           "isolatedStorage": 16,
@@ -133,6 +133,6 @@
     }
   ],
   "routinesListed": 1,
-  "totalEffects": 666,
+  "totalEffects": 788,
   "totalUnresolved": 288
 }

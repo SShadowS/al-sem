@@ -7,9 +7,10 @@
     {
       "coverage": "complete",
       "coverageReasons": [],
-      "effects": 1,
+      "effects": 2,
       "effectsByType": {
-        "DB_MODIFY": 1
+        "DB_MODIFY": 1,
+        "ERROR_IMPLICIT": 1
       },
       "names": {
         "entryPoints": [],
@@ -40,7 +41,9 @@
           "notPlaced": 0,
           "workspace": 0
         },
-        "kinds": {},
+        "kinds": {
+          "errors": 1
+        },
         "literalDeadTables": 0,
         "mayWriteTables": {
           "byDependencies": 0,
@@ -57,6 +60,6 @@
     }
   ],
   "routinesListed": 1,
-  "totalEffects": 1,
+  "totalEffects": 2,
   "totalUnresolved": 0
 }
