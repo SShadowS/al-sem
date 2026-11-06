@@ -291,7 +291,10 @@ impl OutputDir {
         }
         let dir = sys::openat(&anchor, &name, libc::O_DIRECTORY | libc::O_RDONLY, 0)?;
         let (_, _, mode, uid) = sys::fstat(&dir)?;
-        if mode & libc::S_IFMT != libc::S_IFDIR || uid != sys::euid() || mode & 0o077 != 0 {
+        // `mode_t` is u16 on macOS and u32 on Linux; widen the constants to `mode`'s u32.
+        #[allow(clippy::unnecessary_cast)]
+        let is_dir = mode & (libc::S_IFMT as u32) == libc::S_IFDIR as u32;
+        if !is_dir || uid != sys::euid() || mode & 0o077 != 0 {
             return Err(refused(format!(
                 "the instance directory {} is not a private directory of this user",
                 root.join(instance).display()
