@@ -18,9 +18,61 @@
         "kind": "file-unmatched"
       }
     ],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "D49 Rec",
+          "resourceId": "11111111-0000-0000-0000-0000000d4902/table/50100"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Rec.Modify",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 14,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Rec.Get",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 12,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Page.RunModal",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 15,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "UI_WINDOW_OPEN"
+      }
     },
     "entries": [
       {
@@ -37,22 +89,10 @@
         "crossings": {},
         "effects": [
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "D49 Rec",
-              "resourceId": "11111111-0000-0000-0000-0000000d4902/table/50100",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Rec.Modify",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 14,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "00cda7804c9127d8",
             "guarantees": [],
             "paths": [
@@ -68,22 +108,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Rec.Get",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 12,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "6cda70870642a2ab",
             "guarantees": [],
             "paths": [
@@ -99,22 +127,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Page.RunModal",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "40c1ea6e11ec8aee",
             "guarantees": [
               "WRITE_PENDING_AT_UI"
@@ -131,7 +147,6 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
             "refutableGuarantees": [
               "WRITE_PENDING_AT_UI"
             ],
@@ -145,9 +160,7 @@
                 "writeOccurrenceId": "00cda7804c9127d8"
               }
             ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "UI_WINDOW_OPEN"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -211,18 +224,7 @@
           "unresolvedTableWrites": 0
         },
         "unresolved": [
-          {
-            "calleeDisplay": "Page.RunModal",
-            "callsiteAnchor": {
-              "column": 8,
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
-            "owningRoutine": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
-            "owningRoutineDisplay": "ModifyThenRunModal",
-            "status": "unfetched-dependency"
-          }
+          "u:1"
         ],
         "unresolvedInDependencies": {
           "dynamicTarget": 0,
@@ -268,7 +270,21 @@
       "totalEffects": 4,
       "totalUnresolved": 1
     },
+    "unresolvedSites": {
+      "u:1": {
+        "calleeDisplay": "Page.RunModal",
+        "callsiteAnchor": {
+          "column": 8,
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 15,
+          "sourceKind": "source"
+        },
+        "owningRoutine": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
+        "owningRoutineDisplay": "ModifyThenRunModal",
+        "status": "unfetched-dependency"
+      }
+    },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

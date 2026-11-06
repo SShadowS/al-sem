@@ -12,6 +12,12 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [
         {
@@ -23,6 +29,57 @@
         }
       ],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "class": "temporary",
+        "classReason": "known-temporary",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Out Log",
+          "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "TempLog.DeleteAll",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 58,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_DELETE"
+      },
+      "e:2": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Out Log",
+          "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Log.Insert",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 61,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Log.Insert",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 61,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      }
     },
     "entries": [
       {
@@ -37,50 +94,23 @@
         "crossings": {},
         "effects": [
           {
-            "class": "temporary",
-            "classReason": "known-temporary",
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Out Log",
-              "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
               "tempState": "known(true)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "TempLog.DeleteAll",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 58,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "e6dc7b3e3b98f30e",
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
             "pathsOmitted": 1,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_DELETE"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Out Log",
-              "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Log.Insert",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "7d2d91f972099cc8",
             "guarantees": [],
             "paths": [
@@ -96,22 +126,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Log.Insert",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "01431eb67a3f8e1d",
             "guarantees": [],
             "paths": [
@@ -127,10 +145,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -232,5 +247,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

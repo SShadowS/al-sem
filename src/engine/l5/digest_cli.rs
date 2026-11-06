@@ -3125,6 +3125,11 @@ pub fn project_digest_document(
         doc["payload"]["result"] = serde_json::json!({"scope": scope});
         doc = sort_keys_keep_nulls(doc);
     }
+    // 4.0.0 (output validation V5, §7.3): what several roots share, once
+    // (`digest_v4`); `--schema 3` keeps the 3.x document for one release.
+    if v3.as_ref().is_some_and(|v| v.v4) {
+        doc = sort_keys_keep_nulls(crate::engine::l5::digest_v4::document_from_v3(doc));
+    }
     if compact {
         let mut s = serde_json::to_string(&doc).expect("serde_json serialization");
         s.push('\n');
@@ -3143,6 +3148,9 @@ pub struct V3Inputs<'a> {
     pub table_answers: &'a crate::engine::l5::prove::TableAnswers,
     /// Output validation V4 (F76): `payload.result.scope`.
     pub scope: Option<serde_json::Value>,
+    /// Output validation V5 (§7.3): the 4.0.0 document (`digest_v4`);
+    /// `false` is `--schema 3`.
+    pub v4: bool,
 }
 
 pub struct ChangedInputContract {
@@ -3198,21 +3206,17 @@ pub fn format_digest_human_v3(
             if entry.effects.is_empty() {
                 body.push("effects: none".to_string());
             }
-            // A section's shared path start, once (MCP output step 2).
-            body.extend(rr::factor_prefix(rr::commit_lines(r, entry, cx, opts)));
-            body.extend(rr::factor_prefix(rr::workspace_write_lines(
-                r,
-                entry,
-                cx,
-                opts,
-                &|_| None,
-            )));
-            body.extend(rr::caller_dependent_lines(r, entry));
-            body.extend(rr::beyond_lines(r, entry, cx, opts));
-            body.extend(rr::factor_prefix(rr::no_path_lines(r, entry, cx, opts)));
-            body.extend(rr::literal_dead_lines(r, opts));
-            body.extend(rr::temporary_lines(r, opts));
-            body.extend(rr::event_lines(r, cx, opts));
+            // The effect sections; a run of hops several of their paths
+            // share prints once, under a segment id (output validation §7.5).
+            let mut effects = rr::commit_lines(r, entry, cx, opts);
+            effects.extend(rr::workspace_write_lines(r, entry, cx, opts, &|_| None));
+            effects.extend(rr::caller_dependent_lines(r, entry));
+            effects.extend(rr::beyond_lines(r, entry, cx, opts));
+            effects.extend(rr::no_path_lines(r, entry, cx, opts));
+            effects.extend(rr::literal_dead_lines(r, opts));
+            effects.extend(rr::temporary_lines(r, opts));
+            effects.extend(rr::event_lines(r, cx, opts));
+            body.extend(crate::engine::path_segments::segment(effects));
             body.extend(rr::kind_lines(r, entry, opts));
             body.extend(rr::workspace_gap_lines(r, entry, opts));
             body.extend(rr::dependency_gap_lines(r, opts));
@@ -4179,6 +4183,7 @@ fn digest_view(
             compact: render.compact,
             table_answers: &table_answers,
             scope: Some(header.scope_json(serde_json::Map::new())),
+            v4: !render.schema3,
         }),
     );
 

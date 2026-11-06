@@ -212,7 +212,7 @@ fn explain_and_digest_list_the_database_commit() {
         "Db Commit Mgt::PersistAudit",
     ]);
     assert_eq!(code, Some(0), "{stdout}");
-    let v: Value = serde_json::from_str(&stdout).expect("digest JSON");
+    let v: Value = crate::as_v3(serde_json::from_str(&stdout).expect("digest JSON"));
     let commits: Vec<String> = v["payload"]["entries"][0]["effects"]
         .as_array()
         .expect("effects")

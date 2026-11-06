@@ -12,9 +12,30 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Message",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 9,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "UI_MESSAGE"
+      }
     },
     "entries": [
       {
@@ -29,16 +50,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Message",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 9,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "164c21bfb5fa6f3b",
             "guarantees": [],
             "paths": [
@@ -53,10 +65,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "UI_MESSAGE"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -158,5 +167,5 @@
     },
     "workspaceFingerprint": "6bbd1a2d99abadce08496fe643c9429f0d3981694b9ad61899df905cc9eebb26"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

@@ -189,12 +189,12 @@ fn comparison_line(cmp: &Comparison, files: usize) -> String {
             plural(files, "file", "files")
         ),
         "diff" => format!(
-            "impact of a diff ({}); no comparison base: a diff alone names none; HEAD {}",
+            "impact of a diff ({}); HEAD {}",
             plural(files, "file", "files"),
             head.as_deref().unwrap_or("not a git repository")
         ),
-        "files" => "impact of the named files (every routine in them); no diff and no base".into(),
-        _ => "impact of the named routines; no diff and no base".into(),
+        "files" => "impact of the named files (every routine in them)".into(),
+        _ => "impact of the named routines".into(),
     };
     let hash = cmp
         .diff_hash
@@ -483,6 +483,11 @@ fn node_short(n: &Value) -> String {
     )
 }
 
+/// The direct callers and event publishers a routine lists with `detail`
+/// (output validation §7.6, F46: an evidence budget, about 15 lines per
+/// routine, not ten items per list).
+const DETAIL_ITEMS: usize = 3;
+
 /// The reach share at which a reach's lists fold (§3.2: entries reached
 /// over navigation or hubs against the program's entries; start at 50%).
 const FOLD_SHARE_PERCENT: usize = 50;
@@ -571,8 +576,39 @@ fn reach_lines(
     match share {
         Some(p) if p >= FOLD_SHARE_PERCENT && !detail => out.push(format!(
             "{indent}  broad navigation reach ({p}% of the program's entries; list folded) — \
-             {detail_in} lists one representative per kind and tier"
+             {detail_in} lists one representative per tier"
         )),
+        // §7.6 (F46): `detail` is an evidence budget, not ten items per
+        // list: the nearest entry of each tier, each on its own line.
+        _ if detail => {
+            let mut best: Vec<(&str, &str, &Value)> = Vec::new();
+            for e in &entries {
+                let kind = vocab::entry_key(s(e, "kind")).0;
+                for n in e["first"].as_array().into_iter().flatten() {
+                    let tier = vocab::tier_key(s(n, "tier"));
+                    match best.iter_mut().find(|(t, _, _)| *t == tier) {
+                        Some(b) if u(b.2, "hops") <= u(n, "hops") => {}
+                        Some(b) => *b = (tier, kind, n),
+                        None => best.push((tier, kind, n)),
+                    }
+                }
+            }
+            let rank = |t: &str| match t {
+                "local" => 0,
+                "via-dependency" => 1,
+                "via-configuration" => 2,
+                _ => 3,
+            };
+            best.sort_by_key(|(t, _, _)| rank(t));
+            if !best.is_empty() {
+                out.push(format!(
+                    "{indent}  nearest entry per tier (relation not recorded by this walk):"
+                ));
+            }
+            for (_, kind, n) in best {
+                out.push(format!("{indent}    {}: {kind}", node_short(n)));
+            }
+        }
         _ => {
             // One line per kind: two legacy buckets of one kind (codeunit
             // OnRun and background starts) print the first one's witnesses.
@@ -610,7 +646,9 @@ fn reach_lines(
         })
         .collect();
     if !hubs.is_empty() {
-        let cap = if detail { hubs.len() } else { 3 };
+        // §7.6: the hubs stay three, counted, with `detail` too (the JSON
+        // lists every one).
+        let cap = 3;
         out.push(format!(
             "{indent}  hubs on these paths: {}{}",
             hubs.iter()
@@ -619,7 +657,11 @@ fn reach_lines(
                 .collect::<Vec<_>>()
                 .join(", "),
             if hubs.len() > cap {
-                format!(", … +{} ({detail_in} lists them)", hubs.len() - cap)
+                format!(
+                    ", … +{} ({} lists them)",
+                    hubs.len() - cap,
+                    crate::engine::follow_up::Input::FormatJson.on(surface)
+                )
             } else {
                 String::new()
             }
@@ -1124,7 +1166,7 @@ pub fn render(
             d.delta["deleted"].as_array().map_or(0, Vec::len)
         ),
         Err(_) => format!(
-            "input: {} resolved (no base given: added or deleted needs a base)",
+            "input: {} resolved",
             plural(roots.len(), "changed routine", "changed routines")
         ),
     };
@@ -1324,8 +1366,9 @@ pub fn render(
                 if e != "not asked" {
                     h.push(format!("before/after: not computed — {e}"));
                 }
+                // §7.6: "no base given" prints once, in the header.
                 h.push(format!(
-                    "current effects of the {} (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; {which}:",
+                    "current effects of the {}; ranked: reached from a user or a job first, then by ancestors; {which}:",
                     plural(roots.len(), "changed routine", "changed routines"),
                 ));
                 h
@@ -1338,8 +1381,11 @@ pub fn render(
         .map(|r| root_block(r, opts))
         .collect();
     let mut tail: Vec<String> = Vec::new();
-    // 3. The whole change.
-    if let Ok(up) = up {
+    // 3. The whole change (§7.6: not for a change of one routine, whose
+    // block already says it).
+    if let Ok(up) = up
+        && roots.len() > 1
+    {
         let un = &up["union"];
         tail.push("the whole change:".to_string());
         tail.extend(reach_lines(un, false, "  ", opts.surface));
@@ -1500,7 +1546,7 @@ fn impact_header(
         .to_string();
     if !opts.detail && !roots.is_empty() {
         h.more.push(format!(
-            "{} lists up to 10 items per list",
+            "{} lists each routine's direct callers and nearest entry per tier",
             opts.input(Input::Detail)
         ));
     }
@@ -1591,12 +1637,14 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
             // Output validation V2 (§3.2, F12): code callers first, then the
             // reach beyond them split by tier, kind and context, lists folded
             // when the reach is broad, the hubs named.
+            // §7.6 (F46): with `detail`, the direct callers with their call
+            // sites (at most [`DETAIL_ITEMS`], the rest counted).
             let c = &up["callers"];
             let first: Vec<String> = c["first"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .take(if opts.detail { 10 } else { 1 })
+                .take(if opts.detail { DETAIL_ITEMS } else { 1 })
                 .map(|f| match f["line"].as_u64() {
                     Some(l) => format!("{} at {}:{l}", s(f, "display"), s(f, "file")),
                     None => s(f, "display").to_string(),
@@ -1627,7 +1675,7 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
                         .as_array()
                         .into_iter()
                         .flatten()
-                        .take(if opts.detail { 10 } else { 1 })
+                        .take(if opts.detail { DETAIL_ITEMS } else { 1 })
                         .map(node_short)
                         .collect::<Vec<_>>()
                         .join("; ")

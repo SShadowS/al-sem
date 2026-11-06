@@ -10,10 +10,10 @@ more: --format json for every row
       [Delete] write at ws:src/QTTouches.al:89 in Codeunit "QT Touches"::Top2
       [Modify] write at ws:src/QTTouches.al:88 in Codeunit "QT Touches"::Top2
     +2 hops Codeunit "QT Touches"::Entry: 7 touches: 4 on persistent records, 0 on possibly persistent records, 3 on temporary records
-      [Delete] write at ws:src/QTTouches.al:89 in Codeunit "QT Touches"::Top2, through Codeunit "QT Touches"::Top2
+      [Delete] write at ws:src/QTTouches.al:89 in Codeunit "QT Touches"::Top2
       [FindFirst] read at ws:src/QTTouches.al:44 in Codeunit "QT Touches"::TempOnly (temporary record), through Codeunit "QT Touches"::Mixed
-      [Get] read at ws:src/QTTouches.al:65 in Codeunit "QT Touches"::Mixed, through Codeunit "QT Touches"::Mixed
+      [Get] read at ws:src/QTTouches.al:65 in Codeunit "QT Touches"::Mixed
       [Insert] write at ws:src/QTTouches.al:43 in Codeunit "QT Touches"::TempOnly (temporary record), through Codeunit "QT Touches"::Mixed
       [Insert] write at ws:src/QTTouches.al:36 in Codeunit "QT Touches"::WriteItem, through Codeunit "QT Touches"::Top1
       [Insert] write at ws:src/QTTouches.al:36 in Codeunit "QT Touches"::WriteItem (temporary record), through Codeunit "QT Touches"::Mixed
-      [Modify] write at ws:src/QTTouches.al:88 in Codeunit "QT Touches"::Top2, through Codeunit "QT Touches"::Top2
+      [Modify] write at ws:src/QTTouches.al:88 in Codeunit "QT Touches"::Top2

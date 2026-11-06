@@ -36,6 +36,8 @@ pub mod effect_query_cli;
 pub mod effect_store;
 pub mod effect_universe;
 pub(crate) mod event_dispatch;
+/// The query 4.0.0 document (output validation §7.1, §7.2, §8.3).
+pub mod query_v4;
 // Agent-tasks milestone D: `query touches --field`'s consumer sites of one
 // field, read from the model alone, and the D1 field-fact census.
 pub mod field_touches;

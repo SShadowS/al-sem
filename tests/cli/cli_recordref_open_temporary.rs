@@ -52,8 +52,10 @@ fn insert_temp_state(extra: &str) -> String {
         .env("RUST_LOG", "off")
         .output()
         .unwrap();
-    let doc: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+    let doc: serde_json::Value = crate::as_v3(
+        serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr))),
+    );
     let effects: Vec<&serde_json::Value> = doc["payload"]["entries"]
         .as_array()
         .unwrap()

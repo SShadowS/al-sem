@@ -33,7 +33,7 @@ fn touches(ws: &Path, args: &[&str]) -> (Value, i32) {
             String::from_utf8_lossy(&out.stderr)
         )
     });
-    (v, out.status.code().unwrap_or(-1))
+    (crate::as_v3(v), out.status.code().unwrap_or(-1))
 }
 
 fn amount() -> Value {

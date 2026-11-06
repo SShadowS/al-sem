@@ -149,8 +149,9 @@ fn an_open_site_witness_is_labelled_with_its_tier() {
             {"display": "Report 50100::onprereport", "hops": 5, "tier": "onlyOpen"}]}]);
     let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
     assert!(text.contains("report triggers 3 (via-hub 1)"), "{text}");
+    // §7.6: with `detail`, the nearest entry of each tier on its own line.
     assert!(
-        text.contains("[local] Report 357::company::onpostdataitem (2 hops); "),
+        text.contains("[local] Report 357::company::onpostdataitem (2 hops): report trigger\n"),
         "{text}"
     );
     assert!(

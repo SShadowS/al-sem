@@ -1,10 +1,10 @@
 impact routines → 1 changed routine   [cross-app]
 answer: 1 changed routine resolved; ranked first: Codeunit "Out Issue Document"::IssueDoc
 analysis complete · assumptions: current effects only: no base was built, so there is no before/after and no routine is called added or deleted; callers and entries are static may-paths over the sited graph (R0's reverse walk); tests are static reachability, not coverage · limits: none · scope: callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments
-more: detail: true lists up to 10 items per list; format: "json" for every routine with its callers, effects and tests
-impact of the named routines; no diff and no base; one-shot run (no resident revision)
-input: 1 changed routine resolved (no base given: added or deleted needs a base)
-current effects of the 1 changed routine (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; all shown:
+more: detail: true lists each routine's direct callers and nearest entry per tier; format: "json" for every routine with its callers, effects and tests
+impact of the named routines; one-shot run (no resident revision)
+input: 1 changed routine resolved
+current effects of the 1 changed routine; ranked: reached from a user or a job first, then by ancestors; all shown:
   Codeunit "Out Issue Document"::IssueDoc (ws:src/OutIssueDocument.Codeunit.al:3) — changed
       effects: may write 16 tables (1 owned by this app, 15 by dependencies); 1 table whose temporary state the caller decides; commits: may (0 own commit sites); errors 5; HTTP 1; background tasks 1; 2 events
       reached by code callers: no — no code caller found in the analyzed graph (every candidate decided)
@@ -14,9 +14,4 @@ current effects of the 1 changed routine (no base given: current effects; no bef
           first page trigger: [local] Page "Out Doc Card".action(Issue)::OnAction (1 hop)
       external: apps outside the program may call routines of its cone (by reason, routines): public 1
       tests: no modeled path (its cone is complete)
-the whole change:
-  reached beyond it: 2 ancestors — by tier: local 2, via-dependency 0, via-hub 0
-    entries among them, by kind (counted per legacy bucket: an entry in two buckets counts in both): page actions 1, page triggers 1
-      first page action: [local] Page "Out Doc Card".action(Issue)::OnAction (1 hop)
-      first page trigger: [local] Page "Out Doc Card".action(Issue)::OnAction (1 hop)
 tests: run first: no test with a modeled path; selection complete; workspace 1 [Test]; 0 test apps (none found)

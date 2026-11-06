@@ -12,6 +12,7 @@ const OPTS: RenderOpts = RenderOpts {
     json: true,
     surface: crate::engine::follow_up::Surface::Cli,
     single_app: false,
+    schema: 2,
 };
 
 fn roots(stamp: &str) -> Value {
@@ -115,7 +116,7 @@ fn a_root_not_loaded_requires_the_fallback() {
             vec![],
         ),
     ]);
-    assert_eq!(v["changed"][0]["status"], "not-loaded");
+    assert_eq!(v["changed"][0]["testStatus"], "not loaded");
     assert_eq!(v["selectionComplete"], false);
     assert_eq!(v["requiredFallback"][0]["reason"], "root-not-loaded");
 }

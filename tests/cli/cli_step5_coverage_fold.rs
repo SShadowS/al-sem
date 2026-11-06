@@ -133,7 +133,7 @@ fn alsem_json(args: &[&str], ws: &Path) -> (Value, String, i32) {
     let code = out.status.code().unwrap_or(-1);
     let doc = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("{e}: {args:?} exit {code}: stdout {stdout:?} stderr {stderr}"));
-    (doc, stderr, code)
+    (crate::as_v3(doc), stderr, code)
 }
 
 /// The `transactionContext` of every COMMIT effect in `effects`.

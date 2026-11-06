@@ -2152,6 +2152,7 @@ pub fn format_prove_human(
     };
     // Evidence (W2-6, design §4.7): where each effect sits, and the path to it
     // (prefix and terminal of one witness, never invented).
+    let evidence_start = lines.len();
     if let Some(ref indices) = prove_result.evidence
         && !indices.is_empty()
     {
@@ -2330,6 +2331,10 @@ pub fn format_prove_human(
             ));
         }
     }
+    // Output validation §7.5 (F45): a run of hops several evidence paths
+    // share prints once, under a segment id.
+    let evidence = lines.split_off(evidence_start);
+    lines.extend(crate::engine::path_segments::segment(evidence));
 
     // Blockers
     if let Some(ref blockers) = prove_result.blocked_by

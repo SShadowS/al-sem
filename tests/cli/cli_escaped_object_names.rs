@@ -362,12 +362,12 @@ fn alsem_json(args: &[&str]) -> (Value, i32) {
         .expect("spawn alsem");
     let stdout = String::from_utf8_lossy(&out.stdout).replace('\r', "");
     (
-        serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        crate::as_v3(serde_json::from_str(&stdout).unwrap_or_else(|e| {
             panic!(
                 "{e}: {stdout} stderr={}",
                 String::from_utf8_lossy(&out.stderr)
             )
-        }),
+        })),
         out.status.code().unwrap_or(-1),
     )
 }

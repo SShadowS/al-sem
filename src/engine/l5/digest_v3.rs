@@ -49,6 +49,9 @@ use crate::engine::line_base::shown;
 pub struct DigestRender {
     /// `--schema 2`: the 2.x document (old shape over the current analysis).
     pub schema2: bool,
+    /// `--schema 3`: the 3.x document, kept for one release after 4.0.0
+    /// (output validation V5, §7.3). The default is 4.0.0 (`digest_v4`).
+    pub schema3: bool,
     /// `--detail`: unfolded 3.x.
     pub detail: bool,
     /// `--compact`: no indentation.

@@ -127,10 +127,8 @@ fn accounting_comes_first_and_every_diagnostic_appears() {
         "{human}"
     );
     assert!(human.contains("diff file unmatched: other/x.al"), "{human}");
-    assert!(
-        human.contains("current effects; no before/after"),
-        "{human}"
-    );
+    // §7.6: "no base given" prints once, in the header's assumptions.
+    assert!(human.contains("no base was built"), "{human}");
     let (j, _) = answer(vec![Ok(select("reached", vec![]))], true);
     let v: Value = serde_json::from_str(&j).unwrap();
     assert_eq!(v["schema"], "al-sem.impact");

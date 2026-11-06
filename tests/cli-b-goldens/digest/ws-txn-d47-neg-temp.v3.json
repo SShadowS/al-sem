@@ -18,9 +18,63 @@
         "kind": "file-unmatched"
       }
     ],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "class": "temporary",
+        "classReason": "known-temporary",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "D47 Rec",
+          "resourceId": "11111111-0000-0000-0000-0000000d4705/table/50100"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "TempRec.Insert",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 15,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "TempRec.Insert",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 15,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {
+          "method": "Get"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Client.Get",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 16,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "HTTP"
+      }
     },
     "entries": [
       {
@@ -35,44 +89,20 @@
         "crossings": {},
         "effects": [
           {
-            "class": "temporary",
-            "classReason": "known-temporary",
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "D47 Rec",
-              "resourceId": "11111111-0000-0000-0000-0000000d4705/table/50100",
               "tempState": "known(true)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "TempRec.Insert",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "fd83f4fd0de47853",
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
             "pathsOmitted": 1,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "TempRec.Insert",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "2155c4616d7282e4",
             "guarantees": [],
             "paths": [
@@ -88,24 +118,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {
-              "method": "Get"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Client.Get",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "1b3cfdd09f2a0708",
             "guarantees": [],
             "paths": [
@@ -120,10 +136,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "HTTP"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -226,5 +239,5 @@
     },
     "workspaceFingerprint": "d7511a4fe3bcaed11cec5244ebdc7b282e2294c2cf2e3782c9f106718516fe98"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

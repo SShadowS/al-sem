@@ -2091,8 +2091,10 @@ fn candidate_hubs(a: &CallersAnswer, cap: usize) -> Vec<String> {
     out
 }
 
-/// A witness path's hops, a hub in the §8.1 form with its entering site.
-fn path_text(path: &[PathHop]) -> String {
+/// A witness path's hops, a hub in the §8.1 form with its entering site. A
+/// location prints once (§7.5, F45): the hop that enters a hub does not
+/// print the site the hub's `at` names.
+pub(crate) fn path_text(path: &[PathHop]) -> String {
     let mut hops: Vec<String> = Vec::new();
     for (i, h) in path.iter().enumerate() {
         if let Some(kind) = &h.hub {
@@ -2103,12 +2105,74 @@ fn path_text(path: &[PathHop]) -> String {
             hops.push(crate::engine::vocab::hub(kind, None, at.as_deref()));
             continue;
         }
+        let enters_hub = path.get(i + 1).is_some_and(|n| n.hub.is_some());
         hops.push(match (&h.file, h.line) {
-            (Some(f), Some(l)) => format!("{} ({f}:{l})", h.display),
+            (Some(f), Some(l)) if !enters_hub => format!("{} ({f}:{l})", h.display),
             _ => h.display.clone(),
         });
     }
     hops.join(" → ")
+}
+
+/// The blocker kinds that carry an action (§7.5, F45): a guard to rewrite
+/// in a shape the analysis recognizes, a `roots.config.json` to add, a
+/// publication file the analysis does not read.
+const ACTION_KINDS: &[&str] = &[
+    "unrecognized-guard",
+    "publication-unknown",
+    "unread-publication-file",
+];
+
+/// ` at <file>:<line>` of a blocker's anchor (1-based), or nothing.
+fn blocker_place(b: &ProveBlocker) -> String {
+    b.anchor
+        .as_ref()
+        .and_then(|x| Some(format!(" at {}:{}", x.file.as_ref()?, x.line? + 1)))
+        .unwrap_or_default()
+}
+
+/// `blocked by:` on one line (§7.5, F45): the kinds that carry an action
+/// first, each with its first example (what to change and where), then
+/// every other kind's count, largest first. `detail` lists examples of each
+/// kind on the lines below.
+fn blocked_by_line(
+    a: &CallersAnswer,
+    kinds: &[(String, usize)],
+    detail: bool,
+    hcx: &HumanCx<'_>,
+) -> String {
+    let action_words: Vec<String> = ACTION_KINDS
+        .iter()
+        .map(|k| crate::engine::vocab::blocker(k))
+        .collect();
+    let mut parts: Vec<String> = Vec::new();
+    for key in ACTION_KINDS {
+        let Some(n) = a.blocked_counts.get(key) else {
+            continue;
+        };
+        let example = a
+            .blocked_by
+            .iter()
+            .find(|b| b.kind == *key)
+            .map(|b| format!(" ({}{})", b.detail, blocker_place(b)))
+            .unwrap_or_default();
+        parts.push(format!(
+            "{} {n}{example}",
+            crate::engine::vocab::blocker(key)
+        ));
+    }
+    parts.extend(
+        kinds
+            .iter()
+            .filter(|(k, _)| !action_words.contains(k))
+            .map(|(k, n)| format!("{k} {n}")),
+    );
+    let more = if detail {
+        String::new()
+    } else {
+        format!("; {} lists examples of each kind", hcx.detail())
+    };
+    format!("  blocked by: {}{more}", parts.join(", "))
 }
 
 /// A stop reason in words (the JSON keeps its key).
@@ -2393,6 +2457,7 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
     };
     // §3.1: established witnesses first (or `none`), then the candidates,
     // each labelled; every witness line starts with its tier.
+    let witnesses_start = lines.len();
     if a.witness_count > 0 {
         let firm: Vec<&Witness> = a
             .witnesses
@@ -2450,6 +2515,10 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
             }
         }
     }
+    // §7.5 (F45): a run of hops several witnesses share prints once, under
+    // a stable segment id, listed after the witnesses.
+    let witnesses = lines.split_off(witnesses_start);
+    lines.extend(crate::engine::path_segments::segment(witnesses));
     // The entries reached: for non-interactive they are the witnesses'
     // entries (printed on the witness lines above); for the other two they
     // are not the witnesses (traps, pending writes) and print here.
@@ -2526,39 +2595,26 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
         }
     }
     if !a.blocked_by.is_empty() {
-        lines.push(format!(
-            "  blocked by: {}",
-            kinds
-                .iter()
-                .map(|(k, n)| format!("{k} {n}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        let per_kind = if detail { BLOCKER_SAMPLES } else { 2 };
-        let mut by: BTreeMap<&str, usize> = BTreeMap::new();
-        for b in &a.blocked_by {
-            let n = by.entry(b.kind).or_default();
-            *n += 1;
-            if *n > per_kind {
-                continue;
+        lines.push(blocked_by_line(a, &kinds, detail, hcx));
+        if detail {
+            let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+            for b in &a.blocked_by {
+                let n = by.entry(b.kind).or_default();
+                *n += 1;
+                if *n > BLOCKER_SAMPLES {
+                    continue;
+                }
+                lines.push(format!(
+                    "    [{}] {}{}",
+                    crate::engine::vocab::blocker(b.kind),
+                    b.detail,
+                    blocker_place(b)
+                ));
             }
-            let place = b
-                .anchor
-                .as_ref()
-                .and_then(|x| Some(format!(" at {}:{}", x.file.as_ref()?, x.line? + 1)))
-                .unwrap_or_default();
-            lines.push(format!(
-                "    [{}] {}{place}",
-                crate::engine::vocab::blocker(b.kind),
-                b.detail
-            ));
         }
     }
-    lines.push(format!(
-        "  coverage: the reverse cone, {} over {}",
-        plural(a.states, "state", "states"),
-        plural(a.nodes, "node", "nodes")
-    ));
+    // §7.5 (F83): the traversal statistic (states over nodes) is in the
+    // JSON (`states`, `nodes`), not in the human text.
     lines.push(format!(
         "  assumptions: {}",
         if a.assume_no_dependents {

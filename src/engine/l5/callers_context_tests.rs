@@ -871,3 +871,76 @@ fn entries_by_kind_count_each_entry_once_in_its_own_kind() {
     let ctx = super::entry_word_counts(super::CallersQuestion::NonInteractive, words);
     assert_eq!(ctx[&(false, "page trigger")], 2);
 }
+
+/// Output validation V5, the semantic gate of §12.1 for prove (§7.5, F45):
+/// two witnesses that share a tail of four hops print it once, under a
+/// segment id, and each witness's hops come back through its segment: the
+/// expanded human path has the JSON path's hops, one by one, each led by
+/// that hop's routine display. Hand-stated workspace: two callers, each
+/// with a pending `Modify`, call one four-hop chain down to `R`.
+/// Discrimination (2026-11-06): the segment listing printing its run
+/// without the first hop (`run[1..]` in `path_segments::segment`) fails at
+/// the hop count (5 against 6); restored, it passes.
+#[test]
+fn shared_witness_tails_print_once_and_expand_to_every_hop() {
+    let mid = cu(
+        50130,
+        "Pw Middle Dispatcher",
+        "    procedure ForwardFirstStage()\n    begin\n        ForwardSecondStage();\n    end;\n\
+         \n    local procedure ForwardSecondStage()\n    begin\n        ForwardThirdStage();\n    end;\n\
+         \n    local procedure ForwardThirdStage()\n    begin\n        ForwardFourthStage();\n    end;\n\
+         \n    local procedure ForwardFourthStage()\n    var\n        Target: Codeunit \"Pw Target\";\n    \
+         begin\n        Target.R();\n    end;\n",
+    );
+    let caller = |id: u32, name: &str| {
+        cu(
+            id,
+            name,
+            "    local procedure P()\n    var\n        Rec: Record \"Pw Rec\";\n        \
+             Mid: Codeunit \"Pw Middle Dispatcher\";\n    begin\n        Rec.Modify();\n        \
+             Mid.ForwardFirstStage();\n    end;\n",
+        )
+    };
+    let w = ws(&[
+        ("Rec.al", TABLE),
+        ("Target.al", TARGET),
+        ("Mid.al", &mid),
+        ("C1.al", &caller(50131, "Pw First Caller")),
+        ("C2.al", &caller(50132, "Pw Second Caller")),
+    ]);
+    let (v, human) = prove_both(
+        w.path(),
+        "Pw Target::R",
+        "callers-have-pending-writes",
+        true,
+    );
+    let evidence = v["payload"]["result"]["evidence"].as_array().unwrap();
+    assert!(evidence.len() >= 2, "precondition: two witnesses: {v:#}");
+    assert!(
+        human.contains("[segment S1: "),
+        "the tail prints once: {human}"
+    );
+    assert!(
+        human.contains(" → [S1] → "),
+        "a later witness refers to it: {human}"
+    );
+    let expanded = crate::engine::path_segments::expand(&human);
+    let paths: Vec<Vec<&str>> = expanded
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("path: "))
+        .map(|p| p.split(crate::engine::path_segments::SEP).collect())
+        .collect();
+    assert_eq!(paths.len(), evidence.len(), "{expanded}");
+    for (hops, e) in paths.iter().zip(evidence) {
+        let json: Vec<&str> = e["path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["display"].as_str().unwrap())
+            .collect();
+        assert_eq!(hops.len(), json.len(), "{hops:?} vs {json:?}");
+        for (h, d) in hops.iter().zip(&json) {
+            assert!(h.starts_with(d), "hop {h:?} is not {d:?}");
+        }
+    }
+}

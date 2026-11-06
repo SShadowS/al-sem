@@ -19,9 +19,144 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "unknown"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/subscriber.al",
+          "line": 11,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-known-writes",
+        "type": "COMMIT"
+      },
+      "e:2": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Audit Entry",
+          "resourceId": "11111111-0000-0000-0000-00000000d80a/table/50100"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Audit.Insert",
+          "file": "ws:src/subscriber.al",
+          "line": 10,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:3": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Sales Header",
+          "resourceId": "11111111-0000-0000-0000-00000000d80a/table/36"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Header.Modify",
+          "file": "ws:src/posting.al",
+          "line": 10,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:4": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Sales Line",
+          "resourceId": "11111111-0000-0000-0000-00000000d80a/table/37"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Line.ModifyAll",
+          "file": "ws:src/posting.al",
+          "line": 12,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:5": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Sales Header",
+          "resourceId": "11111111-0000-0000-0000-00000000d80a/table/36"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Header.Modify",
+          "file": "ws:src/posting.al",
+          "line": 15,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:6": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Audit.Insert",
+          "file": "ws:src/subscriber.al",
+          "line": 10,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:7": {
+        "confidence": "static",
+        "detail": {
+          "eventClass": "Integration",
+          "resourceDisplay": "onafterpostsalesdoc",
+          "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "OnAfterPostSalesDoc",
+          "file": "ws:src/posting.al",
+          "line": 13,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "EVENT_PUBLISH"
+      },
+      "e:8": {
+        "confidence": "static",
+        "detail": {
+          "eventClass": "Integration",
+          "resourceDisplay": "onafterpostsalesdoc",
+          "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
+        },
+        "evidence": {
+          "sourceKind": "unavailable"
+        },
+        "transactionContext": "unknown",
+        "type": "EVENT_PUBLISH"
+      }
     },
     "entries": [
       {
@@ -36,16 +171,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/subscriber.al",
-              "line": 11,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "b33cddbee316af7c",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -56,13 +182,7 @@
               {
                 "hops": [
                   {
-                    "edge": "direct-call",
-                    "line": 13,
-                    "to": "r:664e61d95662"
-                  },
-                  {
-                    "edge": "event-dispatch",
-                    "to": "r:bec5fb40d9e8"
+                    "tail": "t:1"
                   }
                 ],
                 "terminal": {
@@ -76,27 +196,13 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "unknown",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Audit Entry",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/50100",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Audit.Insert",
-              "file": "ws:src/subscriber.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "e634e7000e71edc3",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -105,13 +211,7 @@
               {
                 "hops": [
                   {
-                    "edge": "direct-call",
-                    "line": 13,
-                    "to": "r:664e61d95662"
-                  },
-                  {
-                    "edge": "event-dispatch",
-                    "to": "r:bec5fb40d9e8"
+                    "tail": "t:1"
                   }
                 ],
                 "terminal": {
@@ -125,27 +225,14 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Sales Header",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/36",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Header.Modify",
-              "file": "ws:src/posting.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "bb00b9ed9f7fee27",
             "guarantees": [],
             "paths": [
@@ -162,27 +249,14 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Sales Line",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/37",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Line.ModifyAll",
-              "file": "ws:src/posting.al",
-              "line": 12,
-              "sourceKind": "source"
-            },
+            "effect": "e:4",
             "factId": "69ff114840bfe64f",
             "guarantees": [],
             "paths": [
@@ -199,27 +273,14 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Sales Header",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/36",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Header.Modify",
-              "file": "ws:src/posting.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "effect": "e:5",
             "factId": "52d1eb55968c00d4",
             "guarantees": [],
             "paths": [
@@ -236,21 +297,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Audit.Insert",
-              "file": "ws:src/subscriber.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:6",
             "factId": "0ee00cd50f434705",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -259,13 +309,7 @@
               {
                 "hops": [
                   {
-                    "edge": "direct-call",
-                    "line": 13,
-                    "to": "r:664e61d95662"
-                  },
-                  {
-                    "edge": "event-dispatch",
-                    "to": "r:bec5fb40d9e8"
+                    "tail": "t:1"
                   }
                 ],
                 "terminal": {
@@ -279,25 +323,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {
-              "eventClass": "Integration",
-              "resourceDisplay": "onafterpostsalesdoc",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "OnAfterPostSalesDoc",
-              "file": "ws:src/posting.al",
-              "line": 13,
-              "sourceKind": "source"
-            },
+            "effect": "e:7",
             "factId": "05706f358086dae9",
             "guarantees": [
               "ORDERING_UNKNOWN"
@@ -307,9 +336,7 @@
             "pathsOmitted": 1,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "EVENT_PUBLISH"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -396,16 +423,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/subscriber.al",
-              "line": 11,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "27a35a28b08e30b4",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -431,27 +449,13 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "unknown",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Audit Entry",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/50100",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Audit.Insert",
-              "file": "ws:src/subscriber.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "f0faba22a0c21816",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -475,21 +479,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Audit.Insert",
-              "file": "ws:src/subscriber.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:6",
             "factId": "907906a3502765ed",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -513,21 +506,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {
-              "eventClass": "Integration",
-              "resourceDisplay": "onafterpostsalesdoc",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
-            },
-            "evidence": {
-              "sourceKind": "unavailable"
-            },
+            "effect": "e:8",
             "factId": "bfd506af3d2b487e",
             "guarantees": [
               "ORDERING_UNKNOWN"
@@ -537,9 +519,7 @@
             "pathsOmitted": 1,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "EVENT_PUBLISH"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {
@@ -624,15 +604,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/subscriber.al",
-              "line": 11,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "df5dcd43f03331ed",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -667,27 +639,14 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Audit Entry",
-              "resourceId": "11111111-0000-0000-0000-00000000d80a/table/50100",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Audit.Insert",
-              "file": "ws:src/subscriber.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "c41fe1845dd96a16",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -706,21 +665,11 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Audit.Insert",
-              "file": "ws:src/subscriber.al",
-              "line": 10,
-              "sourceKind": "source"
-            },
+            "effect": "e:6",
             "factId": "9df495c81b0e17ce",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -739,9 +688,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -814,6 +761,19 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "pathTails": {
+      "t:1": [
+        {
+          "edge": "direct-call",
+          "line": 13,
+          "to": "r:664e61d95662"
+        },
+        {
+          "edge": "event-dispatch",
+          "to": "r:bec5fb40d9e8"
+        }
+      ]
+    },
     "result": {
       "scope": {
         "analysis": "complete",
@@ -857,5 +817,5 @@
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

@@ -4,6 +4,9 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "query.touches",
   "payload": {
+    "defaults": {
+      "via": "direct"
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
@@ -33,78 +36,33 @@
           "op": "FindFirst",
           "operationId": "46598e8ae640a0a8/5ab6bc4aaac8091515f37b87ac829267644e77ee8ce41aad1483cafe08cd7419/op1",
           "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/QTTouches.al",
-              "line": 44,
-              "role": "operation"
-            },
-            "routine": {
-              "anchor": {
-                "column": 4,
-                "file": "ws:src/QTTouches.al",
-                "line": 39,
-                "role": "definition"
-              },
-              "display": "TempOnly",
-              "objectDisplay": "Codeunit QT Touches",
-              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
-              "selector": "Codeunit \"QT Touches\"::TempOnly",
-              "signature": "()",
-              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
-            }
+            "column": 8,
+            "file": "ws:src/QTTouches.al",
+            "line": 44,
+            "role": "operation",
+            "routine": "r:1"
           },
-          "tempState": "known(true)",
-          "touchClass": "temporary",
-          "via": "direct"
+          "tempState": "temporary",
+          "touchClass": "temporary"
         },
         {
           "op": "Insert",
           "operationId": "46598e8ae640a0a8/5ab6bc4aaac8091515f37b87ac829267644e77ee8ce41aad1483cafe08cd7419/op0",
           "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/QTTouches.al",
-              "line": 43,
-              "role": "operation"
-            },
-            "routine": {
-              "anchor": {
-                "column": 4,
-                "file": "ws:src/QTTouches.al",
-                "line": 39,
-                "role": "definition"
-              },
-              "display": "TempOnly",
-              "objectDisplay": "Codeunit QT Touches",
-              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
-              "selector": "Codeunit \"QT Touches\"::TempOnly",
-              "signature": "()",
-              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
-            }
+            "column": 8,
+            "file": "ws:src/QTTouches.al",
+            "line": 43,
+            "role": "operation",
+            "routine": "r:1"
           },
-          "tempState": "known(true)",
-          "touchClass": "temporary",
-          "via": "direct"
+          "tempState": "temporary",
+          "touchClass": "temporary"
         }
       ]
     },
     "from": {
       "resolution": "resolved",
-      "routine": {
-        "anchor": {
-          "column": 4,
-          "file": "ws:src/QTTouches.al",
-          "line": 39,
-          "role": "definition"
-        },
-        "display": "TempOnly",
-        "objectDisplay": "Codeunit QT Touches",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
-        "selector": "Codeunit \"QT Touches\"::TempOnly",
-        "signature": "()",
-        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
-      },
+      "routine": "r:1",
       "selector": "TempOnly"
     },
     "lineBase": 1,
@@ -118,6 +76,22 @@
         "reasons": [],
         "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
         "universe": "cross-app"
+      }
+    },
+    "routines": {
+      "r:1": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 39,
+          "role": "definition"
+        },
+        "display": "TempOnly",
+        "objectDisplay": "Codeunit QT Touches",
+        "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+        "selector": "Codeunit \"QT Touches\"::TempOnly",
+        "signature": "()",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
       }
     },
     "table": {
@@ -144,5 +118,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.10.0"
+  "schemaVersion": "4.0.0"
 }

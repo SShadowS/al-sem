@@ -18,9 +18,63 @@
         "kind": "file-unmatched"
       }
     ],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "D47 Rec",
+          "resourceId": "11111111-0000-0000-0000-0000000d4701/table/50100"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Rec.Modify",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 16,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Rec.Get",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 14,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {
+          "method": "Get"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Client.Get",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 17,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "HTTP"
+      }
     },
     "entries": [
       {
@@ -35,22 +89,10 @@
         "crossings": {},
         "effects": [
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "D47 Rec",
-              "resourceId": "11111111-0000-0000-0000-0000000d4701/table/50100",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Rec.Modify",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "3928707d9f7906b7",
             "guarantees": [],
             "paths": [
@@ -66,22 +108,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Rec.Get",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 14,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "46721fbd11c6b504",
             "guarantees": [],
             "paths": [
@@ -97,24 +127,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {
-              "method": "Get"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Client.Get",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 17,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "fbe3089a337fb3e7",
             "guarantees": [
               "WRITE_PENDING_AT_EXTERNAL_IO"
@@ -131,7 +147,6 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
             "refutableGuarantees": [
               "WRITE_PENDING_AT_EXTERNAL_IO"
             ],
@@ -145,9 +160,7 @@
                 "writeOccurrenceId": "3928707d9f7906b7"
               }
             ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "HTTP"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -255,5 +268,5 @@
     },
     "workspaceFingerprint": "0d6c610dea8d73d6142bb6b9375463620d7e10a84ead5599d3040ada0008b395"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

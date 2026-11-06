@@ -1036,7 +1036,7 @@ fn boundary_groups_name_their_owner_and_every_resource() {
     let ws = workspace().to_string_lossy().into_owned();
     let mut failures = Vec::new();
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
-    let doc: Value = serde_json::from_str(&out).unwrap();
+    let doc: Value = crate::as_v3(serde_json::from_str(&out).unwrap());
     let effects = doc["payload"]["entries"][0]["effects"]
         .as_array()
         .unwrap()
@@ -1210,7 +1210,7 @@ fn digest_path_caps_keys_and_flags_on_the_fixture() {
             arg,
         ]);
         assert_eq!(code, 0, "{err}");
-        let d: Value = serde_json::from_str(&out).unwrap();
+        let d: Value = crate::as_v3(serde_json::from_str(&out).unwrap());
         assert_eq!(d["payload"]["pathCap"], cap, "--max-paths {arg}");
         let keys = d["payload"]["routines"].as_object().unwrap();
         let entry = &d["payload"]["entries"][0];
@@ -1319,7 +1319,8 @@ fn query_effects_buckets_and_first_hops_on_the_fixture() {
             "--format",
             "json",
         ]);
-        (code == 0).then(|| serde_json::from_str::<Value>(&out).unwrap()["payload"].clone())
+        (code == 0)
+            .then(|| crate::as_v3(serde_json::from_str::<Value>(&out).unwrap())["payload"].clone())
     };
     let p = effects_of(ISSUE_DOC_Q).expect("IssueDoc is selectable");
     let s = &p["summary"];
@@ -1433,7 +1434,7 @@ fn explain_digest_and_prove_agree_on_the_fixture() {
     let json = |args: &[&str]| -> Value {
         let (out, err, code) = run_alsem(args);
         assert_eq!(code, 0, "{args:?}: {err}");
-        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}"))
+        crate::as_v3(serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}")))
     };
     let explain = json(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
     let digest = json(&["digest", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
@@ -1614,13 +1615,20 @@ pub(crate) fn query_write_tables(
 }
 
 /// A human output's `writes beyond dependency entry points` block: its
-/// header line and every deeper-indented line after it.
-pub(crate) fn beyond_block(human: &str) -> Vec<&str> {
-    let mut lines = human
+/// header line and every deeper-indented line after it, with its paths in
+/// full (output validation §7.5: each output segments its own region, so
+/// two outputs may name a shared run differently; the hops are the same).
+pub(crate) fn beyond_block(human: &str) -> Vec<String> {
+    let full = al_sem::engine::path_segments::expand(human);
+    let mut lines = full
         .lines()
         .skip_while(|l| !l.starts_with("  writes beyond dependency calls"));
-    let mut out: Vec<&str> = lines.next().into_iter().collect();
-    out.extend(lines.take_while(|l| l.starts_with("    ")));
+    let mut out: Vec<String> = lines.next().into_iter().map(str::to_string).collect();
+    out.extend(
+        lines
+            .take_while(|l| l.starts_with("    "))
+            .map(str::to_string),
+    );
     out
 }
 
@@ -1887,7 +1895,7 @@ fn a_commit_beyond_an_entry_point_has_its_own_terminal_witness() {
     let json = |args: &[&str]| -> Value {
         let (out, err, code) = run_alsem(args);
         assert_eq!(code, 0, "{args:?}: {err}");
-        serde_json::from_str(&out).unwrap()
+        crate::as_v3(serde_json::from_str(&out).unwrap())
     };
     let p = json(&["prove", &wss, ISSUE_DOC, "may-commit", "--format", "json"]);
     let ev = &p["payload"]["result"]["evidence"][0];

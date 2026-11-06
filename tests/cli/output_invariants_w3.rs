@@ -153,11 +153,28 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
 
 /// Output validation F39: the touches `callers` input said "without their
 /// witnesses", while a caller that touches the table through another branch
-/// prints its first touch (operation, location, first hop: c17). Both texts
-/// that describe `callers` now say so. Wording: no discrimination proof
-/// (CLAUDE.md "Scope of the proof").
+/// prints its first touch (operation, location, first hop: c17). V5 (§7.1)
+/// prints each caller once and the first touch they share once; both texts
+/// that describe `callers` say so, and the fixture's rows have that shape.
+/// Wording: no discrimination proof (CLAUDE.md "Scope of the proof").
 #[test]
 fn the_touches_callers_text_matches_its_rows() {
+    let ws = crate::output_shared_evidence::qt_workspace();
+    let (rows, _, code) = run_alsem(&[
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "QT Item",
+        "--from",
+        "Leaf",
+        "--direction",
+        "up",
+        "--callers",
+    ]);
+    assert_eq!(code, 0, "{rows}");
+    assert!(rows.contains("    shared first touch ("), "{rows}");
+    assert!(rows.contains(", by object, nearest first"), "{rows}");
     let tools = al_sem::mcp::tools::tool_list();
     let t = tools
         .iter()
@@ -174,6 +191,7 @@ fn the_touches_callers_text_matches_its_rows() {
             "{label}: {text}"
         );
         assert!(text.contains("first touch"), "{label}: {text}");
+        assert!(text.contains("only when it differs"), "{label}: {text}");
     }
 }
 
@@ -560,7 +578,7 @@ fn every_effect_kind_digest_reports_is_in_the_card() {
     for routine in [ISSUE_DOC, WRITE_LOG, FIELD_OPS] {
         let (d, err, code) = run_alsem(&["digest", &ws, "--routine", routine]);
         assert_eq!(code, 0, "{err}");
-        let d: Value = serde_json::from_str(&d).unwrap();
+        let d: Value = crate::as_v3(serde_json::from_str(&d).unwrap());
         let effects = d["payload"]["entries"][0]["effects"].as_array().unwrap();
         seen.extend(
             effects
@@ -704,7 +722,7 @@ fn crossings_print_their_targets() {
     let ws = workspace().to_string_lossy().into_owned();
     let (out, err, code) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC]);
     assert_eq!(code, 0, "{err}");
-    let doc: Value = serde_json::from_str(&out).unwrap();
+    let doc: Value = crate::as_v3(serde_json::from_str(&out).unwrap());
     let n = doc["payload"]["entries"][0]["crossings"]
         .as_object()
         .map_or(0, |m| m.len());
@@ -802,10 +820,10 @@ fn explain_groups_list_what_they_count() {
 /// T-W2-21: the fields the ConTinAI pipeline reads (`effects.py` from query
 /// effects, `verify.py` from prove; spec §8.3) are present with their types,
 /// on the fixture: query effects rows (`via` `direct` exactly when the
-/// operation is the queried routine's own, `operationId`,
-/// `origin.routine.{stableId, objectDisplay, display}`, `origin.anchor.{file,
-/// line}` with a dependency anchor among them, `tableName`, `tableId`,
-/// `isUnknownBucket`, `tempState`, `op`); prove (`payload.lineBase`,
+/// operation is the queried routine's own, `operationId`, `origin.routine`
+/// → `payload.routines.{stableId, objectDisplay, display}`, `origin.{file,
+/// line}` with a dependency anchor among them, `tableName`, `tableId` or
+/// `tableNotResolved`, `tempState`, `op`; query 4.0.0); prove (`payload.lineBase`,
 /// `result.answer`, the first evidence's `evidence.{file, line}`,
 /// `result.blockedBy` on an `unknown`, `result.assumptions` with
 /// `--closed-world`, an answer with no evidence); digest
@@ -831,46 +849,54 @@ fn consumer_fields_are_present() {
         "--format",
         "json",
     ]);
-    let me = q["payload"]["routine"]["routine"]["stableId"]
+    // Query 4.0.0 (output validation V5, §7.2): a row's routine is an id
+    // into `payload.routines`, its operation's place is on the row
+    // (`origin.file`, `origin.line`), `via` is the row's or
+    // `payload.defaults.via`, an unresolved table is `tableNotResolved`.
+    let p = &q["payload"];
+    let routine = |id: &Value| -> Value {
+        id.as_str()
+            .map_or(Value::Null, |id| p["routines"][id].clone())
+    };
+    let me = routine(&p["routine"]["routine"])["stableId"]
         .as_str()
         .unwrap_or("?")
         .to_string();
-    let rows = q["payload"]["effects"].as_array().unwrap();
+    let rows = p["effects"].as_array().unwrap();
     let mut dep_anchor = false;
     for (i, r) in rows.iter().enumerate() {
         let s = |p: &str| r.pointer(p).and_then(Value::as_str).is_some();
-        for p in [
-            "/op",
-            "/operationId",
-            "/tempState",
-            "/tableId",
-            "/origin/routine/stableId",
-            "/origin/routine/objectDisplay",
-            "/origin/routine/display",
-            "/origin/anchor/file",
-        ] {
+        for p in ["/op", "/operationId", "/tempState", "/origin/file"] {
             if !s(p) {
                 f.push(format!("query row {i}: {p}"));
             }
         }
-        if !(r["tableName"].is_string() || r["tableName"].is_null())
-            || !r["isUnknownBucket"].is_boolean()
-        {
-            f.push(format!("query row {i}: tableName / isUnknownBucket"));
+        let owner = routine(&r["origin"]["routine"]);
+        for k in ["stableId", "objectDisplay", "display"] {
+            if !owner[k].is_string() {
+                f.push(format!("query row {i}: origin.routine → routines.{k}"));
+            }
         }
-        if r.pointer("/origin/anchor/line")
+        if !(r["tableId"].is_string() || r["tableNotResolved"].is_string())
+            || !(r["tableName"].is_string() || r["tableName"].is_null())
+        {
+            f.push(format!(
+                "query row {i}: tableId / tableNotResolved / tableName"
+            ));
+        }
+        if r.pointer("/origin/line")
             .and_then(Value::as_u64)
             .is_none_or(|l| l < 1)
         {
-            f.push(format!("query row {i}: origin.anchor.line"));
+            f.push(format!("query row {i}: origin.line"));
         }
-        let own = r["origin"]["routine"]["stableId"] == me.as_str();
-        match r["via"].as_str() {
+        let own = owner["stableId"] == me.as_str();
+        match r["via"].as_str().or(p["defaults"]["via"].as_str()) {
             Some("direct") if own => {}
             Some("inherited") if !own => {}
             other => f.push(format!("row {i}: via {other:?} (own operation: {own})")),
         }
-        dep_anchor |= r["origin"]["anchor"]["file"]
+        dep_anchor |= r["origin"]["file"]
             .as_str()
             .is_some_and(|a| a.starts_with(&format!("dep:{}:", crate::output_fixture::DEP_GUID)));
     }

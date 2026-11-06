@@ -18,9 +18,69 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Message",
+          "file": "ws:src/Codeunit.al",
+          "line": 21,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "UI_MESSAGE"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/Codeunit.al",
+          "line": 7,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-no-known-writes",
+        "type": "COMMIT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/Codeunit.al",
+          "line": 32,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-no-known-writes",
+        "type": "COMMIT"
+      },
+      "e:4": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/Codeunit.al",
+          "line": 27,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-no-known-writes",
+        "type": "COMMIT"
+      }
     },
     "entries": [
       {
@@ -35,16 +95,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Message",
-              "file": "ws:src/Codeunit.al",
-              "line": 21,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "341879c5930fec57",
             "guarantees": [],
             "paths": [
@@ -59,10 +110,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "UI_MESSAGE"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -144,16 +192,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/Codeunit.al",
-              "line": 7,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "d41571e0450b5d46",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -173,7 +212,6 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
             "refutableGuarantees": [
               "COMMIT_DOMINATES_RETURN"
             ],
@@ -187,9 +225,7 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-no-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -269,16 +305,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/Codeunit.al",
-              "line": 32,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "c71eaa213728e0a7",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -298,7 +325,6 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
             "refutableGuarantees": [
               "COMMIT_DOMINATES_RETURN"
             ],
@@ -312,9 +338,7 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-no-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -394,16 +418,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/Codeunit.al",
-              "line": 27,
-              "sourceKind": "source"
-            },
+            "effect": "e:4",
             "factId": "fb56165678f0df67",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -423,7 +438,6 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
             "refutableGuarantees": [
               "COMMIT_DOMINATES_RETURN"
             ],
@@ -437,9 +451,7 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-no-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -519,16 +531,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/Codeunit.al",
-              "line": 32,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "e4a8376aa5d518ba",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -568,9 +571,7 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-no-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -698,5 +699,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

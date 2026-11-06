@@ -30,6 +30,24 @@ mod unreadable;
 #[path = "../common/git.rs"]
 mod git;
 
+/// A digest 4.0.0 or query 4.0.0 document (output validation V5, §7.2,
+/// §7.3) read back into its 3.x payload shape, through the documents' own
+/// inverses (`digest_v4::to_v3`, `query_v4::to_v3`; exact, checked by
+/// `output_shared_evidence`). The engine-fact tests read rows by their 3.x
+/// fields; any other document is returned as it is.
+pub(crate) fn as_v3(doc: serde_json::Value) -> serde_json::Value {
+    let kind = doc["kind"].as_str().unwrap_or("").to_string();
+    match doc["schemaVersion"].as_str() {
+        Some(al_sem::engine::l5::digest_v4::VERSION) if kind == "digest" => {
+            al_sem::engine::l5::digest_v4::document_to_v3(doc)
+        }
+        Some(al_sem::engine::l4::query_v4::VERSION) if kind.starts_with("query.") => {
+            al_sem::engine::l4::query_v4::document_to_v3(doc)
+        }
+        _ => doc,
+    }
+}
+
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this for the entire set-var → run → remove-var span of any test that
@@ -251,6 +269,7 @@ mod output_fixture;
 mod output_follow_ups;
 mod output_invariants;
 mod output_invariants_w3;
+mod output_shared_evidence;
 mod output_vocabulary;
 mod regen_atomic_writes;
 mod temp_storage_failure;

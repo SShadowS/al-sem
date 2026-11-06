@@ -3,8 +3,8 @@ answer: 6 operations — writes that may persist 2 on 2 tables (2 not temporary,
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 1 app
 more: all: true lists every operation; format: "json" for every row
   writes that may persist (2 tables):
-    Base Doc Line: DeleteAll 1 — first DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7 in Codeunit "Base Poster" (70100)::OnRun, through Codeunit "Base Poster" (70100)::OnRun
-    Out Log: Insert 1 — first Insert at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit "Out Log Mgt"::WriteLog, through Codeunit "Out Log Mgt"::WriteLog
+    Base Doc Line: DeleteAll 1 — first DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7 in Codeunit "Base Poster" (70100)::OnRun
+    Out Log: Insert 1 — first Insert at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit "Out Log Mgt"::WriteLog
   caller-dependent writes (1 table; written only if the caller passes a record that is not temporary):
     Out Doc: Modify 1 (caller-dependent: parameter 1 (Doc)) — first Modify at ws:src/OutIssueDocument.Codeunit.al:14 in Codeunit "Out Issue Document"::IssueDoc
   writes beyond dependency calls (15 tables through 2 dependency routines entered at 2 dependency calls):

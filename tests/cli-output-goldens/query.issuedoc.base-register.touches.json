@@ -67,20 +67,7 @@
     },
     "from": {
       "resolution": "resolved",
-      "routine": {
-        "anchor": {
-          "column": 4,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 3,
-          "role": "definition"
-        },
-        "display": "IssueDoc",
-        "objectDisplay": "Codeunit Out Issue Document",
-        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
-        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
-        "signature": "(var Record \"Out Doc\")",
-        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
-      },
+      "routine": "r:1",
       "selector": "Out Issue Document.IssueDoc"
     },
     "lineBase": 1,
@@ -94,6 +81,41 @@
         "reasons": [],
         "scope": "per operation, one routine into dependency code; dependencies: 1 app",
         "universe": "cross-app"
+      }
+    },
+    "routines": {
+      "r:1": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 3,
+          "role": "definition"
+        },
+        "display": "IssueDoc",
+        "objectDisplay": "Codeunit Out Issue Document",
+        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "signature": "(var Record \"Out Doc\")",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
+      },
+      "r:2": {
+        "anchor": {
+          "column": 16,
+          "file": "ws:src/Pages.al",
+          "line": 22,
+          "role": "definition"
+        },
+        "display": "OnAction",
+        "member": {
+          "caption": "Issue",
+          "kind": "action",
+          "name": "Issue"
+        },
+        "objectDisplay": "Page Out Doc Card",
+        "qualifiedDisplay": "Page \"Out Doc Card\".action(Issue \"Issue\")::OnAction",
+        "selector": "Page \"Out Doc Card\".action(Issue)::OnAction",
+        "signature": "()",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
       }
     },
     "table": {
@@ -112,25 +134,7 @@
       "notTouching": [
         {
           "depth": 1,
-          "routine": {
-            "anchor": {
-              "column": 16,
-              "file": "ws:src/Pages.al",
-              "line": 22,
-              "role": "definition"
-            },
-            "display": "OnAction",
-            "member": {
-              "caption": "Issue",
-              "kind": "action",
-              "name": "Issue"
-            },
-            "objectDisplay": "Page Out Doc Card",
-            "qualifiedDisplay": "Page \"Out Doc Card\".action(Issue \"Issue\")::OnAction",
-            "selector": "Page \"Out Doc Card\".action(Issue)::OnAction",
-            "signature": "()",
-            "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
-          }
+          "routine": "r:2"
         }
       ],
       "note": "the index holds no touch of the table in this routine's cone (one routine into dependency code; not proof of absence); the touching callers reach it through other branches",
@@ -159,5 +163,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.10.0"
+  "schemaVersion": "4.0.0"
 }
