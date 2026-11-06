@@ -25,6 +25,7 @@
             "excerpt": "commit",
             "file": "ws:src/subscriber.al",
             "line": 11,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "df5dcd43f03331ed",
@@ -106,6 +107,7 @@
         "column": 4,
         "file": "ws:src/subscriber.al",
         "line": 4,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "HandlePosted",

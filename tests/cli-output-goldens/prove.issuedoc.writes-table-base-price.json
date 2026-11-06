@@ -24,6 +24,7 @@
             "excerpt": "enters Codeunit Base Calc::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 16,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "36d60a20668909d0",
@@ -145,6 +146,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 3,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "IssueDoc",

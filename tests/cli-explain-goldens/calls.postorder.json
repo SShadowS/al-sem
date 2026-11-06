@@ -22,6 +22,7 @@
               "excerpt": "Order.TestField",
               "file": "ws:src/checks.al",
               "line": 8,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "conditional",
@@ -36,6 +37,7 @@
               "excerpt": "Rec.TestField",
               "file": "ws:src/order.al",
               "line": 16,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -50,6 +52,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 14,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -62,6 +65,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 6,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -76,6 +80,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -91,6 +96,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 32,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -105,6 +111,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 39,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -119,6 +126,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 45,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -133,6 +141,7 @@
               "excerpt": "error-call",
               "file": "ws:src/order.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -147,6 +156,7 @@
               "excerpt": "error-call",
               "file": "ws:src/post.al",
               "line": 129,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -164,6 +174,7 @@
               "excerpt": "OnBeforePostOrder",
               "file": "ws:src/post.al",
               "line": 11,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -186,6 +197,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 14,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -218,6 +230,7 @@
             "excerpt": "OnBeforePostOrder",
             "file": "ws:src/post.al",
             "line": 11,
+            "role": "operation",
             "sourceKind": "source"
           },
           "conditionalOnAppSet": true,
@@ -236,6 +249,7 @@
                     "column": 12,
                     "file": "ws:src/post.al",
                     "line": 129,
+                    "role": "operation",
                     "sourceKind": "source"
                   },
                   "comment": null,
@@ -300,6 +314,7 @@
             "column": 12,
             "file": "ws:src/order.al",
             "line": 38,
+            "role": "operation",
             "sourceKind": "source"
           },
           "caption": "Post",
@@ -330,6 +345,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 3,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Calls Post\"::PostOrder",
@@ -350,6 +366,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 6,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -386,6 +403,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 8,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -429,6 +447,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -456,6 +475,7 @@
                   "column": 11,
                   "file": "ws:src/checks.al",
                   "line": 14,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -469,6 +489,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 32,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -506,6 +527,7 @@
               "column": 16,
               "file": "ws:src/order.al",
               "line": 16,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -527,6 +549,7 @@
                 "column": 8,
                 "file": "ws:src/post.al",
                 "line": 13,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "op": "Validate"
@@ -551,6 +574,7 @@
               "column": 12,
               "file": "ws:src/order.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -572,6 +596,7 @@
                 "column": 8,
                 "file": "ws:src/post.al",
                 "line": 14,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "op": "Modify"
@@ -585,6 +610,7 @@
                   "column": 11,
                   "file": "ws:src/order.al",
                   "line": 24,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",

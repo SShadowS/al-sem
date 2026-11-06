@@ -53,7 +53,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 30
+            "line": 30,
+            "role": "definition"
           },
           "display": "CallerB",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -66,7 +67,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 38
+            "line": 38,
+            "role": "definition"
           },
           "display": "CallerC",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -79,7 +81,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 22
+            "line": 22,
+            "role": "definition"
           },
           "display": "CallerA",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -92,7 +95,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 17
+            "line": 17,
+            "role": "definition"
           },
           "display": "ModifyHelper",
           "objectDisplay": "Codeunit D1 Multi Caller",

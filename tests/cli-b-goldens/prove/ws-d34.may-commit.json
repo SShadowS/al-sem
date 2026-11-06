@@ -19,6 +19,7 @@
             "excerpt": "commit",
             "file": "ws:src/Codeunit.al",
             "line": 10,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "f0647a58f72646cf",
@@ -71,6 +72,7 @@
         "column": 4,
         "file": "ws:src/Codeunit.al",
         "line": 4,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "DirectCommitInLoop",

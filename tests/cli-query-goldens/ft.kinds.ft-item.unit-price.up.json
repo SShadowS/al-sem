@@ -62,7 +62,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 130
+            "line": 130,
+            "role": "definition"
           },
           "display": "CallsKinds",
           "objectDisplay": "Codeunit FT Callers",
@@ -75,7 +76,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 135
+          "line": 135,
+          "role": "callSite"
         },
         "source": "access",
         "tempState": "persistent",
@@ -94,7 +96,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/FTFields.al",
-          "line": 60
+          "line": 60,
+          "role": "definition"
         },
         "display": "Kinds",
         "objectDisplay": "Codeunit FT Consumers",

@@ -22,6 +22,7 @@
               "excerpt": "Order.TestField",
               "file": "ws:src/checks.al",
               "line": 20,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -34,6 +35,7 @@
               "excerpt": "Order.TestField",
               "file": "ws:src/checks.al",
               "line": 21,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -46,6 +48,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -58,6 +61,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 17,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -70,6 +74,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -107,6 +112,7 @@
           "column": 4,
           "file": "ws:src/checks.al",
           "line": 8,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Rules Checks\"::CheckOrder",
@@ -129,6 +135,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": "released only",
@@ -164,6 +171,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 17,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -204,6 +212,7 @@
               "column": 8,
               "file": "ws:src/checks.al",
               "line": 20,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": "A customer is required.\nIt is checked before the blocked flag.",
@@ -251,6 +260,7 @@
               "column": 8,
               "file": "ws:src/checks.al",
               "line": 21,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -299,6 +309,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,

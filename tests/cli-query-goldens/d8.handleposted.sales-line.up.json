@@ -15,7 +15,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/subscriber.al",
-          "line": 4
+          "line": 4,
+          "role": "definition"
         },
         "display": "HandlePosted",
         "objectDisplay": "Codeunit D8BadSubscriber",
@@ -65,13 +66,15 @@
               "anchor": {
                 "column": 8,
                 "file": "ws:src/posting.al",
-                "line": 12
+                "line": 12,
+                "role": "operation"
               },
               "routine": {
                 "anchor": {
                   "column": 4,
                   "file": "ws:src/posting.al",
-                  "line": 3
+                  "line": 3,
+                  "role": "definition"
                 },
                 "display": "PostSalesDoc",
                 "objectDisplay": "Codeunit D8PostingChain",
@@ -89,7 +92,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/posting.al",
-              "line": 3
+              "line": 3,
+              "role": "definition"
             },
             "display": "PostSalesDoc",
             "objectDisplay": "Codeunit D8PostingChain",
@@ -112,7 +116,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/posting.al",
-              "line": 19
+              "line": 19,
+              "role": "definition"
             },
             "display": "OnAfterPostSalesDoc",
             "objectDisplay": "Codeunit D8PostingChain",

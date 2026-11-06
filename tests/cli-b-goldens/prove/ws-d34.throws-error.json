@@ -38,6 +38,7 @@
         "column": 4,
         "file": "ws:src/Codeunit.al",
         "line": 4,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "DirectCommitInLoop",

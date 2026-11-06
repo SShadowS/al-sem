@@ -23,6 +23,7 @@
             "excerpt": "Log.Insert",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 61,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "369cf30301f856c2",
@@ -38,6 +39,7 @@
                   "column": 8,
                   "file": "ws:src/OutIssueDocument.Codeunit.al",
                   "line": 17,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "calleeDisplay": "LogMgt.WriteLog",
@@ -113,6 +115,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 3,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "IssueDoc",

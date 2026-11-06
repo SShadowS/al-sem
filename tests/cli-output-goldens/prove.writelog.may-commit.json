@@ -41,6 +41,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 53,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "WriteLog",

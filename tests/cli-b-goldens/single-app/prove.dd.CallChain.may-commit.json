@@ -61,6 +61,7 @@
         "column": 4,
         "file": "ws:src/Work.al",
         "line": 13,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "CallChain",

@@ -205,6 +205,63 @@ impl Header {
     }
 }
 
+/// Output validation §9.8 (F78): every JSON location object (one with
+/// `file` and `line`) says what it is — `role: definition` (a routine's or
+/// object member's declaration), `callSite` (a call), `operation` (an
+/// operation's own place). Decided by where the location sits: under
+/// `anchor` it is an operation when its holder is an effect or operation
+/// row (`op`, `opKinds`, `effectType`, `operationId`), a call site when it
+/// is a blocker's (`kind` with `detail`), a definition when its holder is a
+/// routine or object reference (`stableId`, `display`, `name`), else (a
+/// rule, a check) an operation;
+/// under `callsite` / `callSite` / `callsiteAnchor` / `site` / `enteredAt`
+/// a call site; under `origin` / `evidence` an operation. Other locations
+/// are left as they are.
+pub fn tag_location_roles(v: &mut Value) {
+    fn is_location(m: &Map<String, Value>) -> bool {
+        m.contains_key("file") && m.contains_key("line")
+    }
+    fn walk(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                let operation_row = ["op", "opKinds", "effectType", "operationId"]
+                    .iter()
+                    .any(|k| m.contains_key(*k));
+                // A blocker (`kind` + `detail`) is anchored at its call site;
+                // a routine or object reference (`stableId`, `display`,
+                // `name`) at its declaration; anything else (a rule, a
+                // check) at the statement it describes.
+                let blocker = m.contains_key("kind") && m.contains_key("detail");
+                let reference = ["stableId", "display", "name", "qualifiedDisplay"]
+                    .iter()
+                    .any(|k| m.contains_key(*k));
+                for (k, x) in m.iter_mut() {
+                    let role = match k.as_str() {
+                        "anchor" if operation_row => Some("operation"),
+                        "anchor" if blocker => Some("callSite"),
+                        "anchor" if reference => Some("definition"),
+                        "anchor" => Some("operation"),
+                        "callsite" | "callSite" | "callsiteAnchor" | "site" | "enteredAt" => {
+                            Some("callSite")
+                        }
+                        "origin" | "evidence" => Some("operation"),
+                        _ => None,
+                    };
+                    if let (Some(r), Value::Object(loc)) = (role, &mut *x)
+                        && is_location(loc)
+                    {
+                        loc.insert("role".into(), Value::String(r.into()));
+                    }
+                    walk(x);
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    walk(v);
+}
+
 /// What a CLI answer's exit code means (output validation §6.3, F36): the
 /// envelope's `outcome`. `answered` and `no-routine-changed` exit 0;
 /// `input-not-mapped`, `not-found`, `ambiguous` and `usage-error` exit 2
@@ -248,6 +305,23 @@ pub fn dependencies_clause(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// §9.8 (F78): a routine's anchor is a definition, an effect row's an
+    /// operation, a call site a call site.
+    #[test]
+    fn locations_say_what_they_are() {
+        let mut v = serde_json::json!({
+            "routine": {"stableId": "x", "anchor": {"file": "a", "line": 1}},
+            "writes": [{"op": "Modify", "anchor": {"file": "a", "line": 2}}],
+            "hop": {"callsite": {"file": "a", "line": 3}},
+            "notALocation": {"anchor": "text"},
+        });
+        tag_location_roles(&mut v);
+        assert_eq!(v["routine"]["anchor"]["role"], "definition");
+        assert_eq!(v["writes"][0]["anchor"]["role"], "operation");
+        assert_eq!(v["hop"]["callsite"]["role"], "callSite");
+        assert_eq!(v["notALocation"]["anchor"], "text");
+    }
 
     /// §6.3: each exit-code meaning from the answer's own words.
     #[test]

@@ -19,6 +19,7 @@
               "excerpt": "commit",
               "file": "ws:src/post.al",
               "line": 27,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -34,6 +35,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 26,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -54,6 +56,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 26,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -102,6 +105,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 23,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Explain Post\"::Archive",

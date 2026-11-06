@@ -25,6 +25,7 @@
             "excerpt": "Message",
             "file": "ws:src/Codeunit.al",
             "line": 21,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "341879c5930fec57",
@@ -68,6 +69,7 @@
         "column": 4,
         "file": "ws:src/Codeunit.al",
         "line": 19,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "OnBeforePrintSafe",

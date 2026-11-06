@@ -1640,7 +1640,10 @@ fn envelope(
     env.insert("kind".into(), kind.into());
     env.insert("payload".into(), payload);
     env.insert("schemaVersion".into(), QUERY_SCHEMA_VERSION.into());
-    serialize_document_value(Value::Object(env))
+    // §9.8 (F78): every location says what it is.
+    let mut env = Value::Object(env);
+    crate::engine::result_header::tag_location_roles(&mut env);
+    serialize_document_value(env)
 }
 
 /// `payload.result.scope` of a query document (F76): `analysis`

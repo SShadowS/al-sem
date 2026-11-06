@@ -79,7 +79,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 93
+            "line": 93,
+            "role": "definition"
           },
           "display": "ByNumberUnknown",
           "objectDisplay": "Codeunit FT Consumers",
@@ -91,7 +92,8 @@
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
-          "line": 97
+          "line": 97,
+          "role": "callSite"
         },
         "source": "Field",
         "tempState": "unknown",
@@ -108,7 +110,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -120,7 +123,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 68
+          "line": 68,
+          "role": "callSite"
         },
         "source": "access",
         "tempState": "caller-dependent",
@@ -138,7 +142,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -150,7 +155,8 @@
         "site": {
           "column": 29,
           "file": "ws:src/FTFields.al",
-          "line": 69
+          "line": 69,
+          "role": "callSite"
         },
         "source": "access",
         "tempState": "caller-dependent",
@@ -167,7 +173,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -179,7 +186,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 70
+          "line": 70,
+          "role": "callSite"
         },
         "source": "Validate",
         "tempState": "caller-dependent",
@@ -196,7 +204,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -208,7 +217,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 71
+          "line": 71,
+          "role": "callSite"
         },
         "source": "SetRange",
         "tempState": "caller-dependent",
@@ -225,7 +235,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -237,7 +248,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 72
+          "line": 72,
+          "role": "callSite"
         },
         "source": "SetFilter",
         "tempState": "caller-dependent",
@@ -254,7 +266,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -266,7 +279,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 73
+          "line": 73,
+          "role": "callSite"
         },
         "source": "SetCurrentKey",
         "tempState": "caller-dependent",
@@ -283,7 +297,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -295,7 +310,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 74
+          "line": 74,
+          "role": "callSite"
         },
         "source": "SetLoadFields",
         "tempState": "caller-dependent",
@@ -312,7 +328,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -324,7 +341,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 75
+          "line": 75,
+          "role": "callSite"
         },
         "source": "CalcSums",
         "tempState": "caller-dependent",
@@ -341,7 +359,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -353,7 +372,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 76
+          "line": 76,
+          "role": "callSite"
         },
         "source": "TestField",
         "tempState": "caller-dependent",
@@ -370,7 +390,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -382,7 +403,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 77
+          "line": 77,
+          "role": "callSite"
         },
         "source": "FieldError",
         "tempState": "caller-dependent",
@@ -399,7 +421,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -411,7 +434,8 @@
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
-          "line": 78
+          "line": 78,
+          "role": "callSite"
         },
         "source": "FieldCaption",
         "tempState": "caller-dependent",
@@ -428,7 +452,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -440,7 +465,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 79
+          "line": 79,
+          "role": "callSite"
         },
         "source": "ModifyAll",
         "tempState": "caller-dependent",
@@ -457,7 +483,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -469,7 +496,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 82
+          "line": 82,
+          "role": "callSite"
         },
         "source": "access",
         "tempState": "temporary",
@@ -487,7 +515,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -499,7 +528,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 83
+          "line": 83,
+          "role": "callSite"
         },
         "source": "TransferFields",
         "tempState": "caller-dependent",
@@ -517,7 +547,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -529,7 +560,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 84
+          "line": 84,
+          "role": "callSite"
         },
         "source": "TransferFields",
         "tempState": "caller-dependent",
@@ -546,7 +578,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 60
+            "line": 60,
+            "role": "definition"
           },
           "display": "Kinds",
           "objectDisplay": "Codeunit FT Consumers",
@@ -558,7 +591,8 @@
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
-          "line": 88
+          "line": 88,
+          "role": "callSite"
         },
         "source": "Field",
         "tempState": "unknown",
@@ -576,7 +610,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 101
+            "line": 101,
+            "role": "definition"
           },
           "display": "Unresolved",
           "objectDisplay": "Codeunit FT Consumers",
@@ -588,7 +623,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 105
+          "line": 105,
+          "role": "callSite"
         },
         "source": "access",
         "tempState": "persistent",
@@ -606,7 +642,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 101
+            "line": 101,
+            "role": "definition"
           },
           "display": "Unresolved",
           "objectDisplay": "Codeunit FT Consumers",
@@ -618,7 +655,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 106
+          "line": 106,
+          "role": "callSite"
         },
         "source": "SetRange",
         "tempState": "persistent",
@@ -635,7 +673,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 167
+            "line": 167,
+            "role": "definition"
           },
           "display": "OnAfterGetRecord",
           "objectDisplay": "Page FT Card",
@@ -647,7 +686,8 @@
         "site": {
           "column": 11,
           "file": "ws:src/FTFields.al",
-          "line": 169
+          "line": 169,
+          "role": "callSite"
         },
         "source": "implicit-access",
         "tempState": "persistent",
@@ -664,7 +704,8 @@
           "anchor": {
             "column": 12,
             "file": "ws:src/FTFields.al",
-            "line": 17
+            "line": 17,
+            "role": "definition"
           },
           "display": "OnValidate",
           "member": {
@@ -680,7 +721,8 @@
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
-          "line": 19
+          "line": 19,
+          "role": "callSite"
         },
         "source": "implicit-access",
         "tempState": "caller-dependent",
@@ -697,7 +739,8 @@
           "anchor": {
             "column": 12,
             "file": "ws:src/FTFields.al",
-            "line": 17
+            "line": 17,
+            "role": "definition"
           },
           "display": "OnValidate",
           "member": {
@@ -713,7 +756,8 @@
         "site": {
           "column": 26,
           "file": "ws:src/FTFields.al",
-          "line": 19
+          "line": 19,
+          "role": "callSite"
         },
         "source": "implicit-access",
         "tempState": "caller-dependent",
@@ -730,7 +774,8 @@
           "anchor": {
             "column": 12,
             "file": "ws:src/FTFields.al",
-            "line": 17
+            "line": 17,
+            "role": "definition"
           },
           "display": "OnValidate",
           "member": {
@@ -746,7 +791,8 @@
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
-          "line": 20
+          "line": 20,
+          "role": "callSite"
         },
         "source": "TestField",
         "tempState": "caller-dependent",

@@ -63,7 +63,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 97
+            "line": 97,
+            "role": "definition"
           },
           "display": "Keyed",
           "objectDisplay": "Codeunit QT Touches",
@@ -76,7 +77,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 107
+            "line": 107,
+            "role": "definition"
           },
           "display": "Entry",
           "objectDisplay": "Codeunit QT Touches",
@@ -89,7 +91,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 77
+            "line": 77,
+            "role": "definition"
           },
           "display": "Top1",
           "objectDisplay": "Codeunit QT Touches",
@@ -102,7 +105,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 39
+            "line": 39,
+            "role": "definition"
           },
           "display": "TempOnly",
           "objectDisplay": "Codeunit QT Touches",
@@ -115,7 +119,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 34
+            "line": 34,
+            "role": "definition"
           },
           "display": "WriteItem",
           "objectDisplay": "Codeunit QT Touches",
@@ -128,7 +133,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 61
+            "line": 61,
+            "role": "definition"
           },
           "display": "Mixed",
           "objectDisplay": "Codeunit QT Touches",
@@ -141,7 +147,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 54
+            "line": 54,
+            "role": "definition"
           },
           "display": "CallWithReal",
           "objectDisplay": "Codeunit QT Touches",
@@ -154,7 +161,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 47
+            "line": 47,
+            "role": "definition"
           },
           "display": "CallWithTemp",
           "objectDisplay": "Codeunit QT Touches",
@@ -167,7 +175,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 83
+            "line": 83,
+            "role": "definition"
           },
           "display": "Top2",
           "objectDisplay": "Codeunit QT Touches",

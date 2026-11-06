@@ -19,6 +19,7 @@
             "excerpt": "error-call",
             "file": "ws:src/Sender.Codeunit.al",
             "line": 14,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "13ef3af0ee3a1c65",
@@ -62,6 +63,7 @@
         "column": 4,
         "file": "ws:src/Sender.Codeunit.al",
         "line": 7,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "PostThenError",
