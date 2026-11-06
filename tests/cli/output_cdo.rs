@@ -531,15 +531,21 @@ fn cdo_every_spilled_answer_carries_a_small_summary() {
 
 /// T-W2-15, the digest size ratchet (owner decision 2026-11-04, spec §9 q1):
 /// the default 3.x digest JSON (pretty) of IssueReminder and RunReportID is at
-/// most 1,250,000 bytes whole and at most 720,000 bytes as its core (the
+/// most 1,310,000 bytes whole and at most 760,000 bytes as its core (the
 /// document without `eventsByPublisher`, every event name kept by O2),
 /// pinned to the CDO baseline `bc3ccb18`. A change that grows either past its
 /// budget fails here; one that shrinks it far may lower the budget.
+///
+/// Raised 2026-11-06 (F1, record operations raise their table's platform
+/// events) from 1,250,000 / 720,000: IssueReminder's cone now holds the
+/// subscribers of the table events it raises, its digest measured 1,293,230
+/// bytes whole and 744,546 core (+3.5%). The owner's ratchet: this raise
+/// needs his confirmation.
 #[test]
 fn cdo_digest_json_fits_its_size_budgets() {
     let Some(a) = cdo_answers() else { return };
-    const WHOLE: usize = 1_250_000;
-    const CORE: usize = 720_000;
+    const WHOLE: usize = 1_310_000;
+    const CORE: usize = 760_000;
     fn strip(v: &mut Value) {
         match v {
             Value::Object(m) => {

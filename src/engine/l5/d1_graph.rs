@@ -302,7 +302,7 @@ pub(crate) fn build_d1_graph<'a>(
                 // Mirrors `D1Policy::expand` exactly (d1.rs:657-675): event
                 // fan-out is D2's job; drop targets with no summary or a
                 // proven-`No` touches_db verdict.
-                if e.kind == "event-dispatch" {
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind) {
                     continue;
                 }
                 let Some(sum) = ctx.summaries.get(&e.to) else {

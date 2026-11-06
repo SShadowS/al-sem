@@ -333,6 +333,10 @@ pub fn program_sites(edges: &[CanonicalEdge]) -> BTreeMap<Site, BTreeSet<Target>
             // program's `Call` edge there: the start's own edge has nothing to
             // be compared with, so it is left out (not reported as a run).
             EdgeKind::BackgroundStart => continue,
+            // altool never raises a platform table event (holes doc A12): the
+            // compiler has no edge to compare a record op's table-event edge
+            // with, so it is left out too.
+            EdgeKind::TableEvent => continue,
         };
         let targets: BTreeSet<Target> = e
             .targets

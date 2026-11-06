@@ -732,6 +732,7 @@ fn canonical_to_golden_key(e: &CanonicalEdge) -> GoldenSiteKey {
             EdgeKind::ImplicitTrigger => 2,
             EdgeKind::EventFlow => 3,
             EdgeKind::BackgroundStart => 4,
+            EdgeKind::TableEvent => 5,
         },
         unit: e.site.span.unit.clone(),
         line: e.site.span.start.line,

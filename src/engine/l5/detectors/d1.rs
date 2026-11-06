@@ -864,8 +864,8 @@ impl<'a> WalkPolicy for D1Policy<'a> {
         edges
             .iter()
             .filter(|e| {
-                // event fan-out is D2's job
-                if e.kind == "event-dispatch" {
+                // event fan-out (a table event's included) is D2's job
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind) {
                     return false;
                 }
                 match self.summaries.get(&e.to) {

@@ -308,14 +308,21 @@ fn graph_export_selects_the_tests_that_reach_each_change() {
             .get("Sel Page Tests.InsertLedger"),
         Some(&"event")
     );
-    // A subscriber to a platform table event: no record operation raises it yet.
+    // A subscriber to a platform table event (F1): the test's
+    // `Ledger.Insert(true)` raises it, so the test reaches the subscriber's
+    // callee through the event, and no hidden channel is left.
+    let after_insert = g.tests_reaching("Sel Ledger Hooks.AfterInsertHook");
+    assert_eq!(
+        after_insert.0.get("Sel Page Tests.InsertLedger"),
+        Some(&"event"),
+        "{after_insert:?}"
+    );
     assert!(
-        g.tests_reaching("Sel Ledger Hooks.AfterInsertHook")
-            .1
-            .contains(&(
-                "Sel Ledger.OnAfterInsertEvent".to_string(),
-                "unraisedPublisher".to_string()
-            ))
+        !after_insert.1.contains(&(
+            "Sel Ledger.OnAfterInsertEvent".to_string(),
+            "unraisedPublisher".to_string()
+        )),
+        "{after_insert:?}"
     );
     assert_eq!(
         g.node("Sel Unbound Subscriber.OnNoSuchEvent")["hiddenCallers"],
@@ -699,13 +706,24 @@ fn graph_export_covers_dependencies() {
     );
 
     // A subscriber to a DEPENDENCY table's platform event: the synthetic
-    // publisher lives on the dependency table, has no incoming edge, and must
-    // survive pruning with its flag (spec §4.6).
+    // publisher lives on the dependency table and survives pruning (spec
+    // §4.6). Since F1 the test's `Item.Insert(true)` raises it (a `tableEvent`
+    // edge), so it carries no `unraisedPublisher` flag and the test reaches
+    // the subscriber's callee through the event.
     let synth = g.node("Dep Item.OnAfterInsertEvent");
     assert_eq!(synth["dependency"], true);
+    assert!(
+        synth.get("hiddenCallers").is_none_or(Value::is_null),
+        "{synth}"
+    );
+    let raise: Vec<(&Value, &Value)> = g
+        .edges_between("Ws Tests.InsertItem", "Dep Item.OnAfterInsertEvent")
+        .iter()
+        .map(|e| (&e["kind"], &e["via"]))
+        .collect();
     assert_eq!(
-        synth["hiddenCallers"],
-        serde_json::json!(["unraisedPublisher"])
+        raise,
+        vec![(&Value::from("Event"), &Value::from("tableEvent"))]
     );
     assert_eq!(
         g.edges_between(
@@ -714,10 +732,12 @@ fn graph_export_covers_dependencies() {
         )[0]["kind"],
         "Event"
     );
-    assert!(g.tests_reaching("Ws Hooks.AfterInsert").1.contains(&(
-        "Dep Item.OnAfterInsertEvent".to_string(),
-        "unraisedPublisher".to_string()
-    )));
+    assert_eq!(
+        g.tests_reaching("Ws Hooks.AfterInsert")
+            .0
+            .get("Ws Tests.InsertItem"),
+        Some(&"event")
+    );
 
     // #160 §8.3: a DEPENDENCY body's run of a page that declares no entry
     // trigger. Its `run` edge comes only from the dependency's site facts

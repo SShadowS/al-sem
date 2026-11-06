@@ -48,6 +48,7 @@ pub(crate) const VIAS: &[&str] = &[
     "dispatchingBuiltin",
     "backgroundStart",
     "clientEvent",
+    "tableEvent",
 ];
 
 /// Every route condition, in name order: a condition mask's bits, read low

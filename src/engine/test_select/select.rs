@@ -27,12 +27,13 @@
 //! **selection-relevant** (it can add test callers no edge shows), with one
 //! class the design allows to be covered: a platform-raised table event
 //! (`OnAfterModifyEvent` …), covered when every write of that table in the
-//! program is an edge into the event. The sited graph has no such edge (a
-//! record write routes to the table's declared triggers only; the platform
-//! publishers are reached through the record hub alone), so no table event
-//! can be shown covered, and the owner's rule applies: one that cannot be
-//! shown covered counts as relevant. The class is printed, with that reason,
-//! so the gap is visible rather than folded away.
+//! program is an edge into the event. Since F1 (spec
+//! `2026-11-06-db-event-subscribers.md`) every record operation on the table
+//! raises it through a `tableEvent` edge, so the publisher is flagged only when
+//! no such site raises it (a dynamic record op, `RecordRef`, reaches it through
+//! the record hub only, which does not clear the flag); then the owner's rule
+//! applies: one that cannot be shown covered counts as relevant. The class is printed, with that reason, so the
+//! gap is visible rather than folded away.
 //!
 //! # Dependency-tier sameness (§4.5, Fable f6)
 //!
@@ -215,9 +216,8 @@ fn hidden_class(g: &SitedGraph, n: NodeIx, ch: &str) -> (&'static str, bool, &'s
         "unraisedPublisher" if g.is_platform_publisher(n) => (
             "platform-table-event",
             true,
-            "a platform-raised table event: covered only when every write of the table is an \
-             edge into it, and the graph has no such edge (writes route to declared triggers \
-             only), so it is not shown covered",
+            "a platform-raised table event no record operation in the graph raises: its \
+             table's writes are outside the loaded code, so it is not shown covered",
         ),
         "unraisedPublisher" => (
             "unraised-publisher",

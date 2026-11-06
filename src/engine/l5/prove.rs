@@ -197,7 +197,10 @@ impl ProveObligations {
 /// (`UnresolvedCone::fires_table_events`): a `Validate` is no effect.
 const SUBSCRIBABLE_EFFECTS: &[&str] = &["EVENT_PUBLISH", "UI_WINDOW_OPEN"];
 
-/// Q6: the cone follows the LOADED subscribers of every event it raises, so
+/// Q6: the cone follows the LOADED subscribers of every event it raises (a
+/// table event through its record operation's table-event edges since F1,
+/// spec `2026-11-06-db-event-subscribers.md`; before that it did not, and a
+/// `no` here could hide a loaded subscriber's write), so
 /// an event is closed over them, unlike an interface, which is open. A `yes`
 /// stands on its witness whatever else subscribes; a `no` (MAY: no matching
 /// effect; MUST: not on every success path) could be overturned by a

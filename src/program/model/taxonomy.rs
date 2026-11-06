@@ -16,6 +16,10 @@ pub enum DispatchKind {
     PageRun,
     ReportRun,
     CodeunitRun,
+    /// A record operation → a subscriber of a platform table event it raises
+    /// (F1, spec `2026-11-06-db-event-subscribers.md`): keyed by the record
+    /// operation like `ImplicitTrigger`, but raised whatever the RunTrigger.
+    TableEvent,
 }
 
 impl DispatchKind {
@@ -31,6 +35,7 @@ impl DispatchKind {
             DispatchKind::PageRun => "page-run",
             DispatchKind::ReportRun => "report-run",
             DispatchKind::CodeunitRun => "codeunit-run",
+            DispatchKind::TableEvent => "table-event",
         }
     }
 }

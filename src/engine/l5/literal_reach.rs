@@ -575,7 +575,15 @@ fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<EdgeSite<'_>>
         SnapshotGraphEdge::EventDispatch {
             from, to, event_id, ..
         } => (from, to, Some(EdgeSite::Event(event_id.as_str())), false),
+        // F1: a table event leaves from its raising operation, whose guards
+        // apply as an implicit trigger's do.
         SnapshotGraphEdge::ImplicitTrigger {
+            from,
+            to,
+            operation_id,
+            ..
+        }
+        | SnapshotGraphEdge::TableEvent {
             from,
             to,
             operation_id,

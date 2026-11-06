@@ -253,21 +253,31 @@ fn a_test_path_names_overloads_apart() {
     );
 }
 
-/// C-6: a routine run only by a subscriber to a platform table event
-/// (`OnAfterModifyEvent`) has a selection-relevant hidden channel in its
-/// cone: no test reaches it, its status is `analysis-incomplete` (never
-/// `no-known-path`), the fallback says why, and `selectionComplete` is false.
-/// A routine with no caller at all and no hidden channel is `no-known-path`
-/// with a complete selection.
+/// C-6: a routine run only by a subscriber to a platform table event no code
+/// raises (`TU Log`'s `OnAfterInsertEvent`; nothing writes `TU Log`) has a
+/// selection-relevant hidden channel in its cone: no test reaches it, its
+/// status is `analysis-incomplete` (never `no-known-path`), the fallback says
+/// why, and `selectionComplete` is false. A routine with no caller at all and
+/// no hidden channel is `no-known-path` with a complete selection. Since F1
+/// (spec `2026-11-06-db-event-subscribers.md`) a table event a record
+/// operation raises is an edge: `Audited`, run by the subscriber of
+/// `TU Item`'s `OnAfterModifyEvent`, is reached from `PostUpdatesQty` through
+/// `Post`'s `Item.Modify()`.
 ///
 /// DISCRIMINATION (2026-11-05): treating a platform table event as covered
-/// (`hidden_class` returning `false` for it) makes `Audited`'s status
-/// `no-known-path` and `selectionComplete` true: this test fails on both.
+/// (`hidden_class` returning `false` for it) makes the unraised routine's
+/// status `no-known-path` and `selectionComplete` true: this test fails on
+/// both. (2026-11-06) Returning no route from `resolve_table_events` makes
+/// `Audited` `analysis-incomplete` again: fails `audited`.
 #[test]
 fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
     let t = universe_repo();
     let ws = t.path().join("App");
     let v = json(&ws, &["--routine", "TU Core::Audited"]);
+    assert_eq!(v["changed"][0]["status"], "reached", "audited: {v:#}");
+    let (human, _) = tests(&ws, &["--routine", "TU Core::Audited"]);
+    golden("universe.audited.human.txt", &human, Some(t.path()));
+    let v = json(&ws, &["--routine", "TU Core::Logged"]);
     assert_eq!(v["changed"][0]["status"], "analysis-incomplete");
     assert_eq!(v["selectionComplete"], false);
     let reasons: Vec<&str> = v["requiredFallback"]
@@ -278,9 +288,8 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
         .collect();
     assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
     assert_eq!(v["hidden"][0]["class"], "platform-table-event");
-    let (human, _) = tests(&ws, &["--routine", "TU Core::Audited"]);
+    let (human, _) = tests(&ws, &["--routine", "TU Core::Logged"]);
     assert!(human.find("selection complete: no").unwrap() < human.find("this is static").unwrap());
-    golden("universe.audited.human.txt", &human, Some(t.path()));
     let v = json(&ws, &["--routine", "TU Core::Untested"]);
     assert_eq!(v["changed"][0]["status"], "no-known-path");
     assert_eq!(v["selectionComplete"], true, "{v:#}");
@@ -461,11 +470,18 @@ fn named_test_apps_and_unresolved_routines() {
 /// tests in 7 codeunits and IssueReminder's 0 local with a nearest test
 /// through dependency code; `selectionComplete` false with its reasons.
 /// And (milestone C item 4, C-12 on CDO) RunReportID's human answer prints
-/// the dependency-tier sameness line exactly: its 283 through-dependency
+/// the dependency-tier sameness line exactly: its 377 through-dependency
 /// tests reach it via dependency nodes that may execute most of the program.
-/// (301 until 2026-11-06: 18 of them reached it only over a `declaredRunnable`
-/// edge from a routine that declares a page variable and never runs it, e.g.
-/// `Codeunit 6489::ServiceLineCheck -> Page 6489`; round-1 c12.)
+/// History (all 2026-11-06, measured on the release-fast build of each):
+/// 301 before; the declaredRunnable narrowing alone gave 283 (18 reached it
+/// only over a `declaredRunnable` edge from a routine that declares a page
+/// variable and never runs it, e.g. `Codeunit 6489::ServiceLineCheck ->
+/// Page 6489`; round-1 c12); F1 alone gave 597 (the record operations of the
+/// posting tests' dependency code raise the table events whose subscribers
+/// reach it); both together give 377 (`integrate/outval-r1-fixes`), because
+/// the narrowing removes only `declaredRunnable` edges (and the test walk
+/// skips `clientEvent` ones), so 220 of F1's 597 (the 18 above and 202 of
+/// the ones F1 added) reached it only over such an edge.
 /// DISCRIMINATION (2026-11-05, cdo profile): `render`'s `same` never true
 /// fails it ("through dependency code: 301 tests (--tier dependency lists
 /// them)"); restored, passes.
@@ -479,7 +495,7 @@ pub(crate) fn cdo_selection_ratchets() {
     assert_eq!(code, 0, "{human}");
     assert!(
         human.lines().any(|l| l
-            == "through dependency code: 283 tests — effectively the suite's posting tests, not specific to this change"),
+            == "through dependency code: 377 tests — effectively the suite's posting tests, not specific to this change"),
         "{human}"
     );
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);

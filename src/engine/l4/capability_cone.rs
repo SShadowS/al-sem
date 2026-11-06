@@ -1301,7 +1301,8 @@ pub(crate) fn capability_via_for_edge_kind(kind: &str) -> &'static str {
     match kind {
         "direct-call" | "variable-typed-call" | "interface-dispatch" => "call",
         "object-run-resolved" | "object-run-unresolved" => "object-run",
-        "event-dispatch" => "event-dispatch",
+        // F1: a platform table event's subscriber runs by event dispatch.
+        "event-dispatch" | "table-event" => "event-dispatch",
         "implicit-trigger" => "implicit-trigger",
         "dependency-export" => "dependency",
         _ => "call",
@@ -3016,7 +3017,9 @@ fn member_digests(
                 h.str(&e.sort_key);
                 let callee = routines_by_id.get(e.to.as_str()).copied();
                 h.u64(u64::from(callee.is_some()));
-                if e.kind == "event-dispatch"
+                // Both bind by the subscriber's parameters
+                // (`table_event_param_temp_state` reads which are records).
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind)
                     && let Some(c) = callee
                 {
                     h.debug(&c.parameters);
@@ -8398,10 +8401,16 @@ codeunit 50100 C
                 // lookup pages and the newly bound overloads add edges, and the
                 // cross-app model demands more dependency code (routines 31,646 ->
                 // 33,287, recursive SCCs 67 -> 70, the largest 492 -> 524).
+                // 784 -> 1027 on 2026-11-06 (F1, record operations raise their
+                // table's platform events; the oracle agreed): a subscriber that
+                // writes the table it subscribes to re-raises the event (65
+                // self-loops now), and the cross-app model demands the subscribers
+                // of the table events the workspace raises (routines 33,287 ->
+                // 34,118, recursive SCCs 70 -> 106, the largest 524 -> 650).
                 assert_eq!(
-                    stats.recursive_members_emitted, 784,
+                    stats.recursive_members_emitted, 1027,
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
-                     784 since the 2026-10-28 engine changes; a \
+                     1027 since F1 (2026-11-06); a \
                      different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s

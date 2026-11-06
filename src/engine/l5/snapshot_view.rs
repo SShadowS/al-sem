@@ -846,7 +846,7 @@ pub(super) fn derive_pd_base(
             let routine = stable_routine_id(from, map);
             let to = stable_routine_id(&edge.to, map);
             let event = match edge.kind.as_str() {
-                "event-dispatch" => edge.event_id.as_deref().unwrap_or(""),
+                "event-dispatch" | "table-event" => edge.event_id.as_deref().unwrap_or(""),
                 _ => "",
             };
             let key = (

@@ -118,6 +118,19 @@ pub enum EdgeKind {
     /// so a consumer that follows the caller's own execution (the model's
     /// calls, the cone, demand) never mistakes it for a call.
     BackgroundStart,
+    /// The platform table events a record operation raises (spec
+    /// `docs/superpowers/specs/2026-11-06-db-event-subscribers.md`):
+    /// `Rec.Modify(…)` raises `OnBeforeModifyEvent` and `OnAfterModifyEvent`
+    /// whatever its RunTrigger, and their subscribers run in the caller's
+    /// transaction. The routes are the table's synthetic
+    /// [`crate::program::resolve::event::PublisherKind::Platform`] publishers
+    /// ([`crate::program::resolve::resolver::resolve_table_events`]); each
+    /// publisher's `EventFlow` edge carries its subscribers. A second edge at
+    /// the record op's site, beside its `ImplicitTrigger` edge (the table's own
+    /// triggers, which RunTrigger gates), under its own obligation
+    /// ([`crate::program::resolve::full::ObligationId::TableEvent`]). Emitted
+    /// only when a loaded app subscribes to one of the events.
+    TableEvent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -456,6 +469,11 @@ pub enum Witness {
         id: BuiltinId,
         catalog_version: String,
     },
+    /// The target is a synthetic platform publisher (F1: a table event a
+    /// record operation raises, [`EdgeKind::TableEvent`]): the platform raises
+    /// it and no declaration exists to cite. Paired with the table's tier
+    /// evidence (`Source` or `Abi`) and a `Routine` target.
+    Platform,
     None,
 }
 

@@ -192,6 +192,14 @@ impl LspEdge {
                 callee_fp: self.callee_fp,
             };
         }
+        // F1: a record op's table-event edge, beside its trigger edge.
+        if self.kind == EdgeKind::TableEvent {
+            return ObligationId::TableEvent {
+                caller: self.from.clone(),
+                span,
+                callee_fp: self.callee_fp,
+            };
+        }
         ObligationId::CallSite {
             caller: self.from.clone(),
             span,

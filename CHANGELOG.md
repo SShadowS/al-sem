@@ -238,6 +238,97 @@ byte-identical.
   L.Insert();`), because `literal_reach` judges a group by its crossing and resources,
   and a resource-less group has none.
 
+### Fixed (record operations raise their table's platform events: F1)
+
+A record operation raises its table's database trigger events and their subscribers run in
+the caller's transaction: `Insert` (`OnBefore/OnAfterInsertEvent`), `Modify`/`ModifyAll`
+(`…ModifyEvent`), `Delete`/`DeleteAll` (`…DeleteEvent`), `Rename` (`…RenameEvent`) and
+`Validate(F)` (`…ValidateEvent` of `F`), whatever the RunTrigger argument says and on
+temporary records too. The engine never followed them: a record operation reached only the
+table's own triggers, and none at all for `RunTrigger = false`. So on the CDO baseline
+`alsem prove OnAfterCopyPurchaseDocument writes-table:"Purch. Inv. Entity Aggregate"`
+answered `no` with complete coverage, though its `Modify(false)` raises Purchase Header
+`OnAfterModifyEvent` and the Base Application subscriber `PurchInvAggregator` locks and
+writes that table (output validation 2026-11-06, call c11). It was the known gap F1 of the
+call-graph export spec, flagged `unraisedPublisher`, not a choice for cost; `prove`'s
+`loaded-subscribers` label already claimed the cone followed these subscribers. Design note:
+`docs/superpowers/specs/2026-11-06-db-event-subscribers.md`.
+
+- **Program engine**: a record operation on a resolved table gets a second edge at its site,
+  `EdgeKind::TableEvent` under `ObligationId::TableEvent`, to the table's synthetic platform
+  publishers of the events it raises (`resolver::resolve_table_events`); their `EventFlow`
+  edges carry the subscribers. No site rule applies. A table no loaded app subscribes to gets
+  no edge. `Validate` reaches the publisher, which collapses fields; the detector model
+  narrows it to the validated field's subscribers.
+- **Detector model**: one `DispatchKind::TableEvent` (`table-event`) call edge per model
+  subscriber, keyed by the record operation, with the event id and whether the subscription
+  may be skipped. The cone, prove, explain, digest and `query effects/touches` follow it
+  (facts inherited `via: event-dispatch`); a subscriber's `Rec`/`xRec` take the raising
+  operation's temp state. Witness paths show it as an `[event]` hop; a fact's first hop names
+  both the operation and the event, so the operation's trigger edges never pass for it.
+- **Walkers that leave event fan-out to another detector** (d1, d2's evidence walk, d46,
+  d48, d54) skip it as they skip `event-dispatch`; explain's callers and rules do not count a
+  table event's subscriber as called (as for integration events).
+- **Demand** follows it forward; a dependency routine whose record op raises an event a
+  primary routine subscribes to is not a "raiser" for the reverse rule.
+- **`alsem graph`**: an `Event` edge with the new `via: "tableEvent"` (additive). A synthetic
+  table publisher is flagged `unraisedPublisher` only when no non-hub edge raises it, so test
+  selection prints the `platform-table-event` hidden channel only for such a publisher. Holes
+  doc row A12: table events now better than altool.
+- Not done (design note §6): the global triggers (`OnDatabaseInsert`, `OnGlobalModify`, gap
+  F8), table-extension `OnBefore/OnAfter<Op>` triggers (F5), d2/d7 rules for table events, and
+  dependency subscribers in a single-app model (no edge, as for dependency triggers).
+
+**Measured on CDO** (`bc3ccb18`, release-fast, before = master `6e577c24`):
+
+- `aldump --program-call-graph-stats`: 98 new `TableEvent` edges, all `resolvedSource`
+  (primary 20,916 → 21,014; whole program 46,328 → 46,426); `unknown` 0 → 0.
+  `--dependency-bodies-stats`: 431,379 → 437,511 (+6,132, Base Application +5,859);
+  `unknown` 0 → 0.
+- c11 (`query effects OnAfterCopyPurchaseDocument --all`) now lists writes beyond the
+  dependency entry point on 3 tables (Purch. Cr. Memo Entity Buffer, Purch. Inv. Entity
+  Aggregate, Purchase Order Entity Buffer) through the three `OnAfterModifyPurchaseHeader`
+  subscribers entered at `CDOSubscribers.Codeunit.al:953`. `prove … writes-table:"Purch. Inv.
+  Entity Aggregate"`: `yes` (Insert at `PurchInvAggregator.Codeunit.al:519`, Modify at `:517`).
+  `prove --closed-world SetCustomerOutputProfile writes-table:"CDO Output Profile
+  Conflict"`: `yes` through `OnAfterModifyCustomer_SyncConflict` (`:578`); its coverage is now
+  incomplete (the cone reaches Customer's other subscribers and their open calls).
+- `alsem analyze --scope primary`: 2,238 → 2,253. d44 20 → 35 (+15): 14 on `CDO
+  Telemetry::Company Triggers_OnCompanyOpenCompleted`, whose `JobQueueEntry.Restart()` raises
+  Job Queue Entry `OnBeforeModifyEvent`, whose CRM subscriber may start a full sync writing
+  the integration tables another `OnCompanyOpenCompleted` subscriber writes (path checked,
+  true may-path); 1 on Customer `OnAfterModifyEvent` (`OnAfterModifyCustomer_SyncConflict`
+  and Workflow's `RunWorkflowOnCustomerChanged` "both" write CDO Output Profile Conflict,
+  but the workflow side reaches it only by modifying Customer again, which re-enters the CDO
+  subscriber: a false positive for d44's intent, 1 of 15). d9: the same 24 findings with more
+  tables (e.g. `PostAndHandle` 399 → 413 tables before its Commit).
+- `alsem analyze --scope all`: 31,311 → 32,454 (1,189 new, 46 gone). All new findings but the
+  primary ones above are in dependency code the cross-app model now demands (the subscribers
+  of table events the workspace raises and their cones): d14 +615, d44 +186, d43 +171, d35
+  +68, d3 +37, d1 +34, smaller others. The 16 d44 findings gone are displaced by the
+  per-event cap of 32 (`onafterlogin` 26 → 32, `apisetup` 5 → 32, `oncompanyinitialize`
+  2 → 32 findings).
+- One `explain` and one `prove` (OnAfterCopyPurchaseDocument), three alternating rounds on a
+  host at load 30-340 on 22 cores: user CPU median explain 133 → 131 s, prove 141 → 142 s
+  (unchanged within the noise); peak RSS median explain 3.14 → 3.20 GB, prove 2.99 → 3.16 GB;
+  wall times too noisy to compare (explain 38-99 s before, 29-49 s after).
+- **A new `Witness::Platform`**: the route to a synthetic publisher has no declaration to
+  cite; the route-applicability contract (CDO: `route_applicability_zero_violations`, 124
+  violations with `Witness::None`) accepts it with `Source`/`Abi` evidence and a `Routine`
+  target only.
+- **CDO ratchets moved, re-minted through their documented `REGEN_TEMP_GOLDENS=1` path**:
+  the L4 frozen digests (`tests/l4-summary-baseline/cdo-*-digest.txt`: the cone now holds the
+  subscribers' effects); the CDO rendering goldens (`tests/cli-output-goldens/cdo/`: e.g.
+  `IssueReminder` `writes-table:Data Exch.` goes from `unknown` to `yes` through Reminder-Issue
+  → Gen. Journal Line `OnAfterInsertEvent` → Workflow's subscriber → its responses, a may-path
+  through the workflow engine; `RunReportID` may-commit gains a 14th effect through Incoming
+  Document Attachment's subscribers); C-9's "through dependency code" count 301 → 597 tests;
+  `derived_only_matches_raw_fold_on_cdo`'s pinned recursive-member count 784 → 1,027 (the
+  raw-fold oracle agrees; recursive SCCs 70 → 106: subscribers that write the table they
+  subscribe to re-raise its events); the digest size budget (owner's ratchet T-W2-15) raised 1,250,000 / 720,000 →
+  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), which needs the
+  owner's confirmation.
+
 ### Fixed (the macOS build compiles again)
 
 `OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with

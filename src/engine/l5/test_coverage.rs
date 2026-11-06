@@ -626,10 +626,10 @@ impl CoverageGraph {
             let from = e.edge_from();
             match e.edge_to() {
                 Some(to) => {
-                    g.edges
-                        .entry(from.to_string())
-                        .or_default()
-                        .push((to.to_string(), e.edge_kind() == "event-dispatch"));
+                    g.edges.entry(from.to_string()).or_default().push((
+                        to.to_string(),
+                        crate::engine::l4::combined_graph::is_subscriber_edge(e.edge_kind()),
+                    ));
                     if role_of_stable_id(primary, to) == Role::Dependency {
                         flag(&mut g.boundary, to, "dependency-code");
                     }
@@ -1223,6 +1223,9 @@ mod tests {
                 true,
             ),
             ("InModalHandler", "OpenCardModally", false),
+            // F1: `Ledger.Insert(true)` (Tests.al:88) raises the platform
+            // OnAfterInsertEvent this subscriber handles.
+            ("OnAfterInsertLedger", "InsertLedger", true),
         ];
         want.sort();
         assert_eq!(covered, want);
@@ -1237,10 +1240,6 @@ mod tests {
             uncovered,
             vec![
                 ("ExportLine", UncoveredReason::NoPath),
-                (
-                    "OnAfterInsertLedger",
-                    UncoveredReason::PlatformEventSubscriber
-                ),
                 ("Ping", UncoveredReason::NoPath),
                 ("ReachedOnlyFromNowhere", UncoveredReason::NoPath),
             ]
