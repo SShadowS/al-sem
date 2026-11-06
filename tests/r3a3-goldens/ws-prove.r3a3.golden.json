@@ -248,6 +248,14 @@
 					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50311#4fab5a2c9393b391dfaef9633863b075cafb51e477a33456a8685afc45b15541/op2"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "44444444-4444-4444-4444-444444444444:Codeunit:50311#4fab5a2c9393b391dfaef9633863b075cafb51e477a33456a8685afc45b15541/op1"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",

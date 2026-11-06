@@ -46,6 +46,18 @@
           },
           {
             "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": []
+          },
+          {
+            "anchor": {
               "column": 12,
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
@@ -593,7 +605,7 @@
           "workspace": 0
         },
         "kinds": {
-          "errors": 9
+          "errors": 10
         },
         "literalDeadTables": 0,
         "mayWriteTables": {

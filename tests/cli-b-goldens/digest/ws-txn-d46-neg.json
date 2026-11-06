@@ -110,6 +110,37 @@
               []
             ],
             "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/NormalCU.al",
+              "line": 34,
+              "sourceKind": "source"
+            },
+            "factId": "c32eb589fa13f8b6",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "label": "COMMIT_REACHABLE",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              }
+            ],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
           }
         ],
         "entryDiagnostics": [],
@@ -258,6 +289,54 @@
               ]
             ],
             "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/NormalCU.al",
+              "line": 34,
+              "sourceKind": "source"
+            },
+            "factId": "d464d7671e046d37",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "provenance": "transitive",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "label": "COMMIT_REACHABLE",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              }
+            ],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              [
+                {
+                  "anchor": {
+                    "column": 8,
+                    "file": "ws:src/NormalCU.al",
+                    "line": 25,
+                    "sourceKind": "source"
+                  },
+                  "calleeDisplay": "DoSetup",
+                  "callsiteId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3/cs0",
+                  "edgeKind": "direct-call",
+                  "fromDisplay": "RunSetup",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b",
+                  "kind": "call",
+                  "toDisplay": "DoSetup",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
+                }
+              ]
+            ],
+            "viaPathsTruncated": false
           }
         ],
         "entryDiagnostics": [],
@@ -284,7 +363,7 @@
     "summary": {
       "rootsRequested": 2,
       "rootsResolved": 2,
-      "totalEffects": 4,
+      "totalEffects": 6,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"

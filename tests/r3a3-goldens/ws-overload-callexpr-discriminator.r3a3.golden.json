@@ -12,6 +12,14 @@
 					"witnessOperationId": "cccccccc-1111-2222-3333-444444444444:Codeunit:50120#d3526fff744d16c607584ce9d7bc44e6dd408b66bd08ca9bc6cbf1d7c14e986c/op2"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "cccccccc-1111-2222-3333-444444444444:Codeunit:50120#d3526fff744d16c607584ce9d7bc44e6dd408b66bd08ca9bc6cbf1d7c14e986c/op1"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -62,6 +70,15 @@
 					"provenance": "inherited",
 					"via": "call",
 					"witnessOperationId": "cccccccc-1111-2222-3333-444444444444:Codeunit:50120#d3526fff744d16c607584ce9d7bc44e6dd408b66bd08ca9bc6cbf1d7c14e986c/op2",
+					"witnessCallsiteId": "cccccccc-1111-2222-3333-444444444444:Codeunit:50122#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6/cs0"
+				},
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "cccccccc-1111-2222-3333-444444444444:Codeunit:50120#d3526fff744d16c607584ce9d7bc44e6dd408b66bd08ca9bc6cbf1d7c14e986c/op1",
 					"witnessCallsiteId": "cccccccc-1111-2222-3333-444444444444:Codeunit:50122#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6/cs0"
 				},
 				{

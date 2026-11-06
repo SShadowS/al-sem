@@ -299,6 +299,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1"
         }
       ],
       "capabilityStatus": "complete",

@@ -268,6 +268,14 @@
             },
             "opSubtype": "Modify"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "19da38eae8386bd5/8e10df7eda3e5e9c8377e7baf4e7b93ced50078ea04953c405397c24df059ca0/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -1091,6 +1099,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "19da38eae8386bd5/0d8721d8d1c18dba266bf0a93bfc630ccdfb604da858d3aad97ec3b2016df412/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "19da38eae8386bd5/0d8721d8d1c18dba266bf0a93bfc630ccdfb604da858d3aad97ec3b2016df412/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -1473,6 +1489,14 @@
             },
             "opSubtype": "Modify"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "19da38eae8386bd5/25a86ea2bb0ceb753714ee11411a10cc225b886767e1588edbc63481c043448e/op0"
         }
       ],
       "capabilityStatus": "complete",

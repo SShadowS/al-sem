@@ -54,6 +54,15 @@
     },
     {
       "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "direct",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
+      "via": "self",
+      "witnessOperationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op2"
+    },
+    {
+      "confidence": "static",
       "extra": {
         "kind": "table",
         "opSubtype": "Insert",
@@ -99,6 +108,16 @@
       "via": "call",
       "witnessCallsiteId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3/cs0",
       "witnessOperationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op3"
+    },
+    {
+      "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "inherited",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b",
+      "via": "call",
+      "witnessCallsiteId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3/cs0",
+      "witnessOperationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op2"
     },
     {
       "confidence": "static",

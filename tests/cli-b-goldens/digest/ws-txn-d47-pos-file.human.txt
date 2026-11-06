@@ -1,6 +1,6 @@
 --- Codeunit D47 Sender::ExportAfterModify ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: yes (1 site); errors at 1 place
+    transaction, UI and errors: commits: yes (1 site); errors at 2 places
     other effects: events: 0 (0 raised in workspace code); file at 1 place
     uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -15,7 +15,7 @@
       path: ExportAfterModify (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
   file at 1 place: FILE at ws:src/Sender.Codeunit.al:17 (unconditional-on-success)
-  errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:14 (unconditional-on-success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:14 (unconditional-on-success); ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:16 (unconditional-on-success)
   gaps in workspace code (1 call the engine cannot follow):
     F.WriteAllText (unresolved-receiver-type) in ExportAfterModify at ws:src/Sender.Codeunit.al:17
 changed-roots: file-unmatched src/Rec.Table.al

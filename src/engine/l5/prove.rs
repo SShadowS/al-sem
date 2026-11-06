@@ -694,7 +694,8 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
         }
         ProveQuestion::ReachesUi => UI_TYPES.contains(&eff.effect_type.as_str()),
         // An explicit Error, or an implicit runtime error (G20: an unguarded
-        // Get/FindFirst/FindLast/FindSet, TestField, FieldError).
+        // record op in statement position, TestField, FieldError; the rule is
+        // `ui_events_error::implicit_error_record_op` / `implicit_error_call`).
         ProveQuestion::ThrowsError => {
             eff.effect_type == "ERROR_THROW" || eff.effect_type == "ERROR_IMPLICIT"
         }

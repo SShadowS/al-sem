@@ -422,6 +422,14 @@
             "kind": "event",
             "eventClass": "Integration"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "05d17100b346c29d/7a01e4b04f497cdc05872527c6565acd35cac5ca1f9f0f623dd489a6466c9fad/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -610,6 +618,14 @@
             "kind": "event",
             "eventClass": "Integration"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "05d17100b346c29d/e9b4e01b5e4f674429c91bb687da02eb49e865ccc93d19815cad305835d38813/op0"
         }
       ],
       "capabilityStatus": "complete",

@@ -12,6 +12,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#039b8b4873e1f02a907310193b5032e68231bef9d9877735da495ad4ff260e63/op0"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#039b8b4873e1f02a907310193b5032e68231bef9d9877735da495ad4ff260e63/op2"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "unresolved",
@@ -113,6 +121,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#112c3c71a9c28fc50572ae0aae08e6aeb1625d40ed318e97cd30ba21bd9745f6/op0"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#112c3c71a9c28fc50572ae0aae08e6aeb1625d40ed318e97cd30ba21bd9745f6/op1"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "unresolved",
@@ -168,6 +184,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#177c4e6b6b917b66f56535028fd7ce0a2f89940d3c92315b756ddaee5f2c0d41/op0"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#177c4e6b6b917b66f56535028fd7ce0a2f89940d3c92315b756ddaee5f2c0d41/op2"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "unresolved",
@@ -214,6 +238,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#2be1c60fbef9f715465126d4d66432f2659cccaf27b5af0cb589d1c52e633a33",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#2be1c60fbef9f715465126d4d66432f2659cccaf27b5af0cb589d1c52e633a33/op0"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",
@@ -274,6 +306,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#3df5154f53abbf325c04c4ad40a199bf7696b453b40e62bdcc2da9d0f5be12a2/op0"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#3df5154f53abbf325c04c4ad40a199bf7696b453b40e62bdcc2da9d0f5be12a2/op2"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "unresolved",
@@ -321,6 +361,15 @@
 			"routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#9469ac8059566b395f7598e17ce7ed8b3a7d34b8c5684e371bfbf24c31672563",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#2be1c60fbef9f715465126d4d66432f2659cccaf27b5af0cb589d1c52e633a33/op0",
+					"witnessCallsiteId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#9469ac8059566b395f7598e17ce7ed8b3a7d34b8c5684e371bfbf24c31672563/cs0"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",
@@ -427,6 +476,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#f2ffd033c26ec2afe95042837ac50d1f03ebb7320fca5d91f926e638d2d68ff1",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#f2ffd033c26ec2afe95042837ac50d1f03ebb7320fca5d91f926e638d2d68ff1/op1"
+				},
 				{
 					"op": "insert",
 					"resourceKind": "table",

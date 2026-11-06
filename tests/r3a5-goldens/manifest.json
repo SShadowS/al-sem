@@ -22,7 +22,7 @@
     "primaryRoutinesWithInheritedDepFacts": 1,
     "primaryRoutinesWithDepDbEffects": 1,
     "coveragesWithOpaqueAppsReason": 2,
-    "totalCrossAppInheritedFacts": 1,
+    "totalCrossAppInheritedFacts": 2,
     "note": "primaryRoutinesWithInheritedDepFacts ≥ 1 is the anti-degenerate invariant: the cone fired cross-app (dep fact propagated to primary caller). This is the core of R3a-5. coveragesWithOpaqueAppsReason ≥ 1 covers the R3a-0 cross-app surface (symbol-only deps / unfetched deps produce opaque/external-target coverage reasons)."
   }
 }

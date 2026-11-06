@@ -4,6 +4,14 @@
 			"routineId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#02305e3c6fe826baede8c365e9290e47e29fd5c76542b5581cde894972f5b58f",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#02305e3c6fe826baede8c365e9290e47e29fd5c76542b5581cde894972f5b58f/op0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -49,6 +57,14 @@
 					"provenance": "direct",
 					"via": "self",
 					"witnessOperationId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e/op1"
+				},
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e/op2"
 				},
 				{
 					"op": "error-implicit",
@@ -143,6 +159,14 @@
 			"routineId": "2a000000-0000-0000-0000-0000000002aa:Page:50900#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "2a000000-0000-0000-0000-0000000002aa:Page:50900#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407/op0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -173,6 +197,22 @@
 		{
 			"routineId": "2a000000-0000-0000-0000-0000000002aa:Table:50900#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "2a000000-0000-0000-0000-0000000002aa:Table:50900#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op0"
+				},
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "2a000000-0000-0000-0000-0000000002aa:Table:50900#440dcf23126accbfbacb03611807b37ec5791111556b0d7b23a400294d56491e/op1"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",

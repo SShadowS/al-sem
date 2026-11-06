@@ -67,6 +67,45 @@
             "viaPathsTruncated": false
           },
           {
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "497413d19f4e63a8",
+            "guarantees": [],
+            "provenance": "transitive",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              [
+                {
+                  "anchor": {
+                    "column": 12,
+                    "file": "ws:src/D1MultiCaller.al",
+                    "line": 35,
+                    "sourceKind": "source"
+                  },
+                  "calleeDisplay": "ModifyHelper",
+                  "callsiteId": "c8d0efe535357e91/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/cs0",
+                  "edgeKind": "direct-call",
+                  "fromDisplay": "CallerB",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf",
+                  "kind": "call",
+                  "toDisplay": "ModifyHelper",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+                }
+              ]
+            ],
+            "viaPathsTruncated": false
+          },
+          {
             "conditionality": "unconditional-on-success",
             "confidence": "static",
             "detail": {},
@@ -135,6 +174,45 @@
             "scopedGuarantees": [],
             "transactionContext": "unknown",
             "type": "DB_MODIFY",
+            "viaPaths": [
+              [
+                {
+                  "anchor": {
+                    "column": 12,
+                    "file": "ws:src/D1MultiCaller.al",
+                    "line": 43,
+                    "sourceKind": "source"
+                  },
+                  "calleeDisplay": "ModifyHelper",
+                  "callsiteId": "c8d0efe535357e91/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/cs0",
+                  "edgeKind": "direct-call",
+                  "fromDisplay": "CallerC",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c",
+                  "kind": "call",
+                  "toDisplay": "ModifyHelper",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+                }
+              ]
+            ],
+            "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "f171f61e4181d3b4",
+            "guarantees": [],
+            "provenance": "transitive",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
             "viaPaths": [
               [
                 {
@@ -249,6 +327,45 @@
             "viaPathsTruncated": false
           },
           {
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "9ef38d0967e5d920",
+            "guarantees": [],
+            "provenance": "transitive",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              [
+                {
+                  "anchor": {
+                    "column": 12,
+                    "file": "ws:src/D1MultiCaller.al",
+                    "line": 27,
+                    "sourceKind": "source"
+                  },
+                  "calleeDisplay": "ModifyHelper",
+                  "callsiteId": "c8d0efe535357e91/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/cs0",
+                  "edgeKind": "direct-call",
+                  "fromDisplay": "CallerA",
+                  "fromRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c",
+                  "kind": "call",
+                  "toDisplay": "ModifyHelper",
+                  "toRoutineId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+                }
+              ]
+            ],
+            "viaPathsTruncated": false
+          },
+          {
             "conditionality": "unconditional-on-success",
             "confidence": "static",
             "detail": {},
@@ -321,6 +438,28 @@
               []
             ],
             "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "efece40aad07874a",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
           }
         ],
         "entryDiagnostics": [],
@@ -347,7 +486,7 @@
     "summary": {
       "rootsRequested": 4,
       "rootsResolved": 4,
-      "totalEffects": 7,
+      "totalEffects": 11,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"

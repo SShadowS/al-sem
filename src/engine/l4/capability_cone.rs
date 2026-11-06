@@ -1128,8 +1128,8 @@ pub(crate) fn direct_facts_for_routine(
     }
 
     // ── implicit runtime errors (G20) ───────────────────────────────────────
-    // A record lookup in statement position (its Boolean discarded) raises an
-    // error when no record matches; TestField and FieldError may always raise
+    // A record lookup or write in statement position (its Boolean discarded)
+    // raises an error when it fails (`implicit_error_record_op`); TestField and FieldError may always raise
     // one. Their own op, not `error-throw`: the ordering engine and the
     // detectors read `error-throw` as an explicit `Error`, and every unguarded
     // `Get` is not that. `prove … throws-error` counts both. No resource id (a
@@ -7505,7 +7505,7 @@ codeunit 50111 "Cell Calls"
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 221),
-        ("fixtures", 58),
+        ("fixtures", 59),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),
@@ -8451,12 +8451,15 @@ codeunit 50100 C
 
     /// T3b's source: M1 -> ... -> M8 -> M1; Mi calls `Wi(R)` on a local
     /// physical `Record Ti` and `Commit()`; `Wi` inserts into its parameter.
+    // `if R.Insert() then;`: the Boolean is consumed, so the write raises no
+    // implicit error (G20) and the set's one non-producer entry stays the
+    // commit.
     fn t3b_src() -> String {
         let mut s = String::from("codeunit 50100 C\n{\n");
         for i in 1..=8 {
             let next = i % 8 + 1;
             s += &format!(
-                "    procedure M{i}()\n    var\n        R: Record T{i};\n    begin\n        W{i}(R);\n        Commit();\n        M{next}();\n    end;\n\n    procedure W{i}(var R: Record T{i})\n    begin\n        R.Insert();\n    end;\n\n"
+                "    procedure M{i}()\n    var\n        R: Record T{i};\n    begin\n        W{i}(R);\n        Commit();\n        M{next}();\n    end;\n\n    procedure W{i}(var R: Record T{i})\n    begin\n        if R.Insert() then;\n    end;\n\n"
             );
         }
         s + "}\n"
@@ -9281,7 +9284,9 @@ mod cone_memory_step1_tests {
 
     /// The `scc_set_tests` T4 source: G's write is guarded by `Flag`; M (a
     /// singleton) takes it through G's frame-bound entry (`substitute_entry`),
-    /// the recursive {A, B} through G's cone with the guard dropped.
+    /// the recursive {A, B} through G's cone with the guard dropped. The
+    /// `Modify`'s Boolean is consumed, so it raises no implicit error (G20)
+    /// and G has the one fact the tests below count.
     const GUARD_SRC: &str = r#"
 codeunit 50100 C
 {
@@ -9302,7 +9307,7 @@ codeunit 50100 C
     procedure G(Flag: Boolean)
     begin
         if Flag then
-            Rec2.Modify();
+            if Rec2.Modify() then;
     end;
 
     procedure N()

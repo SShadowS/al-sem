@@ -1,6 +1,6 @@
 Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: none; UI and errors: none observed
+    transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     callers and tests: callers: 3, reached from 1 page action; tests: 1
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
@@ -21,6 +21,7 @@ Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
   temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond entry points; only temporary: 0 tables
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional-on-success)
   test Codeunit Out Tests::WriteLogInserts (0 own assert(s))
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

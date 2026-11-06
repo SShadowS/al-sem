@@ -72,38 +72,49 @@
             "type": "DB_MODIFY"
           },
           {
-            "conditionality": "unconditional-on-success",
+            "conditionality": "loop-body",
             "confidence": "static",
             "detail": {},
             "evidence": {
               "column": 8,
-              "excerpt": "Cust.FindSet",
+              "excerpt": "Cust.Modify",
               "file": "ws:src/D1MultiCaller.al",
-              "line": 33,
+              "line": 19,
               "sourceKind": "source"
             },
-            "factId": "12d2ab78786edf39",
+            "factId": "497413d19f4e63a8",
             "guarantees": [],
             "paths": [
               {
-                "hops": [],
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 35,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
-                  "line": 33,
-                  "operationId": "c8d0efe535357e91/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/op0"
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
                 }
               }
             ],
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
+            "provenance": "transitive",
             "status": "live",
             "transactionContext": "unknown",
             "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
+        "moreSites": {
+          "ERROR_IMPLICIT": {
+            "ws:src/D1MultiCaller.al": "33 unconditional-on-success"
+          }
+        },
         "routine": {
           "anchor": {
             "column": 4,
@@ -139,7 +150,7 @@
             "workspace": 0
           },
           "kinds": {
-            "errors": 1
+            "errors": 2
           },
           "literalDeadTables": 0,
           "mayWriteTables": {
@@ -222,38 +233,49 @@
             "type": "DB_MODIFY"
           },
           {
-            "conditionality": "unconditional-on-success",
+            "conditionality": "loop-body",
             "confidence": "static",
             "detail": {},
             "evidence": {
               "column": 8,
-              "excerpt": "Cust.FindSet",
+              "excerpt": "Cust.Modify",
               "file": "ws:src/D1MultiCaller.al",
-              "line": 41,
+              "line": 19,
               "sourceKind": "source"
             },
-            "factId": "3d70d5016ea6a707",
+            "factId": "f171f61e4181d3b4",
             "guarantees": [],
             "paths": [
               {
-                "hops": [],
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 43,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
-                  "line": 41,
-                  "operationId": "c8d0efe535357e91/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/op0"
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
                 }
               }
             ],
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
+            "provenance": "transitive",
             "status": "live",
             "transactionContext": "unknown",
             "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
+        "moreSites": {
+          "ERROR_IMPLICIT": {
+            "ws:src/D1MultiCaller.al": "41 unconditional-on-success"
+          }
+        },
         "routine": {
           "anchor": {
             "column": 4,
@@ -289,7 +311,7 @@
             "workspace": 0
           },
           "kinds": {
-            "errors": 1
+            "errors": 2
           },
           "literalDeadTables": 0,
           "mayWriteTables": {
@@ -372,38 +394,49 @@
             "type": "DB_MODIFY"
           },
           {
-            "conditionality": "unconditional-on-success",
+            "conditionality": "loop-body",
             "confidence": "static",
             "detail": {},
             "evidence": {
               "column": 8,
-              "excerpt": "Cust.FindSet",
+              "excerpt": "Cust.Modify",
               "file": "ws:src/D1MultiCaller.al",
-              "line": 25,
+              "line": 19,
               "sourceKind": "source"
             },
-            "factId": "d47b464bf3ed72e4",
+            "factId": "9ef38d0967e5d920",
             "guarantees": [],
             "paths": [
               {
-                "hops": [],
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 27,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
-                  "line": 25,
-                  "operationId": "c8d0efe535357e91/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0"
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
                 }
               }
             ],
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
+            "provenance": "transitive",
             "status": "live",
             "transactionContext": "unknown",
             "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
+        "moreSites": {
+          "ERROR_IMPLICIT": {
+            "ws:src/D1MultiCaller.al": "25 unconditional-on-success"
+          }
+        },
         "routine": {
           "anchor": {
             "column": 4,
@@ -439,7 +472,7 @@
             "workspace": 0
           },
           "kinds": {
-            "errors": 1
+            "errors": 2
           },
           "literalDeadTables": 0,
           "mayWriteTables": {
@@ -514,6 +547,37 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "efece40aad07874a",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -551,7 +615,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -606,7 +672,7 @@
     "summary": {
       "rootsRequested": 4,
       "rootsResolved": 4,
-      "totalEffects": 7,
+      "totalEffects": 11,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"

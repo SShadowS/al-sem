@@ -1,6 +1,7 @@
 //! Who writes a table field (intent-evidence spec §2, "writer"): the routines
-//! that write `T.F` in their own body, by assignment (`R.F := …`, including
-//! the compound `+=` forms), by `R.Validate(F, …)` or by `R.ModifyAll(F, …)`.
+//! that write `T.F` in their own body, by assignment (`R.F := …`, or a bare
+//! `F := …` through the implicit record, including the compound `+=` forms),
+//! by `R.Validate(F, …)` or by `R.ModifyAll(F, …)`.
 //! "`Modify` after assignment" is the assignment itself: the field write is
 //! the assignment's, and the `Modify` that stores it is a table write the
 //! digest effects already carry.
@@ -9,8 +10,12 @@
 //! the `substrate::RULES` writer index d65 reads (`l5::rules_index`) is built
 //! from the same function, so both answer "who writes this field" one way.
 //!
-//! Read from the model alone: each routine's `field_accesses` (the access kind
-//! of #14 says which are writes) and `record_operations`, with the record
+//! Read from the model alone: each routine's field accesses, qualified and
+//! bare ([`field_access_sites`](crate::program::model::workspace::ModelRoutine::field_access_sites),
+//! the one list `alsem query
+//! touches --field` reads too, so its `write` sites and this module's
+//! assignments are the same sites; the access kind of #14 says which are
+//! writes) and `record_operations`, with the record
 //! variable's resolved table (`record_variables[].table_id`, the operation's
 //! `table_id`). Stated limits:
 //!
@@ -22,9 +27,12 @@
 //!   A write whose record variable has no resolved table, or whose field name
 //!   is no field of that table (a `RecordRef` / `FieldRef` write, say), is not
 //!   a write of any listed field.
-//! - A bare field assignment in a table's own trigger (`Amount := 0;`, no
-//!   `Rec.`) is a write only when the body walk records it as a field access
-//!   of `Rec`.
+//! - A bare field assignment (`Amount := 0;`, no `Rec.`) is a write of the
+//!   implicit record the body walk names for it (`Rec` in a table, table
+//!   extension or page with a source table, the `with` receiver in a `with`
+//!   body), matched to that record's table by name like any other write. A
+//!   bare name the scope declares (a variable, a parameter) is no field access
+//!   (`ir_walk`'s `implicit_field_access`).
 //! - **`ModifyAll`'s field** is `ModelRecordOperation::modify_all_field`,
 //!   read at model assembly from the IR (intent-evidence step 6). The body
 //!   walk keeps a record operation's argument texts only for the operations
@@ -119,7 +127,7 @@ pub fn field_writes(model: &Model) -> Vec<FieldWrite<'_>> {
                 .find(|rv| field_key(&rv.name) == key)
                 .and_then(|rv| rv.table_id.as_deref())
         };
-        for fa in &r.field_accesses {
+        for (fa, _) in r.field_access_sites() {
             if !matches!(
                 fa.access,
                 FieldAccessKind::Write | FieldAccessKind::ReadWrite

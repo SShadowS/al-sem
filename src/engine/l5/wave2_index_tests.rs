@@ -359,7 +359,13 @@ fn a_shorter_workspace_route_hides_both_crossings_today() {
     let model = &base.resolved;
     let root = stable(model, "Ws W2", "TwoCalls");
     post_with_crossings(&tree, model, &root);
-    let effects = effects_of(&tree, model, &root);
+    // The table rows: the statement `L.Insert()`'s implicit error (G20) is a
+    // resource-less kind, which gets a group row per crossing whatever the
+    // literal argument (`literal_reach` judges a group by its crossing).
+    let effects: Vec<_> = effects_of(&tree, model, &root)
+        .into_iter()
+        .filter(|e| e.effect_type.starts_with("DB_"))
+        .collect();
     assert!(
         effects
             .iter()
@@ -398,9 +404,11 @@ fn a_crossings_group_rows_carry_its_record() {
         })
         .expect("precondition: one call passes true");
     let effects = effects_of(&tree, model, &root);
+    // The table group rows (the statement insert's resource-less
+    // `ERROR_IMPLICIT`, G20, has a group row at each crossing).
     let row_crossings: BTreeSet<String> = effects
         .iter()
-        .filter(|e| e.boundary_group)
+        .filter(|e| e.boundary_group && e.effect_type.starts_with("DB_"))
         .map(|e| {
             let c = e
                 .crossing

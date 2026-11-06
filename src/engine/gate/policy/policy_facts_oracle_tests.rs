@@ -26,6 +26,12 @@
 //! on the parent (004f0ee4) and after the change, all 454 cases have equal
 //! counts and an equal sha256 once every `<prefix>/<64 hex>` is reduced to its
 //! hash part; 448 raw sha256 values moved, the other 6 hold no internal id.
+//!
+//! Re-recorded (2026-11-06, G20 widened) with `REMINT_POLICY_FACTS_ORACLE=1`:
+//! a statement `Insert` / `Modify` / `Delete` / `Rename` / `Find` now also
+//! gives an `error-implicit` fact. 175 of 455 cases moved; checked against the
+//! old file, no case's `any` / `direct` / `inherited` / `routines` count went
+//! down (facts only added).
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

@@ -12,6 +12,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-000000lo0001:Codeunit:50101#3a212825f19ada075ee0affc78b05b7f6e92a64652962fa7848ff5ae8bfa3e3e/op2"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-000000lo0001:Codeunit:50101#3a212825f19ada075ee0affc78b05b7f6e92a64652962fa7848ff5ae8bfa3e3e/op1"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",

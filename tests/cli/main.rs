@@ -130,6 +130,7 @@ mod cli_escaped_object_names;
 mod cli_event_dispatch_first_hop;
 mod cli_events_policy_dependencies;
 mod cli_explain_differential;
+mod cli_field_writers;
 mod cli_fingerprint_inventory_format;
 mod cli_fingerprint_routine_cross_app;
 mod cli_full_snapshot_split;

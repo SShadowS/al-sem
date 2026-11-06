@@ -16,6 +16,15 @@
   "capabilityFacts": [
     {
       "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "direct",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#0ac57cca433b45d89b3195745a0f2d12bd7417cb1b40f77024fe0a690e8df386",
+      "via": "self",
+      "witnessOperationId": "d70e80577c7f9f60/dc8899623b9860560fcd092fd6394547db2af85a472af61bee4e1392a7bae751/op0"
+    },
+    {
+      "confidence": "static",
       "extra": {
         "kind": "table",
         "opSubtype": "Insert",
@@ -32,6 +41,15 @@
       "subject": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#0ac57cca433b45d89b3195745a0f2d12bd7417cb1b40f77024fe0a690e8df386",
       "via": "self",
       "witnessOperationId": "d70e80577c7f9f60/dc8899623b9860560fcd092fd6394547db2af85a472af61bee4e1392a7bae751/op0"
+    },
+    {
+      "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "direct",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee",
+      "via": "self",
+      "witnessOperationId": "d70e80577c7f9f60/3383fcd0226f3f39cdf1915dad3d346462426382329ee4440a43443e8e289a01/op1"
     },
     {
       "confidence": "static",
@@ -70,6 +88,24 @@
       "subject": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee",
       "via": "self",
       "witnessOperationId": "d70e80577c7f9f60/3383fcd0226f3f39cdf1915dad3d346462426382329ee4440a43443e8e289a01/op0"
+    },
+    {
+      "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "direct",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e",
+      "via": "self",
+      "witnessOperationId": "d70e80577c7f9f60/a4b8bfdd549d070d0d8d0e171859b89014bd838bf6ddc061026ba4cd30ce03dc/op0"
+    },
+    {
+      "confidence": "static",
+      "op": "error-implicit",
+      "provenance": "direct",
+      "resourceKind": "error",
+      "subject": "11111111-0000-0000-0000-00000000e130:Codeunit:50301#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e",
+      "via": "self",
+      "witnessOperationId": "d70e80577c7f9f60/a4b8bfdd549d070d0d8d0e171859b89014bd838bf6ddc061026ba4cd30ce03dc/op1"
     },
     {
       "confidence": "static",

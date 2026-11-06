@@ -180,6 +180,9 @@ fn b3_added_and_removed_keys() {
         own(post),
         pairs(&[
             ("removed", "commit"),
+            // The statement `One.Insert();` is a second implicit error site
+            // beside `One.Modify();` (G20): the error count moves.
+            ("count", "error implicit"),
             ("added", "write FX One Insert (physical)"),
         ])
     );

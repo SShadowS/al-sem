@@ -1,6 +1,6 @@
 Codeunit Calls Post::QuickPost  ws:src/post.al:18
   summary — writes: no observed write that may persist; caller-dependent: 1 table
-    transaction, UI and errors: commits: none; errors at 2 places
+    transaction, UI and errors: commits: none; errors at 3 places
     other effects: events: 0 (0 raised in workspace code)
     callers and tests: callers: none; tests: none (no test code loaded)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
@@ -18,7 +18,7 @@ Codeunit Calls Post::QuickPost  ws:src/post.al:18
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:25
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
-  errors at 2 places: ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:25 (unconditional-on-success); ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   gaps in workspace code (3 gaps):
     gap: error-collector (callee Codeunit Error Message Management::LogSimpleError, routine Codeunit Calls Checks::LogIfBlocked) at ws:src/checks.al:53

@@ -231,6 +231,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "e637661c663a98da/9f26ddadb032f668bcd5e04accffc557d0c1e6b2bac3694d41c948246ace0e0b/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "e637661c663a98da/9f26ddadb032f668bcd5e04accffc557d0c1e6b2bac3694d41c948246ace0e0b/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -394,6 +402,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "e637661c663a98da/d8b54958b60e27b35685ca98b86a1ecf51782fe726a16f7c875d7dfe61d7b19e/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "e637661c663a98da/d8b54958b60e27b35685ca98b86a1ecf51782fe726a16f7c875d7dfe61d7b19e/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -706,6 +722,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "e637661c663a98da/888909c28a715282be9199de64baff3a4038230c9badc39b8b6905a9840e5929/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "e637661c663a98da/888909c28a715282be9199de64baff3a4038230c9badc39b8b6905a9840e5929/op1"
         }
       ],
       "capabilityStatus": "complete",
