@@ -226,7 +226,7 @@ is regeneration, not rework.
 | V6 | **Counting units and per-tool items** | F53, F54, F59, F60, F62, F64–F67, F72, F73, F80, F82 | M | V0 |
 
 Order: V1 first (small, and two of its bugs feed V2 text). V0 is a one-page owner decision,
-signed off here before V2 starts: **V0 approved: (date, owner) — open.** V2 and V3 next, in
+signed off here before V2 starts: **V0 approved: 2026-11-06, owner, as written.** V2 and V3 next, in
 either order. V4 after V2 and V3; V6 after V0. V5 last: three schema majors with consumer
 notices, and nothing in it misleads.
 
