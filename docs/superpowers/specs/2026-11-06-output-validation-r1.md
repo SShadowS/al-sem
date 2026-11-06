@@ -1,11 +1,11 @@
 # Output validation, round 1: what the MCP answers should look like (design spec)
 
-**Status:** design only, revision 3 (after two review rounds by Fable and astra; both accepted
-revision 2 "with changes"). No code lands with this file.
+**Status:** design only, revision 4 (after three review rounds by Fable and astra; both accepted
+revision 3 "with changes", targeted corrections only). No code lands with this file.
 **Date:** 2026-11-06. **Based on:** master `6e577c24`, binary al-sem 2.1.1.
 **Reviews:** of revision 1, `target/tmp/output-validation/round1/review/spec-review-{fable,astra}.md`;
-of revision 2, `…/spec-r2-review-{fable,astra}.md`. What each item changed: "Revision 3" and
-"Revision 2" below.
+of revision 2, `…/spec-r2-review-{fable,astra}.md`; of revision 3, `…/spec-r3-review-{fable,astra}.md`.
+What each item changed: "Revision 4", "Revision 3" and "Revision 2" below.
 **Numbers in sketches:** taken from the round-1 calls (named where used) or marked
 illustrative when they cannot be computed before the fix branches land. Round-2 numeric
 expectations are derived after those branches merge (§12.2), not from this file.
@@ -41,6 +41,29 @@ Words used here:
 **The contract that does not move:** the MCP answer stays the CLI's stdout byte for byte. Every
 change below is a change to the CLI output, or to the envelope, made on purpose with its goldens
 regenerated and read.
+
+---
+
+## Revision 4: what each review item changed
+
+Both reviewers accepted revision 3 with targeted corrections. Every item is applied; none is
+declined.
+
+| Item | Change made |
+|---|---|
+| Fable A, astra (§3.2 entry counts) | the kind line now covers all nine recorded c12 buckets (sum 19,433), mapped to the new kinds — codeunit OnRun 464 + 21 background starts = 485 before deduplication, install triggers 3, upgrade triggers 45 (inflated, as §3.1 notes). Because the legacy buckets overlap (the same `OnAction` is under page actions and page triggers, astra), 19,433 is stated as a sum of buckets, and the disjoint per-kind counts and their total `<e>` are symbolic until classification; `k1 + … + k8 = e`, `a + b = e` |
+| astra (relation totals) | §3.2: an entry with both a code and a navigation witness counts once, under `code` |
+| astra, Fable B (code-callers line) | §3.2: `reached by code callers: no — no code caller found in the analyzed graph (every candidate decided)`, an absence verdict from analysis, not a claim from the routine kind |
+| Fable B (negative-certainty scope) | §8.1: the row governs absence verdicts only; zero counts and empty lists (`established witnesses: none`, `limits: none`, `calls: none`) keep plain words |
+| astra (F61 JSON during V2) | §5.2, §0.1: F61 lands whole in V2 for query effects — the human clause and the JSON `result.scope.families` (additive, query 3.6.0); the shared `result.scope` for the other tools stays V4 |
+| astra (§11.2 row 1; §8.2) | row 1 now says only the round-trip-tested display forms are pasteable (caption or not) and `selector` is the one guaranteed form; §8.2's c05 line is `writes beyond dependency calls: no (every candidate decided; …)` |
+| Fable i | §3.2: the fold line names its trigger and measure (`<p>%` of entries, or a hub covering `<q>%` of graph nodes) |
+| Fable ii | §6.1: one label, `re-analysis under an assumption:`, which carries the complete `{tool, arguments}` call at `--surface=mcp`; `conditional alternative:` removed |
+| Fable iii | §8.1 context row: an `install trigger` always runs in context `install` (and upgrade likewise), so those counts coincide and are not extra entries |
+| Fable iv | test status uses `analysis partial`, the completeness row's word (§8.1, §5.2) |
+| Fable v | §11.2 row 1 (above); §4.7's Verify line says `confirmed writers: 1` |
+| Fable vi | §4.2: `references that may write, not confirmed (kinds: …): none observed (search below)` |
+| Fable vii | §9.3 field mode: `none observed (searched: …; not searched: …)` from the shared helper |
 
 ---
 
@@ -196,9 +219,9 @@ is regeneration, not rework.
 |---|---|---|---|---|
 | V0 | **Word table** (decision only): §8.1 and the migration rule §8.3, approved and dated before any renderer uses them | F49, F51, F52 | — | — |
 | V1 | **Correctness bugs** | F5, F9, F15, F16, F24, F25, F39 | S, 7 small commits | — |
-| V2 | **What misleads**: verdict and tier wording, silent lines, the evidence a hazard needs | F10, F12, F13, F14, F17, F18, F19, F20, F21, F22, F23, F27, F29, F42 (`tableAnswers` only), F48, F50, F55, F56, F57, F61 (human scope clause; the JSON object is V4), F63, F74, F75, F79 | L | V0; the fix-branch gates of §12.2 |
+| V2 | **What misleads**: verdict and tier wording, silent lines, the evidence a hazard needs | F10, F12, F13, F14, F17, F18, F19, F20, F21, F22, F23, F27, F29, F42 (`tableAnswers` only), F48, F50, F55, F56, F57, F61 (query effects: human scope clause and JSON `families`), F63, F74, F75, F79 | L | V0; the fix-branch gates of §12.2 |
 | V3 | **Identities** and the selector grammar | F1–F4, F6–F8 | M | — |
-| V4 | **Result header, summaries, follow-ups** | F28, F30–F37, F42 (the rest, incl. the result index), F43, F61 (JSON `families`), F76, F77, F78, F81, F85 | M | V0, V2, V3 |
+| V4 | **Result header, summaries, follow-ups** | F28, F30–F37, F42 (the rest, incl. the result index), F43, F76 (incl. `result.scope` for the other tools), F77, F78, F81, F85 | M | V0, V2, V3 |
 | V5 | **Size and dedup** (three schema majors: query 4.0.0, digest 4.0.0, tests 2) | F38, F40, F41, F44–F47, F83, F84 | L | V3 (rows refer to routine ids), V4 (the `result` contract) |
 | V6 | **Counting units and per-tool items** | F53, F54, F59, F60, F62, F64–F67, F72, F73, F80, F82 | M | V0 |
 
@@ -377,20 +400,33 @@ contexts may overlap. The JSON already carries the tier per witness; it gains
 `reached from: 6,043 page actions (first: Page 21 …), 10,094 page triggers …, 27,718 ancestors`.
 **New:**
 ```
-  reached by code callers: none (a page action trigger has no code caller)
+  reached by code callers: no — no code caller found in the analyzed graph (every candidate decided)
   reached beyond it: 27,718 ancestors — by tier: local 0, via-dependency 23,230, via-hub 4,488
-    entries among them, by kind: page actions 6,043, page triggers 10,094, table triggers 1,454,
-      event subscribers 775, report triggers 534, codeunit OnRun 464
-    by context (contexts may overlap; not summed): background session or task 21, install 3, upgrade 45
-    by relation: code <a>, UI navigation <b> (a + b = 19,364, the entries above)
-    broad navigation reach; list folded — detail: true lists one representative per kind and tier
+    entries among them: <e> distinct, by kind: page actions <k1>, page triggers <k2>, table triggers <k3>,
+      event subscribers <k4>, report triggers <k5>, codeunit OnRun <k6>, install triggers <k7>, upgrade triggers <k8>
+    by context (contexts may overlap; not summed): background session or task <c1>, install <k7>, upgrade <k8>
+    by relation (each entry once): code <a>, UI navigation <b> (a + b = e)
+    broad navigation reach (<p>% of the program's entries; list folded) — detail: true lists one representative per kind and tier
     hubs on these paths: [hub Page.Run of a variable at dep:Base Application:<Page 6302's file>:<line>], … (detail: true lists them)
 ```
-Every number except `<a>` and `<b>` is c12's as recorded (`factcheck/c12-impact.json`: ancestors
-by tier, entries by kind). The relation split cannot be computed before the relation axis
-exists, so it stays symbolic. The numbers are pre-fix: they include the false `declaredRunnable`
-edges `fix/reach-and-test-selection` removes. Round-2 expectations come from the post-fix run
-(§12.2).
+The ancestor line is c12's as recorded (`factcheck/c12-impact.json`, `up.ancestors`). The entry
+counts are not: c12 recorded nine **legacy** buckets — page-action 6,043, trigger-page 10,094,
+trigger-table 1,454, event-subscriber 775, report-trigger 534, onrun-codeunit 464,
+background-start 21, install-codeunit 3, upgrade-codeunit 45, which add up to 19,433 — and they
+overlap (astra: the same `OnAction` is counted under page actions and under page triggers), so
+19,433 is a sum of buckets, not a count of distinct entries. Mapped to the new kinds, they become
+page actions, page triggers, table triggers, event subscribers, report triggers, codeunit OnRun
+(the 464 plus the 21 background starts, which are `OnRun` entries: 485 before deduplication),
+install triggers (3) and upgrade triggers (45, inflated by the helper-as-entry bug on
+`fix/explain-callers-counts`, as §3.1 notes for c02). The disjoint counts `<k1>`–`<k8>` and their
+total `<e>` are computed after classification, so they stay symbolic; `k1 + … + k8 = e`. Contexts
+come from the same classification (`<c1>` the background starts). The relation split needs the
+relation axis, so it stays symbolic too; **an entry with both a code witness and a navigation
+witness counts once, under `code`** (the stronger relation, as tests rank code first), so
+`a + b = e`. `<p>` is the reach share of §3.2's first folding trigger; when the hub fan-out
+trigger fired instead, the line reads `broad reach over a hub ([hub …] covers <q>% of graph
+nodes; list folded)`. All numbers are pre-fix: they include the false `declaredRunnable` edges
+`fix/reach-and-test-selection` removes. Round-2 expectations come from the post-fix run (§12.2).
 
 Rules:
 - **Labels never depend on size** (astra). Every reach is split by relation (`code`, `UI
@@ -408,8 +444,9 @@ Rules:
      nodes (cone nodes / graph nodes, the measure `test_select` already computes as
      `overHalfOfGraph`). A hub with a huge forward cone makes any reach through it broad, whatever
      the reach share.
-- **Folding is presentation only.** Its words are `broad navigation reach; list folded` (or
-  `broad reach over a hub; list folded`); it never says "not specific" or otherwise changes what a
+- **Folding is presentation only.** Its words name the trigger that fired and its measure:
+  `broad navigation reach (<p>% of the program's entries; list folded)` or `broad reach over a hub
+  ([hub …] covers <q>% of graph nodes; list folded)` (Fable i); it never says "not specific" or otherwise changes what a
   reach means (astra: a widely used routine can truly reach most of the program).
 - **The hub is named** on the line, in the §8.1 form with its kind from the closed list: it is what
   an agent would fix or ignore.
@@ -488,7 +525,7 @@ unchanged.
 field: CDO Setup."Document Folder" (field 60, caption "Document Folder", defined at CDOSetup.Table.al:89)
   confirmed writers: 1
     Table "CDO Setup"."Document Folder"::OnValidate — assignment at CDOSetup.Table.al:97 (changes the record in memory; persisted by whoever modifies Rec)
-  references that may write, not confirmed: none observed (RecordRef.Field by number, TransferFields copies)
+  references that may write, not confirmed (kinds: RecordRef.Field by number, TransferFields copies): none observed (search below)
   writer kinds searched: assignment, Validate, ModifyAll
   searched: 5,479 workspace routine bodies and the dependency bodies loaded; not searched: page and report columns, CalcFormula, TableRelation; dynamic field numbers: 183 sites not matched
   reads, filters and validations: alsem_query_touches with table and field
@@ -602,7 +639,7 @@ human header, `impact/render.rs`.
 `cli-b-goldens` (prove), `cli-explain-goldens`, `cli-query-goldens`, `cli-output-goldens` incl.
 `cdo/`, impact and tests goldens. **Consumers:** ConTinAI `verify.py` reads `result.answer`,
 `evidence`, `blockedBy`, `assumptions` — unchanged. **Verify (round 2):** c01 and c23 lead with
-the conditional write; c10 prints "1 writer observed" with its search; c27 lists the 2 TestField
+the conditional write; c10 prints `confirmed writers: 1` with its search; c27 lists the 2 TestField
 sites and the Get, and its summary carries the filter; c02, c19 and c29 name their assumption
 inputs with what each removes and print `not established:`; c24's headline says "size and
 modification time"; c30 says "transitively" and shows sites; c20's first line says no
@@ -672,10 +709,12 @@ structured object, not a sentence (astra):
 `notExhaustive`. Tests and impact add `selection` (`complete`, the cap asked, returned, total,
 fallback).
 
-**F61 interim contract** (until V4's JSON lands): V2 prints the same facts in the human answer's
-scope clause for query effects (`reads, locks: one dependency routine deep, not exhaustive
-beyond; writes beyond dependency calls: whole cone`), so the misleading part — an operation list
-that reads as exhaustive — is fixed with the V2 wording it qualifies (astra).
+**F61 lands whole in V2 for query effects** (astra: c08 asked for JSON, so a human-only interim
+would leave the call that raised it unfixed). V2 adds, for query effects only, both the human
+scope clause (`reads, locks: one dependency routine deep, not exhaustive beyond; writes beyond
+dependency calls: whole cone`) and the JSON `payload.result.scope.families` object above
+(additive, query 3.6.0). The shared `result.scope` block for the other tools stays in V4, where
+the rest of the header contract lands.
 
 **Envelope `summary`** (≤ 8 KiB, as today) gains, per tool: explain — each card's header and
 summary line; prove — answer, filter, established/candidate counts, the assumption inputs and
@@ -687,8 +726,8 @@ row would erase the differences the agent asked about). Facts shared by several 
 factored into one `shared` block that the rows reference, so the rows stay small. Each row has
 `tableAnswers` for every `writesTables` entry (`{table: {id, name}, answer, blockers,
 firstBlocker}`) and its test status in the §8.1 words — `tests with a modeled path` (with the
-nearest test), `no modeled path`, `analysis incomplete`, `not in projection`, `not loaded`, `not
-requested` — never collapsing one into another (astra: `analysis incomplete` and `not in
+nearest test), `no modeled path`, `analysis partial`, `not in projection`, `not loaded`, `not
+requested` — never collapsing one into another (astra: `analysis partial` and `not in
 projection` are not "no path"); the test scope and fallback print once. query effects summary (F43) gains `writes.byTable` (top
 10 with op counts, the total table count, a truncation flag, and caller-dependent and
 unresolved-table counts apart).
@@ -765,8 +804,10 @@ selector, the question or filter and the scope inputs already filled, printed as
 `alsem_prove {"routine": "<selector>", "question": "writes-table:CDO File"}` and carried in JSON
 as `followUps: [{tool, arguments, why}]`. A follow-up keeps the assumptions of the call it came
 from (astra). A call that changes one (`closedWorld`, `assumeNoDependents`) is never an ordinary
-follow-up: it prints as `conditional alternative: alsem_prove {…, "closedWorld": true} — only if
-<the assumption holds>`, with `kind: "conditional"` in JSON. An in-place input change prints as
+follow-up: it is §4.4's `re-analysis under an assumption:` line, the one label for it, which at
+`--surface=mcp` carries the complete call — `re-analysis under an assumption: alsem_prove {…,
+"closedWorld": true} — only if <the assumption holds>; removes …` — with `kind: "conditional"`
+in JSON (Fable ii: revision 3 had two labels for one line). An in-place input change prints as
 the input (`all: true`, `tier: "dependency"`). The no-engine status (c14) names an analysis call
 that builds the engine (`alsem_explain {"routines": […], "singleApp": true}`), not "any tool"
 (a second status call builds nothing). A command with no MCP tool (`alsem diff`) is named as
@@ -926,16 +967,16 @@ path or a fact carries one value per axis (astra: tier alone cannot say "code or
 | **projection** | `approximate` flag beside the tier | replaces `localApproximate`, which must not silently become `local` (astra): the test universe's source projection qualifies the path |
 | **hub kinds** (closed list, printed `[hub <kind> <name>? at <file>:<line>]`, the variable or receiver name optional after the kind) | `Codeunit.Run of a variable`, `Page.Run of a variable`, `Report.Run of a variable`, `background start of a variable`, `record trigger (<operation>)`, `interface dispatch (open world)` | replaces `h:run:codeunit`, `h:record:modify`, `HUB:run:report`. A hub is an **unresolved** dispatch. Known targets print as a list, not as a hub; when known targets and an unresolved remainder coexist (an interface with loaded implementations under open world), both print: `interface dispatch (open world): 2 known implementations (…) + [hub interface dispatch (open world) at …]` (astra). Configured dispatch is a tier, not a hub kind. A page variable declared and never run is **not** a hub: it is the false `declaredRunnable` edge `fix/reach-and-test-selection` removes (astra), and no output names it as a route. The implementing commit checks the list against `impact_graph` hub classes (`any`/`name`/`run`/`record`/`callbacks`) and adds any it misses |
 | **entry kinds** (what routine starts a run; closed list; an entry has exactly one) | `page action`, `page trigger`, `report trigger` (request page, data-item triggers), `codeunit OnRun`, `table trigger`, `event subscriber`, `install trigger`, `upgrade trigger`, `test procedure`, `public procedure` (callable by other apps) | replaces `page-action`, `trigger-page`, `page-event`, `page triggers`, `trigger-table`, `report-trigger`, `onrun-codeunit`, `install-codeunit`, `upgrade-codeunit`. Kinds are disjoint: counts by kind sum to the entry total. Only the trigger routines of an install or upgrade codeunit are `install trigger` / `upgrade trigger`, not its helpers (fact check c02 #7, on `fix/explain-callers-counts`) |
-| **execution context** (how the run was started; closed list; printed `[context: …]` after the kind) | `UI session`, `background session or task` (with `(job queue)` when started by the Job Queue Dispatcher or a `roots.config.json` job-queue entry), `API page`, `web service`, `install`, `upgrade`, `test run`, `context not established` | new axis (Fable 3, astra): replaces `background-start` and the context words revision 2 mixed into the entry list. An entry can have several contexts, so counts by context **overlap and are never summed**; a line of context counts says so. Example: `codeunit OnRun [context: background session or task (job queue)]` |
+| **execution context** (how the run was started; closed list; printed `[context: …]` after the kind) | `UI session`, `background session or task` (with `(job queue)` when started by the Job Queue Dispatcher or a `roots.config.json` job-queue entry), `API page`, `web service`, `install`, `upgrade`, `test run`, `context not established` | new axis (Fable 3, astra): replaces `background-start` and the context words revision 2 mixed into the entry list. An entry can have several contexts, so counts by context **overlap and are never summed**; a line of context counts says so. An `install trigger` entry always runs in context `install` and an `upgrade trigger` entry in context `upgrade`, so those context counts equal the kind counts and are not extra entries (Fable iii). Example: `codeunit OnRun [context: background session or task (job queue)]` |
 | **blocker kinds** (why an answer is `unknown`; closed list) | callers' context: `external callers`, `hidden callers`, `over a hub`, `order not resolved`, `publication data not loaded`, `publication file not read`, `guard not recognized`, `background target not resolved`, `effects incomplete`, `TryFunction caller`, `limit`; existing-effects questions: `call not resolved`, `interface dispatch (open world)`, `conditional effect exists`, `analysis gap`, `cone truncated`, `witness truncated`, `coverage incomplete` | replaces the kebab-case keys in human text (`external-callers`, `only-open`, `order-unknown`, `publication-unknown`, `unread-publication-file`, `unrecognized-guard`, `unresolved-background-target`, `effects-incomplete`, `tryfunction-caller`, `unresolved-callsite`, `open-world-dispatch`, `non-unconditional-effect-exists`, …). JSON keeps its keys (§8.3). Taken from `callers_context.rs` (`block(` calls) and `prove.rs`; the implementing commit adds any kind it finds missing |
 | **dependency boundary** | `dependency call` (the crossing), `dependency routine entered` (the target) | replaces "entry point" in explain/digest/query. "entry" alone always means an execution entry (Fable) |
 | **verdict** | `yes` / `no` / `unknown`, wherever a verdict exists: prove, digest `tableAnswers`, touches `down`, explain's `writesTables` | astra: "prove only" contradicted the spec's own `tableAnswers` |
-| **negative certainty** (Fable) | `no (every candidate decided)` — proven absent under the stated assumptions (a complete analysis); `none observed (searched: …; not searched: …)` — nothing found by a partial analysis or an index search, with its search; `unknown (blocked by: …)` | `0 writer(s)`, `no observed write`, `no indexed consumer observed`, wave-2 §3.7's `no observed …` and `none` all map to one of these three; card summaries use them too (no exemption) |
+| **negative certainty** (Fable) | `no (every candidate decided)` — proven absent under the stated assumptions (a complete analysis); `none observed (searched: …; not searched: …)` — nothing found by a partial analysis or an index search, with its search; `unknown (blocked by: …)` | governs an **absence verdict** — the answer to something an analysis searched for (writes, commits, writers, callers, consumers, sites), in card summaries too. It does not govern a zero **count** or an empty **list** (`established witnesses: none`, `limits: none`, `calls: none`, `own state changes: … no record operation`), which keep their plain words (Fable B). `0 writer(s)`, `no observed write`, `no indexed consumer observed` and wave-2 §3.7's `no observed …` (and its `none` when it answered a search) map to one of the three |
 | **target resolution** | `table: <name>` / `table: not resolved (<receiver kind>: <reason>)` | replaces `isUnknownBucket`, `unknown` as a table, "decided at run time". A RecordRef does not prove the table varies at run time (astra: some RecordRefs resolve statically), so the reason says what failed, e.g. `RecordRef opened from a variable` |
 | **temp state** | `temporary` / `not temporary` / `caller-dependent (parameter 3, <name>)` / `not resolved` | replaces `known(true)`, `known(false)`, `parameter-dependent(i)`, `temp state unknown`; independent of access kind and reachability |
 | **condition** of an effect | `unconditional on success`, `in a loop`, `conditional`, `condition not resolved` | replaces the bare `(unknown)` after an error site (c05) |
 | **completeness** | always with a subject: `analysis complete` / `analysis partial (<reasons>)` / `not analyzed (<reason>)`, `selection complete|incomplete`, `freshness check complete`; and the non-results `not analyzed`, `not requested`, `not loaded`, `not applicable`, which are not synonyms for partial or empty (astra) | replaces bare `complete`, `coverage: complete`, `testCoverage` status words |
-| **test status** of a routine | `tests with a modeled path` (static; changed-line execution is not established), `no modeled path`, `analysis incomplete`, `not in projection`, `not loaded`, `not requested` | replaces `reached`, `no-known-path`, `analysis-incomplete`, `not-in-projection`, `not-loaded`, and "coverage" for static reach |
+| **test status** of a routine | `tests with a modeled path` (static; changed-line execution is not established), `no modeled path`, `analysis partial` (the completeness row's word), `not in projection`, `not loaded`, `not requested` | replaces `reached`, `no-known-path`, `analysis-incomplete`, `not-in-projection`, `not-loaded`, and "coverage" for static reach |
 
 Fable's proposal to pair `not resolved` with `run-time` on every axis is adopted for `not
 resolved` and declined for `run-time` **for table, temp-state and condition targets**: for those
@@ -948,7 +989,9 @@ reported (Fable).
 ### 8.2 Count units (F53, F54)
 
 Every count names its unit and, where two counts could be compared, how they relate: c05
-`writes beyond dependency calls: none (1 dependency call writes only temporary records)`; c15
+`writes beyond dependency calls: no (every candidate decided; 1 dependency call writes only
+temporary records, which does not directly persist them)` — an absence verdict, so the §8.1
+negative-certainty words; c15
 `commits: 1 site (2 more under literal arguments that cannot run)`; c08 summary `671 operations on
 81 tables one routine deep; whole cone beyond 14 dependency calls: 397 tables (writes only)`;
 c29 `uncaught at: page actions 30, page triggers 42 (distinct entries; an entry is counted
@@ -1043,8 +1086,8 @@ joined with the table's declared keys — field mode already reads them (`field_
 **Field mode** (F60, F74, astra; V2 — it qualifies the c22 answer F17's wording relies on):
 confirmed named references (`read`, `write`, `validate`, `filter`, …) and numeric candidates
 (`RecordRef.Field(8)` on an unresolved table) print as two inventories, with the note that a numeric reference does not break on a rename (it may on a
-renumbering). `filters:` always prints, with `none observed within the searched bodies` when
-empty. The verdict says `not a complete rename inventory: page and report columns, CalcFormula
+renumbering). `filters:` always prints, with `none observed (searched: …; not searched: …)`
+from the shared helper §4.2 names when empty (Fable vii). The verdict says `not a complete rename inventory: page and report columns, CalcFormula
 and TableRelation are not searched (the compiler finds them); keys holding the field are listed
 above`. Revision 1 wrongly said keys are not searched: the table's declared keys are read.
 Searching the other declaration-level consumers is [engine] (§10).
@@ -1142,7 +1185,7 @@ Kept apart, per the rubric. None blocks a milestone above.
 
 | # | Topic | Fable | astra | Decision and reason |
 |---|---|---|---|---|
-| 1 | Display vs selector | make the display a selector (extend the grammar with member forms), or print the stable id | keep `display` and a guaranteed `selector` apart; round-trip tests; captions off the hops | **Both, combined** (§2.1): extend the grammar (Fable's preferred option) so the human display is pasteable except for its caption, and emit `selector` in JSON with a round-trip test (astra). The two are compatible; neither reviewer's reason argues against the other's mechanism |
+| 1 | Display vs selector | make the display a selector (extend the grammar with member forms), or print the stable id | keep `display` and a guaranteed `selector` apart; round-trip tests; captions off the hops | **Both, combined** (§2.1): extend the grammar (Fable's preferred option) so human displays of the round-trip-tested forms are pasteable, caption or not (§2.1 lists them; other displays are not promised), and emit `selector` in JSON, the one guaranteed form, with a round-trip test (astra). The two are compatible; neither reviewer's reason argues against the other's mechanism |
 | 2 | Naming an assumption input on `unknown` | `would narrow it:` (removes some blockers) and `would decide it:` (removes all) | no "would decide it": an assumption is not evidence; "conditional re-analysis" | **astra's label, Fable's content** (§4.4): `re-analysis under an assumption:` with what it removes and what stays, and `removes every blocker of this answer` when true. "Decide" is dropped because the re-run's answer is not computed here and could still be unknown or yes; Fable's need — tell narrowing from full removal — is met by the removes/stays clause |
 | 3 | F21 ("does not establish …") | agrees with revision 1's rejection (the owner rule) | reverse it: "transaction preservation is not established" uses no banned word | **astra** (§4.4): the owner rule bans the words "safe"/"unsafe", not a statement of what an answer does not show, and Fable's agreement was with keeping the banned word out, which still holds. `not established:` lines in the question's terms. Owner may overrule if the rule was meant more widely; flagged in the report |
 | 4 | Overload signatures | also on list rows, not only path hops | on every occurrence of an overloaded name | **astra's rule** (§2.1), which includes Fable's: every occurrence, short names when not overloaded |
