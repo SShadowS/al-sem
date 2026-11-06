@@ -31,8 +31,14 @@
       "byNumberNotLiteral": 0,
       "candidates": 0,
       "candidatesByReason": {},
+      "confirmed": {
+        "sites": 1
+      },
       "declaredKeys": 1,
       "fieldIndexSites": 0,
+      "numericCandidates": {
+        "sites": 0
+      },
       "objects": 1,
       "readWriteSites": 0,
       "routines": 1,
@@ -77,6 +83,9 @@
         ]
       }
     ],
+    "filters": {
+      "sites": 0
+    },
     "from": {
       "resolution": "resolved",
       "routine": {
@@ -138,7 +147,7 @@
           "what": "no dependency code is loaded (single-app, or no dependency)"
         }
       ],
-      "scope": "its callers by the reverse walk (4 routines with a body: local 4, through dependency code 0, only through an open site 0; 0 more without a body in the model)",
+      "scope": "its callers by the reverse walk (4 routines with a body, by tier: local 4, via-dependency 0, via-hub 0; 0 more without a body in the model)",
       "workspaceRoutineBodies": 4
     },
     "table": {
@@ -149,5 +158,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

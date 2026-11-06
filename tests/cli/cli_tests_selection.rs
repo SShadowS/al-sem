@@ -292,7 +292,7 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
     assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
     assert_eq!(v["hidden"][0]["class"], "platform-table-event");
     let (human, _) = tests(&ws, &["--routine", "TU Core::Logged"]);
-    assert!(human.find("selection complete: no").unwrap() < human.find("this is static").unwrap());
+    assert!(human.find("selection incomplete").unwrap() < human.find("this is static").unwrap());
     let v = json(&ws, &["--routine", "TU Core::Untested"]);
     assert_eq!(v["changed"][0]["status"], "no-known-path");
     assert_eq!(v["selectionComplete"], true, "{v:#}");
@@ -313,7 +313,7 @@ fn no_test_scope_says_no_test_was_considered() {
     assert!(human.contains("test scope: none — "), "{human}");
     assert!(human.contains("This does not mean no tests are needed."));
     assert!(!human.contains("none reach"));
-    assert!(human.contains("selection complete: no"));
+    assert!(human.contains("selection incomplete"));
     golden("universe.noscope.human.txt", &human, Some(t.path()));
 }
 
@@ -506,7 +506,7 @@ pub(crate) fn cdo_selection_ratchets() {
     assert_eq!(code, 0, "{human}");
     assert!(
         human.lines().any(|l| l
-            == "through dependency code: 377 tests — effectively the suite's posting tests, not specific to this change"),
+            == "[via-dependency] 377 tests — effectively the suite's posting tests, not specific to this change"),
         "{human}"
     );
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);

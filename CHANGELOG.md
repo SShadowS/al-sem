@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (what misleads: tiers, verdict words and the evidence a hazard needs, output validation V2)
+
+Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md`
+§3, §4, the V2 parts of §5 and §9, the word table §8.1 approved by the owner on
+2026-11-06) found answers where a possibility read as a fact, a conditional write read as
+"no", and a filtered "no" hid what did match. Now:
+
+- **One word table** (`src/engine/vocab.rs`): tiers `local` / `via-dependency` /
+  `via-configuration` / `via-hub`, printed `[tier]` at the start of a witness; the closed
+  lists of entry kinds, execution contexts, blocker kinds and hub kinds (`[hub
+  Codeunit.Run of a variable at …]`, never `h:run:codeunit`); "dependency call" and
+  "dependency routine entered" for the dependency boundary (never "entry point");
+  `analysis complete` / `analysis partial (…)` for completeness; the test-status words;
+  and the negative-certainty words `no (every candidate decided)` / `none observed
+  (searched: …; not searched: …)` / `unknown (blocked by: …)` for every absence verdict.
+  `tests/cli/output_vocabulary.rs` fails when any fixture answer prints a replaced word.
+- **prove, callers' context** (F10, F19–F21, F79): only hub-mediated witnesses print
+  `established witnesses: none` and `candidates over a hub: N` (by context, which may
+  overlap), the answer line names the hub sites on the candidate paths, each witness line
+  starts with its tier. An `unknown` prints `plain reading:`, `not established:` (in the
+  question's terms) and `re-analysis under an assumption: assumeNoDependents: true` with
+  what it removes and what stays (`removes every blocker of this answer` only when it
+  does); `detail: true` on `callers-intercept-errors` prints one uncaught route. JSON:
+  `establishedWitnesses`, `candidateWitnesses {count, byTier}`, evidence `pathTier`.
+- **prove, existing effects**: an `unknown` names its blockers (`unknown (blocked by: …)`),
+  the plain reading, `not established: that it never commits` and, for open-world
+  interface dispatches, `re-analysis under an assumption: closedWorld: true`.
+- **A filtered negative** (F18) says what it filtered and lists up to 5 other reachable
+  sites outside the filter with how to see their routes; JSON `result.filter`,
+  `result.otherSites[]`, and the summary carries the filter.
+- **A conditional write leads** (F14): explain, digest and query effects summaries say
+  "may modify persistent T records (Modify at :24) when Rec is not temporary; otherwise
+  it changes a temporary record; no other write (every candidate decided)". Tables are
+  named when 3 or fewer (F56).
+- **explain**: the direct callees in source order and the route to the UI effect lead the
+  card (F55); with `callersContext` the routine's own state changes and the callers'
+  context section come right after the header, each `yes` with its first witness and
+  each `unknown` with its blockers and the input that removes one (F29, F75); a write in a
+  cone that calls `ChangeCompany` prints `target company: not established by this
+  analysis` (F75); `showSource` on a declaration shows its first statement (F48);
+  field mode prints `confirmed writers` with its search, reference candidates apart, the
+  writer kinds searched (F17).
+- **query effects**: `locks:` and `reads:` always print, with their depth (F57); the
+  scope line states each operation family's depth, and JSON adds
+  `payload.result.scope.families` (F61).
+- **query touches**: table mode counts the routines that touch the table transitively and
+  the workspace and dependency sites that touch it directly, and lists sites (F23);
+  field mode separates confirmed references from numeric candidates and always prints
+  `filters:` (F74); the via-dependency and via-configuration callers come before the
+  caller list.
+- **impact** (F12, F27): code callers first (`reached by code callers: no — … (every
+  candidate decided)`), then the reach by tier, by entry kind and by execution context,
+  folded when the reach covers half the program's entries, with the hubs named; a change
+  mode's first line says what was computed and whether the diff matched; the tests line
+  starts with what to run (F63).
+- **tests** (F13, F63): the answer starts with what to run, in the test app's terms
+  (whole codeunits, a superset) and whether the whole suite must follow; every group
+  shows its tier distribution and its representative path's tier and relation; code paths
+  rank before UI-navigation ones; the nearest test with no local path is labelled "not a
+  focused test". JSON `runFirst[].relation`, `runFirst[].pathTier`, `groups[].tiers`,
+  `changed[].testStatus`.
+- **status** (F22): the headline says how hard it checked (`every input hashed just now:
+  594 inputs` vs `size and modification time, just now`); `check.strength`.
+- **digest**: the envelope summary rows carry `tableAnswers` for `writesTables` (F42),
+  counts-only or not; a change mode says what was computed (F27).
+- Schemas: prove 2.8.0 unfiltered / 2.9.0 filtered, query 3.8.0, explain `al-sem.explain/4`
+  (additive), status `statusVersion` 2 (additive), tests and impact version 1 (additive);
+  digest 3.1.0 unchanged (the envelope summary changed, not the document).
+
 ### Changed (one name for every routine, and selectors that help the next call: output validation V3)
 
 Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md`

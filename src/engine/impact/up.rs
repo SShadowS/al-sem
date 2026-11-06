@@ -302,7 +302,8 @@ fn tier_str(t: Tier) -> &'static str {
 
 /// A node as the answer names it.
 fn node_json(g: &SitedGraph, n: NodeIx, hops: u32, tier: Tier) -> Value {
-    let mut v = json!({"display": display(g, n), "hops": hops, "tier": tier_str(tier)});
+    let mut v = json!({"display": display(g, n), "hops": hops, "tier": tier_str(tier),
+                       "pathTier": crate::engine::vocab::tier(tier)});
     if let Some(id) = g.stable_id(n) {
         v["stableId"] = json!(id);
     }
@@ -362,7 +363,33 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
                    "first": firsts(f)})
         })
         .collect();
+    // Output validation V2 (§3.2, F12): the hubs on the reach (each with a
+    // site that calls it from inside the reach), and the program's entry
+    // count, the denominator of the reach share that folds the lists.
+    let mut hubs: BTreeSet<(String, String)> = BTreeSet::new();
+    for n in up.best.keys() {
+        let Some(kind) = crate::engine::l5::routine_rollup::hub_kind_of(g, *n) else {
+            continue;
+        };
+        let at = g
+            .sites_into(*n)
+            .iter()
+            .map(|&s| &g.sites()[s as usize])
+            .filter(|s| up.best.contains_key(&s.from))
+            .filter_map(|s| s.anchor)
+            .map(|a| format!("{}:{}", g.unit(a.unit), a.start_line + 1))
+            .min()
+            .unwrap_or_default();
+        hubs.insert((kind, at));
+    }
+    let program_entries = (0..g.node_count() as u32)
+        .filter(|&n| g.root_kinds(n) != 0)
+        .count();
+    let entry_total: usize = up.entries.values().map(Firsts::count).sum();
     json!({
+        "hubs": hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
+        "programEntries": program_entries,
+        "entryBuckets": entry_total,
         "states": up.states,
         "maxHops": up.max_hops,
         "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep, "onlyOpen": open},

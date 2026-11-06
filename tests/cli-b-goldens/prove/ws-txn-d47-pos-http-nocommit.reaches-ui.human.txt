@@ -1,6 +1,6 @@
 --- Codeunit "D47 Sender"::SendAfterModify ---
   question: reaches-ui — existing effects (what the routine and its callees already do)
   answer:   no
-  coverage: complete
+  analysis complete
   assumptions: loaded-subscribers
   limits: none

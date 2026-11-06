@@ -36,8 +36,14 @@
       "byNumberNotLiteral": 1,
       "candidates": 0,
       "candidatesByReason": {},
+      "confirmed": {
+        "sites": 0
+      },
       "declaredKeys": 0,
       "fieldIndexSites": 1,
+      "numericCandidates": {
+        "sites": 0
+      },
       "objects": 0,
       "readWriteSites": 0,
       "routines": 0,
@@ -46,6 +52,9 @@
       "uses": {}
     },
     "fieldTouches": [],
+    "filters": {
+      "sites": 0
+    },
     "lineBase": 1,
     "reasons": [
       {
@@ -101,5 +110,5 @@
       "selector": "FT NoMatch"
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

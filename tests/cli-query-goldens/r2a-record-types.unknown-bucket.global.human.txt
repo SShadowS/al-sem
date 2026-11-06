@@ -1,3 +1,5 @@
 --- touches unknown — the UNRESOLVED-TABLE bucket, not a table ---
-  workspace-global: 1 routine touches it (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code is not listed)
-    Codeunit "R2a Records"::DeclaredVars — ws:src/Codeunit.al:10
+  transitively: 1 workspace routine touches it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code is not counted)
+  directly: 1 workspace site in 1 routine and 0 dependency sites touch it — table not resolved: each such site's table is decided by a value the analysis does not resolve, and an unresolved write can be any table
+    [Get] at ws:src/Codeunit.al:20 in Codeunit "R2a Records"::DeclaredVars
+  the 1 routine that touch it transitively: --all lists them

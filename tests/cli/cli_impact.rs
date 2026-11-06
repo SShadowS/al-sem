@@ -146,12 +146,20 @@ fn a_diff_is_accounted_first_then_each_routine() {
     let (human, err, code) = impact(&ws, &["--diff", "-"], Some(DIFF));
     assert_eq!(code, 0, "{err}");
     let lines: Vec<&str> = human.lines().collect();
-    assert!(
-        lines[0].starts_with("impact of a diff (2 files)"),
+    // Output validation V2 (§4.7): the computation first, then the
+    // comparison line.
+    assert_eq!(
+        lines[0],
+        "computed: current effects of the 1 routine this diff touches, in the working tree \
+         (the diff's lines match it: yes); no before/after computed — pass base for that",
         "{human}"
     );
     assert!(
-        lines[1].starts_with("input: 1 changed routine resolved"),
+        lines[1].starts_with("impact of a diff (2 files)"),
+        "{human}"
+    );
+    assert!(
+        lines[2].starts_with("input: 1 changed routine resolved"),
         "{human}"
     );
     assert!(

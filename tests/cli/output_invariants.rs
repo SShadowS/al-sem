@@ -1608,7 +1608,7 @@ pub(crate) fn query_write_tables(
 pub(crate) fn beyond_block(human: &str) -> Vec<&str> {
     let mut lines = human
         .lines()
-        .skip_while(|l| !l.starts_with("  writes beyond dependency entry points"));
+        .skip_while(|l| !l.starts_with("  writes beyond dependency calls"));
     let mut out: Vec<&str> = lines.next().into_iter().collect();
     out.extend(lines.take_while(|l| l.starts_with("    ")));
     out
@@ -1835,8 +1835,8 @@ fn locks_are_their_own_class_in_query_effects() {
     assert!(
         summary.contains("summary: 9 operations — writes that may persist 5 on 2 tables")
             && summary.contains("locks 2 on 2 tables")
-            && summary.contains("on a RecordRef (table decided at run time) 1 in 1 routine")
-            && !summary.contains("table not resolved"),
+            && summary.contains("on a RecordRef (table not resolved: RecordRef) 1 in 1 routine")
+            && !summary.contains("; table not resolved"),
         "{human}"
     );
     let writes: Vec<&str> = human
@@ -1850,7 +1850,7 @@ fn locks_are_their_own_class_in_query_effects() {
         human.contains(
             "  locks (2 tables; not writes): Out Item (also written), Out Log at \
              ws:src/OutFieldOps.Codeunit.al:21 in Codeunit \"Out Field Ops\"::LockLog; a RecordRef \
-             (table decided at run time): 1 lock\n"
+             (table not resolved: RecordRef): 1 lock\n"
         ),
         "{human}"
     );
@@ -2045,24 +2045,20 @@ fn prove_states_coverage_assumptions_and_limits() {
     );
     let yes = run(ISSUE_DOC, "may-commit", "human");
     assert!(yes.contains("\n  answer:   yes\n"), "{yes}");
-    for l in [
-        "  coverage: incomplete — ",
-        "  assumptions: ",
-        "  limits: none",
-    ] {
+    for l in ["  analysis partial — ", "  assumptions: ", "  limits: none"] {
         assert!(yes.contains(l), "{l}:\n{yes}");
     }
     let unknown = run(ISSUE_DOC, "writes-table:Out Item", "human");
     assert!(
-        unknown
-            .contains("\n  answer:   unknown — no matching effect observed; coverage incomplete\n"),
+        unknown.contains("\n  answer:   unknown (blocked by: ")
+            && unknown.contains(" — no matching effect was found in the analyzed cone\n"),
         "{unknown}"
     );
     let uj: Value = serde_json::from_str(&run(ISSUE_DOC, "writes-table:Out Item", "json")).unwrap();
     assert_eq!(uj["payload"]["result"]["answer"], "unknown");
     let no = run(FIELD_OPS, "may-commit", "human");
     assert!(
-        no.contains("\n  answer:   no\n  coverage: complete\n  assumptions: loaded-subscribers\n  limits: none\n"),
+        no.contains("\n  answer:   no\n  analysis complete\n  assumptions: loaded-subscribers\n  limits: none\n"),
         "{no}"
     );
 }

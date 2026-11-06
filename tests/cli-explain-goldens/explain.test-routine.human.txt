@@ -1,25 +1,27 @@
 Codeunit "Explain Tests"::PostUnreleasedFails  ws:src/tests.al:9
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: no observed COMMIT; UI at 1 place; errors at 3 places
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Explain Order (Modify)
+    transaction, UI and errors: commits: none observed (searched: the cone through every resolved call; not searched: calls not resolved); UI at 1 place; errors at 3 places
     other effects: events: 1 (1 raised in workspace code)
     callers and tests: callers: none; tests: none of 1 loaded
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 2 not placed
-  coverage: partial (external-target)
+  analysis partial (external-target)
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: symbol-only-dependency 2
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  calls: Codeunit "Explain Post"::PostOrder (:14)
+  route to its UI effect: UI_ERROR at ws:src/post.al:11, via PostUnreleasedFails → Codeunit "Explain Post"::PostOrder
   rules: none of its own; inherited: none
   callers: none
-  commits: no observed COMMIT
+  commits: none observed (searched: the cone through every resolved call; not searched: external-target)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Explain Order: Modify 1 — known persistent
       Modify at ws:src/post.al:18
       path: PostUnreleasedFails → Codeunit "Explain Post"::PostOrder
       fields PostOrder assigns on this table (not operation-specific): Posted, Status
-  events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond entry points
+  events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond dependency calls
   extension points: none (the routine publishes no event itself)
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
   gaps in workspace code (2 gaps):
     gap: symbol-only-dependency (callee Assert.ExpectedError, status external) at ws:src/tests.al:15

@@ -4,6 +4,6 @@
   evidence: 1 effect
     [EVENT_PUBLISH] at ws:src/posting.al:13
       path: PostSalesDoc → OnAfterPostSalesDoc
-  coverage: complete
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  analysis complete
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

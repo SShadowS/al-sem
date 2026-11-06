@@ -3294,6 +3294,7 @@ fn digest_entry_summary(
     r: &crate::engine::l5::routine_rollup::RoutineRollup,
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     counts_only: bool,
+    answers: Option<&(Vec<serde_json::Value>, Vec<String>)>,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
@@ -3315,6 +3316,31 @@ fn digest_entry_summary(
         if k != "display" {
             v[k] = x;
         }
+    }
+    // Output validation V2 (§5.2, F42): the asked-for `writesTables`
+    // verdicts on the row, counts-only or not: what the caller asked for by
+    // name is never only in the full document.
+    if let Some((values, _)) = answers {
+        v["tableAnswers"] = json!(
+            values
+                .iter()
+                .map(|a| {
+                    let blockers = a["blockedBy"].as_array().map_or(0, Vec::len);
+                    let mut t = json!({
+                        "table": {"name": a["table"]},
+                        "answer": a.get("answer").cloned().unwrap_or(serde_json::Value::Null),
+                        "blockers": blockers,
+                    });
+                    if let Some(b) = a["blockedBy"].as_array().and_then(|b| b.first()) {
+                        t["firstBlocker"] = json!({"kind": b["kind"], "detail": b["detail"]});
+                    }
+                    if let Some(e) = a.get("error") {
+                        t["error"] = e.clone();
+                    }
+                    t
+                })
+                .collect::<Vec<_>>()
+        );
     }
     if !counts_only {
         let (own, dep) = r.may_write_names(cx);
@@ -3353,6 +3379,26 @@ pub fn digest_summary(
     roots_requested: usize,
     changed_roots_diagnostics: usize,
 ) -> serde_json::Value {
+    digest_summary_with(
+        entries,
+        rollups,
+        cx,
+        roots_requested,
+        changed_roots_diagnostics,
+        None,
+    )
+}
+
+/// [`digest_summary`] with each row's `--writes-table` answers
+/// (`tableAnswers`, output validation V2 §5.2).
+pub(crate) fn digest_summary_with(
+    entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    roots_requested: usize,
+    changed_roots_diagnostics: usize,
+    table_answers: Option<&crate::engine::l5::prove::TableAnswers>,
+) -> serde_json::Value {
     use serde_json::json;
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
     let build = |counts_only: bool, routines: usize| {
@@ -3360,7 +3406,15 @@ pub fn digest_summary(
             .iter()
             .zip(rollups)
             .take(routines)
-            .map(|(e, r)| digest_entry_summary(e, r, cx, counts_only))
+            .map(|(e, r)| {
+                digest_entry_summary(
+                    e,
+                    r,
+                    cx,
+                    counts_only,
+                    table_answers.and_then(|t| t.get(&e.routine_id)),
+                )
+            })
             .collect();
         let mut v = json!({
             "kind": "digest",
@@ -3755,12 +3809,13 @@ fn digest_view(
         .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
         .collect();
     // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let summary = digest_summary(
+    let summary = digest_summary_with(
         &entries,
         &rollups,
         &rollup_cx,
         changed_roots.roots.len() + query_diagnostics.len(),
         changed_roots.diagnostics.len(),
+        (!writes_tables.is_empty()).then_some(&table_answers),
     );
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
@@ -3843,6 +3898,29 @@ fn digest_view(
         render.opts(),
         &changed_roots.diagnostics,
     ));
+    // Output validation V2 (§4.7, F27): a change mode says first what it
+    // computed. The digest does not compare the diff's lines with the
+    // working tree (impact does), so it says so.
+    if (diff_text.is_some() || changed_files.is_some()) && !entries.is_empty() {
+        human_text.insert_str(
+            0,
+            &format!(
+                "computed: current effects of the {} {} touches, in the working tree ({}); no \
+                 before/after computed — alsem_impact with base compares two revisions\n",
+                crate::engine::l5::routine_rollup::plural(entries.len(), "routine", "routines"),
+                if diff_text.is_some() {
+                    "this diff"
+                } else {
+                    "these files"
+                },
+                if diff_text.is_some() {
+                    "whether the diff's lines match it is not checked here"
+                } else {
+                    "every routine in the files"
+                }
+            ),
+        );
+    }
     if let Some(t) = &test_coverage {
         human_text.push_str(&t.human_line());
         human_text.push('\n');
@@ -4455,7 +4533,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "other effect kinds at 2 places: FUTURE_KIND at ws:src/A.al:5 (unknown); \
+                "other effect kinds at 2 places: FUTURE_KIND at ws:src/A.al:5 (condition not resolved); \
                  FUTURE_KIND beyond Codeunit Base Poster::OnRun"
                     .to_string()
             ]

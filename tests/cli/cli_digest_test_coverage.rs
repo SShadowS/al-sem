@@ -480,19 +480,20 @@ fn digest_human(ws: &Path, args: &[String]) -> String {
 fn human_line_with_tests() {
     let mut args = routines(MAIN);
     let off = digest_human(&graph_ws(), &args);
-    assert!(!off.contains("test coverage:"), "flag off: {off}");
+    assert!(!off.contains("tests (static reach):"), "flag off: {off}");
     args.push("--tests".to_string());
     let on = digest_human(&graph_ws(), &args);
     let lines: Vec<&str> = on
         .lines()
-        .filter(|l| l.starts_with("test coverage:"))
+        .filter(|l| l.starts_with("tests (static reach):"))
         .collect();
     assert_eq!(
         lines,
         vec![
-            "test coverage: 7 of 10 changed routines reached; 11 [Test] procedures \
-             loaded and considered (partial: dynamic-target, object-run-unresolved, test-page, \
-             unresolved-receiver-type); an unreached routine is not a reason to skip tests"
+            "tests (static reach): 7 of 10 changed routines with tests with a modeled path; 11 \
+             [Test] procedures loaded and considered (analysis partial: dynamic-target, \
+             object-run-unresolved, test-page, unresolved-receiver-type); no modeled path is not \
+             a reason to skip tests"
         ],
         "{on}"
     );

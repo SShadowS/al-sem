@@ -333,6 +333,16 @@ pub fn graph_display_local(g: &crate::program::impact_graph::SitedGraph, n: u32)
     graph_display_as(g, n, None, true)
 }
 
+/// The §8.1 hub kind of a hub node (`Codeunit.Run of a variable`, …), or
+/// `None` for a routine or object node.
+#[must_use]
+pub fn hub_kind_of(g: &crate::program::impact_graph::SitedGraph, n: u32) -> Option<String> {
+    if g.flags(n) & crate::program::impact_graph::sited::flag::HUB == 0 {
+        return None;
+    }
+    crate::engine::vocab::hub_kind(&g.node_id(n))
+}
+
 fn graph_display_as(
     g: &crate::program::impact_graph::SitedGraph,
     n: u32,
@@ -340,6 +350,11 @@ fn graph_display_as(
     local_is_own: bool,
 ) -> Option<String> {
     let local = local_is_own && g.flags(n) & crate::program::impact_graph::sited::flag::LOCAL != 0;
+    // A hub in the §8.1 form (output validation V2): its kind from the
+    // closed list, never its wire id (`h:run:codeunit`).
+    if let Some(kind) = hub_kind_of(g, n) {
+        return Some(crate::engine::vocab::hub(&kind, None, None));
+    }
     if let Some((kind, name, number, primary)) = g.object_node_name(n) {
         return Some(format_object(
             kind,
@@ -1413,47 +1428,24 @@ impl RollupTotals {
     /// other effects, callers and tests, uncertainty — each line the clauses
     /// the one-line summary had. One string; its lines after the first are
     /// indented two more than the `summary:` line (`\n    `).
-    pub fn human(&self) -> String {
-        let mut parts = Vec::new();
-        let writes = if self.may_write_tables == 0 && self.unresolved_table_writes == 0 {
-            "no observed write that may persist".to_string()
-        } else {
-            let mut w = format!(
-                "may write {} ({} owned by this app, {} by dependencies)",
-                plural(self.may_write_tables, "table", "tables"),
-                self.owned_by_app,
-                self.by_dependencies
-            );
-            if self.unresolved_table_writes > 0 {
-                w.push_str(&format!(
-                    " and {} on a table not resolved",
-                    plural(self.unresolved_table_writes, "write", "writes")
-                ));
-            }
-            if let Some(d) = &self.dominant_entry_point {
-                w.push_str(&format!(
-                    "; {} of them beyond {} (entered at {})",
-                    thousands(d.tables),
-                    d.name,
-                    d.sites
-                ));
-            }
-            w
-        };
-        parts.push(writes);
-        parts.push(format!(
-            "caller-dependent: {}",
-            if self.caller_dependent_tables == 0 {
-                "none".to_string()
-            } else {
-                plural(self.caller_dependent_tables, "table", "tables")
-            }
-        ));
-        let mut block = vec![format!("writes: {}", parts.join("; "))];
-        parts = Vec::new();
+    /// `writes`: the `writes:` line's text after the label (output validation
+    /// V2, §4.1: [`writes_summary`] builds it, leading with a conditional
+    /// write when there is no may-persist one).
+    pub fn human(&self, writes: &str) -> String {
+        let mut block = vec![format!("writes: {writes}")];
+        let mut parts: Vec<String> = Vec::new();
         let commits = match self.commits {
-            "no observed" => "commits: no observed COMMIT".to_string(),
-            "none" => "commits: none".to_string(),
+            "no observed" => format!(
+                "commits: {}",
+                crate::engine::vocab::none_observed(
+                    "the cone through every resolved call",
+                    "calls not resolved"
+                )
+            ),
+            "none" => format!(
+                "commits: {}",
+                crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED
+            ),
             answer => {
                 let at_least = if self.commit_sites_partial {
                     "at least "
@@ -1472,8 +1464,8 @@ impl RollupTotals {
                         "{at_least}{}",
                         plural(
                             self.commit_entry_points,
-                            "commit-bearing entry point",
-                            "commit-bearing entry points",
+                            "dependency routine entered that commits",
+                            "dependency routines entered that commit",
                         )
                     ));
                 }
@@ -1555,6 +1547,168 @@ impl RollupTotals {
             self.gaps_workspace, self.gaps_dependency, self.gaps_not_placed
         ));
         format!("summary — {}", block.join("\n    "))
+    }
+
+    /// The may-persist part of the `writes:` line (the tables, the
+    /// dependency routine behind most of them), or `None` when there is no
+    /// may-persist write.
+    #[must_use]
+    pub fn may_persist_words(&self) -> Option<String> {
+        if self.may_write_tables == 0 && self.unresolved_table_writes == 0 {
+            return None;
+        }
+        let mut w = format!(
+            "may write {} ({} owned by this app, {} by dependencies)",
+            plural(self.may_write_tables, "table", "tables"),
+            self.owned_by_app,
+            self.by_dependencies
+        );
+        if self.unresolved_table_writes > 0 {
+            w.push_str(&format!(
+                " and {} on a table not resolved",
+                plural(self.unresolved_table_writes, "write", "writes")
+            ));
+        }
+        if let Some(d) = &self.dominant_entry_point {
+            w.push_str(&format!(
+                "; {} of them beyond {} (entered at {})",
+                thousands(d.tables),
+                d.name,
+                d.sites
+            ));
+        }
+        Some(w)
+    }
+}
+
+/// The text of the summary's `writes:` line (output validation V2, §4.1,
+/// F14). A caller-dependent write is a write risk, never a "no": with no
+/// may-persist write the line leads with it and states its condition ("may
+/// modify persistent T records (Modify at :24) when Rec is not temporary;
+/// otherwise it changes a temporary record"), then the absence of any other
+/// write in the §8.1 negative-certainty words. With both classes the
+/// may-persist writes come first and the conditional ones follow on the
+/// same line. With neither, the absence verdict alone.
+#[must_use]
+pub fn writes_summary(r: &RoutineRollup, entry: &DigestEntryFull) -> String {
+    // The routine's own file, as its rows name it (`ws:` prefixed or not).
+    let own_file = r
+        .root_file
+        .clone()
+        .or_else(|| entry.routine_anchor.as_ref().and_then(|a| a.file.clone()))
+        .map(|f| f.trim_start_matches("ws:").to_string());
+    let conditional: Vec<String> = r
+        .caller_dependent
+        .iter()
+        .map(|t| {
+            let e = &entry.effects[t.rep];
+            let at = match (&e.evidence.file, e.evidence.line) {
+                (Some(f), Some(l)) if own_file.as_deref() == Some(f.trim_start_matches("ws:")) => {
+                    format!(":{}", shown(l))
+                }
+                _ => row_anchor(e),
+            };
+            let kinds = t.kinds.iter().cloned().collect::<Vec<_>>().join(", ");
+            let rec = t
+                .classes
+                .iter()
+                .any(|(_, c)| matches!(c, WriteClass::CallerDependent(CallerReason::ImplicitRec)));
+            let condition = if rec {
+                "when Rec is not temporary (Rec is temporary only when its caller's record is)"
+                    .to_string()
+            } else {
+                let p = t.classes.iter().find_map(|(_, c)| match c {
+                    WriteClass::CallerDependent(CallerReason::Parameter(i)) => Some(*i),
+                    _ => None,
+                });
+                match p {
+                    Some(i) => format!(
+                        "when the record its caller passes (parameter {}) is not temporary",
+                        i + 1
+                    ),
+                    None => "when the record its caller passes is not temporary".to_string(),
+                }
+            };
+            format!(
+                "may modify persistent {} records ({kinds} at {at}) {condition}",
+                t.table
+            )
+        })
+        .collect();
+    let complete = complete(entry, r);
+    let absence = |what: &str| {
+        if complete {
+            format!("{what} (every candidate decided)")
+        } else {
+            format!(
+                "{what}: {}",
+                crate::engine::vocab::none_observed(
+                    "the cone through every resolved call",
+                    &not_searched(entry)
+                )
+            )
+        }
+    };
+    // §9.1 (F56): the tables named when there are 3 or fewer, each with its
+    // operation kinds when a workspace row has them.
+    let named = (!r.may_write.is_empty() && r.may_write.len() <= 3).then(|| {
+        r.may_write
+            .iter()
+            .map(
+                |(id, name)| match r.workspace_code.iter().find(|t| &t.table_id == id) {
+                    Some(t) => {
+                        let e = &entry.effects[t.rep];
+                        let at = match (&e.evidence.file, e.evidence.line) {
+                            (Some(f), Some(l))
+                                if own_file.as_deref() == Some(f.trim_start_matches("ws:")) =>
+                            {
+                                format!(" at :{}", shown(l))
+                            }
+                            _ => String::new(),
+                        };
+                        format!(
+                            "{name} ({}{at})",
+                            t.kinds.iter().cloned().collect::<Vec<_>>().join(", ")
+                        )
+                    }
+                    None => name.clone(),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    let may = r.totals.may_persist_words().map(|w| match &named {
+        Some(n) => format!("{w}: {n}"),
+        None => w,
+    });
+    match (may, conditional.is_empty()) {
+        (Some(w), true) => w,
+        (Some(w), false) => format!("{w}; {}", conditional.join("; ")),
+        (None, false) => format!(
+            "{}; otherwise it changes a temporary record; {}",
+            conditional.join("; "),
+            absence("no other write")
+        ),
+        (None, true) => {
+            if complete {
+                crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED.to_string()
+            } else {
+                crate::engine::vocab::none_observed(
+                    "the cone through every resolved call",
+                    &not_searched(entry),
+                )
+            }
+        }
+    }
+}
+
+/// What an absence over `entry`'s cone did not search: its coverage
+/// reasons, else the calls not resolved.
+fn not_searched(entry: &DigestEntryFull) -> String {
+    if entry.coverage_reasons.is_empty() {
+        "calls not resolved".to_string()
+    } else {
+        entry.coverage_reasons.join(", ")
     }
 }
 
@@ -1711,6 +1865,8 @@ pub struct RoutineRollup {
     pub kind_crossings: BTreeMap<&'static str, Vec<usize>>,
     pub gaps: GapCounts,
     pub totals: RollupTotals,
+    /// The root's own source unit (V2 §4.1: a write in it prints `at :24`).
+    pub root_file: Option<String>,
 }
 
 /// The length of a row's shortest listed path, else of its searched own
@@ -1755,7 +1911,10 @@ impl RoutineRollup {
     /// The rollup of `entry` over `cx` (module doc).
     #[must_use]
     pub fn build(entry: &DigestEntryFull, cx: &RollupCx<'_>) -> RoutineRollup {
-        let mut r = RoutineRollup::default();
+        let mut r = RoutineRollup {
+            root_file: cx.default_file(&entry.routine_id),
+            ..RoutineRollup::default()
+        };
         let mut ws: BTreeMap<String, TableWrites> = BTreeMap::new();
         let mut caller: BTreeMap<String, TableWrites> = BTreeMap::new();
         let mut crossings: Vec<CrossingView> = Vec::new();
@@ -2364,7 +2523,7 @@ pub fn header_lines(
     entry: &DigestEntryFull,
     extra_limits: &[String],
 ) -> Vec<String> {
-    let mut out = vec![r.totals.human()];
+    let mut out = vec![r.totals.human(&writes_summary(r, entry))];
     let (mut open, mut dynamic) = (0usize, 0usize);
     for u in &entry.unresolved {
         match u.status.as_str() {
@@ -2373,7 +2532,13 @@ pub fn header_lines(
             _ => {}
         }
     }
-    let mut cov = format!("coverage: {}", entry.coverage_status);
+    // §8.1 completeness: always with its subject (`analysis complete`,
+    // `analysis partial (<reasons>)`).
+    let mut cov = match entry.coverage_status.as_str() {
+        "complete" => "analysis complete".to_string(),
+        "partial" => "analysis partial".to_string(),
+        other => format!("analysis {other}"),
+    };
     if !entry.coverage_reasons.is_empty() {
         cov.push_str(&format!(" ({})", entry.coverage_reasons.join(", ")));
     }
@@ -2432,13 +2597,22 @@ pub fn header_lines(
     });
     out.push(format!(
         "scope: dependency code followed through every resolved call, with literal arguments, \
-         grouped per entry point ({}{} at {}{}); temporary records are not writes; no lock facts \
-         (alsem query effects lists locks); counts are distinct tables unless a line says \
-         operations; lines are 1-based; --detail lists everything",
+         grouped per dependency routine entered ({}{} at {}{}); writes to temporary records do \
+         not directly persist those records; no lock facts (alsem query effects lists locks); \
+         counts are distinct tables unless a line says operations; lines are 1-based; --detail \
+         lists everything",
         at_least(r.totals.entry_points_partial),
-        plural(r.totals.entry_points, "entry point", "entry points"),
+        plural(
+            r.totals.entry_points,
+            "dependency routine entered",
+            "dependency routines entered"
+        ),
         at_least(r.totals.entry_points_partial),
-        plural(r.totals.crossing_sites, "site", "sites")
+        plural(
+            r.totals.crossing_sites,
+            "dependency call",
+            "dependency calls"
+        )
     ));
     out
 }
@@ -2489,9 +2663,18 @@ pub fn commit_lines(
     let bearing: Vec<&CrossingView> = r.crossings.iter().filter(|c| c.commit).collect();
     if r.commit_sites.is_empty() && bearing.is_empty() {
         return vec![if complete(entry, r) {
-            "commits: none".to_string()
+            format!(
+                "commits: {}",
+                crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED
+            )
         } else {
-            "commits: no observed COMMIT".to_string()
+            format!(
+                "commits: {}",
+                crate::engine::vocab::none_observed(
+                    "the cone through every resolved call",
+                    &not_searched(entry)
+                )
+            )
         }];
     }
     // A site search stopped at its depth bound lists a lower bound.
@@ -2518,8 +2701,8 @@ pub fn commit_lines(
         },
         plural(
             bearing.len(),
-            "commit-bearing entry point",
-            "commit-bearing entry points"
+            "dependency routine entered that commits",
+            "dependency routines entered that commit"
         )
     )];
     // MCP output step 2: the first `caps::PATHED_ROWS` sites and crossings
@@ -2529,7 +2712,11 @@ pub fn commit_lines(
     let mut rest: Vec<String> = Vec::new();
     for (k, &i) in r.commit_sites.iter().enumerate() {
         let e = &entry.effects[i];
-        let row = format!("COMMIT at {} ({})", row_anchor(e), e.conditionality);
+        let row = format!(
+            "COMMIT at {} ({})",
+            row_anchor(e),
+            crate::engine::vocab::condition(e.conditionality)
+        );
         if !pathed(k) {
             rest.push(row);
             continue;
@@ -3013,12 +3200,16 @@ pub fn beyond_lines(
     // The counts of the one union (EntryPointCounts), as the scope line's.
     let counts = EntryPointCounts::of(r);
     let mut out = vec![format!(
-        "writes beyond dependency entry points ({} through {}{} at {}{}):",
+        "writes beyond dependency calls ({} through {}{} at {}{}):",
         plural(tables.len(), "table", "tables"),
         at_least(r.totals.entry_points_partial),
-        plural(counts.writing.0, "entry point", "entry points"),
+        plural(
+            counts.writing.0,
+            "dependency routine entered",
+            "dependency routines entered"
+        ),
         at_least(r.totals.entry_points_partial),
-        plural(counts.writing.1, "site", "sites")
+        plural(counts.writing.1, "dependency call", "dependency calls")
     )];
     let line = |p: &EntryPoint<'_>| -> String {
         let kinds: Vec<String> = p
@@ -3077,7 +3268,7 @@ pub fn beyond_lines(
     let shown = fold(
         writing.clone(),
         caps::ENTRY_POINTS,
-        "entry points",
+        "dependency routines entered",
         o.detail,
     );
     let root_name = cx
@@ -3155,7 +3346,11 @@ pub fn beyond_lines(
     if shown.hidden > 0 {
         out.push(format!(
             "  … +{} with {} — --detail lists them",
-            plural(shown.hidden, "entry point", "entry points"),
+            plural(
+                shown.hidden,
+                "dependency routine entered",
+                "dependency routines entered"
+            ),
             plural(
                 writing[shown.shown.len()..]
                     .iter()
@@ -3171,8 +3366,12 @@ pub fn beyond_lines(
         if o.detail {
             out.push(format!(
                 "  {} at {} write only temporary records or no table:",
-                plural(counts.other.0, "entry point", "entry points"),
-                plural(counts.other.1, "site", "sites")
+                plural(
+                    counts.other.0,
+                    "dependency routine entered",
+                    "dependency routines entered"
+                ),
+                plural(counts.other.1, "dependency call", "dependency calls")
             ));
             for p in others {
                 out.push(format!("  {}", line(p).trim_start()));
@@ -3180,8 +3379,12 @@ pub fn beyond_lines(
         } else {
             out.push(format!(
                 "  {} at {} write only temporary records or no table (--detail lists them)",
-                plural(counts.other.0, "entry point", "entry points"),
-                plural(counts.other.1, "site", "sites")
+                plural(
+                    counts.other.0,
+                    "dependency routine entered",
+                    "dependency routines entered"
+                ),
+                plural(counts.other.1, "dependency call", "dependency calls")
             ));
         }
     }
@@ -3285,7 +3488,7 @@ pub fn temporary_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
     names.sort();
     let names = fold(names, caps::TEMP_NAMES, "tables", o.detail);
     let mut s = format!(
-        "temporary records (not writes): {} in workspace code ({})",
+        "temporary records (writes to them do not directly persist): {} in workspace code ({})",
         plural(r.temporary_ws.len(), "table", "tables"),
         plural(r.temporary_rows.len(), "effect row", "effect rows")
     );
@@ -3298,7 +3501,7 @@ pub fn temporary_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
         .filter(|k| !r.temporary_ws.contains_key(*k))
         .count();
     s.push_str(&format!(
-        "; {} only beyond entry points; only temporary: {}",
+        "; {} only beyond dependency calls; only temporary: {}",
         plural(beyond_only, "table", "tables"),
         plural(r.temporary_only.len(), "table", "tables")
     ));
@@ -3332,7 +3535,7 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
         s.push_str(&format!(", by publisher{}: {}", f.count_note(), f.joined()));
     }
     s.push_str(&format!(
-        "; {} more only beyond entry points",
+        "; {} more only beyond dependency calls",
         thousands(r.events_beyond.len())
     ));
     vec![s]
@@ -3364,7 +3567,7 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, detail: bool) -> V
                     "{} at {} ({}){starts}",
                     e.effect_type,
                     row_anchor(e),
-                    e.conditionality
+                    crate::engine::vocab::condition(e.conditionality)
                 )
             })
             .collect();

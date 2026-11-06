@@ -71,6 +71,65 @@
       }
     ],
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "families": {
+          "beyondDependencyCalls": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "wholeCone",
+            "inventory": "exhaustive",
+            "reasons": []
+          },
+          "locks": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for locks"
+            ]
+          },
+          "reads": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for reads"
+            ]
+          },
+          "validate": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for validations"
+            ]
+          },
+          "writes": {
+            "blockers": {
+              "callNotResolved": 0,
+              "interfaceDispatchOpenWorld": 0
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for writes"
+            ]
+          }
+        }
+      }
+    },
     "routine": {
       "resolution": "resolved",
       "routine": {
@@ -160,5 +219,5 @@
       }
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

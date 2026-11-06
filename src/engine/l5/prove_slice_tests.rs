@@ -242,7 +242,7 @@ fn e2_match_by_label_value_and_label_name() {
         human.contains(crate::engine::l5::prove_slice::STATIC_LABEL),
         "{human}"
     );
-    assert_eq!(v["schemaVersion"], "2.7.0");
+    assert_eq!(v["schemaVersion"], "2.9.0");
     assert_eq!(v["payload"]["filter"]["match"], "customer is BLOCKED");
     let (v, _) = matching(tmp.path(), "KnownOnly", "blockederr");
     assert_eq!(answer(&v), "yes", "the label's name matches");
@@ -470,6 +470,45 @@ fn site_op_and_table_filters() {
         None,
     );
     assert_eq!(answer(&v), "no", "{human}");
+}
+
+/// Output validation V2 (§4.3, F18): a filtered `no` names what it filtered
+/// and the other reachable sites outside the filter, in the human answer and
+/// in the JSON result, so a reader of `answer: "no"` sees what it is "no"
+/// about and what else matched. Discrimination (2026-11-06): with
+/// `prove_slice::human_lines` and `other_sites_value` filtering every site
+/// out (`.filter(|_| false)`), this test fails on the missing other site;
+/// restored, it passes.
+#[test]
+fn a_filtered_no_names_its_filter_and_the_other_sites() {
+    let tmp = fixture();
+    let (v, human) = prove(
+        tmp.path(),
+        "Writes",
+        "writes-table:Sl Rec",
+        None,
+        None,
+        Some("Delete"),
+        None,
+    );
+    assert_eq!(answer(&v), "no", "{human}");
+    let r = &v["payload"]["result"];
+    assert_eq!(r["filter"]["op"], "Delete", "{r:#}");
+    let others = r["otherSites"].as_array().unwrap();
+    assert!(
+        others.iter().any(|s| s["op"] == "Insert"),
+        "the Insert outside the filter is listed: {r:#}"
+    );
+    assert!(
+        human.contains("answer:   no — no Delete site is reachable (every candidate decided"),
+        "{human}"
+    );
+    assert!(
+        human.contains("other reachable write sites (outside the filter): ")
+            && human.contains("Insert at "),
+        "{human}"
+    );
+    assert!(human.contains("to see their routes: op: \""), "{human}");
 }
 
 /// A matching write on a record its caller passes is temporary or not

@@ -129,7 +129,14 @@ pub fn with_excerpts(text: &str, sources: &SourceTexts) -> String {
             let Some(lines) = lines.filter(|l| n >= 1 && n <= l.len()) else {
                 continue;
             };
-            for k in n.saturating_sub(2).max(1)..=(n + 2).min(lines.len()) {
+            // Output validation V2 (§9.1, F48): a location on a declaration
+            // (a procedure, trigger, action or field header) shows the
+            // routine's first statement instead, the excerpt starting there.
+            let (n, range) = match first_statement(lines, n) {
+                Some(s) => (s, s..=(s + 4).min(lines.len())),
+                None => (n, n.saturating_sub(2).max(1)..=(n + 2).min(lines.len())),
+            };
+            for k in range {
                 out.push_str(&format!(
                     "{:indent$}{} {k:>5} | {}\n",
                     "",
@@ -140,6 +147,32 @@ pub fn with_excerpts(text: &str, sources: &SourceTexts) -> String {
         }
     }
     out
+}
+
+/// When 1-based line `n` of `lines` is a declaration header, the 1-based
+/// line of the first statement of the body it opens (the first non-blank
+/// line after its `begin`), within 60 lines; `None` for any other line.
+fn first_statement(lines: &[String], n: usize) -> Option<usize> {
+    let t = lines[n - 1].trim_start().to_ascii_lowercase();
+    let header = [
+        "trigger ",
+        "procedure ",
+        "local procedure ",
+        "internal procedure ",
+    ]
+    .iter()
+    .any(|p| t.starts_with(p))
+        || t.starts_with("action(")
+        || t.starts_with("field(");
+    if !header {
+        return None;
+    }
+    let end = (n + 60).min(lines.len());
+    let begin = (n..end).find(|&i| lines[i].trim().eq_ignore_ascii_case("begin"))?;
+    ((begin + 1)..lines.len())
+        .find(|&i| !lines[i].trim().is_empty())
+        .filter(|&i| !lines[i].trim().to_ascii_lowercase().starts_with("end"))
+        .map(|i| i + 1)
 }
 
 #[cfg(test)]

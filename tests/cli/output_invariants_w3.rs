@@ -1237,11 +1237,11 @@ fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
         Some((digits.parse().ok()?, used))
     };
     let (n, used) = num(rest)?;
-    let rest = rest[used..].strip_prefix(" entry point")?;
-    let rest = rest
-        .strip_prefix('s')
-        .unwrap_or(rest)
-        .strip_prefix(" at ")?;
+    // Output validation V2 (§8.1 dependency boundary): `N dependency
+    // routine(s) entered at S dependency call(s)`.
+    let rest = rest[used..].strip_prefix(" dependency routine")?;
+    let rest = rest.strip_prefix('s').unwrap_or(rest);
+    let rest = rest.strip_prefix(" entered at ")?;
     let rest = rest.strip_prefix("at least ").unwrap_or(rest);
     let (s, _) = num(rest)?;
     Some((n, s))
@@ -1252,8 +1252,10 @@ pub(crate) fn entry_point_lines(text: &str) -> EntryPointLines {
     for l in text.lines() {
         let t = l.trim_start();
         if t.starts_with("scope: ") {
-            out.scope = out.scope.or(points_at(t, "grouped per entry point ("));
-        } else if t.starts_with("writes beyond dependency entry points (") {
+            out.scope = out
+                .scope
+                .or(points_at(t, "grouped per dependency routine entered ("));
+        } else if t.starts_with("writes beyond dependency calls (") {
             out.writing = out.writing.or(points_at(t, " through "));
         } else if t.contains(" write only temporary records or no table") {
             out.other = out.other.or(points_at(t, ""));
@@ -1272,7 +1274,7 @@ pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<Stri
     let mut in_other = false;
     for l in text.lines() {
         let t = l.trim_start();
-        if t.starts_with("writes beyond dependency entry points (") {
+        if t.starts_with("writes beyond dependency calls (") {
             section = Some(indent(l));
             in_other = false;
             continue;

@@ -203,11 +203,13 @@ fn explain_counts_every_commit_site_and_entry_point() {
     assert_eq!(code, Some(0), "{stdout}");
     // `yes`: `Near` commits unconditionally.
     assert!(
-        stdout.contains("commits: yes (2 sites, 1 commit-bearing entry point)"),
+        stdout.contains("commits: yes (2 sites, 1 dependency routine entered that commits)"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("commits: yes — 2 sites in workspace code; 1 commit-bearing entry point:"),
+        stdout.contains(
+            "commits: yes — 2 sites in workspace code; 1 dependency routine entered that commits:"
+        ),
         "{stdout}"
     );
     assert!(
@@ -289,7 +291,9 @@ fn a_literal_dead_site_is_not_counted_beside_a_live_one() {
     ]);
     assert_eq!(code, Some(0), "{stdout}");
     assert!(
-        stdout.contains("commits: yes — 1 site in workspace code; 0 commit-bearing entry points:"),
+        stdout.contains(
+            "commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:"
+        ),
         "{stdout}"
     );
     assert!(
@@ -357,7 +361,7 @@ fn a_site_beyond_the_depth_bound_makes_the_counts_a_lower_bound() {
     );
     assert!(
         stdout.contains(
-            "commits: yes — at least 1 site in workspace code; at least 0 commit-bearing entry points:"
+            "commits: yes — at least 1 site in workspace code; at least 0 dependency routines entered that commit:"
         ),
         "{stdout}"
     );
@@ -494,7 +498,10 @@ fn every_resource_less_site_is_a_place_and_entry_points_say_at_least() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("grouped per entry point (at least 1 entry point at at least 1 site)"),
+        stdout.contains(
+            "grouped per dependency routine entered (at least 1 dependency routine entered at at \
+             least 1 dependency call)"
+        ),
         "{stdout}"
     );
 }

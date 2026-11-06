@@ -2,10 +2,10 @@
   question: may-commit — existing effects (what the routine and its callees already do)
   answer:   unknown
   blockedBy: 1 blocker in 1 kind
-    routine-not-found: 1
+    routine not found: 1
       no routine in the loaded program is named 'NonExistentRoutineXYZ'
       nearest names: no close match
       selector forms: Object::Routine, Object::Routine(<parameter types>), Object."Field"::Trigger, Object.action(Name)::OnAction, or a stable id
-  coverage: incomplete
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  analysis partial
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

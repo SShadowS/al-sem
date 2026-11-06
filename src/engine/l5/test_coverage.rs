@@ -223,9 +223,10 @@ impl TestCoverage {
     /// The human digest's one summary line (spec §Surface).
     #[must_use]
     pub fn human_line(&self) -> String {
+        // §8.1 completeness, always with its subject (F50).
         let status = match self.coverage.reasons.as_slice() {
-            [] => "complete".to_string(),
-            r => format!("partial: {}", r.join(", ")),
+            [] => "analysis complete".to_string(),
+            r => format!("analysis partial: {}", r.join(", ")),
         };
         let unloaded = if self.test_apps_not_loaded.is_empty() {
             String::new()
@@ -245,19 +246,19 @@ impl TestCoverage {
         // all, and that an unreached routine is no reason to skip tests.
         if self.test_procedures_considered == 0 {
             return format!(
-                "test coverage: no test code loaded (0 [Test] procedures in the workspace app), \
-                 so no changed routine is reached; that is not a reason to skip tests{unloaded} \
-                 ({status})"
+                "tests (static reach): not loaded — 0 [Test] procedures in the workspace app, so \
+                 no changed routine has a modeled path; that is not a reason to skip \
+                 tests{unloaded} ({status})"
             );
         }
         let unreached = if self.covered_changed_routines < self.changed_routines {
-            "; an unreached routine is not a reason to skip tests"
+            "; no modeled path is not a reason to skip tests"
         } else {
             ""
         };
         format!(
-            "test coverage: {} of {} changed routines reached; {} [Test] procedures loaded and \
-             considered ({status}){unreached}{unloaded}",
+            "tests (static reach): {} of {} changed routines with tests with a modeled path; {} \
+             [Test] procedures loaded and considered ({status}){unreached}{unloaded}",
             self.covered_changed_routines, self.changed_routines, self.test_procedures_considered
         )
     }

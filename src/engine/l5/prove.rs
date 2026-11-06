@@ -1593,12 +1593,12 @@ fn resolved_target(
 }
 
 /// prove's document `schemaVersion`.
-pub const PROVE_SCHEMA_VERSION: &str = "2.6.0";
+pub const PROVE_SCHEMA_VERSION: &str = "2.8.0";
 
 /// A filtered prove document's `schemaVersion` (agent-tasks E1, additive:
 /// `payload.filter`, `payload.slice`, slice-shaped evidence rows). An
 /// unfiltered document keeps [`PROVE_SCHEMA_VERSION`], byte for byte (E-5).
-pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.7.0";
+pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.9.0";
 
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
@@ -1719,6 +1719,13 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         if !ev.is_empty() {
             result_obj.insert("evidence".into(), serde_json::Value::Array(ev));
         }
+        // Output validation V2 (§4.3, additive): the filter is part of the
+        // verdict, and the other reachable sites are listed beside it.
+        result_obj.insert("filter".into(), s.request.to_value());
+        result_obj.insert(
+            "otherSites".into(),
+            crate::engine::l5::prove_slice::other_sites_value(s),
+        );
     }
 
     // blockedBy — only when present (and non-empty)
@@ -1813,6 +1820,12 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // gains `qualifiedDisplay` (the one display), `signature`, `member`,
     // `selector` and `handle`; `payload.result.table` (and `tables`) for
     // `writes-table`, `payload.result.event` for `publishes-event`.
+    // 2.8.0 unfiltered / 2.9.0 filtered (output validation V2, additive;
+    // the spec's "2.5.0" and "2.6.0" were taken by E1 and V3): the callers'
+    // context result gains `establishedWitnesses`, `candidateWitnesses`
+    // (`{count, byTier}`) and each evidence row `pathTier` (the §8.1 word
+    // beside the legacy `tier`); a filtered result gains `result.filter`
+    // and `result.otherSites[]`.
     let version = if slice.is_some() {
         PROVE_SLICE_SCHEMA_VERSION
     } else {
@@ -1875,14 +1888,37 @@ pub fn format_prove_human(
     // evidence is an absence the obligations block: say so; `yes` and `no`
     // print bare, `no` followed by its coverage and assumptions below.
     let no_evidence = prove_result.evidence.as_ref().is_none_or(Vec::is_empty);
+    let blockers: &[ProveBlocker] = prove_result.blocked_by.as_deref().unwrap_or(&[]);
+    let kinds = blocker_kind_counts(blockers);
     lines.push(match &prove_result.answer {
         // (`paths` is `None` only for the no-root document: nothing was
-        // looked at there.)
+        // looked at there.) Output validation V2 (§8.1): an `unknown` names
+        // its blockers in the negative-certainty form, never softened.
+        ProveAnswer::Unknown if paths.is_some() && !kinds.is_empty() => format!(
+            "  answer:   unknown (blocked by: {}) — {}",
+            named_kinds(&kinds, 3),
+            if no_evidence {
+                "no matching effect was found in the analyzed cone"
+            } else {
+                "matching effects exist, none established on every success path"
+            }
+        ),
         ProveAnswer::Unknown if no_evidence && paths.is_some() => {
-            "  answer:   unknown — no matching effect observed; coverage incomplete".to_string()
+            "  answer:   unknown — no matching effect was found in the analyzed cone".to_string()
         }
         a => format!("  answer:   {}", a.as_str()),
     });
+    // §4.4 (F19, F21): on `unknown`, the plain reading, what the answer does
+    // not establish, and every input that removes a blocker kind.
+    if prove_result.answer == ProveAnswer::Unknown && paths.is_some() {
+        lines.extend(unknown_lines(
+            question,
+            &kinds,
+            no_evidence,
+            &prove_result.obligations,
+            paths.is_some_and(|p| p.detail),
+        ));
+    }
 
     let asked_table = match parse_question(question) {
         Some(ProveQuestion::WritesTable { table }) => Some(table),
@@ -1969,7 +2005,10 @@ pub fn format_prove_human(
                     .or_default()
                     .0
                     .push(if eff.conditionality != "unknown" {
-                        format!("{place} ({})", eff.conditionality)
+                        format!(
+                            "{place} ({})",
+                            crate::engine::vocab::condition(eff.conditionality)
+                        )
                     } else {
                         place
                     });
@@ -1977,7 +2016,10 @@ pub fn format_prove_human(
             }
             lines.push(row);
             if eff.conditionality != "unknown" {
-                lines.push(format!("      conditionality: {}", eff.conditionality));
+                lines.push(format!(
+                    "      condition: {}",
+                    crate::engine::vocab::condition(eff.conditionality)
+                ));
             }
             let Some(p) = paths else {
                 continue;
@@ -2080,6 +2122,107 @@ pub fn format_prove_human(
     lines.join("\n")
 }
 
+/// The blocker kinds of an answer in the §8.1 words with their counts,
+/// largest first (ties by word): `[(key, words, count)]`.
+fn blocker_kind_counts(blockers: &[ProveBlocker]) -> Vec<(&'static str, String, usize)> {
+    let mut by: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for b in blockers {
+        *by.entry(b.kind).or_default() += 1;
+    }
+    let mut v: Vec<(&'static str, String, usize)> = by
+        .into_iter()
+        .map(|(k, n)| (k, crate::engine::vocab::blocker(k), n))
+        .collect();
+    v.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.cmp(&b.1)));
+    v
+}
+
+/// At most `cap` blocker kinds named with their counts, the rest counted.
+fn named_kinds(kinds: &[(&'static str, String, usize)], cap: usize) -> String {
+    let mut s = kinds
+        .iter()
+        .take(cap)
+        .map(|(_, w, n)| format!("{w} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if kinds.len() > cap {
+        let more = kinds.len() - cap;
+        s.push_str(&format!(
+            ", and {more} more {}",
+            if more == 1 { "kind" } else { "kinds" }
+        ));
+    }
+    s
+}
+
+/// What an existing-effects `unknown` does not establish (§4.4), in the
+/// question's terms.
+fn not_established_effect(question: &str) -> String {
+    match parse_question(question) {
+        Some(ProveQuestion::MayCommit) => "that it never commits".to_string(),
+        Some(ProveQuestion::CommitsOnSuccessPath) => {
+            "that it commits on every success path, or that it never does".to_string()
+        }
+        Some(ProveQuestion::ReachesUi) => "that it never shows UI".to_string(),
+        Some(ProveQuestion::ThrowsError) => "that it never raises an error".to_string(),
+        Some(ProveQuestion::WritesTable { table }) => format!("that it never writes {table}"),
+        Some(ProveQuestion::PublishesEvent { event }) => format!("that it never raises {event}"),
+        None => "the asked conclusion".to_string(),
+    }
+}
+
+/// The lines after an existing-effects `unknown` (§4.4): the plain reading,
+/// `not established:`, and `re-analysis under an assumption:` for every
+/// input that removes a blocker kind (`closedWorld: true` removes the
+/// open-world interface dispatches), with what it removes and what stays.
+fn unknown_lines(
+    question: &str,
+    kinds: &[(&'static str, String, usize)],
+    no_evidence: bool,
+    o: &ProveObligations,
+    detail: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if !kinds.is_empty() {
+        out.push(format!(
+            "  plain reading: {}; unknown because of {}",
+            if no_evidence {
+                "no matching effect was found in the analyzed cone"
+            } else {
+                "the matching effects found do not hold on every success path"
+            },
+            named_kinds(kinds, 3)
+        ));
+    }
+    out.push(format!(
+        "  not established: {}",
+        not_established_effect(question)
+    ));
+    if let Some((_, w, n)) = kinds.iter().find(|(k, _, _)| *k == "open-world-dispatch")
+        && o.world != World::Closed
+    {
+        let stay: Vec<(&'static str, String, usize)> = kinds
+            .iter()
+            .filter(|(k, _, _)| *k != "open-world-dispatch")
+            .cloned()
+            .collect();
+        let removes = if stay.is_empty() {
+            format!("removes every blocker of this answer ({w} {n})")
+        } else {
+            format!(
+                "removes {w} {n}; stay: {}",
+                named_kinds(&stay, if detail { stay.len() } else { 3 })
+            )
+        };
+        out.push(format!(
+            "  re-analysis under an assumption: closedWorld: true — only if the deployment has no \
+             other implementations of these interfaces; it changes the assumption, not what runs; \
+             {removes}"
+        ));
+    }
+    out
+}
+
 /// How many evidence rows of one effect type the default prints as places
 /// after the witnessed one (the rest are counted).
 pub const FOLDED_ROWS: usize = 3;
@@ -2169,6 +2312,7 @@ fn blocker_lines(blockers: &[ProveBlocker], detail: bool) -> Vec<String> {
         let total = items.len();
         // Where the call sites are, when any blocker of the kind has one (a
         // coverage or routine-not-found blocker names no place).
+        let kind = crate::engine::vocab::blocker(kind);
         out.push(if at[0] + at[1] > 0 {
             format!(
                 "    {kind}: {} ({})",
@@ -2225,10 +2369,11 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
             ws(pointers.map_or(0, |p| p.workspace_open_world))
         ));
     }
+    // §8.1 completeness: always with its subject.
     let mut coverage = if o.coverage_complete {
-        "coverage: complete".to_string()
+        "analysis complete".to_string()
     } else {
-        "coverage: incomplete".to_string()
+        "analysis partial".to_string()
     };
     if !parts.is_empty() {
         coverage.push_str(&format!(" — {}", parts.join(", ")));
@@ -2248,19 +2393,17 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
     }
     let assumptions = match o.assumption() {
         Some(label) => format!("assumptions: {label}"),
-        None if o.world != World::Closed => "assumptions: none (default world; --closed-world \
-             assumes the loaded interface implementations)"
+        None if o.world != World::Closed => "assumptions: none (default world: an interface \
+             call may reach an implementation that is not loaded)"
             .to_string(),
-        None => {
-            "assumptions: none (--closed-world asked; the answer does not rely on it)".to_string()
-        }
+        None => "assumptions: none (closedWorld asked; the answer does not rely on it)".to_string(),
     };
     let mut limits = Vec::new();
     if o.analysis_gaps > 0 {
         limits.push(plural(o.analysis_gaps, "analysis gap", "analysis gaps"));
     }
     if o.cone_truncated {
-        limits.push("cone-truncated".to_string());
+        limits.push("cone truncated".to_string());
     }
     let limits = if limits.is_empty() {
         "limits: none".to_string()
@@ -2933,7 +3076,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
 
-    let summary = serde_json::json!({
+    let mut summary = serde_json::json!({
         "kind": "prove",
         "routine": rollup_cx.qualified(root_id),
         "question": question_text,
@@ -2945,6 +3088,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         "blockedBy": prove_result.blocked_by.as_ref().map_or(0, Vec::len),
         "obligations": obligations_to_value(&prove_result.obligations),
     });
+    // §4.3: a filtered answer's summary carries its filter, so a reader of
+    // `answer: "no"` reads what it is "no" about.
+    if let Some(s) = &slice {
+        summary["filter"] = s.request.to_value();
+        summary["otherSites"] = serde_json::json!(
+            s.sites
+                .iter()
+                .filter(|x| !matches!(
+                    x.outcome,
+                    crate::engine::l5::prove_slice::Outcome::Match { .. }
+                ))
+                .count()
+        );
+    }
     Ok(ProveRunResult {
         json_text,
         human_text,
@@ -3053,19 +3210,36 @@ fn format_prove_slice_human(
         slice.request.label()
     ));
     let matching = slice.matching().count();
+    // Output validation V2 (§4.3): the filter is part of the verdict.
+    let filtered = match &slice.request.op {
+        Some(op) => format!("{op} site"),
+        None => format!("site {}", slice.request.label()),
+    };
+    let kinds = blocker_kind_counts(result.blocked_by.as_deref().unwrap_or(&[]));
     lines.push(match result.answer {
         ProveAnswer::Yes => format!(
             "  answer:   yes — {} reachable from {header} ({STATIC_LABEL})",
             plural(matching, "matching site", "matching sites")
         ),
         ProveAnswer::No => format!(
-            "  answer:   no — no reachable site matches, and every one was decided ({STATIC_LABEL})"
+            "  answer:   no — no {filtered} is reachable (every candidate decided; \
+             {STATIC_LABEL})"
         ),
         ProveAnswer::Unknown => format!(
-            "  answer:   unknown — no matching site observed, and some sites or the coverage \
-             cannot rule one out ({STATIC_LABEL})"
+            "  answer:   unknown (blocked by: {}) — no {filtered} was found reachable, and some \
+             sites or the analysis cannot rule one out ({STATIC_LABEL})",
+            named_kinds(&kinds, 3)
         ),
     });
+    if result.answer == ProveAnswer::Unknown {
+        lines.extend(unknown_lines(
+            question,
+            &kinds,
+            true,
+            &result.obligations,
+            paths.detail,
+        ));
+    }
     lines.extend(human_lines(slice, paths.cx, paths.root, paths.detail));
     if let Some(blockers) = &result.blocked_by
         && !blockers.is_empty()
@@ -3216,6 +3390,9 @@ fn callers_document(
         "questionScope": "callers-context",
         "answer": a.answer.as_str(),
         "evidence": a.witness_count,
+        // §3.1: established witnesses and candidates over a hub, apart.
+        "establishedWitnesses": a.witness_count - a.open_witness_count,
+        "candidateWitnesses": a.open_witness_count,
         "blockedBy": a.blocked_counts.values().sum::<usize>(),
     });
     ProveRunResult {
@@ -3980,11 +4157,11 @@ mod tests {
              --detail lists every one)",
             "{text}"
         );
-        assert_eq!(lines[1], "    coverage-incomplete: 1", "no place: {text}");
+        assert_eq!(lines[1], "    coverage incomplete: 1", "no place: {text}");
         assert_eq!(lines[2], "      coverage status: partial", "{text}");
         assert_eq!(
             lines[3],
-            "    open-world-dispatch: 5 (2 in this workspace, 2 in dependency code, 1 not placed)",
+            "    interface dispatch (open world): 5 (2 in this workspace, 2 in dependency code, 1 not placed)",
             "{text}"
         );
         assert_eq!(

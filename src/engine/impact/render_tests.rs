@@ -134,8 +134,11 @@ fn a_root_line_prints_its_display_not_its_handle() {
 /// printed beside the real path as a plain "reached from" entry). A path
 /// through dependency code is named too; a local one carries no label.
 ///
-/// Break: drop the tier from `node_short` → the "only over open sites"
-/// witness assert fails.
+/// Output validation V2 (§3.2, §8.1): every witness starts with its tier in
+/// the word table's words, and the entry count says how many are via-hub.
+///
+/// Break: drop the tier from `node_short` → the `[via-hub]` witness assert
+/// fails (2026-11-06, recorded in the V2 commit).
 #[test]
 fn an_open_site_witness_is_labelled_with_its_tier() {
     let (main, mut up, delta) = parts(1, 0);
@@ -145,20 +148,17 @@ fn an_open_site_witness_is_labelled_with_its_tier() {
             {"display": "Report 202::header::onaftergetrecord", "hops": 3, "tier": "throughDependency"},
             {"display": "Report 50100::onprereport", "hops": 5, "tier": "onlyOpen"}]}]);
     let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
+    assert!(text.contains("report triggers 3 (via-hub 1)"), "{text}");
     assert!(
-        text.contains("3 report triggers (1 only over open sites) (first: "),
+        text.contains("[local] Report 357::company::onpostdataitem (2 hops); "),
         "{text}"
     );
     assert!(
-        text.contains("Report 357::company::onpostdataitem (2 hops); "),
+        text.contains("[via-dependency] Report 202::header::onaftergetrecord (3 hops)"),
         "{text}"
     );
     assert!(
-        text.contains("Report 202::header::onaftergetrecord (3 hops, through dependency code)"),
-        "{text}"
-    );
-    assert!(
-        text.contains("Report 50100::onprereport (5 hops, only over open sites)"),
+        text.contains("[via-hub] Report 50100::onprereport (5 hops)"),
         "{text}"
     );
 }

@@ -1,15 +1,16 @@
+computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
 --- Codeunit "D47 Sender"::SendAfterTempInsert ---
-  summary — writes: no observed write that may persist; caller-dependent: none
-    transaction, UI and errors: commits: none; errors at 1 place
+  summary — writes: no (every candidate decided)
+    transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
     other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: none
-  temporary records (not writes): 1 table in workspace code (1 effect row): D47 Rec; 0 tables only beyond entry points; only temporary: 1 table
-  events: 0 raised in workspace code; 0 more only beyond entry points
-  HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:16 (unconditional-on-success)
-  errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:15 (unconditional-on-success)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: no (every candidate decided)
+  temporary records (writes to them do not directly persist): 1 table in workspace code (1 effect row): D47 Rec; 0 tables only beyond dependency calls; only temporary: 1 table
+  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:16 (unconditional on success)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:15 (unconditional on success)
 changed-roots: file-unmatched src/Rec.Table.al

@@ -287,6 +287,8 @@ pub fn check(descriptor: &InputDescriptor, opts: CheckOptions) -> Value {
         "finishedAtUnixMs": unix_ms(SystemTime::now()),
         "checkMs": start.elapsed().as_secs_f64() * 1000.0,
         "hashing": hashing,
+        // §4.5 (additive, statusVersion stays 2): how hard the check was.
+        "strength": if opts.verify { "hashed" } else { "size-and-time" },
         "filesHashed": observed.hashed().len(),
         "complete": complete,
         "incompleteReasons": reasons,
@@ -416,11 +418,19 @@ pub fn headline(e: &EngineState<'_>) -> String {
         Some(n) => format!("generation {n}"),
         None => "the failed build".to_string(),
     };
+    // Output validation V2 (§4.5, F22): the headline says how hard it
+    // checked: every input hashed, or size and modification time only.
     let verdict = if check["fresh"] == json!(true) {
-        format!(
-            "FRESH: no input changed since {generation} (checked just now: {} files, {} packages).",
-            check["inputs"]["alFiles"], check["inputs"]["packages"]
-        )
+        if check["strength"] == json!("hashed") {
+            format!(
+                "FRESH: no input changed since {generation} (every input hashed just now: {} inputs).",
+                check["filesHashed"]
+            )
+        } else {
+            format!(
+                "FRESH: no change seen since {generation} (size and modification time, just now; verify: true hashes every input)."
+            )
+        }
     } else {
         let class = check["refreshClass"]["class"].as_str().unwrap_or("Package");
         format!(

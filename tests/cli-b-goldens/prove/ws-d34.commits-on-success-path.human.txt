@@ -1,12 +1,14 @@
 --- Codeunit "D34 Demo"::DirectCommitInLoop ---
   question: commits-on-success-path — existing effects (what the routine and its callees already do)
-  answer:   unknown
+  answer:   unknown (blocked by: conditional effect exists 1) — matching effects exist, none established on every success path
+  plain reading: the matching effects found do not hold on every success path; unknown because of conditional effect exists 1
+  not established: that it commits on every success path, or that it never does
   evidence: 1 effect
     [COMMIT] at ws:src/Codeunit.al:10
-      conditionality: loop-body
+      condition: in a loop
   blockedBy: 1 blocker in 1 kind
-    non-unconditional-effect-exists: 1 (1 in this workspace)
+    conditional effect exists: 1 (1 in this workspace)
       COMMIT with conditionality "loop-body" @ ws:src/Codeunit.al:10
-  coverage: complete
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  analysis complete
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

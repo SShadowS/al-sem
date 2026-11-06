@@ -1,6 +1,8 @@
 --- touches MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101) ---
-  workspace-global: 4 routines touch it (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not listed)
-    Codeunit "D1 Multi Caller"::CallerB — ws:src/D1MultiCaller.al:30
-    Codeunit "D1 Multi Caller"::CallerC — ws:src/D1MultiCaller.al:38
-    Codeunit "D1 Multi Caller"::CallerA — ws:src/D1MultiCaller.al:22
-    Codeunit "D1 Multi Caller"::ModifyHelper — ws:src/D1MultiCaller.al:17
+  transitively: 4 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+  directly: 4 workspace sites in 4 routines and 0 dependency sites touch it
+    [Modify] at ws:src/D1MultiCaller.al:19 in Codeunit "D1 Multi Caller"::ModifyHelper
+    [FindSet] at ws:src/D1MultiCaller.al:25 in Codeunit "D1 Multi Caller"::CallerA
+    [FindSet] at ws:src/D1MultiCaller.al:33 in Codeunit "D1 Multi Caller"::CallerB
+    [FindSet] at ws:src/D1MultiCaller.al:41 in Codeunit "D1 Multi Caller"::CallerC
+  the 4 routines that touch it transitively: --all lists them

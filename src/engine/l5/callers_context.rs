@@ -143,15 +143,9 @@ impl CallersQuestion {
 
     fn no_text(self) -> &'static str {
         match self {
-            CallersQuestion::PendingWrites => {
-                "no caller has a database write pending when it runs (whole cone seen)"
-            }
-            CallersQuestion::InterceptErrors => {
-                "every path propagates an error to its entry (whole cone seen)"
-            }
-            CallersQuestion::NonInteractive => {
-                "every entry that reaches it is interactive (whole cone seen)"
-            }
+            CallersQuestion::PendingWrites => "no caller has a database write pending when it runs",
+            CallersQuestion::InterceptErrors => "every path propagates an error to its entry",
+            CallersQuestion::NonInteractive => "every entry that reaches it is interactive",
         }
     }
 }
@@ -164,6 +158,10 @@ pub struct Witness {
     pub kind: &'static str,
     /// What it is, in words (`Modify on "Customer"`, `checked Codeunit.Run`).
     pub detail: String,
+    /// The human line's text when it differs from `detail` (a
+    /// non-interactive entry: the entry and where it is started, without
+    /// the legacy kind words `detail` keeps for JSON).
+    pub words: Option<String>,
     /// The decisive site (the pending write, the trap, the entry), 1-based.
     pub file: Option<String>,
     pub line: Option<u32>,
@@ -190,6 +188,9 @@ pub struct PathHop {
     /// The edge's boundary into the next hop (`sync`, `run`, `event`,
     /// `trigger`, `lifecycle`, `test`, `open`); `None` for R.
     pub boundary: Option<&'static str>,
+    /// The hub kind (§8.1 words) when this hop is a hub: an unresolved
+    /// dispatch the graph stands for with one node.
+    pub hub: Option<String>,
 }
 
 /// One question's answer.
@@ -211,6 +212,15 @@ pub struct CallersAnswer {
     /// reached with no trap (intercepted errors), or non-interactive ones
     /// (non-interactive). Distinct entry nodes per kind.
     pub entries: BTreeMap<&'static str, usize>,
+    /// The same entries in the §8.1 words (output validation V2): by entry
+    /// kind for pending writes and intercepted errors, by execution context
+    /// for non-interactive; split by whether the entry was reached only over
+    /// a hub (`true`: a candidate) or not (`false`). Distinct entry nodes per
+    /// word, so two legacy kinds that name one word count a node once.
+    pub entry_words: BTreeMap<(bool, &'static str), usize>,
+    /// Intercepted errors: the nearest route from an entry down to R with no
+    /// trap on it (printed with `detail`, F79): its tier and hops.
+    pub uncaught_route: Option<(Tier, u32, Vec<PathHop>)>,
     /// Paths the walk stopped on, by reason (`commit`, `checked-run`,
     /// `background-start`, `try-function`, `checked-run-trap`, `asserterror`,
     /// `gui-allowed`).
@@ -680,6 +690,8 @@ struct Visitor<'a, 'c> {
     blocker_keys: HashSet<(&'static str, String)>,
     blocked_counts: BTreeMap<&'static str, usize>,
     entries: BTreeMap<&'static str, BTreeSet<NodeIx>>,
+    entry_words: BTreeMap<(bool, &'static str), BTreeSet<NodeIx>>,
+    uncaught: Option<(Tier, u32, Vec<PathHop>)>,
     stopped: BTreeMap<&'static str, usize>,
     commit_behavior: BTreeSet<String>,
     try_function_callers: BTreeSet<String>,
@@ -746,6 +758,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                 file,
                 line,
                 boundary,
+                hub: crate::engine::l5::routine_rollup::hub_kind_of(g, cur.node),
             });
             match next {
                 Some(n) if out.len() < 64 => cur = n,
@@ -796,10 +809,12 @@ impl<'a, 'c> Visitor<'a, 'c> {
             file: st.anchor.map(|a| anchor_place(g, st.from, &a).0),
             line: st.anchor.map(|a| a.start_line + 1),
             boundary: Some(boundary_str(st.boundary)),
+            hub: crate::engine::l5::routine_rollup::hub_kind_of(g, caller),
         }];
         path.extend(self.path_of(from));
         let w = Witness {
             kind,
+            words: None,
             detail,
             file: at.as_ref().map(|a| a.0.clone()),
             line: at.map(|a| a.1),
@@ -1404,7 +1419,7 @@ impl ConeVisitor for Visitor<'_, '_> {
             self.block(
                 "only-open",
                 d.clone(),
-                format!("{d} reaches it only through an open site (a hub)"),
+                format!("{d} reaches it only over a hub"),
                 None,
             );
         }
@@ -1427,17 +1442,36 @@ impl ConeVisitor for Visitor<'_, '_> {
         );
     }
 
-    fn entry(&mut self, _root: u32, n: NodeIx, kinds: &[EntryKind], s: WalkState, _hops: u32) {
+    fn entry(&mut self, _root: u32, n: NodeIx, kinds: &[EntryKind], s: WalkState, hops: u32) {
+        use crate::engine::vocab;
         let pending = s.ext & PENDING != 0;
+        let open = s.tier == Tier::OnlyOpen;
         for k in kinds {
             match self.q {
                 CallersQuestion::PendingWrites => {
                     if pending {
                         self.entries.entry(k.as_str()).or_default().insert(n);
+                        self.entry_words
+                            .entry((open, vocab::entry_kind(*k)))
+                            .or_default()
+                            .insert(n);
                     }
                 }
                 CallersQuestion::InterceptErrors => {
                     self.entries.entry(k.as_str()).or_default().insert(n);
+                    self.entry_words
+                        .entry((open, vocab::entry_kind(*k)))
+                        .or_default()
+                        .insert(n);
+                    // F79: the nearest route an error takes to an entry
+                    // with no trap, established ones before candidates.
+                    if self
+                        .uncaught
+                        .as_ref()
+                        .is_none_or(|(t, h, _)| (s.tier, hops) < (*t, *h))
+                    {
+                        self.uncaught = Some((s.tier, hops, self.path_of(s)));
+                    }
                 }
                 CallersQuestion::NonInteractive => match k {
                     EntryKind::TestProcedure => {
@@ -1450,6 +1484,9 @@ impl ConeVisitor for Visitor<'_, '_> {
                     | EntryKind::UpgradeCodeunit
                     | EntryKind::BackgroundStart => {
                         self.entries.entry(k.as_str()).or_default().insert(n);
+                        if let Some(c) = vocab::entry_context(*k) {
+                            self.entry_words.entry((open, c)).or_default().insert(n);
+                        }
                         let d = self.ix.display(self.cx.g, n);
                         self.entry_witness(s, k.as_str(), d);
                     }
@@ -1544,6 +1581,10 @@ impl Visitor<'_, '_> {
                     .entry("page-action")
                     .or_default()
                     .insert(st.from);
+                self.entry_words
+                    .entry((from.tier == Tier::OnlyOpen, "page action"))
+                    .or_default()
+                    .insert(st.from);
             }
         }
         if self.page_stops.insert(site) {
@@ -1601,8 +1642,18 @@ impl Visitor<'_, '_> {
             }
             _ => format!("{display} is a {kind} entry{extra}"),
         };
+        // The human line's own words (output validation V2): the entry,
+        // where it is started, the guard note; `detail` keeps its JSON text.
+        let words = format!(
+            "{display}{}{extra}",
+            start
+                .as_ref()
+                .map(|(f, l)| format!(", started at {f}:{l}"))
+                .unwrap_or_default()
+        );
         let w = Witness {
             kind: "non-interactive-entry",
+            words: Some(words),
             detail,
             file: place.as_ref().map(|p| p.0.clone()),
             line: place.map(|p| p.1),
@@ -1649,6 +1700,8 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         blocker_keys: HashSet::new(),
         blocked_counts: BTreeMap::new(),
         entries: BTreeMap::new(),
+        entry_words: BTreeMap::new(),
+        uncaught: None,
         stopped: BTreeMap::new(),
         commit_behavior: BTreeSet::new(),
         try_function_callers: BTreeSet::new(),
@@ -1729,6 +1782,12 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         blocked_by,
         blocked_counts: v.blocked_counts,
         entries: v.entries.into_iter().map(|(k, s)| (k, s.len())).collect(),
+        entry_words: v
+            .entry_words
+            .into_iter()
+            .map(|(k, s)| (k, s.len()))
+            .collect(),
+        uncaught_route: v.uncaught,
         stopped: v.stopped,
         commit_behavior: v.commit_behavior.into_iter().collect(),
         try_function_callers: v.try_function_callers.into_iter().collect(),
@@ -1770,6 +1829,8 @@ pub fn result_value(a: &CallersAnswer) -> serde_json::Value {
                 "entry": w.entry.map(|k| json!({"kind": k})),
                 "hops": w.hops,
                 "tier": w.tier.as_str(),
+                // §8.3: the §8.1 word in a new field beside the legacy one.
+                "pathTier": crate::engine::vocab::tier(w.tier),
                 "callerDependent": w.caller_dependent.then_some(true),
                 "path": path,
             })
@@ -1784,11 +1845,19 @@ pub fn result_value(a: &CallersAnswer) -> serde_json::Value {
     if a.assume_no_dependents {
         assumptions.push("assume-no-dependents");
     }
+    let candidates = a.open_witness_count;
     json!({
         "answer": a.answer.as_str(),
         "evidence": evidence,
         "evidenceCount": a.witness_count,
         "evidenceThroughOpenSites": a.open_witness_count,
+        // Output validation V2 (§3.1, §8.1 result tier): established by the
+        // static model vs candidates over a hub, counted apart.
+        "establishedWitnesses": a.witness_count - candidates,
+        "candidateWitnesses": {
+            "count": candidates,
+            "byTier": if candidates > 0 { json!({"via-hub": candidates}) } else { json!({}) },
+        },
         "blockedBy": blocked,
         "blockedByCounts": a.blocked_counts,
         "assumptions": assumptions,
@@ -1807,11 +1876,61 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-fn counts_line(m: &BTreeMap<&'static str, usize>) -> String {
-    m.iter()
-        .map(|(k, n)| format!("{k} {n}"))
+/// The entry words of one class (`false`: established, `true`: over a hub),
+/// largest first: `page actions 3, page triggers 2`.
+fn entry_words_line(a: &CallersAnswer, over_hub: bool) -> String {
+    let mut v: Vec<(&str, usize)> = a
+        .entry_words
+        .iter()
+        .filter(|((h, _), _)| *h == over_hub)
+        .map(|((_, w), n)| (*w, *n))
+        .collect();
+    v.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(y.0)));
+    let by_context = a.question == CallersQuestion::NonInteractive;
+    v.iter()
+        .map(|(w, n)| {
+            if by_context {
+                format!("{w} {n}")
+            } else {
+                format!("{} {n}", crate::engine::vocab::entry_kind_plural(w))
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Every blocker kind with its count in the §8.1 words, largest first.
+fn blocker_counts(a: &CallersAnswer) -> Vec<(String, usize)> {
+    let mut v: Vec<(String, usize)> = a
+        .blocked_counts
+        .iter()
+        .map(|(k, n)| (crate::engine::vocab::blocker(k), *n))
+        .collect();
+    v.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
+    v
+}
+
+/// The blocker kinds of an `unknown`, at most `cap` named (largest first),
+/// the rest counted: `external callers 2, over a hub 9`.
+fn blockers_named(kinds: &[(String, usize)], cap: usize, detail: bool) -> String {
+    let shown = if detail {
+        kinds.len()
+    } else {
+        cap.min(kinds.len())
+    };
+    let mut s = kinds[..shown]
+        .iter()
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if kinds.len() > shown {
+        let more = kinds.len() - shown;
+        s.push_str(&format!(
+            ", and {more} more {} (detail: true lists them)",
+            if more == 1 { "kind" } else { "kinds" }
+        ));
+    }
+    s
 }
 
 /// The one-line form explain's "callers' context" section prints.
@@ -1825,25 +1944,195 @@ pub fn summary_line(a: &CallersAnswer) -> String {
     let mut s = format!("{label}: {}", a.answer.as_str());
     match a.answer {
         ProveAnswer::Yes => {
+            let of = match a.question {
+                CallersQuestion::PendingWrites => "of an uncommitted write when this runs",
+                CallersQuestion::InterceptErrors => "of a caller that may intercept its error",
+                CallersQuestion::NonInteractive => "of an entry no user answers",
+            };
             s.push_str(&format!(
-                " — {}",
+                " — {} {of}",
                 plural(a.witness_count, "witness", "witnesses")
             ));
-            if !a.entries.is_empty() {
-                s.push_str(&format!(" ({})", counts_line(&a.entries)));
+            let established = entry_words_line(a, false);
+            if !established.is_empty() {
+                s.push_str(&format!(" ({established})"));
             }
         }
         ProveAnswer::Unknown => {
-            let kinds: Vec<String> = a
-                .blocked_counts
+            let kinds: Vec<String> = blocker_counts(a)
                 .iter()
                 .map(|(k, n)| format!("{k} {n}"))
                 .collect();
-            s.push_str(&format!(" — blocked: {}", kinds.join(", ")));
+            s.push_str(&format!(" (blockers: {})", kinds.join(", ")));
         }
-        ProveAnswer::No => {}
+        ProveAnswer::No => s = format!("{label}: {}", NO_WORDS),
     }
     s
+}
+
+/// The §8.1 negative-certainty words of a callers' context `no`: the whole
+/// cone was seen and nothing blocks it.
+const NO_WORDS: &str = crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED;
+
+/// The population a question's answer is about, for an `unknown`'s answer
+/// line (§3.1: the question's own population, not all callers).
+fn population(q: CallersQuestion) -> &'static str {
+    match q {
+        CallersQuestion::PendingWrites => "pending write",
+        CallersQuestion::InterceptErrors => "intercepting caller",
+        CallersQuestion::NonInteractive => "non-interactive route",
+    }
+}
+
+/// What an `unknown` does not establish (§4.4, F20, F21, F79), in the
+/// question's terms.
+fn not_established(q: CallersQuestion) -> &'static str {
+    match q {
+        CallersQuestion::PendingWrites => {
+            "that no caller has a write pending when it runs; do not assume a COMMIT added here \
+             commits only this routine's work"
+        }
+        CallersQuestion::InterceptErrors => {
+            "that no caller turns this error into false; and nothing here says which writes roll \
+             back"
+        }
+        CallersQuestion::NonInteractive => {
+            "that a user is present; do not assume an interactive session in code added here"
+        }
+    }
+}
+
+/// The hubs on the candidate paths, in the §8.1 form with the site that
+/// enters each (the hop before it leaves there), distinct, at most `cap`.
+fn candidate_hubs(a: &CallersAnswer, cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for w in a.witnesses.iter().filter(|w| w.tier == Tier::OnlyOpen) {
+        for (i, h) in w.path.iter().enumerate() {
+            let Some(kind) = &h.hub else { continue };
+            let at = i
+                .checked_sub(1)
+                .and_then(|j| w.path.get(j))
+                .and_then(|p| Some(format!("{}:{}", p.file.as_ref()?, p.line?)));
+            let s = crate::engine::vocab::hub(kind, None, at.as_deref());
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+    }
+    out.truncate(cap);
+    out
+}
+
+/// A witness path's hops, a hub in the §8.1 form with its entering site.
+fn path_text(path: &[PathHop]) -> String {
+    let mut hops: Vec<String> = Vec::new();
+    for (i, h) in path.iter().enumerate() {
+        if let Some(kind) = &h.hub {
+            let at = i
+                .checked_sub(1)
+                .and_then(|j| path.get(j))
+                .and_then(|p| Some(format!("{}:{}", p.file.as_ref()?, p.line?)));
+            hops.push(crate::engine::vocab::hub(kind, None, at.as_deref()));
+            continue;
+        }
+        hops.push(match (&h.file, h.line) {
+            (Some(f), Some(l)) => format!("{} ({f}:{l})", h.display),
+            _ => h.display.clone(),
+        });
+    }
+    hops.join(" → ")
+}
+
+/// A stop reason in words (the JSON keeps its key).
+fn stop_words(key: &str) -> &str {
+    match key {
+        "commit" => "a COMMIT",
+        "checked-run" => "a checked Codeunit.Run",
+        "checked-run-trap" => "a checked Codeunit.Run (its own transaction)",
+        "background-start" => "a background start (a new session)",
+        "try-function" => "a TryFunction",
+        "asserterror" => "asserterror",
+        "gui-allowed" => "if GuiAllowed",
+        "page-event" => "a page's own trigger or action (a later user event)",
+        k => k,
+    }
+}
+
+/// The `re-analysis under an assumption:` line of an `unknown` (§4.4): every
+/// input that removes a blocker kind, with what it removes and what stays.
+/// For the callers' context questions the one input is
+/// `assumeNoDependents` (it removes `external callers`). `None` when no
+/// input removes a kind of this answer.
+fn reanalysis_line(a: &CallersAnswer, detail: bool) -> Option<String> {
+    let external = a.blocked_counts.get("external-callers").copied()?;
+    if a.assume_no_dependents {
+        return None;
+    }
+    let who = match external {
+        1 => "this routine".to_string(),
+        2..=5 => format!("these {external} routines"),
+        _ => format!("the {external} routines other apps may call"),
+    };
+    let stay: Vec<(String, usize)> = blocker_counts(a)
+        .into_iter()
+        .filter(|(k, _)| k != "external callers")
+        .collect();
+    let removes = if stay.is_empty() {
+        format!("removes every blocker of this answer (external callers {external})")
+    } else {
+        format!(
+            "removes external callers {external}; stay: {}",
+            blockers_named(&stay, 3, detail)
+        )
+    };
+    Some(format!(
+        "  re-analysis under an assumption: assumeNoDependents: true — assumes no other app calls \
+         {who}; {removes}"
+    ))
+}
+
+/// The `plain reading:` line of an `unknown` (§4.4): what the analyzed
+/// callers show, and why the answer is still unknown.
+fn plain_reading(a: &CallersAnswer) -> String {
+    let found = match (a.question, a.witness_count > 0) {
+        (CallersQuestion::NonInteractive, true) => {
+            "every non-interactive route found passes a hub, which may lead anywhere"
+        }
+        (CallersQuestion::PendingWrites, true) => {
+            "every pending write found reaches it over a hub, which may lead anywhere"
+        }
+        (CallersQuestion::InterceptErrors, true) => {
+            "every interception found reaches it over a hub, which may lead anywhere"
+        }
+        (CallersQuestion::NonInteractive, false) => {
+            "no non-interactive entry was found in the analyzed callers"
+        }
+        (CallersQuestion::PendingWrites, false) => {
+            "no pending write was found in the analyzed callers"
+        }
+        (CallersQuestion::InterceptErrors, false) => {
+            "no interception was found in the analyzed callers"
+        }
+    };
+    let why: Vec<String> = blocker_counts(a)
+        .into_iter()
+        .take(3)
+        .map(|(k, n)| match k.as_str() {
+            "external callers" => {
+                format!("{} other apps may call", plural(n, "routine", "routines"))
+            }
+            "over a hub" => format!(
+                "{} {} it only over a hub",
+                plural(n, "caller", "callers"),
+                if n == 1 { "reaches" } else { "reach" }
+            ),
+            _ => format!("{k} {n}"),
+        })
+        .collect();
+    format!(
+        "  plain reading: {found}; unknown because of {}",
+        why.join(", ")
+    )
 }
 
 /// explain's "callers' context" section for one card (agent-tasks §6.6): the
@@ -1855,10 +2144,12 @@ pub fn section(cx: &CallersCx<'_>, root: &str) -> Option<(serde_json::Value, Vec
     if nodes.is_empty() {
         return None;
     }
-    let mut lines = vec![
-        "callers' context (for adding effects; the sections above are existing effects):"
-            .to_string(),
-    ];
+    // Output validation V2 (§5.1, F29): the section leads the card, and each
+    // answer names its evidence: a `yes` its first witness (tier, what and
+    // where, its path), an `unknown` every blocker kind and the input that
+    // removes one.
+    let mut lines =
+        vec!["for adding a COMMIT, an error or UI here (callers' context):".to_string()];
     let mut json = serde_json::Map::new();
     for q in [
         CallersQuestion::PendingWrites,
@@ -1866,7 +2157,31 @@ pub fn section(cx: &CallersCx<'_>, root: &str) -> Option<(serde_json::Value, Vec
         CallersQuestion::NonInteractive,
     ] {
         let a = answer(q, &nodes, cx);
-        lines.push(format!("  {}", summary_line(&a)));
+        let mut line = format!("  {}", summary_line(&a));
+        let first = a.witnesses.iter().find(|w| w.tier != Tier::OnlyOpen);
+        if a.answer == ProveAnswer::Yes
+            && let Some(w) = first
+        {
+            line.push_str(&format!(
+                "; first [{}]:",
+                crate::engine::vocab::tier(w.tier)
+            ));
+            lines.push(line);
+            let what = match (&w.words, &w.file, w.line) {
+                (Some(words), _, _) => words.clone(),
+                (None, Some(f), Some(l)) => format!("{} at {f}:{l}", w.detail),
+                _ => w.detail.clone(),
+            };
+            lines.push(format!("    {}: {what}", w.kind));
+            lines.push(format!("      path: {}", path_text(&w.path)));
+        } else {
+            lines.push(line);
+        }
+        if a.answer == ProveAnswer::Unknown
+            && let Some(l) = reanalysis_line(&a, false)
+        {
+            lines.push(format!("    {}", l.trim_start()));
+        }
         json.insert(
             q.id().into(),
             serde_json::json!({
@@ -1896,73 +2211,159 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
             q.id()
         ),
     ];
+    let candidates = a.open_witness_count;
+    let established = a.witness_count - candidates;
+    let kinds = blocker_counts(a);
     lines.push(match a.answer {
         ProveAnswer::Yes => format!("  answer:   yes — {}", q.yes_text()),
-        ProveAnswer::No => format!("  answer:   no — {}", q.no_text()),
-        ProveAnswer::Unknown if a.witness_count > 0 => {
-            "  answer:   unknown — witnesses only through open sites (a hub stands for the call), \
-             and the cone is not complete"
-                .to_string()
+        ProveAnswer::No => format!("  answer:   {NO_WORDS} — {}", q.no_text()),
+        // §3.1 (F10): only candidates over a hub were found; the answer
+        // names the hub kinds on their paths, never presents them as
+        // evidence.
+        ProveAnswer::Unknown if candidates > 0 => {
+            let hubs = candidate_hubs(a, 3);
+            format!(
+                "  answer:   unknown — no {} without a hub was established in the analyzed graph; \
+                 {} a hub{}",
+                population(q),
+                plural(candidates, "candidate passes", "candidates pass"),
+                if hubs.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", hubs.join(", "))
+                }
+            )
         }
-        ProveAnswer::Unknown => {
-            "  answer:   unknown — no witness found, but the cone is not complete".to_string()
-        }
+        ProveAnswer::Unknown => format!(
+            "  answer:   unknown (blocked by: {}) — no {} was found in the analyzed callers",
+            blockers_named(&kinds, 3, false),
+            population(q)
+        ),
     });
-    if a.witness_count > 0 {
-        let shown = if detail {
-            a.witnesses.len()
-        } else {
-            a.witnesses.len().min(3)
-        };
-        lines.push(format!(
-            "  evidence: {} (nearest first)",
-            plural(a.witness_count, "witness", "witnesses")
-        ));
-        for w in &a.witnesses[..shown] {
-            let place = match (&w.file, w.line) {
-                (Some(f), Some(l)) => format!(" at {f}:{l}"),
-                _ => String::new(),
-            };
-            let dep = if w.caller_dependent {
-                " (only when the caller passes a physical record)"
-            } else {
-                ""
-            };
-            lines.push(format!(
-                "    [{}] {}{place}{dep} ({}, {})",
-                w.kind,
-                w.detail,
-                plural(w.hops as usize, "hop", "hops"),
-                w.tier.as_str()
-            ));
-            let path: Vec<String> = w
-                .path
-                .iter()
-                .map(|h| match (&h.file, h.line) {
-                    (Some(f), Some(l)) => format!("{} ({f}:{l})", h.display),
-                    _ => h.display.clone(),
-                })
-                .collect();
-            lines.push(format!("      path: {}", path.join(" → ")));
-        }
-        if a.witness_count > shown {
-            lines.push(format!("    … {} more", a.witness_count - shown));
+    // §4.4 (F19-F21, F79): on `unknown`, the plain reading, the conclusion
+    // the answer does not support, and the input that removes a blocker.
+    if a.answer == ProveAnswer::Unknown {
+        lines.push(plain_reading(a));
+        lines.push(format!("  not established: {}", not_established(q)));
+        if let Some(l) = reanalysis_line(a, detail) {
+            lines.push(l);
         }
     }
-    if !a.entries.is_empty() {
+    let shown_max = if detail { usize::MAX } else { 3 };
+    let witness_line = |w: &Witness| -> String {
+        let tier = crate::engine::vocab::tier(w.tier);
+        let hops = plural(w.hops as usize, "hop", "hops");
+        match (w.entry, &w.words) {
+            (Some(k), Some(words)) => {
+                let (kind, ctx) = crate::engine::vocab::entry_key(k);
+                let ctx = ctx.map(|c| format!(" [context: {c}]")).unwrap_or_default();
+                format!("    [{tier}] {kind}{ctx}: {words} ({hops})")
+            }
+            _ => {
+                let place = match (&w.file, w.line) {
+                    (Some(f), Some(l)) => format!(" at {f}:{l}"),
+                    _ => String::new(),
+                };
+                let dep = if w.caller_dependent {
+                    " (only when the caller passes a physical record)"
+                } else {
+                    ""
+                };
+                format!("    [{tier}] {}: {}{place}{dep} ({hops})", w.kind, w.detail)
+            }
+        }
+    };
+    // §3.1: established witnesses first (or `none`), then the candidates,
+    // each labelled; every witness line starts with its tier.
+    if a.witness_count > 0 {
+        let firm: Vec<&Witness> = a
+            .witnesses
+            .iter()
+            .filter(|w| w.tier != Tier::OnlyOpen)
+            .collect();
+        let open: Vec<&Witness> = a
+            .witnesses
+            .iter()
+            .filter(|w| w.tier == Tier::OnlyOpen)
+            .collect();
+        if established == 0 {
+            lines.push("  established witnesses: none".into());
+        } else {
+            let by = entry_words_line(a, false);
+            lines.push(format!(
+                "  established witnesses: {} (nearest first){}",
+                established,
+                if by.is_empty() || q != CallersQuestion::NonInteractive {
+                    String::new()
+                } else {
+                    format!("; by context (contexts may overlap): {by}")
+                }
+            ));
+            let shown = firm.len().min(shown_max);
+            for w in &firm[..shown] {
+                lines.push(witness_line(w));
+                lines.push(format!("      path: {}", path_text(&w.path)));
+            }
+            if established > shown {
+                lines.push(format!(
+                    "    … {} more established (detail: true lists up to {MAX_WITNESSES})",
+                    established - shown
+                ));
+            }
+        }
+        if candidates > 0 {
+            let by = entry_words_line(a, true);
+            lines.push(format!(
+                "  candidates over a hub: {candidates}{}",
+                if by.is_empty() || q != CallersQuestion::NonInteractive {
+                    String::new()
+                } else {
+                    format!("; by context (contexts may overlap): {by}")
+                }
+            ));
+            let shown = open.len().min(shown_max);
+            for w in &open[..shown] {
+                lines.push(witness_line(w));
+                lines.push(format!("      path: {}", path_text(&w.path)));
+            }
+            if candidates > shown {
+                lines.push(format!("    … {} more candidates", candidates - shown));
+            }
+        }
+    }
+    // The entries reached: for non-interactive they are the witnesses'
+    // entries (printed on the witness lines above); for the other two they
+    // are not the witnesses (traps, pending writes) and print here.
+    if (q != CallersQuestion::NonInteractive || a.witness_count == 0) && !a.entry_words.is_empty() {
         let label = match q {
             CallersQuestion::PendingWrites => "entries reached with a write pending",
             CallersQuestion::InterceptErrors => "uncaught at (entries reached with no trap)",
             CallersQuestion::NonInteractive => "non-interactive entries",
         };
-        lines.push(format!("  {label}: {}", counts_line(&a.entries)));
+        for (over_hub, tag) in [(false, ""), (true, " [via-hub]")] {
+            let by = entry_words_line(a, over_hub);
+            if !by.is_empty() {
+                lines.push(format!("  {label}{tag}: {by}"));
+            }
+        }
+    }
+    if detail
+        && q == CallersQuestion::InterceptErrors
+        && let Some((tier, hops, path)) = &a.uncaught_route
+    {
+        lines.push(format!(
+            "  one uncaught route [{}] ({}): {}",
+            crate::engine::vocab::tier(*tier),
+            plural(*hops as usize, "hop", "hops"),
+            path_text(path)
+        ));
     }
     if !a.stopped.is_empty() {
         lines.push(format!(
             "  stopped: {}",
             a.stopped
                 .iter()
-                .map(|(k, n)| format!("{} at {k}", plural(*n, "path", "paths")))
+                .map(|(k, n)| format!("{} at {}", plural(*n, "path", "paths"), stop_words(k)))
                 .collect::<Vec<_>>()
                 .join("; ")
         ));
@@ -2002,7 +2403,7 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
     if !a.blocked_by.is_empty() {
         lines.push(format!(
             "  blocked by: {}",
-            a.blocked_counts
+            kinds
                 .iter()
                 .map(|(k, n)| format!("{k} {n}"))
                 .collect::<Vec<_>>()
@@ -2021,7 +2422,11 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
                 .as_ref()
                 .and_then(|x| Some(format!(" at {}:{}", x.file.as_ref()?, x.line? + 1)))
                 .unwrap_or_default();
-            lines.push(format!("    [{}] {}{place}", b.kind, b.detail));
+            lines.push(format!(
+                "    [{}] {}{place}",
+                crate::engine::vocab::blocker(b.kind),
+                b.detail
+            ));
         }
     }
     lines.push(format!(

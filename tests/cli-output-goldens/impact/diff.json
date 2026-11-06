@@ -452,6 +452,7 @@
         },
         "display": "Codeunit \"TU Core\"::Calc",
         "entries": [],
+        "entryBuckets": 0,
         "eventPublishers": {
           "count": 0,
           "first": [],
@@ -465,6 +466,7 @@
                 "display": "Codeunit \"TU Core\"::Calc",
                 "file": "src/Core.al",
                 "hops": 0,
+                "pathTier": "local",
                 "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
                 "tier": "local"
               },
@@ -472,6 +474,7 @@
                 "display": "Codeunit \"TU Core\"::Post",
                 "file": "src/Core.al",
                 "hops": 1,
+                "pathTier": "local",
                 "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
                 "tier": "local"
               }
@@ -484,6 +487,7 @@
           "byChannel": {},
           "universalHub": false
         },
+        "hubs": [],
         "limited": null,
         "maxHops": 1,
         "nearestAncestors": [
@@ -494,6 +498,7 @@
           }
         ],
         "nodes": 1,
+        "programEntries": 8,
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
         "states": 2,
         "status": "walked",
@@ -523,12 +528,25 @@
         },
         "nearestTestedCaller": null,
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
-        "status": "reached"
+        "status": "reached",
+        "testStatus": "tests with a modeled path"
       }
     ],
     "diagnostics": [
       "changed-roots: hunk-outside-routines App/src/Core.al:8-10",
       "changed-roots: diff-file-not-al App/notes.md"
+    ],
+    "groups": [
+      {
+        "codeunit": "TU Core Tests",
+        "codeunitId": 50850,
+        "tests": 2,
+        "tiers": {
+          "local": 2,
+          "via-dependency": 0,
+          "via-hub": 0
+        }
+      }
     ],
     "hidden": [],
     "limits": [],
@@ -547,10 +565,12 @@
           "Codeunit \"TU Core Tests\"::CalcAddsOne",
           "Codeunit \"TU Core\"::Calc"
         ],
+        "pathTier": "local",
         "procedure": "CalcAddsOne",
         "reaches": [
           "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514"
         ],
+        "relation": "code",
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#310c060899a22ae7a89c63e3dc802ee1ea1199806096dbfbd5efa1afa7c5c940",
         "tier": "local"
       },
@@ -565,14 +585,17 @@
           "Codeunit \"TU Core\"::Post",
           "Codeunit \"TU Core\"::Calc"
         ],
+        "pathTier": "local",
         "procedure": "PostUpdatesQty",
         "reaches": [
           "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514"
         ],
+        "relation": "code",
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#cef2f0b2d01083453c0df5a65fe6974bc777040d9c41e9975027b27e906251c7",
         "tier": "local"
       }
     ],
+    "runFirstLine": "run first (app \"TU Production Tests\"): codeunits 50850 — a superset: whole codeunits, for the 2 selected test procedures on a local path; selection complete",
     "runFirstTotal": 2,
     "schema": "al-sem.tests",
     "scope": {
@@ -606,6 +629,7 @@
       "total": 1
     },
     "entries": [],
+    "entryBuckets": 0,
     "eventPublishers": {
       "count": 0,
       "first": [],
@@ -619,6 +643,7 @@
             "display": "Codeunit \"TU Core\"::Calc",
             "file": "src/Core.al",
             "hops": 0,
+            "pathTier": "local",
             "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
             "tier": "local"
           },
@@ -626,6 +651,7 @@
             "display": "Codeunit \"TU Core\"::Post",
             "file": "src/Core.al",
             "hops": 1,
+            "pathTier": "local",
             "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
             "tier": "local"
           }
@@ -638,8 +664,10 @@
       "byChannel": {},
       "universalHub": false
     },
+    "hubs": [],
     "limited": null,
     "maxHops": 1,
+    "programEntries": 8,
     "states": 2,
     "userOrJobEntries": 0
   },

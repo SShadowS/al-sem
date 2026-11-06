@@ -116,3 +116,77 @@ fn a_parameter_has_one_number() {
         assert_eq!(r["parameterName"], "ToRow", "{r:#}");
     }
 }
+
+fn explain() -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("explain")
+        .arg(ws())
+        .args(["--routine", "QB Copier.CopyDoc"])
+        .output()
+        .expect("spawn alsem");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf8")
+}
+
+/// Output validation V2 (§4.1, F14): a routine whose only write is
+/// caller-dependent is never led by a "no": explain's summary and query
+/// effects' summary both lead with the conditional write, its operation and
+/// place, and the condition, then the absence of any other write. Hand-stated
+/// from the fixture: the one write is `ToRow.Modify()` at line 26, on the
+/// third parameter `ToRow`.
+///
+/// Discrimination (2026-11-06): see the commit message.
+#[test]
+fn a_conditional_write_leads_the_summary() {
+    let card = explain();
+    let writes = card
+        .lines()
+        .find(|l| l.trim_start().starts_with("summary — writes: "))
+        .unwrap_or_else(|| panic!("{card}"));
+    assert!(
+        writes.contains(
+            "writes: may modify persistent QB Row records (Modify at :26) when the record its \
+             caller passes (parameter 3) is not temporary; otherwise it changes a temporary \
+             record; no other write"
+        ),
+        "{card}"
+    );
+    let human = effects(&[]);
+    let summary = human
+        .lines()
+        .find(|l| l.trim_start().starts_with("summary: "))
+        .unwrap_or_else(|| panic!("{human}"));
+    assert!(
+        summary.contains(
+            "may modify persistent QB Row records (Modify at ws:src/Copier.al:26) when the record \
+             its caller passes (parameter 3, ToRow) is not temporary; otherwise it changes a \
+             temporary record; no other write that may persist: none observed"
+        ),
+        "{human}"
+    );
+}
+
+/// Output validation V2 (§9.2, F57; §5.2, F61): `locks:` prints even at
+/// zero, with its scope, and the JSON states each operation family's depth
+/// and inventory. Wording and a structured echo of a fixed scope: no
+/// discrimination proof (CLAUDE.md "Scope of the proof").
+#[test]
+fn locks_and_reads_always_print_with_their_scope() {
+    let human = effects(&[]);
+    assert!(
+        human.contains(
+            "locks: none observed (one dependency routine deep; deeper dependency locks are not \
+             inventoried)"
+        ),
+        "{human}"
+    );
+    let v: Value = serde_json::from_str(&effects(&["--format", "json"])).expect("json");
+    let f = &v["payload"]["result"]["scope"]["families"];
+    assert_eq!(f["locks"]["depth"], "oneDependencyRoutine", "{f:#}");
+    assert_eq!(f["locks"]["inventory"], "notExhaustive", "{f:#}");
+    assert_eq!(v["schemaVersion"], "3.8.0");
+}

@@ -227,6 +227,67 @@
       }
     ],
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "families": {
+          "beyondDependencyCalls": {
+            "blockers": {
+              "callNotResolved": 2,
+              "interfaceDispatchOpenWorld": 1
+            },
+            "depth": "wholeCone",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "calls not resolved and open-world interface dispatches may reach writes the cone does not list"
+            ]
+          },
+          "locks": {
+            "blockers": {
+              "callNotResolved": 2,
+              "interfaceDispatchOpenWorld": 1
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for locks"
+            ]
+          },
+          "reads": {
+            "blockers": {
+              "callNotResolved": 2,
+              "interfaceDispatchOpenWorld": 1
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for reads"
+            ]
+          },
+          "validate": {
+            "blockers": {
+              "callNotResolved": 2,
+              "interfaceDispatchOpenWorld": 1
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for validations"
+            ]
+          },
+          "writes": {
+            "blockers": {
+              "callNotResolved": 2,
+              "interfaceDispatchOpenWorld": 1
+            },
+            "depth": "oneDependencyRoutine",
+            "inventory": "notExhaustive",
+            "reasons": [
+              "dependency code deeper than one routine is not inventoried for writes"
+            ]
+          }
+        }
+      }
+    },
     "routine": {
       "resolution": "resolved",
       "routine": {
@@ -487,5 +548,5 @@
       }
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

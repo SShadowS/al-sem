@@ -686,6 +686,12 @@
     "caption": "Order Status",
     "captionArms": [],
     "field": "Status",
+    "fieldNumber": 2,
+    "referenceCandidates": [],
+    "searched": {
+      "notSearched": "CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)",
+      "searched": "10 workspace routine bodies, 0 dependency routine bodies"
+    },
     "table": "Explain Order",
     "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
     "writers": [

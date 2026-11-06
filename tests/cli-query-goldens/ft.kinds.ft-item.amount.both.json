@@ -31,8 +31,14 @@
       "byNumberNotLiteral": 0,
       "candidates": 0,
       "candidatesByReason": {},
+      "confirmed": {
+        "sites": 18
+      },
       "declaredKeys": 1,
       "fieldIndexSites": 1,
+      "numericCandidates": {
+        "sites": 1
+      },
       "objects": 2,
       "readWriteSites": 1,
       "routines": 2,
@@ -643,6 +649,9 @@
         ]
       }
     ],
+    "filters": {
+      "sites": 2
+    },
     "from": {
       "resolution": "resolved",
       "routine": {
@@ -708,7 +717,7 @@
           "what": "no dependency code is loaded (single-app, or no dependency)"
         }
       ],
-      "scope": "Codeunit \"FT Consumers\"::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body: local 4, through dependency code 0, only through an open site 0; 0 more without a body in the model)",
+      "scope": "Codeunit \"FT Consumers\"::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body, by tier: local 4, via-dependency 0, via-hub 0; 0 more without a body in the model)",
       "workspaceRoutineBodies": 6
     },
     "table": {
@@ -719,5 +728,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

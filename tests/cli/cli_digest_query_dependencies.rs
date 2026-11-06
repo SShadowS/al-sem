@@ -194,8 +194,12 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
         "{res:?}"
     );
     let (human, _) = alsem(&["digest", &ws, "--file", "src/Work.al", "--format", "human"]);
-    assert!(
-        human.starts_with("dependencies: XBase (symbolOnly)\n"),
+    // Output validation V2 (§4.7): a change mode's first line says what was
+    // computed; the dependencies line follows.
+    assert!(human.starts_with("computed: "), "{human}");
+    assert_eq!(
+        human.lines().nth(1),
+        Some("dependencies: XBase (symbolOnly)"),
         "{human}"
     );
 
@@ -216,7 +220,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     for sel in ["18", "Customer"] {
         let (q, code) = json(&["query", "touches", &ws, "--table", sel]);
         assert_eq!(code, 0, "--table {sel}: {q}");
-        assert_eq!(q["schemaVersion"], "3.7.0");
+        assert_eq!(q["schemaVersion"], "3.8.0");
         assert_eq!(q["payload"]["table"]["id"], dep_table(), "--table {sel}");
         assert_eq!(q["payload"]["table"]["name"], "Customer");
         assert_eq!(q["payload"]["dependencies"]["mode"], "crossApp");

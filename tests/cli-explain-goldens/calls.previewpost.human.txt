@@ -1,23 +1,25 @@
 Codeunit "Calls Post"::PreviewPost  ws:src/post.al:36
-  summary — writes: no observed write that may persist; caller-dependent: 1 table
-    transaction, UI and errors: commits: none; errors at 3 places
+  summary — writes: may modify persistent Calls Order records (Modify at :41) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
+    transaction, UI and errors: commits: no (every candidate decided); errors at 3 places
     other effects: events: 0 (0 raised in workspace code)
     callers and tests: callers: none; tests: none (no test code loaded)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  coverage: complete
+  analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  calls: Codeunit "Calls Checks"::CheckPreview (:40)
+  route to its UI effect: UI_ERROR at ws:src/checks.al:23, via PreviewPost → Codeunit "Calls Checks"::CheckPreview
   rules: none of its own
   inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:23]
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:41): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]
   callers: none
-  commits: none
+  commits: no (every candidate decided)
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:41
-  events: 0 raised in workspace code; 0 more only beyond entry points
+  events: 0 raised in workspace code; 0 more only beyond dependency calls
   extension points: none (the routine publishes no event itself)
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:41 (unconditional-on-success); ERROR_THROW at ws:src/checks.al:23 (error-path); ERROR_THROW at ws:src/order.al:25 (error-path)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:41 (unconditional on success); ERROR_THROW at ws:src/checks.al:23 (error-path); ERROR_THROW at ws:src/order.al:25 (error-path)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

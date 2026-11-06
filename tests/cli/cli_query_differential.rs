@@ -747,7 +747,10 @@ fn touches_absence_is_no_only_when_nothing_is_unseen() {
     assert_eq!(leaf["touches"], false, "{leaf}");
     assert_eq!(leaf["absence"]["answer"], "no", "{leaf}");
     assert_eq!(leaf["absence"]["reasons"], serde_json::json!([]), "{leaf}");
-    assert!(human.contains("  down: no — "), "{human}");
+    assert!(
+        human.contains("  down: no (every candidate decided) — "),
+        "{human}"
+    );
 
     let (doc, human) = down("../fixtures/mcp-output/ws", "Out Item", "IssueDoc");
     assert_eq!(doc["touches"], false, "{doc}");

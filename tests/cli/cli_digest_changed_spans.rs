@@ -2067,7 +2067,7 @@ fn entry_anchor_is_the_declaration() {
     )
     .expect("prove runs");
     let p: Value = serde_json::from_str(&prove.json_text).unwrap();
-    assert_eq!(p["schemaVersion"], "2.6.0");
+    assert_eq!(p["schemaVersion"], "2.8.0");
     let a = &p["payload"]["routine"]["anchor"];
     assert_eq!(
         (
@@ -2656,9 +2656,11 @@ fn human_tests_run_lists_the_unmatched_file_before_the_tests_line() {
         .split('\n')
         .collect();
     let n = lines.len();
-    assert!(n >= 3, "{stdout}");
+    assert!(n >= 4, "{stdout}");
+    // Output validation V2 (§4.7): the first line says what was computed.
+    assert!(lines[0].starts_with("computed: "), "{stdout}");
     assert!(
-        lines[0].starts_with("--- ") && lines[0].contains("PostSalesDoc"),
+        lines[1].starts_with("--- ") && lines[1].contains("PostSalesDoc"),
         "{stdout}"
     );
     assert_eq!(
@@ -2666,7 +2668,10 @@ fn human_tests_run_lists_the_unmatched_file_before_the_tests_line() {
         "changed-roots: diff-file-unmatched ./src/missing.al",
         "{stdout}"
     );
-    assert!(lines[n - 1].starts_with("test coverage: "), "{stdout}");
+    assert!(
+        lines[n - 1].starts_with("tests (static reach): "),
+        "{stdout}"
+    );
     assert_eq!(
         lines
             .iter()

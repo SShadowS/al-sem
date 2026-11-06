@@ -3,7 +3,7 @@
   answer:   yes
   evidence: 1 effect
     [COMMIT] at ws:src/Codeunit.al:10
-      conditionality: loop-body
-  coverage: complete
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+      condition: in a loop
+  analysis complete
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

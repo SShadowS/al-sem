@@ -17,6 +17,11 @@
       "selector": "unknown"
     },
     "up": {
+      "directSites": {
+        "dependencySites": 0,
+        "workspaceRoutines": 1,
+        "workspaceSites": 1
+      },
       "index": "operations-one-routine-deep",
       "note": "workspace-global: every workspace routine whose transitive cone touches this table, by the per-operation index (one routine into dependency code). A routine whose only touch is deeper in dependency code is not listed. Scope it with --from <routine> --direction up.",
       "routineCount": 1,
@@ -38,5 +43,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

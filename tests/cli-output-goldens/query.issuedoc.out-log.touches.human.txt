@@ -1,9 +1,9 @@
 --- Codeunit "Out Issue Document"::IssueDoc vs Out Log (a0a00001-0000-4000-8000-0000000000a1/table/50101) ---
-  scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based; dependencies: 1 app (--all lists them)
+  scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based; dependencies: 1 app (--all lists them)
   down: yes — 2 record touches: 1 on a persistent record, 0 on possibly persistent records, 1 on temporary records
     [Insert] write at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit "Out Log Mgt"::WriteLog, through Codeunit "Out Log Mgt"::WriteLog
     temporary records: 1 touch in 1 routine (Codeunit "Out Log Mgt"::WriteLog 1) — --all lists them
-  table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table decided at run time) (they may be this table) — --table unknown lists them
-  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart below
+  table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table not resolved: RecordRef) (they may be this table) — --table unknown lists them
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart, before the caller list
   up: 1 transitive caller (Page "Out Doc Card".action(Issue)::OnAction) inherits this touch through this routine: 1 touches it, 0 do not, 0 unknown — --callers lists them, --all their witnesses
   through dependency code: none by code calls (open sites, hubs and what a user starts are outside this list)

@@ -34,8 +34,14 @@
         "recordref-table-unknown": 1,
         "table-not-resolved": 2
       },
+      "confirmed": {
+        "sites": 21
+      },
       "declaredKeys": 1,
       "fieldIndexSites": 1,
+      "numericCandidates": {
+        "sites": 2
+      },
       "objects": 3,
       "readWriteSites": 1,
       "routines": 5,
@@ -747,6 +753,9 @@
         ]
       }
     ],
+    "filters": {
+      "sites": 3
+    },
     "lineBase": 1,
     "reasons": [
       {
@@ -802,5 +811,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.7.0"
+  "schemaVersion": "3.8.0"
 }

@@ -201,7 +201,7 @@ fn explain_and_digest_list_the_database_commit() {
     assert_eq!(code, Some(0), "{stdout}");
     assert!(stdout.contains("commits: yes (1 site)"), "{stdout}");
     assert!(
-        stdout.contains(&format!("COMMIT at {FILE}:17 (unconditional-on-success)")),
+        stdout.contains(&format!("COMMIT at {FILE}:17 (unconditional on success)")),
         "{stdout}"
     );
 

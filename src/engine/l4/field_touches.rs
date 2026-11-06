@@ -200,6 +200,62 @@ pub const NOT_SEARCHED: &[(&str, &str)] = &[
     ),
 ];
 
+/// The searched / not-searched sentence of a field answer (output
+/// validation V2, §4.2, §9.3): one helper for `query touches --field` and
+/// `explain --field`, so the two say the same. `cross_app`: dependency code
+/// is loaded (only what the workspace calls). Returns `(searched, not
+/// searched)`, for `searched: …; not searched: …` and for the §8.1
+/// `none observed (searched: …; not searched: …)` of an empty inventory.
+#[must_use]
+pub fn search_words(cov: &Coverage, cross_app: bool) -> (String, String) {
+    let n = |k: usize, one: &str, many: &str| {
+        format!(
+            "{} {}",
+            crate::engine::l5::routine_rollup::thousands(k),
+            if k == 1 { one } else { many }
+        )
+    };
+    let searched = format!(
+        "{}, {}",
+        n(
+            cov.workspace_bodies,
+            "workspace routine body",
+            "workspace routine bodies"
+        ),
+        n(
+            cov.dependency_bodies,
+            "dependency routine body",
+            "dependency routine bodies"
+        )
+    );
+    let mut not = vec![
+        "CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level)"
+            .to_string(),
+    ];
+    not.push(if cross_app {
+        "dependency code the workspace does not call (not loaded)".to_string()
+    } else {
+        "dependency code (none loaded)".to_string()
+    });
+    if cov.dependency_without_body > 0 {
+        not.push(format!(
+            "{} known by symbols only",
+            n(
+                cov.dependency_without_body,
+                "dependency routine",
+                "dependency routines"
+            )
+        ));
+    }
+    if cov.by_number_not_literal > 0 {
+        not.push(format!(
+            "dynamic field numbers ({} not matched)",
+            n(cov.by_number_not_literal, "site", "sites")
+        ));
+    }
+    (searched, not.join("; "))
+}
+
 /// Resolve `selector` to one field of `table`: a field number, or a name
 /// compared the AL way. `Err` lists the candidates (empty when none).
 pub fn resolve_field<'m>(

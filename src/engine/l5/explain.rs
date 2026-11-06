@@ -214,9 +214,14 @@ struct FieldAnswer {
     table: String,
     table_id: String,
     field: String,
+    number: i64,
     captions: Vec<String>,
     /// Per writer (stable id, in id order): its write sites, in anchor order.
     writers: BTreeMap<String, Vec<(WriteKind, PAnchor)>>,
+    /// `(searched, not searched)`, from `field_touches::search_words`.
+    search: (String, String),
+    /// References that may write, not confirmed: each `kind at file:line`.
+    candidates: Vec<String>,
 }
 
 /// What `resolve` hands to `compute`.
@@ -733,6 +738,34 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
         sites.sort_by(|a, b| anchor_key(&a.1).cmp(&anchor_key(&b.1)).then(a.0.cmp(&b.0)));
         sites.dedup_by(|a, b| a.0 == b.0 && anchor_key(&a.1) == anchor_key(&b.1));
     }
+    // Output validation V2 (§4.2, F17): what was searched (the helper the
+    // touches field mode prints), and the references that may write but are
+    // not confirmed writers: `RecordRef.Field` by number and `TransferFields`
+    // copies, from the same field-use index.
+    let touches = crate::engine::l4::field_touches::field_touches(model, mt, mf, &|_| true);
+    let search = crate::engine::l4::field_touches::search_words(
+        &touches.coverage,
+        touches.coverage.dependency_bodies > 0,
+    );
+    let candidates: Vec<String> = touches
+        .sites
+        .iter()
+        .filter_map(|s| {
+            use crate::program::body::record_op::FieldUse;
+            let kind = if s.uses.contains(&FieldUse::ByNumber) {
+                "RecordRef.Field by number"
+            } else if s.uses.contains(&FieldUse::CopyCandidate) {
+                "TransferFields copy"
+            } else {
+                return None;
+            };
+            Some(format!(
+                "{kind} at {}:{}",
+                s.anchor.source_unit_id,
+                s.anchor.start_line + 1
+            ))
+        })
+        .collect();
     Resolved {
         roots: writers.keys().cloned().collect(),
         diagnostics: vec![],
@@ -740,8 +773,11 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
             table: mt.name.clone(),
             table_id: mt.id.clone(),
             field: mf.name.clone(),
+            number: mf.field_number,
             captions: mf.captions.clone(),
             writers,
+            search,
+            candidates,
         }),
         unresolved: false,
     }
@@ -1303,6 +1339,187 @@ fn path_names(
     out
 }
 
+/// What a routine itself changes (output validation V2, §5.1, F75): the
+/// object globals it assigns and its own record operations that write, or
+/// "none". One line, for the callers' context section.
+fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str) -> String {
+    let Some(r) = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.stable_routine_id == root)
+    else {
+        return "own state changes: not known (no body in the model)".to_string();
+    };
+    let globals: BTreeMap<String, &str> = r
+        .variables
+        .iter()
+        .filter(|v| v.scope.as_deref() == Some("global"))
+        .map(|v| (v.name.to_ascii_lowercase(), v.name.as_str()))
+        .collect();
+    let set: BTreeSet<&str> = r
+        .var_assignments
+        .iter()
+        .filter_map(|a| {
+            let head = a
+                .lhs_name
+                .split(['.', '['])
+                .next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .to_ascii_lowercase();
+            globals.get(&head).copied()
+        })
+        .collect();
+    let kind = model
+        .workspace
+        .objects
+        .iter()
+        .find(|o| o.id == r.object_id)
+        .map_or("object".to_string(), |o| o.object_type.to_ascii_lowercase());
+    let writes: Vec<String> = r
+        .record_operations
+        .iter()
+        .filter(|o| {
+            matches!(
+                o.op.as_str(),
+                "Insert" | "Modify" | "ModifyAll" | "Delete" | "DeleteAll" | "Rename" | "Validate"
+            )
+        })
+        .map(|o| format!("{} on {}", o.op, o.record_variable_name))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut parts = Vec::new();
+    if !set.is_empty() {
+        parts.push(format!(
+            "sets {} {kind} {} ({})",
+            set.len(),
+            if set.len() == 1 { "global" } else { "globals" },
+            set.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    parts.push(if writes.is_empty() {
+        "no record write of its own".to_string()
+    } else {
+        format!("record writes of its own: {}", writes.join(", "))
+    });
+    format!("own state changes: {}", parts.join("; "))
+}
+
+/// The routine's direct callees in source order, at most [`CALLS_SHOWN`]
+/// named (output validation V2, §9.1, F55): `calls: X (:181), Y (:190); +2
+/// more`. Builtins and unresolved calls are not routines and are left out.
+fn calls_line(
+    model: &crate::program::model::workspace::Model,
+    names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
+    root: &str,
+) -> Option<String> {
+    let routines = &model.workspace.routines;
+    let r = routines.iter().find(|r| r.stable_routine_id == root)?;
+    let stable_of: HashMap<&str, &str> = routines
+        .iter()
+        .map(|x| (x.id.as_str(), x.stable_routine_id.as_str()))
+        .collect();
+    let to_of: HashMap<&str, &str> = model
+        .calls
+        .edges
+        .iter()
+        .filter(|e| e.from == r.id)
+        .filter_map(|e| Some((e.callsite_id.as_str(), e.to.as_deref()?)))
+        .collect();
+    let mut sites: Vec<&crate::program::body::features::PCallSite> = r.call_sites.iter().collect();
+    sites.sort_by_key(|c| (c.source_anchor.start_line, c.source_anchor.start_column));
+    let mut seen = HashSet::new();
+    let mut items: Vec<String> = Vec::new();
+    for c in sites {
+        let Some(to) = to_of.get(c.id.as_str()) else {
+            continue;
+        };
+        let Some(stable) = stable_of.get(to) else {
+            continue;
+        };
+        if !seen.insert(*stable) {
+            continue;
+        }
+        items.push(format!(
+            "{} (:{})",
+            names.display(stable),
+            c.source_anchor.start_line + 1
+        ));
+    }
+    if items.is_empty() {
+        return Some("calls: none (no call to a routine; builtins aside)".to_string());
+    }
+    let more = items.len().saturating_sub(CALLS_SHOWN);
+    items.truncate(CALLS_SHOWN);
+    Some(format!(
+        "calls: {}{}",
+        items.join(", "),
+        if more > 0 {
+            format!("; +{more} more")
+        } else {
+            String::new()
+        }
+    ))
+}
+
+/// How many direct callees explain's `calls:` line names.
+const CALLS_SHOWN: usize = 5;
+
+/// The `ChangeCompany` calls in a routine's workspace cone (output
+/// validation V2, §9.1, F75): the routine's own body and every workspace
+/// routine its resolved calls reach, each `file:line` (1-based). The analysis
+/// tracks no company per record (§10), so a write in such a cone prints
+/// "target company: not established by this analysis".
+fn change_company_sites(
+    model: &crate::program::model::workspace::Model,
+    root: &str,
+) -> Vec<String> {
+    let routines = &model.workspace.routines;
+    let Some(start) = routines.iter().position(|r| r.stable_routine_id == root) else {
+        return Vec::new();
+    };
+    let by_id: HashMap<&str, usize> = routines
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.id.as_str(), i))
+        .collect();
+    let mut out_edges: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &model.calls.edges {
+        if let Some(to) = &e.to {
+            out_edges
+                .entry(e.from.as_str())
+                .or_default()
+                .push(to.as_str());
+        }
+    }
+    let mut seen = HashSet::from([start]);
+    let mut queue = VecDeque::from([start]);
+    let mut sites = BTreeSet::new();
+    while let Some(i) = queue.pop_front() {
+        let r = &routines[i];
+        for c in &r.call_sites {
+            let t = c.callee_text.to_ascii_lowercase();
+            if t == "changecompany" || t.ends_with(".changecompany") {
+                sites.insert(format!(
+                    "{}:{}",
+                    c.source_anchor.source_unit_id,
+                    c.source_anchor.start_line + 1
+                ));
+            }
+        }
+        for to in out_edges.get(r.id.as_str()).into_iter().flatten() {
+            if let Some(&j) = by_id.get(to)
+                && seen.insert(j)
+            {
+                queue.push_back(j);
+            }
+        }
+    }
+    sites.into_iter().collect()
+}
+
 /// One card's callers through dependency code under `--callers-context`
 /// (callers-through-dependency design r2 §11.3, `impact_graph::dep_callers`):
 /// the JSON `throughDependency` (counts, the catalog, the 3 nearest code
@@ -1535,12 +1752,64 @@ fn render(
                     .unwrap_or(human.len());
                 human.insert_str(at, &format!("    {line}\n"));
             }
+            // Output validation V2 (§5.1, F29, F75): the routine's own state
+            // changes, the target company of its writes, and the callers'
+            // context section lead the card, right after its header lines.
+            let after_header = |h: &str| {
+                h.find("\n  scope: ")
+                    .and_then(|i| h[i + 1..].find('\n').map(|j| i + 1 + j + 1))
+                    .unwrap_or(h.len())
+            };
+            let mut lead: Vec<String> = Vec::new();
+            // §9.1 (F55): the direct callees first, and the short route to
+            // the UI effect the card names (a callee list alone does not say
+            // how the routine reaches it).
+            if let Some(l) = calls_line(model, &rcx.names, rid) {
+                lead.push(l);
+            }
+            if let Some(e) = entry.and_then(|e| {
+                e.effects
+                    .iter()
+                    .filter(|f| f.effect_type.starts_with("UI_") && !f.literal_unreachable)
+                    .find(|f| f.via_paths.iter().any(|p| !p.is_empty()))
+            }) && let Some(p) = e
+                .via_paths
+                .iter()
+                .filter(|p| !p.is_empty())
+                .min_by_key(|p| p.len())
+            {
+                let at = match (&e.evidence.file, e.evidence.line) {
+                    (Some(f), Some(l)) => rcx.location(f, l),
+                    _ => "no position kept".to_string(),
+                };
+                lead.push(format!(
+                    "route to its UI effect: {} at {at}, via {}",
+                    e.effect_type,
+                    rcx.path_line(rid, p)
+                ));
+            }
+            let writes =
+                entry.is_some_and(|e| e.effects.iter().any(|f| f.effect_type.starts_with("DB_")));
+            if writes {
+                let sites = change_company_sites(model, rid);
+                if !sites.is_empty() {
+                    json["targetCompany"] = json!({"established": false, "changeCompany": sites});
+                    lead.push(format!(
+                        "target company: not established by this analysis (ChangeCompany at {})",
+                        sites.join(", ")
+                    ));
+                }
+            }
             // `--callers-context` (agent-tasks §6.6): the callers' context
-            // section, before `next:`.
+            // section.
             if let Some((value, lines)) = callers.get(rid) {
                 json["callersContext"] = value.clone();
-                let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
-                let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
+                lead.push(own_state_changes(model, rid));
+                lead.extend(lines.iter().cloned());
+            }
+            if !lead.is_empty() {
+                let at = after_header(&human);
+                let text: String = lead.iter().map(|l| format!("  {l}\n")).collect();
                 human.insert_str(at, &text);
             }
             (card.sort_key.clone(), rid.clone(), json, human)
@@ -1750,15 +2019,50 @@ fn field_json(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -
         "caption": caption.clone().ok().flatten(),
         "captionArms": caption.err().unwrap_or_default(),
         "writers": writers,
+        // Output validation V2 (§4.2, additive): the search and the
+        // reference candidates beside the confirmed writers.
+        "fieldNumber": f.number,
+        "searched": {"searched": f.search.0, "notSearched": f.search.1},
+        "referenceCandidates": f.candidates,
     })
 }
 
 fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -> String {
-    let mut out = format!("field: {}.{}", f.table, f.field);
+    // Output validation V2 (§4.2, F17): a count with its search, never a
+    // bare `0`; confirmed writers and reference candidates counted apart.
+    let quote = |s: &str| {
+        if s.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            s.to_string()
+        } else {
+            format!("\"{s}\"")
+        }
+    };
+    let mut out = format!(
+        "field: {}.{} (field {}",
+        quote(&f.table),
+        quote(&f.field),
+        f.number
+    );
     if let Ok(Some(c)) = one_text(&f.captions) {
-        out.push_str(&format!(" (caption \"{c}\")"));
+        out.push_str(&format!(", caption \"{c}\""));
     }
-    out.push_str(&format!(": {} writer(s)\n", f.writers.len()));
+    out.push_str(")\n");
+    let (searched, not_searched) = &f.search;
+    if f.writers.is_empty() {
+        out.push_str(&format!(
+            "  confirmed writers: {}\n",
+            crate::engine::vocab::none_observed(searched, not_searched)
+        ));
+    } else {
+        out.push_str(&format!("  confirmed writers: {}\n", f.writers.len()));
+    }
+    let kind_words = |k: WriteKind| match k {
+        WriteKind::Assign => {
+            "assignment (changes the record in memory; persisted by whoever modifies or inserts it)"
+        }
+        WriteKind::Validate => "Validate (also runs the field's OnValidate)",
+        WriteKind::ModifyAll => "ModifyAll (a set-based write to the database)",
+    };
     for (id, sites) in writers_by_anchor(f) {
         let display = ix
             .rows_of(id.as_str())
@@ -1766,9 +2070,9 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
             .map_or_else(|| id.clone(), |&i| ix.qualified(i));
         let at: Vec<String> = sites
             .iter()
-            .map(|(k, a)| format!("{} at {}", k.as_str(), anchor_human(a)))
+            .map(|(k, a)| format!("{} at {}", kind_words(*k), anchor_human(a)))
             .collect();
-        out.push_str(&format!("  {display}: {}\n", at.join(", ")));
+        out.push_str(&format!("    {display} — {}\n", at.join(", ")));
         for (_, a) in sites {
             let (_, site) = index_site(entry, id, a);
             let rules = site.map_or(&[][..], |s| s.rules.as_slice());
@@ -1792,6 +2096,32 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
             }
         }
     }
+    out.push_str(&format!(
+        "  references that may write, not confirmed (kinds: RecordRef.Field by number, \
+         TransferFields copies): {}\n",
+        if f.candidates.is_empty() {
+            "none observed (search below)".to_string()
+        } else {
+            let mut s = format!("{}: ", f.candidates.len());
+            s.push_str(
+                &f.candidates
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+            if f.candidates.len() > 5 {
+                s.push_str(&format!("; … +{}", f.candidates.len() - 5));
+            }
+            s
+        }
+    ));
+    out.push_str("  writer kinds searched: assignment, Validate, ModifyAll\n");
+    out.push_str(&format!(
+        "  searched: {searched}; not searched: {not_searched}\n"
+    ));
+    out.push_str("  reads, filters and validations: alsem_query_touches with table and field\n");
     out.push('\n');
     out
 }
@@ -2789,7 +3119,9 @@ impl Card {
             }
         }
         let mut header = header_lines(&rollup, full, &counted);
-        header[0] = totals.human();
+        header[0] = totals.human(&crate::engine::l5::routine_rollup::writes_summary(
+            &rollup, full,
+        ));
         if !notes.is_empty() {
             header.insert(
                 4,
