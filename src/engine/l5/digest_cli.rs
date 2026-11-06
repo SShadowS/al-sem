@@ -3651,6 +3651,23 @@ pub(crate) fn digest_summary_tested(
                 .collect::<Vec<_>>(),
         });
     }
+    // Rows that do not all fit with their totals are listed compact (the
+    // identity, summary line, verdicts and test status; the totals stay in
+    // the document), so the summary names as many requested roots as it can
+    // before it cuts any.
+    let reserve = crate::engine::result_index::INDEX_RESERVE_BYTES;
+    if v.to_string().len() + reserve > crate::engine::batch::output::SUMMARY_CAP_BYTES {
+        v["shared"] = json!({});
+        v["rowDetail"] = json!("compact: each root's totals are in the document");
+        if let Some(rs) = v["routines"].as_array_mut() {
+            for r in rs {
+                if let Some(m) = r.as_object_mut() {
+                    m.remove("summary");
+                    m.remove("effectsByType");
+                }
+            }
+        }
+    }
     let mut v = crate::engine::result_index::with_index(v, "routines", "stableId", index_rows);
     v["routinesListed"] = json!(v["routines"].as_array().map_or(0, Vec::len));
     v
