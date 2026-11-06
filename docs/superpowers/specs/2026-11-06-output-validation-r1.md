@@ -1,10 +1,14 @@
 # Output validation, round 1: what the MCP answers should look like (design spec)
 
-**Status:** design only, revision 2 (after the review of revision 1 by Fable and astra, both
-"accept with the listed changes"). No code lands with this file.
+**Status:** design only, revision 3 (after two review rounds by Fable and astra; both accepted
+revision 2 "with changes"). No code lands with this file.
 **Date:** 2026-11-06. **Based on:** master `6e577c24`, binary al-sem 2.1.1.
-**Reviews of revision 1:** `target/tmp/output-validation/round1/review/spec-review-fable.md`
-and `…/spec-review-astra.md`. What each item changed: "Revision 2" below.
+**Reviews:** of revision 1, `target/tmp/output-validation/round1/review/spec-review-{fable,astra}.md`;
+of revision 2, `…/spec-r2-review-{fable,astra}.md`. What each item changed: "Revision 3" and
+"Revision 2" below.
+**Numbers in sketches:** taken from the round-1 calls (named where used) or marked
+illustrative when they cannot be computed before the fix branches land. Round-2 numeric
+expectations are derived after those branches merge (§12.2), not from this file.
 **Input:** 30 MCP calls recorded on the CDO baseline (`bc3ccb18`), each with the task an agent
 had; a fact check of every claim against the AL source; two independent reviews of the outputs
 against one rubric (Fable and astra). All of it is under
@@ -24,17 +28,73 @@ effects", §12 surface and versions), and the call-graph export contract
 (`…/specs/2026-10-13-callgraph-export-design.md`). Nothing here changes `alsem graph` JSONL.
 
 Words used here:
-- **hub** (or **open site**): a call the engine cannot resolve to one target, such as
-  `Codeunit.Run(<variable>)`. The graph stands for it with one node that may lead anywhere. A
-  path over a hub is a possibility, not a path the code is known to take.
-- **tier**: how a path reached its end. `local` (every hop in the workspace or a loaded test
-  app), `via-dependency` (it passes dependency code), `via-hub` (it passes a hub).
+- **hub** (or **open site**): a call whose set of targets the engine cannot close — an
+  unresolved dispatch, such as `Codeunit.Run(<variable>)`. The graph stands for it with one node
+  that may lead anywhere. A call with several known targets is not a hub; when known targets and
+  an unresolved remainder coexist (an interface under open world), both are shown. A path over a
+  hub is a possibility, not a path the code is known to take.
+- **tier**: where a path goes, from the word table (§8.1): `local`, `via-dependency`,
+  `via-configuration`, `via-hub`; the weakest hop decides.
 - **boilerplate**: the coverage / assumptions / limits / scope lines every card repeats.
 - **envelope**: the JSON the MCP tool returns around the answer text (`exitCode`, `summary`, …).
 
 **The contract that does not move:** the MCP answer stays the CLI's stdout byte for byte. Every
 change below is a change to the CLI output, or to the envelope, made on purpose with its goldens
 regenerated and read.
+
+---
+
+## Revision 3: what each review item changed
+
+Both reviewers accepted revision 2 with changes. Fable's must-changes are numbered 1–4 and its
+should-changes e–p (its §5 and §3); astra's are its "remaining must-changes" list, named by
+topic. Every item is applied; declines are marked. The main class was consistency: every sketch
+now uses the §8.1 word table exactly, and every sketch number either adds up from a named call
+or is marked illustrative.
+
+### R3.1 Must-change items
+
+| Item | Change made |
+|---|---|
+| Fable 1 (hub form in §3.1, §3.2) | §3.1 uses `[hub Codeunit.Run of a variable at …]`; §3.2 uses a real c12 hub, `[hub Page.Run of a variable at …]`. §8.1 states where a hub's variable name goes (`[hub <kind> <name>? at <file>:<line>]`) |
+| astra: declared-but-never-run variables are not hubs | `page variable (declared, never run)` removed from the hub list and from every sketch: it is the false `declaredRunnable` edge `fix/reach-and-test-selection` removes, not an uncertain route. §8.1 says so |
+| astra: known targets plus an unresolved remainder | the hub definition (Words) and §8.1's hub row: both print (`interface dispatch: 2 known implementations + open remainder`) |
+| Fable 2, astra (§3.2 counts; fan-out population; "not specific") | §3.2 sketch rebuilt from c12's recorded numbers (ancestors 27,718 = local 0 + via-dependency 23,230 + via-hub 4,488; entries by kind from the same answer); the code/navigation split is marked illustrative (it needs the relation axis and the fix branch). The single-hub trigger is redefined on a stated population (the hub's forward cone over graph nodes, as `test_select` already measures `overHalfOfGraph`); the folding words are `broad navigation reach; list folded`, never "not specific" |
+| Fable 3, astra (entry kinds vs context) | §8.1: entry kinds are routine kinds only (closed list); **execution context** is its own row with its own closed list and counting rule (contexts overlap and are never summed). §3.1, §4.4, §5.1 sketches use `codeunit OnRun [context: job queue]` and `by context: …` |
+| astra: relation describes the whole witness | §8.1: `relation` is `UI navigation` when any edge of the witness is navigation, else `code` |
+| astra: configuration evidence status | §8.1: a `via-configuration` witness is a candidate (the binding lives in data the analysis has not read), counted under `candidates over configuration`, never established |
+| Fable 4 (negative certainty leaks) | §4.1, §4.2, §6.2 use `no (every candidate decided)` and `none observed (searched: …; not searched: …)`; no "no observed" survives in a sketch. This replaces wave-2 §3.7's absence wording; §8.1 says so |
+| astra: feasible summary overflow | §5.2: the summary is bounded (8 KiB); mandatory content that does not fit goes to a **complete compact result index** file beside the answer (every requested identity, verdict and selected test), named in the summary; transport truncation (`summaryTruncated`) is reported apart from `selectionComplete` |
+| astra: non-result states; structured per-family scope | §5.2: analysis `complete` / `partial` / `not analyzed` (with reasons); test status uses the §8.1 completeness words including `analysis incomplete`, `not in projection`, `not loaded`, `not requested`; per-family scope is a structured object (`depth`, `inventory`, `reasons`, `blockers`) |
+| astra: c06 reused c02's counts | §5.1 sketch uses c06's own recorded section (8 witnesses, 7 from page triggers; external callers 2; publication unknown 1, unread publication file 1, background target not resolved 2) |
+| astra: dependency-owned touch sites | §9.3: `dependency sites` line apart from workspace sites; the transitive relation is qualified |
+| astra: confirmed writers vs reference candidates | §4.2: confirmed writers (assignment, `Validate`, `ModifyAll`) counted; `RecordRef.Field(n)` and `TransferFields` listed apart as references or copy candidates, never as writers |
+| astra: "temporary records are not writes" | replaced everywhere by "writes to temporary records do not directly persist those records" (§5.3, and the sentence the spec quotes from the scope line) |
+| astra: company context omitted | §9.1, §10: a write in a cone that calls `ChangeCompany` prints `target company: not established by this analysis (ChangeCompany at <file>:<line>)` |
+| astra: pasteability only for tested forms | §2.1: only `selector` is guaranteed; human displays are pasteable for the forms the round-trip test covers (listed), not for dependency displays with numbers, data-item members or app labels. Fable j (the caption contradiction) resolved by the same rewrite |
+| astra: stale consumer recipes | §7.2: ConTinAI `effects.py` reads `origin.line` (was `origin.anchor.line`); §7.3: bc-dev-mcp joins each root's references and annotations with `payload.effects` |
+| astra: assumption-changing follow-ups | §6.1: ordinary follow-ups keep the call's assumptions; a call that changes one is printed as `conditional alternative:` |
+| astra: F74 and F61 alongside V2 | §0.1: F74 and the output part of F61 move to V2 |
+| Fable: scope the `run-time` decline | §8.1 and §11.2 row 5: the decline is for table, temp and condition targets; for call edges `honest dynamic` (`HonestDynamic`, `edge.rs`) is a proven run-time fact and keeps its word |
+
+### R3.2 Should-change items (Fable e–p)
+
+| Item | Disposition |
+|---|---|
+| e | applied: §7.1 and §3.3 use `via-dependency` / `via-configuration`; `Codeunit "Workflow Response Handling" (1521)::ExecuteResponse` in the §2.2 form |
+| f | applied: §5.2's third header line and §5.3's one-liner are merged into one line (`analysis complete · assumptions: … · limits: … · scope: …`), `more:` on its own line |
+| g | applied: F16 prints `caller-dependent (parameter 3, ToPurchaseHeader)`, the §8.1 form, already in V1 |
+| h | applied: §5.2 test status uses the §8.1 words |
+| i | applied: §2.4's `selector forms:` line lists the member forms |
+| j | applied (with astra's pasteability item) |
+| k | applied: `pending writes: yes` |
+| l | applied: milestone markers on §5.1 (V2), §5.2 (the `tableAnswers` part is V2), §9.3 field mode (V2), §9.8 (F73 V6, F78 V4) |
+| m | applied: §7.6 lists `via-configuration` |
+| n | applied: §8.1 gains a **blocker kinds** row, the closed list from `callers_context.rs` plus prove's effect-question blockers |
+| o | applied: the c02 sketch names the three largest kinds that stay and prints `and 4 more kinds stay (detail: true lists them)` (c02 has eight blocker kinds, not nine; external callers is the one removed); the rule caps at three named kinds |
+| p | applied: §8.3 states the exception (a correctness fix that removes rows a reader should never have counted is a minor bump; a rename is not) |
+
+No item is declined in revision 3.
 
 ---
 
@@ -116,8 +176,8 @@ branches). The outputs failed agents in four ways, and both reviewers found the 
 1. **The same thing has several names.** Overloads print as one name (four identical
    `CreateSMTPLogEntries` rows); a table's field triggers and a page's actions print as bare
    `OnValidate` / `OnAction`; dependency routines print as `Codeunit 448::handlerequest`.
-2. **Possibilities look like facts.** A path over a hub is printed as evidence (c02); a reach set
-   the size of the whole program is listed as if it were specific (c12, c20); a conditional write
+2. **Possibilities look like facts.** A path over a hub is printed as evidence (c02); a very
+   broad reach is listed with no tier and no hub named (c12, c20); a conditional write
    is led by "no write" (c01, c23); a filtered "no" hides the sites that do match (c27).
 3. **The answer is not first, and not in the summary.** c06's COMMIT hazard is the third-to-last
    line; c15's asked-for CDO File verdict is missing from the envelope summary; c17's new
@@ -136,11 +196,11 @@ is regeneration, not rework.
 |---|---|---|---|---|
 | V0 | **Word table** (decision only): §8.1 and the migration rule §8.3, approved and dated before any renderer uses them | F49, F51, F52 | — | — |
 | V1 | **Correctness bugs** | F5, F9, F15, F16, F24, F25, F39 | S, 7 small commits | — |
-| V2 | **What misleads**: verdict and tier wording, silent lines, the evidence a hazard needs | F10, F12, F13, F14, F17, F18, F19, F20, F21, F22, F23, F27, F29, F42 (`tableAnswers` only), F48, F50, F55, F56, F57, F63, F75, F79 | L | V0; the fix-branch gates of §12.2 |
+| V2 | **What misleads**: verdict and tier wording, silent lines, the evidence a hazard needs | F10, F12, F13, F14, F17, F18, F19, F20, F21, F22, F23, F27, F29, F42 (`tableAnswers` only), F48, F50, F55, F56, F57, F61 (human scope clause; the JSON object is V4), F63, F74, F75, F79 | L | V0; the fix-branch gates of §12.2 |
 | V3 | **Identities** and the selector grammar | F1–F4, F6–F8 | M | — |
-| V4 | **Result header, summaries, follow-ups** | F28, F30–F37, F42 (the rest), F43, F61, F76, F77, F78, F81, F85 | M | V0, V2, V3 |
+| V4 | **Result header, summaries, follow-ups** | F28, F30–F37, F42 (the rest, incl. the result index), F43, F61 (JSON `families`), F76, F77, F78, F81, F85 | M | V0, V2, V3 |
 | V5 | **Size and dedup** (three schema majors: query 4.0.0, digest 4.0.0, tests 2) | F38, F40, F41, F44–F47, F83, F84 | L | V3 (rows refer to routine ids), V4 (the `result` contract) |
-| V6 | **Counting units and per-tool items** | F53, F54, F59, F60, F62, F64–F67, F72, F73, F74, F80, F82 | M | V0 |
+| V6 | **Counting units and per-tool items** | F53, F54, F59, F60, F62, F64–F67, F72, F73, F80, F82 | M | V0 |
 
 Order: V1 first (small, and two of its bugs feed V2 text). V0 is a one-page owner decision,
 signed off here before V2 starts: **V0 approved: (date, owner) — open.** V2 and V3 next, in
@@ -157,7 +217,7 @@ discrimination proof (break the fix, watch the test fail, revert).
 | id | Bug | Fix | Test (discrimination break) |
 |---|---|---|---|
 | F15 | query effects files a `Get` under "caller-dependent writes": c11 prints `caller-dependent writes 2 on 1 table` then `Purchase Header: Get 1, Modify 1`. `effect_query_cli.rs:2991` `bucket()` returns `callerDependent` before it reads `op_family`; the `Temporary` arm returns before it too (Fable), so a temporary `Get` reads as "temporary records" work | Split **both** non-physical classes by op family as the physical class is split: writes, reads, locks, validations and other families each keep their class as a note (`caller-dependent`, `temporary`). The read, lock and validate totals count every class (a temporary or caller-dependent lock is a lock). JSON `writeTables` loses the read rows; a minor query bump (3.6.0), since a row moves bucket. Passed to the V1 fix branch | fixture routine with, on one caller-dependent parameter, a `Get`, a `LockTable` and a `Modify`, and on a temporary record a `Get`: writes count 1, reads 2 (one caller-dependent, one temporary), locks 1 (break: return the class for every op again) |
-| F16 | One answer, two bases: `(caller-dependent: parameter 3)` (1-based, `temp_note`) and `temp parameter-dependent(2)` (raw 0-based, `temp_state_str` in the `--all` rows) | Human rows print the same words as `temp_note`: `caller-dependent: parameter 3 (ToPurchaseHeader)` with the parameter name. JSON keeps `parameterIndex` (0-based) and adds `parameterPosition` (1-based) and `parameterName` | the c11 shape in the fixture: both lines name position 3 (break: print the raw index) |
+| F16 | One answer, two bases: `(caller-dependent: parameter 3)` (1-based, `temp_note`) and `temp parameter-dependent(2)` (raw 0-based, `temp_state_str` in the `--all` rows) | Both human forms print the §8.1 temp-state words: `caller-dependent (parameter 3, ToPurchaseHeader)` (1-based, with the parameter name), so the golden moves once. JSON keeps `parameterIndex` (0-based) and adds `parameterPosition` (1-based) and `parameterName` | the c11 shape in the fixture: both lines name position 3 (break: print the raw index) |
 | F24 | impact exits 2 when the change has no routine (c13), although the accounting is complete. `impact/render.rs:715` | Exit 0 with `outcome: "no-routine-changed"` (see F36) **only when the accounting is complete** (no unmapped line, no file not mapped, no diff line that fails to match the working tree). When no routine resolved because input did not map, the outcome is `input-not-mapped` and the exit stays 2 (no answer) | `cli_impact.rs`: a header-only diff exits 0 with `no-routine-changed`; a diff whose lines do not match the tree exits 2 with `input-not-mapped` (break: restore the `roots.is_empty()` rule; break 2: drop the completeness condition) |
 | F25 | impact without a base says `— signature changed` of a routine the diff adds (c20). `impact/jobs.rs:268-274` sets the status from "a changed line falls on the signature" | Without a base, the status says what the diff shows: `new in this diff (every line added)` when all of the routine's lines are `+` lines, else `signature lines changed in the diff`. "Signature changed" is kept for a base comparison (`delta.pairing == signature`) | the c20 patch shape: an added routine prints `new in this diff` (break: drop the all-added check) |
 | F5 | prove's callers' context answers print `dep:<guid>:path` in human text (c02); the rule is `dep:<app name>:path` (plan 2g, wave-2 §3.8 rule 5). `callers_document` (`prove.rs` ~L2981) never calls `dependencies.readable_locations`, which the effects path calls (`prove.rs:2711`) | Call it in `callers_document`. JSON keeps the guid (the ConTinAI citation reader needs it) | the hygiene test `human_outputs_are_clean_and_within_budget` gains a callers' context answer and asserts no `dep:<36-char guid>:` in human text (break: remove the call) |
@@ -203,10 +263,16 @@ Rules:
 `Owner::Routine(<types>)` only, so a trigger display could not be pasted into the next call. V3
 extends the grammar with the member forms `Object."Field"::Trigger` and
 `Object.action(Name)::OnAction` (a caption after the name is accepted and ignored on input), and
-every JSON row carries `selector`: the shortest form that resolves to that one stable id. The
-human display is a valid selector except for the caption. Test: every `selector` emitted in the
-fixture's and CDO's goldens resolves to its own stable id (break: drop the member forms from the
-grammar).
+every JSON row carries `selector`: the shortest form that resolves to that one stable id.
+
+**What is guaranteed** (astra): only `selector` is guaranteed to resolve. A human display is
+pasteable for the forms the round-trip test covers, and only those: a workspace
+`Object::Routine`, with a parameter list, `Object."Field"::Trigger` and
+`Object.action(Name)::OnAction` with or without its caption. Other displays — a dependency
+object with its number in brackets (`Codeunit "Job Queue Dispatcher" (448)::HandleRequest`),
+data-item members, an app label — are not promised to parse; the description says to use
+`selector`. Test: every `selector` emitted in the fixture's and CDO's goldens, and every display
+of a covered form, resolves to its own stable id (break: drop the member forms from the grammar).
 
 Where the data is: workspace routines have the member in the model; graph nodes carry `member`,
 `objectName`, `memberName` and `arity` (call-graph spec, node table). No engine change.
@@ -240,7 +306,8 @@ c26: one 1,000-character line with both overloads.
 ```
 explain: no routine in the loaded program is named 'SendMailTwice' (exit 2: no answer)
   nearest names: Codeunit "CDO Send Mail Management"::SendMail (6 overloads); Codeunit "CDO E-Mail"::Send (…)
-  selector forms: Object::Routine, Object::Routine(<parameter types>), or a stable id
+  selector forms: Object::Routine, Object::Routine(<parameter types>), Object."Field"::Trigger,
+    Object.action(Name)::OnAction, or a stable id
 ```
 **New** c26:
 ```
@@ -284,48 +351,68 @@ lists `SendMail`; c26 offers the two-selector value.
 **New:**
 ```
   answer:   unknown — no non-interactive route without a hub was established in the analyzed graph;
-            47 candidates pass a hub (Codeunit.Run of a variable at OnpremSessionHandler.Codeunit.al:43,
-            at JobQueueStartCodeunit.Codeunit.al:32; record trigger (Modify) at CDODataUpgrade.Codeunit.al:128)
+            47 candidates pass a hub ([hub Codeunit.Run of a variable at OnpremSessionHandler.Codeunit.al:43],
+            [hub Codeunit.Run of a variable at JobQueueStartCodeunit.Codeunit.al:32],
+            [hub record trigger (Modify) at CDODataUpgrade.Codeunit.al:128])
   established witnesses: none
-  candidates over a hub: 47 (background start 9, install 3, upgrade 35); nearest:
-    [via-hub] job queue: Codeunit "Job Queue Dispatcher" (448) → … → [hub Codeunit.Run at JobQueueStartCodeunit.Codeunit.al:32] → Codeunit "CDO Auto-Send Runner"::OnRun → …
+  candidates over a hub: 47; by context (contexts may overlap): background session or task 9, install 3, upgrade 35
+    [via-hub] codeunit OnRun [context: background session or task (job queue)]: Codeunit "Job Queue Dispatcher" (448)::OnRun → … →
+      [hub Codeunit.Run of a variable at JobQueueStartCodeunit.Codeunit.al:32] → Codeunit "CDO Auto-Send Runner"::OnRun → …
 ```
+(Counts from c02 as recorded. `upgrade 35` is inflated by the helper-as-entry bug on
+`fix/explain-callers-counts`; round 2 takes the number after that fix.)
 Rules: the answer line is about the question's own population (here non-interactive routes, not
 all callers: c17 shows SetFiles has many code callers) and names the hub kinds actually on the
 candidate paths, at most three sites, never a generic list (Fable). "Established" means
 established by the static model, not observed. An answer with only hub-mediated witnesses
 prints `established witnesses: none` before any candidate; every witness line starts with its
-tier; entry-kind counts of candidates are labelled as candidates. The JSON already carries the tier per witness; it gains
+tier; counts of candidates are labelled as candidates and, when they are by context, say that
+contexts may overlap. The JSON already carries the tier per witness; it gains
 `establishedWitnesses` and `candidateWitnesses` counts (prove 2.5.0). **Files:** `callers_context.rs`
 `format_human`, `prove.rs` evidence rendering.
 
-### 3.2 A reach that is the whole program says so (F12)
+### 3.2 A broad reach is split by tier, kind and relation, and folded (F12)
 
 **Current** c12 (and c20, per routine and again for the whole change):
 `reached from: 6,043 page actions (first: Page 21 …), 10,094 page triggers …, 27,718 ancestors`.
 **New:**
 ```
-  reached by code: this action only (0 code callers; nearest publisher: none)
-  reached by UI navigation: 4,820 of the program's 16,137 entries (page actions 5,393, page triggers …) — folded: not specific to this change
-  reached over hubs: 1,412 entries, after [hub page variable "Sales Invoice" in Codeunit "Document Errors Mgt." (9070), declared, never run]
-    entries by tier: local 0, via-dependency 4,631, via-hub 1,412; detail: true lists one representative per kind
+  reached by code callers: none (a page action trigger has no code caller)
+  reached beyond it: 27,718 ancestors — by tier: local 0, via-dependency 23,230, via-hub 4,488
+    entries among them, by kind: page actions 6,043, page triggers 10,094, table triggers 1,454,
+      event subscribers 775, report triggers 534, codeunit OnRun 464
+    by context (contexts may overlap; not summed): background session or task 21, install 3, upgrade 45
+    by relation: code <a>, UI navigation <b> (a + b = 19,364, the entries above)
+    broad navigation reach; list folded — detail: true lists one representative per kind and tier
+    hubs on these paths: [hub Page.Run of a variable at dep:Base Application:<Page 6302's file>:<line>], … (detail: true lists them)
 ```
-(Numbers illustrative; the fact check's own counts are in `factcheck/c11-c20.md`, c12.)
+Every number except `<a>` and `<b>` is c12's as recorded (`factcheck/c12-impact.json`: ancestors
+by tier, entries by kind). The relation split cannot be computed before the relation axis
+exists, so it stays symbolic. The numbers are pre-fix: they include the false `declaredRunnable`
+edges `fix/reach-and-test-selection` removes. Round-2 expectations come from the post-fix run
+(§12.2).
 
 Rules:
 - **Labels never depend on size** (astra). Every reach is split by relation (`code`, `UI
   navigation`) and by tier, whatever its population. Code reach (direct and transitive callers,
   publishers) always prints first, with its nearest witness, even when the other lines fold.
-- **One unit per line** (Fable). A line counts entries (page actions, page triggers, job-queue
-  and background starts, …) or ancestors, never both; a share has numerator and denominator of
-  the same population (entries reached / entries in the program).
-- **Folding** (lists replaced by the count line, back with `detail: true`) fires when the entries
-  reached over navigation or hubs exceed a share of the program's entries (start at 50%,
-  measured on CDO), **or** when one hub alone reaches more than that share (Fable: a single
-  `Codeunit.Run` hub reaching 90% should fold even if the total is 45%). The share only folds; it
-  never makes a reach "not real" (astra: a widely used routine can truly reach most of the program).
-- **The hub is named** on the line, with its kind from the closed list of §8.1: it is what an
-  agent would fix or ignore.
+- **One unit per line** (Fable). A line counts ancestors, entries by kind, or entries by context,
+  never two of them; kinds are disjoint and sum to the entry total; contexts overlap and are not
+  summed (§8.1). A share has numerator and denominator of the same population.
+- **Folding** (lists replaced by the count lines, back with `detail: true`) fires on either of two
+  measures, each with its own stated population (astra: revision 2's "one hub reaches 90% while
+  the total is 45%" compared two different things without saying so):
+  1. **reach share**: entries reached over navigation or hubs, divided by the program's entries
+     (both counted as entries; start at 50%, measured on CDO);
+  2. **hub fan-out**: a hub on the paths whose forward cone covers more than half of the graph's
+     nodes (cone nodes / graph nodes, the measure `test_select` already computes as
+     `overHalfOfGraph`). A hub with a huge forward cone makes any reach through it broad, whatever
+     the reach share.
+- **Folding is presentation only.** Its words are `broad navigation reach; list folded` (or
+  `broad reach over a hub; list folded`); it never says "not specific" or otherwise changes what a
+  reach means (astra: a widely used routine can truly reach most of the program).
+- **The hub is named** on the line, in the §8.1 form with its kind from the closed list: it is what
+  an agent would fix or ignore.
 
 The fix branch already prints the tier on `first:` items (F11, handled elsewhere); this builds
 on it. **Files:** `impact/render.rs` (`reached_clause`, the whole-change block), `impact/up.rs`
@@ -341,7 +428,7 @@ tests differ in tier shows the distribution (`18 tests: local 0, via-dependency 
 its representative path's tier. A witness that needs UI navigation says `this witness requires UI
 navigation; invocation of the action is not established` (astra: the test's own body is not
 enough to claim "no action is invoked"; helpers and handlers matter). c07's line becomes `no
-local test; nearest via dependency code: … (not a focused test)`. JSON: `runFirst[].tier`
+local test; nearest [via-dependency]: … (not a focused test)`. JSON: `runFirst[].tier`
 exists; add `relation` and `group.tiers`.
 
 Ranking: `select.rs:457` already sorts tests by (tier, hops, codeunit, name), so revision 1's
@@ -351,8 +438,8 @@ needs UI navigation ranks ahead of a `via-dependency` code path today. The rank 
 `test_select/select.rs` (rank key).
 
 **Verify (round 2):** c02 prints `established witnesses: none` and names the hub sites on its
-candidate paths; c12 and c20 split reach by code / UI navigation / hub, code first with its
-nearest witness, navigation folded with the hub named; c28 groups show tier distributions and
+candidate paths; c12 and c20 split reach by tier, kind, context and relation, code callers first
+with the nearest witness, broad reach folded with its hubs named; c28 groups show tier distributions and
 code paths lead navigation-only ones; c07 says "not a focused test".
 
 ---
@@ -368,8 +455,11 @@ code paths lead navigation-only ones; c07 says "not a focused test".
 **New** (explain, digest human, query effects):
 ```
   summary — writes: may modify persistent CDO E-Mail Job records (Modify at :24) when Rec is not temporary;
-            otherwise it changes a temporary record; no other write observed
+            otherwise it changes a temporary record; no other write (every candidate decided)
 ```
+(c01's analysis is complete, so the absence uses the top level of the §8.1 negative-certainty
+row; under a partial analysis it reads `no other write: none observed (searched: …; not
+searched: …)`.)
 Rules:
 - When a card has caller-dependent writes and no may-persist writes, the summary leads with the
   caller-dependent ones and states the condition in astra's words above ("may modify persistent …
@@ -381,10 +471,13 @@ Rules:
 - **Both classes** (Fable): may-persist writes first, then the conditional ones **on the same
   summary line** (`writes: CDO Log (Insert); may modify persistent CDO E-Mail Job when Rec is not
   temporary`), never only under a later heading.
-- Path conditions and an incomplete analysis qualify the line as they do today (`no observed …`).
+- Path conditions qualify the line as they do today. An absence uses the §8.1 negative-certainty
+  words: `no (every candidate decided)` under a complete analysis, `none observed (searched: …;
+  not searched: …)` under a partial one.
 
-This changes wave-2 §3.8 rule 2 (order), which put may-persist writes first unconditionally. The
-JSON is unchanged.
+This changes wave-2 §3.8 rule 2 (order), which put may-persist writes first unconditionally, and
+wave-2 §3.7's absence wording (`no observed …`), which the §8.1 row replaces. The JSON is
+unchanged.
 **Files:** `routine_rollup.rs` summary line, `effect_query_cli.rs` summary parts.
 
 ### 4.2 Field writers: a count with its search (F17)
@@ -392,17 +485,23 @@ JSON is unchanged.
 **Current** c10: `field: CDO Setup.Document Folder (caption "Document Folder"): 0 writer(s)`.
 **New:**
 ```
-field: CDO Setup."Document Folder" (field 60, caption "Document Folder", defined at CDOSetup.Table.al:89): 1 writer observed
-  Table "CDO Setup"."Document Folder"::OnValidate — assignment at CDOSetup.Table.al:97 (changes the record in memory; persisted by whoever modifies Rec)
-  writer kinds searched: assignment, Validate, ModifyAll, TransferFields into the table, by-number RecordRef.Field (candidates)
-  searched: 5,479 workspace routine bodies and the dependency bodies loaded; not searched: page columns, CalcFormula, TableRelation; dynamic field numbers: 183 sites not matched
+field: CDO Setup."Document Folder" (field 60, caption "Document Folder", defined at CDOSetup.Table.al:89)
+  confirmed writers: 1
+    Table "CDO Setup"."Document Folder"::OnValidate — assignment at CDOSetup.Table.al:97 (changes the record in memory; persisted by whoever modifies Rec)
+  references that may write, not confirmed: none observed (RecordRef.Field by number, TransferFields copies)
+  writer kinds searched: assignment, Validate, ModifyAll
+  searched: 5,479 workspace routine bodies and the dependency bodies loaded; not searched: page and report columns, CalcFormula, TableRelation; dynamic field numbers: 183 sites not matched
   reads, filters and validations: alsem_query_touches with table and field
 ```
-With none found: `no writer observed (searched: …; not searched: …)`, never a bare `0`. A
-writer row says whether it is an assignment, a `Validate` or a record write (astra): an
-assignment changes the field in memory, and only a later `Modify`/`Insert` persists it. The
-writer kinds listed are those `field_touches.rs` classifies as `write`, `validate` and
-`copy-candidate`; the implementing commit takes the exact list from that code. This uses
+(Counts from c10 and c22's recorded search lines; the writer row is the post-fix answer of
+`fix/field-writers-implicit`.) With no confirmed writer: `confirmed writers: none observed
+(searched: …; not searched: …)`, never a bare `0`. Confirmed writers and reference candidates are
+counted apart (astra): a `RecordRef.Field(n)` establishes a reference to the field, not a write,
+and a `TransferFields` copy is a candidate. A writer row says whether it is an assignment, a
+`Validate` or a `ModifyAll` (astra): an assignment changes the field in memory, and only a later
+`Modify`/`Insert` persists it. The kinds are those `field_touches.rs` classifies as `write` and
+`validate` (confirmed) and `by-number` / `copy-candidate` (candidates); the implementing commit
+takes the exact list from that code. This uses
 the same searched/not-searched sentence as touches field mode (`field_touches.rs`), from one
 helper. The count is fixed on `fix/field-writers-implicit`; this lands after it. **Files:**
 `explain.rs` field mode, `field_writers.rs`.
@@ -412,7 +511,7 @@ helper. The count is fixed on `fix/field-writers-implicit`; this lands after it.
 **Current** c27: `answer: no — no reachable site matches … other sites: 3 reachable`.
 **New:**
 ```
-  answer:   no FieldError site is reachable (every candidate decided)
+  answer:   no — no FieldError site is reachable (every candidate decided)
   other reachable error sites: 3 — TestField at CDOMergeTableField.Table.al:64; TestField at :65; Get (implicit error) at :526
   to see their routes: op: "TestField", or no op
 ```
@@ -432,17 +531,20 @@ c19: `… --closed-world assumes the loaded interface implementations`.
   plain reading: no interception was found in the analyzed callers; unknown because 2 routines are public
   not established: that no caller turns this error into false; and nothing here says which writes roll back
   re-analysis under an assumption: assumeNoDependents: true — assumes no other app calls these 2 routines;
-    removes every blocker of this answer (2 external-caller blockers)
+    removes every blocker of this answer (external callers 2)
 ```
-c02 (nine blocker kinds):
+c02 (eight blocker kinds, as recorded):
 ```
   re-analysis under an assumption: assumeNoDependents: true — assumes no other app calls the public routines;
-    removes 438 external-caller blockers; 9,156 hub blockers and 6,710 order-unknown blockers stay
+    removes external callers 438; stay: over a hub 9,156, order not resolved 6,710, hidden callers 15,
+    and 4 more kinds (detail: true lists them)
   not established: that a user is present; do not assume an interactive session in code added here
 ```
 c19: `re-analysis under an assumption: closedWorld: true — only if the deployment has no other
 implementations of these interfaces; it changes the assumption, not what runs; removes every
-blocker of this answer (3 open-world sites)`, and `not established: that it never commits`.
+blocker of this answer (interface dispatch (open world) 3)`, and `not established: that it
+never commits`. Blocker kinds print in the §8.1 blocker-kinds words; at most three kinds that
+stay are named, largest first, the rest counted.
 
 Rules:
 - **Every input that removes a blocker kind is named**, with what it removes and what stays
@@ -476,9 +578,10 @@ today. `statusVersion` stays 2 (additive). **Files:** `src/mcp/freshness.rs`.
 ### 4.6 Touches table mode says "transitively" and shows sites (F23)
 
 **Current** c30: `1802 routines touch it` and 12 routine headers from one codeunit.
-**New:** `1,802 workspace routines touch it transitively; 214 sites in 96 routines touch it
-directly` (numbers illustrative), then the direct sites (§9.3). A listed line is a site, never a
-routine header. **Files:** `effect_query_cli.rs` touches table mode.
+**New:** `1,802 workspace routines touch it transitively (through workspace or dependency
+sites); <s> workspace sites in <r> routines and <d> dependency sites touch it directly`, then
+the sites (§9.3). 1,802 is c30's count; the site counts are not in the round-1 answer and are
+derived when §9.3 is built. A listed line is a site, never a routine header. **Files:** `effect_query_cli.rs` touches table mode.
 
 ### 4.7 A change mode says what it computed (F27)
 
@@ -509,33 +612,46 @@ before/after and that its diff matched.
 
 ## 5. Result first, and one result header (V4)
 
-### 5.1 The answer leads (F28, F29)
+### 5.1 The answer leads (F28, F29) — F29 and F75 land in V2
 
 **c06** (explain `callersContext`) **new** first section after the header:
 ```
-  own state changes: sets 2 codeunit globals (ReportSelectionUsage, …); no record operation
+  own state changes: sets 2 codeunit globals; no record operation
   for adding a COMMIT, an error or UI here (callers' context):
-    pending writes: YES — 8 witnesses of an uncommitted write when this runs; first ([local]):
-      Page "CDO Sales Invoice Actions"::OnAfterGetCurrRecord → Rec.Modify at …:NN, then SetReportSelectionUsage at …:276
-    intercepted errors: unknown (2 routines are public; re-analysis under assumeNoDependents: true removes every blocker)
-    non-interactive: unknown (blockers: external callers 438, hubs 9,156, publication data not loaded, …)
+    pending writes: yes — 8 witnesses of an uncommitted write when this runs (7 from page triggers); first [local]:
+      Page "CDO Sales Invoice Actions"::OnAfterGetCurrRecord → <write> at …:NN, then SetReportSelectionUsage at …:276
+    intercepted errors: unknown (blockers: external callers 2)
+      re-analysis under an assumption: assumeNoDependents: true — removes every blocker of this answer
+    non-interactive: unknown (blockers: external callers 2, background target not resolved 2,
+      publication data not loaded 1, publication file not read 1)
 ```
-The witness comes from the pending-writes walk the section already runs; explain prints its
-first witness (tier, source of the write, order of write and call) instead of only the count.
-The count says "witnesses" unless distinct callers were counted (astra). The non-interactive
-line names every blocker kind by count, not the one that is easiest to explain. `own state
-changes` (F75) lists what the routine itself changes: globals, record operations, or "none". **c17**: the "through dependency code / configured
-dispatch" block moves above the caller list. **c21/c24**: covered by §5.2 (summary first).
+The counts are c06's as recorded (`pending writes: yes — 8 witnesses (trigger-page 7)`;
+`intercepted errors: … external-callers 2`; `non-interactive: … external-callers 2,
+publication-unknown 1, unread-publication-file 1, unresolved-background-target 2`). The first
+witness's write and line are illustrative: the round-1 answer printed no witness, and the
+caller counts move on `fix/explain-callers-counts`. The witness comes from the pending-writes walk
+the section already runs; explain prints its first witness (tier, source of the write, order of
+write and call) instead of only the count. The count says "witnesses" unless distinct callers
+were counted (astra). The non-interactive line names every blocker kind by count, in the §8.1
+blocker-kinds words, not the one that is easiest to explain. `own state
+changes` (F75) lists what the routine itself changes: globals, record operations, or "none";
+when its cone calls `ChangeCompany`, it adds `target company: not established by this analysis
+(ChangeCompany at <file>:<line>)` (§9.1). **c17**: the `via-dependency` / `via-configuration`
+callers block moves above the caller list. **c21/c24**: covered by §5.2 (summary first).
 
-### 5.2 One result header on every tool, and a summary always (F30, F42, F43, F61, F76, F77)
+### 5.2 One result header on every tool, and a summary always (F30, F42, F43, F61, F76, F77) — `tableAnswers` and F61's per-family scope land in V2
 
-**Human output** starts with the same three lines (astra: human only; a JSON document never gains
-a text preamble):
+**Human output** starts with the same four lines (astra: human only; a JSON document never gains
+a text preamble). The third line is the only place analysis, assumptions, limits and scope print
+(Fable f: revision 2 had two spellings on one answer):
 ```
 <tool> <resolved inputs, canonical names>   [universe, revision generation]
 answer: <the one-line result>
-analysis: <complete | partial (reasons)>; scope: <one clause>; more: <MCP inputs>
+analysis complete · assumptions: <full labels> · limits: <none | kinds with counts> · scope: <one clause>
+more: <MCP inputs>
 ```
+`analysis` is `analysis complete`, `analysis partial (<reasons>)` or `not analyzed (<reason>)`
+— the §8.1 completeness words.
 `answer:` is the verdict for prove, the selection line for tests, the accounting outcome for
 impact, the headline for status, and the card's summary line for explain and digest (Fable:
 explain has no yes/no). Variants: an unresolved input prints `answer: no answer — <why>` and the
@@ -543,13 +659,23 @@ input as given, not "resolved inputs"; status prints its headline(s) only.
 
 **JSON documents** (F76) carry the same facts as structured fields in every standalone
 document, readable without the MCP envelope: `payload.result.scope` with `analysis`
-(`complete`/`partial` and reasons), `assumptions` (the full labels), `limits`, and, per operation
-family where the tool reports families (F61: query effects `reads`, `writes`, `locks`,
-`validate`; and the deep-write aggregate beyond dependency calls), the depth and whether the
-family's inventory is exhaustive (`perOperation: "one dependency routine deep"`,
-`beyondDependencyCalls: "writes only, whole cone"`, `locks: "one dependency routine deep; not
-exhaustive beyond"`). Tests and impact add `selection` (`complete`, the cap asked, returned,
-total, fallback).
+(`complete` / `partial` / `notAnalyzed`, and `reasons`), `assumptions` (the full labels), `limits`,
+and `families` where the tool reports operation families (F61: query effects `reads`, `writes`,
+`locks`, `validate`, and the deep-write aggregate `beyondDependencyCalls`). Each family is a
+structured object, not a sentence (astra):
+```json
+"locks": {"depth": "oneDependencyRoutine", "inventory": "notExhaustive",
+          "reasons": ["dependency code deeper than one routine is not inventoried"],
+          "blockers": {"callNotResolved": 0, "interfaceDispatchOpenWorld": 0}}
+```
+`depth` is `operation` / `oneDependencyRoutine` / `wholeCone`; `inventory` is `exhaustive` /
+`notExhaustive`. Tests and impact add `selection` (`complete`, the cap asked, returned, total,
+fallback).
+
+**F61 interim contract** (until V4's JSON lands): V2 prints the same facts in the human answer's
+scope clause for query effects (`reads, locks: one dependency routine deep, not exhaustive
+beyond; writes beyond dependency calls: whole cone`), so the misleading part — an operation list
+that reads as exhaustive — is fixed with the V2 wording it qualifies (astra).
 
 **Envelope `summary`** (≤ 8 KiB, as today) gains, per tool: explain — each card's header and
 summary line; prove — answer, filter, established/candidate counts, the assumption inputs and
@@ -560,16 +686,27 @@ id** — four c15 rows, twenty c25 rows, each with its signature (astra: folding
 row would erase the differences the agent asked about). Facts shared by several rows are
 factored into one `shared` block that the rows reference, so the rows stay small. Each row has
 `tableAnswers` for every `writesTables` entry (`{table: {id, name}, answer, blockers,
-firstBlocker}`) and its test status (`reached` / `no-known-path` / `not-loaded`, nearest test);
-the test scope and fallback print once. query effects summary (F43) gains `writes.byTable` (top
+firstBlocker}`) and its test status in the §8.1 words — `tests with a modeled path` (with the
+nearest test), `no modeled path`, `analysis incomplete`, `not in projection`, `not loaded`, `not
+requested` — never collapsing one into another (astra: `analysis incomplete` and `not in
+projection` are not "no path"); the test scope and fallback print once. query effects summary (F43) gains `writes.byTable` (top
 10 with op counts, the total table count, a truncation flag, and caller-dependent and
 unresolved-table counts apart).
 
-**Cap rules** (astra): the 8 KiB cap never drops a requested verdict (`tableAnswers`, the prove
-answer and filter), the selection up to `maxTests`, the fallback, or a requested root's row.
-When those alone exceed it, the summary keeps them and drops per-row counts first; it always
-says what it cut (`summaryTruncated: {rowsListed, rowsTotal, dropped: ["effectsByType", …]}`)
-and points at the full document. `countsOnly` is replaced by this field.
+**Overflow policy** (astra: revision 2's rule could not hold when the mandatory content alone
+exceeds 8 KiB). The summary stays bounded at 8 KiB and always holds the headline, the analysis
+line, the fallback and the complete input accounting. Everything the caller asked for by name —
+each requested root's identity and verdicts (`tableAnswers`, the prove answer and filter), each
+selected test up to `maxTests` — also goes, always, into a **complete compact result index**: a
+JSON file written next to the answer in the server's output folder
+(`<answer>.index.json`, schema `al-sem.result-index/1`, one row per requested identity with its
+verdicts and status, one row per selected test). The summary carries as many index rows as fit,
+then `index: {path, rows, sha256}` and `summaryTruncated: {rowsListed, rowsTotal, dropped: [...]}`.
+Nothing requested is ever only in the full document, and the selection is never silently cut:
+`summaryTruncated` is about the transport; `selectionComplete` is about the selection, and they
+are reported apart. `countsOnly` is replaced by these fields. The index is written by the same
+renderer that writes the summary (`DigestRunResult` and its siblings already return the summary,
+plan 1b), so it costs one more file write, not a new pass.
 
 The JSON writer sorts keys, so "first" in a document can only mean "in the summary"; that is why
 the summary carries the selection, not a reordered document.
@@ -578,11 +715,12 @@ the summary carries the selection, not a reordered document.
 
 Wave-2 §3.7 says coverage, assumptions and limits are always visible, never folded. That stays,
 and the assumption keeps its full sentence (astra: "loaded program" alone hides the exclusion).
-What changes: when all three are trivial they print as one line, `analysis complete ·
-assumptions: loaded program; unloaded implementations and subscribers are not enumerated ·
-limits: none`. The static scope prose that is the same for every answer (temp records are not
-writes, line base, which input lists everything) moves to the tool description, where it already
-is. A scope fact that limits **this** answer stays beside it (astra): dependency depth when the
+What changes: they print as the header's third line (§5.2), `analysis complete · assumptions:
+loaded program; unloaded implementations and subscribers are not enumerated · limits: none ·
+scope: …`. The static scope prose that is the same for every answer (writes to temporary records
+do not directly persist those records, line base, which input lists everything) moves to the
+tool description, where it already is; the description takes this wording instead of today's
+"temporary records are not writes", which contradicts F15's independent access kind (astra). A scope fact that limits **this** answer stays beside it (astra): dependency depth when the
 answer reached dependency code, an effect family not reported (`no lock facts`), literal-route
 treatment when rows were ruled out. Empty sections (`extension points: none`, `events: 0 … 0
 more`, `rules: none of its own; inherited: none`, `commits: none` repeated after the summary)
@@ -624,8 +762,11 @@ format json` (c13), `--tier dependency lists them` (c07), `The next command buil
 **New:** the MCP front end appends a hidden `--surface=mcp` to the argv it builds. With it, a
 follow-up is a complete call, not a flag fragment (astra): `{tool, arguments}` with the resolved
 selector, the question or filter and the scope inputs already filled, printed as
-`alsem_prove {"routine": "<selector>", "question": "writes-table:CDO File", "closedWorld": true}`
-and carried in JSON as `followUps: [{tool, arguments, why}]`. An in-place input change prints as
+`alsem_prove {"routine": "<selector>", "question": "writes-table:CDO File"}` and carried in JSON
+as `followUps: [{tool, arguments, why}]`. A follow-up keeps the assumptions of the call it came
+from (astra). A call that changes one (`closedWorld`, `assumeNoDependents`) is never an ordinary
+follow-up: it prints as `conditional alternative: alsem_prove {…, "closedWorld": true} — only if
+<the assumption holds>`, with `kind: "conditional"` in JSON. An in-place input change prints as
 the input (`all: true`, `tier: "dependency"`). The no-engine status (c14) names an analysis call
 that builds the engine (`alsem_explain {"routines": […], "singleApp": true}`), not "any tool"
 (a second status call builds nothing). A command with no MCP tool (`alsem diff`) is named as
@@ -643,10 +784,11 @@ headings legitimately contain `--`). Break: drop the flag from the front end.
 
 `next:` lines are built from the card, and a suggestion is dropped only when its answer is
 already on the card (astra: an unknown or incomplete cone is exactly when a question helps):
-`writes-table` for a write the card shows without a witness, or when writes are `no observed`
-under partial analysis; `may-commit` when commits are `may` or `no observed` under partial
-analysis, not when the card proves `none`; the callers' context questions when the card has
-callers. c06 (complete analysis, no writes, no commits) gets neither. c01's "alsem prove names
+`writes-table` for a write the card shows without a witness, or when writes are `none observed`
+(a partial analysis); `may-commit` when commits are `yes` without a witness or `none observed`,
+not when the card says `no (every candidate decided)`; the callers' context questions when the
+card has callers. c06 (complete analysis, writes and commits `no (every candidate decided)`) gets
+neither. c01's "alsem prove names
 the caller" is dropped: no prove question names which callers pass a non-temporary record
 (revision 1 suggested `callers-have-pending-writes` for it; it does not answer that).
 
@@ -675,8 +817,8 @@ records, 0 …); first [CalcFields] read at …:740 in Table CDO E-Mail Log::Get
 ```
   up: all 952 transitive callers touch CDO E-Mail Log through other branches (not through SetFiles itself);
       shared first touch: [CalcFields] at CDOEMailLog.Table.al:740 (GetEMailFromStorage)
-  also, not in the 952: 2 workspace callers only through dependency code; 81 only via configured dispatch
-      (Workflow Response Handling::ExecuteResponse); the three populations are disjoint
+  also, not in the 952: 2 workspace callers [via-dependency]; 81 [via-configuration] candidates
+      (Codeunit "Workflow Response Handling" (1521)::ExecuteResponse); the three populations are disjoint
   callers (952 routines in N objects), by object, nearest hops first:
     Codeunit "CDO E-Mail Template Management" (9): CreateDocumentsForRecord :… (+1 hop), CreateDocuments(<list A>) :… (+2 hops), CreateDocuments(<list B>) :… (+3 hops), …
 ```
@@ -696,8 +838,9 @@ rows carry `firstHop: "r:12"` and `origin: {routine: "r:40", file, line, column}
 operation's own location stays on the row, apart from the routine's definition anchor (astra).
 `via` moves to a document default (`payload.defaults.via: "inherited"`) and a row carries it
 only when it differs. Target: under 200 KB on c08. **Schema:** query 4.0.0 (fields change shape). **Consumer:**
-ConTinAI `effects.py` reads each row's `origin.anchor.line` (plan §4.1): it must read the routine
-table. Tell its maintainers before merge; keep `--schema 3` for one release, as digest did
+ConTinAI `effects.py` reads each row's `origin.anchor.line` (plan §4.1): in 4.0.0 the
+operation's line is `origin.line` on the same row (no join needed); the routine table is only
+for the routine's identity and definition anchor. Tell its maintainers before merge; keep `--schema 3` for one release, as digest did
 (owner decision 5).
 
 ### 7.3 Digest with many roots (F41)
@@ -715,7 +858,9 @@ entry equals the 3.x entry for the same input (break: drop the per-root liveness
 file readers. Target: under 300 KB on c25. **Schema:** digest 4.0.0, `schema: 3` kept one release.
 **Consumer:** bc-dev-mcp reads digest 2.x and is pinned to 1.7.1 (`satisfiesPin` refuses another
 major), so it is not exposed until its pin moves; its readers (`risk.ts`, `alsem-writes.ts`) then
-read `payload.effects` with `roots`. ConTinAI does not read digest.
+read each root's effect references and annotations and join them with `payload.effects` for the
+intrinsic facts (a root's liveness and temp state come from its annotation, never from the
+shared row). ConTinAI does not read digest.
 
 ### 7.4 Tests JSON (F44)
 
@@ -741,8 +886,8 @@ c02 under 3 KB.
 
 With `detail: true`, a routine gets an evidence budget instead of ten items per list (astra: ten
 per category is still a census): its direct callers and publishers with call sites, then one
-representative per relation and tier (code local, code via-dependency, UI navigation, over a
-hub), each on its own line, about 15 lines per routine; the counts per kind stay on one line. The
+representative per relation and tier (`code` × `local` / `via-dependency` / `via-configuration`
+/ `via-hub`, and `UI navigation`), each on its own line, about 15 lines per routine; the counts per kind stay on one line. The
 whole-change block is omitted when the change has one routine; "no base given" prints once in
 the header (§4.7). Target: c20 under 4 KB.
 
@@ -775,23 +920,30 @@ path or a fact carries one value per axis (astra: tier alone cannot say "code or
 
 | Axis | Words | Replaces / notes |
 |---|---|---|
-| **tier** of a path (where it goes) | `local` (no dependency hop and no hub), `via-dependency` (a dependency hop, no hub), `via-configuration` (a dispatch whose targets are decided by data the engine can name, such as workflow responses or report selections), `via-hub` (an unresolved dispatch hop) | replaces `onlyOpen`, `only-open`, `only over open sites`, `through an open site (a hub)`, `throughDependency`, `through-dependency`, `tier configured`. **Precedence** (Fable): a path's tier is its weakest hop, `via-hub` > `via-configuration` > `via-dependency` > `local`. Configured dispatch is its own tier, not a hub (both reviewers: a configured target can be decided by reading data; a hub cannot) |
-| **result tier** (what an answer found) | `established witnesses: N` / `candidates over a hub: N` (and `over configuration: N`) | keeps the fact that **only** hub-mediated witnesses were found, which a per-witness tier loses (astra). JSON `establishedWitnesses`, `candidateWitnesses`. "Established" = by the static model, never observed |
-| **relation** of a path (how it starts) | `code` (calls, runs, triggers, events) / `UI navigation` (a page the user opens from another page) | new axis; impact and tests rank code before navigation (§3.3) |
+| **tier** of a path (where it goes) | `local` (no dependency hop, no configuration hop, no hub), `via-dependency` (a dependency hop, no configuration hop, no hub), `via-configuration` (a dispatch whose targets are decided by data the engine can name, such as workflow responses or report selections), `via-hub` (an unresolved dispatch hop) | replaces `onlyOpen`, `only-open`, `only over open sites`, `through an open site (a hub)`, `throughDependency`, `through-dependency`, `tier configured`. **Precedence** (Fable): a path's tier is its weakest hop, `via-hub` > `via-configuration` > `via-dependency` > `local`. Configured dispatch is its own tier, not a hub (both reviewers: a configured target can be decided by reading data; a hub cannot). Printed `[<tier>]` at the start of a witness or a population (`[via-hub] codeunit OnRun …`, `2 workspace callers [via-dependency]`) |
+| **result tier** (what an answer found) | `established witnesses: N` / `candidates over a hub: N` / `candidates over configuration: N` | keeps the fact that **only** hub-mediated witnesses were found, which a per-witness tier loses (astra). JSON `establishedWitnesses`, `candidateWitnesses` (with `byTier`). "Established" = by the static model, never observed. A `via-configuration` witness is always a **candidate** (astra): the binding lives in data (workflow responses, report selections, `roots.config.json` entries) the analysis has not read, so naming the data does not establish that it is configured. A `local` or `via-dependency` witness with no hub and no configuration hop is established |
+| **relation** of a witness (how it runs, over its whole length) | `code` (every edge is a call, run, trigger or event) / `UI navigation` (any edge is a page the user opens from another page) | new axis; the weakest edge decides, so a test that starts with a code call and later needs a user to open a page is `UI navigation` (astra). Impact and tests rank code before navigation (§3.3) |
 | **projection** | `approximate` flag beside the tier | replaces `localApproximate`, which must not silently become `local` (astra): the test universe's source projection qualifies the path |
-| **hub kinds** (closed list, printed `[hub <kind> at <file>:<line>]`) | `Codeunit.Run of a variable`, `Page.Run of a variable`, `Report.Run of a variable`, `record trigger (<operation>)`, `interface dispatch`, `page variable (declared, never run)`, `background start of a variable` | replaces `h:run:codeunit`, `h:record:modify`, `HUB:run:report`. A hub is an **unresolved** target; when some targets are known (a closed enum, an interface with loaded implementations) the known ones print as a list, not as a hub (astra). Configured dispatch is a tier, not a hub kind. The implementing commit checks the list against `impact_graph` hub classes (`any`/`name`/`run`/`record`/`callbacks`) and adds any it misses |
-| **execution entries** | `page action`, `page trigger`, `API page`, `web service` (published from `roots.config.json`), `job queue`, `background start`, `install`, `upgrade`, `report` (request page, data-item triggers), `codeunit OnRun` (a literal `Codeunit.Run`), `table trigger`, `event subscriber`, `public procedure` (callable by other apps), `test` | replaces `trigger-page`, `page-event`, `page-action`, `page triggers`. Only the entry routines of an install or upgrade codeunit are `install`/`upgrade` entries, not its helpers (fact check c02 #7, on `fix/explain-callers-counts`). **Execution context** (API, job queue, background) is a separate axis from the entry kind, since they overlap (astra): a job-queue run of a codeunit's `OnRun` is `codeunit OnRun` in context `job queue` |
+| **hub kinds** (closed list, printed `[hub <kind> <name>? at <file>:<line>]`, the variable or receiver name optional after the kind) | `Codeunit.Run of a variable`, `Page.Run of a variable`, `Report.Run of a variable`, `background start of a variable`, `record trigger (<operation>)`, `interface dispatch (open world)` | replaces `h:run:codeunit`, `h:record:modify`, `HUB:run:report`. A hub is an **unresolved** dispatch. Known targets print as a list, not as a hub; when known targets and an unresolved remainder coexist (an interface with loaded implementations under open world), both print: `interface dispatch (open world): 2 known implementations (…) + [hub interface dispatch (open world) at …]` (astra). Configured dispatch is a tier, not a hub kind. A page variable declared and never run is **not** a hub: it is the false `declaredRunnable` edge `fix/reach-and-test-selection` removes (astra), and no output names it as a route. The implementing commit checks the list against `impact_graph` hub classes (`any`/`name`/`run`/`record`/`callbacks`) and adds any it misses |
+| **entry kinds** (what routine starts a run; closed list; an entry has exactly one) | `page action`, `page trigger`, `report trigger` (request page, data-item triggers), `codeunit OnRun`, `table trigger`, `event subscriber`, `install trigger`, `upgrade trigger`, `test procedure`, `public procedure` (callable by other apps) | replaces `page-action`, `trigger-page`, `page-event`, `page triggers`, `trigger-table`, `report-trigger`, `onrun-codeunit`, `install-codeunit`, `upgrade-codeunit`. Kinds are disjoint: counts by kind sum to the entry total. Only the trigger routines of an install or upgrade codeunit are `install trigger` / `upgrade trigger`, not its helpers (fact check c02 #7, on `fix/explain-callers-counts`) |
+| **execution context** (how the run was started; closed list; printed `[context: …]` after the kind) | `UI session`, `background session or task` (with `(job queue)` when started by the Job Queue Dispatcher or a `roots.config.json` job-queue entry), `API page`, `web service`, `install`, `upgrade`, `test run`, `context not established` | new axis (Fable 3, astra): replaces `background-start` and the context words revision 2 mixed into the entry list. An entry can have several contexts, so counts by context **overlap and are never summed**; a line of context counts says so. Example: `codeunit OnRun [context: background session or task (job queue)]` |
+| **blocker kinds** (why an answer is `unknown`; closed list) | callers' context: `external callers`, `hidden callers`, `over a hub`, `order not resolved`, `publication data not loaded`, `publication file not read`, `guard not recognized`, `background target not resolved`, `effects incomplete`, `TryFunction caller`, `limit`; existing-effects questions: `call not resolved`, `interface dispatch (open world)`, `conditional effect exists`, `analysis gap`, `cone truncated`, `witness truncated`, `coverage incomplete` | replaces the kebab-case keys in human text (`external-callers`, `only-open`, `order-unknown`, `publication-unknown`, `unread-publication-file`, `unrecognized-guard`, `unresolved-background-target`, `effects-incomplete`, `tryfunction-caller`, `unresolved-callsite`, `open-world-dispatch`, `non-unconditional-effect-exists`, …). JSON keeps its keys (§8.3). Taken from `callers_context.rs` (`block(` calls) and `prove.rs`; the implementing commit adds any kind it finds missing |
 | **dependency boundary** | `dependency call` (the crossing), `dependency routine entered` (the target) | replaces "entry point" in explain/digest/query. "entry" alone always means an execution entry (Fable) |
 | **verdict** | `yes` / `no` / `unknown`, wherever a verdict exists: prove, digest `tableAnswers`, touches `down`, explain's `writesTables` | astra: "prove only" contradicted the spec's own `tableAnswers` |
-| **negative certainty** (Fable) | `no (every candidate decided)` — proven absent under the stated assumptions; `none observed (searched: …; not searched: …)` — an index found nothing, with its search; `unknown (blocked by: …)` | `0 writer(s)`, `no observed write`, `no indexed consumer observed` all become the middle level |
+| **negative certainty** (Fable) | `no (every candidate decided)` — proven absent under the stated assumptions (a complete analysis); `none observed (searched: …; not searched: …)` — nothing found by a partial analysis or an index search, with its search; `unknown (blocked by: …)` | `0 writer(s)`, `no observed write`, `no indexed consumer observed`, wave-2 §3.7's `no observed …` and `none` all map to one of these three; card summaries use them too (no exemption) |
 | **target resolution** | `table: <name>` / `table: not resolved (<receiver kind>: <reason>)` | replaces `isUnknownBucket`, `unknown` as a table, "decided at run time". A RecordRef does not prove the table varies at run time (astra: some RecordRefs resolve statically), so the reason says what failed, e.g. `RecordRef opened from a variable` |
 | **temp state** | `temporary` / `not temporary` / `caller-dependent (parameter 3, <name>)` / `not resolved` | replaces `known(true)`, `known(false)`, `parameter-dependent(i)`, `temp state unknown`; independent of access kind and reachability |
 | **condition** of an effect | `unconditional on success`, `in a loop`, `conditional`, `condition not resolved` | replaces the bare `(unknown)` after an error site (c05) |
-| **completeness** | always with a subject: `analysis complete|partial`, `selection complete|incomplete`, `freshness check complete`, `tests with a modeled path` (never "coverage" for static reach; changed-line execution is not established); and the non-results `not analyzed`, `not requested`, `not loaded`, `not applicable`, which are not synonyms for partial or empty (astra) | replaces bare `complete`, `coverage: complete`, `testCoverage` status words |
+| **completeness** | always with a subject: `analysis complete` / `analysis partial (<reasons>)` / `not analyzed (<reason>)`, `selection complete|incomplete`, `freshness check complete`; and the non-results `not analyzed`, `not requested`, `not loaded`, `not applicable`, which are not synonyms for partial or empty (astra) | replaces bare `complete`, `coverage: complete`, `testCoverage` status words |
+| **test status** of a routine | `tests with a modeled path` (static; changed-line execution is not established), `no modeled path`, `analysis incomplete`, `not in projection`, `not loaded`, `not requested` | replaces `reached`, `no-known-path`, `analysis-incomplete`, `not-in-projection`, `not-loaded`, and "coverage" for static reach |
 
 Fable's proposal to pair `not resolved` with `run-time` on every axis is adopted for `not
-resolved` and declined for `run-time`: the engine has no fact that proves a target is a run-time
-value (§11.2 row 5).
+resolved` and declined for `run-time` **for table, temp-state and condition targets**: for those
+the engine infers "run time" from the receiver kind and does not prove it (§11.2 row 5). For
+**call edges** a proven run-time fact exists — the resolver's `HonestDynamic`
+(`src/program/resolve/edge.rs`, `DispatchShape::DynamicOpen`), "provably runtime-typed" in
+CLAUDE.md's taxonomy — and it keeps its word, `honest dynamic`, wherever call resolution is
+reported (Fable).
 
 ### 8.2 Count units (F53, F54)
 
@@ -809,7 +961,9 @@ code`). Wave-2 §3.6 is the rule set for the units; this adds "print the unit".
 
 ### 8.3 JSON migration rule (astra)
 
-Replacing a value inside an existing field is a breaking change, not an additive one. So: a
+Replacing a value inside an existing field is a breaking change, not an additive one. One
+exception (Fable p): a correctness fix that removes rows a reader should never have counted
+(F15's read rows under `writeTables`) is a minor bump; a rename or a changed meaning is not. So: a
 renamed value goes into a **new field** beside the old one (`tier: "onlyOpen"` stays, `pathTier:
 "via-hub"` is added); the old field stays for one release, then leaves in the next major. For
 query, digest and tests the old fields leave in their V5 majors (§7), so readers see one break;
@@ -837,6 +991,12 @@ renderer-owned text (a grep over the 30 answers, also kept as an invariant on th
   on INSERT/MODIFY/VALIDATE only) and is labelled as the routine's assignments, not as what each
   `Modify` writes; receiver and control-flow qualifications stay (astra). Impact's `may write 1
   table` becomes the same.
+- **Company context** (F75, astra): when the routine's cone calls `ChangeCompany` (a catalogued
+  builtin, so the resolved edge is there), each write line it may affect adds `target company:
+  not established by this analysis (ChangeCompany at <file>:<line>)`. c20's subscriber calls
+  `CDOSetup.ChangeCompany(NewCompanyName)` at `CDOSubscribers.Codeunit.al:55`, so its CDO Setup
+  write prints that line. The analysis tracks no company per record (§10), so the fact is never
+  inferred and never silently omitted.
 - **Caller rules** (F67): `caller rule: rejects when not VariantRec.IsRecord; checked by 2
   callers; no equivalent check recognized in 41 analyzed callers` ("skipped" reads like a bypass,
   "not checked" like a proof of absence).
@@ -854,30 +1014,35 @@ question (c11) must not depend on a missing line meaning zero. Each carries its 
 `locks: none observed (one dependency routine deep; deeper dependency locks are not
 inventoried)`. The counts include every temp class and unresolved-table operations (§1 F15).
 
-### 9.3 query touches, table mode (F59, F60)
+### 9.3 query touches, table mode (F59, F60, F74) — field mode (F74) lands in V2
 
 **New** (c30):
 ```
---- touches of CDO E-Mail Template Header (table 6175283) ---
-  direct: 214 sites in 96 routines — Get 120, FindSet 31, SetRange 28, Modify 12, Insert 9, SetCurrentKey 3 (key-relevant), …
-  by object: Codeunit "CDO E-Mail Template Management" 41 sites, Table "CDO Document Template Line" 18, …
-  transitive: 1,802 workspace routines reach one of these sites
-  key-relevant: SetCurrentKey at …:NN, …; SetRange on key fields at …
+--- touches of "CDO E-Mail Template Header" (table 6175283) ---
+  workspace sites: <s> in <r> routines — by op: Get <g>, FindSet …, SetRange …, Modify …, Insert …, SetCurrentKey <k>
+  dependency sites: <d> in <q> dependency routines (one dependency routine deep), by op: …
+  by object: Codeunit "CDO E-Mail Template Management" <n1> sites, Table "CDO Document Template Line" <n2>, …
+  transitive: 1,802 workspace routines reach one of the sites above (workspace or dependency)
+  key-relevant (not exhaustive): Get <g> (primary key), SetCurrentKey <k>, SetRange/SetFilter on key fields …
     [Get] at CDODocumentTemplateLine.Table.al:1162 in Table "CDO Document Template Line"::…
 ```
-(numbers illustrative). "Direct" means the operation's own routine is a workspace routine whose
-body holds the operation on this table; the full routine list stays available with `all: true`.
-c18's `unknown` table gets the same shape, with each site's receiver and why the table is not
-resolved, and the warning that an unresolved write can be any table. Key-relevant uses (not
+1,802 and the `Get` at `:1162` are c30's (the fact check's sample); the site counts are not in the
+round-1 answer and stay symbolic until §9.3 is built; the by-op counts add up to the site total.
+A **workspace site** is an operation on this table in a workspace routine's own body; a
+**dependency site** is one in a dependency routine the workspace reaches (astra: a workspace
+routine can touch a table only through a dependency-owned operation, so the transitive count
+must not claim every consumer reaches a workspace site). The full routine list stays available
+with `all: true`. c18's unresolved-table bucket gets the same shape, each site with `table: not
+resolved (<receiver kind>: <reason>)`, and the warning that an unresolved write can be any table. Key-relevant uses (not
 exhaustive, and labelled so): `Get` sites (they use the primary key), SetCurrentKey sites (from
 the operation index), and SetRange/SetFilter on key fields, which needs the field-use index
 joined with the table's declared keys — field mode already reads them (`field_touches.rs`
 `declared_keys`, advertised in `tools.rs`). If the join costs more than a second on CDO, ship
 `Get` and SetCurrentKey only and mark the rest [engine].
 
-**Field mode** (F60, F74, astra): confirmed named references (`read`, `write`, `validate`,
-`filter`, …) and numeric candidates (`RecordRef.Field(8)` on an unresolved table) print as two
-inventories, with the note that a numeric reference does not break on a rename (it may on a
+**Field mode** (F60, F74, astra; V2 — it qualifies the c22 answer F17's wording relies on):
+confirmed named references (`read`, `write`, `validate`, `filter`, …) and numeric candidates
+(`RecordRef.Field(8)` on an unresolved table) print as two inventories, with the note that a numeric reference does not break on a rename (it may on a
 renumbering). `filters:` always prints, with `none observed within the searched bodies` when
 empty. The verdict says `not a complete rename inventory: page and report columns, CalcFormula
 and TableRelation are not searched (the compiler finds them); keys holding the field are listed
@@ -923,7 +1088,7 @@ with its scope; c30 and c18 show ops by kind and direct sites; c22 separates the
 candidate and prints `filters:`; c13 says "byte-order mark"; c07 and c28 start with what to run;
 c09's inputs add up.
 
-### 9.8 Other per-answer items (F73, F78)
+### 9.8 Other per-answer items (F73 in V6, F78 in V4)
 
 - **Guarantees and refutation** (F73, c15, astra): a digest guarantee whose evidence is
   `validForRefutation: false` prints as a description (`ordering: commit after insert,
@@ -944,10 +1109,11 @@ Kept apart, per the rubric. None blocks a milestone above.
   TableRelation are not indexed (declared keys are). A rename inventory needs them. Output-only
   stopgap: §9.3.
 - **Key-relevant uses in table mode** (F59): possible from existing indexes; measure the join (§9.3).
-- **Company context of a write** (F75, c20): whether the model records `ChangeCompany` on a record
-  variable, so a write can be labelled with the company it targets, is not verified. Check before
-  V2 implements F75's company part; without the fact, F75 prints the routine's own state changes
-  only.
+- **Company context of a write** (F75, c20): checked for revision 3 — `ChangeCompany` appears in
+  the engine only as a catalogued builtin (`resolve/global_builtins.rs`, `member_catalog.rs`); no
+  fact records which company a record variable targets. So the output prints `target company:
+  not established by this analysis` beside the `ChangeCompany` site (§9.1); naming the company is
+  the engine capability, deferred.
 - **Deep reads and locks in query effects** (F61, c08): deferred engine capability (plan §5 Q4
   keeps per-operation detail one dependency routine deep). The output part, saying so per
   operation family, is accepted (§5.2).
@@ -966,7 +1132,7 @@ Kept apart, per the rubric. None blocks a milestone above.
 | Boilerplate | one short `scope:` line or the envelope | scope and completeness beside the answer, standardized | **both, within wave-2 §3.7**: the three facts stay visible as one line; static prose goes to the description (§5.3) |
 | c13 outcome | exit 0 | a distinct outcome code | **exit 0 plus `outcome`** (§1 F24, §6.3): agents treat non-zero as failure; the outcome tells cases apart |
 | c19 closed world | name `closedWorld: true` | warn it can hide the problem | **both**: name it as a re-analysis under an assumption and say it changes the assumption, not what runs (§4.4; wording settled in §11.2 row 2) |
-| c12 whole-program reach | omit, "not specific" | a separate optional section | **one line with counts by tier and "not specific"**; lists only with `detail` (§3.2) |
+| c12 whole-program reach | omit, "not specific" | a separate optional section | **counts by tier, kind, context and relation, lists folded**; lists only with `detail` (§3.2). Revision 3 drops the words "not specific" (folding is presentation only) |
 | c26 ambiguity | one card per overload when ≤3 | a copyable request for both | **astra**: a card the agent did not ask for may be the wrong one; the error stays exit 2 with a ready value (§2.4) |
 | c19 wording | — | "does not establish safety" | revision 1 rejected it; **revision 2 accepts the substance** without the banned word: `not established: that it never commits` (§4.4, §11.2 row 3) |
 | c02, c07 | "partly" (layout makes candidates look like evidence) | "yes" | no output decision depends on the verdict; §3.1 and §3.3 apply either way |
@@ -980,8 +1146,8 @@ Kept apart, per the rubric. None blocks a milestone above.
 | 2 | Naming an assumption input on `unknown` | `would narrow it:` (removes some blockers) and `would decide it:` (removes all) | no "would decide it": an assumption is not evidence; "conditional re-analysis" | **astra's label, Fable's content** (§4.4): `re-analysis under an assumption:` with what it removes and what stays, and `removes every blocker of this answer` when true. "Decide" is dropped because the re-run's answer is not computed here and could still be unknown or yes; Fable's need — tell narrowing from full removal — is met by the removes/stays clause |
 | 3 | F21 ("does not establish …") | agrees with revision 1's rejection (the owner rule) | reverse it: "transaction preservation is not established" uses no banned word | **astra** (§4.4): the owner rule bans the words "safe"/"unsafe", not a statement of what an answer does not show, and Fable's agreement was with keeping the banned word out, which still holds. `not established:` lines in the question's terms. Owner may overrule if the rule was meant more widely; flagged in the report |
 | 4 | Overload signatures | also on list rows, not only path hops | on every occurrence of an overloaded name | **astra's rule** (§2.1), which includes Fable's: every occurrence, short names when not overloaded |
-| 5 | Unknown words | one pair `not resolved` / `run-time` on table, temp and condition | a RecordRef does not prove a run-time table; use `not resolved` with receiver and reason | **astra** (§8.1): `not resolved (<receiver>: <reason>)` on every axis; `run-time` is not used, because the engine has no fact that proves a target varies at run time. Fable's goal (the same words on every axis, saying why) is kept through the reason |
-| 6 | Folding a whole-program reach | fire on the total share or on one hub's fan-out | the share may fold, never label; split by relation regardless of size | **Both** (§3.2): Fable's triggers decide folding only; astra's rule that labels and the code/navigation/hub split never depend on size |
+| 5 | Unknown words | one pair `not resolved` / `run-time` on table, temp and condition | a RecordRef does not prove a run-time table; use `not resolved` with receiver and reason | **astra** (§8.1): `not resolved (<receiver>: <reason>)` on every axis; `run-time` is not used for table, temp-state and condition targets, because for those the engine infers it from the receiver kind and does not prove it. Revision 3 scopes this (Fable, r2 review): for call edges `HonestDynamic` is a proven run-time fact and `honest dynamic` keeps its word. Fable's goal (the same words on every axis, saying why) is kept through the reason |
+| 6 | Folding a broad reach | fire on the total share or on one hub's fan-out | the share may fold, never label; split by relation regardless of size | **Both** (§3.2): Fable's triggers decide folding only; astra's rule that labels and the split never depend on size. Revision 3 gives each trigger its own stated population (reach share over entries; hub fan-out over graph nodes), after astra showed revision 2 compared two different measures |
 | 7 | Digest summary rows | (accepted revision 1's folded "distinct routine" rows) | one row per stable id, never folded | **astra** (§5.2): the c15 task compares overloads, so folding loses the asked-for difference; sharing common facts keeps the size down. Fable did not argue for folding |
 | 8 | Impact `detail` | (accepted ten items per list) | an evidence budget | **astra** (§7.6): a census with shorter lines is still a census |
 | 9 | Moving work earlier | F42 `tableAnswers`, F57 into V2 | also F13, completeness subject, candidates, lock scope, exact selection, F55/F56/F48 | **both** (§0.1): V2 grows to everything that misleads or leaves a hazard without its evidence. V2 is now the largest milestone; it can split into V2a (wording, F10–F29) and V2b (evidence lines, F48/F55/F56/F57/F63) if the implementer wants two branches |
@@ -1000,8 +1166,10 @@ decision follows its words.
   - shared evidence reconstructs each root's and each row's original meaning: a digest root's
     entry, a query row's operation location, a prove witness's hops through its segment (§7);
   - read, lock and validate totals include every temp class and unresolved-table operations (§1 F15);
-  - the summary cap keeps requested verdicts, the selection up to `maxTests`, the fallback and the
-    truncation metadata (§5.2);
+  - overflow: on a fixture whose requested rows exceed 8 KiB, the summary stays ≤ 8 KiB with the
+    headline, analysis line, fallback, accounting, `index` and `summaryTruncated`, and the result
+    index holds every requested identity, verdict and selected test (§5.2; break: write the index
+    without the rows the summary dropped);
   - `unknown` stays `unknown` unless new evidence or an explicitly changed assumption is given
     (no renderer turns it into a softer "no");
   - zero resolved roots from input that did not map is `input-not-mapped`, never
@@ -1016,8 +1184,11 @@ decision follows its words.
   CHANGELOG entry.
 - **Round 2:** rebuild and copy `~/.al-sem/bin/alsem` (it does not update itself), re-run the
   same 30 calls with `target/tmp/output-validation/round1/record.py` and `plan.json`, and check
-  each call against the "Verify" lines above. The same two reviewers read round 2 against the
-  same rubric; a finding that comes back is reopened in the register.
+  each call against the "Verify" lines above. The "Verify" lines state shapes, not numbers:
+  round-2 numeric expectations (counts, sizes past the ratchets) are derived from a run after
+  the four fix branches of §12.2 have merged, because those branches move c02, c06, c12, c20,
+  c21 and c25's numbers. The same two reviewers read round 2 against the same rubric; a finding
+  that comes back is reopened in the register.
 
 ### 12.2 Fix-branch gates (check and date before the dependent commit)
 
@@ -1079,7 +1250,7 @@ finding is rejected any more.
 | F7 | Not-found selector: no near matches or selector forms | c03 | both | medium | §2.4 |
 | F8 | Ambiguous selector: one long line; no ready value for both | c26 | both | low | §2.4 |
 | F10 | prove prints hub-mediated witnesses as evidence; tier at line end only | c02 | both | high | §3.1 |
-| F12 | Whole-program reach listed as if specific, twice | c12, c20 | both | high | §3.2 |
+| F12 | A reach about the size of the program listed with no tier, kind split or hub, twice | c12, c20 | both | high | §3.2 |
 | F13 | Tests: no tier per group; nearest reads as focused; no code-vs-navigation relation in the rank (tests already sort by tier and hops, `select.rs:457`) | c07, c21, c28 | both | medium | §3.3 |
 | F14 | Conditional write led by "no observed write that may persist" | c01, c23 | both | high | §4.1 |
 | F17 | Field writers: bare `0 writer(s)` with no search statement | c10 | both | high | §4.2 |
