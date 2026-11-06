@@ -469,6 +469,11 @@ pub enum Witness {
         id: BuiltinId,
         catalog_version: String,
     },
+    /// The target is a synthetic platform publisher (F1: a table event a
+    /// record operation raises, [`EdgeKind::TableEvent`]): the platform raises
+    /// it and no declaration exists to cite. Paired with the table's tier
+    /// evidence (`Source` or `Abi`) and a `Routine` target.
+    Platform,
     None,
 }
 

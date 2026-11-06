@@ -2709,7 +2709,7 @@ pub fn table_event_names(op: &str) -> Option<[&'static str; 2]> {
 /// and its `EventFlow` edge carries the subscribers, so the record op reaches
 /// them through it, as a call reaches an integration event's publisher. Empty
 /// when nothing loaded subscribes. The publisher has no source span: the route's
-/// evidence is the table's tier and its witness is [`Witness::None`].
+/// evidence is the table's tier and its witness is [`Witness::Platform`].
 ///
 /// The publisher collapses a validate event's fields into one (`element`), so a
 /// `Validate(A)` route reaches the subscribers of every field of the table here;
@@ -2732,7 +2732,7 @@ pub fn resolve_table_events(
                 target: RouteTarget::Routine(r.id.clone()),
                 evidence: tier_evidence(table_object.tier),
                 conditions: vec![],
-                witness: Witness::None,
+                witness: Witness::Platform,
                 receiver_tier: None,
             });
         }

@@ -10,27 +10,27 @@
         "interface-open-world",
         "object-run-unresolved"
       ],
-      "effects": 666,
+      "effects": 686,
       "effectsByType": {
-        "BACKGROUND_TASK": 4,
-        "COMMIT": 17,
-        "DB_DELETE": 28,
+        "BACKGROUND_TASK": 5,
+        "COMMIT": 18,
+        "DB_DELETE": 29,
         "DB_INSERT": 50,
-        "DB_MODIFY": 29,
+        "DB_MODIFY": 30,
         "ERROR_IMPLICIT": 110,
-        "ERROR_THROW": 116,
-        "EVENT_PUBLISH": 93,
-        "FILE": 5,
-        "HTTP": 23,
-        "ISOLATED_STORAGE": 17,
-        "TELEMETRY": 26,
-        "UI_CONFIRM": 7,
-        "UI_ERROR": 116,
-        "UI_FILE_DIALOG": 4,
-        "UI_HYPERLINK": 2,
-        "UI_MESSAGE": 8,
-        "UI_PROGRESS": 2,
-        "UI_WINDOW_OPEN": 9
+        "ERROR_THROW": 118,
+        "EVENT_PUBLISH": 95,
+        "FILE": 6,
+        "HTTP": 24,
+        "ISOLATED_STORAGE": 18,
+        "TELEMETRY": 27,
+        "UI_CONFIRM": 8,
+        "UI_ERROR": 118,
+        "UI_FILE_DIALOG": 5,
+        "UI_HYPERLINK": 3,
+        "UI_MESSAGE": 9,
+        "UI_PROGRESS": 3,
+        "UI_WINDOW_OPEN": 10
       },
       "names": {
         "entryPoints": [
@@ -54,15 +54,15 @@
         ],
         "tablesOwnedByDependencies": [
           "Activity Log",
+          "Approval Comment Line",
+          "Approval Entry",
+          "Assembly Header",
           "Attachment",
           "Avg. Cost Adjmt. Entry Point",
+          "CRM Full Synch. Review Line",
           "CSC Access Token",
           "CSC App To Migrate",
-          "CSC Client Credential",
-          "CSC Company Activation",
-          "CSC Company Activation Cache",
-          "CSC Company Setup",
-          "CSC Country/Region"
+          "CSC Client Credential"
         ],
         "topCallees": [
           {
@@ -95,7 +95,7 @@
           "withWritesSites": 14
         },
         "events": {
-          "distinct": 524,
+          "distinct": 534,
           "inWorkspaceCode": 75
         },
         "gaps": {
@@ -105,21 +105,21 @@
         },
         "kinds": {
           "backgroundTasks": 3,
-          "errors": 194,
+          "errors": 195,
           "file": 4,
           "http": 20,
           "isolatedStorage": 16,
           "telemetry": 23,
           "ui": 17
         },
-        "literalDeadTables": 328,
+        "literalDeadTables": 329,
         "mayWriteTables": {
-          "byDependencies": 132,
-          "count": 143,
+          "byDependencies": 142,
+          "count": 153,
           "mostBeyond": {
             "enteredAt": "ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19",
             "entryPoint": "Codeunit Reminder-Issue::OnRun",
-            "tables": 78
+            "tables": 89
           },
           "ownedByApp": 11
         },
@@ -127,12 +127,12 @@
           "operations": 0,
           "tables": 0
         },
-        "temporaryOnlyTables": 51,
+        "temporaryOnlyTables": 57,
         "unresolvedTableWrites": 2
       }
     }
   ],
   "routinesListed": 1,
-  "totalEffects": 666,
+  "totalEffects": 686,
   "totalUnresolved": 288
 }

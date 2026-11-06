@@ -76,7 +76,9 @@ way a call reaches an integration event's publisher.
   nothing subscribes to gets **no** `TableEvent` edge (no new honest-empty obligations).
 - Shape `Multicast`, completeness `Partial { ReverseDependentSubscribers }`: an app not loaded
   may subscribe too, as for any event. Each route has the table's tier evidence (`Source` or
-  `Abi`) and `Witness::None` (the publisher has no source).
+  `Abi`) and the new `Witness::Platform` (the publisher has no declaration to cite; the
+  route-applicability contract accepts it with `Source`/`Abi` evidence and a `Routine`
+  target only).
 - The lookup goes through the resolver's reads facade (`routines_named`), so the workspace
   session's S rule re-resolves a dependency file when a publisher appears or goes.
 - **Validate** reaches the publisher of the event, which collapses the fields (one synthetic

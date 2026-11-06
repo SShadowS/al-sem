@@ -81,6 +81,22 @@ call-graph export spec, flagged `unraisedPublisher`, not a choice for cost; `pro
   host at load 30-340 on 22 cores: user CPU median explain 133 → 131 s, prove 141 → 142 s
   (unchanged within the noise); peak RSS median explain 3.14 → 3.20 GB, prove 2.99 → 3.16 GB;
   wall times too noisy to compare (explain 38-99 s before, 29-49 s after).
+- **A new `Witness::Platform`**: the route to a synthetic publisher has no declaration to
+  cite; the route-applicability contract (CDO: `route_applicability_zero_violations`, 124
+  violations with `Witness::None`) accepts it with `Source`/`Abi` evidence and a `Routine`
+  target only.
+- **CDO ratchets moved, re-minted through their documented `REGEN_TEMP_GOLDENS=1` path**:
+  the L4 frozen digests (`tests/l4-summary-baseline/cdo-*-digest.txt`: the cone now holds the
+  subscribers' effects); the CDO rendering goldens (`tests/cli-output-goldens/cdo/`: e.g.
+  `IssueReminder` `writes-table:Data Exch.` goes from `unknown` to `yes` through Reminder-Issue
+  → Gen. Journal Line `OnAfterInsertEvent` → Workflow's subscriber → its responses, a may-path
+  through the workflow engine; `RunReportID` may-commit gains a 14th effect through Incoming
+  Document Attachment's subscribers); C-9's "through dependency code" count 301 → 597 tests;
+  `derived_only_matches_raw_fold_on_cdo`'s pinned recursive-member count 784 → 1,027 (the
+  raw-fold oracle agrees; recursive SCCs 70 → 106: subscribers that write the table they
+  subscribe to re-raise its events); the digest size budget (owner's ratchet T-W2-15) raised 1,250,000 / 720,000 →
+  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), which needs the
+  owner's confirmation.
 
 ### Fixed (the macOS build compiles again)
 
