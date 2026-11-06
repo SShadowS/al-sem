@@ -52,7 +52,6 @@
               "sourceKind": "source"
             },
             "factId": "fd83f4fd0de47853",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
@@ -75,7 +74,6 @@
               "sourceKind": "source"
             },
             "factId": "2155c4616d7282e4",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -109,7 +107,6 @@
               "sourceKind": "source"
             },
             "factId": "1b3cfdd09f2a0708",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {

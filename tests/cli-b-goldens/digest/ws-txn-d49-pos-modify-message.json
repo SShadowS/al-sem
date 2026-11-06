@@ -45,7 +45,6 @@
               "sourceKind": "source"
             },
             "factId": "fa4712cf8225549f",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -68,7 +67,6 @@
               "sourceKind": "source"
             },
             "factId": "fdb0a0fca2b84e91",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -91,7 +89,6 @@
               "sourceKind": "source"
             },
             "factId": "46634eb02893729c",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],

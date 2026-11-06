@@ -464,10 +464,14 @@ fn effect_v3(
     m.insert("conditionality".into(), e.conditionality.into());
     m.insert("transactionContext".into(), e.transaction_context.into());
     m.insert("guarantees".into(), json!(e.guarantees));
-    m.insert(
-        "guaranteeEvidence".into(),
-        crate::engine::l5::digest_cli::guarantee_evidence(e),
-    );
+    // F73: beside a non-empty `guarantees` only (an empty list has no flag
+    // to carry).
+    if !e.guarantees.is_empty() {
+        m.insert(
+            "guaranteeEvidence".into(),
+            crate::engine::l5::digest_cli::guarantee_evidence(e),
+        );
+    }
     let mut detail = Map::new();
     for (k, v) in &e.detail {
         // 1d's first-ten comma string: `resources` holds the list (§4.4.2).

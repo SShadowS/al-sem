@@ -2497,7 +2497,8 @@ pub fn guarantee_refutable(eff: &DigestEffectFull, label: &str) -> bool {
         .any(|sg| sg.label == label && sg.valid_for_refutation)
 }
 
-/// `guaranteeEvidence` (F73, additive beside `guarantees`): each label with
+/// `guaranteeEvidence` (F73, additive beside a non-empty `guarantees`;
+/// absent when there is no label): each label with
 /// its `validForRefutation` flag, in `guarantees` order, so a reader never
 /// sees a descriptive guarantee beside refutable facts without the flag
 /// (the folded document keeps no trivial scoped guarantee to look it up in).
@@ -2563,7 +2564,9 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     let guarantees: Vec<serde_json::Value> =
         eff.guarantees.iter().map(|g| g.clone().into()).collect();
     m.insert("guarantees".into(), serde_json::Value::Array(guarantees));
-    m.insert("guaranteeEvidence".into(), guarantee_evidence(eff));
+    if !eff.guarantees.is_empty() {
+        m.insert("guaranteeEvidence".into(), guarantee_evidence(eff));
+    }
     m.insert("factId".into(), eff.fact_id.clone().into());
     let sg: Vec<serde_json::Value> = eff
         .scoped_guarantees

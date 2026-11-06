@@ -237,7 +237,6 @@
               "sourceKind": "source"
             },
             "factId": "5141fd0a447226eb",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
@@ -399,7 +398,6 @@
               "sourceKind": "source"
             },
             "factId": "369cf30301f856c2",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -593,7 +591,6 @@
               "resourceCount": "1"
             },
             "factId": "370b6539b611c25e",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "resources": [
@@ -615,7 +612,6 @@
               "resourceCount": "1"
             },
             "factId": "10311c540d591a90",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "resources": [
@@ -642,7 +638,6 @@
               "sourceKind": "source"
             },
             "factId": "ebe72fa16ca367fe",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
@@ -665,7 +660,6 @@
               "sourceKind": "source"
             },
             "factId": "3682e914d340f673",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -770,7 +764,6 @@
               "sourceKind": "source"
             },
             "factId": "75166aca19c90410",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {

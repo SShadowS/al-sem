@@ -42,7 +42,6 @@
               "sourceKind": "source"
             },
             "factId": "a689dbf263569916",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -154,7 +153,6 @@
               "sourceKind": "source"
             },
             "factId": "38c70e42fe9a7037",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -277,7 +275,6 @@
               "sourceKind": "source"
             },
             "factId": "dcde102cebfc3bd8",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -395,7 +392,6 @@
               "sourceKind": "source"
             },
             "factId": "62015033955c8a7a",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -513,7 +509,6 @@
               "sourceKind": "source"
             },
             "factId": "55a3870ca804c405",
-            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
