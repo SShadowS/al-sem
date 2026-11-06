@@ -156,7 +156,7 @@ fn touches_up(extra: &[&str]) -> Value {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert_eq!(v["schemaVersion"], "3.5.0");
+    assert_eq!(v["schemaVersion"], "3.6.0");
     v["payload"]["up"].clone()
 }
 
@@ -297,5 +297,53 @@ fn query_touches_up_single_app_is_not_applicable() {
     assert_eq!(
         up["throughDependency"],
         serde_json::json!({"relation": "code-calls-through-dependency", "notApplicable": "no dependency code loaded"})
+    );
+}
+
+/// Output validation F5: a callers' context answer's human text names a
+/// dependency location by the app's name (`dep:Base Application:…`), never
+/// by its guid; the JSON keeps the guid. Hand-stated: `DC Both.Direct`'s path
+/// to `Target` passes `DC Engine.Process` in `dep/src/Engine.al`, the
+/// dependency whose app.json says id `437dbf0e-…` and name
+/// "Base Application".
+///
+/// Discrimination (2026-11-06): removing the `readable_locations` call after
+/// `callers_document` in `prove.rs` fails at "no dependency guid in the human
+/// text"; restored, passes.
+#[test]
+fn callers_context_human_text_names_dependency_locations_by_app_name() {
+    const GUID: &str = "437dbf0e-84ff-417a-965d-ed2bb9650972";
+    let ws = fixture().join("ws");
+    let human = run(
+        env!("CARGO_BIN_EXE_alsem"),
+        &[
+            "prove",
+            "DC Target.Target",
+            "callers-have-pending-writes",
+            "--format",
+            "human",
+        ],
+        &ws,
+    );
+    assert!(
+        human.contains("Codeunit \"DC Engine\"::Process (dep:"),
+        "precondition: a witness path through dependency code: {human}"
+    );
+    assert!(
+        !human.contains(&format!("dep:{GUID}:")),
+        "no dependency guid in the human text: {human}"
+    );
+    assert!(
+        human.contains("Codeunit \"DC Engine\"::Process (dep:Base Application:src/Engine.al:23)"),
+        "{human}"
+    );
+    let json = run(
+        env!("CARGO_BIN_EXE_alsem"),
+        &["prove", "DC Target.Target", "callers-have-pending-writes"],
+        &ws,
+    );
+    assert!(
+        json.contains(&format!("dep:{GUID}:")),
+        "the JSON keeps the guid: {json}"
     );
 }

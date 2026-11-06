@@ -1384,7 +1384,10 @@ not seen: generation 12; 16 workspace gaps, 265 dependency gaps on the changed r
 
 JSON schema `al-sem.impact/1`: `comparison` (the tuple), `input` (buckets, diagnostics,
 mismatches), `roots[]` (stable id, handle, display, anchor, status
-`changed|added|deleted|signatureChanged|positionUncertain`, `up`, `effects`, `delta: null`,
+`changed|added|deleted|signatureChanged|positionUncertain`, or, from the diff alone (output
+validation F25), `addedInDiff` (its header line is a `+` line and no `-` line sits in or
+at the edges of its span) and
+`signatureLinesChanged` (`added` and `signatureChanged` need a base), `up`, `effects`, `delta: null`,
 `tests`), `schema: null`, `tests` (the `al-sem.tests/1` block or a not-computed reason),
 `revisions`, `coverage`, `assumptions`, `limits`, `base: null`.
 

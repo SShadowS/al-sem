@@ -1,5 +1,5 @@
 --- effects of Codeunit CDO E-Mail Handler::RunReportID ---
-  summary: 629 operations — writes that may persist 27 on 13 tables (24 known persistent, 3 temp state unknown); writes beyond dependency entry points on 396 tables through 15 entry points (393 only there); locks 2 on 2 tables; reads 245 on 66 tables; temporary records 287 on 11 tables in 86 routines; on a RecordRef (table decided at run time) 68 in 29 routines
+  summary: 629 operations — writes that may persist 27 on 13 tables (24 known persistent, 3 temp state unknown); writes beyond dependency entry points on 396 tables through 15 entry points (393 only there); locks 2 on 2 tables; reads 440 on 72 tables; temporary records 92 on 7 tables in 51 routines; on a RecordRef (table decided at run time) 68 in 29 routines
   coverage: per operation, one routine into dependency code; operations and routes the root's literal arguments rule out are listed and marked (alsem explain and prove drop them); writes beyond dependency entry points follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary records are not writes; dependencies: 11 apps (--all lists them)
   writes that may persist (13 tables):
@@ -50,7 +50,7 @@
       representative path (CTS-CDN eDocument Log): … → [interface] CDO eDocuments Dispatcher::DispatchDocument → DoDispatch → SendEDocument → CTS-CDN Network Doc. Mgt.::CreateEDocumentLog (Insert at dep:Continia Delivery Network:src/.dependencies/CDN/Codeunit/CTSCDNNetworkDocMgt.Codeunit.al:407); through the site at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:228
     29 entry points at 37 sites write only temporary records or no table (--detail lists them)
   locks (2 tables; not writes): CDO Azure Application Setup (also written), CDO E-Mail Log (also written); a RecordRef (table decided at run time): 5 locks
-  reads: 245 on 66 tables (Get 98, CalcFields 37, Next 35, FindSet 31, FindFirst 27, FindLast 11, IsEmpty 4, Count 2) — --all lists them
-  temporary records: 287 operations on 11 tables in 86 routines — --all lists them
+  reads: 440 on 72 tables (Get 99, Next 90, CalcFields 82, FindSet 82, FindFirst 41, IsEmpty 21, FindLast 15, Count 10; 195 on temporary records) — --all lists them
+  temporary records: 92 operations on 7 tables in 51 routines — --all lists them
   on a RecordRef (table decided at run time): 68 operations in 29 routines (FindSet 18, Next 18, FindFirst 6, Find 5, LockTable 5, Modify 5, Count 3, Get 3, IsEmpty 3, FindLast 1, Insert 1) — --all lists them
   next: alsem prove <routine> writes-table:<table> follows the whole cone for one table

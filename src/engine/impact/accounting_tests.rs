@@ -167,13 +167,9 @@ fn every_changed_line_lands_in_one_bucket() {
         "the global and the routine"
     );
     assert_eq!(h.routines, BTreeSet::from([CHECK.to_string()]));
-    assert_eq!(
-        a.routines.get(CHECK),
-        Some(&RoutineLines {
-            body: 2,
-            signature: 2
-        })
-    );
+    let check = a.routines.get(CHECK).expect("Check is changed");
+    assert_eq!((check.body, check.signature), (2, 2));
+    assert!(!check.added_in_diff(), "{check:?}");
     // The hunks that touch no routine: the field's, the removed routine's,
     // and the other file's.
     let outside: Vec<(String, i32, i32)> = a

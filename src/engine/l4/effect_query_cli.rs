@@ -91,8 +91,14 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `up.throughDependency`, the workspace callers that reach the routine only
 /// by code calls through dependency code, each with its tier and witness
 /// ([`render_through_dependency`]); `transitiveCallers` and the rest of `up`
-/// are unchanged.
-const QUERY_SCHEMA_VERSION: &str = "3.5.0";
+/// are unchanged. 3.6.0 (output validation V1, F15/F16): `query effects`
+/// splits the caller-dependent and temporary classes by op family as the
+/// physical class is, so a caller-dependent or temporary read, lock, validate
+/// or unclassified row moves to that family's bucket (`summary.reads`, …) and
+/// out of `summary.callerDependent` / `summary.temporary` / `byTable`; a
+/// caller-dependent row adds `parameterPosition` (1-based) and
+/// `parameterName` (additive; `tempState` keeps the 0-based index).
+const QUERY_SCHEMA_VERSION: &str = "3.6.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1979,6 +1985,31 @@ fn temp_note(t: &TempStateKind) -> String {
     }
 }
 
+/// The words `query effects` uses for a caller-dependent temp state of the
+/// root's own parameter (F16): `caller-dependent: parameter 3
+/// (ToPurchaseHeader)`, 1-based like [`temp_note`], with the parameter's name
+/// when `params` (the root's declared parameters) has it; `caller-dependent:
+/// Rec` for the receiver. `None` for any other state.
+fn caller_dependent_words(
+    t: &TempStateKind,
+    params: &[crate::program::model::workspace::ModelParameter],
+) -> Option<String> {
+    match t {
+        TempStateKind::ParameterDependent(i) if *i == RECEIVER_PARAM_INDEX => {
+            Some("caller-dependent: Rec".to_string())
+        }
+        TempStateKind::ParameterDependent(i) => {
+            let name = params
+                .iter()
+                .find(|p| p.index == *i)
+                .map(|p| format!(" ({})", p.name))
+                .unwrap_or_default();
+            Some(format!("caller-dependent: parameter {}{name}", i + 1))
+        }
+        _ => None,
+    }
+}
+
 /// The human `via` note (spec §4.5): `direct` and `inherited` print nothing
 /// here (the first hop of an inherited touch is W2-2's `firstHop`).
 fn via_note(v: crate::engine::l4::effect_store::ViaRank) -> &'static str {
@@ -2988,21 +3019,27 @@ pub fn render_query_effects(
 
 /// The exclusive bucket of one row (design §4.5, F10): table not resolved
 /// first, then the write class of its temp state, then the op family.
+///
+/// The caller-dependent and temporary classes are split by op family exactly
+/// as the physical class is (F15): only a write is a caller-dependent WRITE
+/// or a temporary-record write; a caller-dependent or temporary `Get` is a
+/// read, a `LockTable` a lock, and so on.
 fn bucket(t: &TableTouch<'_>) -> &'static str {
     use crate::engine::l5::rollup::{WriteClass, classify};
     if is_unknown_table(t.table_id) {
         return "tableNotResolved";
     }
-    match classify(&[temp_state_str(t.temp_state).as_str()]) {
-        WriteClass::Temporary => "temporary",
-        WriteClass::CallerDependent(_) => "callerDependent",
-        WriteClass::Physical(_) => match op_family(t.op) {
-            "lock" => "locks",
-            "write" => "writes",
-            "validate" => "validate",
-            "read" => "reads",
-            _ => "unclassified",
+    let class = classify(&[temp_state_str(t.temp_state).as_str()]);
+    match op_family(t.op) {
+        "write" => match class {
+            WriteClass::Temporary => "temporary",
+            WriteClass::CallerDependent(_) => "callerDependent",
+            WriteClass::Physical(_) => "writes",
         },
+        "lock" => "locks",
+        "validate" => "validate",
+        "read" => "reads",
+        _ => "unclassified",
     }
 }
 
@@ -3192,6 +3229,21 @@ fn render_query_effects_body(
                 ops.get(t.operation_id, &join).as_ref(),
                 Some(tables.get(t.table_id)),
             );
+            // F16 (3.6.0, additive): a caller-dependent row's parameter,
+            // 1-based, and its name (`tempState` keeps the 0-based index).
+            if let (TempStateKind::ParameterDependent(i), Value::Object(m)) = (t.temp_state, &mut v)
+                && *i != RECEIVER_PARAM_INDEX
+            {
+                m.insert("parameterPosition".into(), (u64::from(*i) + 1).into());
+                m.insert(
+                    "parameterName".into(),
+                    routine
+                        .parameters
+                        .iter()
+                        .find(|p| p.index == *i)
+                        .map_or(Value::Null, |p| p.name.clone().into()),
+                );
+            }
             // Q4 (3.1.0, additive): an unresolved table's receiver, where it
             // is a RecordRef.
             if is_unknown_table(t.table_id)
@@ -3580,7 +3632,8 @@ fn render_query_effects_body(
                 "    {}: {}{locks}{} — first {} {at}{through}{mark}{ruled_out}\n",
                 table_name(id),
                 ops_text(&op_counts(rows)),
-                temp_note(first.temp_state),
+                caller_dependent_words(first.temp_state, &routine.parameters)
+                    .map_or_else(|| temp_note(first.temp_state), |w| format!(" ({w})")),
                 first.op
             ));
         }
@@ -3677,8 +3730,32 @@ fn render_query_effects_body(
         ("unclassified", "unclassified"),
     ] {
         if let Some(b) = buckets.get(key) {
+            // F15: a caller-dependent or temporary row is counted here by
+            // its op family; the note says how many of them are.
+            let mut notes = Vec::new();
+            let caller_dependent = b
+                .rows
+                .iter()
+                .filter(|&&i| matches!(effects[i].temp_state, TempStateKind::ParameterDependent(_)))
+                .count();
+            if caller_dependent > 0 {
+                notes.push(format!("{caller_dependent} caller-dependent"));
+            }
+            let temporary = b
+                .rows
+                .iter()
+                .filter(|&&i| matches!(effects[i].temp_state, TempStateKind::Known(true)))
+                .count();
+            if temporary > 0 {
+                notes.push(format!("{temporary} on temporary records"));
+            }
+            let notes = if notes.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", notes.join(", "))
+            };
             human.push_str(&format!(
-                "  {label}: {} on {} ({}){}\n",
+                "  {label}: {} on {} ({}{notes}){}\n",
                 b.rows.len(),
                 plural(b.tables.len(), "table", "tables"),
                 ops_text(&b.ops),
@@ -3738,12 +3815,17 @@ fn render_query_effects_body(
             }
             _ => String::new(),
         };
+        // F16: a caller-dependent row names its parameter as the table rows
+        // do (1-based, with its name), never the raw 0-based index.
+        let temp = match caller_dependent_words(e.temp_state, &routine.parameters) {
+            Some(w) => w,
+            None => format!("temp {}", temp_state_str(e.temp_state)),
+        };
         human.push_str(&format!(
-            "    [{}] on {} via {}, temp {} — {}{mark}\n",
+            "    [{}] on {} via {}, {temp} — {}{mark}\n",
             e.op,
             table,
             e.via.as_str(),
-            temp_state_str(e.temp_state),
             origin_human(ops.get(e.operation_id, &join).as_ref(), e.operation_id)
         ));
     }

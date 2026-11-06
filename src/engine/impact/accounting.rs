@@ -219,6 +219,29 @@ pub struct FileAccount {
 pub struct RoutineLines {
     pub body: usize,
     pub signature: usize,
+    /// Of `body + signature`, the `+` lines (the rest are `-` lines).
+    pub added: usize,
+    /// The routine's header line (its declaration's anchor line) is a `+`
+    /// line of the diff.
+    pub header_added: bool,
+    /// A run of `-` lines sits inside the routine's span or right at its
+    /// edges (just before its first line or just after its last), whichever
+    /// bucket the run was counted in.
+    pub removed_near: bool,
+}
+
+impl RoutineLines {
+    /// The diff introduces this declaration (output validation F25): its
+    /// header line is a `+` line and no `-` line sits in or at the edges of
+    /// its span. Then the old text had no header at this place (a rewritten
+    /// header shows a `-` line, and a span holds one header), even when the
+    /// diff aligns the routine's last lines (`end;`) with the old text as
+    /// context (c20). What a diff alone can prove; only a base can say the
+    /// routine is new to the program.
+    #[must_use]
+    pub fn added_in_diff(&self) -> bool {
+        self.header_added && !self.removed_near && self.added == self.body + self.signature
+    }
 }
 
 /// The whole diff's account.
@@ -437,6 +460,19 @@ fn account_file(
         }
     });
     let mut mismatched = Vec::new();
+    // F25: the spans a `-` run sits in or at the edges of.
+    let mut removed_near: BTreeSet<usize> = BTreeSet::new();
+    for h in &df.hunks {
+        for c in &h.changes {
+            if let HunkChange::DeletedAfter(l) | HunkChange::DeletedAttributesAfter(l) = *c {
+                let next0 = l.max(0) as usize; // line l + 1, 0-based
+                removed_near.extend(mine.iter().copied().filter(|&i| {
+                    let s = &spans.spans[i];
+                    (s.start as usize) <= next0 && next0 <= s.end as usize + 1
+                }));
+            }
+        }
+    }
     for h in &df.hunks {
         let mut ha = hunk_account(h);
         // The diff against the analyzed text.
@@ -465,6 +501,10 @@ fn account_file(
                         let rid = &spans.spans[i].routine;
                         ha.routines.insert(rid.clone());
                         let e = routines.entry(rid.clone()).or_default();
+                        e.added += 1;
+                        if ix == spans.spans[i].anchor_line as usize {
+                            e.header_added = true;
+                        }
                         if body(i).is_some_and(|b| ix >= b) {
                             e.body += 1;
                             Bucket::Body
@@ -522,6 +562,11 @@ fn account_file(
         }
         fa.buckets.add(&ha.buckets);
         fa.hunks.push(ha);
+    }
+    for i in removed_near {
+        if let Some(e) = routines.get_mut(&spans.spans[i].routine) {
+            e.removed_near = true;
+        }
     }
     if let Some(&first) = mismatched.first() {
         fa.mismatch = Some(Mismatch {

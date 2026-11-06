@@ -146,6 +146,32 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Output validation F39: the touches `callers` input said "without their
+/// witnesses", while a caller that touches the table through another branch
+/// prints its first touch (operation, location, first hop: c17). Both texts
+/// that describe `callers` now say so. Wording: no discrimination proof
+/// (CLAUDE.md "Scope of the proof").
+#[test]
+fn the_touches_callers_text_matches_its_rows() {
+    let tools = al_sem::mcp::tools::tool_list();
+    let t = tools
+        .iter()
+        .find(|t| t["name"] == "alsem_query_touches")
+        .expect("alsem_query_touches");
+    let input = t["inputSchema"]["properties"]["callers"]["description"]
+        .as_str()
+        .unwrap();
+    let tool = t["description"].as_str().unwrap();
+    for (label, text) in [("input", input), ("tool", tool)] {
+        assert!(!text.contains("without their witnesses"), "{label}: {text}");
+        assert!(
+            !text.contains("location, without witnesses"),
+            "{label}: {text}"
+        );
+        assert!(text.contains("first touch"), "{label}: {text}");
+    }
+}
+
 /// Output step 1b (astra Task 5, fable fact 2): explain's tests line tells
 /// "no test code loaded" from "tests loaded, none reaches it", in the
 /// summary, the section and JSON (`summary.testsLoaded`), and says neither
