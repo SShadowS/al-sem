@@ -31,7 +31,17 @@
     },
     "up": {
       "directSites": {
+        "dependencyByOp": {},
+        "dependencyRoutines": 0,
         "dependencySites": 0,
+        "keyRelevant": {},
+        "workspaceByObject": {
+          "Codeunit D1 Multi Caller": 4
+        },
+        "workspaceByOp": {
+          "FindSet": 3,
+          "Modify": 1
+        },
         "workspaceRoutines": 4,
         "workspaceSites": 4
       },
@@ -95,5 +105,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.9.0"
+  "schemaVersion": "3.10.0"
 }

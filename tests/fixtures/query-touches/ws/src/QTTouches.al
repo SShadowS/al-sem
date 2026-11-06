@@ -6,7 +6,10 @@
 //   temporary and to a persistent record;
 // - Mixed: persistent, temporary and rebound touches in one cone;
 // - Leaf: touches QT Other only, so its callers' QT Item touches are informative;
-// - Top3 calls Leaf and touches nothing else (a caller that does not touch it).
+// - Top3 calls Leaf and touches nothing else (a caller that does not touch it);
+// - Keyed: key-relevant sites for table mode (output validation §9.3): a
+//   SetCurrentKey, a SetRange on the key field "No." (key-relevant) and a
+//   SetFilter on Qty (in no key: not key-relevant).
 table 50700 "QT Item"
 {
     fields
@@ -89,6 +92,16 @@ codeunit 50700 "QT Touches"
     procedure Top3()
     begin
         Leaf();
+    end;
+
+    procedure Keyed()
+    var
+        Item: Record "QT Item";
+    begin
+        Item.SetCurrentKey("No.");
+        Item.SetRange("No.", 'A');
+        Item.SetFilter(Qty, '>0');
+        if Item.FindFirst() then;
     end;
 
     procedure Entry()

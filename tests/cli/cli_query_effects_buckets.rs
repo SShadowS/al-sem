@@ -190,5 +190,5 @@ fn locks_and_reads_always_print_with_their_scope() {
     let f = &v["payload"]["result"]["scope"]["families"];
     assert_eq!(f["locks"]["depth"], "oneDependencyRoutine", "{f:#}");
     assert_eq!(f["locks"]["inventory"], "notExhaustive", "{f:#}");
-    assert_eq!(v["schemaVersion"], "3.9.0");
+    assert_eq!(v["schemaVersion"], "3.10.0");
 }

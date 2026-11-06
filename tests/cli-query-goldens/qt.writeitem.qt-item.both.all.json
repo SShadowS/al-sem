@@ -35,13 +35,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -63,7 +63,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 31
+          "line": 34
         },
         "display": "WriteItem",
         "objectDisplay": "Codeunit QT Touches",
@@ -118,13 +118,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -138,7 +138,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 51
+              "line": 54
             },
             "display": "CallWithReal",
             "objectDisplay": "Codeunit QT Touches",
@@ -159,13 +159,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -179,7 +179,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 44
+              "line": 47
             },
             "display": "CallWithTemp",
             "objectDisplay": "Codeunit QT Touches",
@@ -200,13 +200,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -220,7 +220,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 74
+              "line": 77
             },
             "display": "Top1",
             "objectDisplay": "Codeunit QT Touches",
@@ -241,13 +241,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 41
+              "line": 44
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 39
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -261,7 +261,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 58
+              "line": 61
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
@@ -282,13 +282,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 62
+              "line": 65
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 58
+                "line": 61
               },
               "display": "Mixed",
               "objectDisplay": "Codeunit QT Touches",
@@ -302,7 +302,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 58
+              "line": 61
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
@@ -323,13 +323,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 40
+              "line": 43
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 39
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -343,7 +343,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 58
+              "line": 61
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
@@ -364,13 +364,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -384,7 +384,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 58
+              "line": 61
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
@@ -405,13 +405,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 86
+              "line": 89
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 80
+                "line": 83
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
@@ -425,7 +425,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -446,13 +446,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 41
+              "line": 44
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 39
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -466,7 +466,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -487,13 +487,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 62
+              "line": 65
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 58
+                "line": 61
               },
               "display": "Mixed",
               "objectDisplay": "Codeunit QT Touches",
@@ -507,7 +507,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -528,13 +528,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 40
+              "line": 43
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 39
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -548,7 +548,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -569,13 +569,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -589,7 +589,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -610,13 +610,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 36
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 34
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -630,7 +630,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -651,13 +651,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 85
+              "line": 88
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 80
+                "line": 83
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
@@ -671,7 +671,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 107
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -687,5 +687,5 @@
       ]
     }
   },
-  "schemaVersion": "3.9.0"
+  "schemaVersion": "3.10.0"
 }

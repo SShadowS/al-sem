@@ -8,4 +8,5 @@ more: --all lists every witness, no fold; --format json for every row
     declaration-level consumers (CalcFormula, TableRelation, columns) are not searched
     1 site uses RecordRef.Field with a number that is not a literal (any field; not matched)
   filters: none observed (searched: 11 workspace routine bodies, 0 dependency routine bodies; not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded); dynamic field numbers (1 site not matched))
-  not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed as declared keys
+  declared keys holding the field: none
+  not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed above

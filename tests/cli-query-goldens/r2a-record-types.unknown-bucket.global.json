@@ -30,7 +30,18 @@
     },
     "up": {
       "directSites": {
+        "dependencyByOp": {},
+        "dependencyRoutines": 0,
         "dependencySites": 0,
+        "keyRelevant": {
+          "Get": 1
+        },
+        "workspaceByObject": {
+          "Codeunit R2a Records": 1
+        },
+        "workspaceByOp": {
+          "Get": 1
+        },
         "workspaceRoutines": 1,
         "workspaceSites": 1
       },
@@ -55,5 +66,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.9.0"
+  "schemaVersion": "3.10.0"
 }

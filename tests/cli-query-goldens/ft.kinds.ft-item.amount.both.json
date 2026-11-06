@@ -29,11 +29,13 @@
     },
     "fieldSummary": {
       "byNumberNotLiteral": 0,
+      "candidateSites": 0,
       "candidates": 0,
       "candidatesByReason": {},
       "confirmed": {
         "sites": 18
       },
+      "confirmedSites": 19,
       "declaredKeys": 1,
       "fieldIndexSites": 1,
       "numericCandidates": {
@@ -740,5 +742,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.9.0"
+  "schemaVersion": "3.10.0"
 }

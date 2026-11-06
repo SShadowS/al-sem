@@ -1,12 +1,19 @@
 query touches QT Item (07070707-0000-4000-8000-000000000071/table/50700)   [cross-app]
-answer: transitively: 8 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+answer: workspace sites: 10 in 5 routines — by op: FindFirst 2, Insert 2, Delete 1, Get 1, Modify 1, SetCurrentKey 1, SetFilter 1, SetRange 1
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
-  directly: 6 workspace sites in 4 routines and 0 dependency sites touch it
-    [Insert] at ws:src/QTTouches.al:33 in Codeunit "QT Touches"::WriteItem
-    [Insert] at ws:src/QTTouches.al:40 in Codeunit "QT Touches"::TempOnly
-    [FindFirst] at ws:src/QTTouches.al:41 in Codeunit "QT Touches"::TempOnly
-    [Get] at ws:src/QTTouches.al:62 in Codeunit "QT Touches"::Mixed
-    [Modify] at ws:src/QTTouches.al:85 in Codeunit "QT Touches"::Top2
-    [Delete] at ws:src/QTTouches.al:86 in Codeunit "QT Touches"::Top2
-  the 8 routines that touch it transitively: --all lists them
+  dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
+  by object: Codeunit QT Touches 10 sites
+  transitive: 9 workspace routines reach one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+  key-relevant (not exhaustive; their sites listed first): Get 1 (primary key), SetCurrentKey 1, SetRange/SetFilter on key fields 1
+    [Get] at ws:src/QTTouches.al:65 in Codeunit "QT Touches"::Mixed
+    [SetCurrentKey] at ws:src/QTTouches.al:101 in Codeunit "QT Touches"::Keyed
+    [SetRange] at ws:src/QTTouches.al:102 in Codeunit "QT Touches"::Keyed
+    [Insert] at ws:src/QTTouches.al:36 in Codeunit "QT Touches"::WriteItem
+    [Insert] at ws:src/QTTouches.al:43 in Codeunit "QT Touches"::TempOnly
+    [FindFirst] at ws:src/QTTouches.al:44 in Codeunit "QT Touches"::TempOnly
+    [Modify] at ws:src/QTTouches.al:88 in Codeunit "QT Touches"::Top2
+    [Delete] at ws:src/QTTouches.al:89 in Codeunit "QT Touches"::Top2
+    [SetFilter] at ws:src/QTTouches.al:103 in Codeunit "QT Touches"::Keyed
+    [FindFirst] at ws:src/QTTouches.al:104 in Codeunit "QT Touches"::Keyed
+  the 9 routines that touch it transitively: --all lists them

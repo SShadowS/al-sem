@@ -111,7 +111,11 @@ use crate::program::resolve::full::LoadedDependencies;
 /// 3.9.0 (output validation V4, F76, additive): `payload.result.scope` in
 /// every query document (analysis, reasons, assumptions, limits, universe,
 /// scope), beside query effects' `families`.
-const QUERY_SCHEMA_VERSION: &str = "3.9.0";
+/// 3.10.0 (output validation V6, F59, additive): table mode's
+/// `up.directSites` adds `dependencyRoutines`, `workspaceByOp`,
+/// `dependencyByOp`, `workspaceByObject` and `keyRelevant`; field mode's
+/// `fieldSummary` adds `confirmedSites` and `candidateSites`.
+const QUERY_SCHEMA_VERSION: &str = "3.10.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2028,7 +2032,7 @@ fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> S
                 &[
                     "  down: ",
                     "  up: ",
-                    "  transitively: ",
+                    "  workspace sites: ",
                     "  consumers: ",
                     "  not answerable: ",
                 ]
@@ -2259,9 +2263,29 @@ fn render_query_touches_body(
             let resolved = substrate.resolved();
             let names = crate::engine::l5::routine_rollup::RoutineNames::new(resolved, &[]);
             let unknown = is_unknown_table(&table.id);
-            let mut ws_sites: Vec<(String, u32, String, String)> = Vec::new();
+            // Output validation §9.3 (F59): the sites by operation and by
+            // object, and the key-relevant ones. The table's key fields, as
+            // `field_touches` compares names.
+            let key_fields: HashSet<String> = resolved
+                .workspace
+                .tables
+                .iter()
+                .filter(|t| t.id == table.id)
+                .flat_map(|t| {
+                    t.keys.iter().flat_map(move |k| {
+                        k.fields.iter().filter_map(move |f| {
+                            t.fields
+                                .iter()
+                                .find(|x| x.id == *f)
+                                .map(|x| super::field_touches::field_key(&x.name))
+                        })
+                    })
+                })
+                .collect();
+            let mut ws_sites: Vec<TableSite> = Vec::new();
             let mut ws_routines: BTreeSet<&str> = BTreeSet::new();
-            let mut dep_sites = 0usize;
+            let mut dep_by_op: BTreeMap<String, usize> = BTreeMap::new();
+            let mut dep_routines: BTreeSet<&str> = BTreeSet::new();
             for r in &resolved.workspace.routines {
                 let primary = is_primary_routine(resolved, r);
                 for o in &r.record_operations {
@@ -2274,55 +2298,174 @@ fn render_query_touches_body(
                     }
                     if primary {
                         ws_routines.insert(r.stable_routine_id.as_str());
-                        ws_sites.push((
-                            o.source_anchor.source_unit_id.clone(),
-                            o.source_anchor.start_line + 1,
-                            o.op.clone(),
-                            names.display(&r.stable_routine_id),
-                        ));
+                        ws_sites.push(TableSite {
+                            file: o.source_anchor.source_unit_id.clone(),
+                            line: o.source_anchor.start_line + 1,
+                            op: o.op.clone(),
+                            who: names.display(&r.stable_routine_id),
+                            object: join.of(r).object_display,
+                            key: key_relevance(
+                                &o.op,
+                                o.field_arguments
+                                    .as_ref()
+                                    .and_then(|a| a.first())
+                                    .map(String::as_str),
+                                &key_fields,
+                            ),
+                            record_ref: o.receiver_is_record_ref,
+                        });
                     } else {
-                        dep_sites += 1;
+                        dep_routines.insert(r.stable_routine_id.as_str());
+                        *dep_by_op.entry(o.op.clone()).or_default() += 1;
                     }
                 }
             }
-            ws_sites.sort();
+            ws_sites.sort_by(|a, b| (&a.file, a.line, &a.op).cmp(&(&b.file, b.line, &b.op)));
+            let dep_sites: usize = dep_by_op.values().sum();
+            let mut ws_by_op: BTreeMap<&str, usize> = BTreeMap::new();
+            let mut by_object: BTreeMap<&str, usize> = BTreeMap::new();
+            let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
+            for s in &ws_sites {
+                *ws_by_op.entry(s.op.as_str()).or_default() += 1;
+                *by_object.entry(s.object.as_str()).or_default() += 1;
+                if let Some(k) = s.key {
+                    *by_key.entry(k).or_default() += 1;
+                }
+            }
+            let ranked = |m: &BTreeMap<&str, usize>| -> Vec<(String, usize)> {
+                let mut v: Vec<(String, usize)> =
+                    m.iter().map(|(k, n)| ((*k).to_string(), *n)).collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                v
+            };
+            let dep_ranked = ranked(&dep_by_op.iter().map(|(k, n)| (k.as_str(), *n)).collect());
+            let by_op_text = |v: &[(String, usize)]| -> String {
+                v.iter()
+                    .map(|(k, n)| format!("{k} {}", thousands(*n)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             if let Some(up) = payload.get_mut("up") {
                 up["directSites"] = json!({
                     "workspaceSites": ws_sites.len(),
                     "workspaceRoutines": ws_routines.len(),
                     "dependencySites": dep_sites,
+                    // §9.3 (F59, additive): by operation, by object, and the
+                    // key-relevant sites (not exhaustive).
+                    "dependencyRoutines": dep_routines.len(),
+                    "workspaceByOp": ws_by_op,
+                    "dependencyByOp": dep_by_op,
+                    "workspaceByObject": by_object,
+                    "keyRelevant": by_key,
                 });
             }
             human.push_str(&format!(
-                "  transitively: {} it (through workspace or dependency sites; per operation, one \
+                "  workspace sites: {} in {}{}\n",
+                thousands(ws_sites.len()),
+                plural(ws_routines.len(), "routine", "routines"),
+                if ws_sites.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — by op: {}", by_op_text(&ranked(&ws_by_op)))
+                }
+            ));
+            human.push_str(&format!(
+                "  dependency sites: {} in {} the analysis loads (those the workspace reaches, and \
+                 the callers of dependency events it subscribes to){}\n",
+                thousands(dep_sites),
+                plural(
+                    dep_routines.len(),
+                    "dependency routine",
+                    "dependency routines"
+                ),
+                if dep_sites == 0 {
+                    String::new()
+                } else {
+                    format!(", by op: {}", by_op_text(&dep_ranked))
+                }
+            ));
+            if unknown {
+                human.push_str(
+                    "  table not resolved: each site's table is decided by a value the analysis \
+                     does not resolve, and an unresolved write can be any table\n",
+                );
+            }
+            if !by_object.is_empty() {
+                let objects = ranked(&by_object);
+                let shown_o = fold_len(objects.len(), TOUCHES_LIST_CAP, all);
+                human.push_str(&format!(
+                    "  by object: {}{}\n",
+                    objects[..shown_o]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (o, n))| if i == 0 {
+                            format!("{o} {}", plural(*n, "site", "sites"))
+                        } else {
+                            format!("{o} {}", thousands(*n))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if shown_o < objects.len() {
+                        format!(
+                            ", … +{} — {} lists them",
+                            plural(objects.len() - shown_o, "object", "objects"),
+                            Input::All.on(surface)
+                        )
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+            human.push_str(&format!(
+                "  transitive: {} one of the workspace or dependency sites (per operation, one \
                  routine into dependency code: a routine whose only touch is deeper in dependency \
                  code{unseen} is not counted)\n",
                 plural(
                     routines.len(),
-                    "workspace routine touches",
-                    "workspace routines touch"
+                    "workspace routine reaches",
+                    "workspace routines reach"
                 ),
             ));
-            human.push_str(&format!(
-                "  directly: {} in {} and {} touch it{}\n",
-                plural(ws_sites.len(), "workspace site", "workspace sites"),
-                plural(ws_routines.len(), "routine", "routines"),
-                plural(dep_sites, "dependency site", "dependency sites"),
-                if unknown {
-                    " — table not resolved: each such site's table is decided by a value the \
-                     analysis does not resolve, and an unresolved write can be any table"
-                } else {
-                    ""
-                }
-            ));
-            let shown_sites = fold_len(ws_sites.len(), GLOBAL_LIST_CAP, all);
-            for (file, line, op, who) in &ws_sites[..shown_sites] {
-                human.push_str(&format!("    [{op}] at {file}:{line} in {who}\n"));
+            if !ws_sites.is_empty() {
+                let parts: Vec<String> = KEY_USES
+                    .iter()
+                    .filter(|k| !(unknown && **k == KEY_FILTER))
+                    .map(|k| {
+                        let n = by_key.get(k).copied().unwrap_or(0);
+                        match *k {
+                            KEY_GET => format!("{k} {} (primary key)", thousands(n)),
+                            _ => format!("{k} {}", thousands(n)),
+                        }
+                    })
+                    .collect();
+                human.push_str(&format!(
+                    "  key-relevant (not exhaustive; their sites listed first): {}\n",
+                    parts.join(", ")
+                ));
             }
-            if shown_sites < ws_sites.len() {
+            // The key-relevant sites first, then the others; `all` lists
+            // every site.
+            let mut listed: Vec<&TableSite> = ws_sites.iter().filter(|s| s.key.is_some()).collect();
+            listed.extend(ws_sites.iter().filter(|s| s.key.is_none()));
+            let shown_sites = fold_len(listed.len(), GLOBAL_LIST_CAP, all);
+            for s in &listed[..shown_sites] {
+                let table_note = if unknown {
+                    format!(
+                        " — table: not resolved ({})",
+                        if s.record_ref { "RecordRef" } else { "Record" }
+                    )
+                } else {
+                    String::new()
+                };
+                human.push_str(&format!(
+                    "    [{}] at {}:{} in {}{table_note}\n",
+                    s.op, s.file, s.line, s.who
+                ));
+            }
+            if shown_sites < listed.len() {
                 human.push_str(&format!(
                     "    … +{} — {} lists them, and every routine\n",
-                    plural(ws_sites.len() - shown_sites, "site", "sites"),
+                    plural(listed.len() - shown_sites, "site", "sites"),
                     Input::All.on(surface)
                 ));
             }
@@ -2453,6 +2596,52 @@ fn render_query_touches_body(
     }
 }
 
+/// A caller row's distance with its unit (output validation §8.2, F53):
+/// `1 hop`, `3 hops`.
+fn hops_unit(n: usize) -> String {
+    plural(n, "hop", "hops")
+}
+
+/// One operation on the asked table in a workspace routine's own body
+/// (table mode, output validation §9.3).
+struct TableSite {
+    file: String,
+    line: u32,
+    op: String,
+    who: String,
+    object: String,
+    key: Option<&'static str>,
+    record_ref: bool,
+}
+
+/// The key-relevant uses table mode counts (§9.3, F59; not exhaustive).
+const KEY_GET: &str = "Get";
+const KEY_CURRENT: &str = "SetCurrentKey";
+const KEY_FILTER: &str = "SetRange/SetFilter on key fields";
+const KEY_USES: [&str; 3] = [KEY_GET, KEY_CURRENT, KEY_FILTER];
+
+/// Why a site is key-relevant, or `None`: a `Get` (it reads by the primary
+/// key), a `SetCurrentKey`, or a `SetRange`/`SetFilter` whose field (the
+/// first argument) is in one of the table's declared keys (`key_fields`,
+/// [`super::field_touches::field_key`] spellings).
+fn key_relevance(
+    op: &str,
+    first_arg: Option<&str>,
+    key_fields: &HashSet<String>,
+) -> Option<&'static str> {
+    match op.to_ascii_lowercase().as_str() {
+        "get" => Some(KEY_GET),
+        "setcurrentkey" => Some(KEY_CURRENT),
+        "setrange" | "setfilter"
+            if first_arg
+                .is_some_and(|a| key_fields.contains(&super::field_touches::field_key(a))) =>
+        {
+            Some(KEY_FILTER)
+        }
+        _ => None,
+    }
+}
+
 /// The scope line every routine-scoped touches answer prints after its title.
 const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code\n";
 
@@ -2470,7 +2659,7 @@ const GLOBAL_LIST_CAP: usize = 12;
 const TEMP_OWNERS_SHOWN: usize = 4;
 
 /// The shared fold rule (design §3.8 rule 4): one helper for every output.
-use crate::engine::l5::routine_rollup::fold_len;
+use crate::engine::l5::routine_rollup::{fold_len, thousands};
 
 /// The record-operation family of an op kind (spec §4.5's buckets): lock,
 /// write, validate (it runs the field's trigger and may write: never a read),
@@ -3258,7 +3447,7 @@ fn render_through_dependency(
     let row = |c: &DepCaller, label: &str| {
         format!(
             "    +{} {}{label}{}\n",
-            c.hops.len(),
+            hops_unit(c.hops.len()),
             if c.tier == DepTier::Configured {
                 "[via-configuration] "
             } else {
@@ -3493,7 +3682,11 @@ fn render_touches_up_solve(
         ));
         if list_callers && !all {
             for c in &callers {
-                human.push_str(&format!("    +{} {}\n", c.depth, cx.caller_line(c.routine)));
+                human.push_str(&format!(
+                    "    +{} {}\n",
+                    hops_unit(c.depth as usize),
+                    cx.caller_line(c.routine)
+                ));
             }
         }
     } else {
@@ -3512,7 +3705,7 @@ fn render_touches_up_solve(
             if all {
                 human.push_str(&format!(
                     "    +{} {}: {}: {}\n",
-                    c.depth,
+                    hops_unit(c.depth as usize),
                     cx.routine_label(c.routine),
                     plural(w.count, "touch", "touches"),
                     counts_human(&w.counts)
@@ -3523,7 +3716,7 @@ fn render_touches_up_solve(
             } else {
                 human.push_str(&format!(
                     "    +{} {}: {} ({}); first {}\n",
-                    c.depth,
+                    hops_unit(c.depth as usize),
                     cx.routine_label(c.routine),
                     plural(w.count, "touch", "touches"),
                     counts_human(&w.counts),
@@ -3543,7 +3736,7 @@ fn render_touches_up_solve(
         for a in &product {
             human.push_str(&format!(
                 "    +{} {} {}\n",
-                a.depth,
+                hops_unit(a.depth as usize),
                 cx.routine_label(a.touch.routine),
                 cx.witness_line(&a.touch)
             ));
@@ -4589,6 +4782,25 @@ fn render_query_effects_body(
             "beyondWrites".into(),
             json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
         );
+        // Output validation §8.2 (F53): the two populations with their
+        // units, so the operation tables and the whole-cone write tables
+        // are never compared as one count.
+        let line = format!(
+            "{} on {} one routine deep; whole cone beyond {}: {} (writes only)",
+            plural(effects.len(), "operation", "operations"),
+            plural(
+                m.get("tableCount").and_then(Value::as_u64).unwrap_or(0) as usize,
+                "table",
+                "tables"
+            ),
+            plural(
+                beyond_writes.len(),
+                "dependency routine entered",
+                "dependency routines entered"
+            ),
+            plural(beyond_tables.len(), "table", "tables"),
+        );
+        m.insert("counts".into(), line.into());
         // Step 1b: and how many rows the root's literal arguments mark.
         m.insert(
             "literalRoutes".into(),
@@ -5275,6 +5487,10 @@ fn render_field_touches(
             "readWriteSites": read_write_sites,
             "sitesByTempState": temp_json,
             "candidates": candidates,
+            // §8.2 (F53, 3.10.0): the sites with no candidate reason and
+            // those with one; they add up to `sites`.
+            "confirmedSites": site_list.len() - candidates,
+            "candidateSites": candidates,
             "candidatesByReason": cand_json,
             "byNumberNotLiteral": cov.by_number_not_literal,
             "fieldIndexSites": cov.field_index_sites,
@@ -5361,10 +5577,16 @@ fn render_field_touches(
                 .iter()
                 .map(|(c, n)| format!("{} {n}", c.as_str()))
                 .collect();
-            format!("; candidates: {candidates} ({})", by.join(", "))
+            format!("; candidates by reason: {}", by.join(", "))
         };
+        // Output validation §8.2 (F53): confirmed sites and candidates
+        // counted apart (they add up to the sites), each count with its
+        // unit: uses per site (a site can have two), sites per temp state.
         human.push_str(&format!(
-            "  consumers: {} in {} of {} — uses: {}; records: {}{cand_h}\n",
+            "  consumers: {}, {} ({} in {} of {}) — uses (a site can have two): {}; sites by \
+             record: {}{cand_h}\n",
+            plural(site_list.len() - candidates, "site", "sites"),
+            plural(candidates, "candidate", "candidates"),
             plural(site_list.len(), "site", "sites"),
             plural(routine_set.len(), "routine", "routines"),
             plural(object_set.len(), "object", "objects"),
@@ -5393,12 +5615,10 @@ fn render_field_touches(
             plural(filters, "site", "sites")
         }
     ));
-    human.push_str(
-        "  not a complete rename inventory: page and report columns, CalcFormula and \
-         TableRelation are not searched (the compiler finds them); keys holding the field are \
-         listed as declared keys\n",
-    );
-    if !answer.declared_keys.is_empty() {
+    // §9.3 (F60): the declared keys first, so the verdict can say "above".
+    let keys_line = if answer.declared_keys.is_empty() {
+        "  declared keys holding the field: none\n".to_string()
+    } else {
         let keys: Vec<String> = answer
             .declared_keys
             .iter()
@@ -5408,8 +5628,56 @@ fn render_field_touches(
                 format!("key {} ({})", i + 1, names.join(", "))
             })
             .collect();
-        human.push_str(&format!("  declared keys: {}\n", keys.join("; ")));
-    }
+        format!("  declared keys: {}\n", keys.join("; "))
+    };
+    human.push_str(&keys_line);
+    human.push_str(
+        "  not a complete rename inventory: page and report columns, CalcFormula and \
+         TableRelation are not searched (the compiler finds them); keys holding the field are \
+         listed above\n",
+    );
+    // Output validation §8.2 (F54): what each tag on a site row means, for
+    // the tags the rows carry, printed once under the first row.
+    let mut legend: Option<String> = {
+        let mut tags: BTreeSet<String> = BTreeSet::new();
+        let mut methods = false;
+        for (s, _, _) in &sites {
+            tags.insert(s.temp.as_str().to_string());
+            match s.source.as_str() {
+                "access" | "implicit-access" => {
+                    tags.insert(s.source.clone());
+                }
+                _ => methods = true,
+            }
+            if let Some(c) = s.candidate {
+                tags.insert(format!("candidate: {}", c.as_str()));
+            }
+        }
+        let mut parts: Vec<String> = tags
+            .iter()
+            .map(|t| {
+                let what = match t.as_str() {
+                    "persistent" => "the record is not temporary",
+                    "temporary" => "a temporary record",
+                    "caller-dependent" => "the record is a parameter: temporary or not as its caller passes it",
+                    "unknown" => "the record's temp state is not resolved",
+                    "access" => "a field named on a record (Rec.Field)",
+                    "implicit-access" => "a bare field name inside the table's own code",
+                    "candidate: table-not-resolved" => "the record's table is not resolved, so the site may not name this field",
+                    "candidate: copy-table-not-resolved" => "the other record's table is not resolved, so the copy may not include this field",
+                    "candidate: recordref-table-unknown" => "a RecordRef whose table is not resolved, so the number may name another table's field",
+                    _ => "",
+                };
+                format!("{t}: {what}")
+            })
+            .collect();
+        if methods {
+            parts.push(
+                "a method name (Field, SetRange, …): the record method that names the field".into(),
+            );
+        }
+        (!sites.is_empty()).then(|| format!("      legend: {}\n", parts.join("; ")))
+    };
     // Per object, folded unless --all.
     let mut by_object: Vec<(&str, Vec<usize>)> = Vec::new();
     for (i, (_, rr, _)) in sites.iter().enumerate() {
@@ -5455,6 +5723,10 @@ fn render_field_touches(
                 uses_text(&s.uses),
                 extra.join(", ")
             ));
+            // §8.2 (F54): one legend line under the first tagged row.
+            if let Some(l) = legend.take() {
+                human.push_str(&l);
+            }
         }
         if shown_sites < ixs.len() {
             human.push_str(&format!(
