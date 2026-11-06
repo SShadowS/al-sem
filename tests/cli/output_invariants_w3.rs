@@ -1238,10 +1238,18 @@ fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
     };
     let (n, used) = num(rest)?;
     // Output validation V2 (§8.1 dependency boundary): `N dependency
-    // routine(s) entered at S dependency call(s)`.
-    let rest = rest[used..].strip_prefix(" dependency routine")?;
-    let rest = rest.strip_prefix('s').unwrap_or(rest);
-    let rest = rest.strip_prefix(" entered at ")?;
+    // routine(s) entered at S dependency call(s)`, or on the scope line
+    // (after `grouped per dependency routine entered (`) `N, at S …`.
+    // (`num` takes a trailing comma as a thousands separator.)
+    let after = &rest[used..];
+    let rest = match after.strip_prefix(", at ").or(after.strip_prefix(" at ")) {
+        Some(r) => r,
+        None => {
+            let rest = rest[used..].strip_prefix(" dependency routine")?;
+            let rest = rest.strip_prefix('s').unwrap_or(rest);
+            rest.strip_prefix(" entered at ")?
+        }
+    };
     let rest = rest.strip_prefix("at least ").unwrap_or(rest);
     let (s, _) = num(rest)?;
     Some((n, s))

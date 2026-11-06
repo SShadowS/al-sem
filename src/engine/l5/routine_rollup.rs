@@ -2597,16 +2597,12 @@ pub fn header_lines(
     });
     out.push(format!(
         "scope: dependency code followed through every resolved call, with literal arguments, \
-         grouped per dependency routine entered ({}{} at {}{}); writes to temporary records do \
+         grouped per dependency routine entered ({}{}, at {}{}); writes to temporary records do \
          not directly persist those records; no lock facts (alsem query effects lists locks); \
          counts are distinct tables unless a line says operations; lines are 1-based; --detail \
          lists everything",
         at_least(r.totals.entry_points_partial),
-        plural(
-            r.totals.entry_points,
-            "dependency routine entered",
-            "dependency routines entered"
-        ),
+        thousands(r.totals.entry_points),
         at_least(r.totals.entry_points_partial),
         plural(
             r.totals.crossing_sites,

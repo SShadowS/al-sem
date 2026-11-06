@@ -7,8 +7,8 @@ Codeunit "Calls Post"::PostOrder  ws:src/post.al:3
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  calls: Codeunit "Calls Checks"::CheckOrder (:7), Codeunit "Calls Checks"::CheckCollectible (:8), Codeunit "Calls Checks"::CheckBig (:10), Codeunit "Calls Post"::OnBeforePostOrder (:11), Codeunit "Calls Checks"::CheckLate (:15)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  calls: Codeunit "Calls Checks": CheckOrder (:7), CheckCollectible (:8), CheckBig (:10); +2 more
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
   inherits via CheckOrder: rejects when not (Order."No." = '') and Order.Amount is empty: (platform message)  [TestField ws:src/checks.al:8]

@@ -7,7 +7,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:48 (in a loop)
       path: TransitiveCommit → Persist
@@ -21,7 +21,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:10 (in a loop)
   events: 0 raised in workspace code; 0 more only beyond dependency calls
@@ -34,7 +34,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:48 (unconditional on success)
   events: 0 raised in workspace code; 0 more only beyond dependency calls
@@ -47,7 +47,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   effects: none
   commits: no (every candidate decided)
   events: 0 raised in workspace code; 0 more only beyond dependency calls
@@ -60,7 +60,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:22 (in a loop)
   events: 0 raised in workspace code; 0 more only beyond dependency calls
@@ -73,7 +73,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:41 (unconditional on success)
   events: 0 raised in workspace code; 0 more only beyond dependency calls

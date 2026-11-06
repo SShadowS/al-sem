@@ -7,8 +7,8 @@ Codeunit "Explain Post"::PostOrder  ws:src/post.al:5
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  calls: Codeunit "Explain Post"::OnBeforePostOrder (:13)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  calls: this object: OnBeforePostOrder (:13)
   doc: Posts a released order. / It marks the order posted.
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:12]

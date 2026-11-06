@@ -392,8 +392,9 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
             .unwrap_or_default();
         hubs.insert((kind, at));
     }
+    // Entries only: a public procedure is a root kind, not an entry.
     let program_entries = (0..g.node_count() as u32)
-        .filter(|&n| g.root_kinds(n) != 0)
+        .filter(|&n| !EntryKind::of_root_kinds(g.root_kinds(n)).is_empty())
         .count();
     let entry_total: usize = up.entries.values().map(Firsts::count).sum();
     json!({

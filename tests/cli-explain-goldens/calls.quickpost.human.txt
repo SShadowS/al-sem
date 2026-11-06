@@ -8,8 +8,8 @@ Codeunit "Calls Post"::QuickPost  ws:src/post.al:18
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
   notes: error-collector 1, table-trigger-rules-skipped 2
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  calls: Codeunit "Calls Checks"::CheckOrder (:22), Codeunit "Calls Checks"::LogIfBlocked (:23)
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  calls: Codeunit "Calls Checks": CheckOrder (:22), LogIfBlocked (:23)
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
   inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:15]

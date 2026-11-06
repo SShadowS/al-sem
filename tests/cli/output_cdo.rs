@@ -728,7 +728,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // touches now lists its 2 code callers through Document Sending
         // Profile with folded witnesses, and the configured count (16 lines,
         // 3,683 B on 2026-11-06; before 11 / 2.2 KB).
-        ("RunReportID", "query touches human") => (20, 4_100),
+        // Output validation V2: the tier words (`[via-dependency]`,
+        // `[via-configuration]` and why a configured caller is a candidate)
+        // add ~100 B (4,201 B on 2026-11-06).
+        ("RunReportID", "query touches human") => (20, 4_400),
         (_, "query touches human") => (20, 3_000),
         (_, "prove may-commit human") => (20, 2_000),
         ("RunReportID", "prove writes-table human") => (20, 5_000),

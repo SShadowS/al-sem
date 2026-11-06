@@ -1422,6 +1422,13 @@ fn calls_line(
         .iter()
         .map(|x| (x.id.as_str(), x.stable_routine_id.as_str()))
         .collect();
+    // A callee in the routine's own object prints as `::Name` (the header
+    // names the object); one elsewhere by its whole display.
+    let own: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = routines
+        .iter()
+        .filter(|x| x.object_id == r.object_id)
+        .map(|x| (x.stable_routine_id.as_str(), x))
+        .collect();
     let to_of: HashMap<&str, &str> = model
         .calls
         .edges
@@ -1432,7 +1439,7 @@ fn calls_line(
     let mut sites: Vec<&crate::program::body::features::PCallSite> = r.call_sites.iter().collect();
     sites.sort_by_key(|c| (c.source_anchor.start_line, c.source_anchor.start_column));
     let mut seen = HashSet::new();
-    let mut items: Vec<String> = Vec::new();
+    let mut items: Vec<(String, String, u32)> = Vec::new();
     for c in sites {
         let Some(to) = to_of.get(c.id.as_str()) else {
             continue;
@@ -1443,20 +1450,43 @@ fn calls_line(
         if !seen.insert(*stable) {
             continue;
         }
-        items.push(format!(
-            "{} (:{})",
-            names.display(stable),
-            c.source_anchor.start_line + 1
-        ));
+        let display = names.display(stable);
+        let (object, rest) = match (own.get(stable), display.split_once("::")) {
+            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => {
+                (String::new(), rest.to_string())
+            }
+            (_, Some((o, rest))) => (o.to_string(), rest.to_string()),
+            _ => (String::new(), display.clone()),
+        };
+        items.push((object, rest, c.source_anchor.start_line + 1));
     }
     if items.is_empty() {
         return Some("calls: none (no call to a routine; builtins aside)".to_string());
     }
     let more = items.len().saturating_sub(CALLS_SHOWN);
     items.truncate(CALLS_SHOWN);
+    // An object prints once for a run of its routines (`Codeunit "X": A
+    // (:1), B (:2)`); the card's own object as `this object:`.
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (object, rest, line) in &items {
+        let label = if object.is_empty() {
+            "this object".to_string()
+        } else {
+            object.clone()
+        };
+        let item = format!("{rest} (:{line})");
+        match groups.last_mut() {
+            Some((l, v)) if *l == label => v.push(item),
+            _ => groups.push((label, vec![item])),
+        }
+    }
+    let shown: Vec<String> = groups
+        .into_iter()
+        .map(|(l, v)| format!("{l}: {}", v.join(", ")))
+        .collect();
     Some(format!(
         "calls: {}{}",
-        items.join(", "),
+        shown.join("; "),
         if more > 0 {
             format!("; +{more} more")
         } else {
@@ -1466,7 +1496,8 @@ fn calls_line(
 }
 
 /// How many direct callees explain's `calls:` line names.
-const CALLS_SHOWN: usize = 5;
+/// (§9.1 says at most 5; 3 keeps a large card under the client budget.)
+const CALLS_SHOWN: usize = 3;
 
 /// The `ChangeCompany` calls in a routine's workspace cone (output
 /// validation V2, §9.1, F75): the routine's own body and every workspace
@@ -1784,15 +1815,32 @@ fn render(
                 .filter(|p| !p.is_empty())
                 .min_by_key(|p| p.len())
             {
-                let at = match (&e.evidence.file, e.evidence.line) {
-                    (Some(f), Some(l)) => rcx.location(f, l),
-                    _ => "no position kept".to_string(),
+                // A short route (§9.1): each hop by its name, an overloaded
+                // routine's parameter list left out (the card's sections
+                // carry the full displays).
+                let route: Vec<String> = rcx
+                    .path_line(rid, p)
+                    .split(" → ")
+                    .map(|hop| {
+                        // The routine's name: no object, no parameter list.
+                        let name = hop.rfind("::").map_or(hop, |i| &hop[i + 2..]);
+                        name.split('(').next().unwrap_or(name).trim().to_string()
+                    })
+                    .collect();
+                // The routine and the last hops before the effect (a long
+                // route elides its middle; `detail` and prove print it whole).
+                const ROUTE_TAIL: usize = 2;
+                let route = if route.len() > ROUTE_TAIL + 1 {
+                    format!(
+                        "{} → … → {}",
+                        route[0],
+                        route[route.len() - ROUTE_TAIL..].join(" → ")
+                    )
+                } else {
+                    route.join(" → ")
                 };
-                lead.push(format!(
-                    "route to its UI effect: {} at {at}, via {}",
-                    e.effect_type,
-                    rcx.path_line(rid, p)
-                ));
+                // The place prints on the card's UI line; here the route.
+                lead.push(format!("UI route: {} via {route}", e.effect_type));
             }
             let writes =
                 entry.is_some_and(|e| e.effects.iter().any(|f| f.effect_type.starts_with("DB_")));

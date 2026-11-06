@@ -498,7 +498,7 @@
           }
         ],
         "nodes": 1,
-        "programEntries": 8,
+        "programEntries": 2,
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
         "states": 2,
         "status": "walked",
@@ -667,7 +667,7 @@
     "hubs": [],
     "limited": null,
     "maxHops": 1,
-    "programEntries": 8,
+    "programEntries": 2,
     "states": 2,
     "userOrJobEntries": 0
   },

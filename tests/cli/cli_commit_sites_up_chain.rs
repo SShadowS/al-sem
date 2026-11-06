@@ -499,8 +499,7 @@ fn every_resource_less_site_is_a_place_and_entry_points_say_at_least() {
     );
     assert!(
         stdout.contains(
-            "grouped per dependency routine entered (at least 1 dependency routine entered at at \
-             least 1 dependency call)"
+            "grouped per dependency routine entered (at least 1, at at least 1 dependency call)"
         ),
         "{stdout}"
     );

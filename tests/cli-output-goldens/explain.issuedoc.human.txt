@@ -7,8 +7,8 @@ Codeunit "Out Issue Document"::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:3
   analysis partial (interface-open-world, object-run-unresolved) — 1 interface call open world, 2 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (2 dependency routines entered at 2 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  calls: Codeunit "Base Poster" (70100)::OnRun (:15), Codeunit "Base Calc" (70101)::OnRun (:16), Codeunit "Out Log Mgt"::WriteLog (:17), Codeunit "Out Sender"::Notify (:18), Codeunit "Out Issue Document"::GetHandler (:22); +3 more
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (2, at 2 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  calls: Codeunit "Base Poster" (70100): OnRun (:15); Codeunit "Base Calc" (70101): OnRun (:16); Codeunit "Out Log Mgt": WriteLog (:17); +5 more
   rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
   inherited rules: none
   callers: none; reached from 1 page action

@@ -6,6 +6,6 @@
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → InsertIssuedReminderHeader (Insert at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:474)
     [DB_MODIFY] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → OnAfterIssueReminder → [event] Codeunit "Issue Reminder Event Handler" (6756)::UpdateStatusWhenReminderIsIssued (Modify at dep:Base Application:src/Sales/Reminder/Automation/Actions/IssueReminders/IssueReminderEventHandler.Codeunit.al:61)
-  coverage: incomplete — 21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
-  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  analysis partial — 21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
+  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
   limits: none

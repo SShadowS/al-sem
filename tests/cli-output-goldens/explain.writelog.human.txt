@@ -7,7 +7,7 @@ Codeunit "Out Log Mgt"::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
   analysis complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   calls: none (no call to a routine; builtins aside)
   rules: none of its own; inherited: none
   callers: 3 — Codeunit "Out Issue Document"::IssueDoc, Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts; reached from 1 page action
