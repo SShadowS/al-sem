@@ -15,6 +15,16 @@
     "question": "publishes-event:onafterpostsalesdoc",
     "result": {
       "answer": "yes",
+      "event": {
+        "kind": "integration",
+        "name": "OnAfterPostSalesDoc",
+        "publishers": [
+          {
+            "display": "Codeunit D8PostingChain::OnAfterPostSalesDoc",
+            "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec"
+          }
+        ]
+      },
       "evidence": [
         {
           "conditionality": "unknown",

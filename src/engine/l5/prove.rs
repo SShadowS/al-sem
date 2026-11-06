@@ -1406,6 +1406,10 @@ pub struct ProveDocumentArgs<'a> {
     /// `payload.routine` (`qualifiedDisplay`, `signature`, `member`,
     /// `selector`, `handle`). Empty for the no-root document.
     pub routine_identity: serde_json::Map<String, serde_json::Value>,
+    /// V3 §2.3 (2.6.0): the question's target as resolved,
+    /// `payload.result.table` / `payload.result.event` (and `tables` when a
+    /// name or number names several).
+    pub resolved_target: serde_json::Map<String, serde_json::Value>,
 }
 
 /// W2-0b: a group path's structured witness (`groupWitness`): per hop the
@@ -1440,6 +1444,154 @@ pub(crate) fn group_witness_value(
     })
 }
 
+/// The target of a `writes-table` or `publishes-event` question as resolved
+/// (output validation V3, §2.3): the JSON fields for `payload.result`
+/// (`table: {id, name, number, app, appId}`, plus `tables` when the name or
+/// number names more than one; `event: {name, kind, publishers}`) and the
+/// question as the human answer line prints it
+/// (`writes-table:CDO E-Mail Job (table 6175283, this app)`). Any other
+/// question: no field, the question as typed.
+fn resolved_target(
+    model: &crate::program::model::workspace::Model,
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    question: &ProveQuestion,
+    question_text: &str,
+) -> (serde_json::Map<String, serde_json::Value>, String) {
+    use serde_json::json;
+    let mut out = serde_json::Map::new();
+    let primary = model.primary_app.as_ref().map(|p| p.app_guid.as_str());
+    let app_words = |guid: &str| {
+        if primary.is_some_and(|p| p.eq_ignore_ascii_case(guid)) {
+            "this app".to_string()
+        } else {
+            cx.app_label(guid)
+        }
+    };
+    match question {
+        ProveQuestion::WritesTable { table } => {
+            let q = table.trim();
+            let mut hits: Vec<&crate::program::model::workspace::ModelTable> = model
+                .workspace
+                .tables
+                .iter()
+                .filter(|t| {
+                    !t.is_extension_stub
+                        && (t.name.eq_ignore_ascii_case(q)
+                            || t.id.rsplit('/').next().is_some_and(|n| n == q))
+                })
+                .collect();
+            hits.sort_by(|a, b| a.id.cmp(&b.id));
+            hits.dedup_by(|a, b| a.id == b.id);
+            let row = |t: &crate::program::model::workspace::ModelTable| {
+                json!({
+                    "id": t.id,
+                    "name": t.name,
+                    "number": t.table_number,
+                    "app": cx.app_label(&t.app_guid),
+                    "appId": t.app_guid,
+                })
+            };
+            let Some(first) = hits.first() else {
+                return (out, question_text.to_string());
+            };
+            out.insert("table".into(), row(first));
+            let human = if hits.len() == 1 {
+                format!(
+                    "writes-table:{} (table {}, {})",
+                    first.name,
+                    first.table_number,
+                    app_words(&first.app_guid)
+                )
+            } else {
+                out.insert("tables".into(), hits.iter().map(|t| row(t)).collect());
+                let each: Vec<String> = hits
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} (table {}, {})",
+                            t.name,
+                            t.table_number,
+                            app_words(&t.app_guid)
+                        )
+                    })
+                    .collect();
+                format!(
+                    "writes-table:{q} ({} tables: {})",
+                    hits.len(),
+                    each.join("; ")
+                )
+            };
+            (out, human)
+        }
+        ProveQuestion::PublishesEvent { event } => {
+            let q = event.trim();
+            let mut name: Option<&str> = None;
+            let mut kind: Option<&str> = None;
+            let mut publishers: Vec<(String, String)> = Vec::new();
+            for e in &model.events.graph.events {
+                // A symbol synthesized from a subscription whose publisher
+                // the program does not hold (`unknown/…`) names no publisher.
+                if !e.event_name.eq_ignore_ascii_case(q)
+                    || e.publisher_object_id.starts_with("unknown")
+                {
+                    continue;
+                }
+                name.get_or_insert(e.event_name.as_str());
+                kind.get_or_insert(e.event_kind.as_str());
+                let (id, display) = match &e.publisher_stable_routine_id {
+                    Some(s) => (s.clone(), cx.qualified(s)),
+                    None => (
+                        e.publisher_object_id.clone(),
+                        cx.object_display(&e.publisher_object_id),
+                    ),
+                };
+                if !publishers.iter().any(|(i, _)| *i == id) {
+                    publishers.push((id, display));
+                }
+            }
+            let Some(name) = name else {
+                out.insert(
+                    "event".into(),
+                    json!({"name": q, "kind": null, "publishers": []}),
+                );
+                return (
+                    out,
+                    format!(
+                        "publishes-event:{q} (no loaded publisher declares it; only subscriptions \
+                         name it)"
+                    ),
+                );
+            };
+            publishers.sort();
+            out.insert(
+                "event".into(),
+                json!({
+                    "name": name,
+                    "kind": kind,
+                    "publishers": publishers
+                        .iter()
+                        .map(|(id, d)| json!({"stableId": id, "display": d}))
+                        .collect::<Vec<_>>(),
+                }),
+            );
+            const SHOWN: usize = 3;
+            let mut by: Vec<String> = publishers
+                .iter()
+                .take(SHOWN)
+                .map(|(_, d)| d.clone())
+                .collect();
+            if publishers.len() > SHOWN {
+                by.push(format!("+{} more", publishers.len() - SHOWN));
+            }
+            (
+                out,
+                format!("publishes-event:{name} (published by {})", by.join(", ")),
+            )
+        }
+        _ => (out, question_text.to_string()),
+    }
+}
+
 /// prove's document `schemaVersion`.
 pub const PROVE_SCHEMA_VERSION: &str = "2.6.0";
 
@@ -1467,11 +1619,13 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         pointers,
         slice,
         routine_identity,
+        resolved_target,
     } = args;
 
     // result sub-object
     let mut result_obj = serde_json::Map::new();
     result_obj.insert("answer".into(), prove_result.answer.as_str().into());
+    result_obj.extend(resolved_target);
 
     // evidence — only when present (and non-empty)
     if let Some(ref indices) = prove_result.evidence
@@ -1657,7 +1811,8 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // 2.6.0 unfiltered / 2.7.0 filtered (output validation V3, additive; the
     // spec's "2.5.0" was already the filtered number): `payload.routine`
     // gains `qualifiedDisplay` (the one display), `signature`, `member`,
-    // `selector` and `handle`.
+    // `selector` and `handle`; `payload.result.table` (and `tables`) for
+    // `writes-table`, `payload.result.event` for `publishes-event`.
     let version = if slice.is_some() {
         PROVE_SLICE_SCHEMA_VERSION
     } else {
@@ -2552,6 +2707,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             pointers: None,
             slice: None,
             routine_identity: serde_json::Map::new(),
+            resolved_target: serde_json::Map::new(),
         });
 
         let human_text = format_prove_human(
@@ -2715,6 +2871,13 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     if !handle.is_empty() {
         routine_identity.insert("handle".into(), handle.into());
     }
+    // V3 §2.3: the question's target as resolved.
+    let (resolved_target, question_human) = resolved_target(
+        cx.view().model(),
+        &rollup_cx,
+        &parsed_question,
+        question_text,
+    );
 
     // Project document
     cx.view().census_output();
@@ -2734,6 +2897,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         pointers: Some(&pointers),
         slice: slice.as_ref(),
         routine_identity,
+        resolved_target,
     });
 
     let paths = HumanPaths {
@@ -2760,6 +2924,12 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             Some(&paths),
         ),
     };
+    // V3 §2.3: the question line names the target as resolved.
+    let human_text = human_text.replacen(
+        &format!("  question: {question_text} "),
+        &format!("  question: {question_human} "),
+        1,
+    );
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
 

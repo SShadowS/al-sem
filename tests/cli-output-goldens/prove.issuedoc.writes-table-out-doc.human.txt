@@ -1,5 +1,5 @@
 --- Codeunit "Out Issue Document"::IssueDoc ---
-  question: writes-table:Out Doc — existing effects (what the routine and its callees already do)
+  question: writes-table:Out Doc (table 50100, this app) — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 1 effect
     [DB_MODIFY] at ws:src/OutIssueDocument.Codeunit.al:14

@@ -36,6 +36,11 @@ Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-valida
   filtered (2.5.0 was already the filtered number); explain stays `al-sem.explain/4`
   (additive). `ModelRoutine` gains `member_detail` (the member's kind and caption, read at
   assembly).
+- **prove names the target as resolved** (F6, §2.3): `payload.result.table` (`{id, name,
+  number, app, appId}`, and `tables` when a name or number names several) for
+  `writes-table`, `payload.result.event` (`{name, kind, publishers}`; no publisher when
+  only subscriptions name the event) for `publishes-event`; the question line reads
+  `writes-table:CDO E-Mail Job (table 6175283, this app)`. Part of prove 2.6.0/2.7.0.
 - **Member selectors** (§2.1): every tool reads `Object."Field"::Trigger`,
   `Object.Field::Trigger` and `Object.action(Name)::OnAction` (a caption after the name is
   ignored), after the forms that resolved before, so no selector resolves differently. A

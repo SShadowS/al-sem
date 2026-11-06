@@ -1,5 +1,5 @@
 --- Codeunit "Out Issue Document"::IssueDoc ---
-  question: writes-table:Base Price — existing effects (what the routine and its callees already do)
+  question: writes-table:Base Price (table 70022, Out Base) — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 1 effect
     [DB_MODIFY] beyond Codeunit Base Calc::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16

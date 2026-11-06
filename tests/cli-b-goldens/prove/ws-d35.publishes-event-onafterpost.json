@@ -15,6 +15,10 @@
     "question": "publishes-event:OnAfterPost",
     "result": {
       "answer": "no",
+      "event": {
+        "name": "OnAfterPost",
+        "publishers": []
+      },
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
