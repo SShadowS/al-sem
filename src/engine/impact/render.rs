@@ -321,10 +321,18 @@ fn effects_clause(e: &Value) -> String {
     format!("effects: {}", parts.join("; "))
 }
 
-/// A node's short name with its hops (`Page X (3 hops)`).
+/// A node's short name with its hops and, when the path is not local, its
+/// tier in the words `tests` uses (`Page X (3 hops)`, `Page Y (5 hops, only
+/// over open sites)`). An open-site (hub) witness is a possibility, not a
+/// path: round-1 c20 printed a `run:report` hub's witness as a plain one.
 fn node_short(n: &Value) -> String {
+    let tier = match s(n, "tier") {
+        "throughDependency" => ", through dependency code",
+        "onlyOpen" => ", only over open sites",
+        _ => "",
+    };
     format!(
-        "{} ({})",
+        "{} ({}{tier})",
         s(n, "display"),
         plural(u(n, "hops"), "hop", "hops")
     )
@@ -377,10 +385,20 @@ fn reached_clause(up: &Value, detail: bool) -> String {
                 }
             })
             .collect();
-        parts.push(if first.is_empty() {
-            entry_words(kind, n)
+        let open = u(e, "onlyOpen");
+        let words = if open > 0 {
+            format!(
+                "{} ({} only over open sites)",
+                entry_words(kind, n),
+                thousands(open)
+            )
         } else {
-            format!("{} (first: {})", entry_words(kind, n), first.join("; "))
+            entry_words(kind, n)
+        };
+        parts.push(if first.is_empty() {
+            words
+        } else {
+            format!("{words} (first: {})", first.join("; "))
         });
     }
     if parts.is_empty() {

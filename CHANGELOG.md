@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (impact reach and test selection: four over-claims from output-validation round 1)
+
+Measured on the CDO baseline (`bc3ccb18`, release-fast, before = master `6e577c24`).
+
+- **A declared `Page`/`Report`/`XmlPort`/`Query` variable no longer runs its object (c12).**
+  The may-execute graph's rule 2 gave every routine of an object a `declaredRunnable` run
+  edge to every runnable type its globals (or its own locals) declared. `Document Errors
+  Mgt.` declares `Page "Sales Invoice"` and only calls `RunBackgroundCheck()` on it, so its
+  empty `OnRun` and `GetNothingToPostErrorMsg` were shown as impossible "first" witnesses.
+  Now only a `TestPage`/`TestRequestPage` declaration counts; for the other four kinds the run
+  is a site: a typed `.Run()`/`.RunModal()` was already an engine `run` edge, and a call whose
+  route is a dispatching builtin that runs an object of kind K (`ReportVar.SaveAsPdf()`,
+  `QueryVar.Open()`) on a receiver typed as object X of kind K gets the `declaredRunnable`
+  edge to X, from that routine, at that line (`project::Builder::receiver_run`). c12's
+  ancestors: 27,718 → 21,088; its first codeunit OnRun is now `CDO Open Unhandled Sales
+  Inv.::OnRun`, not `Codeunit 9070::onrun`. `alsem graph` on CDO: 31,099 → 24,872 nodes,
+  78,678 → 56,780 edges, `declaredRunnable` 4,690 → 6 (the rest leave by pruning).
+  **bc-dev-mcp:** no schema change; fewer edges.
+- **An open-site (hub) witness says so in impact's human answer (c20).** `reached from`
+  printed `Report.RunModal(<id from Report Selections>)` → `run:report` hub witnesses (JSON
+  tier `onlyOpen`) beside real paths. Each list now puts witnesses with a real path first
+  (a node reached first over a hub and later by a real path shows the real one), every
+  non-local witness carries its tier in the words `tests` uses (`5 hops, only over open
+  sites`, `through dependency code`), each entry kind counts its open-only nodes
+  (`5,657 page actions (1,046 only over open sites)`), and the JSON entry, external and
+  publisher rows gain `onlyOpen` (additive). c20's `"Print" on Page CDO Customer Card`
+  witness is no longer among the first ten.
+- **A control add-in's event trigger is not reachable from a test (c21).** A page's
+  lifecycle edge into a `usercontrol` event trigger (`EditorInitialized`) now has
+  `via: "clientEvent"`: only the add-in's JavaScript raises it, so `alsem tests` (and
+  impact's test part) does not walk it, while impact keeps it (a real client fires it).
+  c21's ten run-first tests no longer go through `EditorInitialized` (now through the page's
+  Send action, the labelled over-approximation c28 accepted); c28: 369 → 351 tests in
+  34 codeunits. **bc-dev-mcp:** a new, additive `via` value; a test walk over the export
+  should skip it (spec 2026-10-13 rule 1).
+- **`digest --tests` no longer says "complete" / "no-path" with no test considered (c25).**
+  With 0 `[Test]` procedures the block is `partial` (reason `no-test-code`) and each routine
+  reads `no-test-code`. The coverage graph still holds the workspace app's own tests only
+  (the agent-tasks spec names no single test universe for digest); the sibling test apps the
+  same discovery as `alsem tests` finds are named in `testAppsNotLoaded` and add reason
+  `test-apps-not-loaded`, in JSON and in the human line. c25 on CDO: `complete` / 20 ×
+  `no-path` → `partial: no-test-code, test-apps-not-loaded`, naming `Continia Document
+  Output 365 - Test` (1,844 `[Test]` lines).
+
 ### Fixed (the macOS build compiles again)
 
 `OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with

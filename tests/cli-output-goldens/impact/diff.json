@@ -452,7 +452,8 @@
         "entries": [],
         "eventPublishers": {
           "count": 0,
-          "first": []
+          "first": [],
+          "onlyOpen": 0
         },
         "external": [
           {
@@ -473,6 +474,7 @@
                 "tier": "local"
               }
             ],
+            "onlyOpen": 0,
             "why": "public"
           }
         ],
@@ -604,7 +606,8 @@
     "entries": [],
     "eventPublishers": {
       "count": 0,
-      "first": []
+      "first": [],
+      "onlyOpen": 0
     },
     "external": [
       {
@@ -625,6 +628,7 @@
             "tier": "local"
           }
         ],
+        "onlyOpen": 0,
         "why": "public"
       }
     ],

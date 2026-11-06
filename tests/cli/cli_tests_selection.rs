@@ -413,8 +413,11 @@ fn named_test_apps_and_unresolved_routines() {
 /// tests in 7 codeunits and IssueReminder's 0 local with a nearest test
 /// through dependency code; `selectionComplete` false with its reasons.
 /// And (milestone C item 4, C-12 on CDO) RunReportID's human answer prints
-/// the dependency-tier sameness line exactly: its 301 through-dependency
+/// the dependency-tier sameness line exactly: its 283 through-dependency
 /// tests reach it via dependency nodes that may execute most of the program.
+/// (301 until 2026-11-06: 18 of them reached it only over a `declaredRunnable`
+/// edge from a routine that declares a page variable and never runs it, e.g.
+/// `Codeunit 6489::ServiceLineCheck -> Page 6489`; round-1 c12.)
 /// DISCRIMINATION (2026-11-05, cdo profile): `render`'s `same` never true
 /// fails it ("through dependency code: 301 tests (--tier dependency lists
 /// them)"); restored, passes.
@@ -428,7 +431,7 @@ pub(crate) fn cdo_selection_ratchets() {
     assert_eq!(code, 0, "{human}");
     assert!(
         human.lines().any(|l| l
-            == "through dependency code: 301 tests — effectively the suite's posting tests, not specific to this change"),
+            == "through dependency code: 283 tests — effectively the suite's posting tests, not specific to this change"),
         "{human}"
     );
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);

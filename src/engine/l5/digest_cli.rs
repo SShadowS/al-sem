@@ -2917,6 +2917,10 @@ pub fn project_digest_document(
     // and keeps `detail.resourcesOriginalCount`.
     // 3.0.0 (MCP output wave 2, W2-2, design §4.4): the rendering
     // redesign (`digest_v3`'s module doc); `--schema 2` keeps 2.2.0.
+    // Still 3.0.0 (unreleased, round-1 c25): `testCoverage` with 0 tests
+    // considered is `partial` (reason `no-test-code`, items `no-test-code`,
+    // was `complete` / `no-path`), and sibling test apps digest does not load
+    // add `test-apps-not-loaded` and `testAppsNotLoaded` (opt-in block).
     let compact = v3.as_ref().is_some_and(|v| v.compact);
     let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
@@ -3624,13 +3628,32 @@ fn digest_view(
     // `--tests` plan always builds the tree, roots or not (`digest_plan`).
     let test_coverage = tests.then(|| {
         let changed = coverage_changed_roots(&changed_roots.roots, &entries, &owners);
-        crate::engine::l5::test_coverage::compute_test_coverage(
+        let mut tc = crate::engine::l5::test_coverage::compute_test_coverage(
             effects
                 .coverage_graph
                 .as_ref()
                 .expect("a --tests plan builds the coverage graph"),
             &changed,
-        )
+        );
+        // The coverage graph holds the workspace app's own tests only. The
+        // sibling test apps `alsem tests` would load (the same discovery,
+        // files only, as explain's C-7) are named, and make the block
+        // partial: a test there may reach what these do not (round-1 c25).
+        let scope = crate::engine::test_select::scope::discover(
+            &cx.inputs().workspace,
+            &crate::engine::test_select::scope::ScopeRequest::default(),
+        );
+        tc.note_unloaded_test_apps(
+            scope
+                .apps
+                .iter()
+                .map(|a| crate::engine::l5::test_coverage::UnloadedTestApp {
+                    name: a.name.clone(),
+                    test_attribute_lines: a.test_attribute_lines,
+                })
+                .collect(),
+        );
+        tc
     });
     // #69 D1.4: the query's inputs (the effects, the L4 store's join) are dead
     // here. Free them before the JSON projection. (The cells are released

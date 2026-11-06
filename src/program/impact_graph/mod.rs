@@ -50,8 +50,15 @@
 //! - `Trigger` `lifecycle` — object node -> its triggers, its extensions'
 //!   triggers, a page's parts, source-table triggers and platform events, the
 //!   objects its actions open, an XmlPort's table triggers;
-//! - `Run` `declaredRunnable` — a routine declaring a `Page`/`Report`/`XmlPort`/
-//!   `Query`/`TestPage`/`TestRequestPage` variable may run that object;
+//! - `Trigger` `clientEvent` — a page's object node -> the event triggers of
+//!   its `usercontrol` add-ins (a lifecycle edge only a client's JavaScript
+//!   fires: a test walk does not follow it, impact does);
+//! - `Run` `declaredRunnable` — a routine declaring a `TestPage`/
+//!   `TestRequestPage` variable (or whose object declares one) may run that
+//!   object; and a call site running a dispatching builtin on a receiver
+//!   typed as one `Page`/`Report`/`XmlPort`/`Query` (`ReportVar.SaveAsPdf()`)
+//!   runs it. A plain declaration of those four kinds runs nothing (a typed
+//!   `.Run()`/`.RunModal()` is a `run` edge);
 //! - `Event` `testHandler` — a test -> the handlers it lists; `Run` `testRunner`
 //!   — a test -> its codeunit (its `OnRun` runs first);
 //! - `Open` edges: `unresolved`, `dynamic`, `dispatchingBuiltin` (into a hub),

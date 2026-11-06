@@ -62,23 +62,51 @@ pub fn user_or_job(k: EntryKind) -> bool {
     )
 }
 
-/// A bounded list: the first `keep` items by `(hops, tier, node)` and the
-/// count of distinct nodes.
+/// A list's distinct nodes, each with its best witness state, and the first
+/// `keep` of them for the answer ([`Firsts::first`]).
 #[derive(Default)]
 struct Firsts {
-    nodes: BTreeSet<NodeIx>,
-    first: Vec<(u32, Tier, NodeIx)>,
+    /// Node -> its best `(only over open sites, hops, tier, arrival)`.
+    best: HashMap<NodeIx, (bool, u32, Tier, usize)>,
+    arrivals: usize,
 }
 
 impl Firsts {
-    fn add(&mut self, n: NodeIx, hops: u32, tier: Tier, keep: usize) {
-        if !self.nodes.insert(n) {
-            return;
+    fn add(&mut self, n: NodeIx, hops: u32, tier: Tier) {
+        let key = (tier == Tier::OnlyOpen, hops);
+        self.arrivals += 1;
+        let at = self.arrivals;
+        let e = self.best.entry(n).or_insert((key.0, key.1, tier, at));
+        if key < (e.0, e.1) {
+            *e = (key.0, key.1, tier, at);
         }
-        // States arrive in hop order, so the first `keep` are the nearest.
-        if self.first.len() < keep {
-            self.first.push((hops, tier, n));
-        }
+    }
+
+    /// How many distinct nodes.
+    fn count(&self) -> usize {
+        self.best.len()
+    }
+
+    /// How many nodes only a path over an open site (a hub) reaches.
+    fn only_open(&self) -> usize {
+        self.best.values().filter(|b| b.0).count()
+    }
+
+    /// The witnesses to show: every node reached by a path with no open site
+    /// first, nearest first, then the ones only an open site reaches (round-1
+    /// c20: a `run:report` hub's 5-hop witness was listed beside the real
+    /// 4-hop path as if it were one). Ties keep arrival (walk) order.
+    fn first(&self, keep: usize) -> Vec<(u32, Tier, NodeIx)> {
+        let mut v: Vec<(bool, u32, usize, Tier, NodeIx)> = self
+            .best
+            .iter()
+            .map(|(&n, &(open, hops, tier, at))| (open, hops, at, tier, n))
+            .collect();
+        v.sort_unstable_by_key(|&(open, hops, at, _, _)| (open, hops, at));
+        v.into_iter()
+            .take(keep)
+            .map(|(_, hops, _, tier, n)| (hops, tier, n))
+            .collect()
     }
 }
 
@@ -135,8 +163,7 @@ impl ConeVisitor for Up<'_> {
         if let Via::Site(site) = via {
             let st = &self.g.sites()[site as usize];
             if st.boundary == Boundary::EventDispatch {
-                self.publishers
-                    .add(st.from, hops, s.tier, self.keep.per_list);
+                self.publishers.add(st.from, hops, s.tier);
             }
         }
         if !self.root_nodes.contains(&s.node)
@@ -155,17 +182,14 @@ impl ConeVisitor for Up<'_> {
     }
     fn entry(&mut self, _: u32, n: NodeIx, kinds: &[EntryKind], s: WalkState, hops: u32) {
         for k in kinds {
-            self.entries
-                .entry(*k)
-                .or_default()
-                .add(n, hops, s.tier, self.keep.per_list);
+            self.entries.entry(*k).or_default().add(n, hops, s.tier);
         }
     }
     fn external(&mut self, _: u32, n: NodeIx, why: ExternalWhy, s: WalkState, hops: u32) {
         self.external
             .entry(why.as_str())
             .or_default()
-            .add(n, hops, s.tier, self.keep.per_list);
+            .add(n, hops, s.tier);
     }
     fn limit(&mut self, l: Limit) {
         self.limit = Some(l);
@@ -306,9 +330,9 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
         .filter_map(|k| up.entries.get(k).map(|f| (k, f)))
         .map(|(k, f)| {
             let first: Vec<Value> = f
-                .first
-                .iter()
-                .map(|&(h, t, n)| {
+                .first(up.keep.per_list)
+                .into_iter()
+                .map(|(h, t, n)| {
                     let mut v = node_json(g, n, h, t);
                     if *k == EntryKind::PageAction
                         && let Some((action, caption)) =
@@ -320,16 +344,22 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
                     v
                 })
                 .collect();
-            json!({"kind": k.as_str(), "count": f.nodes.len(),
+            json!({"kind": k.as_str(), "count": f.count(), "onlyOpen": f.only_open(),
                    "userOrJob": user_or_job(*k), "first": first})
         })
         .collect();
+    let firsts = |f: &Firsts| -> Vec<Value> {
+        f.first(up.keep.per_list)
+            .into_iter()
+            .map(|(h, t, n)| node_json(g, n, h, t))
+            .collect()
+    };
     let external: Vec<Value> = up
         .external
         .iter()
         .map(|(why, f)| {
-            json!({"why": why, "count": f.nodes.len(),
-                   "first": f.first.iter().map(|&(h, t, n)| node_json(g, n, h, t)).collect::<Vec<_>>()})
+            json!({"why": why, "count": f.count(), "onlyOpen": f.only_open(),
+                   "first": firsts(f)})
         })
         .collect();
     json!({
@@ -337,9 +367,9 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
         "maxHops": up.max_hops,
         "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep, "onlyOpen": open},
         "entries": entries,
-        "userOrJobEntries": up.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.nodes.len()).sum::<usize>(),
-        "eventPublishers": {"count": up.publishers.nodes.len(),
-                            "first": up.publishers.first.iter().map(|&(h, t, n)| node_json(g, n, h, t)).collect::<Vec<_>>()},
+        "userOrJobEntries": up.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count()).sum::<usize>(),
+        "eventPublishers": {"count": up.publishers.count(), "onlyOpen": up.publishers.only_open(),
+                            "first": firsts(&up.publishers)},
         "external": external,
         "hidden": {"universalHub": up.universal, "byChannel": up.hidden},
         "limited": up.limit.map(|l| match l {
@@ -474,4 +504,41 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
                  "walkMs": started.elapsed().as_millis() as u64,
                  "scratchBytes": scratch.bytes()},
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A list's witnesses put every node a path with no open site reaches
+    /// before the ones only an open site (a hub) reaches, nearest first; a
+    /// node reached first over a hub and later by a real path is shown with
+    /// the real path; arrival order breaks ties. States are fed in hop order,
+    /// as the walk delivers them.
+    ///
+    /// DISCRIMINATION (2026-11-06): sorting `Firsts::first` by `(hops,
+    /// arrival)` (the open flag dropped from the key) fails the first assert
+    /// (the 2-hop hub witness comes first).
+    #[test]
+    fn real_paths_are_listed_before_open_site_witnesses() {
+        let mut f = Firsts::default();
+        f.add(10, 2, Tier::OnlyOpen);
+        f.add(11, 2, Tier::OnlyOpen);
+        f.add(12, 3, Tier::Local);
+        f.add(13, 3, Tier::ThroughDependency);
+        f.add(11, 4, Tier::ThroughDependency);
+        f.add(12, 5, Tier::OnlyOpen);
+        assert_eq!(
+            f.first(10),
+            vec![
+                (3, Tier::Local, 12),
+                (3, Tier::ThroughDependency, 13),
+                (4, Tier::ThroughDependency, 11),
+                (2, Tier::OnlyOpen, 10),
+            ]
+        );
+        assert_eq!(f.count(), 4);
+        assert_eq!(f.only_open(), 1, "only node 10 has no real path");
+        assert_eq!(f.first(2).len(), 2);
+    }
 }
