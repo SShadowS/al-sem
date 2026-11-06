@@ -216,7 +216,9 @@ fn a_large_main_part_streams_its_effects_with_the_same_totals() {
         )
     };
     let (whole, none) = run(&[]);
-    assert_eq!(whole.len(), 6, "precondition: six routines in Core.al");
+    // Eight since `TU Core::Logged` and `TU Log Subscribers::OnLogInserted`
+    // (the unraised platform table event of C-6) joined the fixture.
+    assert_eq!(whole.len(), 8, "precondition: eight routines in Core.al");
     // `Post`'s `Item.Modify()` on its `var` parameter.
     assert!(
         whole
@@ -224,9 +226,9 @@ fn a_large_main_part_streams_its_effects_with_the_same_totals() {
             .any(|(_, e)| e["callerDependentTables"].as_u64() > Some(0)),
         "precondition: a root writes a table: {whole:?}"
     );
-    assert_eq!(none, 0, "six roots are read whole by default");
+    assert_eq!(none, 0, "eight roots are read whole by default");
     let (streamed, batches) = run(&[("AL_SEM_IMPACT_ROOT_BATCH", "1")]);
-    assert_eq!(batches, 6, "one batch per root");
+    assert_eq!(batches, 8, "one batch per root");
     assert_eq!(streamed, whole);
 }
 

@@ -1522,6 +1522,29 @@ fn convert<'a>(
             _ => None,
         })
         .collect();
+    // F1: each record op's table-event edge, by its site (the key its
+    // `ImplicitTrigger` edge shares), and each publisher's event flow.
+    let table_event_edges: HashMap<_, &ClassifiedEdge> = view
+        .all_edges()
+        .filter_map(|ce| match &ce.obligation_id {
+            ObligationId::TableEvent {
+                caller,
+                span,
+                callee_fp,
+            } => Some(((caller, span, *callee_fp), ce)),
+            _ => None,
+        })
+        .collect();
+    let event_flow: HashMap<&RoutineNodeId, &ClassifiedEdge> = if table_event_edges.is_empty() {
+        HashMap::new()
+    } else {
+        view.all_edges()
+            .filter_map(|ce| match &ce.obligation_id {
+                ObligationId::Publisher(p) => Some((p, ce)),
+                _ => None,
+            })
+            .collect()
+    };
     let mut background_starts: HashMap<String, BackgroundStart> = HashMap::new();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order).
@@ -1562,6 +1585,15 @@ fn convert<'a>(
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
                 edges.extend(conv.triggers(RoutineIx::of(ri), r, op, ce, &mut c));
+                edges.extend(conv.table_events(
+                    RoutineIx::of(ri),
+                    r,
+                    op,
+                    ce,
+                    &table_event_edges,
+                    &event_flow,
+                    &mut c,
+                ));
             } else if matches!(
                 op.op.as_str(),
                 "Insert" | "Modify" | "Delete" | "Validate" | "Rename"
@@ -2469,6 +2501,139 @@ impl<'a> Converter<'a> {
                 e
             })
             .collect()
+    }
+}
+
+impl Converter<'_> {
+    /// F1 (spec `2026-11-06-db-event-subscribers.md`): a matched record op's
+    /// program `TableEvent` edge (the table's platform-event publishers, found
+    /// by the op's `ImplicitTrigger` obligation) → one `TableEvent` edge per
+    /// model subscriber of each publisher, read off the publisher's `EventFlow`
+    /// edge, sorted by `(event, to)`. A `Validate` reaches only the subscribers
+    /// of its own field (the publisher collapses the fields; the subscriber's
+    /// `[EventSubscriber]` element names one), and with no field argument read,
+    /// none. The events fire whatever the RunTrigger, so nothing here reads it.
+    /// A subscriber outside the model (a dependency's, in a single-app model)
+    /// keeps its identity in `external_targets` and gets no edge, as a
+    /// dependency trigger does (S3.6).
+    #[allow(clippy::too_many_arguments)]
+    fn table_events(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        op: &ModelRecordOperation,
+        ce: &ClassifiedEdge,
+        table_event_edges: &HashMap<(&RoutineNodeId, &CanonicalSpan, u64), &ClassifiedEdge>,
+        event_flow: &HashMap<&RoutineNodeId, &ClassifiedEdge>,
+        c: &mut SiteCensus,
+    ) -> Vec<CallEdge> {
+        let ObligationId::CallSite {
+            caller,
+            span,
+            callee_fp,
+        } = &ce.obligation_id
+        else {
+            return Vec::new();
+        };
+        let Some(te) = table_event_edges.get(&(caller, span, *callee_fp)) else {
+            return Vec::new();
+        };
+        let op_lc = op.op.fold_identifier();
+        let field_lc = (op_lc == "validate").then(|| {
+            op.field_arguments
+                .as_ref()
+                .and_then(|fa| fa.first())
+                .map(|f| {
+                    crate::program::body::node_util::strip_quotes(f)
+                        .replace("\"\"", "\"")
+                        .fold_identifier()
+                })
+        });
+        // ModifyAll/DeleteAll raise once per row, and the row set may be empty.
+        let fires = if matches!(op_lc.as_str(), "modifyall" | "deleteall") {
+            crate::engine::l4::combined_graph::TriggerFires::Maybe
+        } else {
+            crate::engine::l4::combined_graph::TriggerFires::Always
+        };
+        let mut out: Vec<(String, String, bool)> = Vec::new();
+        for publisher in &te.edge.routes {
+            let RouteTarget::Routine(pid) = &publisher.target else {
+                continue;
+            };
+            let Some(flow) = event_flow.get(pid) else {
+                continue;
+            };
+            let mut event_id = crate::program::model::events::encode_event_id(
+                &self.model_object_id(&pid.object),
+                pid.name_lc.as_str(),
+            );
+            if let Some(field) = &field_lc {
+                let Some(field) = field else {
+                    // A `Validate` whose field was not read reaches no field.
+                    c.adapter_routes_dropped += flow.edge.routes.len();
+                    continue;
+                };
+                event_id = format!("{event_id}/{field}");
+            }
+            for route in &flow.edge.routes {
+                let RouteTarget::Routine(sid) = &route.target else {
+                    c.adapter_routes_dropped += 1;
+                    continue;
+                };
+                if let Some(Some(field)) = &field_lc
+                    && !self.subscribes_to_element(sid, pid.name_lc.as_str(), field)
+                {
+                    continue;
+                }
+                match self.target(route) {
+                    Target::Model(t) => {
+                        out.push((event_id.clone(), t.id.clone(), !route.conditions.is_empty()))
+                    }
+                    Target::MissingFromModel => c.adapter_routes_dropped += 1,
+                    Target::Outside => {
+                        if self.record_target(&op.id, route) {
+                            c.adapter_trigger_dependency_routes += 1;
+                        } else {
+                            c.adapter_routes_dropped += 1;
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out.into_iter()
+            .map(|(event_id, to, conditional)| {
+                let mut e = CallEdge::base(ix, &r.id, &op.id, &op.id);
+                e.to = Some(to);
+                e.dispatch_kind = DispatchKind::TableEvent;
+                e.fires = Some(fires);
+                e.resolution = if conditional
+                    || fires != crate::engine::l4::combined_graph::TriggerFires::Always
+                {
+                    Resolution::Maybe
+                } else {
+                    Resolution::Resolved
+                };
+                e.table_event = Some(crate::program::model::calls::TableEventMeta {
+                    event_id,
+                    conditional,
+                });
+                e
+            })
+            .collect()
+    }
+
+    /// Whether subscriber `sid` subscribes to platform event `event_lc` for
+    /// element (field) `field_lc`: one of its `[EventSubscriber]` attributes
+    /// names that event and that element (both folded).
+    fn subscribes_to_element(&self, sid: &RoutineNodeId, event_lc: &str, field_lc: &str) -> bool {
+        self.graph.routines.run_by(|x| x.id.cmp(sid)).any(|n| {
+            n.event_subscribers.iter().any(|a| {
+                a.event_name.as_ref() == event_lc
+                    && a.element.as_deref().is_some_and(|e| e == field_lc)
+            })
+        })
     }
 }
 

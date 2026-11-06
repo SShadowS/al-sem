@@ -234,6 +234,9 @@ fn main_selection_exact_sets() {
             &["BonusAboveThousand", "NightlyRecalcDecays"],
             true,
         ),
+        // F1: Tests.al:88 `Ledger.Insert(true)` raises the table's platform
+        // OnAfterInsertEvent, which Ledger.al:164 subscribes to.
+        cov("OnAfterInsertLedger", &["InsertLedger"], true),
     ];
     want_cov.sort();
     assert_eq!(covered(&b), want_cov, "covered: {b}");
@@ -249,13 +252,6 @@ fn main_selection_exact_sets() {
             "ReachedOnlyFromNowhere",
             "Codeunit Sel Unbound Subscriber",
             "no-path",
-        ),
-        // Ledger.al:164: subscribes to the table's platform OnAfterInsertEvent; no
-        // publisher routine exists.
-        unc(
-            "OnAfterInsertLedger",
-            "Codeunit Sel Ledger Subscriber",
-            "platform-event-subscriber",
         ),
     ];
     want_unc.sort();
@@ -491,7 +487,7 @@ fn human_line_with_tests() {
     assert_eq!(
         lines,
         vec![
-            "test coverage: 6 of 10 changed routines reached; 11 [Test] procedures \
+            "test coverage: 7 of 10 changed routines reached; 11 [Test] procedures \
              loaded and considered (partial: dynamic-target, object-run-unresolved, test-page, \
              unresolved-receiver-type); an unreached routine is not a reason to skip tests"
         ],

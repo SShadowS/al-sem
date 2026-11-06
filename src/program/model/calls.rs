@@ -132,7 +132,10 @@ pub fn closed_interface_sites<'a>(
 ) -> std::collections::HashSet<&'a str> {
     let mut rows: HashMap<&str, HashMap<super::ix::RoutineIx, bool>> = HashMap::new();
     for e in edges {
-        if e.dispatch_kind == DispatchKind::ImplicitTrigger {
+        if matches!(
+            e.dispatch_kind,
+            DispatchKind::ImplicitTrigger | DispatchKind::TableEvent
+        ) {
             continue;
         }
         let closed = e
@@ -185,6 +188,23 @@ pub struct CallEdge {
     /// edge from the op (#96); the typed graph copies it. `None` on every other
     /// edge.
     pub fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
+    /// `TableEvent` edges only (F1): the platform table event the record
+    /// operation raises, in the event graph's id form
+    /// (`program::model::events::encode_event_id`, with the field for a
+    /// validate event), and whether the subscription may be skipped (a manual
+    /// or conditional subscriber). `None` on every other edge.
+    pub table_event: Option<TableEventMeta>,
+}
+
+/// The platform event behind a `TableEvent` [`CallEdge`] (F1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableEventMeta {
+    /// The event graph's id of the event (`…/event/onaftermodifyevent`, or
+    /// `…/event/onaftervalidateevent/<field>`).
+    pub event_id: String,
+    /// The subscription may be skipped (its program route carries a dispatch
+    /// condition).
+    pub conditional: bool,
 }
 
 impl CallEdge {
@@ -209,6 +229,7 @@ impl CallEdge {
             unknown_method_name: None,
             receiver_shape: None,
             fires: None,
+            table_event: None,
         }
     }
 }

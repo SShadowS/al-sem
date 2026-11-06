@@ -101,6 +101,15 @@ pub struct TypedEdge {
     pub fires: Option<TriggerFires>,
 }
 
+/// Whether a combined/typed edge kind runs an event SUBSCRIBER: a
+/// publisher's `event-dispatch` edge, or (F1) a record operation's
+/// `table-event` edge to a platform table event's subscriber. The walkers that
+/// leave event fan-out to another detector skip both.
+#[must_use]
+pub fn is_subscriber_edge(kind: &str) -> bool {
+    matches!(kind, "event-dispatch" | "table-event")
+}
+
 /// Whether an `implicit-trigger` edge's trigger runs every time its record
 /// operation executes. The op's own control context applies on top of this.
 #[derive(
@@ -242,6 +251,7 @@ fn is_edge_kind_enum(kind: DispatchKind) -> bool {
             | DispatchKind::Interface
             | DispatchKind::ImplicitTrigger
             | DispatchKind::Dynamic
+            | DispatchKind::TableEvent
     )
 }
 
@@ -349,16 +359,22 @@ pub(crate) fn assemble(
         // check is needed.
         if let Some(to) = &ce.to {
             if is_edge_kind_enum(ce.dispatch_kind) {
+                // F1: a table-event edge names its platform event and whether
+                // the subscription may be skipped; never isolated.
+                let te = ce.table_event.as_ref();
                 edges.push(CombinedEdge {
                     from: ce.from.clone(),
                     to: to.clone(),
                     kind: ce.dispatch_kind.as_str().to_string(),
                     callsite_id: Some(ce.callsite_id.clone()),
                     operation_id: Some(ce.operation_id.clone()),
-                    event_id: None,
+                    event_id: te.map(|t| t.event_id.clone()),
                     subscriber_app_id: None,
                     resolution: ce.resolution.as_str().to_string(),
-                    dispatch: None,
+                    dispatch: te.map(|t| DispatchMeta {
+                        conditional: t.conditional,
+                        isolated: false,
+                    }),
                 });
             }
             // Resolved interface dispatch ("maybe"): open-world uncertainty, once,
@@ -718,6 +734,28 @@ fn build_typed_edges(
                 // The adapter decides `fires` once, from the op (#96 D1). An
                 // edge without it reads as `Maybe`, the conservative answer.
                 fires: Some(ce.fires.unwrap_or(TriggerFires::Maybe)),
+            });
+            continue;
+        }
+        // F1: a table-event edge, keyed by its record operation like an
+        // implicit trigger, carries the platform event it raises.
+        if ce.dispatch_kind == DispatchKind::TableEvent {
+            let Some(to) = &ce.to else { continue };
+            typed_edges.push(TypedEdge {
+                kind: "table-event".to_string(),
+                from: ce.from.clone(),
+                to: Some(to.clone()),
+                callsite_id: None,
+                operation_id: Some(ce.operation_id.clone()),
+                event_id: ce.table_event.as_ref().map(|t| t.event_id.clone()),
+                receiver_type: None,
+                interface_name: None,
+                candidate_count: None,
+                target_object: None,
+                object_type: None,
+                target_id_source: None,
+                trigger_kind: None,
+                fires: None,
             });
             continue;
         }

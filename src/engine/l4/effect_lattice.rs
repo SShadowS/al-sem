@@ -175,7 +175,8 @@ fn via_rank(via: &str) -> u8 {
 pub fn via_for_edge_kind(kind: &str) -> &'static str {
     match kind {
         "implicit-trigger" => "implicit-trigger",
-        "event-dispatch" => "event-subscriber",
+        // F1: a platform table event's subscriber runs by event dispatch.
+        "event-dispatch" | "table-event" => "event-subscriber",
         "dynamic" => "dynamic",
         _ => "inherited",
     }

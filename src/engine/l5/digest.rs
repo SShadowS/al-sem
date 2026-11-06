@@ -430,12 +430,16 @@ fn edge_callsite_id(e: &SnapshotGraphEdge) -> Option<&str> {
 /// The identity of an inherited fact's first hop (#96 D5, #98 D2): the firing
 /// operation of an implicit-trigger edge, the INTERNAL event id of an
 /// event-dispatch edge, or the call site of a call-family edge. `retag` sets
-/// all three from the same edge, so at most one is present.
+/// all three from the same edge, so at most one is present, except on a
+/// table-event edge (F1), which carries both its raising operation and its
+/// event: [`FirstHop::OpEvent`], so the op's implicit-trigger edges never pass
+/// for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FirstHop<'a> {
     Op(&'a str),
     Event(&'a str),
     Callsite(&'a str),
+    OpEvent(&'a str, &'a str),
 }
 
 impl FirstHop<'_> {
@@ -443,17 +447,22 @@ impl FirstHop<'_> {
     fn id(self) -> String {
         match self {
             FirstHop::Op(s) | FirstHop::Event(s) | FirstHop::Callsite(s) => s.to_string(),
+            FirstHop::OpEvent(op, ev) => format!("{op} {ev}"),
         }
     }
 }
 
-/// The ONE reader of a fact's first-hop ids (#98 D2), precedence op, then
-/// event, then call site. `None` when the fact has no op, event or call-site
-/// id (a direct fact with a callsite witness returns `Some(Callsite)`; only
-/// Case C, reached for inherited facts, acts on it).
+/// The ONE reader of a fact's first-hop ids (#98 D2), precedence op (with the
+/// event too: a table event), then event, then call site. `None` when the fact
+/// has no op, event or call-site id (a direct fact with a callsite witness
+/// returns `Some(Callsite)`; only Case C, reached for inherited facts, acts on
+/// it).
 fn fact_first_hop(f: &Fact) -> Option<FirstHop<'_>> {
     if let Some(op) = f.witness_first_hop_operation_id() {
-        Some(FirstHop::Op(op))
+        Some(match f.witness_first_hop_event_id() {
+            Some(ev) => FirstHop::OpEvent(op, ev),
+            None => FirstHop::Op(op),
+        })
     } else if let Some(ev) = f.witness_first_hop_event_id() {
         Some(FirstHop::Event(ev))
     } else {
@@ -467,6 +476,9 @@ fn fact_first_hop(f: &Fact) -> Option<FirstHop<'_>> {
 fn is_first_hop(e: &SnapshotGraphEdge, fact: &Fact) -> bool {
     match fact_first_hop(fact) {
         Some(FirstHop::Op(op)) => e.edge_operation_id() == Some(op),
+        Some(FirstHop::OpEvent(op, ev)) => {
+            e.edge_operation_id() == Some(op) && e.edge_event_id() == Some(ev)
+        }
         Some(FirstHop::Event(ev)) => e.edge_event_id() == Some(ev),
         Some(FirstHop::Callsite(cs)) => edge_callsite_id(e) == Some(cs),
         None => false,
@@ -669,7 +681,9 @@ impl CrossingSite {
     /// The site of edge `e` (a boundary edge has one).
     fn of(e: &SnapshotGraphEdge) -> CrossingSite {
         match e {
-            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => {
+            // F1: a table event leaves from its raising operation.
+            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. }
+            | SnapshotGraphEdge::TableEvent { operation_id, .. } => {
                 CrossingSite::Operation(operation_id.clone())
             }
             SnapshotGraphEdge::EventDispatch { event_id, .. } => {
@@ -907,7 +921,8 @@ fn edge_has_hop(edge: &SnapshotGraphEdge) -> bool {
         | SnapshotGraphEdge::EventDispatch { .. }
         | SnapshotGraphEdge::VariableTypedCall { .. }
         | SnapshotGraphEdge::InterfaceDispatch { .. }
-        | SnapshotGraphEdge::ImplicitTrigger { .. } => true,
+        | SnapshotGraphEdge::ImplicitTrigger { .. }
+        | SnapshotGraphEdge::TableEvent { .. } => true,
     }
 }
 
@@ -957,7 +972,11 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
             })
         }
         SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
-        SnapshotGraphEdge::EventDispatch { to, event_id, .. } => {
+        // F1: a record operation raising a platform table event is shown as
+        // the dispatch of that event to its subscriber (the raiser stands in
+        // for the publisher, which the platform is).
+        SnapshotGraphEdge::EventDispatch { to, event_id, .. }
+        | SnapshotGraphEdge::TableEvent { to, event_id, .. } => {
             let display = idx
                 .routine_display_by_id
                 .get(to)
@@ -1827,7 +1846,7 @@ impl<'i> WitDag<'i> {
                 }
             }
         }
-        let opaque = if matches!(first_hop, FirstHop::Event(_)) {
+        let opaque = if matches!(first_hop, FirstHop::Event(_) | FirstHop::OpEvent(..)) {
             std::collections::HashSet::new()
         } else {
             seeds
@@ -2006,6 +2025,7 @@ impl<'i> DagCache<'i> {
             FirstHop::Op(_) => 0,
             FirstHop::Event(_) => 1,
             FirstHop::Callsite(_) => 2,
+            FirstHop::OpEvent(..) => 3,
         };
         let dag = self.0.entry((kind, first_hop.id())).or_insert_with(|| {
             let mut seeds: Vec<(&'i str, &'i SnapshotGraphEdge)> = first_edges
@@ -2080,7 +2100,14 @@ fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (Bounda
         )
     };
     let (id, evidence_kind, operation_id, callsite_id, (source_file, line, column)) = match e {
+        // F1: a table event's terminal is its raising operation, as a
+        // trigger's is.
         SnapshotGraphEdge::ImplicitTrigger {
+            operation_id,
+            anchor,
+            ..
+        }
+        | SnapshotGraphEdge::TableEvent {
             operation_id,
             anchor,
             ..

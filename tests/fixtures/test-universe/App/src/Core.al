@@ -36,6 +36,31 @@ codeunit 50801 "TU Core"
     procedure Audited()
     begin
     end;
+
+    procedure Logged()
+    begin
+    end;
+}
+
+table 50803 "TU Log"
+{
+    fields
+    {
+        field(1; Id; Integer)
+        {
+        }
+    }
+}
+
+codeunit 50804 "TU Log Subscribers"
+{
+    [EventSubscriber(ObjectType::Table, Database::"TU Log", 'OnAfterInsertEvent', '', false, false)]
+    local procedure OnLogInserted(var Rec: Record "TU Log")
+    var
+        Core: Codeunit "TU Core";
+    begin
+        Core.Logged();
+    end;
 }
 
 codeunit 50802 "TU Subscribers"

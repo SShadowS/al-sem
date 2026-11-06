@@ -27,8 +27,8 @@
   },
   "coverage": {
     "graph": {
-      "nodes": 7,
-      "sites": 4
+      "nodes": 10,
+      "sites": 7
     },
     "states": {
       "perRoot": 2,
@@ -530,7 +530,7 @@
     "limits": [],
     "lineBase": 1,
     "next": "next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run \"AL: Download symbols\"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve",
-    "productionSourceStamp": "prod-v1:36dbae2fe449e122388fbf8c988a5991",
+    "productionSourceStamp": "prod-v1:cdd0f9df16e015bd87135e0b21d0bfb1",
     "requiredFallback": [],
     "runFirst": [
       {

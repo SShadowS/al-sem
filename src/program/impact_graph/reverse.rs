@@ -625,8 +625,9 @@ pub fn object_run_reaches(g: &SitedGraph, r: NodeIx) -> bool {
 ///
 /// - kept: a direct or interface call, an object run (`Codeunit.Run`,
 ///   `Page.RunModal`, a typed-variable run) and the trigger the run runs
-///   ([`object_run_reaches`]), a record operation firing a table trigger, an
-///   event publisher dispatching to its subscribers;
+///   ([`object_run_reaches`]), a record operation firing a table trigger or
+///   raising its table's platform event (F1, `tableEvent`), an event
+///   publisher dispatching to its subscribers;
 /// - dropped: a page's lifecycle into a trigger a user starts (an action, a
 ///   field trigger, a part, a page it opens, its tables' triggers and platform
 ///   events), a rule's edge (`declaredRunnable`, a test's handler list or
@@ -647,7 +648,10 @@ pub fn is_code_call_site(g: &SitedGraph, s: SiteIx) -> bool {
     }
     match site.boundary {
         Boundary::Sync | Boundary::Run | Boundary::TriggerOf { .. } => {
-            matches!(site.via(), "call" | "interface" | "run" | "implicitTrigger")
+            matches!(
+                site.via(),
+                "call" | "interface" | "run" | "implicitTrigger" | "tableEvent"
+            )
         }
         Boundary::EventDispatch => site.via() == "eventFlow",
         Boundary::Lifecycle => {

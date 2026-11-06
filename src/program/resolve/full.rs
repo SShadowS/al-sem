@@ -87,6 +87,8 @@ use std::sync::Arc;
 /// - **`CallSite`** — mirrors [`SiteId`]: `(caller, span, callee_fp)`.
 /// - **`Publisher`** — the publisher routine's node id.
 ///   One `Publisher` obligation per publisher routine in the graph.
+/// - **`TableEvent`** — the platform table events a record op raises
+///   ([`EdgeKind::TableEvent`]), keyed like its `CallSite`.
 /// - **`Background`** — a static background start's target resolution (F3,
 ///   [`EdgeKind::BackgroundStart`]): the same `(caller, span, callee_fp)` as
 ///   the start's own `CallSite` obligation (the catalog call), kept apart so
@@ -101,6 +103,16 @@ pub enum ObligationId {
     },
     Publisher(RoutineNodeId),
     Background {
+        caller: RoutineNodeId,
+        span: CanonicalSpan,
+        callee_fp: u64,
+    },
+    /// The platform table events a record operation raises
+    /// ([`EdgeKind::TableEvent`]): the same `(caller, span, callee_fp)` as the
+    /// record op's own `CallSite` obligation (its `ImplicitTrigger` edge), kept
+    /// apart so the site has one obligation per edge. Only a record op whose
+    /// table has a loaded subscriber of one of those events has one.
+    TableEvent {
         caller: RoutineNodeId,
         span: CanonicalSpan,
         callee_fp: u64,
@@ -627,6 +639,10 @@ fn resolve_call_site_obligation(
     // Engine-switch S3.4: the file's source text, so a record operation's
     // `Validate` field argument can be read (`TriggerSiteRule`).
     text: &str,
+    // The record-op arm fills the routes of the site's `TableEvent` edge (the
+    // table's platform-event publishers, `resolve_table_events`); every other
+    // arm leaves it empty.
+    table_events_out: &mut Vec<Route>,
 ) -> (
     EdgeKind,
     DispatchShape,
@@ -990,6 +1006,11 @@ fn resolve_call_site_obligation(
                     RouteTarget::Routine(id) => rule.admits(id),
                     _ => true,
                 });
+                // The platform table events: raised whatever the RunTrigger,
+                // so the site rule above never filters them.
+                *table_events_out = crate::program::resolve::resolver::resolve_table_events(
+                    &op_lc, table_node, graph,
+                );
                 facts_out.unqualified_record_op = !callee_text.contains('.');
                 (shape, completeness, routes)
             } else {
@@ -1156,6 +1177,7 @@ pub(crate) fn resolve_file_obligations(
                     build_context: pf.file.ir.preproc_context(site.expr).to_vec(),
                     ..SiteFacts::default()
                 };
+                let mut table_events: Vec<Route> = Vec::new();
                 let (kind, shape, completeness, routes, finding) = resolve_call_site_obligation(
                     &site.shape,
                     site.arity,
@@ -1173,6 +1195,7 @@ pub(crate) fn resolve_file_obligations(
                     pf.file.ir.preproc_context(site.expr),
                     &mut facts,
                     &pf.text,
+                    &mut table_events,
                 );
                 // A parens-less value read is a call only when it reaches a
                 // routine; otherwise it is a variable, field or built-in read.
@@ -1295,6 +1318,34 @@ pub(crate) fn resolve_file_obligations(
                         commit,
                     }),
                 });
+                if !table_events.is_empty() {
+                    edges.push(ClassifiedEdge {
+                        obligation_id: ObligationId::TableEvent {
+                            caller: caller.clone(),
+                            span: site.span.clone(),
+                            callee_fp: fp,
+                        },
+                        edge: Edge {
+                            from: caller.clone(),
+                            site: SiteId {
+                                caller: caller.clone(),
+                                span: site.span.clone(),
+                                callee_fingerprint: fp,
+                            },
+                            kind: EdgeKind::TableEvent,
+                            shape: DispatchShape::Multicast,
+                            // Another app may subscribe too.
+                            completeness: SetCompleteness::Partial {
+                                reason: OpenWorldReason::ReverseDependentSubscribers,
+                            },
+                            routes: std::mem::take(&mut table_events),
+                        },
+                        // No site key: the key is the record op's own (the model
+                        // pairs the op with its `ImplicitTrigger` edge and finds
+                        // this one by obligation).
+                        site: None,
+                    });
+                }
                 if let Some((targets, _)) = bg_start
                     && !targets.is_empty()
                 {

@@ -205,21 +205,31 @@ fn a_leaf_reached_through_production_code_is_reached() {
     assert_eq!(v["runFirst"][0]["hops"], 2);
 }
 
-/// C-6: a routine run only by a subscriber to a platform table event
-/// (`OnAfterModifyEvent`) has a selection-relevant hidden channel in its
-/// cone: no test reaches it, its status is `analysis-incomplete` (never
-/// `no-known-path`), the fallback says why, and `selectionComplete` is false.
-/// A routine with no caller at all and no hidden channel is `no-known-path`
-/// with a complete selection.
+/// C-6: a routine run only by a subscriber to a platform table event no code
+/// raises (`TU Log`'s `OnAfterInsertEvent`; nothing writes `TU Log`) has a
+/// selection-relevant hidden channel in its cone: no test reaches it, its
+/// status is `analysis-incomplete` (never `no-known-path`), the fallback says
+/// why, and `selectionComplete` is false. A routine with no caller at all and
+/// no hidden channel is `no-known-path` with a complete selection. Since F1
+/// (spec `2026-11-06-db-event-subscribers.md`) a table event a record
+/// operation raises is an edge: `Audited`, run by the subscriber of
+/// `TU Item`'s `OnAfterModifyEvent`, is reached from `PostUpdatesQty` through
+/// `Post`'s `Item.Modify()`.
 ///
 /// DISCRIMINATION (2026-11-05): treating a platform table event as covered
-/// (`hidden_class` returning `false` for it) makes `Audited`'s status
-/// `no-known-path` and `selectionComplete` true: this test fails on both.
+/// (`hidden_class` returning `false` for it) makes the unraised routine's
+/// status `no-known-path` and `selectionComplete` true: this test fails on
+/// both. (2026-11-06) Returning no route from `resolve_table_events` makes
+/// `Audited` `analysis-incomplete` again: fails `audited`.
 #[test]
 fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
     let t = universe_repo();
     let ws = t.path().join("App");
     let v = json(&ws, &["--routine", "TU Core::Audited"]);
+    assert_eq!(v["changed"][0]["status"], "reached", "audited: {v:#}");
+    let (human, _) = tests(&ws, &["--routine", "TU Core::Audited"]);
+    golden("universe.audited.human.txt", &human, Some(t.path()));
+    let v = json(&ws, &["--routine", "TU Core::Logged"]);
     assert_eq!(v["changed"][0]["status"], "analysis-incomplete");
     assert_eq!(v["selectionComplete"], false);
     let reasons: Vec<&str> = v["requiredFallback"]
@@ -230,9 +240,8 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
         .collect();
     assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
     assert_eq!(v["hidden"][0]["class"], "platform-table-event");
-    let (human, _) = tests(&ws, &["--routine", "TU Core::Audited"]);
+    let (human, _) = tests(&ws, &["--routine", "TU Core::Logged"]);
     assert!(human.find("selection complete: no").unwrap() < human.find("this is static").unwrap());
-    golden("universe.audited.human.txt", &human, Some(t.path()));
     let v = json(&ws, &["--routine", "TU Core::Untested"]);
     assert_eq!(v["changed"][0]["status"], "no-known-path");
     assert_eq!(v["selectionComplete"], true, "{v:#}");

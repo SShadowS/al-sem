@@ -500,7 +500,7 @@ fn own_keys(
         };
         if matches!(
             e.dispatch_kind,
-            DispatchKind::Builtin | DispatchKind::ImplicitTrigger
+            DispatchKind::Builtin | DispatchKind::ImplicitTrigger | DispatchKind::TableEvent
         ) || !seen.insert((e.callsite_id.as_str(), to))
         {
             continue;

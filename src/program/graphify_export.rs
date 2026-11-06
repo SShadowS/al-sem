@@ -840,7 +840,8 @@ fn relation_for(kind: EdgeKind, target: &RouteTarget) -> &'static str {
     match kind {
         EdgeKind::Run => "runs",
         EdgeKind::ImplicitTrigger => "triggers",
-        EdgeKind::EventFlow => "raises_event",
+        // A record operation raising its table's platform event (F1).
+        EdgeKind::EventFlow | EdgeKind::TableEvent => "raises_event",
         // F3: the target runs in a new session or task, not in the caller's.
         EdgeKind::BackgroundStart => "starts_background",
         EdgeKind::Call => match target {

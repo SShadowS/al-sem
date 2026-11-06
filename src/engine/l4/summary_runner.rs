@@ -1056,6 +1056,12 @@ pub(crate) fn substitute_pd_temp_state(
             None => TempState::Unknown,
         };
     }
+    if edge.kind == "table-event" {
+        return match &edge.operation_id {
+            Some(op) => table_event_param_temp_state(routine, op, callee, callee_param_index),
+            None => TempState::Unknown,
+        };
+    }
     // (1) any other to-less edge: no caller-frame binding.
     let cs_id = match &edge.callsite_id {
         Some(id) => id,
@@ -1090,6 +1096,34 @@ pub(crate) fn trigger_receiver_temp_state(
     callee_param_index: u32,
 ) -> TempState {
     if callee_param_index != crate::program::body::features::RECEIVER_PARAM_INDEX {
+        return TempState::Unknown;
+    }
+    record_op_by_id(routine, op_id)
+        .and_then(|op| op.temp_state.as_ref())
+        .map_or(TempState::Unknown, TempState::from_p)
+}
+
+/// The temp state a `table-event` edge (F1) hands to the subscriber's parameter
+/// `callee_param_index`. A platform table event passes the record the
+/// operation `op_id` works on as the subscriber's `Rec` (and, for Modify,
+/// Rename and Validate, its earlier version as `xRec`, a record of the same
+/// table and the same temporariness), so each RECORD parameter binds to that
+/// op's own temp state in the caller's frame, as an implicit trigger's `Rec`
+/// does ([`trigger_receiver_temp_state`]). A non-record parameter
+/// (`RunTrigger`, `CurrFieldNo`), an unknown subscriber or an op not found is
+/// `Unknown` (sound = fires).
+pub(crate) fn table_event_param_temp_state(
+    routine: &ModelRoutine,
+    op_id: &str,
+    subscriber: Option<&ModelRoutine>,
+    callee_param_index: u32,
+) -> TempState {
+    let is_record = subscriber.is_some_and(|s| {
+        s.parameters
+            .iter()
+            .any(|p| p.index == callee_param_index && p.is_record)
+    });
+    if !is_record {
         return TempState::Unknown;
     }
     record_op_by_id(routine, op_id)

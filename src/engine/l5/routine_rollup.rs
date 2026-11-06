@@ -672,7 +672,7 @@ impl<'m> RollupCx<'m> {
 pub fn edge_tag(kind: &str) -> &'static str {
     if kind.starts_with("object-run") {
         "[run] "
-    } else if kind == "event-dispatch" {
+    } else if kind == "event-dispatch" || kind == "table-event" {
         "[event] "
     } else if kind == "implicit-trigger" {
         "[trigger] "

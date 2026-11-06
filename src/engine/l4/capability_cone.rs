@@ -1301,7 +1301,8 @@ pub(crate) fn capability_via_for_edge_kind(kind: &str) -> &'static str {
     match kind {
         "direct-call" | "variable-typed-call" | "interface-dispatch" => "call",
         "object-run-resolved" | "object-run-unresolved" => "object-run",
-        "event-dispatch" => "event-dispatch",
+        // F1: a platform table event's subscriber runs by event dispatch.
+        "event-dispatch" | "table-event" => "event-dispatch",
         "implicit-trigger" => "implicit-trigger",
         "dependency-export" => "dependency",
         _ => "call",
@@ -3016,7 +3017,9 @@ fn member_digests(
                 h.str(&e.sort_key);
                 let callee = routines_by_id.get(e.to.as_str()).copied();
                 h.u64(u64::from(callee.is_some()));
-                if e.kind == "event-dispatch"
+                // Both bind by the subscriber's parameters
+                // (`table_event_param_temp_state` reads which are records).
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind)
                     && let Some(c) = callee
                 {
                     h.debug(&c.parameters);

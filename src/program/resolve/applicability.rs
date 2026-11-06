@@ -1036,4 +1036,143 @@ mod trigger_site_rule_tests {
             .collect();
         assert!(wrong.is_empty(), "cases {wrong:?}");
     }
+
+    /// F1 (spec `2026-11-06-db-event-subscribers.md`): a record op's
+    /// `TableEvent` edge routes to its table's synthetic platform publishers
+    /// of the events the op raises, whatever its RunTrigger and on a temporary
+    /// record too; only events a loaded subscriber names have a publisher, and
+    /// a table nothing subscribes to gets no edge. Each case hand-states its
+    /// subscribers and its statement.
+    ///
+    /// DISCRIMINATION (2026-11-06): returning no route from
+    /// `resolve_table_events` fails every non-empty case; clearing the routes
+    /// when `rule.run_trigger == Some(false)` fails `modifyfalse`, `temp`,
+    /// `insert` (no argument reads as `false`), `deletefalse` and `modifyall`.
+    #[test]
+    fn table_event_edges_reach_the_platform_publishers_whatever_the_run_trigger() {
+        let root = std::env::temp_dir().join(format!("f1-table-event-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("app.json"),
+            r#"{"id":"11111111-0000-0000-0000-0000000000f1","name":"F","publisher":"P","version":"1.0.0.0","dependencies":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/T.Table.al"),
+            "table 50100 T\n{\n    fields\n    {\n        field(1; A; Code[20]) { }\n    }\n    trigger OnModify()\n    begin\n    end;\n}\ntable 50102 Quiet\n{\n    fields\n    {\n        field(1; A; Code[20]) { }\n    }\n}\n",
+        )
+        .unwrap();
+        let subscriber = |event: &str, element: &str| {
+            format!(
+                "    [EventSubscriber(ObjectType::Table, Database::T, '{event}', '{element}', false, false)]\n    local procedure S{event}()\n    begin\n    end;\n\n"
+            )
+        };
+        let subs: String = [
+            subscriber("OnBeforeModifyEvent", ""),
+            subscriber("OnAfterModifyEvent", ""),
+            subscriber("OnAfterInsertEvent", ""),
+            subscriber("OnAfterDeleteEvent", ""),
+            subscriber("OnAfterRenameEvent", ""),
+            subscriber("OnAfterValidateEvent", "A"),
+        ]
+        .concat();
+        std::fs::write(
+            root.join("src/S.Codeunit.al"),
+            format!("codeunit 50103 S\n{{\n{subs}}}\n"),
+        )
+        .unwrap();
+        let cases: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "modifyfalse",
+                "R: Record T;",
+                "R.Modify(false)",
+                &["onaftermodifyevent", "onbeforemodifyevent"],
+            ),
+            (
+                "modifytrue",
+                "R: Record T;",
+                "R.Modify(true)",
+                &["onaftermodifyevent", "onbeforemodifyevent"],
+            ),
+            (
+                "temp",
+                "R: Record T temporary;",
+                "R.Modify(false)",
+                &["onaftermodifyevent", "onbeforemodifyevent"],
+            ),
+            (
+                "insert",
+                "R: Record T;",
+                "R.Insert()",
+                &["onafterinsertevent"],
+            ),
+            (
+                "deletefalse",
+                "R: Record T;",
+                "R.Delete(false)",
+                &["onafterdeleteevent"],
+            ),
+            (
+                "rename",
+                "R: Record T;",
+                "R.Rename('X')",
+                &["onafterrenameevent"],
+            ),
+            (
+                "validate",
+                "R: Record T;",
+                "R.Validate(A, 'X')",
+                &["onaftervalidateevent"],
+            ),
+            (
+                "modifyall",
+                "R: Record T;",
+                "R.ModifyAll(A, '')",
+                &["onaftermodifyevent", "onbeforemodifyevent"],
+            ),
+            ("quiet", "Q: Record Quiet;", "Q.Modify(true)", &[]),
+            ("get", "R: Record T;", "R.Get('X')", &[]),
+        ];
+        let body: String = cases
+            .iter()
+            .map(|(name, var, stmt, _)| {
+                format!("    procedure {name}()\n    var\n        {var}\n    begin\n        {stmt};\n    end;\n\n")
+            })
+            .collect();
+        std::fs::write(
+            root.join("src/C.Codeunit.al"),
+            format!("codeunit 50101 C\n{{\n{body}}}\n"),
+        )
+        .unwrap();
+        let inputs = crate::program::inputs::WorkspaceInputs::read(&root, &Default::default());
+        let (_ctx, report, _) =
+            crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
+        std::fs::remove_dir_all(&root).ok();
+        let routes_of = |caller: &str| -> Vec<String> {
+            let mut out: Vec<String> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.kind == EdgeKind::TableEvent && ce.edge.from.name_lc == caller)
+                .flat_map(|e| e.edge.routes.iter())
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(id) => {
+                        assert_eq!(id.object.kind, al_syntax::ir::ObjectKind::Table);
+                        id.name_lc.to_string()
+                    }
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            out.sort();
+            out
+        };
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(name, _, _, want)| {
+                let got = routes_of(name);
+                (got != *want).then(|| format!("{name}: {got:?} (want {want:?})"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "cases {wrong:?}");
+    }
 }

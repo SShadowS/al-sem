@@ -323,7 +323,9 @@ impl<'a> Builder<'a> {
             ("run", Kind::Trigger, _) => Boundary::TriggerOf { op: None },
             ("run", Kind::Event, _) => Boundary::EventDispatch,
             ("run" | "declaredRunnable", _, _) => Boundary::Run,
-            ("implicitTrigger", _, Key::Routine(r)) => Boundary::TriggerOf {
+            // F1: a record op raising its table's platform event belongs to
+            // that op, as its trigger does (`trigger_op` knows the events).
+            ("implicitTrigger" | "tableEvent", _, Key::Routine(r)) => Boundary::TriggerOf {
                 op: trigger_op(r.name_lc.as_str()),
             },
             ("eventFlow", _, _) => Boundary::EventDispatch,
@@ -397,7 +399,9 @@ impl<'a> Builder<'a> {
             let e = &ce.edge;
             let from = Key::Routine(e.from.clone());
             let line = match ce.obligation_id {
-                ObligationId::CallSite { .. } | ObligationId::Background { .. } => Some(Anchor {
+                ObligationId::CallSite { .. }
+                | ObligationId::Background { .. }
+                | ObligationId::TableEvent { .. } => Some(Anchor {
                     unit: self.sited.unit(&e.site.span.unit),
                     start_line: e.site.span.start.line,
                     start_col: e.site.span.start.col,
@@ -443,6 +447,7 @@ impl<'a> Builder<'a> {
                                 EdgeKind::ImplicitTrigger => (Kind::Trigger, "run"),
                                 EdgeKind::EventFlow => (Kind::Event, "run"),
                                 EdgeKind::BackgroundStart => (Kind::Run, "backgroundStart"),
+                                EdgeKind::TableEvent => (Kind::Event, "tableEvent"),
                             };
                             let to = Key::Object(self.run_object(&oid));
                             self.add(
@@ -486,7 +491,9 @@ impl<'a> Builder<'a> {
                     .unwrap_or(&[]),
                 // A background start's dynamic codeunits are its catalog
                 // call's open bound (`full::resolve_file_obligations`).
-                ObligationId::Publisher(_) | ObligationId::Background { .. } => &[],
+                ObligationId::Publisher(_)
+                | ObligationId::Background { .. }
+                | ObligationId::TableEvent { .. } => &[],
             };
             let via = if e.shape == DispatchShape::DynamicOpen {
                 "dynamic"
@@ -595,6 +602,18 @@ impl<'a> Builder<'a> {
                 Kind::Event,
                 conf,
                 "eventFlow",
+                line,
+                conditions,
+            ),
+            // F1 (spec 2026-11-06-db-event-subscribers): a record operation
+            // raises its table's platform event; the publisher's own
+            // `eventFlow` edges go on to the subscribers.
+            EdgeKind::TableEvent => self.add(
+                from.clone(),
+                Key::Routine(rid.clone()),
+                Kind::Event,
+                conf,
+                "tableEvent",
                 line,
                 conditions,
             ),
@@ -893,9 +912,9 @@ impl<'a> Builder<'a> {
         }
         for o in inp.missing_obligations {
             let caller = match o {
-                ObligationId::CallSite { caller, .. } | ObligationId::Background { caller, .. } => {
-                    caller
-                }
+                ObligationId::CallSite { caller, .. }
+                | ObligationId::Background { caller, .. }
+                | ObligationId::TableEvent { caller, .. } => caller,
                 ObligationId::Publisher(p) => p,
             };
             self.simple(
@@ -1045,12 +1064,18 @@ impl<'a> Builder<'a> {
         let mut incoming_any: HashSet<&RoutineNodeId> = HashSet::new();
         let mut incoming_event: HashSet<&RoutineNodeId> = HashSet::new();
         let mut outgoing_event: HashSet<&RoutineNodeId> = HashSet::new();
+        // A routine with an incoming edge from a non-hub node: a site that is
+        // shown, not only a hub's "anything of this kind may".
+        let mut incoming_shown: HashSet<&RoutineNodeId> = HashSet::new();
         let nodes = &self.sited.nodes;
         for ((from, to, kind), e) in &self.edges {
             if let Key::Routine(t) = &nodes[*to as usize] {
                 incoming_any.insert(t);
                 if *kind == Kind::Event {
                     incoming_event.insert(t);
+                }
+                if !matches!(nodes[*from as usize], Key::Hub(_)) {
+                    incoming_shown.insert(t);
                 }
             }
             if let Key::Routine(f) = &nodes[*from as usize]
@@ -1062,6 +1087,12 @@ impl<'a> Builder<'a> {
         let mut out: HashMap<RoutineNodeId, Vec<&'static str>> = HashMap::new();
         for r in self.inp.graph.routines.iter() {
             let mut flags: Vec<&'static str> = Vec::new();
+            // A synthetic platform TABLE publisher (rule (a) until F1, spec
+            // 2026-11-06-db-event-subscribers): each record operation on its
+            // table now raises it through a `tableEvent` edge, so it is flagged
+            // only when no shown site raises it; a hub edge (a record op on a
+            // table not known) still does not clear the flag. A page event
+            // fires exactly when its page runs (lifecycle), never flagged.
             match r.publisher_kind {
                 Some(PublisherKind::Platform)
                     if matches!(
@@ -1069,7 +1100,9 @@ impl<'a> Builder<'a> {
                         ObjectKind::Table | ObjectKind::TableExtension
                     ) =>
                 {
-                    flags.push("unraisedPublisher");
+                    if !incoming_shown.contains(&r.id) {
+                        flags.push("unraisedPublisher");
+                    }
                 }
                 Some(PublisherKind::Platform) | None => {}
                 Some(_) => {
@@ -2162,7 +2195,33 @@ pub(crate) mod tests {
                 ..Default::default()
             },
         );
+        // F1: a record op that raises the table's modify event (a `TableEvent`
+        // edge, as the resolver emits it) clears that publisher's flag.
+        // DISCRIMINATION (2026-11-06): flagging every table publisher (the old
+        // rule (a)) fails "a record op raising it clears the flag"; letting any
+        // incoming edge clear it (`incoming_any`) fails "a hub edge into it must
+        // not clear the flag".
+        let tmodify = w.rtn_with(&table, "OnAfterModifyEvent", |r| {
+            r.publisher_kind = Some(PublisherKind::Platform)
+        });
+        let s3 = w.rtn(&cu, "S3");
+        w.event(&tmodify, &[&s3]);
+        w.edge(
+            &caller,
+            EdgeKind::TableEvent,
+            DispatchShape::Multicast,
+            vec![src(&tmodify)],
+            2,
+        );
         let o = w.project(a);
+        assert_eq!(
+            o.edge("Cu.Caller", "Tab.OnAfterModifyEvent"),
+            ("Event", "Resolved", "tableEvent")
+        );
+        assert!(
+            o.node("Tab.OnAfterModifyEvent").hidden_callers.is_empty(),
+            "a record op raising it clears the flag"
+        );
         assert_eq!(
             o.edge("h:record:insert", "Tab.OnAfterInsertEvent"),
             ("Trigger", "Open", "hubExpansion")

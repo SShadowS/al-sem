@@ -198,7 +198,7 @@ impl<'a> WalkPolicy for D48Policy<'a> {
         edges
             .iter()
             .filter(|e| {
-                if e.kind == "event-dispatch" {
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind) {
                     return false;
                 }
                 routine_touches_external_io(self.cone_derived, &e.to)

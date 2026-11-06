@@ -125,7 +125,7 @@ pub fn derive_dispatch_sequencing_from_edge(
     hop_kind: &str,
     ledger_status: Option<&str>,
 ) -> &'static str {
-    if hop_kind == "event-dispatch" || hop_kind == "implicit-trigger" {
+    if hop_kind == "event-dispatch" || hop_kind == "implicit-trigger" || hop_kind == "table-event" {
         return "unordered-broadcast";
     }
     if hop_kind == "interface-dispatch" {
@@ -246,7 +246,7 @@ pub fn reconstruct_call_chains(
                 // the trigger's frame) is compared with the root's.
                 let (callsite_id, callsite_order) = if let Some(cs) = hop.callsite_id.as_deref() {
                     (cs, callsite_by_id.get(cs).and_then(|c| c.order))
-                } else if hop.kind == "implicit-trigger"
+                } else if (hop.kind == "implicit-trigger" || hop.kind == "table-event")
                     && let Some(op) = hop.operation_id.as_deref()
                 {
                     (op, operation_by_id.get(op).and_then(|o| o.order))
@@ -272,8 +272,13 @@ pub fn reconstruct_call_chains(
                 let mut dispatch_sequencing =
                     derive_dispatch_sequencing_from_edge(hop.kind, ledger_status);
 
-                // Rule 5 §3: look-ahead — next hop event-dispatch.
-                let mut broadcast_event_id: Option<String> = None;
+                // Rule 5 §3: look-ahead — next hop event-dispatch. A table-event
+                // hop (F1) is its own event broadcast.
+                let mut broadcast_event_id: Option<String> = if hop.kind == "table-event" {
+                    hop.event_id.clone()
+                } else {
+                    None
+                };
                 if let Some(next_hop) = hops.get(hop_idx + 1)
                     && next_hop.kind == "event-dispatch"
                 {
@@ -385,6 +390,7 @@ fn map_edge_kind_to_hop_kind(edge_kind: &str) -> &'static str {
         "object-run-resolved" | "object-run-unresolved" => "object-run",
         "event-dispatch" => "event-dispatch",
         "implicit-trigger" => "implicit-trigger",
+        "table-event" => "table-event",
         "dependency-export" => "dependency-export",
         _ => "unknown",
     }

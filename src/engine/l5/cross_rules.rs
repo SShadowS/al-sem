@@ -359,6 +359,15 @@ impl CrossRulesIndex {
         // Edges grouped by (row, site).
         let mut groups: BTreeMap<(usize, &str), Vec<&CallEdge>> = BTreeMap::new();
         for e in &model.calls.edges {
+            // A table event's subscriber (F1) is dispatched, not called, as an
+            // integration event's is (the model's calls hold no publisher ->
+            // subscriber edge): neither a caller of it nor a rule step.
+            // DISCRIMINATION (2026-11-06): without this skip,
+            // `cli_tests_selection::explain_callers_equal_the_cones_direct_callers`
+            // fails (explain counts the raiser of `OnAfterInsertLedger`).
+            if e.dispatch_kind == DispatchKind::TableEvent {
+                continue;
+            }
             groups
                 .entry((e.from_ix.get(), e.callsite_id.as_str()))
                 .or_default()
