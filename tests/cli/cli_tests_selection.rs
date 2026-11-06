@@ -468,8 +468,16 @@ fn named_test_apps_and_unresolved_routines() {
 /// the sited graph does). The sibling test app is auto-discovered beside the
 /// pinned baseline (`DO-cdo-baseline/Test`). Also RunReportID's 68 local
 /// tests in 7 codeunits and IssueReminder's 0 local with a nearest test
-/// through dependency code; `selectionComplete` false with its reasons.
-/// And (milestone C item 4, C-12 on CDO) RunReportID's human answer prints
+/// through dependency code; `selectionComplete` false with its one reason,
+/// `unresolved-test-calls`. `hidden-callers` was a reason too until the
+/// integration of F1 with the `declaredRunnable` narrowing: F1 alone left two
+/// unraised platform publishers in these cones (`Table 1900` "Cancelled
+/// Document" `OnAfterModifyEvent`/`OnAfterRenameEvent`, whose Base App
+/// subscribers no loaded record operation raises), and with the narrowing
+/// their subscribers no longer reach RunReportID or IssueReminder (measured
+/// on a master + reach + F1 probe build: no hidden node, the same as the
+/// full integration). The C-6 fixture test still pins the `hidden-callers`
+/// reason. And (milestone C item 4, C-12 on CDO) RunReportID's human answer prints
 /// the dependency-tier sameness line exactly: its 377 through-dependency
 /// tests reach it via dependency nodes that may execute most of the program.
 /// History (all 2026-11-06, measured on the release-fast build of each):
@@ -548,8 +556,7 @@ pub(crate) fn cdo_selection_ratchets() {
         .iter()
         .map(|f| f["reason"].as_str().unwrap())
         .collect();
-    assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
-    assert!(reasons.contains(&"unresolved-test-calls"), "{reasons:?}");
+    assert_eq!(reasons, ["unresolved-test-calls"], "{reasons:?}");
 }
 
 /// C-8 (agent-tasks §4.8): `alsem graph` on a test app naming the production
