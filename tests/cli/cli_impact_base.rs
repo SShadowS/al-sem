@@ -64,19 +64,10 @@ impl Repo {
     }
 }
 
+/// `git <args>` in the test's own repository (`tests/common/git.rs`: never a
+/// hook's `GIT_DIR`, never the machine's config).
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.email=t@t", "-c", "user.name=t"])
-        .args(args)
-        .output()
-        .expect("git");
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    crate::git::run(dir, args);
 }
 
 /// A repository whose top is `ws/`, holding `app.json`, the tables and

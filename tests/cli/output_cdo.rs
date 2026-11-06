@@ -733,12 +733,7 @@ use crate::output_invariants_w3::{
 /// dependency closure)`, the stamps every CDO golden carries (CLAUDE.md).
 fn cdo_stamp(ws: &std::path::Path) -> Value {
     let git = |args: &[&str]| -> Option<String> {
-        let o = std::process::Command::new("git")
-            .arg("-C")
-            .arg(ws)
-            .args(args)
-            .output()
-            .ok()?;
+        let o = crate::git::reader(ws).args(args).output().ok()?;
         o.status
             .success()
             .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())

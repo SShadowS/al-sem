@@ -2,22 +2,15 @@
 //! commit, branch and working-tree layer is made by the test.
 
 use std::path::Path;
-use std::process::Command;
 
 use super::*;
 
+/// `git <args>` in the test's own repository: never a hook's `GIT_DIR`, never
+/// the machine's config ([`crate::git_env::scratch_git_command`]).
 fn sh(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::git_env::scratch_git_command()
         .arg("-C")
         .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
         .args(args)
         .output()
         .expect("git runs");

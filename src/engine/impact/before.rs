@@ -65,7 +65,7 @@ fn rel_below_root(workspace: &Path, diff_root: Option<&str>) -> Result<String, S
                 .map_err(|_| "the workspace is not inside --diff-root".to_string())
         }
         None => {
-            let out = std::process::Command::new("git")
+            let out = crate::git_env::git_command()
                 .arg("-C")
                 .arg(workspace)
                 .args(["rev-parse", "--show-prefix"])
@@ -122,7 +122,7 @@ fn folder_hash(dir: &Path) -> String {
 /// key holds their content.
 fn base_source_deps(workspace: &Path, commit: &str) -> Vec<(String, String)> {
     // `git show <commit>:<path>` names the path from the top level.
-    let top_rel = std::process::Command::new("git")
+    let top_rel = crate::git_env::git_command()
         .arg("-C")
         .arg(workspace)
         .args(["rev-parse", "--show-prefix"])
@@ -135,7 +135,7 @@ fn base_source_deps(workspace: &Path, commit: &str) -> Vec<(String, String)> {
         top_rel,
         crate::program::source_deps::CONFIG_FILE
     );
-    let Ok(out) = std::process::Command::new("git")
+    let Ok(out) = crate::git_env::git_command()
         .arg("-C")
         .arg(workspace)
         .args(["show", &spec])

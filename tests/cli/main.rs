@@ -27,6 +27,9 @@ mod dep_dispatch_fixture;
 #[path = "../common/unreadable.rs"]
 mod unreadable;
 
+#[path = "../common/git.rs"]
+mod git;
+
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this for the entire set-var → run → remove-var span of any test that
@@ -130,6 +133,7 @@ mod cli_explain_differential;
 mod cli_fingerprint_inventory_format;
 mod cli_fingerprint_routine_cross_app;
 mod cli_full_snapshot_split;
+mod cli_git_env_isolation;
 mod cli_graph_export;
 mod cli_ids_and_line_bases;
 mod cli_impact;

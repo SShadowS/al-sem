@@ -188,6 +188,12 @@ targets=(
 # discover the next one. A golden gate must report every stale family in one pass.
 # ⟨task-3 fix wave, review I-3(2)⟩
 unset CDO_WS ENFORCE_CDO_WS
+# ⟨2026-11-05⟩ The tests must never see a git hook's repository variables
+# (`GIT_DIR`, `GIT_INDEX_FILE`, ...): with them, a test's `git -C <tmp> commit`
+# writes into the committer's repository. The pre-commit hook drops them too;
+# this covers any other caller. This script runs no git of its own.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars 2>/dev/null)
 
 # nextest (profile `goldens`: never fail fast, for the reason above). Measured
 # 2026-10-18, warm tree, 876 tests on both runners: 27-31 s against 64-80 s for

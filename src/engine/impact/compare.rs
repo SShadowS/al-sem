@@ -18,7 +18,6 @@
 //! directory and reads only; nothing in the repository is changed.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Value, json};
 
@@ -111,7 +110,7 @@ pub fn diff_hash(text: &str) -> String {
 /// `git <args>` in `dir`: its stdout (trimmed of the final newline), or why
 /// it failed.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::git_env::git_command()
         .arg("-C")
         .arg(dir)
         .args(args)

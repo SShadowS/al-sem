@@ -30,6 +30,11 @@ fi
 
 export CDO_WS="$ws"
 export ENFORCE_CDO_WS=1
+# ⟨2026-11-05⟩ The tests must never see a git hook's repository variables
+# (`GIT_DIR`, `GIT_INDEX_FILE`, ...): with them, a test's `git -C <tmp> commit`
+# writes into the committer's repository. This script runs no git of its own.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars 2>/dev/null)
 
 echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1"
 

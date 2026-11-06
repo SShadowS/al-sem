@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (a commit's hook no longer lets tests write into the committer's repository)
+
+Git hands its hooks `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_PREFIX` (from a worktree,
+`GIT_DIR` is absolute), and they beat `git -C <dir>`. The pre-commit hook ran
+`check-goldens` with them set, so the impact tests' scratch repositories
+(`git -C <tmp> init/add/commit`) became the committer's own: a commit from a worktree
+recorded the tests' "fixture"/"base" commits on the branch, replaced its index and set
+`core.bare=true` in the shared `.git/config`, which broke the main checkout. Fixed on
+both sides:
+
+- `scripts/git-hooks/pre-commit` runs everything it starts (`ci-steps fmt`,
+  `check-goldens`) with every variable `git rev-parse --local-env-vars` names removed;
+  its own `git` calls keep them. It blocks the commit if it cannot list them.
+  `scripts/check-goldens`, `scripts/ci-steps` and `scripts/cdo-gate` drop the same
+  variables themselves, for any other caller.
+- Every `git` the crate and its tests spawn goes through the new `al_sem::git_env`:
+  `git_command()` (the variables removed; used by `alsem impact`'s base and comparison
+  code and the golden stamps' `workspace_git_info`) and `scratch_git_command()` (also no
+  system or user config, the hook's `GIT_AUTHOR_*` dropped and a fixed identity given
+  with `-c`, for a repository the test made). The integration tests reach them through
+  `tests/common/git.rs` (`cli_impact`, `cli_impact_base`, `output_cdo`), the lib tests
+  directly (`impact::compare_tests`).
+- `tests/cli/cli_git_env_isolation.rs` re-runs the test binary with the three variables
+  pointing at a sentinel repository and checks its HEAD, commit count, index and config
+  are unchanged. With the variable removal deleted it fails (the sentinel's config gains
+  the child's write); `git_env`'s own test checks the list covers what the installed git
+  names.
+
 ### Added (callers through dependency code, v1: the configured-dispatch label)
 
 Design: `docs/superpowers/specs/2026-11-06-dependency-callers-design.md` (revision 2).

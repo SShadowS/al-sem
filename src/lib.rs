@@ -39,6 +39,9 @@ pub mod census_hook;
 pub mod config;
 pub mod dependencies;
 pub mod engine;
+/// The one way to spawn `git`: without the repository variables a git hook
+/// exports — see the module doc.
+pub mod git_env;
 /// Tree-sitter AL language bindings. Exposed from the library so additive
 /// binaries (e.g. the R0 `aldump`) can parse without duplicating the `extern`
 /// declaration. `main.rs` keeps its own `mod language;` for the LSP binary;
