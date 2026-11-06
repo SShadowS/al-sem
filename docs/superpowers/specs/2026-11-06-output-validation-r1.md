@@ -226,7 +226,7 @@ is regeneration, not rework.
 | V6 | **Counting units and per-tool items** | F53, F54, F59, F60, F62, F64–F67, F72, F73, F80, F82 | M | V0 |
 
 Order: V1 first (small, and two of its bugs feed V2 text). V0 is a one-page owner decision,
-signed off here before V2 starts: **V0 approved: (date, owner) — open.** V2 and V3 next, in
+signed off here before V2 starts: **V0 approved: 2026-11-06, owner, as written.** V2 and V3 next, in
 either order. V4 after V2 and V3; V6 after V0. V5 last: three schema majors with consumer
 notices, and nothing in it misleads.
 
@@ -1241,10 +1241,12 @@ decision follows its words.
 
 | Branch | Findings it handles (handled elsewhere) | Spec work that waits for it | Merged (date, commit) |
 |---|---|---|---|
-| `fix/field-writers-implicit` | c10, c01 (F71) | §4.2 F17 | open |
-| `fix/explain-callers-counts` | c06 ×2, c02 ×2 (F68, F69) | §5.1 F29 counts, §8.1 install/upgrade entries | open |
-| `fix/db-event-subscribers` | c11 (F58) | the F58 stopgap limit line is dropped only after this merges; if V2 lands first, V2 adds the limit `table-event subscribers are not followed` and removes it when the branch lands | open |
-| `fix/reach-and-test-selection` | c12 ×3, c20, c21, c25 (F11, F26, F70) | §3.2 F12 (the share is measured after it), §3.3 F13, §5.2 digest test status | open |
+| `fix/field-writers-implicit` | c10, c01 (F71) | §4.2 F17 | 2026-11-06, `57ad5025` (via `integrate/outval-r1-fixes`) |
+| `fix/explain-callers-counts` | c06 ×2, c02 ×2 (F68, F69) | §5.1 F29 counts, §8.1 install/upgrade entries | 2026-11-06, `41184f73` |
+| `fix/db-event-subscribers` | c11 (F58) | the F58 stopgap limit line is not needed: this branch landed before V2 | 2026-11-06, `57ad5025` (via `integrate/outval-r1-fixes`) |
+| `fix/reach-and-test-selection` | c12 ×3, c20, c21, c25 (F11, F26, F70) | §3.2 F12 (the share is measured after it), §3.3 F13, §5.2 digest test status | 2026-11-06, `57ad5025` (via `integrate/outval-r1-fixes`) |
+
+All four gates are closed. The V1 bugs (`fix/output-v1`) landed in the same integration merge.
 
 Each handled-elsewhere finding is verified in round 2 on the call that raised it, like every
 other finding.
