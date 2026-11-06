@@ -159,7 +159,12 @@ pub enum ToolCall {
 /// and it measures `structuredContent`, which holds the stdout escaped plus
 /// the envelope. 40 KiB leaves that room; the wire's own default (64 KiB)
 /// still serves the LSP front end.
-pub const MCP_DEFAULT_INLINE_BYTES: u64 = 40 * 1024;
+///
+/// TEMPORARY 48 KiB (owner decision 2026-11-06, output validation V3): the
+/// one routine display (every occurrence of an overloaded name prints its
+/// parameter types) grew RunReportID's CDO explain card to 45,058 bytes.
+/// This goes back to 40 KiB in V5 (spec 2026-11-06 §7.5/§7.7, path dedup).
+pub const MCP_DEFAULT_INLINE_BYTES: u64 = 48 * 1024;
 
 /// Claude Code's limit (measured 2026-11-04): a result whose serialized
 /// `structuredContent` is over 50,000 characters is filed, not shown. The
@@ -217,7 +222,7 @@ fn common_properties() -> Map<String, Value> {
     );
     m.insert(
         "maxInlineBytes".into(),
-        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 40960, at most 4194304); a larger one is written to a file in the server's output folder. Left unset, an answer over the client's 50,000 characters once escaped also goes to a file; set, the cap is exact."}),
+        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 49152, at most 4194304); a larger one is written to a file in the server's output folder. Left unset, an answer over the client's 50,000 characters once escaped also goes to a file; set, the cap is exact."}),
     );
     m
 }
@@ -1394,7 +1399,8 @@ mod tests {
             json!({"routine": "P", "question": "may-commit", "deterministic": true}),
         )
         .unwrap();
-        // MCP output plan 1c: human by default for an agent; 40 KiB inline,
+        // MCP output plan 1c: human by default for an agent; 48 KiB inline
+        // (temporary, 40 KiB again in V5),
         // and (T-W2-23) the client's character budget.
         assert_eq!(c.max_inline_bytes, Some(MCP_DEFAULT_INLINE_BYTES));
         assert_eq!(c.client_budget_chars, Some(MCP_CLIENT_BUDGET_CHARS));

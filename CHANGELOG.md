@@ -41,6 +41,9 @@ Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-valida
   `writes-table`, `payload.result.event` (`{name, kind, publishers}`; no publisher when
   only subscriptions name the event) for `publishes-event`; the question line reads
   `writes-table:CDO E-Mail Job (table 6175283, this app)`. Part of prove 2.6.0/2.7.0.
+- **The MCP default inline cap is 48 KiB for now** (owner decision 2026-11-06; was 40 KiB):
+  the one display grew RunReportID's CDO explain card to 45,058 bytes (IssueReminder
+  39,169). Temporary: V5's path dedup (spec §7.5/§7.7) brings it back to 40 KiB.
 - **Member selectors** (§2.1): every tool reads `Object."Field"::Trigger`,
   `Object.Field::Trigger` and `Object.action(Name)::OnAction` (a caption after the name is
   ignored), after the forms that resolved before, so no selector resolves differently. A

@@ -852,6 +852,11 @@ fn cdo_selectors_round_trip() {
 /// 2026-11-05, a 3,289-byte margin; IssueReminder 32,433, 8,527). A card
 /// that grows into the margin fails here: shorten the card, do not raise
 /// the cap without the owner.
+///
+/// The cap is TEMPORARILY 48 KiB (owner decision 2026-11-06): output
+/// validation V3's one routine display grew RunReportID's card to 45,058
+/// bytes (IssueReminder 39,169). It goes back to 40 KiB in V5 (spec
+/// 2026-11-06 §7.5/§7.7, path dedup).
 #[test]
 fn cdo_explain_cards_stay_inline_with_a_margin() {
     let Some(a) = cdo_answers() else { return };
