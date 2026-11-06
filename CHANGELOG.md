@@ -27,12 +27,19 @@ validation round 1, calls c06 and c02):
   `CDOUnhandled`'s "Statements" were missing). The trigger set is the resolver's own
   (`run_triggers`), shared through `impact_graph::reverse::run_reaches_trigger`, the
   rule the sited graph's `object_run_reaches` already used. An action reached through
-  several triggers counts once.
+  several triggers counts once. On CDO, `SetReportSelectionUsage` now reads "callers: 13,
+  reached from 118 page actions" (was 2 and 38): the 80 new actions are the 9 above, 1
+  opening `CDO Customer Card`, and 70 Base App actions (role centers, Customer Card/List)
+  opening `Sales Order (List)` / `Sales Invoice (List)`, whose CDO page extensions'
+  `OnAfterGetCurrRecord` call it.
 - **Every routine of an Install or Upgrade codeunit was an entry.** Only the triggers the
   platform runs are now: `OnInstallAppPerCompany`/`PerDatabase`, and
   `OnCheckPreconditions…`, `OnUpgrade…`, `OnValidateUpgrade…` (per company and per
   database). A helper procedure is reached through the trigger that calls it (c02: a
-  `local procedure` was reported as an "upgrade-codeunit entry").
+  `local procedure` was reported as an "upgrade-codeunit entry"; its only call is
+  commented out, so it never runs. c02's witnesses go from 47 to 14, upgrade entries from
+  35 to 4, install from 3 to 1; the answer stays `unknown`). `analyze` on CDO, both
+  scopes, and `--program-call-graph-stats` are unchanged.
 - **`prove`'s unrecognized GuiAllowed guard printed the guarded call's line** with wording
   that names the condition (c02: `:1434`, the condition is at `:1433`). It prints the
   condition's own line now.
