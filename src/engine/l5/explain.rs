@@ -2020,7 +2020,10 @@ fn render(
         "result".into(),
         json!({"scope": header.scope_json(Map::new())}),
     );
-    let json_text = serialize_normalized_value(&sort_keys_keep_nulls(Value::Object(doc)));
+    // §9.8 (F78): every location says what it is.
+    let mut doc = Value::Object(doc);
+    crate::engine::result_header::tag_location_roles(&mut doc);
+    let json_text = serialize_normalized_value(&sort_keys_keep_nulls(doc));
 
     let mut human = header.human();
     if let Some(f) = &resolved.field {

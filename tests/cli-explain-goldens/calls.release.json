@@ -24,6 +24,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 55,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -44,6 +45,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 55,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -88,6 +90,7 @@
             "column": 8,
             "file": "ws:src/post.al",
             "line": 55,
+            "role": "operation",
             "sourceKind": "source"
           },
           "kind": "table-trigger-rules-skipped",
@@ -99,6 +102,7 @@
                 "column": 12,
                 "file": "ws:src/order.al",
                 "line": 25,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "comment": null,
@@ -125,6 +129,7 @@
                     "column": 11,
                     "file": "ws:src/order.al",
                     "line": 24,
+                    "role": "operation",
                     "sourceKind": "source"
                   },
                   "kind": "Other",
@@ -160,6 +165,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 52,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Calls Post\"::Release",
@@ -179,6 +185,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 6,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -229,6 +236,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 8,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -286,6 +294,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -327,6 +336,7 @@
                   "column": 11,
                   "file": "ws:src/checks.al",
                   "line": 14,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -340,6 +350,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 32,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [],
@@ -390,6 +401,7 @@
               "column": 12,
               "file": "ws:src/post.al",
               "line": 63,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -439,6 +451,7 @@
               "column": 16,
               "file": "ws:src/post.al",
               "line": 103,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -482,6 +495,7 @@
                   "column": 15,
                   "file": "ws:src/post.al",
                   "line": 102,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -495,6 +509,7 @@
               "column": 12,
               "file": "ws:src/post.al",
               "line": 112,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [

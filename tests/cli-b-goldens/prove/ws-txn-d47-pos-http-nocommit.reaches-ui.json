@@ -41,6 +41,7 @@
         "column": 4,
         "file": "ws:src/Sender.Codeunit.al",
         "line": 8,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "SendAfterModify",

@@ -39,6 +39,7 @@
             "excerpt": "OnAfterPostSalesDoc",
             "file": "ws:src/posting.al",
             "line": 13,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "05706f358086dae9",
@@ -63,6 +64,7 @@
                   "column": 8,
                   "file": "ws:src/posting.al",
                   "line": 13,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "calleeDisplay": "OnAfterPostSalesDoc",
@@ -108,6 +110,7 @@
         "column": 4,
         "file": "ws:src/posting.al",
         "line": 3,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "PostSalesDoc",

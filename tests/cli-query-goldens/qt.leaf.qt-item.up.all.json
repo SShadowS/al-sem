@@ -15,7 +15,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 67
+          "line": 67,
+          "role": "definition"
         },
         "display": "Leaf",
         "objectDisplay": "Codeunit QT Touches",
@@ -65,13 +66,15 @@
               "anchor": {
                 "column": 8,
                 "file": "ws:src/QTTouches.al",
-                "line": 33
+                "line": 33,
+                "role": "operation"
               },
               "routine": {
                 "anchor": {
                   "column": 4,
                   "file": "ws:src/QTTouches.al",
-                  "line": 31
+                  "line": 31,
+                  "role": "definition"
                 },
                 "display": "WriteItem",
                 "objectDisplay": "Codeunit QT Touches",
@@ -89,7 +92,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 74
+              "line": 74,
+              "role": "definition"
             },
             "display": "Top1",
             "objectDisplay": "Codeunit QT Touches",
@@ -117,13 +121,15 @@
               "anchor": {
                 "column": 8,
                 "file": "ws:src/QTTouches.al",
-                "line": 86
+                "line": 86,
+                "role": "operation"
               },
               "routine": {
                 "anchor": {
                   "column": 4,
                   "file": "ws:src/QTTouches.al",
-                  "line": 80
+                  "line": 80,
+                  "role": "definition"
                 },
                 "display": "Top2",
                 "objectDisplay": "Codeunit QT Touches",
@@ -141,7 +147,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 80
+              "line": 80,
+              "role": "definition"
             },
             "display": "Top2",
             "objectDisplay": "Codeunit QT Touches",
@@ -169,13 +176,15 @@
               "anchor": {
                 "column": 8,
                 "file": "ws:src/QTTouches.al",
-                "line": 86
+                "line": 86,
+                "role": "operation"
               },
               "routine": {
                 "anchor": {
                   "column": 4,
                   "file": "ws:src/QTTouches.al",
-                  "line": 80
+                  "line": 80,
+                  "role": "definition"
                 },
                 "display": "Top2",
                 "objectDisplay": "Codeunit QT Touches",
@@ -193,7 +202,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -216,7 +226,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 89
+              "line": 89,
+              "role": "definition"
             },
             "display": "Top3",
             "objectDisplay": "Codeunit QT Touches",
@@ -245,13 +256,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 33,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 31,
+                "role": "definition"
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -265,7 +278,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 74
+              "line": 74,
+              "role": "definition"
             },
             "display": "Top1",
             "objectDisplay": "Codeunit QT Touches",
@@ -286,13 +300,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 86
+              "line": 86,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 80
+                "line": 80,
+                "role": "definition"
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
@@ -306,7 +322,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 80
+              "line": 80,
+              "role": "definition"
             },
             "display": "Top2",
             "objectDisplay": "Codeunit QT Touches",
@@ -327,13 +344,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 85
+              "line": 85,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 80
+                "line": 80,
+                "role": "definition"
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
@@ -347,7 +366,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 80
+              "line": 80,
+              "role": "definition"
             },
             "display": "Top2",
             "objectDisplay": "Codeunit QT Touches",
@@ -368,13 +388,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 86
+              "line": 86,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 80
+                "line": 80,
+                "role": "definition"
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
@@ -388,7 +410,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -409,13 +432,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 41
+              "line": 41,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 36,
+                "role": "definition"
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -429,7 +454,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -450,13 +476,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 62
+              "line": 62,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 58
+                "line": 58,
+                "role": "definition"
               },
               "display": "Mixed",
               "objectDisplay": "Codeunit QT Touches",
@@ -470,7 +498,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -491,13 +520,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 40
+              "line": 40,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 36,
+                "role": "definition"
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -511,7 +542,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -532,13 +564,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 33,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 31,
+                "role": "definition"
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -552,7 +586,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -573,13 +608,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 33,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 31,
+                "role": "definition"
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -593,7 +630,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
@@ -614,13 +652,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 85
+              "line": 85,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 80
+                "line": 80,
+                "role": "definition"
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
@@ -634,7 +674,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/QTTouches.al",
-              "line": 94
+              "line": 94,
+              "role": "definition"
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",

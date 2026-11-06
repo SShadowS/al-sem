@@ -121,8 +121,12 @@ fn graph_inventory_and_prove_share_ids_and_declare_line_bases() {
             doc["payload"]["routine"]["stableId"],
             row["stableRoutineId"]
         );
+        // Prove's anchor says it is a definition (output validation F78).
+        let mut anchor = doc["payload"]["routine"]["anchor"].clone();
+        assert_eq!(anchor["role"], "definition");
+        anchor.as_object_mut().unwrap().remove("role");
         assert_eq!(
-            doc["payload"]["routine"]["anchor"], row["sourceAnchor"],
+            anchor, row["sourceAnchor"],
             "the inventory anchor is prove's"
         );
     }

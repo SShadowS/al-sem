@@ -35,13 +35,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 33
+              "line": 33,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 31
+                "line": 31,
+                "role": "definition"
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
@@ -63,7 +65,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 44
+          "line": 44,
+          "role": "definition"
         },
         "display": "CallWithTemp",
         "objectDisplay": "Codeunit QT Touches",

@@ -44,6 +44,7 @@
         "column": 4,
         "file": "ws:src/Codeunit.al",
         "line": 19,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "OnBeforePrintSafe",

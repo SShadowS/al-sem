@@ -24,6 +24,7 @@
             "excerpt": "enters Codeunit Base Poster::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 15,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "dbb35aab093e98c0",
@@ -136,6 +137,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 3,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "IssueDoc",

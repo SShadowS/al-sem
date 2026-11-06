@@ -32,7 +32,9 @@ its own scope, and an MCP answer names MCP calls instead of CLI flags:
   …`, `extension points: none`, `events: 0 … 0 more`, a repeated `commits: no …`,
   `callers: none`) are not printed; the dependencies are `dependencies: N apps` in the
   scope clause; telemetry is a count in the summary; touches field mode drops `note:`
-  lines that repeat `searched:`. A card's title says `defined at` (F78).
+  lines that repeat `searched:`. A card's title says `defined at`, and every location
+  object of the prove, explain and query documents carries `role: definition | callSite |
+  operation` (F78).
 - **MCP-shaped follow-ups** (F34, F35, F37): the MCP and LSP front ends append a hidden
   `--surface=mcp`; with it every fold note names the input (`detail: true`, `all: true`,
   `tier: "dependency"`) and every follow-up is a complete call (`alsem_prove {"routine":

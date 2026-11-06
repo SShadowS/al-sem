@@ -2129,10 +2129,25 @@ fn explain_digest_and_prove_give_one_table_answer() {
         assert_eq!(code, 0, "{args:?}: {err}");
         serde_json::from_str(&out).unwrap()
     };
+    // The location `role` (output validation F78) is a label of the
+    // document it is printed in (prove and explain carry it, digest not);
+    // the answer is the rest.
+    fn without_roles(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                m.remove("role");
+                m.values_mut().for_each(without_roles);
+            }
+            Value::Array(a) => a.iter_mut().for_each(without_roles),
+            _ => {}
+        }
+    }
     let key = |v: &Value| {
+        let mut blocked = v.get("blockedBy").cloned().unwrap_or(serde_json::json!([]));
+        without_roles(&mut blocked);
         (
             v["answer"].clone(),
-            v.get("blockedBy").cloned().unwrap_or(serde_json::json!([])),
+            blocked,
             v.get("assumptions").cloned().unwrap_or(Value::Null),
         )
     };

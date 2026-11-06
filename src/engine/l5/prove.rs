@@ -1848,7 +1848,10 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     };
     env.insert("schemaVersion".into(), version.into());
 
-    serialize_document_value(serde_json::Value::Object(env))
+    // §9.8 (F78): every location says what it is.
+    let mut env = serde_json::Value::Object(env);
+    crate::engine::result_header::tag_location_roles(&mut env);
+    serialize_document_value(env)
 }
 
 // ---------------------------------------------------------------------------
@@ -3748,7 +3751,9 @@ fn callers_document(
     env.insert("kind".into(), "prove".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
     env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
-    let json_text = serialize_document_value(serde_json::Value::Object(env));
+    let mut env = serde_json::Value::Object(env);
+    crate::engine::result_header::tag_location_roles(&mut env);
+    let json_text = serialize_document_value(env);
     let routine = header.qualified.clone();
     let summary = serde_json::json!({
         "kind": "prove",

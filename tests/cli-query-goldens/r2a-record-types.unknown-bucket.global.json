@@ -42,7 +42,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 10
+            "line": 10,
+            "role": "definition"
           },
           "display": "DeclaredVars",
           "objectDisplay": "Codeunit R2a Records",

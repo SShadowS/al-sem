@@ -23,6 +23,7 @@
             "excerpt": "Cust.Modify",
             "file": "ws:src/D1MultiCaller.al",
             "line": 19,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "9dc07ba4a609e78a",
@@ -38,6 +39,7 @@
                   "column": 12,
                   "file": "ws:src/D1MultiCaller.al",
                   "line": 27,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "calleeDisplay": "ModifyHelper",
@@ -90,6 +92,7 @@
         "column": 4,
         "file": "ws:src/D1MultiCaller.al",
         "line": 22,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "CallerA",

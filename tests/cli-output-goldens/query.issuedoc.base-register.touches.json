@@ -71,7 +71,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 3
+          "line": 3,
+          "role": "definition"
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
@@ -115,7 +116,8 @@
             "anchor": {
               "column": 16,
               "file": "ws:src/Pages.al",
-              "line": 22
+              "line": 22,
+              "role": "definition"
             },
             "display": "OnAction",
             "member": {

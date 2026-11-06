@@ -24,6 +24,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 49,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -36,6 +37,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 70,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -58,6 +60,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 49,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -86,6 +89,7 @@
             "column": 8,
             "file": "ws:src/post.al",
             "line": 49,
+            "role": "operation",
             "sourceKind": "source"
           },
           "kind": "table-trigger-rules-skipped",
@@ -97,6 +101,7 @@
                 "column": 12,
                 "file": "ws:src/order.al",
                 "line": 25,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "comment": null,
@@ -123,6 +128,7 @@
                     "column": 11,
                     "file": "ws:src/order.al",
                     "line": 24,
+                    "role": "operation",
                     "sourceKind": "source"
                   },
                   "kind": "Other",
@@ -158,6 +164,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 44,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Calls Post\"::RecursivePost",
@@ -178,6 +185,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 70,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,

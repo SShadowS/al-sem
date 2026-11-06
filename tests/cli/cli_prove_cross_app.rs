@@ -704,7 +704,8 @@ fn single_app_flag_reaches_prove() {
         // not establish, and `analysis partial` replaces `coverage:`), then
         // output validation V4 (schema 2.10.0: `result.scope` and
         // `result.followUps`, additive; the human answer's four header lines,
-        // the top callees not resolved as their own line).
+        // the top callees not resolved as their own line; the routine
+        // anchor's `role: definition`, F78).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

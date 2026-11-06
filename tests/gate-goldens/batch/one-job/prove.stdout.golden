@@ -41,6 +41,7 @@
         "column": 4,
         "file": "ws:src/D1MultiCaller.al",
         "line": 22,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "CallerA",
