@@ -1615,13 +1615,20 @@ pub(crate) fn query_write_tables(
 }
 
 /// A human output's `writes beyond dependency entry points` block: its
-/// header line and every deeper-indented line after it.
-pub(crate) fn beyond_block(human: &str) -> Vec<&str> {
-    let mut lines = human
+/// header line and every deeper-indented line after it, with its paths in
+/// full (output validation §7.5: each output segments its own region, so
+/// two outputs may name a shared run differently; the hops are the same).
+pub(crate) fn beyond_block(human: &str) -> Vec<String> {
+    let full = al_sem::engine::path_segments::expand(human);
+    let mut lines = full
         .lines()
         .skip_while(|l| !l.starts_with("  writes beyond dependency calls"));
-    let mut out: Vec<&str> = lines.next().into_iter().collect();
-    out.extend(lines.take_while(|l| l.starts_with("    ")));
+    let mut out: Vec<String> = lines.next().into_iter().map(str::to_string).collect();
+    out.extend(
+        lines
+            .take_while(|l| l.starts_with("    "))
+            .map(str::to_string),
+    );
     out
 }
 

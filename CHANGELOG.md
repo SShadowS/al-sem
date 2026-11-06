@@ -35,7 +35,8 @@ reader needs is dropped.
   touch class print once (`shared first touch (952 of 952 callers): …`); then every caller
   once, grouped by object (nearest object first), each with its definition line and hop
   distance, and its own first touch or class only when it differs. The through-dependency
-  line says how its populations relate (`the three populations are disjoint`). The
+  line says how its populations relate (`the three are disjoint`: the transitive callers,
+  the via-dependency callers and the via-configuration candidates). The
   `callers` input and the tool description say exactly that.
 - **explain caller rules** (§7.7, F47): more than three callers without the equivalent check
   print as counts by object kind (`no equivalent check recognized in 41 analyzed callers:

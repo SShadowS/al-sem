@@ -3599,7 +3599,7 @@ fn render_through_dependency(
         line.push_str(if configured.is_empty() {
             "; disjoint from the transitive callers"
         } else {
-            "; the three populations are disjoint"
+            "; the three are disjoint"
         });
         if !list_callers && !all {
             line.push_str(&format!(" — {} lists them", Input::Callers.on(cx.surface)));
