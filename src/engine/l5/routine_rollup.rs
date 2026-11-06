@@ -103,6 +103,42 @@ pub fn fold_len(len: usize, cap: usize, all: bool) -> usize {
     }
 }
 
+/// One overload as the short-handle rule reads it: its parameter types, in
+/// order, and its declaration's place (unit, line, column) for source order.
+pub struct OverloadShape<'a> {
+    pub types: Vec<&'a str>,
+    pub order: (&'a str, u32, u32),
+}
+
+/// The short handle of overload `me` among its same-app, same-name `others`
+/// ([`RollupCx::handle`]'s rule, shared with the test-selection paths): `/n`
+/// (its arity) when no other has its arity; `/n[position: type]` naming the
+/// parameter types it differs in from the same-arity ones; `/n#k` (k in source
+/// order) when it differs in none. The flag says the handle is numbered
+/// (`#k`), which only a legend tells apart.
+#[must_use]
+pub fn overload_short(me: &OverloadShape<'_>, others: &[OverloadShape<'_>]) -> (String, bool) {
+    let n = me.types.len();
+    let siblings: Vec<&OverloadShape<'_>> = others.iter().filter(|o| o.types.len() == n).collect();
+    // A same-arity overload names the parameter types it differs in
+    // (`/7[1: Record "X"]`); one that differs in none (two field triggers) is
+    // numbered in source order (`/0#2`).
+    let differing: Vec<String> = (0..n)
+        .filter(|&p| siblings.iter().any(|o| o.types[p] != me.types[p]))
+        .map(|p| format!("{}: {}", p + 1, me.types[p]))
+        .collect();
+    let numbered = !siblings.is_empty() && differing.is_empty();
+    let short = if siblings.is_empty() {
+        format!("/{n}")
+    } else if !differing.is_empty() {
+        format!("/{n}[{}]", differing.join("; "))
+    } else {
+        let before = siblings.iter().filter(|o| o.order < me.order).count();
+        format!("/{n}#{}", before + 1)
+    };
+    (short, numbered)
+}
+
 /// The caps of §3.8 rule 4.
 pub mod caps {
     pub const TABLES: usize = 12;
@@ -308,38 +344,18 @@ impl<'m> RollupCx<'m> {
             .collect();
         let mut out = String::new();
         if !others.is_empty() {
-            let n = r.parameters.len();
-            // Same-arity overloads (two of a table's field triggers, say) are
-            // numbered in source order: `/0#2`; the legend says which is which.
-            let key = |o: &ModelRoutine| {
-                (
-                    o.source_anchor.source_unit_id.clone(),
-                    o.source_anchor.start_line,
-                    o.source_anchor.start_column,
-                )
-            };
-            let siblings: Vec<&&ModelRoutine> =
-                others.iter().filter(|o| o.parameters.len() == n).collect();
-            // A same-arity overload names the parameter types it differs in
-            // (`/7[1: Record "X"]`); one that differs in none (two field
-            // triggers) is numbered in source order (`/0#2`).
-            let differing: Vec<String> = (0..n)
-                .filter(|&p| {
-                    siblings
-                        .iter()
-                        .any(|o| o.parameters[p].type_text != r.parameters[p].type_text)
-                })
-                .map(|p| format!("{}: {}", p + 1, r.parameters[p].type_text))
-                .collect();
-            let numbered = !siblings.is_empty() && differing.is_empty();
-            let short = if siblings.is_empty() {
-                format!("/{n}")
-            } else if !differing.is_empty() {
-                format!("/{n}[{}]", differing.join("; "))
-            } else {
-                let before = siblings.iter().filter(|o| key(o) < key(r)).count();
-                format!("/{n}#{}", before + 1)
-            };
+            fn shape(o: &ModelRoutine) -> OverloadShape<'_> {
+                OverloadShape {
+                    types: o.parameters.iter().map(|p| p.type_text.as_str()).collect(),
+                    order: (
+                        o.source_anchor.source_unit_id.as_str(),
+                        o.source_anchor.start_line,
+                        o.source_anchor.start_column,
+                    ),
+                }
+            }
+            let other_shapes: Vec<OverloadShape<'_>> = others.iter().map(|o| shape(o)).collect();
+            let (short, numbered) = overload_short(&shape(r), &other_shapes);
             let full: Vec<String> = r
                 .parameters
                 .iter()

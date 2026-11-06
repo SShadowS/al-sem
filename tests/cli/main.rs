@@ -176,6 +176,7 @@ mod cli_prove_throws_error;
 mod cli_prove_transpiled_guard;
 mod cli_prove_unknown_write_anchor;
 mod cli_query_differential;
+mod cli_query_effects_buckets;
 mod cli_query_field;
 mod cli_receiver_temp_state;
 mod cli_record_integer_builtin_arg;

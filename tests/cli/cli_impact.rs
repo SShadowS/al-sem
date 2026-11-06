@@ -179,6 +179,108 @@ fn a_diff_is_accounted_first_then_each_routine() {
     golden("diff.json", &j, t.path());
 }
 
+/// Output validation F25: without a base, a routine's status says what the
+/// diff shows. The diff has c20's shape for `Audited`: it adds `Untested`'s
+/// `end;`, a blank line, `Audited`'s header and `begin`, and aligns
+/// `Audited`'s own `end;` with `Untested`'s old one as context. It also
+/// rewrites `Leaf`'s header line (a `-` and a `+` line). `Audited` is "new in
+/// this diff" (its header is added, none of its lines removed), `Leaf`
+/// "signature lines changed in the diff" (its header is added too, but a
+/// line is removed), and neither is called "signature changed" (that needs a
+/// base).
+///
+/// Discrimination (2026-11-06): `added_in_diff` always false (the status
+/// falls to the signature rule) fails at "Audited is new in this diff";
+/// dropping its `removed_near` check fails at the `Leaf` status (the `-`
+/// header line sits just before `Leaf`'s span and is counted as removed
+/// routine text, so only `removed_near` sees it); restored, passes.
+#[test]
+fn without_a_base_the_status_says_what_the_diff_shows() {
+    let t = universe();
+    let ws = t.path().join("App");
+    let diff = "diff --git a/App/src/Core.al b/App/src/Core.al
+--- a/App/src/Core.al
++++ b/App/src/Core.al
+@@ -28,1 +28,1 @@
+-    procedure Leaf(X: Integer)
++    procedure Leaf()
+@@ -32,4 +32,8 @@
+     procedure Untested()
+     begin
++    end;
++
++    procedure Audited()
++    begin
+     end;
+ }
+";
+    let v = json(&ws, &["--diff", "-", "--no-tests"], Some(diff));
+    let status = |name: &str| -> String {
+        v["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["display"] == format!("Codeunit TU Core::{name}"))
+            .unwrap_or_else(|| panic!("no root {name}: {v:#}"))["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        status("Audited"),
+        "addedInDiff",
+        "Audited is new in this diff"
+    );
+    assert_eq!(status("Leaf"), "signatureLinesChanged");
+    let (human, err, code) = impact(&ws, &["--diff", "-", "--no-tests"], Some(diff));
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        human.contains(
+            "Codeunit TU Core::Audited (ws:src/Core.al:36) — new in this diff (its header is an added line, none of its lines removed)"
+        ),
+        "{human}"
+    );
+    assert!(
+        human.contains("— signature lines changed in the diff"),
+        "{human}"
+    );
+    assert!(!human.contains("— signature changed"), "{human}");
+}
+
+/// Output validation F24: a diff that changes no routine (only the `Qty`
+/// field's line) gets a complete answer, "0 changed routines", and exits 0;
+/// a `--routine` selector that names nothing is no answer and exits 2.
+///
+/// Discrimination (2026-11-06): restoring `exit = if roots.is_empty() { 2 }`
+/// in `impact/render.rs` fails at "a complete nothing-changed answer exits
+/// 0"; `input_unresolved` given no diagnostic (every empty answer exits 0)
+/// fails at "an unresolved selector is no answer"; restored, passes.
+#[test]
+fn a_change_with_no_routine_is_a_complete_answer() {
+    let t = universe();
+    let ws = t.path().join("App");
+    let field_only = "diff --git a/App/src/Core.al b/App/src/Core.al
+--- a/App/src/Core.al
++++ b/App/src/Core.al
+@@ -8,3 +8,3 @@
+         field(2; Qty; Decimal)
+-        {   // quantity
++        {
+         }
+";
+    let (human, err, code) = impact(&ws, &["--diff", "-"], Some(field_only));
+    assert!(
+        human.contains("input: 0 changed routines resolved"),
+        "precondition: no routine changed: {human}{err}"
+    );
+    assert_eq!(
+        code, 0,
+        "a complete nothing-changed answer exits 0: {human}{err}"
+    );
+    let (human, err, code) = impact(&ws, &["--routine", "TU Core.NoSuchRoutine"], None);
+    assert_eq!(code, 2, "an unresolved selector is no answer: {human}{err}");
+}
+
 /// The main part streams a large effects read in batches
 /// (`AL_SEM_IMPACT_ROOT_BATCH=1`: one root per batch, so every one of
 /// `Core.al`'s six routines makes a batch, `digest.stream_batches`), and each

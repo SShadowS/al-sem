@@ -267,10 +267,15 @@ impl Job for MainJob<'_> {
                     .and_then(|a| a.routines.get(id).copied())
                     .unwrap_or_default();
                 let uncertain = span.is_some_and(|s| mismatched.contains(&s.source_unit_id));
+                // F25: what the diff shows, never more. "signatureChanged"
+                // and "added" need a base; the render sets them from the
+                // before/after pairing.
                 let status = if uncertain {
                     "positionUncertain"
+                } else if lines.added_in_diff() {
+                    "addedInDiff"
                 } else if lines.signature > 0 {
-                    "signatureChanged"
+                    "signatureLinesChanged"
                 } else {
                     "changed"
                 };

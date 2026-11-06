@@ -205,6 +205,54 @@ fn a_leaf_reached_through_production_code_is_reached() {
     assert_eq!(v["runFirst"][0]["hops"], 2);
 }
 
+/// Output validation F9 (agent-tasks §12.1): a test path that passes two
+/// overloads names each by its handle. The copy's `Post` calls `Send(1)`,
+/// `Send(N: Integer)` calls `Send()`, and `Send()` calls `Untested`, so
+/// `PostUpdatesQty`'s path to `Untested` passes `Send/1` then `Send/0`.
+///
+/// Discrimination (2026-11-06): `path_name` printing the bare `display`
+/// (no handle) fails at "the two overloads print apart"; restored, passes.
+#[test]
+fn a_test_path_names_overloads_apart() {
+    let t = universe_repo();
+    let core = t.path().join("App/src/Core.al");
+    let text = std::fs::read_to_string(&core).unwrap();
+    let post = "        Leaf();\n        Item.Modify();";
+    assert_eq!(text.matches(post).count(), 1, "precondition: Post's body");
+    let leaf = "    procedure Leaf()\n";
+    assert_eq!(text.matches(leaf).count(), 1, "precondition: Leaf");
+    let text = text
+        .replace(
+            post,
+            "        Leaf();\n        Send(1);\n        Item.Modify();",
+        )
+        .replace(
+            leaf,
+            "    procedure Send(N: Integer)\n    begin\n        Send();\n    end;\n\n    \
+             procedure Send()\n    begin\n        Untested();\n    end;\n\n    procedure Leaf()\n",
+        );
+    std::fs::write(&core, text).unwrap();
+    let ws = t.path().join("App");
+    let v = json(&ws, &["--routine", "TU Core::Untested"]);
+    let path: Vec<&str> = v["runFirst"][0]["path"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no path: {v:#}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        path.windows(2)
+            .any(|w| w == ["Codeunit TU Core::Send/1", "Codeunit TU Core::Send/0"]),
+        "the two overloads print apart: {path:?}"
+    );
+    let (human, code) = tests(&ws, &["--routine", "TU Core::Untested"]);
+    assert_eq!(code, 0, "{human}");
+    assert!(
+        human.contains("Codeunit TU Core::Send/1 → Codeunit TU Core::Send/0"),
+        "{human}"
+    );
+}
+
 /// C-6: a routine run only by a subscriber to a platform table event
 /// (`OnAfterModifyEvent`) has a selection-relevant hidden channel in its
 /// cone: no test reaches it, its status is `analysis-incomplete` (never

@@ -272,6 +272,10 @@ pub struct LocalName {
     pub file: Box<str>,
     /// The routine is a trigger (`OnRun`, `OnAction`, …).
     pub trigger: bool,
+    /// Its overload handle (`/1`, `/2[1: Integer]`, `/0#2`), empty when no
+    /// other routine of its object has its name
+    /// ([`crate::engine::l5::routine_rollup::overload_short`]).
+    pub handle: Box<str>,
 }
 
 impl SitedGraph {
@@ -787,6 +791,7 @@ impl SitedBuilder {
                                     .get_with_path(r)
                                     .map(|(_, p)| Box::from(p))
                                     .unwrap_or_default(),
+                                handle: Box::default(),
                             },
                         );
                     }
@@ -827,6 +832,70 @@ impl SitedBuilder {
                             });
                         }
                     }
+                }
+            }
+        }
+        // Output validation F9: each local overload's short handle, by the
+        // rule `RollupCx::handle` prints (`/n`, `/n[position: type]`,
+        // `/n#k`), so a test path never prints two overloads alike.
+        {
+            use crate::engine::l5::routine_rollup::{OverloadShape, overload_short};
+            type Group<'k> = (
+                &'k crate::program::node::ObjectNodeId,
+                &'k str,
+                Option<&'k str>,
+            );
+            let mut groups: HashMap<Group<'_>, Vec<u32>> = HashMap::new();
+            for (&i, l) in &local_names {
+                if let (false, Key::Routine(r)) = (l.routine.is_empty(), &self.nodes[i as usize]) {
+                    groups
+                        .entry((
+                            &r.object,
+                            r.name_lc.as_str(),
+                            r.enclosing_member_lc.as_deref(),
+                        ))
+                        .or_default()
+                        .push(i);
+                }
+            }
+            let mut handles: Vec<(u32, String)> = Vec::new();
+            for members in groups.values().filter(|m| m.len() > 1) {
+                let shapes: Vec<(u32, OverloadShape<'_>)> = members
+                    .iter()
+                    .filter_map(|&i| {
+                        let Key::Routine(r) = &self.nodes[i as usize] else {
+                            return None;
+                        };
+                        let (m, path) = inp.surface.get_with_path(r)?;
+                        Some((
+                            i,
+                            OverloadShape {
+                                types: m
+                                    .params
+                                    .iter()
+                                    .map(|p| p.ty.as_deref().unwrap_or(""))
+                                    .collect(),
+                                order: (path, m.origin.start.row, m.origin.start.column),
+                            },
+                        ))
+                    })
+                    .collect();
+                for (k, (i, me)) in shapes.iter().enumerate() {
+                    let others: Vec<OverloadShape<'_>> = shapes
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != k)
+                        .map(|(_, (_, o))| OverloadShape {
+                            types: o.types.clone(),
+                            order: o.order,
+                        })
+                        .collect();
+                    handles.push((*i, overload_short(me, &others).0));
+                }
+            }
+            for (i, h) in handles {
+                if let Some(l) = local_names.get_mut(&i) {
+                    l.handle = h.into();
                 }
             }
         }

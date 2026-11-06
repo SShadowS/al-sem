@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (output validation V1: wrong statements in tool outputs)
+
+Spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md` §1. Each fix has a test
+on a hand-stated fixture and a discrimination proof.
+
+- **`query effects` counted reads as writes (F15).** `bucket()` sent every row of a
+  caller-dependent temp state to "caller-dependent writes", and every row on a temporary
+  record to "temporary records", before it looked at the operation. A `Get` on the
+  caller's record was counted as a write (c11: `caller-dependent writes 2 on 1 table` for
+  one `Get` and one `Modify`). Both classes are now split by operation family the way the
+  physical class is: only a write is a caller-dependent or temporary-record write; a read
+  joins `reads` with a note (`Get 2; 1 caller-dependent, 1 on temporary records`), a lock
+  joins `locks`, and so on. JSON: those rows leave `summary.callerDependent`,
+  `summary.temporary` and `byTable`; query schema 3.6.0.
+- **`query effects` numbered one parameter two ways (F16).** The table rows said
+  `caller-dependent: parameter 3` (1-based) while the `--all` rows said
+  `temp parameter-dependent(2)` (the raw 0-based index). Both now print
+  `caller-dependent: parameter 3 (ToPurchaseHeader)`, 1-based with the parameter's name;
+  each JSON row adds `parameterPosition` (1-based) and `parameterName`, and `tempState`
+  keeps its 0-based form.
+- **`impact` exited 2 on a complete answer (F24).** A change that touched no routine
+  (c13: 25 object headers) got a full, complete accounting, "0 changed routines", and
+  exit code 2, which agents and the MCP envelope read as a failure. It now exits 0. Exit
+  2 stays for no answer: a `--routine` selector or `--file` that matched nothing or more
+  than one thing, a diff file naming two workspace files, or a diff that does not parse.
+- **`impact` without a base called an added routine "signature changed" (F25).** The
+  status came from "a changed line falls on the signature", so a routine the diff adds
+  (c20) read as a changed signature. Without a base the status now says only what the diff
+  shows: `new in this diff` (JSON `addedInDiff`) when the routine's header line is a `+`
+  line and no `-` line sits in or at the edges of its span, else `signature lines changed
+  in the diff` (`signatureLinesChanged`). The rule is not "every line is a `+` line": git
+  aligns a new routine's closing `end;` with the previous routine's old one as context, as
+  in c20. `added` and `signature changed` still come from a base comparison's pairing. The
+  accounting's per-routine row gains its added-line count and the two facts.
+- **`prove`'s callers' context answers printed dependency guids (F5).** Their human text
+  named a dependency location `dep:<guid>:path` (c02); the rule is `dep:<app name>:path`,
+  which the effects path already applied. The callers' context path now applies the same
+  `readable_locations`; the JSON keeps the guid.
+- **Test-selection paths printed two overloads alike (F9).** A path passing two
+  overloads read `Codeunit CDO E-Mail::Send → Codeunit CDO E-Mail::Send` (c28); agent-tasks
+  §12.1 requires each to carry its handle. The sited graph now keeps each local overload's
+  short handle (`/1`, `/2[1: Integer]`, `/0#2`), computed by the rule `RollupCx::handle`
+  uses (factored into `routine_rollup::overload_short`, which both call), and every
+  `alsem tests` / impact test path prints it (`Send/1 → Send/0`), in JSON `path` too.
+- **The touches `callers` input was described wrongly (F39).** Its MCP descriptions said
+  "without their witnesses", but a caller that touches the table through another branch
+  prints its first touch (operation, location, first hop; c17). Both texts now say so.
+
 ### Fixed (the macOS build compiles again)
 
 `OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with

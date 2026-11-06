@@ -185,6 +185,14 @@ pub fn display(g: &SitedGraph, n: NodeIx) -> String {
     }
 }
 
+/// A path hop's name (agent-tasks §12.1, output validation F9): [`display`]
+/// with the routine's overload handle, so two overloads on one path never
+/// print alike.
+fn path_name(g: &SitedGraph, n: NodeIx) -> String {
+    let handle = g.local_name(n).map_or("", |l| &*l.handle);
+    format!("{}{handle}", display(g, n))
+}
+
 fn object_number(g: &SitedGraph, n: NodeIx) -> Option<i64> {
     match g.routine_object(n)?.key {
         ObjKey::Id(i) => Some(i),
@@ -653,7 +661,7 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
                 "class": class_of(&s),
                 "hops": h,
                 "reaches": args.roots[root],
-                "path": path.iter().map(|&p| display(g, p)).collect::<Vec<_>>(),
+                "path": path.iter().map(|&p| path_name(g, p)).collect::<Vec<_>>(),
             })
         })
         .collect();

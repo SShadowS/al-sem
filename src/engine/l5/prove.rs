@@ -2427,13 +2427,15 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     if let Some((answer, header)) = callers {
         cx.release(Cell::L4);
         cx.release(Cell::Effects);
-        return Ok(callers_document(
-            job,
-            &answer,
-            &header,
-            &workspace_fp,
-            diagnostics_json,
-        ));
+        let mut doc = callers_document(job, &answer, &header, &workspace_fp, diagnostics_json);
+        // F5 (2g): readable dependency locations, as the effects path prints
+        // them (the JSON keeps the guid).
+        doc.human_text = cx
+            .view()
+            .target()
+            .dependencies()
+            .readable_locations(doc.human_text);
+        return Ok(doc);
     }
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
