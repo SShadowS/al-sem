@@ -106,6 +106,16 @@ documents ship in the same major, so a reader sees one break.
   expand_to_every_hop` checks a prove witness's hops through its segment. Each has a
   discrimination proof.
 
+§7 size targets on CDO (`bc3ccb18`, release-fast, round-1 argv; before → after). Met:
+RunReportID's explain card 45,374 → 37,461 B (inline under 40 KiB); IssueReminder's digest
+1,347,484 / 798,800 → 1,238,334 / 734,734 B (budget 1,380,000 / 820,000 kept); c21 `hidden`
+by class; c23 no repeated `through`; c29 no traversal statistic. Missed, open for the
+round-2 reviewers: c17 348,928 → 72,599 B (target 60 KB, all 952 callers listed); c08
+1,306,333 → 728,567 B (200 KB); c25 1,259,622 → 643,176 B (300 KB); c02 10,502 → 6,711 B
+(3 KB); c20 14,246 → 6,964 B (4 KB). The explain line ratchets rose to 145 / 160 and the byte
+ratchets fell to 34,000 / 39,000 (owner decision 2026-11-06: the segment listing adds lines
+while removing bytes).
+
 ### Changed (counting units and per-tool items, output validation V6)
 
 Output validation round 1, milestone V6 (spec

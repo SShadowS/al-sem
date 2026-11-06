@@ -734,8 +734,13 @@ const RENDERED: &[(&str, &str)] = &[
 /// ~700 B dependency numbers, ~670 B quotes). Lines did not grow.
 fn ratchet(label: &str, call: &str) -> Budget {
     let (lines, bytes) = match (label, call) {
-        ("IssueReminder", "explain human") => (140, 43_000),
-        ("RunReportID", "explain human") => (150, 49_500),
+        // Output validation V5 (§7.5, owner decision 2026-11-06): the path
+        // segment listing adds lines while removing bytes (one line per
+        // shared run, each path printing `[Sn]` instead of its hops):
+        // IssueReminder 142 lines / 32,926 B, RunReportID 155 / 37,461 B
+        // (were 140 / 43,000 and 150 / 49,500).
+        ("IssueReminder", "explain human") => (145, 34_000),
+        ("RunReportID", "explain human") => (160, 39_000),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
         ("RunReportID", "query effects human") => (80, 27_000),
