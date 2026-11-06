@@ -2544,12 +2544,14 @@ codeunit 50898 "D1E Work"
 
 /// FP-07 (class P over a class K list): the classification lookup reads a
 /// collided id's LAST row's copy, not the greatest by value. `Work` in an
-/// Install codeunit is a plain procedure in arm A and an event subscriber in
+/// Install codeunit is a public procedure in arm A and an event subscriber in
 /// arm B (the last row): the K list keeps both copies, and the detector
 /// context's lookup is arm B's (`event-subscriber` among its kinds). A roots
 /// config that names another routine leaves `Work`'s entries as they are.
+/// (Arm A was a `local procedure`, a root only while every routine of an
+/// Install codeunit was one; a helper is no install entry now.)
 /// Breaks: the lookup takes the last of the value-sorted list -> arm A's
-/// (`["install-codeunit"]` sorts after); the overlay collapses every id to one
+/// (`["public-procedure"]` sorts after); the overlay collapses every id to one
 /// entry -> one `Work` entry with the config.
 #[test]
 fn collided_classification_lookup_is_the_last_rows() {
@@ -2565,7 +2567,7 @@ codeunit 50899 "RC Install"
     end;
 
 #if A
-    local procedure Work()
+    procedure Work()
     begin
     end;
 #else

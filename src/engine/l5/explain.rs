@@ -34,8 +34,10 @@
 //! gap with the skipped rules; a call to an error collector is an
 //! `error-collector` gap; event subscribers' own rules are listed under their
 //! extension point (`subscriberRoutines`), not merged into `inherited`;
-//! `reachedFrom` also follows a page action's `RunObject = Codeunit X` into
-//! that codeunit's `OnRun`.
+//! `reachedFrom` also follows a page action's `RunObject` into the triggers a
+//! run of that object reaches (a codeunit's `OnRun`, a page's `OnOpenPage`
+//! and its other lifecycle triggers, those of its extensions; the resolver's
+//! rule, `impact_graph::reverse::run_reaches_trigger`).
 //!
 //! The command builds the model with `ViewNeeds::EXPLAIN` (rules and card
 //! text, both built at assembly) and computes over it with `explain_plan`: one
@@ -778,7 +780,7 @@ struct IndexData {
     /// `ModifyAll` / `Validate` operation id -> the field it writes, as its
     /// table declares it (W2-4, design §4.1 rule 2d: a per-op fact).
     op_field: HashMap<String, String>,
-    /// Codeunit object id -> the page actions whose `RunObject` runs it:
+    /// Object id -> the page actions whose `RunObject` runs it:
     /// (the page's object index, the action's index in its run actions, the
     /// raw `RunObject` value's index in the action's).
     run_by: HashMap<String, Vec<(usize, usize, usize)>>,
@@ -1098,6 +1100,67 @@ impl<'m> Indexes<'m> {
                 (oi, a, a.run_object[ri].as_str())
             })
             .collect()
+    }
+
+    /// The page actions whose `RunObject` runs row `i`: `i` is a trigger a
+    /// run of its object reaches with no user acting (the resolver's rule,
+    /// [`crate::program::impact_graph::reverse::run_reaches_trigger`]: a
+    /// codeunit's `OnRun`, a page's, report's or XMLport's lifecycle
+    /// triggers), the actions running its object; or the same trigger of a
+    /// page or report extension, the actions running the object it extends.
+    fn run_by_trigger(&self, i: usize) -> Vec<(usize, &'m CardAction, &'m str)> {
+        use al_syntax::ir::ObjectKind;
+        let r = self.row(i);
+        if r.kind != "trigger" {
+            return Vec::new();
+        }
+        let kind = match r.object_type.as_str() {
+            "Codeunit" => ObjectKind::Codeunit,
+            "Page" => ObjectKind::Page,
+            "PageExtension" => ObjectKind::PageExtension,
+            "Report" => ObjectKind::Report,
+            "ReportExtension" => ObjectKind::ReportExtension,
+            "XMLport" => ObjectKind::XmlPort,
+            _ => return Vec::new(),
+        };
+        if !crate::program::impact_graph::reverse::run_reaches_trigger(
+            kind,
+            &r.name.to_ascii_lowercase(),
+            r.enclosing_member.is_some(),
+        ) {
+            return Vec::new();
+        }
+        let base_type = match kind {
+            ObjectKind::PageExtension => "Page",
+            ObjectKind::ReportExtension => "Report",
+            _ => return self.run_by(r.object_id.as_str()),
+        };
+        let objects = &self.model.workspace.objects;
+        let Some(base) = self
+            .data
+            .declaring
+            .of(objects, r)
+            .and_then(|o| o.extends_target_name.as_deref())
+        else {
+            return Vec::new();
+        };
+        let base = base.fold_identifier();
+        let ids: BTreeSet<&str> = objects
+            .iter()
+            .filter(|o| o.object_type == base_type && o.name.fold_identifier() == base)
+            .map(|o| o.id.as_str())
+            .collect();
+        ids.into_iter().flat_map(|id| self.run_by(id)).collect()
+    }
+
+    /// Whether row `i` is a page action's `OnAction` trigger: the rows whose
+    /// actions explain counts under "reached from page actions" (F16j), so
+    /// they are not counted as routine callers too.
+    fn is_action_trigger(&self, i: usize) -> bool {
+        self.row(i)
+            .card_text
+            .as_deref()
+            .is_some_and(|t| !t.actions.is_empty())
     }
 
     /// `(object type, object name)` of a row.
@@ -2359,38 +2422,34 @@ impl Card {
         let mut reached_from = Vec::new();
         for &r in up.keys() {
             let row = ix.row(r);
-            // A page action whose `RunObject` runs this codeunit's `OnRun`.
-            if row.kind == "trigger"
-                && row.object_type == "Codeunit"
-                && row.name.eq_ignore_ascii_case("OnRun")
-            {
-                for (oi, a, raw) in ix.run_by(row.object_id.as_str()) {
-                    let page = &model.workspace.objects[oi];
-                    let caption = one_text(&a.caption).ok().flatten();
-                    reached_from.push((
-                        json!({
-                            "kind": "PageAction",
-                            "objectType": page.object_type,
-                            "object": page.name,
-                            "action": a.name,
-                            "actionKind": a.kind,
-                            "caption": caption,
-                            "tooltip": one_text(&a.tooltip).ok().flatten(),
-                            "runObject": raw,
-                            "via": path_names(ix, &up, r),
-                            "anchor": anchor_json(&a.anchor),
-                        }),
-                        format!(
-                            "reached from page action {} on {}{} (RunObject = {raw}) at {}",
-                            a.name,
-                            object_display(&page.object_type, &page.name),
-                            caption
-                                .map(|c| format!(" (caption \"{c}\")"))
-                                .unwrap_or_default(),
-                            anchor_human(&a.anchor)
-                        ),
-                    ));
-                }
+            // A page action whose `RunObject` runs this row's object (a
+            // codeunit's `OnRun`, a page's `OnOpenPage`, …; `run_by_trigger`).
+            for (oi, a, raw) in ix.run_by_trigger(r) {
+                let page = &model.workspace.objects[oi];
+                let caption = one_text(&a.caption).ok().flatten();
+                reached_from.push((
+                    json!({
+                        "kind": "PageAction",
+                        "objectType": page.object_type,
+                        "object": page.name,
+                        "action": a.name,
+                        "actionKind": a.kind,
+                        "caption": caption,
+                        "tooltip": one_text(&a.tooltip).ok().flatten(),
+                        "runObject": raw,
+                        "via": path_names(ix, &up, r),
+                        "anchor": anchor_json(&a.anchor),
+                    }),
+                    format!(
+                        "reached from page action {} on {}{} (RunObject = {raw}) at {}",
+                        a.name,
+                        object_display(&page.object_type, &page.name),
+                        caption
+                            .map(|c| format!(" (caption \"{c}\")"))
+                            .unwrap_or_default(),
+                        anchor_human(&a.anchor)
+                    ),
+                ));
             }
             let Some(t) = row.card_text.as_deref() else {
                 continue;
@@ -2444,7 +2503,10 @@ impl Card {
                 .cmp(&b.0["anchor"].to_string())
                 .then(a.1.cmp(&b.1))
         });
-        reached_from.dedup_by(|a, b| a.0 == b.0);
+        // One entry per action: an action reaches the routine once, even when
+        // several reached rows lead back to it (a page's `OnOpenPage` and its
+        // `OnAfterGetRecord`, a page and its extension).
+        reached_from.dedup_by(|a, b| a.0["anchor"] == b.0["anchor"]);
 
         // Tests.
         let mut tests = Vec::new();
@@ -2624,13 +2686,13 @@ impl Card {
         // W2-2: the rollup's totals, with explain's callers and tests (F16k).
         let mut totals = rollup.totals.clone();
         // F16j: a page action's trigger is counted under page actions, not as
-        // a routine caller.
+        // a routine caller. Every other direct caller is a routine caller: a
+        // page's `OnOpenPage`, `OnAfterGetCurrRecord` or a field's
+        // `OnAssistEdit` is code that calls the routine, and no page action
+        // stands for it.
         let routine_callers: Vec<String> = known_callers
             .iter()
-            .filter(|&&c| {
-                let r = ix.row(c);
-                !(r.kind == "trigger" && r.object_type.starts_with("Page"))
-            })
+            .filter(|&&c| !ix.is_action_trigger(c))
             .map(|&c| ix.qualified(c))
             .collect();
         totals.callers = Some(routine_callers.len());

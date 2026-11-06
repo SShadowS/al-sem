@@ -894,3 +894,245 @@ fn explain_runs_in_a_batch_like_standalone() {
     let run = batch_in(&jobs, Some(&root), &[]);
     assert_each_standalone(&run, &jobs, Some(&root));
 }
+
+// ── callers and page actions add up (output-validation c06) ──
+
+const CALLERS_APP_JSON: &str = r#"{"id":"c06c06c0-0000-0000-0000-00000000c006","name":"ExplainCallers","publisher":"Test","version":"1.0.0.0","platform":"26.0.0.0","runtime":"13.0","dependencies":[]}"#;
+
+/// `ExTarget` is called by a procedure, a codeunit's `OnRun`, a page's
+/// `OnOpenPage`, `OnAfterGetCurrRecord` and a field's `OnAssistEdit`, a page
+/// extension's `OnOpenPage`, another page's `OnOpenPage`, a third page's
+/// field `OnValidate`, and an action's `OnAction`. A role center's actions
+/// run the codeunit, the journal page, the card page (reached through three
+/// of its triggers: one action all the same) and the third page (whose only
+/// caller is a field trigger, which opening the page does not run).
+const CALLERS_AL: &str = r#"table 50110 "Ex Rec"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; Code) { }
+    }
+}
+
+codeunit 50100 "Ex Handler"
+{
+    procedure ExTarget()
+    begin
+    end;
+
+    procedure ExHelper()
+    begin
+        ExTarget();
+    end;
+}
+
+codeunit 50101 "Ex Runner"
+{
+    trigger OnRun()
+    var
+        H: Codeunit "Ex Handler";
+    begin
+        H.ExTarget();
+    end;
+}
+
+page 50102 "Ex Card"
+{
+    PageType = Card;
+    SourceTable = "Ex Rec";
+
+    layout
+    {
+        area(Content)
+        {
+            field(CodeField; Rec.Code)
+            {
+                trigger OnAssistEdit()
+                var
+                    H: Codeunit "Ex Handler";
+                begin
+                    H.ExTarget();
+                end;
+            }
+        }
+    }
+
+    actions
+    {
+        area(Processing)
+        {
+            action(DoIt)
+            {
+                Caption = 'Do It';
+
+                trigger OnAction()
+                var
+                    H: Codeunit "Ex Handler";
+                begin
+                    H.ExTarget();
+                end;
+            }
+        }
+    }
+
+    trigger OnOpenPage()
+    var
+        H: Codeunit "Ex Handler";
+    begin
+        H.ExTarget();
+    end;
+
+    trigger OnAfterGetCurrRecord()
+    var
+        H: Codeunit "Ex Handler";
+    begin
+        H.ExTarget();
+    end;
+}
+
+pageextension 50103 "Ex Card Ext" extends "Ex Card"
+{
+    trigger OnOpenPage()
+    var
+        H: Codeunit "Ex Handler";
+    begin
+        H.ExTarget();
+    end;
+}
+
+page 50104 "Ex Journal"
+{
+    PageType = Worksheet;
+    SourceTable = "Ex Rec";
+
+    trigger OnOpenPage()
+    var
+        H: Codeunit "Ex Handler";
+    begin
+        H.ExTarget();
+    end;
+}
+
+page 50105 "Ex Other"
+{
+    PageType = Card;
+    SourceTable = "Ex Rec";
+
+    layout
+    {
+        area(Content)
+        {
+            field(CodeField; Rec.Code)
+            {
+                trigger OnValidate()
+                var
+                    H: Codeunit "Ex Handler";
+                begin
+                    H.ExTarget();
+                end;
+            }
+        }
+    }
+}
+
+page 50106 "Ex Home"
+{
+    PageType = RoleCenter;
+
+    actions
+    {
+        area(Processing)
+        {
+            action(JournalAction)
+            {
+                Caption = 'Journal';
+                RunObject = page "Ex Journal";
+            }
+            action(RunnerAction)
+            {
+                Caption = 'Runner';
+                RunObject = codeunit "Ex Runner";
+            }
+            action(CardAction)
+            {
+                Caption = 'Card';
+                RunObject = page "Ex Card";
+            }
+            action(OtherAction)
+            {
+                Caption = 'Other';
+                RunObject = page "Ex Other";
+            }
+        }
+    }
+}
+"#;
+
+/// Every direct caller is counted once, as a routine caller or under page
+/// actions (c06: 11 page triggers such as `OnOpenPage` were in neither), and
+/// a `RunObject = page X` action is reached when a run of X reaches the
+/// routine (c06: only `RunObject = codeunit` was followed), once per action.
+#[test]
+fn explain_counts_every_caller_and_page_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(ws.join("app.json"), CALLERS_APP_JSON).unwrap();
+    std::fs::write(ws.join("src/Callers.al"), CALLERS_AL).unwrap();
+    let ws_s = ws.to_string_lossy();
+    let (out, stderr, code) = run_alsem(&[
+        "explain",
+        &ws_s,
+        "--routine",
+        "ExTarget",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{out}\n{stderr}");
+    let doc = json(&out);
+    let card = &doc["cards"][0];
+    // Nine direct callers: eight routine callers and one action trigger.
+    assert_eq!(card["rules"]["knownCallers"], 9, "{card:#}");
+    assert_eq!(card["summary"]["callers"], 8, "{card:#}");
+    let mut actions: Vec<&str> = card["reachedFrom"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["action"].as_str().unwrap())
+        .collect();
+    actions.sort_unstable();
+    assert_eq!(
+        actions,
+        ["CardAction", "DoIt", "JournalAction", "RunnerAction"],
+        "{card:#}"
+    );
+    assert_eq!(card["summary"]["pageActions"], 4, "{card:#}");
+    let (human, _, _) = run_alsem(&[
+        "explain",
+        &ws_s,
+        "--routine",
+        "ExTarget",
+        "--format",
+        "human",
+    ]);
+    let line = human
+        .lines()
+        .find(|l| l.trim_start().starts_with("callers:"))
+        .unwrap_or_else(|| panic!("a callers line: {human}"));
+    for name in [
+        "Page Ex Card::OnOpenPage",
+        "Page Ex Card::OnAfterGetCurrRecord",
+        "Page Ex Card::OnAssistEdit",
+        "PageExtension Ex Card Ext::OnOpenPage",
+        "Page Ex Journal::OnOpenPage",
+        "Page Ex Other::OnValidate",
+    ] {
+        assert!(line.contains(name), "{name} in {line}");
+    }
+    assert!(line.starts_with("  callers: 8 — "), "{line}");
+    assert!(line.contains("reached from 4 page actions"), "{line}");
+}

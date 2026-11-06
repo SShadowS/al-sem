@@ -310,20 +310,24 @@ fn probe(g: &SitedGraph, id: &str, opts: &WalkOptions<'_>) -> Value {
 /// dispatched, not called), a background start (a `Background` site, F3: the
 /// target runs in its own session, and the model's calls do not carry it;
 /// the walks over the graph still reach the starter), a test's handler list, open sites, `r` itself,
-/// hubs, and a page's or page extension's triggers (page actions are counted
-/// apart, explain's F16j).
+/// hubs, and a page action's `OnAction` trigger (page actions are counted
+/// apart, explain's F16j; a page's other triggers are callers).
 #[must_use]
 pub fn direct_callers(g: &SitedGraph, r: NodeIx) -> BTreeSet<NodeIx> {
     use crate::program::impact_graph::sited::Boundary;
-    // A page's or page extension's trigger (explain's F16j: `object_type`
-    // starting with `Page`).
+    // A page action's `OnAction` trigger on a page or page extension
+    // (explain's F16j: counted under page actions). A page's other triggers
+    // (`OnOpenPage`, a field's `OnValidate`, …) are callers.
     let is_page_trigger = |n: NodeIx| {
-        g.routine_object(n).is_some_and(|o| {
-            matches!(
-                o.kind,
-                al_syntax::ir::ObjectKind::Page | al_syntax::ir::ObjectKind::PageExtension
-            )
-        }) && g.local_name(n).is_some_and(|l| l.trigger)
+        matches!(
+            g.nodes.get(n as usize),
+            Some(crate::program::impact_graph::project::Key::Routine(id))
+                if matches!(
+                    id.object.kind,
+                    al_syntax::ir::ObjectKind::Page | al_syntax::ir::ObjectKind::PageExtension
+                ) && id.enclosing_member_lc.is_some()
+                    && id.name_lc.as_str() == "onaction"
+        ) && g.local_name(n).is_some_and(|l| l.trigger)
     };
     let mut out = BTreeSet::new();
     let add = |n: NodeIx, out: &mut BTreeSet<NodeIx>| {

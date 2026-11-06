@@ -647,6 +647,16 @@ pub(crate) fn classify_gui(guards: &[crate::engine::resident::guards::Guard]) ->
     out
 }
 
+/// The 0-based line of the first guard [`classify_gui`] finds unrecognized:
+/// the controlling statement of a condition that mentions GuiAllowed in a
+/// shape it does not read.
+fn unrecognized_gui_line(guards: &[crate::engine::resident::guards::Guard]) -> Option<u32> {
+    guards
+        .iter()
+        .find(|gd| classify_gui(std::slice::from_ref(gd)) == GuiGuard::Unrecognized)
+        .map(|gd| gd.line)
+}
+
 /// One caller row's forward facts ([`Visitor::caller_facts`]).
 #[derive(Default)]
 struct CallerFacts {
@@ -1259,7 +1269,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
         if !mentions {
             return SiteEval::default();
         }
-        let guard = match self.cx.inputs {
+        let (guard, condition_line) = match self.cx.inputs {
             Some(inputs) => {
                 match crate::engine::resident::guards::site_guards_cached(
                     inputs,
@@ -1267,11 +1277,11 @@ impl<'a, 'c> Visitor<'a, 'c> {
                     site,
                     &mut self.guards,
                 ) {
-                    Ok(gs) => classify_gui(&gs),
-                    Err(_) => GuiGuard::None,
+                    Ok(gs) => (classify_gui(&gs), unrecognized_gui_line(&gs)),
+                    Err(_) => (GuiGuard::None, None),
                 }
             }
-            None => GuiGuard::None,
+            None => (GuiGuard::None, None),
         };
         match guard {
             GuiGuard::Inside => SiteEval {
@@ -1279,6 +1289,13 @@ impl<'a, 'c> Visitor<'a, 'c> {
                 bits: 0,
             },
             GuiGuard::Unrecognized => {
+                // The place is the condition's own line (the controlling
+                // statement's), not the guarded call's: the line names
+                // where the condition is.
+                let at = match (at, condition_line) {
+                    (Some((f, _)), Some(l)) => Some((f, l + 1)),
+                    (at, _) => at,
+                };
                 let d = self.ix.display(self.cx.g, c);
                 let place = at
                     .as_ref()

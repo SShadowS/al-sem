@@ -595,25 +595,37 @@ pub fn config_entries(
 /// record triggers (`OnInsertRecord`, …), anything a page part runs.
 #[must_use]
 pub fn object_run_reaches(g: &SitedGraph, r: NodeIx) -> bool {
-    use al_syntax::ir::ObjectKind;
     let Some(super::project::Key::Routine(id)) = g.nodes.get(r as usize) else {
         return false;
     };
-    let kind = match id.object.kind {
+    run_reaches_trigger(
+        id.object.kind,
+        id.name_lc.as_str(),
+        id.enclosing_member_lc.is_some(),
+    )
+}
+
+/// [`object_run_reaches`] over a routine's parts: a trigger named `name_lc`
+/// (folded) of an object of `kind`, declared in a member (`member`) or at
+/// object level. The one rule both the sited graph and `alsem explain`'s
+/// "reached from page actions" (a `RunObject` run) read.
+#[must_use]
+pub fn run_reaches_trigger(kind: al_syntax::ir::ObjectKind, name_lc: &str, member: bool) -> bool {
+    use al_syntax::ir::ObjectKind;
+    let kind = match kind {
         ObjectKind::PageExtension => ObjectKind::Page,
         ObjectKind::ReportExtension => ObjectKind::Report,
         k => k,
     };
-    let name = id.name_lc.as_str();
     match crate::program::resolve::resolver::run_triggers(kind) {
         Some((object, members)) => {
-            if id.enclosing_member_lc.is_some() {
-                members.contains(&name)
+            if member {
+                members.contains(&name_lc)
             } else {
-                object.contains(&name)
+                object.contains(&name_lc)
             }
         }
-        None => kind == ObjectKind::Codeunit && id.enclosing_member_lc.is_none() && name == "onrun",
+        None => kind == ObjectKind::Codeunit && !member && name_lc == "onrun",
     }
 }
 
