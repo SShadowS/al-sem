@@ -4503,7 +4503,11 @@ impl Card {
                 "the witness of a commit, or the blockers of an unknown",
             ));
         }
-        let has_callers = !self.known_callers.is_empty() || !self.reached_from.is_empty();
+        // A page action's own card has no caller: its `reached from` is the
+        // action itself (round-2 r2 §2.4, c05).
+        let own_action = self.run_by.as_ref().is_some_and(|rb| rb.action);
+        let has_callers =
+            !self.known_callers.is_empty() || (!self.reached_from.is_empty() && !own_action);
         if has_callers && !callers_shown {
             out.push(
                 FollowUp::new(

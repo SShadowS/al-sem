@@ -642,6 +642,16 @@ fn reach_lines(
             "{indent}  broad reach ({p}% of the program's declared entries{})",
             if detail { "" } else { "; list folded" }
         )),
+        // Below the fold the share still prints, with its counts (measured
+        // on CDO, 2026-11-07: c12, c20's first routine and n09 hold 30%, so
+        // without this line the share would never be shown there).
+        Some(p) if u(declared, "reached") > 0 => out.push(format!(
+            "{indent}  these ancestors hold {p}% of the program's declared entries ({} of {}; \
+             pages run by an action's RunObject, background targets and roots.config entries \
+             are counted on neither side)",
+            thousands(u(declared, "reached")),
+            thousands(u(declared, "program")),
+        )),
         _ => {}
     }
     if !wide || detail {

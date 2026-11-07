@@ -10,6 +10,7 @@ current effects of the 1 changed routine; ranked: reached from a user or a job f
       calls: Codeunit "Base Poster" (70100): OnRun (:15); Codeunit "Base Calc" (70101): OnRun (:16); Codeunit "Out Log Mgt": WriteLog (:17); +5 more
       direct code callers: none found
       reached beyond it: 2 ancestors by code calls, UI navigation, configuration or a hub (relation not recorded by this walk): within the workspace 2, through a dependency 0, over a hub 0
+        these ancestors hold 16% of the program's declared entries (1 of 6; pages run by an action's RunObject, background targets and roots.config entries are counted on neither side)
         entries among them, by kind (counted per legacy bucket: an entry in two buckets counts in both): page actions 1, page triggers 1
       tests: no modeled path (its cone is complete)
 tests: run first: no test with a modeled path; selection complete; workspace 1 [Test]; 0 test apps (none found)

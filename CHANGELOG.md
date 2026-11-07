@@ -28,8 +28,9 @@ Milestone W1 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§2
   (JSON `declaredEntries`: `reached <= program` by construction). From 90% it prints
   `these ancestors hold 99% of the program's declared entries (n of N; pages run by an
   action's RunObject, background targets and roots.config entries are counted on neither
-  side); counts by kind folded`; from 50% `broad reach (…; list folded)`. A limited walk
-  prints no share.
+  side); counts by kind folded`; from 50% `broad reach (…; list folded)`; below 50% the
+  same `these ancestors hold …` line without the fold (c12, c20 and n09 measure 30% on
+  CDO, so the share would otherwise never print there). A limited walk prints no share.
 - **impact, smaller W1 items** (G1, G15): the changed routine is no longer listed as its
   own entry (JSON `rootEntryKinds`, `rootUserOrJob` keep its kinds for the ranking); the
   hubs line prints once per answer (the whole change's, with several routines); `external:`
