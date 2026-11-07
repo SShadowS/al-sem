@@ -516,8 +516,9 @@ pub(crate) fn cdo_selection_ratchets() {
     let (human, code) = tests(&ws, &["--routine", "CDO E-Mail Handler::RunReportID"]);
     assert_eq!(code, 0, "{human}");
     assert!(
-        human.lines().any(|l| l
-            == "[via-dependency] 376 tests — effectively the suite's posting tests, not specific to this change; --tier dependency gives the 376 tests' codeunit filter"),
+        human.lines().any(|l| l.starts_with("[via-dependency] 376 tests in ")
+            && l.contains(" — a broad set: each one's path enters dependency code that may run more than half of the program")
+            && l.ends_with("; --tier dependency lists them")),
         "{human}"
     );
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);

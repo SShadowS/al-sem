@@ -2439,6 +2439,7 @@ mod tests {
                 background_starts: Default::default(),
             }),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let owned = build_detector_context(&resolved, crate::engine::l5::registry::substrate::ALL);
         let ctx = owned.ctx();

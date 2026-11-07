@@ -458,11 +458,17 @@ fn unclassified_callee_reason(callee_text: &str) -> UnknownReason {
 /// known record variable (`extract::classify_call`), so `X.Insert(true)` on a
 /// call result, a Dictionary value or a Variant arrives here as a member call,
 /// and an untracked `X` may as well be a codeunit with a procedure `Insert`.
+///
+/// Round-3 c02: a record bound is read with the site's arguments
+/// (`trigger_rule(method)`): a RunTrigger left out or a literal `false` runs
+/// no table trigger, only the platform table events
+/// ([`OpenBound::RecordEvents`]).
 pub(crate) fn site_open_bounds(
     site: &CalleeShape,
     arity: usize,
     shape: DispatchShape,
     routes: &[Route],
+    trigger_rule: &dyn Fn(&str) -> crate::program::resolve::applicability::TriggerSiteRule,
 ) -> Vec<OpenBound> {
     let mut out: Vec<OpenBound> = Vec::new();
     for r in routes {
@@ -471,7 +477,11 @@ pub(crate) fn site_open_bounds(
                 Some(DispatchingBuiltin::Run(kind)) => {
                     out.push(OpenBound::Run { kind: Some(kind) })
                 }
-                Some(DispatchingBuiltin::Record(op)) => out.push(OpenBound::Record { op }),
+                Some(DispatchingBuiltin::Record(op)) => {
+                    // `RecordRef::modify` → `modify`, `Record::deleteall` → `deleteall`.
+                    let method = bid.0.rsplit("::").next().unwrap_or(op);
+                    out.push(OpenBound::record(op, &trigger_rule(method)));
+                }
                 None => {}
             }
         }
@@ -484,7 +494,7 @@ pub(crate) fn site_open_bounds(
         let by_name = |name: &str, out: &mut Vec<OpenBound>| {
             let name_lc = name.fold_identifier();
             if let Some(op) = record_trigger_op(&name_lc) {
-                out.push(OpenBound::Record { op });
+                out.push(OpenBound::record(op, &trigger_rule(&name_lc)));
             }
             if matches!(name_lc.as_str(), "run" | "runmodal") {
                 out.push(OpenBound::Run { kind: None });
@@ -503,9 +513,10 @@ pub(crate) fn site_open_bounds(
                     _ => None,
                 },
             }),
-            CalleeShape::RecordOp { op, .. } => {
-                if let Some(op) = record_trigger_op(&op.fold_identifier()) {
-                    out.push(OpenBound::Record { op });
+            CalleeShape::RecordOp { op: method, .. } => {
+                let method_lc = method.fold_identifier();
+                if let Some(op) = record_trigger_op(&method_lc) {
+                    out.push(OpenBound::record(op, &trigger_rule(&method_lc)));
                 }
             }
             CalleeShape::Commit | CalleeShape::Unknown => out.push(OpenBound::Any),
@@ -1113,8 +1124,13 @@ fn resolve_call_site_obligation(
                 // known triggers, but we cannot say there are none). On the
                 // edge this looks like a table without triggers; the site fact
                 // says it is open (#63).
+                // Round-3 c02: a RunTrigger left out or `false` runs no
+                // trigger of whatever table it is; the table events still run.
                 if let Some(op) = record_trigger_op(&op_lc) {
-                    facts_out.open.push(OpenBound::Record { op });
+                    let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
+                        &op_lc, call_args, file, text,
+                    );
+                    facts_out.open.push(OpenBound::record(op, &rule));
                 }
                 (
                     DispatchShape::Multicast,
@@ -1312,7 +1328,12 @@ pub(crate) fn resolve_file_obligations(
                     parenless.push(site.expr);
                 }
                 if facts.open.is_empty() {
-                    facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes);
+                    let rule = |method_lc: &str| {
+                        crate::program::resolve::applicability::TriggerSiteRule::of(
+                            method_lc, &site.args, &pf.file, &pf.text,
+                        )
+                    };
+                    facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes, &rule);
                 }
                 // F3: a background start (by the catalog id the call resolved
                 // to). Its literal codeunits get their own edge below; only a
@@ -4956,6 +4977,11 @@ codeunit 50003 \"Check Dimensions\"
              V.Run(); // variant-run\n        \
              V.Foo(1); // variant-name\n        \
              RR.Insert(true); // recordref\n        \
+             RR.Modify(); // recordref-no-trigger\n        \
+             RR.Delete(false); // recordref-false\n        \
+             RR.Rename(1); // recordref-rename\n        \
+             U.Modify(); // unresolved-no-trigger\n        \
+             V.Modify(); // variant-no-trigger\n        \
              FR.Validate(1); // fieldref\n        \
              Codeunit.Run(50000); // int-run\n        \
              Codeunit.Run(CuId); // var-run\n        \
@@ -4997,6 +5023,29 @@ codeunit 50003 \"Check Dimensions\"
         );
         assert_eq!(at("// variant-name"), vec![name("foo", 1)]);
         assert_eq!(at("// recordref"), vec![B::Record { op: "insert" }]);
+        // Round-3 c02: a RunTrigger left out or `false` runs no trigger of
+        // whatever table, only the platform table events; `Rename` takes no
+        // RunTrigger and always runs its trigger. Discrimination
+        // (2026-11-07): `OpenBound::record` ignoring the rule fails at
+        // `recordref-no-trigger`; the unresolved-table arm pushing `Record`
+        // unconditionally fails there too (a RecordRef parameter is that arm).
+        assert_eq!(
+            at("// recordref-no-trigger"),
+            vec![B::RecordEvents { op: "modify" }]
+        );
+        assert_eq!(
+            at("// recordref-false"),
+            vec![B::RecordEvents { op: "delete" }]
+        );
+        assert_eq!(at("// recordref-rename"), vec![B::Record { op: "rename" }]);
+        assert_eq!(
+            at("// unresolved-no-trigger"),
+            vec![B::RecordEvents { op: "modify" }]
+        );
+        assert_eq!(
+            at("// variant-no-trigger"),
+            vec![name("modify", 0), B::RecordEvents { op: "modify" }]
+        );
         assert_eq!(at("// fieldref"), vec![B::Record { op: "validate" }]);
         assert_eq!(
             at("// int-run"),

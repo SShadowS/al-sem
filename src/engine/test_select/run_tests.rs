@@ -153,10 +153,16 @@ fn through_dependency_sameness_is_said() {
     )
     .unwrap()
     .text;
+    // Round-3 c07: the line says what the rule measured, never that the
+    // tests are "not specific to this change".
     assert!(
         human.contains(
-            "[via-dependency] 1 test — effectively the suite's posting tests, not specific to this change"
+            "[via-dependency] 1 test in 1 codeunit of the suite's 2, not listed at this tier — \
+             a broad set: each one's path enters dependency code that may run more than half \
+             of the program; nearest: Codeunit T::X [code] (2 hops); --tier dependency lists \
+             them"
         ),
         "{human}"
     );
+    assert!(!human.contains("not specific"), "{human}");
 }

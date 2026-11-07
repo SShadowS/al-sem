@@ -412,6 +412,7 @@ mod tests {
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
             obsolete_gone: false,
+            page_ui: Default::default(),
         }
     }
 

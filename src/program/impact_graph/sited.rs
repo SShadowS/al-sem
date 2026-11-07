@@ -246,6 +246,12 @@ pub struct SitedGraph {
     stable_of: Vec<u32>,
     /// The lifecycle sites a page's action makes (`RunObject`), sorted.
     action_run_sites: Vec<u32>,
+    /// The lifecycle sites from a page into its source table's record
+    /// triggers and table events that the page blocks only through
+    /// `Editable = false` while code may set its editability at runtime
+    /// ([`crate::program::page_ui`]), sorted: their relation is not
+    /// established.
+    ui_candidate_sites: Vec<u32>,
     /// Per action-run site with named actions, sorted by site: the actions
     /// that run its target, each `(the object declaring it, its name)`
     /// (round-2 r2 §2.1 step 3).
@@ -458,6 +464,14 @@ impl SitedGraph {
     #[must_use]
     pub fn is_action_run(&self, s: u32) -> bool {
         self.action_run_sites.binary_search(&s).is_ok()
+    }
+
+    /// Whether site `s` is a page's lifecycle into a record trigger or table
+    /// event that the page may block (`Editable = false`, set at runtime
+    /// somewhere): a candidate step ([`crate::program::page_ui`]).
+    #[must_use]
+    pub fn is_ui_candidate(&self, s: u32) -> bool {
+        self.ui_candidate_sites.binary_search(&s).is_ok()
     }
 
     /// The actions an action-run site stands for, each `(the object
@@ -725,6 +739,7 @@ impl SitedGraph {
             + self.stable.capacity() * size_of::<StableEntry>()
             + self.stable_of.capacity() * size_of::<u32>()
             + self.action_run_sites.capacity() * size_of::<u32>()
+            + self.ui_candidate_sites.capacity() * size_of::<u32>()
             + self
                 .action_run_actions
                 .iter()
@@ -791,6 +806,8 @@ pub(crate) struct SitedBuilder {
     unit_ix: HashMap<Box<str>, u32>,
     /// The lifecycle sites a page action's `RunObject` makes.
     pub(crate) action_run_sites: Vec<u32>,
+    /// The candidate page-lifecycle sites ([`SitedGraph::is_ui_candidate`]).
+    pub(crate) ui_candidate_sites: Vec<u32>,
     /// Per action-run site with named actions: those actions.
     pub(crate) action_run_actions: Vec<(u32, Vec<RunAction>)>,
     /// The sites the projection labelled `configuredDispatch`, in site order.
@@ -807,6 +824,7 @@ impl SitedBuilder {
             units: Vec::new(),
             unit_ix: HashMap::new(),
             action_run_sites: Vec::new(),
+            ui_candidate_sites: Vec::new(),
             action_run_actions: Vec::new(),
             configured_arms: Vec::new(),
         };
@@ -1127,6 +1145,10 @@ impl SitedBuilder {
         action_run_sites.sort_unstable();
         action_run_sites.dedup();
         action_run_sites.shrink_to_fit();
+        let mut ui_candidate_sites = self.ui_candidate_sites;
+        ui_candidate_sites.sort_unstable();
+        ui_candidate_sites.dedup();
+        ui_candidate_sites.shrink_to_fit();
         let mut action_run_actions = self.action_run_actions;
         action_run_actions.sort();
         action_run_actions.dedup_by_key(|(s, _)| *s);
@@ -1165,6 +1187,7 @@ impl SitedBuilder {
             stable,
             stable_of,
             action_run_sites,
+            ui_candidate_sites,
             action_run_actions,
             entry_inventory: std::sync::OnceLock::new(),
             rev_off,

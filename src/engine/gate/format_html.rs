@@ -1237,6 +1237,7 @@ mod tests {
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let coverage = AnalysisCoverage {
             source_units_total: 1,
@@ -1295,6 +1296,7 @@ mod tests {
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let coverage = AnalysisCoverage {
             source_units_total: 0,

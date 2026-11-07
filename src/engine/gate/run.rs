@@ -1212,6 +1212,7 @@ pub(crate) fn empty_output_result(
                 dependency_diagnostics: vec![],
                 calls: Default::default(),
                 events: Default::default(),
+                page_ui_blocked: Default::default(),
             };
             format_html(&HtmlFormatInputs {
                 findings: &[],
@@ -1486,6 +1487,7 @@ mod tests {
             dependency_diagnostics: vec![d("dependencies")],
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let run = RunOutput {
             findings: vec![],

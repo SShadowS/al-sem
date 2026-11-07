@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-3 fact check: a page's permissions decide what a user runs through it)
+
+Round-3 fact check n09 and m03. A page's lifecycle site into its source table's record
+triggers and table events (a user inserting, modifying, renaming, deleting or editing a field
+in the page) was added whatever the page declared. So `Page "CDO E-Mail/Print Statement"`
+(`DeleteAllowed = false`) was an established UI route to the Customer `OnAfterDeleteEvent`
+subscriber (n09's nearest UI entry, `established: true`), and a `TestPage` on `Page "CDO Key
+Field Value Part"` (`InsertAllowed = false`) selected 7 tests for the variant entry's
+`OnInsert` (m03). New module `program::page_ui`:
+
+- `InsertAllowed = false` blocks insert; `ModifyAllowed = false` modify and rename;
+  `DeleteAllowed = false` delete; a field edit (`OnValidate` and the validate events) needs
+  insert or modify. No AL method sets these at runtime, so the site is not added.
+- `Editable = false` blocks insert, modify, rename and field edits, **not delete** (Microsoft
+  Learn: "Do not use `CurrPage.Editable` to prevent users from deleting entries"; Base
+  Application's `Customer List` is `Editable = false` and users delete customers there).
+  `Page.Editable(true)` can undo it at runtime: a page some code may make editable (a
+  `CurrPage.Editable(…)` in the page or an extension of it, a `Page X` variable's
+  `Editable(…)`, a part's `CurrPage.<part>.Page.Editable(…)`) keeps the site as a candidate,
+  in impact's `overRule` population (relation not established, the path also needs UI
+  navigation). A setter whose receiver the declarations do not type makes every
+  `Editable = false` block a candidate.
+- A property counts only when every `#if` arm writes it literally `false`. A page extension
+  cannot declare these properties (they apply to Page and request page only). A
+  symbol-only page carries them from its symbols.
+- `SourceTableTemporary = true` is unchanged: the table's own triggers still run (on
+  temporary records), and its table events carry the temporary record (round 2's guard).
+- One answer for every consumer: the facts live on `ObjectNode::page_ui` (pack schema 13),
+  `page_ui::page_ui_blocks` reads them from the program graph, and the sited graph (impact,
+  tests, the call-graph export, explain's callers' context) and the model
+  (`Model::page_ui_blocked`, explain's potential UI surfaces of a table trigger or a field's
+  `OnValidate`) both call it.
+- Measured on CDO (`bc3ccb18`): n09's nearest UI entry is now `Page "CDO E-Mail/Print
+  Statement".action(Action10Action)` (its `RunObject` opens Base Application's `Customer
+  Card`, where a user can delete); the UI-navigation population is unchanged (14,528
+  ancestors, 11,230 entries: Customer List and Card allow delete), over a hub 5,654 -> 5,649.
+  m03 selects 134 tests in 15 codeunits (was 141 in 16): 68943 is gone, 68984 stays (its
+  wizard's `Insert(true)`). The call-graph export loses 3,224 edges and gains none: 3,211
+  page lifecycle edges from 303 pages (2,632 into `OnValidate`), and 13 edges of the 9
+  nodes it now prunes. Every runtime `Editable(…)` setter in the CDO program resolves to a
+  page, so `Editable = false` blocks stay certain everywhere else (`Customer List` loses
+  its insert, modify, rename and validate edges and keeps delete).
+
+### Fixed (round-3 fact check: witnesses on paths that cannot run)
+
+- **An `Error(..)` behind a literal Boolean argument is no error on that path (m04).**
+  `alsem prove 'Codeunit "CDO Subscribers"::OnAfterCreateCustomerFromTemplate' throws-error`
+  listed an ERROR_THROW at Continia Core's `CredentialManagement.Codeunit.al:148`, which
+  fires only under `if ShowError and not IsClientCredentialValid then Error(..)`, while
+  its one route calls `HasValidCredentials(false)`. Two defects stacked:
+  - an `Error(..)` statement's statement-tree leaf carries its call-site id, while its
+    `error-throw` fact names its `error-call` operation id, so no parameter guard ever
+    reached an explicit error, not even `if ShowError then Error(..)`. Each `error-call`
+    operation now takes the guard of the call site at the same place
+    (`param_guard::alias_error_ops`, the pairing `control_context` already used);
+  - only a whole-condition guard (`P`, `not P`, `P = false`) was read. Now the simple
+    guards among the operands of an `and` chain guard its THEN branch, and those of an
+    `or` chain guard (negated) its ELSE branch and what follows `if … then exit;`
+    (`PCFNNode::junction_guards`, in memory only; L2 output unchanged).
+  Both the cone's guard (singleton SCCs) and the per-root literal reach (recursive SCCs,
+  dependency code included) read these frames, so every reader of literal-dead effects
+  (prove, digest, explain, query) moves together. On CDO the answer stays `yes` on the
+  two ERROR_IMPLICIT rows; the ERROR_THROW row is gone. `explain DocSave` now counts
+  412 tables written (was 415) and errors at 305 places (was 308).
+- **A record operation that runs no trigger is no "hub record trigger" (c02).** A
+  `RecordRef.Modify();` on a RecordRef opened from a table-number parameter
+  (`UpgradeBaseApp.Codeunit.al:2022`) became the hub `h:record:modify`, which expands to
+  every table's `OnModify`, so `prove … callers-may-run-noninteractive` printed `[hub
+  record trigger (Modify) at …:2022]` and a path into `Table "CAL Test Line"::OnModify`.
+  An `Insert`/`Modify`/`Delete`/`DeleteAll`/`ModifyAll` whose RunTrigger is left out or a
+  literal `false` runs no trigger of any table. Such a site on a table not resolved now
+  gets the bound `OpenBound::RecordEvents` and the hub `h:record-events:<op>` (node
+  `hub: "record-events"`, shown as `table events (Modify, no trigger)`), which expands to
+  the platform table events only (`OnBefore/OnAfter<Op>Event`, raised whatever the
+  RunTrigger). `Rename` and `Validate` take no RunTrigger and keep the trigger hub. Spec
+  row added to `2026-10-13-callgraph-export-design.md` §4.5; the `alsem graph` export
+  gains the new hub class (additive; a consumer that switches on the hub class, such as
+  bc-dev-mcp's parser, should learn `record-events`: not checked from here).
+
+### Fixed (round-3 output validation: test selection)
+
+- **Every changed routine a test reaches (c21).** `runFirst[].reaches` named only the
+  changed routine at the end of the test's shortest path, so with 20 changed routines every
+  row named `SetSendUsingBCEmailAccount` while its tests also reach 12 more (BCSendMail,
+  WaitForMailLimit, …). With up to 32 changed routines (one walk each) `reaches` now lists
+  every changed routine the test reaches, in `changed[]` order, with `reachesHops` beside it
+  (same order) and `reachesByNavigationOnly` (the ones it reaches only by UI navigation,
+  left out when none). Over 32 it stays the shortest path's routine, and
+  `result.selection.reachesComplete` says which (`true`/`false`). The select part carries
+  `reachesAll` (each root with tier, hops and relation) and `reachesComplete`.
+- **Nearest test is relation-aware (c21).** A changed routine's nearest test is the first
+  code test (tier, hops), and a UI-navigation test only when no code test reaches it.
+  `changed[].nearest.relation` is new (additive), the human `nearest [via-dependency, UI
+  navigation]` label and impact's `tests:` line (`nearest … (local, code, 1 hop)`) say it.
+  Under `maxTests` each routine takes its nearest test by that test's own path to the
+  routine (code before navigation, then tier, hops), so for BCSendMail a code test is
+  returned instead of `AttachmentsAssistEdit_OpensAttachmentsPage` (UI navigation only).
+- **The capped run target is the returned tests' (round-3 B1).** The envelope summary's
+  `runTarget.codeunits` listed the full selection's codeunits (15 on c21) while the 10
+  returned tests come from 4. It now lists the returned tests' codeunits, with
+  `runTarget.supersetOf: "returnedTests"` (whole codeunits: a superset of them); under a cap
+  the full selection's codeunits move to `selectionRunTarget` (`supersetOf:
+  "selectedTests"`, with `tests`). **Consumer notice** (bc-dev-mcp and any reader of
+  `summary.runTarget`): under a cap the field's meaning changes from "the selection" to "the
+  returned tests"; read `selectionRunTarget` for the old value. Uncapped answers are
+  unchanged.
+- **"Effectively the suite's posting tests" (c07, n02, m03)** came from a cone-size rule,
+  not from the tests: on c07 only 28 of the 444 are in posting codeunits. The line now says
+  what the rule measured: `[via-dependency] 444 tests in 40 codeunits of the suite's 1,844,
+  not listed at this tier — a broad set: each one's path enters dependency code that may run
+  more than half of the program; nearest: … ; tier: "dependency" lists them`. The MCP tool
+  description no longer promises "not specific to this change".
+- **"Each opens a page on the field's table" (n02)** was not computed: the 37 tests open
+  Template Card, CDO Setup and Setup Wizard, on other tables. The navigation caveat now names
+  the first page each path opens (at most three, then counted) and the step still needed:
+  `the first page each path opens: Page "CDO E-Mail Template Card", Page "CDO Setup", Page
+  "CDO Setup Wizard"; whether a test edits the field is not established`.
+
+### Fixed (counts and labels the round-3 fact check found)
+
+- **n03, a key on a system field.** A table key may name a system field (Base
+  Application's Customer: `key(Key17; SystemModifiedAt)`), which no table declares as a
+  `field`. The model dropped that member, so the key had no fields and `query touches`'
+  `keys:` line left it out ("+13" for 14 hidden keys). Key members now resolve the five
+  system fields to their fixed numbers (SystemId 2000000000 … SystemModifiedBy
+  2000000004), the keys line counts every declared key and prints the system field by
+  name, and the key-relevant test and `--field` mode's key names read the same names.
+  The keys line also stopped adding the keys of a tableextension stub whose id collides
+  with the table (G-5).
+- **c17, touches callers.** "first touch not the shared one" listed callers whose first
+  touch was the shared one, reached through an event subscriber. The callers are now
+  grouped by the touch's site; one that reaches the shared touch another way is on its
+  own line, `the shared first touch, reached another way (3 callers): … (through an
+  event subscriber)`.
+- **c18, the reason of an unresolved RecordRef.** The reason named the first `Open` or
+  `GetTable` anywhere in the routine. It now names the origins that reach the operation
+  (a reaching-definitions walk over the statement tree): `copied by Duplicate() from the
+  global RecRefFilter, which SetRecRefFilter sets` at `CDOEMailHandler.Codeunit.al:450`;
+  both branches where both reach (`…; or set by GetTable from a record whose table is
+  not resolved`).
+- **m10, a page run.** explain's `calls:` line showed `Page.RunModal(Page::"X")` as one
+  of the page's trigger edges (`Page "X"::OnClosePage`). Object runs are now on their
+  own line, `runs: Page "CDO E-Mail Recipients" (RunModal at :105)` (impact's
+  `runsLine` beside `callsLine`).
+- **m04, prove's headline on a dependency group** names the operation the witness ends
+  at and where (`Insert (implicit error) at dep:…:514, beyond Codeunit "CTS-CDN DO Page
+  Helpers"::InsertDefaultCustomerSetup, entered at …`); a group's boundary is printed in
+  the one display (`Codeunit "CSC Core"::…`).
+- **n08/m01, digest on an ambiguous selector** gives the complete follow-up over the
+  candidates (`complete call: alsem_digest {"routines": [...]}`, and `summary.next`),
+  and a lookup failure's summary carries no effect totals; its payload has no routine
+  table or path cap.
+- **c02 wording.** "unknown because of 9545 callers that reach it only over a hub"; the
+  callers' answer line says "unknown because of"; a fold note says what `detail` adds
+  (`--detail lists 2 more; 12 only counted`).
+- **c10, explain `--field`'s scope** names whose cone the depth clause is about (`the
+  writer card's effects: dependency code: none reached`); the field search itself reads
+  dependency bodies and says so on its `searched:` line.
+
 ### Changed (round-2 output validation, W5: noise and size)
 
 Milestone W5 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.1-§4.4,

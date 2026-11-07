@@ -208,6 +208,12 @@ pub struct ObjectNode {
     /// seeing both, and Base Application's own references bound to the stub.
     /// `false` for a symbol-only object.
     pub obsolete_gone: bool,
+    /// A Page's declared UI permissions (`Editable`, `InsertAllowed`,
+    /// `ModifyAllowed`, `DeleteAllowed` written `false`) and, for any source
+    /// object, the `Editable(…)` setter calls in its file's code
+    /// ([`crate::program::page_ui`]). A symbol-only page carries its
+    /// properties from the symbol reference and no setters.
+    pub page_ui: crate::program::page_ui::PageUiDecl,
 }
 
 /// One retained ABI parameter's dispatch-relevant metadata (Task 2, roadmap-
@@ -838,7 +844,9 @@ pub fn extract_nodes(
     objects: &mut Vec<ObjectNode>,
     routines: &mut Vec<RoutineNode>,
 ) {
-    for obj in &file.objects {
+    // Once per file, one list per object.
+    let editable_setters = crate::program::page_ui::editable_setters(file);
+    for (obj_ix, obj) in file.objects.iter().enumerate() {
         let key = ObjKey::from_source(obj);
         let obj_id = ObjectNodeId {
             app,
@@ -982,6 +990,10 @@ pub fn extract_nodes(
                 p.name.eq_ignore_ascii_case("access")
                     && p.value.trim().eq_ignore_ascii_case("internal")
             }),
+            page_ui: crate::program::page_ui::PageUiDecl {
+                editable_setters: editable_setters[obj_ix].clone(),
+                ..crate::program::page_ui::PageUiDecl::from_properties(obj)
+            },
         });
         // Computed once per object — same value for every routine in the object.
         let subscriber_instance_manual = read_event_subscriber_instance(obj);
@@ -1160,6 +1172,7 @@ pub(crate) mod test_fixtures {
             enum_impls: vec![("icustominterface".into(), ObjectRef::Id(50101))],
             lookup_pages: vec!["\"Demo Lookup\"".into()],
             obsolete_gone: true,
+            page_ui: Default::default(),
             internal: true,
         }
     }

@@ -715,6 +715,7 @@ mod tests {
             dependency_diagnostics: Vec::new(),
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let ctx = detector_context(&resolved, &art, None, None);
 
