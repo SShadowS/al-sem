@@ -216,6 +216,7 @@ mod cli_overload_last_ambiguities;
 mod cli_own_table_extension_method;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
+mod cli_page_ui_permissions;
 mod cli_parameterless_symbol_method;
 mod cli_policy_pins;
 mod cli_prove_closed_world;

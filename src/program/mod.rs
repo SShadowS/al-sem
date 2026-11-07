@@ -17,6 +17,7 @@ pub mod node;
 pub mod node_extract;
 pub mod node_set;
 pub mod pack;
+pub mod page_ui;
 pub mod physical;
 pub mod profile;
 pub mod recordref_table;

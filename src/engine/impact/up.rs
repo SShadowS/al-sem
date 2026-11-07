@@ -84,7 +84,9 @@ pub mod bit {
     pub const NAV: u8 = 1;
     /// The path takes a rule edge: a routine or object declaring a
     /// `TestPage`/`TestRequestPage` variable (`declaredRunnable` with no call
-    /// site). Its relation is not established.
+    /// site), or a page's lifecycle into a record trigger the page declares
+    /// non-editable while code may make it editable at runtime
+    /// ([`SitedGraph::is_ui_candidate`]). Its relation is not established.
     pub const RULE: u8 = 2;
     /// The path takes a site labelled `configuredDispatch`: it runs only
     /// when configuration data selects it.
@@ -103,13 +105,18 @@ pub mod bit {
 ///   site: the builtin runs the object);
 /// - [`bit::NAV`]: every other lifecycle site, and an action-run site;
 /// - [`bit::RULE`]: `declaredRunnable` with no call site (a `TestPage`
-///   declaration);
+///   declaration), and (with [`bit::NAV`]) a candidate page-lifecycle site
+///   ([`SitedGraph::is_ui_candidate`], [`crate::program::page_ui`]);
 /// - an `Open` site sets nothing: the walk's tier says "over a hub";
 /// - [`bit::CONFIGURED`], beside the row's own: a `configuredDispatch` site.
 #[must_use]
 pub fn site_bits(g: &SitedGraph, s: SiteIx) -> u8 {
     let st = &g.sites()[s as usize];
     let relation = match st.boundary {
+        // A page's lifecycle into a record trigger the page may block
+        // (`Editable = false`, while code may set its editability at
+        // runtime): a UI step a rule allows but no fact establishes.
+        Boundary::Lifecycle if g.is_ui_candidate(s) => bit::NAV | bit::RULE,
         Boundary::Lifecycle => {
             let code =
                 !g.is_routine(st.from) && !g.is_action_run(s) && object_run_reaches(g, st.to);

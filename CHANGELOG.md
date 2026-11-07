@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-3 fact check: a page's permissions decide what a user runs through it)
+
+Round-3 fact check n09 and m03. A page's lifecycle site into its source table's record
+triggers and table events (a user inserting, modifying, renaming, deleting or editing a field
+in the page) was added whatever the page declared. So `Page "CDO E-Mail/Print Statement"`
+(`DeleteAllowed = false`) was an established UI route to the Customer `OnAfterDeleteEvent`
+subscriber (n09's nearest UI entry, `established: true`), and a `TestPage` on `Page "CDO Key
+Field Value Part"` (`InsertAllowed = false`) selected 7 tests for the variant entry's
+`OnInsert` (m03). New module `program::page_ui`:
+
+- `InsertAllowed = false` blocks insert; `ModifyAllowed = false` modify and rename;
+  `DeleteAllowed = false` delete; a field edit (`OnValidate` and the validate events) needs
+  insert or modify. No AL method sets these at runtime, so the site is not added.
+- `Editable = false` blocks insert, modify, rename and field edits, **not delete** (Microsoft
+  Learn: "Do not use `CurrPage.Editable` to prevent users from deleting entries"; Base
+  Application's `Customer List` is `Editable = false` and users delete customers there).
+  `Page.Editable(true)` can undo it at runtime: a page some code may make editable (a
+  `CurrPage.Editable(…)` in the page or an extension of it, a `Page X` variable's
+  `Editable(…)`, a part's `CurrPage.<part>.Page.Editable(…)`) keeps the site as a candidate,
+  in impact's `overRule` population (relation not established, the path also needs UI
+  navigation). A setter whose receiver the declarations do not type makes every
+  `Editable = false` block a candidate.
+- A property counts only when every `#if` arm writes it literally `false`. A page extension
+  cannot declare these properties (they apply to Page and request page only). A
+  symbol-only page carries them from its symbols.
+- `SourceTableTemporary = true` is unchanged: the table's own triggers still run (on
+  temporary records), and its table events carry the temporary record (round 2's guard).
+- One answer for every consumer: the facts live on `ObjectNode::page_ui` (pack schema 13),
+  `page_ui::page_ui_blocks` reads them from the program graph, and the sited graph (impact,
+  tests, the call-graph export, explain's callers' context) and the model
+  (`Model::page_ui_blocked`, explain's potential UI surfaces of a table trigger or a field's
+  `OnValidate`) both call it.
+- Measured on CDO (`bc3ccb18`): n09's nearest UI entry is now `Page "CDO E-Mail/Print
+  Statement".action(Action10Action)` (its `RunObject` opens Base Application's `Customer
+  Card`, where a user can delete); the UI-navigation population is unchanged (14,528
+  ancestors, 11,230 entries: Customer List and Card allow delete), over a hub 5,654 -> 5,649.
+  m03 selects 134 tests in 15 codeunits (was 141 in 16): 68943 is gone, 68984 stays (its
+  wizard's `Insert(true)`). The call-graph export loses 3,224 edges and gains none: 3,211
+  page lifecycle edges from 303 pages (2,632 into `OnValidate`), and 13 edges of the 9
+  nodes it now prunes. Every runtime `Editable(…)` setter in the CDO program resolves to a
+  page, so `Editable = false` blocks stay certain everywhere else (`Customer List` loses
+  its insert, modify, rename and validate edges and keeps delete).
+
 ### Changed (round-2 output validation, W5: noise and size)
 
 Milestone W5 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.1-§4.4,

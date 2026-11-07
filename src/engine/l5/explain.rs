@@ -3303,10 +3303,14 @@ impl RunBy {
         }
     }
 
-    /// Potential UI surfaces of a table: the pages whose source table it is
-    /// (the sited graph's rule for a lifecycle site from a page into its
-    /// source table's triggers, `impact_graph::project`), sorted.
-    fn pages_on_table(model: &Model, table: &ModelTable) -> Vec<String> {
+    /// Potential UI surfaces of a table for a user's record operation `op` (a
+    /// [`crate::program::page_ui::op`] bit; 0 for a step no page property
+    /// blocks, a lookup or an assist-edit): the pages whose source table it
+    /// is, less those that block `op` for certain (`InsertAllowed = false`,
+    /// …; the sited graph's rule for a lifecycle site from a page into its
+    /// source table's triggers, `impact_graph::project`, reads the same
+    /// [`Model::page_blocks`] answer), sorted.
+    fn pages_on_table(model: &Model, table: &ModelTable, op: u8) -> Vec<String> {
         use crate::engine::l4::field_touches::field_key;
         let table_key = field_key(&table.name);
         let mut pages: Vec<String> = model
@@ -3318,6 +3322,7 @@ impl RunBy {
                     && o.source_table_name
                         .as_deref()
                         .is_some_and(|t| field_key(t) == table_key)
+                    && !model.page_blocks(&o.id, op)
             })
             .map(|o| crate::engine::l5::routine_rollup::format_object("Page", &o.name, None))
             .collect();
@@ -3366,7 +3371,10 @@ impl RunBy {
         }
         sites.sort_by(|a, b| (&a.0, a.1, &a.2).cmp(&(&b.0, b.1, &b.2)));
         sites.dedup();
-        let pages = Self::pages_on_table(model, table);
+        // The pages where a user's operation runs this trigger.
+        let op = crate::program::impact_graph::project::trigger_op(&r.name.to_ascii_lowercase())
+            .map_or(0, crate::program::page_ui::op::of_index);
+        let pages = Self::pages_on_table(model, table, op);
         let table_display = format!("\"{}\"", table.name.replace('"', "\"\""));
         let surfaces = if pages.is_empty() {
             format!("potential UI surfaces: no page on table {table_display} in the loaded program")
@@ -3560,8 +3568,14 @@ impl RunBy {
         let field = table.fields.iter().find(|f| field_key(&f.name) == member)?;
         // Potential UI surfaces: the pages whose source table is the field's
         // table. Page columns are not indexed, so whether a page shows the
-        // field is not known.
-        let pages = Self::pages_on_table(model, table);
+        // field is not known. A page where a user can edit no record (insert
+        // and modify both blocked) runs no `OnValidate`.
+        let op = if name == "onvalidate" {
+            crate::program::page_ui::op::VALIDATE
+        } else {
+            0
+        };
+        let pages = Self::pages_on_table(model, table, op);
         let table_display = format!("\"{}\"", table.name.replace('"', "\"\""));
         let what_page = if name == "onvalidate" {
             "shows or edits"

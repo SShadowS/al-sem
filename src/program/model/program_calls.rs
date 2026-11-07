@@ -564,6 +564,21 @@ fn attach_program_calls_with(
         r.file = None;
         r.site_exprs = crate::program::site_key::SiteExprs::default();
     }
+    // The pages that block a user's record operation, from the graph (the
+    // sited graph's page lifecycle reads the same function).
+    let page_ui_blocked = {
+        let graph = program.body().ctx.graph();
+        crate::program::page_ui::page_ui_blocks(graph)
+            .into_iter()
+            .filter(|(_, b)| b.certain != 0)
+            .map(|(id, b)| {
+                (
+                    crate::program::model::model_object_id(graph, &id),
+                    b.certain,
+                )
+            })
+            .collect()
+    };
     let (meta, body) = program.into_parts();
     body.release();
     // #160 §4.1.4: everything retained from here on is post-attach.
@@ -581,6 +596,7 @@ fn attach_program_calls_with(
         dependency_diagnostics: meta.coverage.dependency_diagnostics(),
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
+        page_ui_blocked,
     };
     // The three whole-model final passes, each its own span (context-server
     // design r4 §12 stage 1: they gate stage 4's per-revision cost).
@@ -2871,6 +2887,7 @@ mod tests {
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let (none, three) = (census_model_rows(&model(0)), census_model_rows(&model(3)));
         assert_eq!(

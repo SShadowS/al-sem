@@ -221,6 +221,10 @@ struct Builder<'a> {
     /// The [`Site::guard`] bits of the sites being added (set around one
     /// engine route in [`Self::engine_edges`]; 0 otherwise).
     site_guard: u8,
+    /// What each page blocks a user from doing to its source table's records
+    /// through it ([`crate::program::page_ui`]); pages blocking nothing are
+    /// absent.
+    page_ui: HashMap<ObjectNodeId, crate::program::page_ui::PageUiBlocks>,
 }
 
 /// How many sites a sited-graph build adds between cancellation checks
@@ -229,7 +233,7 @@ pub(crate) const CANCEL_EVERY: u64 = 4096;
 
 /// The trigger boundary of a record trigger or platform table event named
 /// `name_lc`: the operation that fires it.
-fn trigger_op(name_lc: &str) -> Option<u8> {
+pub(crate) fn trigger_op(name_lc: &str) -> Option<u8> {
     super::sited::RECORD_OPS
         .iter()
         .position(|op| {
@@ -279,6 +283,7 @@ impl<'a> Builder<'a> {
             cancelled: false,
             added: 0,
             site_guard: 0,
+            page_ui: crate::program::page_ui::page_ui_blocks(g),
         }
     }
 
@@ -905,6 +910,8 @@ impl<'a> Builder<'a> {
         // records of its source table: the table events its record operations
         // raise come with the record temporary (`Site::guard`).
         let mut temporary_source: Option<ObjectNodeId> = None;
+        // The page's source table: what its UI permissions apply to.
+        let mut page_source: Option<ObjectNodeId> = None;
         if oid.kind == ObjectKind::Page
             && let Some(st) = &obj.source_table
             && let Some(RunTarget::Object(table)) = self.resolve_ref(oid, ObjectKind::Table, st)
@@ -921,6 +928,7 @@ impl<'a> Builder<'a> {
             {
                 temporary_source = Some(table.clone());
             }
+            page_source = Some(table.clone());
             tables.push(table);
         }
         for to in opens {
@@ -969,7 +977,21 @@ impl<'a> Builder<'a> {
                     .filter(|r| r.publisher_kind == Some(PublisherKind::Platform))
                     .map(|r| (r.id.clone(), event_guard)),
             );
+            // What the page lets a user do to these records through it
+            // (`page_ui`): a blocked operation's triggers and table events
+            // get no site, a candidate's get a site marked so.
+            let blocks = if page_source.as_ref() == Some(&table) {
+                self.page_ui.get(oid).copied().unwrap_or_default()
+            } else {
+                crate::program::page_ui::PageUiBlocks::default()
+            };
             for (t, guard) in targets {
+                let op =
+                    trigger_op(t.name_lc.as_str()).map_or(0, crate::program::page_ui::op::of_index);
+                if blocks.certain & op != 0 {
+                    continue;
+                }
+                let before = self.sited.sites.len();
                 self.site_guard = guard;
                 self.simple(
                     from.clone(),
@@ -979,6 +1001,9 @@ impl<'a> Builder<'a> {
                     "lifecycle",
                 );
                 self.site_guard = 0;
+                if blocks.candidate & op != 0 && self.sited.sites.len() > before {
+                    self.sited.ui_candidate_sites.push(before as u32);
+                }
             }
         }
         if obj.tier == TrustTier::SymbolOnly {
@@ -1610,6 +1635,7 @@ pub(crate) mod tests {
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
                 obsolete_gone: false,
+                page_ui: Default::default(),
             });
             oid
         }

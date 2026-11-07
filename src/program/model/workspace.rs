@@ -3483,6 +3483,22 @@ pub struct Model {
     /// The detector event graph built from the program engine's subscription
     /// inventory (engine-switch S4.2), by the same function.
     pub events: std::sync::Arc<super::events::ProgramEvents>,
+    /// Per page (model object id) that blocks a user's record operation for
+    /// certain: those operations, as [`crate::program::page_ui::op`] bits.
+    /// From the program graph by the function the sited graph reads
+    /// ([`crate::program::page_ui::page_ui_blocks`]), so `explain`'s potential
+    /// UI surfaces and the sited graph's page lifecycle agree. Empty for a
+    /// model built without a program build.
+    pub page_ui_blocked: std::collections::BTreeMap<String, u8>,
+}
+
+impl Model {
+    /// Whether the page with model object id `page` blocks a user's record
+    /// operation `op` (a [`crate::program::page_ui::op`] bit) for certain.
+    #[must_use]
+    pub fn page_blocks(&self, page: &str, op: u8) -> bool {
+        self.page_ui_blocked.get(page).is_some_and(|b| b & op != 0)
+    }
 }
 
 // ---------------------------------------------------------------------------

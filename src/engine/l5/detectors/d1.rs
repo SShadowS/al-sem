@@ -3205,6 +3205,7 @@ mod shadow_tests {
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let premerge = detect_d1_premerge(&resolved, &ctx);
         let (old_keys, old_max_sev_by_key, old_root_cause_keys) = extract_old_keys(&premerge);
@@ -4296,6 +4297,7 @@ mod assembly_tests {
             dependency_diagnostics: vec![],
             calls: Default::default(),
             events: Default::default(),
+            page_ui_blocked: Default::default(),
         };
         let premerge = detect_d1_premerge(&resolved, &ctx);
         // rootCauseKey -> fingerprint (all premerge findings sharing a key hash equal).
