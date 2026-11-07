@@ -5,6 +5,7 @@ more: --tier dependency adds tests whose path passes dependency code; --format j
 test scope: workspace 0 [Test] procedures; 1 test app (TU Production Tests: production source projection approximate), 2 tests; 1 app skipped: --format json lists why
 changed: 1 routine (Codeunit "TU Core"::Post — tests with a modeled path)
 tests on a local path: 1 test in 1 codeunit — by relation: code 1, UI navigation 0 (code paths first, then by tier and hops):
-  Codeunit 50850 TU Core Tests: 1 test; first [local, code] 1 hop (first: PostUpdatesQty; via Codeunit "TU Core"::Post)
+  by tier: local 1, via-dependency 0, via-hub 0
+  Codeunit 50850 TU Core Tests: 1 test; first [local, code] 1 hop (first: PostUpdatesQty)
+    path: Codeunit "TU Core"::Post
 selection complete
-missing test-library symbols: 1 app (Library Assert) — add them to Test/.alpackages ("AL: Download symbols" in the test app), then ask again

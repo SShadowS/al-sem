@@ -1,7 +1,7 @@
 digest files src/Rec.Table.al, src/Sender.Codeunit.al → Codeunit "D49 Sender"::ModifyThenMessage   [cross-app]
 answer: writes: may write 1 table (1 owned by this app, 0 by dependencies): D49 Rec (Modify at :14)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every effect row
+more: --detail lists every list in full; --format json for every effect row
 computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D49 Sender"::ModifyThenMessage ---
   transaction, UI and errors: commits: no (every candidate decided); UI at 1 place; errors at 2 places

@@ -1,11 +1,11 @@
 explain Codeunit "Rules Checks"::CheckOrder   [cross-app]
 answer: writes: no (every candidate decided)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every row
+more: --detail lists every list in full; --format json for every row
 Codeunit "Rules Checks"::CheckOrder  defined at ws:src/checks.al:8
   transaction, UI and errors: commits: no (every candidate decided); errors at 5 places
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: none; tests: none (no test code loaded)
+  callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   doc: Checks an order before it is posted.

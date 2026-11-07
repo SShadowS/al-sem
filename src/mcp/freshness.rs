@@ -753,13 +753,9 @@ pub fn status_text(body: &Value) -> String {
         out.push(refresh);
     }
     if out.is_empty() {
+        // Round-2 G25: the headline already says that no engine is running
+        // and nothing was checked; a `not checked:` line would repeat it.
         out.push(body["headline"].as_str().unwrap_or("").to_string());
-        out.push(format!(
-            "  not checked: {}",
-            body["noEngine"]["reason"]
-                .as_str()
-                .unwrap_or("no engine is running")
-        ));
     }
     out.join("\n") + "\n"
 }

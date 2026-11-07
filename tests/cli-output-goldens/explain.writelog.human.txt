@@ -1,11 +1,10 @@
 explain Codeunit "Out Log Mgt"::WriteLog   [cross-app]
 answer: writes: may write 1 table (1 owned by this app, 0 by dependencies): Out Log (Insert at :61)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 1 app
-more: --detail lists every list complete; --format json for every row
+more: --detail lists every list in full; --format json for every row
 Codeunit "Out Log Mgt"::WriteLog  defined at ws:src/OutIssueDocument.Codeunit.al:53
   transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: 3 direct (3 routines); 1 page action reaches it in all; tests: 1
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   callers: 3 direct — 3 routines: Codeunit "Out Issue Document"::IssueDoc, Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts; 1 page action reaches it in all (directly or through callers)

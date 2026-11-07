@@ -411,39 +411,43 @@ impl Job for ExplainJob<'_> {
         // The graph is declared only with `--callers-context` (read it only
         // then: an undeclared read panics).
         let sited = self.callers_context.then(|| cx.sited()).flatten();
-        let callers: HashMap<String, (Value, Vec<String>)> = match sited {
-            Some(g) if !resolved.roots.is_empty() => {
-                let det = cx.view().det();
-                let ccx = crate::engine::l5::callers_context::CallersCx {
-                    model: cx.view().model(),
-                    g,
-                    summaries: &det.summaries,
-                    cone_derived: &det.cone_derived,
-                    inputs: Some(cx.inputs()),
-                    assume_no_dependents: false,
-                    cancel: None,
-                };
-                // §6.1: the section's follow-ups name each card's selector.
-                let apps = cx.view().target().dependencies().apps;
-                let names =
-                    crate::engine::l5::routine_rollup::RoutineNames::new(cx.view().model(), &apps);
-                let fcx = crate::engine::follow_up::Cx::new(self.opts.surface, self.req.single_app);
-                resolved
-                    .roots
-                    .iter()
-                    .filter_map(|r| {
-                        let selector = names.selector(r);
-                        let hcx = crate::engine::l5::callers_context::HumanCx {
-                            fcx,
-                            selector: &selector,
-                        };
-                        crate::engine::l5::callers_context::section(&ccx, r, &hcx)
-                            .map(|s| (r.clone(), s))
-                    })
-                    .collect()
-            }
-            _ => HashMap::new(),
-        };
+        let callers: HashMap<String, crate::engine::l5::callers_context::CallersSection> =
+            match sited {
+                Some(g) if !resolved.roots.is_empty() => {
+                    let det = cx.view().det();
+                    let ccx = crate::engine::l5::callers_context::CallersCx {
+                        model: cx.view().model(),
+                        g,
+                        summaries: &det.summaries,
+                        cone_derived: &det.cone_derived,
+                        inputs: Some(cx.inputs()),
+                        assume_no_dependents: false,
+                        cancel: None,
+                    };
+                    // §6.1: the section's follow-ups name each card's selector.
+                    let apps = cx.view().target().dependencies().apps;
+                    let names = crate::engine::l5::routine_rollup::RoutineNames::new(
+                        cx.view().model(),
+                        &apps,
+                    );
+                    let fcx =
+                        crate::engine::follow_up::Cx::new(self.opts.surface, self.req.single_app);
+                    resolved
+                        .roots
+                        .iter()
+                        .filter_map(|r| {
+                            let selector = names.selector(r);
+                            let hcx = crate::engine::l5::callers_context::HumanCx {
+                                fcx,
+                                selector: &selector,
+                            };
+                            crate::engine::l5::callers_context::section(&ccx, r, &hcx)
+                                .map(|s| (r.clone(), s))
+                        })
+                        .collect()
+                }
+                _ => HashMap::new(),
+            };
         // `--callers-context` also counts each card's callers through
         // dependency code (callers-through-dependency design r2 §11.3): the
         // sited graph is declared here, so it costs one walk per card.
@@ -1939,7 +1943,7 @@ fn render(
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
     table_answers: &TableAnswers,
     test_scope: &crate::engine::test_select::scope::Scope,
-    callers: &HashMap<String, (Value, Vec<String>)>,
+    callers: &HashMap<String, crate::engine::l5::callers_context::CallersSection>,
     through: &HashMap<String, (Value, String)>,
     single_app: bool,
 ) -> ExplainRunResult {
@@ -1981,7 +1985,7 @@ fn render(
         .iter()
         .map(|rid| {
             let entry = full.iter().find(|e| &e.routine_id == rid);
-            let card = Card::build(
+            let mut card = Card::build(
                 &ix,
                 &cross,
                 rid,
@@ -2007,39 +2011,11 @@ fn render(
                 .iter()
                 .map(|f| format!("{} — {}", f.text(opts.surface), f.why))
                 .collect();
-            let (head, body) = card.human_parts(single, &next);
-            let head_len = head.len();
             let mut json = card.json();
             json["followUps"] = crate::engine::follow_up::json_list(&follow_ups);
-            let mut human = format!("{head}{body}");
-            // Before the `next:` lines, else before the card's closing blank
-            // line.
-            let before_next = |h: &str| {
-                h.find("\n  next:")
-                    .map_or(h.len().saturating_sub(1), |i| i + 1)
-            };
-            // `--writes-table` (W2-2 gap (a)): prove's own answer per table,
-            // before `next:`.
-            if let Some((values, lines)) = table_answers.get(rid) {
-                json["tableAnswers"] = json!(values);
-                let at = before_next(&human);
-                let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
-                human.insert_str(at, &text);
-            }
-            // `--callers-context`: the callers through dependency code, on
-            // the line after `callers:` (design r2 §11.3).
-            if let Some((value, line)) = through.get(rid) {
-                json["throughDependency"] = value.clone();
-                let at = human
-                    .find("\n  callers:")
-                    .and_then(|i| human[i + 1..].find('\n').map(|j| i + 1 + j + 1))
-                    .unwrap_or_else(|| before_next(&human));
-                human.insert_str(at, &format!("    {line}\n"));
-            }
             // Output validation V2 (§5.1, F29, F75): the routine's own state
             // changes, the target company of its writes, and the callers'
             // context section lead the card, right after its head.
-            let after_header = |_: &str| head_len;
             let mut lead: Vec<String> = Vec::new();
             // §9.1 (F55): the direct callees first, and the short route to
             // the UI effect the card names (a callee list alone does not say
@@ -2103,16 +2079,59 @@ fn render(
                 }
             }
             // `--callers-context` (agent-tasks §6.6): the callers' context
-            // section.
-            if let Some((value, lines)) = callers.get(rid) {
-                json["callersContext"] = value.clone();
+            // section. Round-2 G24: without `detail` the card leads with the
+            // callers (its `answer:` line is the three callers' answers, the
+            // `writes:` line joins the summary lines), and the lines above
+            // follow the summary lines.
+            let callers_first = callers.get(rid).is_some() && !opts.detail;
+            let mut after_summary: Vec<String> = Vec::new();
+            if let Some(section) = callers.get(rid) {
+                json["callersContext"] = section.json.clone();
+                if callers_first {
+                    after_summary = std::mem::take(&mut lead);
+                    let summary = &card.header.summary;
+                    let (first, rest) = summary.split_once('\n').unwrap_or((summary, ""));
+                    let writes = first.strip_prefix("summary — ").unwrap_or(first);
+                    card.header.summary = format!(
+                        "summary — {}\n    {writes}{}{rest}",
+                        section.answer,
+                        if rest.is_empty() { "" } else { "\n" }
+                    );
+                }
                 lead.push(own_state_changes(model, rid));
-                lead.extend(lines.iter().cloned());
+                lead.extend(section.lines.iter().cloned());
+            }
+            let (head, body) =
+                card.human_parts(single, &next, callers_first.then_some(&after_summary[..]));
+            let head_len = head.len();
+            let mut human = format!("{head}{body}");
+            // Before the `next:` lines, else before the card's closing blank
+            // line.
+            let before_next = |h: &str| {
+                h.find("\n  next:")
+                    .map_or(h.len().saturating_sub(1), |i| i + 1)
+            };
+            // `--writes-table` (W2-2 gap (a)): prove's own answer per table,
+            // before `next:`.
+            if let Some((values, lines)) = table_answers.get(rid) {
+                json["tableAnswers"] = json!(values);
+                let at = before_next(&human);
+                let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
+                human.insert_str(at, &text);
+            }
+            // `--callers-context`: the callers through dependency code, on
+            // the line after `callers:` (design r2 §11.3).
+            if let Some((value, line)) = through.get(rid) {
+                json["throughDependency"] = value.clone();
+                let at = human
+                    .find("\n  callers:")
+                    .and_then(|i| human[i + 1..].find('\n').map(|j| i + 1 + j + 1))
+                    .unwrap_or_else(|| before_next(&human));
+                human.insert_str(at, &format!("    {line}\n"));
             }
             if !lead.is_empty() {
-                let at = after_header(&human);
                 let text: String = lead.iter().map(|l| format!("  {l}\n")).collect();
-                human.insert_str(at, &text);
+                human.insert_str(head_len, &text);
             }
             (
                 card.sort_key.clone(),
@@ -2410,7 +2429,7 @@ fn explain_header(
     let s = opts.surface;
     if !cards.is_empty() && !opts.detail {
         h.more
-            .push(format!("{} lists every list complete", Input::Detail.on(s)));
+            .push(format!("{} lists every list in full", Input::Detail.on(s)));
     }
     h.more
         .push(format!("{} for every row", Input::FormatJson.on(s)));
@@ -4759,7 +4778,35 @@ impl Card {
     /// prints its own only when the answer has several cards and its own
     /// differ). The lead sections (calls, the UI route, the callers' context)
     /// go between the two.
-    fn human_parts(&self, single: bool, next: &[String]) -> (String, String) {
+    ///
+    /// Round-2 G24: with `callers_first` (the callers' context is shown and
+    /// `detail` is off) the card leads with the callers: the head is the
+    /// title, the body starts with the callers' line and its rules, then the
+    /// summary lines and `callers_first`'s lines (calls, the UI route, the
+    /// target company), the tests and a pointer to `detail` for the effect
+    /// rows; the page-action captions and objects move behind `detail`.
+    /// Round-2 G25: the summary's `callers and tests:` line is not printed
+    /// when the body prints the callers (or `run by:`) and tests lines.
+    fn human_parts(
+        &self,
+        single: bool,
+        next: &[String],
+        callers_first: Option<&[String]>,
+    ) -> (String, String) {
+        let compact = callers_first.is_some() && !self.opts.detail;
+        let actions = self.reached_from.len();
+        let body_prints_callers = self.run_by.is_some()
+            || !(self.direct.total == 0 && actions == 0 && self.callers.is_empty());
+        let rest: Vec<String> = self
+            .header
+            .rest()
+            .into_iter()
+            .filter_map(|l| match l.strip_prefix("callers and tests: ") {
+                Some(_) if body_prints_callers => None,
+                Some(_) => Some(self.direct.summary()),
+                None => Some(l.to_string()),
+            })
+            .collect();
         let mut head = format!(
             "{}{}\n",
             self.title,
@@ -4779,8 +4826,10 @@ impl Card {
             if !single {
                 line(&format!("summary — {}", self.header.answer()));
             }
-            for l in self.header.rest() {
-                line(l);
+            if !compact {
+                for l in &rest {
+                    line(l);
+                }
             }
             if !single {
                 if self.header.analysis != crate::engine::result_header::Analysis::Complete {
@@ -4824,7 +4873,6 @@ impl Card {
         // 8: callers with their caller rules, then the page actions. Round-2
         // r2 §2.3-2.4: the direct callers as one set; a trigger says what
         // runs it (`run by:`) instead of `callers: none`.
-        let actions = self.reached_from.len();
         match &self.run_by {
             // Round 2 G4 (W3): a table or page trigger keeps its direct
             // callers' line (the routines whose operation or run reaches it).
@@ -4849,11 +4897,32 @@ impl Card {
         }
         // A page action's own card: its only `reached from` is the action
         // itself, which `entry point: this action` says (G26).
-        let actions = if self.run_by.as_ref().is_some_and(|rb| rb.action) {
+        let actions = if self.run_by.as_ref().is_some_and(|rb| rb.action) || compact {
             0
         } else {
             actions
         };
+        if let Some(after) = callers_first.filter(|_| compact) {
+            // Round-2 G24: the effects as summary lines only.
+            for l in &rest {
+                line(l);
+            }
+            for l in after {
+                line(l);
+            }
+            for l in self.tests_lines() {
+                line(&l);
+            }
+            line(&format!(
+                "effect rows (writes, commits, events, other kinds, gaps): {} lists them",
+                self.opts.detail_input()
+            ));
+            for n in next {
+                line(&format!("next: {n}"));
+            }
+            out.push('\n');
+            return (head, out);
+        }
         if actions == 0 {
         } else if actions <= 3 || detail {
             for (_, h) in &self.reached_from {
@@ -4912,56 +4981,8 @@ impl Card {
             line(l);
         }
         // 19: tests.
-        // Output step 1b (astra Task 5, fable fact 2): "none reach it" read
-        // the same with and without test code loaded.
-        // Agent-tasks C-7: the sibling test apps are discovered, never
-        // analyzed here (no test universe is built for explain).
-        let siblings = self.test_scope.as_ref().filter(|s| !s.apps.is_empty());
-        // Round 2 G60: the complete tests call for this routine.
-        let selector = self.routine["selector"]
-            .as_str()
-            .or_else(|| self.routine["id"].as_str())
-            .unwrap_or_default()
-            .to_string();
-        let tests_call = crate::engine::follow_up::FollowUp::new(
-            crate::engine::follow_up::Tool::Tests,
-            crate::engine::follow_up::Cx::new(self.opts.surface, false),
-            "selects the tests",
-        )
-        .arg("routines", vec![selector]);
-        let not_here = format!(
-            "not analyzed in this call — {} selects them",
-            tests_call.text(self.opts.surface)
-        );
-        if self.tests.is_empty() {
-            line(&match (self.totals.tests_loaded, siblings) {
-                (None, _) => "tests: not searched in this answer".to_string(),
-                (Some(0), Some(s)) => format!(
-                    "tests: no [Test] procedure in the workspace app; {}; {not_here}",
-                    s.sibling_summary()
-                ),
-                (Some(0), None) => format!(
-                    "tests: no test code found (0 [Test] procedures in the workspace app; {}); \
-                     that is not a reason to skip tests",
-                    self.test_scope.as_ref().map_or_else(
-                        || "sibling apps not searched".into(),
-                        |s| s.sibling_summary()
-                    )
-                ),
-                (Some(n), _) => format!(
-                    "tests: {} loaded; none reaches it (not a reason to skip tests){}",
-                    rf_plural(n, "[Test] procedure", "[Test] procedures"),
-                    siblings
-                        .map(|s| format!("; also {}, {not_here}", s.sibling_summary()))
-                        .unwrap_or_default()
-                ),
-            });
-        }
-        for (_, h) in &self.tests {
-            line(h);
-        }
-        if let (false, Some(s)) = (self.tests.is_empty(), siblings) {
-            line(&format!("  also {}, {not_here}", s.sibling_summary()));
+        for l in self.tests_lines() {
+            line(&l);
         }
         // 20: gaps in workspace code (dependency gaps fold, 21).
         let shown: Vec<&Gap> = self
@@ -5022,6 +5043,63 @@ impl Card {
         }
         out.push('\n');
         (head, out)
+    }
+
+    /// The card's tests lines (section 19).
+    fn tests_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        // Output step 1b (astra Task 5, fable fact 2): "none reach it" read
+        // the same with and without test code loaded.
+        // Agent-tasks C-7: the sibling test apps are discovered, never
+        // analyzed here (no test universe is built for explain).
+        let siblings = self.test_scope.as_ref().filter(|s| !s.apps.is_empty());
+        // Round 2 G60: the complete tests call for this routine.
+        let selector = self.routine["selector"]
+            .as_str()
+            .or_else(|| self.routine["id"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        let tests_call = crate::engine::follow_up::FollowUp::new(
+            crate::engine::follow_up::Tool::Tests,
+            crate::engine::follow_up::Cx::new(self.opts.surface, false),
+            "selects the tests",
+        )
+        .arg("routines", vec![selector]);
+        let not_here = format!(
+            "not analyzed in this call — {} selects them",
+            tests_call.text(self.opts.surface)
+        );
+        if self.tests.is_empty() {
+            out.push(match (self.totals.tests_loaded, siblings) {
+                (None, _) => "tests: not searched in this answer".to_string(),
+                (Some(0), Some(s)) => format!(
+                    "tests: no [Test] procedure in the workspace app; {}; {not_here}",
+                    s.sibling_summary()
+                ),
+                (Some(0), None) => format!(
+                    "tests: no test code found (0 [Test] procedures in the workspace app; {}); \
+                     that is not a reason to skip tests",
+                    self.test_scope.as_ref().map_or_else(
+                        || "sibling apps not searched".into(),
+                        |s| s.sibling_summary()
+                    )
+                ),
+                (Some(n), _) => format!(
+                    "tests: {} loaded; none reaches it (not a reason to skip tests){}",
+                    rf_plural(n, "[Test] procedure", "[Test] procedures"),
+                    siblings
+                        .map(|s| format!("; also {}, {not_here}", s.sibling_summary()))
+                        .unwrap_or_default()
+                ),
+            });
+        }
+        for (_, h) in &self.tests {
+            out.push(h.clone());
+        }
+        if let (false, Some(s)) = (self.tests.is_empty(), siblings) {
+            out.push(format!("  also {}, {not_here}", s.sibling_summary()));
+        }
+        out
     }
 
     /// The follow-ups this card does not answer itself (§6.2): `writes-table`

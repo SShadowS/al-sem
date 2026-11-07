@@ -2,8 +2,7 @@ tests Codeunit "TU Core"::Post   [cross-app]
 answer: run first: no test with a modeled local path; then the whole suite (selection incomplete: no-test-scope)
 analysis complete · assumptions: static reachability, not coverage: a reached test may not exercise the changed lines · limits: none · scope: tests on a local path
 more: --tier dependency adds tests whose path passes dependency code; --format json for every selected test and its path
-test scope: workspace 0 [Test] procedures; sibling test apps turned off (testApps: [] in .al-sem.json)
+test scope: workspace 0 [Test] procedures; sibling test apps turned off (testApps: [] in .al-sem.json); selection incomplete: no test code was considered
 test scope: none — no [Test] procedure in the workspace app, and sibling test apps turned off (testApps: [] in .al-sem.json). No test was considered. This does not mean no tests are needed.
 changed: 1 routine (Codeunit "TU Core"::Post — not-analyzed)
 tests on a local path: none
-selection incomplete — run the whole suite as well (requiredFallback): no test code was considered

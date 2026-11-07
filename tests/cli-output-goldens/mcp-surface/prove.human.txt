@@ -1,6 +1,6 @@
 prove Codeunit "Out Issue Document"::IssueDoc callers-intercept-errors   [cross-app]
 answer: unknown (blocked by: external callers 1) — no intercepting caller was found in the analyzed callers
-analysis partial (stopped: 1 path at a page's own trigger or action (a later user event)) · assumptions: none (apps that depend on this app are not loaded; their calls block a no) · limits: none · scope: callers' context (not about the routine's own effects); dependencies: 1 app
+analysis partial (1 path stopped; stopped: says where) · assumptions: none (apps that depend on this app are not loaded; their calls block a no) · limits: none · scope: callers' context (not about the routine's own effects); dependencies: 1 app
 more: format: "json" for every evidence row and its hops
   plain reading: no interception was found in the analyzed callers; unknown because of 1 routine other apps may call
   not established: that no caller turns this error into false; and nothing here says which writes roll back

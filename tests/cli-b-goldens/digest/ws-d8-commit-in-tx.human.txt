@@ -1,7 +1,7 @@
 digest files src/posting.al, src/subscriber.al → 3 roots: Codeunit D8PostingChain::PostSalesDoc, Codeunit D8PostingChain::OnAfterPostSalesDoc, Codeunit D8BadSubscriber::HandlePosted   [cross-app]
 answer: 3 roots, one card each; each card leads with its summary line
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every effect row
+more: --detail lists every list in full; --format json for every effect row
 computed: current effects of the 3 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit D8PostingChain::PostSalesDoc ---
   summary — writes: may write 3 tables (3 owned by this app, 0 by dependencies): Sales Header (Modify at :10), Sales Line (ModifyAll at :12), Audit Entry (Insert)

@@ -732,7 +732,12 @@ fn r5_implicit_rec_binds_the_declaring_arms_source_table() {
                 .as_array()
                 .unwrap_or_else(|| panic!("no effects: {doc}"))
                 .iter()
-                .map(|e| e["tableName"].as_str().unwrap())
+                // Query 5.0.0 (round-2 G34): the row's table through
+                // `payload.tables`.
+                .map(|e| {
+                    let t = e["table"].as_str().unwrap();
+                    doc["payload"]["tables"][t]["name"].as_str().unwrap()
+                })
                 .collect();
             assert_eq!(tables, vec![table], "{routine} in {order:?}: {doc}");
         }

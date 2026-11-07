@@ -62,7 +62,16 @@ fn inputs(doc: &Value) -> Vec<(String, String)> {
 
 /// `alsem digest <ws> --file src/Work.al --format json`.
 fn digest(ws: &Path) -> Value {
-    json(&["digest", &ws.to_string_lossy(), "--file", "src/Work.al"])
+    // The 4.0.0 document keeps `dependencies.apps` (round-2 G38: 5.0.0
+    // carries their count and digest).
+    json(&[
+        "digest",
+        &ws.to_string_lossy(),
+        "--file",
+        "src/Work.al",
+        "--schema",
+        "4",
+    ])
 }
 
 fn digest_apps(doc: &Value) -> Vec<(String, String)> {

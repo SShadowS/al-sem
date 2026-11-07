@@ -1,11 +1,11 @@
 explain Codeunit "Calls Post"::QuickPost   [cross-app]
 answer: writes: may modify persistent Calls Order records (Modify at :25) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every row
+more: --detail lists every list in full; --format json for every row
 Codeunit "Calls Post"::QuickPost  defined at ws:src/post.al:18
   transaction, UI and errors: commits: no (every candidate decided); errors at 3 places
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: none; tests: none (no test code loaded)
+  callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: error-collector 1, table-trigger-rules-skipped 2
   calls: Codeunit "Calls Checks"::CheckOrder (called at :22); Codeunit "Calls Checks"::LogIfBlocked (called at :23)

@@ -8,17 +8,10 @@
       "via": "inherited"
     },
     "dependencies": {
-      "apps": [
-        {
-          "appId": "d0d00001-0000-4000-8000-0000000000b1",
-          "name": "Out Base",
-          "publisher": "probe",
-          "source": "embedded",
-          "version": "1.0.0.0"
-        }
-      ],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:8e0182909e090c4c",
+    "dependencyCount": 1,
     "direction": "both",
     "down": {
       "answerable": true,
@@ -45,8 +38,7 @@
           "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
           "origin": {
             "column": 8,
-            "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+            "file": "f:1",
             "line": 58,
             "role": "operation",
             "routine": "r:1"
@@ -59,8 +51,7 @@
           "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
           "origin": {
             "column": 8,
-            "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+            "file": "f:1",
             "line": 61,
             "role": "operation",
             "routine": "r:1"
@@ -69,6 +60,12 @@
           "touchClass": "knownPersistent"
         }
       ]
+    },
+    "files": {
+      "f:1": {
+        "display": "ws:src/OutIssueDocument.Codeunit.al",
+        "file": "ws:src/OutIssueDocument.Codeunit.al"
+      }
     },
     "from": {
       "resolution": "resolved",
@@ -98,7 +95,6 @@
         },
         "display": "WriteLog",
         "objectDisplay": "Codeunit \"Out Log Mgt\"",
-        "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
         "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
         "signature": "(Text[100])",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
@@ -112,7 +108,6 @@
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit \"Out Issue Document\"",
-        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
         "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
         "signature": "(var Record \"Out Doc\")",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"

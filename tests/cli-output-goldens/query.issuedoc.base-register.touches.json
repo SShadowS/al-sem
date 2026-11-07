@@ -5,17 +5,10 @@
   "kind": "query.touches",
   "payload": {
     "dependencies": {
-      "apps": [
-        {
-          "appId": "d0d00001-0000-4000-8000-0000000000b1",
-          "name": "Out Base",
-          "publisher": "probe",
-          "source": "embedded",
-          "version": "1.0.0.0"
-        }
-      ],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:8e0182909e090c4c",
+    "dependencyCount": 1,
     "direction": "both",
     "down": {
       "absence": {
@@ -93,7 +86,6 @@
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit \"Out Issue Document\"",
-        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
         "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
         "signature": "(var Record \"Out Doc\")",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"

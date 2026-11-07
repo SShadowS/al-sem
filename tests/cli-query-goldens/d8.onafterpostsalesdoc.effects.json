@@ -8,9 +8,10 @@
       "via": "event-subscriber"
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effectCount": 1,
     "effects": [
       {
@@ -22,17 +23,21 @@
         "operationId": "469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op1",
         "origin": {
           "column": 8,
-          "file": "ws:src/subscriber.al",
-          "fileDisplay": "ws:src/subscriber.al",
+          "file": "f:1",
           "line": 10,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "11111111-0000-0000-0000-00000000d80a/table/50100",
-        "tableName": "Audit Entry",
+        "table": "t:1",
         "tempState": "not temporary"
       }
     ],
+    "files": {
+      "f:1": {
+        "display": "ws:src/subscriber.al",
+        "file": "ws:src/subscriber.al"
+      }
+    },
     "lineBase": 1,
     "result": {
       "scope": {
@@ -56,10 +61,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for locks"
-            ]
+            "inventory": "notExhaustive"
           },
           "reads": {
             "blockers": {
@@ -67,10 +69,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for reads"
-            ]
+            "inventory": "notExhaustive"
           },
           "validate": {
             "blockers": {
@@ -78,10 +77,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for validations"
-            ]
+            "inventory": "notExhaustive"
           },
           "writes": {
             "blockers": {
@@ -89,10 +85,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for writes"
-            ]
+            "inventory": "notExhaustive"
           }
         },
         "limits": [],
@@ -116,7 +109,6 @@
         },
         "display": "HandlePosted",
         "objectDisplay": "Codeunit D8BadSubscriber",
-        "qualifiedDisplay": "Codeunit D8BadSubscriber::HandlePosted",
         "selector": "Codeunit D8BadSubscriber::HandlePosted",
         "signature": "(Record \"Sales Header\")",
         "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0"
@@ -130,7 +122,6 @@
         },
         "display": "OnAfterPostSalesDoc",
         "objectDisplay": "Codeunit D8PostingChain",
-        "qualifiedDisplay": "Codeunit D8PostingChain::OnAfterPostSalesDoc",
         "selector": "Codeunit D8PostingChain::OnAfterPostSalesDoc",
         "signature": "(Record \"Sales Header\")",
         "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec"
@@ -210,6 +201,12 @@
         "operations": 1,
         "tables": 1,
         "tempStateUnknown": 0
+      }
+    },
+    "tables": {
+      "t:1": {
+        "id": "11111111-0000-0000-0000-00000000d80a/table/50100",
+        "name": "Audit Entry"
       }
     }
   },

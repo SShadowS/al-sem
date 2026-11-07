@@ -209,15 +209,9 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
     let ws = workspace().to_string_lossy().into_owned();
     let (human, _, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC]);
     assert_eq!(code, 0, "{human}");
-    // Step 2's risk block puts the tests clause on its own "callers and
-    // tests:" line (it was one long summary sentence).
-    assert!(
-        human
-            .lines()
-            .any(|l| l.trim_start().starts_with("callers and tests:")
-                && l.contains("; tests: none of 1 loaded")),
-        "{human}"
-    );
+    // Round-2 G25: the tests line below is the one copy (no summary
+    // `callers and tests:` line beside it).
+    assert!(!human.contains("callers and tests:"), "{human}");
     assert!(
         human.contains(
             "  tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)"
@@ -244,13 +238,7 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
     let w = t.path().to_string_lossy().into_owned();
     let (human, _, code) = run_alsem(&["explain", &w, "--routine", "Run"]);
     assert_eq!(code, 0, "{human}");
-    assert!(
-        human
-            .lines()
-            .any(|l| l.trim_start().starts_with("callers and tests:")
-                && l.ends_with("; tests: none in the workspace; test app discovery incomplete")),
-        "{human}"
-    );
+    assert!(!human.contains("callers and tests:"), "{human}");
     // Agent-tasks C-7: with no git top level no sibling is searched, and the
     // line says so instead of "no test code".
     assert!(
@@ -917,12 +905,19 @@ fn consumer_fields_are_present() {
                 f.push(format!("query row {i}: origin.routine → routines.{k}"));
             }
         }
-        if !(r["tableId"].is_string() || r["tableNotResolved"].is_string())
-            || !(r["tableName"].is_string() || r["tableName"].is_null())
+        // Query 5.0.0 (round-2 G34): the table and the file through
+        // `payload.tables` / `payload.files`.
+        let table = r["table"].as_str().map(|t| &p["tables"][t]);
+        if !(table.is_some_and(|t| t["id"].is_string()) || r["tableNotResolved"].is_string())
+            || !table.is_none_or(|t| t["name"].is_string() || t["name"].is_null())
         {
             f.push(format!(
-                "query row {i}: tableId / tableNotResolved / tableName"
+                "query row {i}: table (tables.id, tables.name) / tableNotResolved"
             ));
+        }
+        let file = r["origin"]["file"].as_str().map(|f| &p["files"][f]["file"]);
+        if !file.is_some_and(Value::is_string) {
+            f.push(format!("query row {i}: origin.file → files.file"));
         }
         if r.pointer("/origin/line")
             .and_then(Value::as_u64)
@@ -936,8 +931,8 @@ fn consumer_fields_are_present() {
             Some("inherited") if !own => {}
             other => f.push(format!("row {i}: via {other:?} (own operation: {own})")),
         }
-        dep_anchor |= r["origin"]["file"]
-            .as_str()
+        dep_anchor |= file
+            .and_then(Value::as_str)
             .is_some_and(|a| a.starts_with(&format!("dep:{}:", crate::output_fixture::DEP_GUID)));
     }
     assert!(
@@ -1599,4 +1594,75 @@ fn query_analysis_counts_the_families_blockers() {
         .expect("an analysis line");
     assert!(head.starts_with("analysis partial ("), "{head}");
     assert!(head.contains("beyondDependencyCalls"), "{head}");
+}
+
+/// Round-2 c20's diff (the bundle's argument, verbatim).
+const C20_DIFF: &str = "diff --git a/Cloud/src/Features/SendOnPosting/CDOSubscribers.Codeunit.al b/Cloud/src/Features/SendOnPosting/CDOSubscribers.Codeunit.al\nindex fa85c71..de30f55 100644\n--- a/Cloud/src/Features/SendOnPosting/CDOSubscribers.Codeunit.al\n+++ b/Cloud/src/Features/SendOnPosting/CDOSubscribers.Codeunit.al\n@@ -36,6 +36,29 @@ codeunit 6175310 \"CDO Subscribers\"\n         if CDOSetup.Get() then begin\n             CDOSetup.\"Azure Blob Container Name\" := '';\n             CDOSetup.\"Azure Blob Private Endpoint URL\" := '';\n+            CDOSetup.\"Azure Blob Folder\" := '';\n+            CDOSetup.Modify(false);\n+        end;\n+    end;\n+\n+    // A copied company must not inherit the source company's folder along with its container -\n+    // sharing both would collide the moment the copy starts writing blobs. Clearing the\n+    // container here also forces a fresh blank-to-value fill next time it is configured.\n+    // Internal (not local) so the test suite can invoke this subscriber directly, the same way\n+    // Environment Triggers' own published events are invoked - the base app's Copy Company event\n+    // is itself declared local on the report and cannot be raised from a test codeunit otherwise.\n+    [EventSubscriber(ObjectType::Report, Report::\"Copy Company\", 'OnAfterCreatedNewCompanyByCopyCompany', '', true, false)]\n+    internal procedure OnAfterCreatedNewCompanyByCopyCompany(NewCompanyName: Text[30]; Company: Record Company)\n+    var\n+        CDOSetup: Record \"CDO Setup\";\n+    begin\n+        CDOSetup.ChangeCompany(NewCompanyName);\n+        if CDOSetup.Get() then begin\n+            // A copied company stays in the same environment, so its private endpoint URL is\n+            // still correct - only the container and folder are company-specific and must be\n+            // cleared so the copy does not silently share the source company's blob location.\n+            CDOSetup.\"Azure Blob Container Name\" := '';\n+            CDOSetup.\"Azure Blob Folder\" := '';\n             CDOSetup.Modify(false);\n         end;\n     end;\n";
+
+/// Round-2 W5 (spec §5, §7's W5 row): the size ratchets of the round-2
+/// calls whose size the owner decided, on the CDO baseline `bc3ccb18`, each
+/// the CLI stdout of the bundle's own arguments over MCP. Measured
+/// 2026-11-07 (release-fast) and set with about 1% headroom; §5's target
+/// beside each. A number may go down freely; up only by editing it here with
+/// the reason. Targets met: n10 (~5 KB). Missed, at the measured value after
+/// every cut the design names (see the W5 report): c02 (3.5 KB; 4,065 B),
+/// c08 (~480 KB; 600,333 B), c17 (< 60 KB; 62,552 B), c20 (~4.6 KB; 6,056 B),
+/// c25 (~290 KB compact; 372,752 B). Size only: no discrimination proof.
+#[test]
+fn cdo_round2_size_ratchets() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    let calls: &[(&str, &str, Value, usize)] = &[
+        (
+            "c02",
+            "alsem_prove",
+            json!({"routine": "Codeunit \"CDO CDN E-Doc Embed Req. Subs.\"::SetFiles", "question": "callers-may-run-noninteractive"}),
+            4_100,
+        ),
+        (
+            "c08",
+            "alsem_query_effects",
+            json!({"routine": "Codeunit \"CDO eDocs Sending Profile Subs\"::OnBeforeSendCustomer", "format": "json"}),
+            606_000,
+        ),
+        (
+            "c17",
+            "alsem_query_touches",
+            json!({"table": "CDO E-Mail Log", "from": "Codeunit \"CDO CDN E-Doc Embed Req. Subs.\"::SetFiles", "direction": "up", "callers": true}),
+            63_200,
+        ),
+        (
+            "c20",
+            "alsem_impact",
+            json!({"diff": C20_DIFF, "detail": true}),
+            6_150,
+        ),
+        (
+            "c25",
+            "alsem_digest",
+            json!({"files": ["src/Features/Email/Sending/CDOSendMailManagement.Codeunit.al"], "tests": true}),
+            376_500,
+        ),
+        (
+            "n10",
+            "alsem_explain",
+            json!({"routines": ["Codeunit \"CDO E-Mail Handler\"::DocSave"], "callersContext": true}),
+            5_000,
+        ),
+    ];
+    let mut server = crate::mcp_server::Server::ready(&ws, None);
+    let mut failures = Vec::new();
+    for (i, (label, tool, args, budget)) in calls.iter().enumerate() {
+        let result = server.call(7000 + i as i64, tool, args.clone());
+        let (stdout, stderr, exit) =
+            crate::mcp_server::cli_bytes(&crate::mcp_server::envelope(&result));
+        assert_eq!(exit, 0, "{label}: {}", String::from_utf8_lossy(&stderr));
+        eprintln!("{label}: {} bytes (budget {budget})", stdout.len());
+        if stdout.len() > *budget {
+            failures.push(format!("{label}: {} > {budget}", stdout.len()));
+        }
+    }
+    assert!(server.finish().success());
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

@@ -5,9 +5,10 @@
   "kind": "query.touches",
   "payload": {
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "direction": "down",
     "error": "a `down` query is about one routine's cone — pass --from <routine>, or omit --direction for the workspace-global list",
     "lineBase": 1,

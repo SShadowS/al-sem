@@ -45,11 +45,13 @@ fn effects(extra: &[&str]) -> String {
 #[test]
 fn reads_are_never_counted_as_writes() {
     let human = effects(&[]);
-    assert!(
-        human.contains("caller-dependent writes 1 on 1 table"),
-        "{human}"
-    );
-    assert!(human.contains("reads 2 on 1 table"), "{human}");
+    // Round-2 G29: the writes on their own line, the reads on theirs.
+    let writes = human
+        .lines()
+        .find(|l| l.starts_with("  writes: "))
+        .unwrap_or_else(|| panic!("{human}"));
+    assert!(writes.contains("caller-dependent 1 on 1 table"), "{human}");
+    assert!(human.contains("reads: 2 on 1 table"), "{human}");
     // No temporary-record WRITE bucket (summary part or its own line).
     assert!(!human.contains("temporary records 1"), "{human}");
     assert!(!human.contains("  temporary records:"), "{human}");
@@ -159,9 +161,10 @@ fn a_conditional_write_leads_the_summary() {
         "{card}"
     );
     let human = effects(&[]);
+    // Round-2 G29: the answer is the operation count; the writes line leads.
     let summary = human
         .lines()
-        .find(|l| l.starts_with("answer: "))
+        .find(|l| l.starts_with("  writes: "))
         .unwrap_or_else(|| panic!("{human}"));
     assert!(
         summary.contains(

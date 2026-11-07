@@ -8,10 +8,17 @@
       "via": "inherited"
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "direction": "up",
+    "files": {
+      "f:1": {
+        "display": "ws:src/QTTouches.al",
+        "file": "ws:src/QTTouches.al"
+      }
+    },
     "from": {
       "resolution": "resolved",
       "routine": "r:1",
@@ -40,7 +47,6 @@
         },
         "display": "Leaf",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::Leaf",
         "selector": "Codeunit \"QT Touches\"::Leaf",
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#aa1df0d029d17a4b31887859cffdc77988c363725d462953c4f1bb6251038dbe"
@@ -54,7 +60,6 @@
         },
         "display": "WriteItem",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
         "selector": "Codeunit \"QT Touches\"::WriteItem",
         "signature": "(var Record \"QT Item\")",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
@@ -68,7 +73,6 @@
         },
         "display": "Top1",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::Top1",
         "selector": "Codeunit \"QT Touches\"::Top1",
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#1f3271c0e735418a755ca4072577d57566edc2b9600df19a7ce141051b5699fa"
@@ -82,7 +86,6 @@
         },
         "display": "Top2",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
         "selector": "Codeunit \"QT Touches\"::Top2",
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#f1e7fa13c469792bb96767705a35f70e5624e0a8a87e957bcfe5598c2906b0ce"
@@ -96,7 +99,6 @@
         },
         "display": "Entry",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
         "selector": "Codeunit \"QT Touches\"::Entry",
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
@@ -110,7 +112,6 @@
         },
         "display": "Top3",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::Top3",
         "selector": "Codeunit \"QT Touches\"::Top3",
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#267355f87c453a8c1b481343df9ca1711610ada2d53c5089d8b4b7bbeedfe059"
@@ -194,8 +195,7 @@
         "operationId": "46598e8ae640a0a8/df980d5b2960e89e21f2452e4999035332235f104bbebfa4faac1c33412033e1/op0",
         "origin": {
           "column": 8,
-          "file": "ws:src/QTTouches.al",
-          "fileDisplay": "ws:src/QTTouches.al",
+          "file": "f:1",
           "line": 37,
           "role": "operation",
           "routine": "r:2"
@@ -208,8 +208,7 @@
         "operationId": "46598e8ae640a0a8/e109d4cf8a860242c4842a5d4e219298c34fec0b8f0dd48f8a6618d9d99814cf/op1",
         "origin": {
           "column": 8,
-          "file": "ws:src/QTTouches.al",
-          "fileDisplay": "ws:src/QTTouches.al",
+          "file": "f:1",
           "line": 90,
           "role": "operation",
           "routine": "r:4"
@@ -223,8 +222,7 @@
         "operationId": "46598e8ae640a0a8/e109d4cf8a860242c4842a5d4e219298c34fec0b8f0dd48f8a6618d9d99814cf/op1",
         "origin": {
           "column": 8,
-          "file": "ws:src/QTTouches.al",
-          "fileDisplay": "ws:src/QTTouches.al",
+          "file": "f:1",
           "line": 90,
           "role": "operation",
           "routine": "r:4"

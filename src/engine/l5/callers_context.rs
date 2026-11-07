@@ -239,6 +239,9 @@ pub struct CallersAnswer {
     pub assume_no_dependents: bool,
     pub states: usize,
     pub nodes: usize,
+    /// Round-2 G24: the distinct direct callers the walk analyzed (the
+    /// nodes it reached one hop up from the roots).
+    pub direct_callers: usize,
 }
 
 /// Witnesses kept per answer.
@@ -414,6 +417,51 @@ impl<'a> Index<'a> {
             None => graph_display(g, n, Some(self.model)).unwrap_or_else(|| g.display(n)),
         }
     }
+}
+
+/// Round-2 G24: a pending write behind a call, by its operation and table:
+/// `Modify on "T" at <file:line> in <callee>, before the call` — the
+/// operation from the callee's cone (its physical write ops on the table),
+/// the site when the callee writes the table itself (else the operation is
+/// deeper in its callees and only the callee is named).
+fn pending_call_words(
+    ix: &Index<'_>,
+    cx: &CallersCx<'_>,
+    cs: &PCallSite,
+    callee: &str,
+    table: &str,
+) -> String {
+    let display = ix.table(table);
+    let name = display.strip_prefix("Table ").unwrap_or(&display);
+    let ops = cx.cone_derived.physical_table_write_ops_of(callee);
+    let op = ops
+        .get(table)
+        .and_then(|v| v.first())
+        .map(|o| {
+            let mut s = o.to_string();
+            if let Some(c) = s.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            s
+        })
+        .unwrap_or_else(|| "a write".to_string());
+    let own = ix.by_id.get(callee).and_then(|r| {
+        r.record_operations
+            .iter()
+            .filter(|o| o.table_id.as_deref() == Some(table))
+            .filter(|o| o.op.eq_ignore_ascii_case(&op))
+            .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column))
+    });
+    let at = own
+        .map(|o| {
+            format!(
+                " at {}:{}",
+                o.source_anchor.source_unit_id,
+                o.source_anchor.start_line + 1
+            )
+        })
+        .unwrap_or_default();
+    format!("{op} on {name}{at} in {}, before the call", cs.callee_text)
 }
 
 /// A site of a caller's body, found by its anchor.
@@ -1107,24 +1155,21 @@ impl<'a, 'c> Visitor<'a, 'c> {
                         .call_sites
                         .iter()
                         .filter(|cs| rep.sites.contains(&cs.id))
-                        .find(|cs| {
-                            fwd_own.iter().any(|(s, callee)| {
-                                s.as_deref() == Some(cs.id.as_str())
+                        .find_map(|cs| {
+                            fwd_own.iter().find_map(|(s, callee)| {
+                                (s.as_deref() == Some(cs.id.as_str())
                                     && self
                                         .cx
                                         .cone_derived
                                         .physical_write_ids_of(callee)
                                         .next()
-                                        .is_some()
+                                        .is_some())
+                                .then_some((cs, callee))
                             })
                         });
                     match via {
-                        Some(cs) => (
-                            format!(
-                                "{} may write {} before the call",
-                                cs.callee_text,
-                                self.ix.table(t)
-                            ),
+                        Some((cs, callee)) => (
+                            pending_call_words(self.ix, self.cx, cs, callee, t),
                             Some((
                                 cs.source_anchor.source_unit_id.clone(),
                                 cs.source_anchor.start_line + 1,
@@ -1793,7 +1838,15 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
     let mut open = v.open_witnesses;
     open.sort_by_key(|w| w.hops);
     witnesses.extend(open);
+    let direct_callers = v
+        .hops
+        .iter()
+        .filter(|(_, h)| **h == 1)
+        .map(|(s, _)| s.node)
+        .collect::<HashSet<_>>()
+        .len();
     CallersAnswer {
+        direct_callers,
         question: q,
         answer,
         witnesses,
@@ -1885,6 +1938,8 @@ pub fn result_value(a: &CallersAnswer) -> serde_json::Value {
         "testEntries": a.test_entries,
         "unrecognizedGuards": a.unrecognized_guards,
         "cone": {"states": a.states, "nodes": a.nodes},
+        // Round-2 G24 (additive): the population explain's answers name.
+        "directCallersAnalyzed": a.direct_callers,
     })
 }
 
@@ -2208,10 +2263,14 @@ fn blocked_by_line(
         let Some(n) = a.blocked_counts.get(key) else {
             continue;
         };
+        // Round-2 G25: an `unknown`'s `to narrow it:` line already names
+        // each action kind's example; it is not printed twice.
+        let narrowed = a.answer == ProveAnswer::Unknown;
         let example = a
             .blocked_by
             .iter()
             .find(|b| b.kind == *key)
+            .filter(|_| !narrowed)
             .map(|b| format!(" ({}{})", b.detail, blocker_place(b)))
             .unwrap_or_default();
         parts.push(format!(
@@ -2362,11 +2421,7 @@ fn plain_reading(a: &CallersAnswer) -> String {
 /// three answers' one-line forms, and their JSON (`callersContext`). `None`
 /// when the routine is not in the sited graph.
 #[must_use]
-pub fn section(
-    cx: &CallersCx<'_>,
-    root: &str,
-    hcx: &HumanCx<'_>,
-) -> Option<(serde_json::Value, Vec<String>)> {
+pub fn section(cx: &CallersCx<'_>, root: &str, hcx: &HumanCx<'_>) -> Option<CallersSection> {
     let nodes = cx.g.nodes_with_stable_id(root);
     if nodes.is_empty() {
         return None;
@@ -2374,9 +2429,12 @@ pub fn section(
     // Output validation V2 (§5.1, F29): the section leads the card, and each
     // answer names its evidence: a `yes` its first witness (tier, what and
     // where, its path), an `unknown` every blocker kind and the input that
-    // removes one.
+    // removes one. Round-2 G24: an answer that found nothing says among
+    // which population (the direct callers the walk analyzed), and the
+    // three answers' short forms are the card's `answer:` line.
     let mut lines =
         vec!["for adding a COMMIT, an error or UI here (callers' context):".to_string()];
+    let mut short: Vec<String> = Vec::new();
     let mut json = serde_json::Map::new();
     for q in [
         CallersQuestion::PendingWrites,
@@ -2384,25 +2442,29 @@ pub fn section(
         CallersQuestion::NonInteractive,
     ] {
         let a = answer(q, &nodes, cx);
-        let mut line = format!("  {}", summary_line(&a));
+        short.push(short_answer(&a));
         let first = a.witnesses.iter().find(|w| w.tier != Tier::OnlyOpen);
         if a.answer == ProveAnswer::Yes
             && let Some(w) = first
         {
-            line.push_str(&format!(
-                "; first [{}]:",
-                crate::engine::vocab::tier(w.tier)
-            ));
-            lines.push(line);
             let what = match (&w.words, &w.file, w.line) {
                 (Some(words), _, _) => words.clone(),
                 (None, Some(f), Some(l)) => format!("{} at {f}:{l}", w.detail),
                 _ => w.detail.clone(),
             };
-            lines.push(format!("    {}: {what}", w.kind));
-            lines.push(format!("      path: {}", path_text(&w.path)));
+            lines.push(format!(
+                "  {}; first [{}]: {what}",
+                summary_line(&a),
+                crate::engine::vocab::tier(w.tier)
+            ));
+            lines.extend(crate::engine::path_segments::elide(vec![format!(
+                "    path: {}",
+                path_text(&w.path)
+            )]));
+        } else if a.answer == ProveAnswer::Unknown {
+            lines.push(format!("  {}", found_among_line(&a)));
         } else {
-            lines.push(line);
+            lines.push(format!("  {}", summary_line(&a)));
         }
         if a.answer == ProveAnswer::Unknown
             && let Some(l) = reanalysis_line(&a, false, hcx)
@@ -2421,9 +2483,17 @@ pub fn section(
                 "entries": a.entries,
                 "blockedByCounts": a.blocked_counts,
                 "followUps": follow_ups,
+                "directCallersAnalyzed": a.direct_callers,
             }),
         );
     }
+    // Round-2 G24 (G48's output limitation): no lock facts are kept for the
+    // callers, so their held locks are not analyzed.
+    lines.push("  locks held by callers: not analyzed (no lock facts)".to_string());
+    json.insert(
+        "locksHeldByCallers".into(),
+        serde_json::json!({"analyzed": false, "reason": "no lock facts"}),
+    );
     // §6.1: one complete call; the other two questions take the same form.
     let ask = crate::engine::follow_up::FollowUp::prove(
         hcx.fcx,
@@ -2437,7 +2507,81 @@ pub fn section(
         CallersQuestion::InterceptErrors.id(),
         CallersQuestion::NonInteractive.id()
     ));
-    Some((serde_json::Value::Object(json), lines))
+    Some(CallersSection {
+        json: serde_json::Value::Object(json),
+        lines,
+        answer: short.join("; "),
+    })
+}
+
+/// explain's callers' context section for one card (round-2 G24).
+pub struct CallersSection {
+    /// JSON `callersContext`.
+    pub json: serde_json::Value,
+    /// The section's human lines.
+    pub lines: Vec<String>,
+    /// The three answers' short forms, the card's `answer:` line
+    /// (`pending writes: yes (8 witnesses); intercepted errors: unknown; …`).
+    pub answer: String,
+}
+
+/// One answer's short form for the `answer:` line (round-2 G24).
+fn short_answer(a: &CallersAnswer) -> String {
+    let label = match a.question {
+        CallersQuestion::PendingWrites => "pending writes",
+        CallersQuestion::InterceptErrors => "intercepted errors",
+        CallersQuestion::NonInteractive => "non-interactive",
+    };
+    match a.answer {
+        ProveAnswer::Yes => format!(
+            "{label}: yes ({})",
+            plural(a.witness_count, "witness", "witnesses")
+        ),
+        ProveAnswer::No => format!("{label}: no"),
+        ProveAnswer::Unknown => format!("{label}: unknown"),
+    }
+}
+
+/// An `unknown`'s line (round-2 G24): what was found among the computed
+/// population (the direct callers the walk analyzed), then why the answer
+/// is unknown in plain words.
+fn found_among_line(a: &CallersAnswer) -> String {
+    let label = match a.question {
+        CallersQuestion::PendingWrites => "pending writes",
+        CallersQuestion::InterceptErrors => "intercepted errors",
+        CallersQuestion::NonInteractive => "non-interactive",
+    };
+    let among = plural(
+        a.direct_callers,
+        "analyzed direct caller",
+        "analyzed direct callers",
+    );
+    let found = if a.open_witness_count > 0 {
+        format!(
+            "none established among {among} ({} over a hub)",
+            plural(a.open_witness_count, "candidate", "candidates")
+        )
+    } else {
+        format!("none found among {among}")
+    };
+    let why: Vec<String> = blocker_counts(a)
+        .into_iter()
+        .map(|(k, n)| match k.as_str() {
+            "external callers" => {
+                format!("{} other apps may call", plural(n, "routine", "routines"))
+            }
+            "over a hub" => format!(
+                "{} {} it only over a hub",
+                plural(n, "caller", "callers"),
+                if n == 1 { "reaches" } else { "reach" }
+            ),
+            _ => format!("{k} {n}"),
+        })
+        .collect();
+    format!(
+        "{label}: unknown — {found}; unknown because {}",
+        why.join(", ")
+    )
 }
 
 /// prove's human answer for a callers' context question.
@@ -2567,20 +2711,30 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
                     format!("; by context (contexts may overlap): {by}")
                 }
             ));
-            let shown = open.len().min(shown_max);
+            // Round-2 G33: one candidate by default (the counts by context
+            // are on the line above); `detail` lists every kept one.
+            let shown = open.len().min(if detail { usize::MAX } else { 1 });
             for w in &open[..shown] {
                 lines.push(witness_line(w));
                 lines.push(format!("      path: {}", path_text(&w.path)));
             }
             if candidates > shown {
-                lines.push(format!("    … {} more candidates", candidates - shown));
+                lines.push(format!(
+                    "    … {} more candidates ({} lists up to {OPEN_WITNESSES})",
+                    candidates - shown,
+                    hcx.detail()
+                ));
             }
         }
     }
     // §7.5 (F45): a run of hops several witnesses share prints once, under
     // a stable segment id, listed after the witnesses.
+    // Round-2 G33: then the repeated object and file elided on consecutive
+    // hops.
     let witnesses = lines.split_off(witnesses_start);
-    lines.extend(crate::engine::path_segments::segment(witnesses));
+    lines.extend(crate::engine::path_segments::elide(
+        crate::engine::path_segments::segment(witnesses),
+    ));
     // The entries reached: for non-interactive they are the witnesses'
     // entries (printed on the witness lines above); for the other two they
     // are not the witnesses (traps, pending writes) and print here.

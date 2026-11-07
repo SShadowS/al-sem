@@ -1,11 +1,10 @@
 explain Codeunit "CDO Telemetry"::UpdateLastUpload   [cross-app]
 answer: writes: may modify persistent CDO Setup records (Modify at :48) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 11 apps
-more: detail: true lists every list complete; format: "json" for every row
+more: detail: true lists every list in full; format: "json" for every row
 Codeunit "CDO Telemetry"::UpdateLastUpload  defined at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:45
   transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: 1 direct (1 routine); tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   callers: 1 direct — 1 routine: Codeunit "CDO Telemetry"::QueueUpload

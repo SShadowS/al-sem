@@ -312,9 +312,7 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
         human
             .find("assumptions: static reachability, not coverage")
             .unwrap()
-            < human
-                .find("selection incomplete — run the whole suite")
-                .unwrap()
+            < human.find("; selection incomplete: ").unwrap()
     );
     let v = json(&ws, &["--routine", "TU Core::Untested"]);
     assert_eq!(v["changed"][0]["testStatus"], "no modeled path");
@@ -377,18 +375,9 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
         ),
         "{human}"
     );
-    let summary_tests = |human: &str| -> String {
-        let l = human
-            .lines()
-            .find(|l| l.trim_start().starts_with("callers and tests:"))
-            .unwrap_or_else(|| panic!("no callers and tests line: {human}"));
-        l[l.find("; tests: ").expect("a tests clause") + 2..].to_string()
-    };
-    assert_eq!(
-        summary_tests(&human),
-        "tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)",
-        "{human}"
-    );
+    // Round-2 G25: the `tests:` line above is the one copy; the summary's
+    // `callers and tests:` line is not printed beside it.
+    assert!(!human.contains("callers and tests:"), "{human}");
     let v: Value =
         serde_json::from_str(&run(&["--routine", "TU Core::Post", "--format", "json"])).unwrap();
     assert_eq!(v["cards"][0]["testScope"]["analyzed"], false);
@@ -403,11 +392,7 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
         human.contains("sibling test apps turned off (testApps: [] in .al-sem.json)"),
         "{human}"
     );
-    assert_eq!(
-        summary_tests(&human),
-        "tests: none (no test code loaded)",
-        "{human}"
-    );
+    assert!(!human.contains("callers and tests:"), "{human}");
 }
 
 /// R0-3: explain's `callers:` count (the model's call adjacency) equals the

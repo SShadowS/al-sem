@@ -1657,9 +1657,15 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
         n(&b.1).cmp(&n(&a.1)).then(a.0.cmp(b.0))
     });
     let tables_written = ranked.len();
+    // Round-2 G34: complete when 20 tables or fewer, else the first 10.
+    let shown = if tables_written <= 20 {
+        tables_written
+    } else {
+        10
+    };
     let top: Vec<Value> = ranked
         .iter()
-        .take(10)
+        .take(shown)
         .map(|(t, ops)| json!({"table": t, "ops": ops}))
         .collect();
     crate::engine::result_index::with_index(
@@ -1675,7 +1681,7 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
             "writes": {
                 "byTable": top,
                 "tables": tables_written,
-                "truncated": tables_written > 10,
+                "truncated": tables_written > shown,
                 "callerDependent": caller_dependent,
                 "tableNotResolved": unresolved_writes,
             },
@@ -2162,13 +2168,16 @@ fn query_with_header(
                     } else {
                         format!("{}: {rest}", label.trim().trim_end_matches(':'))
                     };
-                    // A result line with detail lines under it stays.
+                    // A result line with detail lines under it stays, as
+                    // its label only (round-2 G25: one copy of the line).
                     let next_deeper = lines
                         .get(i + 1)
                         .is_some_and(|n| n.starts_with("    ") && !n.starts_with("    ["));
                     if !next_deeper {
                         continue;
                     }
+                    body.push(format!("{} (as in answer):", label.trim_end_matches(": ")));
+                    continue;
                 }
                 body.push((*l).to_string());
             }
@@ -2866,10 +2875,17 @@ fn render_query_touches_body(
             // excerpt of its first statements follows).
             human.push_str(&format!("  defined at {}:{}\n", rr.file, shown(rr.line)));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
-            human.push_str(if beyond.is_some() {
-                TOUCHES_SCOPE_LINE_CONE
-            } else {
-                TOUCHES_SCOPE_LINE
+            // Round-2 G27: the dependency-write clause only when the cone
+            // enters dependency code.
+            let enters = beyond.as_ref().is_none_or(|b| {
+                b.entry.unresolved_traversal.dependency_routines > 0
+                    || b.rollup.totals.entry_points > 0
+                    || b.rollup.totals.crossing_sites > 0
+            });
+            human.push_str(match (&beyond, enters) {
+                (Some(_), true) => TOUCHES_SCOPE_LINE_CONE,
+                (Some(_), false) => "  scope: dependency code: none reached\n",
+                (None, _) => TOUCHES_SCOPE_LINE,
             });
 
             let cx = TouchCx {
@@ -3462,6 +3478,29 @@ fn callers_by_object<'a>(
         with_touch,
         plural(touchers.len(), "caller", "callers"),
     ));
+    // Round-2 G36: the listed callers whose first touch is another, in one
+    // line (each with its own first touch), not inside the caller list.
+    let own: Vec<String> = touchers[..listed]
+        .iter()
+        .filter_map(|c| {
+            let (own_touch, _) = first(c);
+            (own_touch != touch).then(|| {
+                let internal = cx.query.bundle().routine_id(c.routine);
+                let name = cx
+                    .join
+                    .get(internal)
+                    .map_or_else(|| internal.to_string(), |r| r.qualified());
+                format!("{name} (first touch: {own_touch})")
+            })
+        })
+        .collect();
+    if !own.is_empty() {
+        out.push_str(&format!(
+            "    first touch not the shared one ({}): {}\n",
+            plural(own.len(), "caller", "callers"),
+            own.join("; ")
+        ));
+    }
     // By object, in the order of each object's nearest caller.
     // (object display, file, its callers with their routine).
     type Group<'c, 't> = (String, String, Vec<(&'c CallerTouch<'t>, RoutineRef)>);
@@ -3482,7 +3521,8 @@ fn callers_by_object<'a>(
     }
     let routines = listed;
     out.push_str(&format!(
-        "    callers ({} in {}), by object, nearest first; each with its definition line and hops:\n",
+        "    callers ({} in {}), by object, nearest first; each object's callers by hop \
+         distance, each with its definition line:\n",
         plural(routines, "routine", "routines"),
         plural(objects.len(), "object", "objects"),
     ));
@@ -3502,25 +3542,30 @@ fn callers_by_object<'a>(
         ));
         let mut sorted: Vec<&(&CallerTouch<'_>, RoutineRef)> = rows.iter().collect();
         sorted.sort_by(|a, b| (a.0.depth, &a.1.in_object).cmp(&(b.0.depth, &b.1.in_object)));
-        for (c, r) in sorted {
-            let (own_touch, own_class) = first(c);
-            let mut differs = Vec::new();
-            if own_touch != touch {
-                differs.push(format!("first touch: {own_touch}"));
-            }
-            if own_class != class {
-                differs.push(format!("touches {own_class}"));
+        // Round-2 G36: one line per hop distance.
+        let mut i = 0;
+        while i < sorted.len() {
+            let depth = sorted[i].0.depth;
+            let mut names = Vec::new();
+            while i < sorted.len() && sorted[i].0.depth == depth {
+                let (c, r) = sorted[i];
+                let (_, own_class) = first(c);
+                names.push(format!(
+                    "{} :{}{}",
+                    r.in_object,
+                    shown(r.line),
+                    if own_class != class {
+                        format!(" (touches {own_class})")
+                    } else {
+                        String::new()
+                    }
+                ));
+                i += 1;
             }
             out.push_str(&format!(
-                "        {} :{} +{}{}\n",
-                r.in_object,
-                shown(r.line),
-                hops_unit(c.depth as usize),
-                if differs.is_empty() {
-                    String::new()
-                } else {
-                    format!(" — {}", differs.join("; "))
-                }
+                "        +{}: {}\n",
+                hops_unit(depth as usize),
+                names.join(", ")
             ));
         }
     }
@@ -4148,7 +4193,9 @@ fn render_through_dependency(
         line.push_str(if configured.is_empty() {
             "; disjoint from the transitive callers"
         } else {
-            "; the three are disjoint"
+            // Round-2 G36: the three populations by name.
+            "; the transitive callers, the callers through dependency code and those only \
+             through configured dispatch are disjoint"
         });
         if !list_callers && !all {
             line.push_str(&format!(" — {} lists them", Input::Callers.on(cx.surface)));
@@ -5099,11 +5146,12 @@ fn render_query_effects_body(
             "dependency code deeper than one routine",
         )
     };
+    // Round-2 G29: the answer is the operation count; writes, reads and
+    // locks each print on their own line (`parts` is the writes line).
     let mut parts = Vec::new();
     if count("writes") > 0 {
         parts.push(format!(
-            "writes that may persist {} on {} ({known} not temporary, {unknown_temp} temp state \
-             not resolved)",
+            "may persist {} on {} ({known} not temporary, {unknown_temp} temp state not resolved)",
             count("writes"),
             plural(ntables("writes"), "table", "tables")
         ));
@@ -5124,11 +5172,11 @@ fn render_query_effects_body(
             )
         });
     } else if beyond_tables.is_empty() {
-        parts.push(format!("writes that may persist: {write_search}"));
+        parts.push(format!("may persist: {write_search}"));
     }
     if !beyond_writes.is_empty() {
         parts.push(format!(
-            "writes beyond dependency calls on {} through {} ({} only there)",
+            "beyond dependency calls on {} through {} ({} only there)",
             plural(beyond_tables.len(), "table", "tables"),
             plural(
                 crate::engine::l5::routine_rollup::routines_entered(&beyond_writes),
@@ -5140,7 +5188,7 @@ fn render_query_effects_body(
     }
     if count("callerDependent") > 0 {
         parts.push(format!(
-            "caller-dependent writes {} on {}",
+            "caller-dependent {} on {}",
             count("callerDependent"),
             plural(ntables("callerDependent"), "table", "tables")
         ));
@@ -5148,55 +5196,24 @@ fn render_query_effects_body(
     // §9.2 (F57): `locks:` and `reads:` always print, with their scope, so
     // a lock question never depends on a missing line meaning zero. The
     // counts include every temp class and unresolved-table operations (F15).
-    for (key, label) in [("locks", "locks"), ("reads", "reads")] {
-        parts.push(if count(key) > 0 {
-            format!(
-                "{label} {} on {}",
-                count(key),
-                plural(ntables(key), "table", "tables")
-            )
-        } else {
-            format!(
-                "{label}: none observed (one dependency routine deep; deeper dependency {label} \
-                 are not inventoried)"
-            )
-        });
-    }
-    for (key, label) in [("validate", "validate"), ("unclassified", "unclassified")] {
-        if count(key) > 0 {
-            parts.push(format!(
-                "{label} {} on {}",
-                count(key),
-                plural(ntables(key), "table", "tables")
-            ));
-        }
-    }
-    if count("temporary") > 0 {
-        parts.push(format!(
-            "temporary records {} on {} in {}",
-            count("temporary"),
-            plural(ntables("temporary"), "table", "tables"),
-            plural(buckets["temporary"].owners.len(), "routine", "routines")
-        ));
-    }
-    // Q4: RecordRef operations first, then the rest of "table not resolved".
-    for (record_ref, label) in [
-        (true, "on a RecordRef (table not resolved: RecordRef)"),
-        (false, "table not resolved"),
-    ] {
-        if let Some(b) = unresolved.get(&record_ref) {
-            parts.push(format!(
-                "{label} {} in {}",
-                b.rows.len(),
-                plural(b.owners.len(), "routine", "routines")
-            ));
-        }
-    }
+    // A family with operations prints its own line, with its operation
+    // counts, below (as do validate, temporary records and unresolved
+    // tables); an empty one says so here.
     human.push_str(&format!(
-        "  summary: {} — {}\n",
+        "  summary: {} (writes, reads and locks below)\n",
         plural(effects.len(), "operation", "operations"),
-        parts.join("; ")
     ));
+    if !parts.is_empty() {
+        human.push_str(&format!("  writes: {}\n", parts.join("; ")));
+    }
+    for label in ["reads", "locks"] {
+        if count(label) == 0 {
+            human.push_str(&format!(
+                "  {label}: none observed (one dependency routine deep; deeper dependency {label} \
+                 are not inventoried)\n"
+            ));
+        }
+    }
     if beyond.is_some() {
         // Wave 3a: the writes beyond each entry point are the cone's, read
         // as explain reads them; the per-operation rows keep L4's depth.
@@ -5500,6 +5517,9 @@ fn render_query_effects_body(
         );
         human.push_str(&format!("  next: {} — {}\n", f.text(surface), f.why));
     }
+    // Round-2 G29: the operation rows print before the deep-write summary
+    // (`writes beyond dependency calls`), after which they are spliced.
+    let rows_at = human.len();
     if all {
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
@@ -5542,6 +5562,10 @@ fn render_query_effects_body(
             e.via.as_str(),
             origin_human(ops.get(e.operation_id, &join).as_ref(), e.operation_id)
         ));
+    }
+    if all && let Some(at) = human[..rows_at].find("\n  writes beyond dependency calls") {
+        let rows = human.split_off(rows_at);
+        human.insert_str(at + 1, &rows);
     }
 
     let mut summary = effects_summary(&rr.qualified(), &effects, &tables);
@@ -6381,10 +6405,12 @@ fn render_field_touches(
         // not-loaded dependency code and the dynamic field numbers are its
         // `not searched:` part); the JSON keeps every reason.
     }
+    // Round-2 G25: the search clause is the `searched:` line's; `filters:`
+    // names it rather than printing it again.
     human.push_str(&format!(
         "  filters: {}\n",
         if filters == 0 {
-            crate::engine::vocab::none_observed(&searched_w, &not_searched_w)
+            "none observed (same search)".to_string()
         } else {
             plural(filters, "site", "sites")
         }
@@ -6412,7 +6438,7 @@ fn render_field_touches(
     );
     // Output validation §8.2 (F54): what each tag on a site row means, for
     // the tags the rows carry, printed once under the first row.
-    let mut legend: Option<String> = {
+    let legend: Option<String> = {
         let mut tags: BTreeSet<String> = BTreeSet::new();
         let mut methods = false;
         for (s, _, _) in &sites {
@@ -6450,8 +6476,12 @@ fn render_field_touches(
                 "a method name (Field, SetRange, …): the record method that names the field".into(),
             );
         }
-        (!sites.is_empty()).then(|| format!("      legend: {}\n", parts.join("; ")))
+        (!sites.is_empty()).then(|| format!("  legend: {}\n", parts.join("; ")))
     };
+    // Round-2 G25: the legend prints once, before the per-object list.
+    if let Some(l) = &legend {
+        human.push_str(l);
+    }
     // Per object, folded unless --all.
     let mut by_object: Vec<(&str, Vec<usize>)> = Vec::new();
     for (i, (_, rr, _)) in sites.iter().enumerate() {
@@ -6497,10 +6527,6 @@ fn render_field_touches(
                 uses_text(&s.uses),
                 extra.join(", ")
             ));
-            // §8.2 (F54): one legend line under the first tagged row.
-            if let Some(l) = legend.take() {
-                human.push_str(&l);
-            }
         }
         if shown_sites < ixs.len() {
             human.push_str(&format!(

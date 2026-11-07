@@ -25,9 +25,10 @@
       }
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effects": {
       "e:1": {
         "confidence": "static",
@@ -181,9 +182,7 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "tail": "t:1"
-                  }
+                  "t:1"
                 ],
                 "terminal": {
                   "file": "ws:src/subscriber.al",
@@ -210,9 +209,7 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "tail": "t:1"
-                  }
+                  "t:1"
                 ],
                 "terminal": {
                   "file": "ws:src/subscriber.al",
@@ -308,9 +305,7 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "tail": "t:1"
-                  }
+                  "t:1"
                 ],
                 "terminal": {
                   "file": "ws:src/subscriber.al",
@@ -769,11 +764,11 @@
     "pathCap": 1,
     "pathTails": {
       "t:1": [
-        {
-          "edge": "direct-call",
-          "line": 13,
-          "to": "r:664e61d95662"
-        },
+        [
+          "direct-call",
+          13,
+          "r:664e61d95662"
+        ],
         {
           "edge": "event-dispatch",
           "to": "r:bec5fb40d9e8"

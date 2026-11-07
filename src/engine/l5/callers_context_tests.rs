@@ -944,3 +944,38 @@ fn shared_witness_tails_print_once_and_expand_to_every_hop() {
         }
     }
 }
+
+/// Round-2 G24: explain's "none found among <k> analyzed direct callers"
+/// counts the direct callers the walk analyzed, not every ancestor. Hand-
+/// stated: `R`'s one direct caller `Mid.M` is called by two more routines,
+/// so the walk reaches three callers and one of them is direct.
+/// Discrimination: see the commit (count every reached node instead of
+/// those one hop up).
+#[test]
+fn the_analyzed_direct_callers_are_one_hop_up() {
+    let mid = cu(
+        50140,
+        "Pw Mid",
+        "    procedure M()\n    var\n        Target: Codeunit \"Pw Target\";\n    begin\n        \
+         Target.R();\n    end;\n",
+    );
+    let up = |id: u32, name: &str| {
+        cu(
+            id,
+            name,
+            "    local procedure P()\n    var\n        Mid: Codeunit \"Pw Mid\";\n    begin\n        \
+             Mid.M();\n    end;\n",
+        )
+    };
+    let v = pending(&[
+        ("Mid.al", &mid),
+        ("U1.al", &up(50141, "Pw Up One")),
+        ("U2.al", &up(50142, "Pw Up Two")),
+    ]);
+    let r = &v["payload"]["result"];
+    assert!(
+        r["cone"]["nodes"].as_u64().unwrap() >= 3,
+        "precondition: the walk reaches more than the direct caller: {r:#}"
+    );
+    assert_eq!(r["directCallersAnalyzed"], 1, "{r:#}");
+}

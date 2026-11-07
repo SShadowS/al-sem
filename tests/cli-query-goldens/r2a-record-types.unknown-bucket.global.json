@@ -5,9 +5,10 @@
   "kind": "query.touches",
   "payload": {
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "direction": "both",
     "lineBase": 1,
     "result": {

@@ -1414,9 +1414,11 @@ struct DigestCli {
     #[arg(long = "detail", default_value_t = false)]
     detail: bool,
 
-    /// JSON without indentation.
-    #[arg(long = "compact", default_value_t = false)]
-    compact: bool,
+    /// JSON without indentation. Round-2 G35: the default of the 5.0.0
+    /// document; `--compact=false` writes it indented. Older schemas
+    /// (`--schema 4|3|2`) stay indented unless `--compact` is given.
+    #[arg(long = "compact", num_args = 0..=1, default_missing_value = "true")]
+    compact: Option<bool>,
 
     /// Answer "does it write table T?" for each root, by the evaluation
     /// `alsem prove <routine> writes-table:T` uses (the same answer, blockers
@@ -3163,11 +3165,17 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
             schema3: d.schema == Some(3),
             schema4: d.schema == Some(4),
             detail: d.detail,
-            compact: d.compact,
+            // Round-2 G35: compact by default for 5.0.0 only.
+            compact: d.compact.unwrap_or(matches!(d.schema, None | Some(5))),
             max_paths: d.max_paths,
             surface: d.surface,
         },
-        Some(2) if d.detail || d.compact || d.max_paths.is_some() || !d.writes_table.is_empty() => {
+        Some(2)
+            if d.detail
+                || d.compact == Some(true)
+                || d.max_paths.is_some()
+                || !d.writes_table.is_empty() =>
+        {
             return failed(
                 "al-sem digest: --schema 2 takes no --detail, --max-paths or --compact \
                  (the 2.x document has no folds or caps)",

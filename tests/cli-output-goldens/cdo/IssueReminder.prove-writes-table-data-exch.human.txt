@@ -21,5 +21,6 @@ more: detail: true lists every blocker and row; format: "json" for every evidenc
       Codeunit.Run(<dynamic>) in HandleDelivery @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:186
       Report.RunModal in TryRunReport @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:244
       … +18 blockers (of 21 blockers; detail: true lists them)
-  top callees not resolved: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8
+  top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
+  top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps
