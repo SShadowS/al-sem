@@ -178,7 +178,10 @@ n09, n10; `target/tmp/output-validation/round2/factcheck/`).
   events, and writing T, instead of the open record hub that reached every table's
   `OnModify` (c02: `UpgradeBaseApp.Codeunit.al:2100` was printed as a hub into `Table "CAL
   Test Line"::OnModify`). CDO: 3 more resolved dependency obligations (table events of
-  RecordRef operations now typed), `unknown` stays 0.
+  RecordRef operations now typed), `unknown` stays 0. `derived_only_matches_raw_fold_on_cdo`'s
+  pinned recursive-member count 1,027 → 972 (the raw-fold oracle agrees; subscriber self-loops
+  65 → 31, recursive SCCs 106 → 71): a guarded subscriber no longer re-raises its own table's
+  event for a temporary record.
 
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 

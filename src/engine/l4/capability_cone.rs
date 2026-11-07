@@ -8403,10 +8403,17 @@ codeunit 50100 C
                 // self-loops now), and the cross-app model demands the subscribers
                 // of the table events the workspace raises (routines 33,287 ->
                 // 34,118, recursive SCCs 70 -> 106, the largest 524 -> 650).
+                // 1027 -> 972 on 2026-11-07 (round-2 fix `fix/r2-temp-events`; the
+                // oracle agreed): a table event raised by a provably temporary
+                // record, or with RunTrigger false, no longer enters a subscriber
+                // whose leading guard exits on `Rec.IsTemporary()` / `not
+                // RunTrigger`, so most subscriber self-loops close no cycle any more
+                // (self-loops 65 -> 31, recursive SCCs 106 -> 71, the largest
+                // 650 -> 633, routines 34,118 -> 34,119).
                 assert_eq!(
-                    stats.recursive_members_emitted, 1027,
+                    stats.recursive_members_emitted, 972,
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
-                     1027 since F1 (2026-11-06); a \
+                     972 since the temp-record table-event guards (2026-11-07); a \
                      different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s
