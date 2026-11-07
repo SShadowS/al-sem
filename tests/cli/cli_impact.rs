@@ -427,8 +427,11 @@ fn raised_by_names_the_routines_own_events_apart_from_ancestor_publishers() {
     let (text, err, code) = impact(&ws, &["--routine", "TU Core::Audited", "--no-tests"], None);
     assert_eq!(code, 0, "{text}{err}");
     assert!(!text.contains("raised by:"), "{text}");
+    // Round-2 §R2.4 landing change 4: the ancestor publishers are a legacy
+    // list of every relation, so the human text no longer prints them (JSON
+    // `eventPublishers.count` keeps them, asserted above).
     assert!(
-        text.contains("event publishers among its ancestors: "),
+        !text.contains("event publishers among its ancestors"),
         "{text}"
     );
 }

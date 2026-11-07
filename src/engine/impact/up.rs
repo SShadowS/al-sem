@@ -692,7 +692,8 @@ fn node_json(g: &SitedGraph, n: NodeIx, hops: u32, tier: Tier) -> Value {
 
 /// What the legacy `ancestors` tiers count: every relation together (the
 /// classified counts are `byRelation`).
-pub const POPULATION: &str = "all ancestors (code, UI navigation, configuration, hub)";
+pub const POPULATION: &str =
+    "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation";
 
 /// Counts per class and tier, in `byRelation`'s shape (round-2 r2 §2.1
 /// step 5): `{code: {local, viaDependency}, uiNavigation: {local,
@@ -875,7 +876,8 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     share.insert("all".into(), share_json(entries.len(), program));
     let program_by_kind: Vec<(&str, usize)> = {
         let mut words: Vec<(&str, usize)> = Vec::new();
-        for (k, n) in inv.by_kind(|_| true) {
+        // The same set as `programEntries`: the changed routines left out.
+        for (k, n) in inv.by_kind(|e| !up.shared.changed.contains(&e)) {
             let w = vocab::entry_kind(k);
             match words.iter_mut().find(|(x, _)| *x == w) {
                 Some(x) => x.1 += n,
@@ -925,6 +927,28 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     m.insert("nearest".into(), Value::Object(nearest));
     m.insert("firstByKind".into(), Value::Object(first_by_kind));
     m.insert("externalCode".into(), json!(external_code));
+    // §R2.4 landing changes 1-2: the totals say when they include a page
+    // counted once for its unnamed actions, or a background target with no
+    // `OnRun` (counted apart).
+    let noted = |bit: u8| {
+        let reached = entries
+            .iter()
+            .filter(|(e, _)| inv.note(*e) & bit != 0)
+            .count();
+        let program = (0..inv.len() as u32)
+            .filter(|e| inv.note(*e) & bit != 0 && !up.shared.changed.contains(e))
+            .count();
+        json!({"reached": reached, "program": program})
+    };
+    m.insert(
+        "entryNotes".into(),
+        json!({
+            "pagesWithUnnamedActions": noted(crate::program::impact_graph::entries::NOTE_UNNAMED_ACTIONS),
+            "backgroundTargetsWithoutOnRun":
+                noted(crate::program::impact_graph::entries::NOTE_BACKGROUND_WITHOUT_ON_RUN),
+            "unnamedActionRunSites": inv.unnamed_sites(),
+        }),
+    );
     m
 }
 
@@ -1007,24 +1031,23 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
             .unwrap_or_default();
         hubs.insert((kind, at));
     }
-    // Entries only: a public procedure is a root kind, not an entry.
-    let program_entries = (0..g.node_count() as u32)
-        .filter(|&n| !EntryKind::of_root_kinds(g.root_kinds(n)).is_empty())
-        .count();
     let entry_total: usize = up.entries.values().map(Firsts::count).sum();
     let mut out = json!({
-        // The legacy `ancestors` tiers and entry buckets mix every relation
-        // (round-2 r2 §2.1 step 5: they stay until the next impact version;
-        // the classified counts are `byRelation`).
-        "population": POPULATION,
         "rootEntryKinds": up.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
         "rootUserOrJob": up.root_entry.iter().any(|k| user_or_job(*k)),
         "hubs": hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
-        "programEntries": program_entries,
+        // §R2.4 landing change 5: one program total, the canonical count
+        // (`programShare.program`); the legacy root-kind mask count is gone.
+        "programEntries": up.shared.program(),
         "entryBuckets": entry_total,
         "states": up.states,
         "maxHops": up.max_hops,
-        "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep, "onlyOpen": open},
+        // The legacy tiers mix every relation (r2 §2.1 step 5: they stay
+        // until the next impact version; the classified counts are
+        // `byRelation`). §R2.4 landing change 7: the label says so here
+        // only.
+        "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep,
+                      "onlyOpen": open, "population": POPULATION},
         "entries": entries,
         "userOrJobEntries": up.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count()).sum::<usize>(),
         // `count`: publishers anywhere among the ancestors; `direct` (round-2
@@ -1184,6 +1207,13 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
         "schema": SCHEMA,
         "version": 1,
         "graph": {"nodes": g.node_count(), "sites": g.site_count()},
+        // §R2.4 landing change 3: R0's `local` tier includes a dependency
+        // loaded from a source folder; the scope line says so when the
+        // program has one.
+        "localSourceDependencies": (0..g.node_count() as u32).any(|n| {
+            g.flags(n) & flag::LOCAL != 0
+                && crate::program::impact_graph::dep_callers::is_dependency_node(g, n)
+        }),
         "roots": roots_out,
         "union": union,
         "cost": {"perRootStates": states, "unionStates": ustats.states,
@@ -1331,9 +1361,16 @@ mod tests {
     /// out of both. So `reached <= program`, and every reached entry is one
     /// the program counts.
     ///
+    /// §R2.4 landing change 1: the background target object and the `OnRun`
+    /// it starts are one entry; the page whose unnamed action runs on the
+    /// path is noted. `programEntries` is the share's program total.
+    ///
     /// DISCRIMINATION (2026-11-07): counting the changed routine's entry in
-    /// the program (`Shared::program` returning `inv.len()`) fails "4 of 5"
-    /// (4 of 6).
+    /// the program (`Shared::program` returning `inv.len()`) fails "3 of 4"
+    /// (3 of 5). DISCRIMINATION (2026-11-07, landing change 1): keying the
+    /// background target object by its own node (the `on_run` lookup in
+    /// `EntryInventory::of` skipped) fails "the background target and its
+    /// OnRun are one entry".
     #[test]
     fn the_entry_share_counts_canonical_entries_on_both_sides() {
         let (g, r, open_t, on_run) = entry_world();
@@ -1351,19 +1388,37 @@ mod tests {
         let inv = g.entry_inventory();
         assert!(inv.of_node(open_t).is_some() && inv.of_node(on_run).is_some());
         assert!(inv.of_node(r).is_some(), "precondition: R itself is one");
+        let bg = (0..g.node_count() as u32)
+            .find(|&n| g.is_background_target(n))
+            .expect("precondition: a background target");
+        assert_eq!(
+            inv.of_node(bg),
+            inv.of_node(on_run),
+            "the background target and its OnRun are one entry"
+        );
         let d = &s["programShare"]["all"];
         let (reached, program) = (d["reached"].as_u64(), d["program"].as_u64());
         assert!(
             reached <= program,
             "reached {reached:?} <= program {program:?}"
         );
-        // Reached: Opened.OnOpenPage, Bg.OnRun, the Bg object (a background
-        // target) and Card's action-run page; the program adds
-        // Other.OnOpenPage and leaves R out.
-        assert_eq!((reached, program), (Some(4), Some(5)), "{d:#}");
-        assert_eq!(d["percent"], json!(80));
+        // Reached: Opened.OnOpenPage, Bg (its object and OnRun, one entry)
+        // and Card's action-run page; the program adds Other.OnOpenPage and
+        // leaves R out.
+        assert_eq!((reached, program), (Some(3), Some(4)), "{d:#}");
+        assert_eq!(d["percent"], json!(75));
+        assert_eq!(s["programEntries"], json!(4));
+        // Card's RunObject names no action: one entry for the page, noted.
+        assert_eq!(
+            s["entryNotes"]["pagesWithUnnamedActions"],
+            json!({"reached": 1, "program": 1})
+        );
         assert_eq!(s["relationRecorded"], json!(true));
-        assert_eq!(s["population"], json!(POPULATION));
+        assert_eq!(s["ancestors"]["population"], json!(POPULATION));
+        assert!(
+            s["population"].is_null(),
+            "the label is on `ancestors` only"
+        );
     }
 
     /// Round-2 r2 §2.1 (W1): the changed routine is not listed as an entry it
@@ -1396,7 +1451,7 @@ mod tests {
         assert_eq!(s["rootUserOrJob"], json!(true));
         // Nor is it one of its own canonical entries, in any population.
         let all = &s["programShare"]["all"];
-        assert_eq!(all["reached"], json!(4), "{all:#}");
+        assert_eq!(all["reached"], json!(3), "{all:#}");
     }
 }
 

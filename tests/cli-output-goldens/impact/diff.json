@@ -377,7 +377,7 @@
       ],
       "limits": [],
       "reasons": [],
-      "scope": "callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments",
+      "scope": "callers and entries over the whole program, dependency code in its own tier; test code is not in these callers (tests: reports it); the roots.config entry overlay is not applied; effects through every resolved call with literal arguments",
       "universe": "cross-app"
     },
     "selection": {
@@ -469,6 +469,7 @@
         "ancestors": {
           "local": 1,
           "onlyOpen": 0,
+          "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
           "throughDependency": 0,
           "total": 1
         },
@@ -541,6 +542,17 @@
           "uiNavigation": {}
         },
         "entryBuckets": 0,
+        "entryNotes": {
+          "backgroundTargetsWithoutOnRun": {
+            "program": 0,
+            "reached": 0
+          },
+          "pagesWithUnnamedActions": {
+            "program": 0,
+            "reached": 0
+          },
+          "unnamedActionRunSites": 0
+        },
         "eventPublishers": {
           "count": 0,
           "direct": {
@@ -617,7 +629,6 @@
           }
         ],
         "nodes": 1,
-        "population": "all ancestors (code, UI navigation, configuration, hub)",
         "programEntries": 2,
         "programEntriesByKind": {
           "event subscriber": 2
@@ -811,6 +822,7 @@
     "ancestors": {
       "local": 1,
       "onlyOpen": 0,
+      "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
       "throughDependency": 0,
       "total": 1
     },
@@ -870,6 +882,17 @@
       "uiNavigation": {}
     },
     "entryBuckets": 0,
+    "entryNotes": {
+      "backgroundTargetsWithoutOnRun": {
+        "program": 0,
+        "reached": 0
+      },
+      "pagesWithUnnamedActions": {
+        "program": 0,
+        "reached": 0
+      },
+      "unnamedActionRunSites": 0
+    },
     "eventPublishers": {
       "count": 0,
       "direct": {
@@ -938,7 +961,6 @@
       "overRule": null,
       "uiNavigation": null
     },
-    "population": "all ancestors (code, UI navigation, configuration, hub)",
     "programEntries": 2,
     "programEntriesByKind": {
       "event subscriber": 2

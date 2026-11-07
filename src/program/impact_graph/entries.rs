@@ -9,7 +9,11 @@
 //!   name)`, whether it runs through its `OnAction` trigger or through its
 //!   `RunObject` (an action-run site, [`SitedGraph::action_run_actions`]); an
 //!   action with both counts once. An action-run site whose actions the facts
-//!   do not name stands for the page that declares them (one entry per page).
+//!   do not name stands for the page that declares them (one entry per page,
+//!   noted: [`NOTE_UNNAMED_ACTIONS`]). A static background target (the
+//!   codeunit object a start enters) and the `OnRun` it runs are one entry;
+//!   a target codeunit with no `OnRun` node is its own entry, noted
+//!   ([`NOTE_BACKGROUND_WITHOUT_ON_RUN`]).
 //! - **Kind.** One per entry: the first of its kinds in [`EntryKind::ALL`]'s
 //!   order (page action before page trigger, …), so the kinds are disjoint.
 //!   Every kind the entry has is kept for the execution contexts.
@@ -43,6 +47,13 @@ enum EntryKey {
     ActionRunPage(NodeIx),
 }
 
+/// An entry that stands for a page whose action-run site names no action
+/// (one entry per page, not per action; §R2.4 landing change 2).
+pub const NOTE_UNNAMED_ACTIONS: u8 = 1;
+/// A background target codeunit with no `OnRun` node: counted apart, not
+/// merged with its `OnRun` (§R2.4 landing change 1).
+pub const NOTE_BACKGROUND_WITHOUT_ON_RUN: u8 = 2;
+
 /// The bit of `k` in an entry's kind mask.
 fn kind_bit(k: EntryKind) -> u16 {
     1 << EntryKind::ALL
@@ -62,6 +73,11 @@ pub struct EntryInventory {
     /// Per entry: the action's declared name, for an action an action-run
     /// site stands for.
     action: Vec<Option<Box<str>>>,
+    /// Per entry: [`NOTE_UNNAMED_ACTIONS`] / [`NOTE_BACKGROUND_WITHOUT_ON_RUN`]
+    /// bits, for the totals that must say they include such entries.
+    note: Vec<u8>,
+    /// How many action-run sites name no action (each counted as its page).
+    unnamed_sites: usize,
     /// The entry of each node that is one.
     node_entry: HashMap<NodeIx, u32>,
     /// The entries each action-run site stands for.
@@ -80,36 +96,60 @@ impl EntryInventory {
                 inv.kinds.push(0);
                 inv.witness.push(witness);
                 inv.action.push(None);
+                inv.note.push(0);
                 (inv.kinds.len() - 1) as u32
             })
+        };
+        // Each codeunit's `OnRun` node (round-2 r2 §R2.4 landing change 1: a
+        // background start's target object and the `OnRun` it runs are one
+        // entry).
+        let mut on_run: HashMap<&ObjectNodeId, NodeIx> = HashMap::new();
+        for n in 0..g.node_count() as u32 {
+            if let Some(Key::Routine(r)) = g.nodes.get(n as usize)
+                && r.enclosing_member_lc.is_none()
+                && r.name_lc.as_str() == "onrun"
+            {
+                on_run.entry(&r.object).or_insert(n);
+            }
+        }
+        let routine_key = |n: NodeIx, mask: u16| match g.nodes.get(n as usize) {
+            Some(Key::Routine(r))
+                if mask & kind_bit(EntryKind::PageAction) != 0
+                    && r.enclosing_member_lc.is_some() =>
+            {
+                EntryKey::Action(
+                    r.object.clone(),
+                    r.enclosing_member_lc
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase(),
+                )
+            }
+            _ => g.stable_id(n).map_or(EntryKey::Node(n), EntryKey::Stable),
         };
         for n in 0..g.node_count() as u32 {
             let mut mask = EntryKind::of_root_kinds(g.root_kinds(n))
                 .into_iter()
                 .fold(0u16, |m, k| m | kind_bit(k));
-            if g.is_background_target(n) {
+            let background = g.is_background_target(n);
+            if background {
                 mask |= kind_bit(EntryKind::BackgroundStart);
             }
             if mask == 0 {
                 continue;
             }
-            let key = match g.nodes.get(n as usize) {
-                Some(Key::Routine(r))
-                    if mask & kind_bit(EntryKind::PageAction) != 0
-                        && r.enclosing_member_lc.is_some() =>
-                {
-                    EntryKey::Action(
-                        r.object.clone(),
-                        r.enclosing_member_lc
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase(),
-                    )
-                }
-                _ => g.stable_id(n).map_or(EntryKey::Node(n), EntryKey::Stable),
+            let (key, note) = match g.nodes.get(n as usize) {
+                // A background target object: the entry of the `OnRun` it
+                // starts, or apart (noted) when the codeunit has none.
+                Some(Key::Object(o)) if background => match on_run.get(o) {
+                    Some(&r) => (routine_key(r, 0), 0),
+                    None => (EntryKey::Node(n), NOTE_BACKGROUND_WITHOUT_ON_RUN),
+                },
+                _ => (routine_key(n, mask), 0),
             };
             let e = intern(&mut inv, key, n);
             inv.kinds[e as usize] |= mask;
+            inv.note[e as usize] |= note;
             inv.node_entry.insert(n, e);
         }
         for &s in g.action_run_sites() {
@@ -117,7 +157,10 @@ impl EntryInventory {
             let acts = g.action_run_actions(s);
             let mut es: Vec<u32> = Vec::new();
             if acts.is_empty() {
-                es.push(intern(&mut inv, EntryKey::ActionRunPage(page), page));
+                let e = intern(&mut inv, EntryKey::ActionRunPage(page), page);
+                inv.note[e as usize] |= NOTE_UNNAMED_ACTIONS;
+                inv.unnamed_sites += 1;
+                es.push(e);
             } else {
                 for (object, name) in acts {
                     let e = intern(
@@ -139,6 +182,19 @@ impl EntryInventory {
             inv.site_entries.insert(s, es);
         }
         inv
+    }
+
+    /// An entry's note bits ([`NOTE_UNNAMED_ACTIONS`],
+    /// [`NOTE_BACKGROUND_WITHOUT_ON_RUN`]).
+    #[must_use]
+    pub fn note(&self, e: u32) -> u8 {
+        self.note[e as usize]
+    }
+
+    /// How many action-run sites name no action.
+    #[must_use]
+    pub fn unnamed_sites(&self) -> usize {
+        self.unnamed_sites
     }
 
     /// How many entries the program holds.
@@ -208,6 +264,7 @@ impl EntryInventory {
     pub fn bytes(&self) -> usize {
         use std::mem::size_of;
         self.kinds.capacity() * size_of::<u16>()
+            + self.note.capacity()
             + self.witness.capacity() * size_of::<NodeIx>()
             + self.action.capacity() * size_of::<Option<Box<str>>>()
             + self.node_entry.capacity() * (2 * size_of::<u32>() + 8)

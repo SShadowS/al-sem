@@ -539,28 +539,6 @@ fn al_name(n: &str) -> String {
     }
 }
 
-/// Where an ancestor's path goes, in plain words (round-2 r2 §2.1, W1
-/// interim): the walk records no relation, so its population never carries a
-/// bracketed tier.
-fn tier_words(tier: &str) -> &'static str {
-    match crate::engine::vocab::tier_key(tier) {
-        "local" => "within the workspace",
-        "via-dependency" => "through a dependency",
-        _ => "over a hub",
-    }
-}
-
-/// An ancestor of the unclassified population: its display, where its path
-/// goes and its hops (`Page X (through a dependency, 3 hops)`).
-fn node_plain(n: &Value) -> String {
-    format!(
-        "{} ({}, {})",
-        s(n, "display"),
-        tier_words(s(n, "tier")),
-        plural(u(n, "hops"), "hop", "hops")
-    )
-}
-
 /// The direct callers and event publishers a routine lists with `detail`
 /// (output validation §7.6, F46: an evidence budget, about 15 lines per
 /// routine, not ten items per list).
@@ -748,8 +726,8 @@ fn reach_lines(
         if n == 0 {
             if key == "code" {
                 out.push(format!(
-                    "{indent}reached by code: none — no code path reaches it in the analyzed \
-                     graph{}",
+                    "{indent}reached by code: none — no established code-path witness in the \
+                     analyzed graph{}",
                     match limited {
                         Some(l) => format!("; analysis partial (limit: {l})"),
                         None if candidates > 0 => {
@@ -829,6 +807,30 @@ fn reach_lines(
                 nearest(&mut out, key);
             }
         }
+    }
+    // §R2.4 landing changes 1-2: the totals say what they include that is
+    // not one entry per action or per run.
+    let notes = &up["entryNotes"];
+    let pages = u(&notes["pagesWithUnnamedActions"], "reached");
+    let bg = u(&notes["backgroundTargetsWithoutOnRun"], "reached");
+    if pages + bg > 0 {
+        let mut parts = Vec::new();
+        if pages > 0 {
+            parts.push(format!(
+                "{} counted once each (their actions are not named)",
+                plural(pages, "page", "pages")
+            ));
+        }
+        if bg > 0 {
+            parts.push(format!(
+                "{} with no OnRun found (counted apart)",
+                plural(bg, "background target", "background targets")
+            ));
+        }
+        out.push(format!(
+            "{indent}entry totals include {}",
+            parts.join(", and ")
+        ));
     }
     // Round-2 r2 §2.1 Rules: no single population reaches the threshold,
     // but their union does.
@@ -1767,9 +1769,21 @@ fn impact_header(
         .filter(|l| !l.starts_with("callers and entries not computed"))
         .cloned()
         .collect();
-    h.scope = "callers and entries over the whole program, dependency code in its own tier; \
-               effects through every resolved call with literal arguments"
-        .to_string();
+    // §R2.4 landing change 3: once per answer, what the callers do not
+    // count.
+    let local_source = up
+        .as_ref()
+        .is_ok_and(|u| u["localSourceDependencies"] == json!(true));
+    h.scope = format!(
+        "callers and entries over the whole program, dependency code in its own tier; test code \
+         is not in these callers (tests: reports it); the roots.config entry overlay is not \
+         applied{}; effects through every resolved call with literal arguments",
+        if local_source {
+            "; local includes dependencies loaded from source folders"
+        } else {
+            ""
+        }
+    );
     if !opts.detail && !roots.is_empty() {
         h.more.push(format!(
             "{} lists each routine's direct callers and its first entry of each kind",
@@ -1884,8 +1898,21 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                     None => s(f, "display").to_string(),
                 })
                 .collect();
+            // §R2.4 landing change 6: a changed routine that is an entry
+            // says so (its kind first among its own).
+            if let Some(k) = up["rootEntryKinds"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(Value::as_str)
+            {
+                out.push(format!(
+                    "      the changed routine is a {} (an entry itself)",
+                    crate::engine::vocab::entry_key(k).0
+                ));
+            }
             out.push(if u(c, "count") == 0 {
-                "      direct code callers: none found".to_string()
+                "      direct code callers: none found (test code is not counted; see tests:)"
+                    .to_string()
             } else {
                 let rest = u(c, "count").saturating_sub(first.len());
                 format!(
@@ -1931,15 +1958,10 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                     list(direct, node_short)
                 ));
             }
-            // The publishers anywhere among the ancestors mix every relation
-            // (a legacy list, not a population): no bracketed tier.
-            if u(p, "count") > 0 {
-                out.push(format!(
-                    "      event publishers among its ancestors: {} (first: {})",
-                    thousands(u(p, "count")),
-                    list(p, node_plain)
-                ));
-            }
+            // §R2.4 landing change 4: the publishers anywhere among the
+            // ancestors are a legacy list of every relation, not a
+            // population: dropped from the human text (JSON
+            // `eventPublishers` keeps it). The direct `raised by:` stays.
         }
         if !r["tests"].is_null() {
             out.push(format!("      {}", tests_clause(&r["tests"])));

@@ -229,7 +229,7 @@ fn program_wide_needs_the_programs_entries_and_an_unlimited_walk() {
     assert!(!text.contains("every candidate decided"), "{text}");
     assert!(
         text.contains(
-            "reached by code: none — no code path reaches it in the analyzed graph; \
+            "reached by code: none — no established code-path witness in the analyzed graph; \
                        analysis partial (limit: state budget 2000000)"
         ),
         "{text}"
