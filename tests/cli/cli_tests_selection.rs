@@ -373,7 +373,7 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
     let human = run(&["--routine", "TU Core::Post"]);
     assert!(
         human.contains(
-            "  tests: no [Test] procedure in the workspace app; 1 test app discovered (TU Production Tests); not analyzed in this call — alsem tests selects them"
+            "  tests: no [Test] procedure in the workspace app; 1 test app discovered (TU Production Tests); not analyzed in this call — alsem tests --routine 'Codeunit \"TU Core\"::Post' selects them"
         ),
         "{human}"
     );

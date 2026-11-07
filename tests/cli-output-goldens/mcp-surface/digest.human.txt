@@ -10,11 +10,11 @@ more: detail: true lists every list complete; format: "json" for every effect ro
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
       path: IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Out Log: Insert 1 — known persistent
+    Out Log: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: IssueDoc → Codeunit "Out Log Mgt"::WriteLog
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14
+    Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
   writes beyond dependency calls (15 tables through 2 dependency routines entered at 2 dependency calls):
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event
       representative path (Base Doc Line, the nearest of 14 tables): IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)

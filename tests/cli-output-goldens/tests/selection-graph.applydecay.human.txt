@@ -1,5 +1,5 @@
 tests Codeunit "Acc Nightly Recalc"::ApplyDecay   [cross-app]
-answer: run first (app "workspace"): codeunits 50947 — a superset: whole codeunits, for the 1 selected test procedure on a local path; then the whole suite (selection incomplete: unresolved-test-calls)
+answer: run first (app "workspace"): codeunits 50947 — a superset: whole codeunits, for the 1 selected test procedure on a local path; then the whole suite: app "workspace", 22 tests (selection incomplete: unresolved-test-calls)
 analysis complete · assumptions: static reachability, not coverage: a reached test may not exercise the changed lines · limits: none · scope: tests on a local path
 more: --tier dependency adds tests whose path passes dependency code; --format json for every selected test and its path
 test scope: workspace 11 [Test] procedures; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)

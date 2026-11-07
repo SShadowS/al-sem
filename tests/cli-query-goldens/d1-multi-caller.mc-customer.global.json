@@ -31,6 +31,43 @@
     },
     "up": {
       "directSites": {
+        "byFamily": {
+          "keyRelevant": {
+            "byOp": {},
+            "routines": 0,
+            "sites": 0
+          },
+          "locks": {
+            "byOp": {},
+            "routines": 0,
+            "sites": 0
+          },
+          "other": {
+            "byOp": {},
+            "routines": 0,
+            "sites": 0
+          },
+          "reads": {
+            "byOp": {
+              "FindSet": 3
+            },
+            "routines": 3,
+            "sites": 3
+          },
+          "recordWrites": {
+            "byOp": {
+              "Modify": 1
+            },
+            "routines": 1,
+            "sites": 1,
+            "temporary": 0
+          },
+          "validations": {
+            "byOp": {},
+            "routines": 0,
+            "sites": 0
+          }
+        },
         "dependencyByOp": {},
         "dependencyRoutines": 0,
         "dependencySites": 0,

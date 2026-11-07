@@ -476,8 +476,10 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(env["summary"]["kind"], "digest", "{env}");
         assert_eq!(env["summary"]["rootsResolved"], 1, "{env}");
         assert_eq!(env["summary"]["routinesListed"], 1, "{env}");
+        // Round 2 G10: a compact row names its result-index row.
+        assert_eq!(env["summary"]["routines"][0]["index"], 1, "{env}");
         assert_eq!(
-            env["summary"]["routines"][0]["routine"],
+            env["summary"]["routines"][0]["selector"],
             "Codeunit \"Explain Post\"::PostOrder"
         );
 
@@ -799,9 +801,15 @@ fn the_inline_only_path_delivers_inline() {
     assert!(env["stdoutText"].is_string(), "{env}");
     assert!(env.get("stdoutFile").is_none(), "{env}");
     assert_eq!(cli_bytes(&env), expected);
-    // MCP output plan 1b/1e: a summary goes with a file only; inline, the
-    // answer itself is there.
-    assert!(env.get("summary").is_none(), "{env}");
+    // MCP output plan 1b/1e, round 2 G12: inline, the answer itself is
+    // there; a JSON answer over 8 KiB carries the summary too, with no index
+    // file (the result is inline).
+    let big = env["stdoutText"].as_str().unwrap().len()
+        > al_sem::engine::batch::output::SUMMARY_CAP_BYTES;
+    assert!(big, "the fixture's digest JSON is over 8 KiB: {env}");
+    assert_eq!(env["summary"]["kind"], "digest", "{env}");
+    assert!(env["summary"].get("index").is_none(), "{env}");
+    assert!(env["summary"].get("indexRows").is_none(), "{env}");
     let argv = [
         "query",
         "touches",

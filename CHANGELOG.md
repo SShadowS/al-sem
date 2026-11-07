@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (round-2 output validation, W3: missing information)
+
+Milestone W3 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§3, §2.4's
+W3 rows). Output only, except a lazily built index of each record operation's trigger and
+table-event edges for the write lines (no engine fact changes).
+
+- **touches on a table shows each operation family, writes first** (G8, n03, c18, c30):
+  the workspace sites print by family — `record writes: 16 sites in 14 routines — Modify 13,
+  DeleteAll 1, Insert 1, ModifyAll 1 (temporary records: 2)`, `validations: 5 sites (a
+  validation may lead to a write; it is not one)`, `locks:`, `key-relevant`, `reads:`,
+  `other operations:` — each with its own count and a share of the 12 samples (record
+  writes at most 6; each kind of a family once before a second site of any; key-field
+  filters before Gets). JSON `directSites.byFamily`. New input `opFamily: "write"` (CLI
+  `--op-family write`, workspace-global list only): every record-write site (Insert,
+  Modify, ModifyAll, Delete, DeleteAll, Rename), temporary records included and tagged
+  (`up.writeSites[].tempState`). No other value is accepted.
+- **touches, smaller items** (G21, G22, G19): an unresolved table names its receiver and
+  why (`table: not resolved (RecordRef RecRef: opened from a variable)`; also `set by
+  GetTable …`, `passed by the caller`, `not opened in this routine`); the table's keys
+  print before the key-relevant line (`keys: primary key "Code"; other keys: …`), which
+  says what it does not search (key uses in page and report declarations); an answer from
+  a routine says where it is (`defined at …`, so `showSource` shows its first statements).
+- **digest hands tests over to the tests tool** (G9, c25): with no test code here and a
+  sibling test app found, the human line is `tests: not analyzed here (test app "…" is not
+  loaded in this engine) — alsem_tests {"files": […]} selects them`; the summary's
+  `testScope.next` and each `not loaded` index row (`testsNext`) carry the call.
+- **digest summary rows fit** (G10, c25): each summary row is compact — `index` (its row in
+  the result index), `selector`, `analysis`, `testStatus`, `tableAnswers`,
+  `observedWrites` and a short `answer`, one clause per effect family with its qualifiers
+  (`may write 15 tables (4 owned by this app, 11 by dependencies), 1 write on a table not
+  resolved, caller-dependent writes on 1 table (only when the caller's record is not
+  temporary); commits: may; UI 2; …; analysis partial (…)`); an answer two rows share is in
+  `shared`. Signature, stable id, the full answer and the totals are in the index row. c25's
+  20 rows now all fit (7.9 KB of 8 KiB, was 6 of 20); the overflow contract
+  (`summaryTruncated`, the complete index) stays.
+- **a capped test selection spreads over the changed routines** (G11, c21): under
+  `maxTests` each changed routine takes its nearest test first (a test counts once), then
+  the global rank fills the rest; the run line describes the returned tests (`codeunits … —
+  for the 10 returned tests (144 selected in all)`), the totals stay the full selection's.
+- **large inline JSON gets the summary too** (G12, c21): an inline JSON answer over 8 KiB
+  carries the envelope `summary` a file answer carries (no index file: the result is
+  inline).
+- **blockers** (G13, c15, c19): `coverage incomplete` is dropped from the blocker list and
+  count when each of its reasons is a listed blocker (interface open world, a call not
+  resolved); otherwise it stays. A table answer's `firstBlocker` is the first blocker with a
+  site (`site: "file:line"`), else the first with `site: null`. A digest row names its
+  written tables when there are 3 or fewer (`observedWrites`).
+- **limits agree with the body** (G14, c01, c11, c23): query effects' header `limits:`
+  collects the families inventoried one dependency routine deep (`limits: reads, locks and
+  validations one dependency routine deep`). A write line in digest and explain says what
+  its table events ran: `runs: no OnModify trigger run; table-event subscribers: none in the
+  loaded program` (or the triggers and the count of followed subscribers).
+- **what runs a table or page trigger** (G4's W3 rows, c10-style cards): a table's
+  `OnInsert`/`OnModify`/`OnDelete`/`OnRename` prints `run by: record operations that run it:
+  N sites (Insert at … in …)` (the resolver's implicit-trigger edges, so `Insert()` without
+  RunTrigger is not listed) and the pages on the table as potential UI surfaces; a page
+  trigger a run runs prints the code runs of the page and the actions that open it; any
+  other page trigger says it runs while a user works in the page. The `callers:` line stays
+  beside it.
+- **prove** (G16, G17, n01, n04): a `yes` names its first witness on the answer line (`yes —
+  COMMIT at …:229 (in a loop), and 10 more`), workspace sites before dependency ones; an
+  implicit error names its operation (`Get (implicit error) at …:50 (in a loop)`); on
+  `throws-error` a TryFunction root says `declared TryFunction; interception depends on how
+  the caller invokes it`, and every such answer gives `whether a caller traps it: alsem_prove
+  {…, "question": "callers-intercept-errors"}`.
+- **tests and explain follow-ups** (G18, G20, G23, G60, G62): `then the whole suite: app "…",
+  1,844 tests`; the posting-tests line says which input gives their codeunit filter; prove's
+  callers'-context answers print `to narrow it:` (the unrecognized guard's site, the
+  roots.config.json) before the other blockers; explain's field answer is the field card
+  only (`field 60 declared at …`, reference candidates counted per kind, no `no rule`
+  lines, complete calls for the field's OnValidate, the writers' cards and the touches
+  query); explain's tests line gives the complete `alsem_tests {"routines": […]}` call; a
+  query effects answer with no operation says `scope: record operations only; not
+  page-context restrictions or non-record effects` (JSON `result.scope.covers`).
+
 ### Changed (round-2 output validation, W1: what misled)
 
 Milestone W1 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§2.1 interim,

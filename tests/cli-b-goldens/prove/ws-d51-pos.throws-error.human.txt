@@ -1,7 +1,8 @@
 prove Codeunit "D51 Sender"::PostThenError throws-error   [cross-app]
-answer: yes
+answer: yes — ERROR_THROW at ws:src/Sender.Codeunit.al:14 (unconditional on success)
 analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops
   evidence: 1 effect
     [ERROR_THROW] at ws:src/Sender.Codeunit.al:14
       condition: unconditional on success
+  whether a caller traps it: alsem prove 'Codeunit "D51 Sender"::PostThenError' callers-intercept-errors

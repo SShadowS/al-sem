@@ -2,6 +2,7 @@ query touches Codeunit "Out Issue Document"::IssueDoc vs Out Log (a0a00001-0000-
 answer: down: yes — 2 record touches: 1 on a persistent record, 0 on possibly persistent records, 1 on temporary records
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 1 app
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row
+  defined at ws:src/OutIssueDocument.Codeunit.al:3
     [Insert] write at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit "Out Log Mgt"::WriteLog
     temporary records: 1 touch in 1 routine (Codeunit "Out Log Mgt"::WriteLog 1) — --all lists them
   table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table not resolved: RecordRef) (they may be this table) — --table unknown lists them

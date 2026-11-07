@@ -12,7 +12,7 @@ Codeunit "Out Log Mgt"::WriteLog  defined at ws:src/OutIssueDocument.Codeunit.al
     caller rule (checked by 1 caller: Codeunit "Out Issue Document"::IssueDoc; no equivalent check recognized in 2 analyzed callers: Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
     reached from page action Page "Out Doc Card".action(Issue "Issue") at ws:src/Pages.al:18
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Out Log: Insert 1 — known persistent
+    Out Log: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: WriteLog (in the routine itself)
       fields WriteLog assigns on this table (not operation-specific): Entry No., Message

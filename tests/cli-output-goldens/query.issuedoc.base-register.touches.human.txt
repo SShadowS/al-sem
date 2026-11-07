@@ -2,6 +2,7 @@ query touches Codeunit "Out Issue Document"::IssueDoc vs Base Register (d0d00001
 answer: down: no indexed touch (per operation, one routine into dependency code); the whole cone may write it beyond dependency calls (below)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 1 app
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row
+  defined at ws:src/OutIssueDocument.Codeunit.al:3
   table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table not resolved: RecordRef) (they may be this table) — --table unknown lists them
   beyond dependency calls (the whole cone, literal arguments followed): may write it beyond 1 dependency routine entered: Codeunit "Base Poster" (70100)::OnRun (Modify) — alsem prove 'Out Issue Document.IssueDoc' 'writes-table:Base Register' gives the path
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (the tests and impact tools follow it); paths through dependency code are listed apart, before the caller list

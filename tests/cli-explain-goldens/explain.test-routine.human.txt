@@ -11,7 +11,7 @@ Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
   UI route: UI_MESSAGE via PostUnreleasedFails → PostOrder
   commits: none observed (searched: the cone through every resolved call; not searched: external-target)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Explain Order: Modify 1 — known persistent
+    Explain Order: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/post.al:18
       path: PostUnreleasedFails → Codeunit "Explain Post"::PostOrder
       fields PostOrder assigns on this table (not operation-specific): Posted, Status

@@ -39,7 +39,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
-            "line": 44,
+            "line": 45,
             "role": "operation",
             "routine": "r:1"
           },
@@ -52,7 +52,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
-            "line": 65,
+            "line": 66,
             "role": "operation",
             "routine": "r:2"
           },
@@ -66,7 +66,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
-            "line": 43,
+            "line": 44,
             "role": "operation",
             "routine": "r:1"
           },
@@ -79,7 +79,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
-            "line": 36,
+            "line": 37,
             "role": "operation",
             "routine": "r:3"
           },
@@ -111,7 +111,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 39,
+          "line": 40,
           "role": "definition"
         },
         "display": "TempOnly",
@@ -125,7 +125,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 61,
+          "line": 62,
           "role": "definition"
         },
         "display": "Mixed",
@@ -139,7 +139,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 34,
+          "line": 35,
           "role": "definition"
         },
         "display": "WriteItem",

@@ -8,7 +8,7 @@ computed: current effects of the 1 routine these files touches, in the working t
   other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    D47 Rec: Modify 1 — known persistent
+    D47 Rec: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/Sender.Codeunit.al:16
       path: SendAfterModify (in the routine itself)
   HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:17 (unconditional on success)

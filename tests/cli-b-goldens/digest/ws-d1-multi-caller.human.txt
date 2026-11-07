@@ -9,7 +9,7 @@ computed: current effects of the 4 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    MC Customer: Modify 1 — known persistent
+    MC Customer: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerB → ModifyHelper
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:33 (unconditional on success)
@@ -20,7 +20,7 @@ computed: current effects of the 4 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    MC Customer: Modify 1 — known persistent
+    MC Customer: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerC → ModifyHelper
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:41 (unconditional on success)
@@ -31,7 +31,7 @@ computed: current effects of the 4 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    MC Customer: Modify 1 — known persistent
+    MC Customer: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerA → ModifyHelper
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:25 (unconditional on success)
@@ -42,5 +42,5 @@ computed: current effects of the 4 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    MC Customer: Modify — depends on the caller's record argument at ws:src/D1MultiCaller.al:19
+    MC Customer: Modify — depends on the caller's record argument at ws:src/D1MultiCaller.al:19; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
   errors at 1 place: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (unconditional on success)

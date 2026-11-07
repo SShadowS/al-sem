@@ -12,6 +12,9 @@ expectation by hand from this text.
 | `RB Ledger.Amount::OnLookup` | no code call runs it; the same page |
 | `RB Actions.action(Direct)::OnAction` | an entry point: the action itself, no code caller |
 | `RB Subscriber.OnAfterInsertLedger` | run by its publisher, `Table "RB Ledger"::OnAfterInsertEvent`; no direct code caller |
-| `RB Ledger::OnInsert` | no direct code caller; what runs a table trigger is not listed yet (W3) |
+| `RB Ledger::OnInsert` | run by record operations: none observed (no operation inserts with `RunTrigger` true); potential UI surfaces: 1 page (`RB Ledger Card`) |
+| `RB Journal::OnInsert` (W3) | run by 1 record operation: `RB Runner.Inserter`'s `Insert(true)`; `InsertsQuietly`'s `Insert()` runs no trigger and is not listed; potential UI surfaces: 1 page (`RB Journal Card`) |
+| `RB Journal Card::OnOpenPage` (W3) | run by the code run of the page in `RB Runner.OpensCard`; no page action opens it |
+| `RB Journal Card::OnInsertRecord` (W3) | a page record trigger a run does not run: the page's lifecycle while a user works in it |
 
 Ids 51200-51299. Nothing here is compiled; the engine reads the source only.

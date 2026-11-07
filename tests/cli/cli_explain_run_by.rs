@@ -110,12 +110,11 @@ fn a_trigger_says_what_runs_it() {
     );
     let insert = explain(r#"Table "RB Ledger"::OnInsert"#, false);
     assert!(
-        insert.contains(
-            "direct code callers: none found (what runs a trigger is not listed for this kind yet)"
-        ),
+        insert.contains("run by: record operations that run it: none observed"),
         "{insert}"
     );
     for text in [&validate, &lookup, &action, &subscriber, &insert] {
+        assert!(!text.contains("is not listed for this kind yet"), "{text}");
         assert!(
             !text
                 .lines()
@@ -124,4 +123,44 @@ fn a_trigger_says_what_runs_it() {
             "{text}"
         );
     }
+}
+
+/// G4 (W3 rows): a table's record trigger is run by the record operations
+/// whose implicit-trigger edge reaches it — `Inserter`'s `Insert(true)`, not
+/// `InsertsQuietly`'s `Insert()` (no RunTrigger) — with the pages on its
+/// table as potential UI surfaces; a page trigger a run runs (`OnOpenPage`)
+/// by the code runs of the page; one a run does not run (`OnInsertRecord`)
+/// by the page's lifecycle.
+#[test]
+fn table_and_page_triggers_say_what_runs_them() {
+    let insert = explain(r#"Table "RB Journal"::OnInsert"#, false);
+    assert!(
+        insert.contains(
+            r#"run by: record operations that run it: 1 site (Insert at ws:src/RunBy.al:143 in Codeunit "RB Runner"::Inserter); potential UI surfaces: 1 page on table "RB Journal" (Page "RB Journal Card")"#
+        ),
+        "{insert}"
+    );
+    assert!(!insert.contains("InsertsQuietly"), "{insert}");
+    let v: Value = serde_json::from_str(&explain(r#"Table "RB Journal"::OnInsert"#, true)).unwrap();
+    let rb = &v["cards"][0]["runBy"];
+    assert_eq!(rb["kind"], "table-trigger", "{rb:#}");
+    assert_eq!(
+        rb["recordOperations"].as_array().map(Vec::len),
+        Some(1),
+        "{rb:#}"
+    );
+    let open = explain(r#"Page "RB Journal Card"::OnOpenPage"#, false);
+    assert!(
+        open.contains(
+            r#"run by: code runs of the page: 1 routine (Codeunit "RB Runner"::OpensCard); page actions that open it: none observed"#
+        ),
+        "{open}"
+    );
+    let new_record = explain(r#"Page "RB Journal Card"::OnInsertRecord"#, false);
+    assert!(
+        new_record.contains(
+            r#"run by: the page's lifecycle while a user works in Page "RB Journal Card""#
+        ),
+        "{new_record}"
+    );
 }

@@ -337,6 +337,45 @@ fn u(v: &Value, k: &str) -> usize {
     v.get(k).and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
+/// The returned tests under a cap of `cap` (round 2 G11): `picked` is the
+/// selection in its global rank (code relation before navigation, then
+/// tier, hops, codeunit, display). In `changed` order, each changed
+/// routine takes its nearest test (the first in that rank that reaches it);
+/// a test already taken for an earlier routine is skipped, so it counts
+/// once; the remaining slots fill by the global rank. The result keeps the
+/// global rank's order.
+fn spread_cap<'v>(picked: &[&'v Value], changed: &[Value], cap: usize) -> Vec<&'v Value> {
+    let mut taken: Vec<usize> = Vec::new();
+    let reaches = |t: &Value, id: &str| match &t["reaches"] {
+        Value::String(r) => r == id,
+        Value::Array(rs) => rs.iter().any(|r| r.as_str() == Some(id)),
+        _ => false,
+    };
+    let same = |a: &Value, b: &Value| a["stableId"] == b["stableId"];
+    for c in changed {
+        if taken.len() >= cap {
+            break;
+        }
+        let id = s(c, "stableId");
+        if let Some(i) = picked
+            .iter()
+            .position(|t| reaches(t, id) && !taken.iter().any(|&j| same(picked[j], t)))
+        {
+            taken.push(i);
+        }
+    }
+    for (i, t) in picked.iter().enumerate() {
+        if taken.len() >= cap {
+            break;
+        }
+        if !taken.iter().any(|&j| same(picked[j], t)) {
+            taken.push(i);
+        }
+    }
+    taken.sort_unstable();
+    taken.into_iter().map(|i| picked[i]).collect()
+}
+
 /// The scope line (§4.6) and whether there is any test scope. Output
 /// validation §9.5 (F64): one clause per part — the test apps by name with
 /// the tests loaded, the skipped apps counted (the JSON's `scope.skipped`
@@ -517,7 +556,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         .filter(|t| opts.tier.takes(s(t, "tier")))
         .collect();
     let shown: Vec<&Value> = match opts.max_tests {
-        Some(m) => picked.iter().copied().take(m).collect(),
+        Some(m) => spread_cap(&picked, &changed_out, m),
         None => picked.clone(),
     };
     // Fallback reasons from the parts.
@@ -703,6 +742,30 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     };
     let code_tests = by_relation(crate::engine::vocab::RELATION_CODE);
     let nav_tests = by_relation(crate::engine::vocab::RELATION_NAVIGATION);
+    // Round 2 G11: under a cap the run line describes the returned tests
+    // (with the full selection's size beside them); the totals,
+    // `selectionComplete` and the fallback stay about the full selection.
+    let capped = shown.len() < picked.len();
+    let shown_of = |rel: &str| -> Vec<&Value> {
+        shown
+            .iter()
+            .copied()
+            .filter(|t| relation(t) == rel)
+            .collect()
+    };
+    let (line_code, line_nav) = if capped {
+        (
+            shown_of(crate::engine::vocab::RELATION_CODE),
+            shown_of(crate::engine::vocab::RELATION_NAVIGATION),
+        )
+    } else {
+        (code_tests.clone(), nav_tests.clone())
+    };
+    let in_all = if capped {
+        format!(" ({} selected in all)", thousands(picked.len()))
+    } else {
+        String::new()
+    };
     let codeunits_of = |v: &[&Value]| -> String {
         let mut ids: Vec<String> = Vec::new();
         for t in v {
@@ -722,24 +785,51 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     // §9.5 (F63): what to run, first, in the test app's terms.
     let run_line = if picked.is_empty() {
         format!("run first: no test with a modeled {}", opts.tier.words())
-    } else if !nav_tests.is_empty() && code_tests.is_empty() {
+    } else if !line_nav.is_empty() && line_code.is_empty() {
         format!(
             "no modeled code-call witness in the selected scope; {} {} by UI navigation only \
-             ({}) — candidates: codeunits {} (a superset: whole codeunits)",
-            n_of(nav_tests.len(), "test reaches", "tests reach"),
+             ({}){in_all} — candidates: codeunits {} (a superset: whole codeunits)",
+            n_of(
+                line_nav.len(),
+                if capped {
+                    "returned test reaches"
+                } else {
+                    "test reaches"
+                },
+                if capped {
+                    "returned tests reach"
+                } else {
+                    "tests reach"
+                }
+            ),
             navigation_target(&changed_out),
             navigation_caveat(&changed_out),
-            codeunit_ids.join("|"),
+            if capped {
+                codeunits_of(&shown)
+            } else {
+                codeunit_ids.join("|")
+            },
         )
-    } else if !nav_tests.is_empty() {
+    } else if !line_nav.is_empty() {
         format!(
             "run first ({app_words}): {} by code calls (codeunits {}; a superset: whole \
-             codeunits); {} more by UI navigation only (codeunits {}; {})",
-            n_of(code_tests.len(), "test", "tests"),
-            codeunits_of(&code_tests),
-            thousands(nav_tests.len()),
-            codeunits_of(&nav_tests),
+             codeunits); {} more by UI navigation only (codeunits {}; {}){in_all}",
+            n_of(
+                line_code.len(),
+                if capped { "returned test" } else { "test" },
+                if capped { "returned tests" } else { "tests" }
+            ),
+            codeunits_of(&line_code),
+            thousands(line_nav.len()),
+            codeunits_of(&line_nav),
             navigation_caveat(&changed_out),
+        )
+    } else if capped {
+        format!(
+            "run first ({app_words}): codeunits {} — a superset: whole codeunits, for the {}{in_all} on a {}",
+            codeunits_of(&shown),
+            n_of(shown.len(), "returned test", "returned tests"),
+            opts.tier.words()
         )
     } else {
         format!(
@@ -755,8 +845,16 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     } + &if complete {
         "; selection complete".to_string()
     } else {
+        // Round 2 G18: the whole suite names its run target.
+        let suite_tests: usize = u(roots, "workspaceTests")
+            + ok_parts.iter().map(|p| u(p, "testsLoaded")).sum::<usize>();
+        let target = if suite_tests == 0 {
+            String::new()
+        } else {
+            format!(": {app_words}, {}", n_of(suite_tests, "test", "tests"))
+        };
         format!(
-            "; then the whole suite (selection incomplete: {})",
+            "; then the whole suite{target} (selection incomplete: {})",
             fallback
                 .iter()
                 .map(|f| s(f, "reason").to_string())
@@ -1090,9 +1188,15 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             "[via-dependency] {}{}",
             n_of(thr, "test", "tests"),
             if same {
-                " — effectively the suite's posting tests, not specific to this change"
+                // Round 2 G18: the input that gives their codeunit filter.
+                format!(
+                    " — effectively the suite's posting tests, not specific to this change; {} \
+                     gives the {} tests' codeunit filter",
+                    crate::engine::follow_up::Input::TierDependency.on(opts.surface),
+                    thousands(thr)
+                )
             } else {
-                tier_note.as_str()
+                tier_note.clone()
             }
         ));
     }
@@ -1298,5 +1402,71 @@ mod tests {
             ),
             "{mixed}"
         );
+    }
+
+    /// Round 2 G11: under a cap the returned tests spread over the changed
+    /// routines. Hand-stated: routine r1 has three near tests, r2 one far
+    /// one; a cap of 2 returns one test per routine, not r1's two nearest.
+    /// A test nearest to both routines (t0, reaching r1 and r2) is taken
+    /// once, for r1, and r2 still gets its own. The run line describes the
+    /// returned tests, the totals the full selection.
+    #[test]
+    fn a_capped_selection_spreads_over_the_changed_routines() {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Codeunit X::A"},
+                      {"stableId": "r2", "display": "Codeunit X::B"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 4,
+        });
+        let test = |id: &str, cu: i64, hops: u64, reaches: Value| {
+            json!({"stableId": id, "codeunitId": cu, "codeunit": format!("T{cu}"),
+                "procedure": id, "tier": "local", "hops": hops, "reaches": reaches,
+                "display": format!("Codeunit T{cu}::{id}"),
+                "path": [format!("Codeunit T{cu}::{id}"), "Codeunit X::A"]})
+        };
+        let opts = RenderOpts {
+            tier: TierPick::Local,
+            max_tests: Some(2),
+            json: true,
+            surface: Default::default(),
+            single_app: false,
+            schema: 2,
+        };
+        let part = |tests: Vec<Value>| Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({"roots": [{"stableId": "r1", "status": "reached"},
+                                        {"stableId": "r2", "status": "reached"}],
+                              "tests": tests})),
+        };
+        let returned = |tests: Vec<Value>| -> (Vec<String>, Value) {
+            let v: Value =
+                serde_json::from_str(&render(&roots, &[part(tests)], opts).text).unwrap();
+            let ids = v["runFirst"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["stableId"].as_str().unwrap().to_string())
+                .collect();
+            (ids, v)
+        };
+        let base = vec![
+            test("t1", 50001, 1, json!("r1")),
+            test("t2", 50002, 2, json!("r1")),
+            test("t3", 50003, 3, json!("r1")),
+            test("t4", 50004, 4, json!("r2")),
+        ];
+        let (ids, v) = returned(base.clone());
+        assert_eq!(ids, ["t1", "t4"], "{v:#}");
+        assert_eq!(v["runFirstTotal"], 4, "{v:#}");
+        let line = v["runFirstLine"].as_str().unwrap();
+        assert!(
+            line.contains("codeunits 50001|50004")
+                && line.contains("for the 2 returned tests (4 selected in all)"),
+            "{line}"
+        );
+        let mut shared = base;
+        shared.insert(0, test("t0", 50000, 0, json!(["r1", "r2"])));
+        let (ids, v) = returned(shared);
+        assert_eq!(ids, ["t0", "t4"], "t0 counts once: {v:#}");
     }
 }

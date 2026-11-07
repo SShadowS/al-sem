@@ -9,7 +9,7 @@ computed: current effects of the 1 routine these files touches, in the working t
   uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
   commits: none observed (searched: the cone through every resolved call; not searched: object-run-unresolved)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    D49 Rec: Modify 1 — known persistent
+    D49 Rec: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/Sender.Codeunit.al:14
       path: ModifyThenRunModal (in the routine itself)
   UI at 1 place: UI_WINDOW_OPEN at ws:src/Sender.Codeunit.al:15 (unconditional on success)

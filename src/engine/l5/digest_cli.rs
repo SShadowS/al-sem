@@ -3235,7 +3235,7 @@ pub fn format_digest_human_v3(
             // share prints once, under a segment id (output validation §7.5).
             let mut effects = rr::commit_lines(r, entry, cx, opts);
             effects.extend(rr::workspace_write_lines(r, entry, cx, opts, &|_| None));
-            effects.extend(rr::caller_dependent_lines(r, entry));
+            effects.extend(rr::caller_dependent_lines(r, entry, cx));
             effects.extend(rr::beyond_lines(r, entry, cx, opts));
             effects.extend(rr::no_path_lines(r, entry, cx, opts));
             effects.extend(rr::literal_dead_lines(r, opts));
@@ -3506,6 +3506,9 @@ fn digest_entry_summary(
         "stableId": e.routine_id,
         "analysis": facts.analysis.key(),
         "answer": facts.answer(),
+        // Round 2 G10: the summary row's short answer (the full one stays
+        // in the result index).
+        "shortAnswer": short_answer(&r.totals, &facts.analysis),
         "effects": e.effects.len(),
         "effectsByType": by_type,
         // W2-2 (T-W2-13): the one RollupTotals serialization.
@@ -3521,6 +3524,11 @@ fn digest_entry_summary(
             v[k] = x;
         }
     }
+    // Round 2 G13: when 3 tables or fewer are observed written, the row
+    // names them.
+    if (1..=3).contains(&r.may_write.len()) {
+        v["observedWrites"] = json!(r.may_write.values().collect::<Vec<_>>());
+    }
     // Output validation V2 (§5.2, F42): the asked-for `writesTables`
     // verdicts on the row, counts-only or not: what the caller asked for by
     // name is never only in the full document.
@@ -3535,8 +3543,9 @@ fn digest_entry_summary(
                         "answer": a.get("answer").cloned().unwrap_or(serde_json::Value::Null),
                         "blockers": blockers,
                     });
-                    if let Some(b) = a["blockedBy"].as_array().and_then(|b| b.first()) {
-                        t["firstBlocker"] = json!({"kind": b["kind"], "detail": b["detail"]});
+                    let blockers = a["blockedBy"].as_array().map_or(&[][..], Vec::as_slice);
+                    if let Some(b) = first_blocker(blockers) {
+                        t["firstBlocker"] = b;
                     }
                     if let Some(e) = a.get("error") {
                         t["error"] = e.clone();
@@ -3547,6 +3556,29 @@ fn digest_entry_summary(
         );
     }
     v
+}
+
+/// A table answer's `firstBlocker` (round 2 G13): the first blocker with a
+/// source site, `{kind, detail, site: "file:line"}`; when no blocker has a
+/// site, the first blocker as it is, with `site: null`.
+fn first_blocker(blockers: &[serde_json::Value]) -> Option<serde_json::Value> {
+    let site_of = |b: &serde_json::Value| -> Option<String> {
+        let a = b.get("anchor")?;
+        let file = a["file"].as_str()?;
+        Some(match a["line"].as_u64() {
+            Some(l) => format!("{file}:{l}"),
+            None => file.to_string(),
+        })
+    };
+    let b = blockers
+        .iter()
+        .find(|b| site_of(b).is_some())
+        .or_else(|| blockers.first())?;
+    Some(serde_json::json!({
+        "kind": b["kind"],
+        "detail": b["detail"],
+        "site": site_of(b),
+    }))
 }
 
 /// The digest's summary (MCP output plan 1b, D1/D2; output validation V4
@@ -3653,102 +3685,203 @@ pub(crate) fn digest_summary_tested(
             )
         })
         .collect();
-    // The values two or more rows share, once.
-    const FACTORED: &[&str] = &["effectsByType", "summary"];
-    let mut seen: Vec<(String, serde_json::Value, usize)> = Vec::new();
-    for r in &rows {
-        for k in FACTORED {
-            let s = r[*k].to_string();
-            match seen.iter_mut().find(|(t, _, _)| *t == s) {
-                Some(x) => x.2 += 1,
-                None => seen.push((s, r[*k].clone(), 1)),
-            }
-        }
-    }
-    let mut shared = serde_json::Map::new();
-    let mut key_of: Vec<(String, String)> = Vec::new();
-    for (s, v, n) in &seen {
-        if *n > 1 {
-            let key = format!("s{}", shared.len() + 1);
-            shared.insert(key.clone(), v.clone());
-            key_of.push((s.clone(), key));
-        }
-    }
-    let listed: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let mut r = r.clone();
-            for k in FACTORED {
-                let s = r[*k].to_string();
-                if let Some((_, key)) = key_of.iter().find(|(t, _)| *t == s) {
-                    r[*k] = json!({"shared": key});
-                }
-            }
-            r
-        })
-        .collect();
-    let index_rows: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let mut x = json!({});
-            for k in [
-                "routine",
-                "stableId",
-                "selector",
-                "signature",
-                "member",
-                "analysis",
-                "answer",
-                "tableAnswers",
-                "testStatus",
-            ] {
-                if let Some(v) = r.get(k) {
-                    x[k] = v.clone();
-                }
-            }
-            x
-        })
-        .collect();
-    let mut v = json!({
+    let head = json!({
         "kind": "digest",
         "rootsRequested": roots_requested,
         "rootsResolved": entries.len(),
         "totalEffects": entries.iter().map(|e| e.effects.len()).sum::<usize>(),
         "totalUnresolved": total_unresolved,
         "changedRootsDiagnostics": changed_roots_diagnostics,
-        "routinesListed": listed.len(),
-        "shared": shared,
-        "routines": listed,
     });
-    if let Some(tc) = test_coverage {
-        v["testScope"] = json!({
+    let test_scope = test_coverage.map(|tc| {
+        let mut s = json!({
             "status": tc.coverage.status,
             "reasons": tc.coverage.reasons,
             "testProceduresConsidered": tc.test_procedures_considered,
             "testAppsNotLoaded": tc.test_apps_not_loaded.iter().map(|a| a.name.clone())
                 .collect::<Vec<_>>(),
         });
-    }
-    // Rows that do not all fit with their totals are listed compact (the
-    // identity, summary line, verdicts and test status; the totals stay in
-    // the document), so the summary names as many requested roots as it can
-    // before it cuts any.
-    let reserve = crate::engine::result_index::INDEX_RESERVE_BYTES;
-    if v.to_string().len() + reserve > crate::engine::batch::output::SUMMARY_CAP_BYTES {
-        v["shared"] = json!({});
-        v["rowDetail"] = json!("compact: each root's totals are in the document");
-        if let Some(rs) = v["routines"].as_array_mut() {
-            for r in rs {
-                if let Some(m) = r.as_object_mut() {
-                    m.remove("summary");
-                    m.remove("effectsByType");
+        // Round 2 G9: the hand-over to the tests tool.
+        if let Some(next) = &tc.next {
+            s["next"] = next.json();
+        }
+        s
+    });
+    compact_digest_summary(head, rows, test_scope)
+}
+
+/// The keys of a full summary row the result index keeps (round 2 G10):
+/// the identity, the full answer, the verdicts, the test status, and the
+/// totals that carry conditional persistence and uncertainty.
+const INDEX_ROW_KEYS: &[&str] = &[
+    "routine",
+    "stableId",
+    "selector",
+    "signature",
+    "member",
+    "analysis",
+    "answer",
+    "tableAnswers",
+    "testStatus",
+    "effects",
+    "effectsByType",
+    "summary",
+    "guaranteeLabels",
+    "observedWrites",
+];
+
+/// A short summary answer longer than this is factored into `shared` when
+/// two rows or more give it (overloads mostly do).
+const SHARED_ANSWER_MIN: usize = 24;
+
+/// The digest summary from its `head` (the totals), the full `rows` (one per
+/// root, [`digest_entry_summary`]) and the test scope (round 2 G10). Each
+/// listed row is compact: `index` (its 1-based row in the result index,
+/// which holds its signature, stable id, full answer and totals), `selector`,
+/// `analysis`, `testStatus`, `tableAnswers` and the short `answer`, one clause
+/// per effect family with its qualifiers; an answer two rows share is in
+/// `shared`. When the rows still do not fit 8 KiB, the overflow contract
+/// holds: `summaryTruncated` and the complete index
+/// ([`crate::engine::result_index::with_index`]).
+fn compact_digest_summary(
+    mut head: serde_json::Value,
+    rows: Vec<serde_json::Value>,
+    test_scope: Option<serde_json::Value>,
+) -> serde_json::Value {
+    use serde_json::json;
+    let next = test_scope.as_ref().and_then(|s| s.get("next")).cloned();
+    let index_rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut x = json!({});
+            for k in INDEX_ROW_KEYS {
+                if let Some(v) = r.get(*k) {
+                    x[*k] = v.clone();
                 }
             }
+            if let (Some(n), Some("not loaded")) = (&next, r["testStatus"].as_str()) {
+                x["testsNext"] = n.clone();
+            }
+            x
+        })
+        .collect();
+    // The short answers two rows or more share, once.
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in &rows {
+        if let Some(a) = r["shortAnswer"].as_str() {
+            *counts.entry(a).or_default() += 1;
         }
     }
-    let mut v = crate::engine::result_index::with_index(v, "routines", "stableId", index_rows);
+    let mut shared = serde_json::Map::new();
+    let mut key_of: BTreeMap<&str, String> = BTreeMap::new();
+    for r in &rows {
+        let Some(a) = r["shortAnswer"].as_str() else {
+            continue;
+        };
+        if counts[a] > 1 && a.len() > SHARED_ANSWER_MIN && !key_of.contains_key(a) {
+            let key = format!("s{}", shared.len() + 1);
+            shared.insert(key.clone(), json!({ "answer": a }));
+            key_of.insert(a, key);
+        }
+    }
+    let listed: Vec<serde_json::Value> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut x = json!({ "index": i + 1 });
+            for k in [
+                "selector",
+                "analysis",
+                "testStatus",
+                "tableAnswers",
+                "observedWrites",
+            ] {
+                if let Some(v) = r.get(k) {
+                    x[k] = v.clone();
+                }
+            }
+            match r["shortAnswer"].as_str().and_then(|a| key_of.get(a)) {
+                Some(key) => x["shared"] = json!(key),
+                None => x["answer"] = r["shortAnswer"].clone(),
+            }
+            x
+        })
+        .collect();
+    head["routinesListed"] = json!(listed.len());
+    head["rowDetail"] = json!(
+        "compact: each row names its result-index row (`index`), which holds its signature, \
+         stable id, full answer and totals"
+    );
+    head["shared"] = serde_json::Value::Object(shared);
+    head["routines"] = serde_json::Value::Array(listed);
+    if let Some(s) = test_scope {
+        head["testScope"] = s;
+    }
+    let mut v = crate::engine::result_index::with_index(head, "routines", "index", index_rows);
     v["routinesListed"] = json!(v["routines"].as_array().map_or(0, Vec::len));
     v
+}
+
+/// The summary row's short answer (round 2 G10): one clause per effect
+/// family, each with its qualifiers — the writes with who owns the tables
+/// and the caller-dependent ones' condition, commits, the effect kinds with
+/// their counts, and the analysis with its reasons when partial.
+fn short_answer(
+    t: &crate::engine::l5::routine_rollup::RollupTotals,
+    analysis: &crate::engine::result_header::Analysis,
+) -> String {
+    use crate::engine::l5::routine_rollup::{FAMILIES, plural, thousands};
+    let mut parts: Vec<String> = Vec::new();
+    let mut writes: Vec<String> = Vec::new();
+    if t.may_write_tables > 0 {
+        let mut q: Vec<String> = Vec::new();
+        if t.owned_by_app > 0 {
+            q.push(format!("{} owned by this app", thousands(t.owned_by_app)));
+        }
+        if t.by_dependencies > 0 {
+            q.push(format!("{} by dependencies", thousands(t.by_dependencies)));
+        }
+        writes.push(format!(
+            "may write {} ({})",
+            plural(t.may_write_tables, "table", "tables"),
+            q.join(", ")
+        ));
+    }
+    if t.unresolved_table_writes > 0 {
+        writes.push(format!(
+            "{} on a table not resolved",
+            plural(t.unresolved_table_writes, "write", "writes")
+        ));
+    }
+    if t.caller_dependent_tables > 0 {
+        writes.push(format!(
+            "caller-dependent writes on {} (only when the caller's record is not temporary)",
+            plural(t.caller_dependent_tables, "table", "tables")
+        ));
+    }
+    let complete = matches!(analysis, crate::engine::result_header::Analysis::Complete);
+    parts.push(if writes.is_empty() && complete {
+        "writes: no".to_string()
+    } else if writes.is_empty() {
+        "writes: none observed".to_string()
+    } else {
+        writes.join(", ")
+    });
+    parts.push(format!("commits: {}", t.commits));
+    for (key, label) in FAMILIES {
+        if let Some(n) = t.kinds.get(*key).filter(|n| **n > 0) {
+            let least = if t.kinds_partial.contains(*key) {
+                "at least "
+            } else {
+                ""
+            };
+            parts.push(format!("{label} {least}{}", thousands(*n)));
+        }
+    }
+    if !complete {
+        parts.push(analysis.human());
+    }
+    parts.join("; ")
 }
 
 /// Run the full digest pipeline for a workspace.
@@ -4146,6 +4279,30 @@ fn digest_view(
                 })
                 .collect(),
         );
+        // Round 2 G9: no test code here and a sibling test app found —
+        // the complete tests call that selects from it, on the same input
+        // (the routines asked, or the files: given, or the roots' own).
+        if tc.test_procedures_considered == 0 && !tc.test_apps_not_loaded.is_empty() {
+            let fcx = crate::engine::follow_up::Cx::new(render.surface, req.single_app);
+            let next = crate::engine::follow_up::FollowUp::new(
+                crate::engine::follow_up::Tool::Tests,
+                fcx,
+                "selects the tests of the sibling test apps this engine does not load",
+            );
+            tc.next = Some(match (&changed_routines, &changed_files) {
+                (Some(rs), _) => next.arg("routines", rs.clone()),
+                (None, Some(fs)) => next.arg("files", fs.clone()),
+                (None, None) => {
+                    let files: BTreeSet<String> = entries
+                        .iter()
+                        .filter_map(|e| e.routine_anchor.as_ref()?.file.as_deref())
+                        .filter_map(|f| f.strip_prefix("ws:"))
+                        .map(str::to_string)
+                        .collect();
+                    next.arg("files", files.into_iter().collect::<Vec<_>>())
+                }
+            });
+        }
         tc
     });
     // Output validation V4 (§5.2, F42, F77): one row per root with its test
@@ -4251,7 +4408,7 @@ fn digest_view(
         );
     }
     if let Some(t) = &test_coverage {
-        human_text.push_str(&t.human_line());
+        human_text.push_str(&t.human_line(render.surface));
         human_text.push('\n');
     }
     // W2-2 gap (a): `--writes-table`, per root in entry order.
@@ -4352,6 +4509,153 @@ mod tests_rule_b;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// c25's 20 roots (round 2): the selectors after the owner, as the
+    /// result index gave them.
+    const C25_SELECTORS: [&str; 20] = [
+        "BCSendMail",
+        "SendMail(var Record \"CDO Document Template Line\", var Record \"CDO File\", var Record \"CDO Template Line Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Text, Boolean, Integer, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean)",
+        "SendMail(var Record \"CDO E-Mail Template Line\", var Record \"CDO File\", var Record \"CDO E-Mail Template Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Text, Boolean, Integer, Boolean, Boolean, Boolean, Boolean)",
+        "SendMail(var Record \"CDO E-Mail Template Line\", var Record \"CDO File\", var Record \"CDO E-Mail Template Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Text, Boolean, Integer, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Dictionary of [Code[10], Text])",
+        "SetSendUsingBCEmailAccount",
+        "SendMail(var Record \"CDO Document Template Line\", var Record \"CDO File\", var Record \"CDO Template Line Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Text, Boolean, Integer, Boolean, Boolean, Boolean, Boolean)",
+        "SealDocumentsBeforeSending",
+        "SendMSGraphMail",
+        "SendMail(var Record \"CDO E-Mail Template Line\", var Record \"CDO File\", var Record \"CDO E-Mail Template Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Text, Boolean, Integer, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean)",
+        "CreateLog(var Record \"CDO Document Template Line\", var Record \"CDO File\", var Record \"CDO Template Line Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Boolean, Boolean)",
+        "WaitForMailLimit",
+        "StartEvents",
+        "InsertImageAttachmentsAsBase64",
+        "GetMailBodyAndCIDAttachemntsAsXmlDocument(var Record \"CDO Template Line Attachment\", Text)",
+        "EndEvents",
+        "SendMail(var Record \"CDO Document Template Line\", var Record \"CDO File\", var Record \"CDO Template Line Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Text, Boolean, Integer, Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Dictionary of [Code[10], Text])",
+        "CreateLog(var Record \"CDO Document Template Line\", var Record \"CDO File\", var Record \"CDO Template Line Attachment\", var RecordRef, Text, Text, Text, Text, Text, Text, Boolean, Boolean, Dictionary of [Code[10], Text])",
+        "SetSendUsingAzureApp",
+        "GetMailBodyAndCIDAttachemntsAsXmlDocument(var Record \"CDO E-Mail Template Attachment\", Text)",
+        "SetSendUsingDOSMTP",
+    ];
+
+    /// One full summary row of c25's shape: identity, a long full answer,
+    /// the totals, and the short answer `short`.
+    fn c25_row(i: usize, selector: &str, short: &str) -> serde_json::Value {
+        let selector = format!("Codeunit \"CDO Send Mail Management\"::{selector}");
+        serde_json::json!({
+            "routine": selector,
+            "selector": selector,
+            "stableId": format!("f4b69b55-c90d-4937-8f53-2742898fa948:Codeunit:6175335#{i:064x}"),
+            "signature": "(var Record \"CDO Document Template Line\", var Record \"CDO File\")",
+            "analysis": "partial",
+            "answer": "writes: may write 15 tables (4 owned by this app, 11 by dependencies) and 1 \
+                       write on a table not resolved; 8 of them beyond Codeunit Email (8901)::Send \
+                       (entered at ws:src/Features/Email/Sending/CDOSendMailManagement.Codeunit.al:260)",
+            "shortAnswer": short,
+            "effects": 221,
+            "effectsByType": {"DB_INSERT": 8, "DB_MODIFY": 3, "ERROR_IMPLICIT": 27, "HTTP": 7},
+            "summary": {"callerDependentTables": 1, "gaps": {"workspace": 3, "dependency": 14}},
+            "testStatus": "not loaded",
+        })
+    }
+
+    /// Round 2 G10: c25's 20 rows fit the 8 KiB summary in their compact
+    /// form (every row listed, no `summaryTruncated`), each row naming its
+    /// index row; the index keeps every row whole with its conditional
+    /// persistence, uncertainty and test status. A wider selection still
+    /// truncates under the overflow contract: `summaryTruncated`, and the
+    /// complete index. Hand-stated rows (c25's selectors; short answers of
+    /// the longest shapes the render gives, the six SendMail overloads
+    /// sharing one).
+    #[test]
+    fn digest_summary_rows_fit_and_overflow_keeps_the_index() {
+        use crate::engine::result_index::{INDEX_RESERVE_BYTES, ROWS_KEY};
+        let long = "may write 15 tables (4 owned by this app, 11 by dependencies), 1 write on a \
+                    table not resolved, caller-dependent writes on 1 table (only when the \
+                    caller's record is not temporary); commits: may; UI 3; HTTP 2; isolated \
+                    storage 4; errors 40; analysis partial (21 calls not resolved (6 in this \
+                    workspace))";
+        let short = |i: usize| -> String {
+            match i % 4 {
+                0 => "writes: none observed; commits: none".to_string(),
+                1 => "may write 1 table (1 owned by this app); commits: no observed; errors 2; \
+                      analysis partial (1 call not resolved)"
+                    .to_string(),
+                2 => format!(
+                    "may write {} tables (2 owned by this app, 3 by dependencies); commits: may; errors 9; analysis partial (3 calls not resolved)",
+                    5 + i
+                ),
+                _ => "writes: none observed; commits: none; UI 1".to_string(),
+            }
+        };
+        let rows: Vec<serde_json::Value> = C25_SELECTORS
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let a = if s.starts_with("SendMail(") {
+                    long.to_string()
+                } else {
+                    short(i)
+                };
+                c25_row(i, s, &a)
+            })
+            .collect();
+        let head =
+            || serde_json::json!({"kind": "digest", "rootsRequested": 20, "rootsResolved": 20});
+        let scope = serde_json::json!({
+            "status": "partial", "reasons": ["no-test-code", "test-apps-not-loaded"],
+            "testProceduresConsidered": 0,
+            "testAppsNotLoaded": ["Continia Document Output 365 - Test"],
+            "next": {"tool": "alsem_tests", "arguments": {"files": ["src/Features/Email/Sending/CDOSendMailManagement.Codeunit.al"]},
+                     "why": "selects the tests of the sibling test apps this engine does not load", "kind": "ordinary"},
+        });
+        let s = compact_digest_summary(head(), rows.clone(), Some(scope.clone()));
+        let mut sent = s.clone();
+        sent.as_object_mut().unwrap().remove(ROWS_KEY);
+        let bytes = sent.to_string().len();
+        assert!(
+            bytes + INDEX_RESERVE_BYTES <= crate::engine::batch::output::SUMMARY_CAP_BYTES,
+            "c25's 20 rows: {bytes} bytes"
+        );
+        assert!(s.get("summaryTruncated").is_none(), "{s:#}");
+        assert_eq!(s["routines"].as_array().unwrap().len(), 20);
+        assert_eq!(s["routines"][1]["index"], 2);
+        assert!(s["routines"][1].get("stableId").is_none());
+        let index = s[ROWS_KEY].as_array().unwrap();
+        assert_eq!(index.len(), 20);
+        assert_eq!(index[1]["summary"]["callerDependentTables"], 1);
+        assert_eq!(index[1]["testStatus"], "not loaded");
+        assert_eq!(index[1]["testsNext"]["tool"], "alsem_tests");
+        // A wider selection: the summary truncates, the index holds all.
+        let wide: Vec<serde_json::Value> = (0..80)
+            .map(|i| c25_row(i, C25_SELECTORS[1], &format!("{long} #{i}")))
+            .collect();
+        let s = compact_digest_summary(head(), wide, Some(scope));
+        let t = &s["summaryTruncated"];
+        assert_eq!(t["rowsTotal"], 80, "{s:#}");
+        assert!(t["rowsListed"].as_u64().unwrap() < 80);
+        assert_eq!(s[ROWS_KEY].as_array().unwrap().len(), 80);
+    }
+
+    /// Round 2 G13: a table answer's `firstBlocker` is the first blocker
+    /// with a site, not the meta-entry listed before it; with no site at
+    /// all, the first blocker with `site: null`.
+    #[test]
+    fn first_blocker_has_a_site() {
+        let meta =
+            serde_json::json!({"kind": "analysis-gap", "detail": "1 analysis gap(s) in cone"});
+        let site = serde_json::json!({
+            "kind": "open-world-dispatch",
+            "detail": "Provider.GetCache().GetSubscription in GetLicenseState",
+            "anchor": {"file": "dep:Continia Core:src/LicenseManagement.Codeunit.al", "line": 456},
+        });
+        let b = first_blocker(&[meta.clone(), site]).unwrap();
+        assert_eq!(b["kind"], "open-world-dispatch");
+        assert_eq!(
+            b["site"],
+            "dep:Continia Core:src/LicenseManagement.Codeunit.al:456"
+        );
+        let b = first_blocker(&[meta]).unwrap();
+        assert_eq!(b["kind"], "analysis-gap");
+        assert!(b["site"].is_null());
+    }
 
     /// A2.10: digest builds its plan from the set it is given.
     #[test]
@@ -4678,7 +4982,9 @@ mod tests {
         let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
         let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
         let s = digest_summary(&[e], &[r], &cx, 1, 0);
-        let row = &s["routines"][0];
+        // Round 2 G10: the totals are in the row's result-index row.
+        let row = &s[crate::engine::result_index::ROWS_KEY][0];
+        assert_eq!(s["routines"][0]["index"], 1, "{s}");
         assert_eq!(row["effectsByType"]["COMMIT"], 3, "{s}");
         let c = &row["summary"]["commits"];
         assert_eq!(c["ownSites"], 1, "{s}");
@@ -4914,8 +5220,19 @@ mod tests {
             !text.contains("callsiteAnchor") && !text.contains("a-very-long-candidate"),
             "no call-site item: {text}"
         );
-        // Output validation V4 (§5.2): one compact row per root.
-        let r = &s["routines"][0];
+        // Output validation V4 (§5.2): one compact row per root; round 2
+        // G10: its identity and totals are in its result-index row, the
+        // listed row names it and gives the short answer.
+        let listed = &s["routines"][0];
+        assert_eq!(listed["index"], 1, "{s}");
+        assert!(
+            listed["answer"]
+                .as_str()
+                .is_some_and(|a| a
+                    .starts_with("may write 13 tables (1 owned by this app, 12 by dependencies)")),
+            "{s}"
+        );
+        let r = &s["indexRows"][0];
         assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
         assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
         // W2-2: the one RollupTotals serialization.
@@ -5135,10 +5452,12 @@ mod tests {
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{} bytes", text.len());
         assert_eq!(rows.as_array().map(Vec::len), Some(40), "{rows}");
-        let listed = s["routinesListed"].as_u64().unwrap();
-        assert!((1..40).contains(&listed), "{text}");
-        assert_eq!(s["summaryTruncated"]["rowsListed"], listed, "{text}");
-        assert_eq!(s["summaryTruncated"]["rowsTotal"], 40, "{text}");
+        // Round 2 G10: the compact rows (their totals in the index, the
+        // answer the 40 rows share once in `shared`) all fit; the overflow
+        // case is `digest_summary_rows_fit_and_overflow_keeps_the_index`.
+        assert_eq!(s["routinesListed"], 40, "{text}");
+        assert!(s.get("summaryTruncated").is_none(), "{text}");
+        assert_eq!(s["routines"][0]["shared"], "s1", "{text}");
         assert_eq!(s["rootsResolved"], 40);
     }
 

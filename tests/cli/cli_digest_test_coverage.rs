@@ -684,8 +684,8 @@ fn sibling_test_apps_are_named_and_make_the_block_partial() {
     let human = String::from_utf8_lossy(&out.stdout);
     assert!(
         human.contains(
-            "test apps not loaded by digest: TU Production Tests (2 [Test] lines) (alsem tests, \
-             MCP alsem_tests, selects from them)"
+            "tests: not analyzed here (test app \"TU Production Tests\" is not loaded in this \
+             engine) — alsem tests --routine Post selects them"
         ),
         "{human}"
     );

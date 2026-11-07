@@ -18,7 +18,7 @@ Codeunit "Calls Post"::PostOrder  defined at ws:src/post.al:3
   callers: 1 direct — 1 trigger: Codeunit "Calls Post Run"::OnRun; 1 page action reaches it in all (directly or through callers)
     reached from page action Page "Calls Order Card".action(PostIt "Post") (RunObject = codeunit "Calls Post Run") at ws:src/order.al:38
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:14
+    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:14; runs: OnModify trigger; table-event subscribers: none in the loaded program
   events raised (1 in workspace code, its own and downstream): Codeunit Calls Post: OnBeforePostOrder; 0 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnBeforePostOrder: 1 subscriber(s)
     subscriber Codeunit "Calls Subscriber"::CheckBeforePost (only when its app is installed): rejects when Order.Amount = 0: "A zero amount cannot post."  [Error ws:src/post.al:129]

@@ -318,6 +318,15 @@ pub(crate) const CORPUS: &[Case] = &[
         args: &["--table", "QT Item"],
         exit_code: 0,
     },
+    // Round 2 G8: `--op-family write`, every record-write site with its
+    // temp state.
+    Case {
+        slug: "qt.qt-item.global.writes",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &["--table", "QT Item", "--op-family", "write"],
+        exit_code: 0,
+    },
     // ---- Agent-tasks milestone D (design §7): `tests/fixtures/field-touches`.
     // Every consumer of "FT Item".Amount, by use kind (the fixture's header
     // holds the hand counts; `cli_query_field` asserts them).
@@ -480,10 +489,123 @@ fn case(slug: &str) -> &'static Case {
 #[test]
 fn query_touches_w2_3_fixture_goldens() {
     let qt: Vec<&Case> = CORPUS.iter().filter(|c| c.workspace == QT_WS).collect();
-    assert_eq!(qt.len(), 8);
+    assert_eq!(qt.len(), 9);
     for c in qt {
         check_case(c);
     }
+}
+
+/// The lines of `text` from the one starting with `start` (trimmed) up to
+/// the next family header (a two-space line), the header excluded.
+fn family_block<'t>(text: &'t str, start: &str) -> Vec<&'t str> {
+    let mut lines = text
+        .lines()
+        .skip_while(|l| !l.trim_start().starts_with(start));
+    let header = lines
+        .next()
+        .unwrap_or_else(|| panic!("no `{start}` line in:\n{text}"));
+    let _ = header;
+    lines.take_while(|l| l.starts_with("    ")).collect()
+}
+
+/// Round 2 G8: table mode lists the record writes as their own family,
+/// first, with their own count; the fixture's `Validate` is a validation,
+/// counted and sampled apart, never among the record writes.
+#[test]
+fn query_touches_table_mode_families() {
+    let ws = fixtures_dir().join(QT_WS);
+    let ws = ws.to_string_lossy().to_string();
+    let (human, code) = run_alsem(&["query", "touches", &ws, "--table", "QT Item"], "human");
+    assert_eq!(code, 0, "{human}");
+    let writes_line = human
+        .lines()
+        .find(|l| l.trim_start().starts_with("record writes:"))
+        .unwrap_or_else(|| panic!("no record writes line:\n{human}"));
+    assert!(
+        writes_line.contains("record writes: 4 sites in 3 routines"),
+        "the record writes are Insert 2, Modify 1, Delete 1 (no Validate): {writes_line}"
+    );
+    let writes = family_block(&human, "record writes:");
+    assert!(
+        writes.iter().any(|l| l.contains("[Modify]")),
+        "the Modify is sampled under record writes:\n{human}"
+    );
+    assert!(
+        writes
+            .iter()
+            .all(|l| !l.contains("[Validate]") && !l.contains("[Get]")),
+        "no validation or read under record writes:\n{human}"
+    );
+    let validations = family_block(&human, "validations:");
+    assert_eq!(validations.len(), 1, "{human}");
+    assert!(validations[0].contains("[Validate]"), "{human}");
+    // Record writes come before every other family.
+    let pos = |needle: &str| human.find(needle).unwrap_or(usize::MAX);
+    assert!(pos("record writes:") < pos("validations:"));
+    assert!(pos("validations:") < pos("key-relevant"));
+    let (json, _) = run_alsem(&["query", "touches", &ws, "--table", "QT Item"], "json");
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+    let fam = &doc["payload"]["up"]["directSites"]["byFamily"];
+    assert_eq!(fam["recordWrites"]["sites"], 4, "{fam}");
+    assert_eq!(
+        fam["recordWrites"]["temporary"], 1,
+        "TempOnly's Insert: {fam}"
+    );
+    assert_eq!(fam["validations"]["sites"], 1, "{fam}");
+    // `--op-family write`: every record-write site, the temporary one
+    // included and tagged, no validation.
+    let (json, code) = run_alsem(
+        &[
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            "QT Item",
+            "--op-family",
+            "write",
+        ],
+        "json",
+    );
+    assert_eq!(code, 0, "{json}");
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+    let sites = doc["payload"]["up"]["writeSites"]
+        .as_array()
+        .unwrap_or_else(|| panic!("writeSites: {doc:#}"));
+    let ops: Vec<&str> = sites.iter().map(|s| s["op"].as_str().unwrap()).collect();
+    assert_eq!(ops.len(), 4, "{ops:?}");
+    assert!(
+        ops.iter().all(|o| [
+            "Insert",
+            "Modify",
+            "ModifyAll",
+            "Delete",
+            "DeleteAll",
+            "Rename"
+        ]
+        .contains(o)),
+        "{ops:?}"
+    );
+    assert_eq!(
+        sites
+            .iter()
+            .filter(|s| s["tempState"] == "known(true)")
+            .count(),
+        1,
+        "TempOnly's Insert is listed and tagged: {sites:#?}"
+    );
+    let (_, code) = run_alsem(
+        &[
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            "QT Item",
+            "--op-family",
+            "read",
+        ],
+        "human",
+    );
+    assert_ne!(code, 0, "only `write` ships");
 }
 
 /// Agent-tasks milestone D: every `tests/fixtures/field-touches` golden

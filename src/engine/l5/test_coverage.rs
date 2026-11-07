@@ -195,6 +195,12 @@ pub struct TestCoverage {
     /// left out of the JSON when none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub test_apps_not_loaded: Vec<UnloadedTestApp>,
+    /// Round 2 G9: the tests tool call that selects from the sibling test
+    /// apps this engine does not load (set beside
+    /// [`Self::note_unloaded_test_apps`]); the summary's `testScope.next`
+    /// and the human line carry it.
+    #[serde(skip)]
+    pub next: Option<crate::engine::follow_up::FollowUp>,
 }
 
 impl TestCoverage {
@@ -220,9 +226,31 @@ impl TestCoverage {
         self.coverage.status = "partial";
     }
 
-    /// The human digest's one summary line (spec §Surface).
+    /// The human digest's one summary line (spec §Surface). With no test
+    /// code loaded and sibling test apps found, it hands over to the tests
+    /// tool with the complete call ([`Self::next`], round 2 G9).
     #[must_use]
-    pub fn human_line(&self) -> String {
+    pub fn human_line(&self, surface: crate::engine::follow_up::Surface) -> String {
+        if let (0, Some(next), false) = (
+            self.test_procedures_considered,
+            &self.next,
+            self.test_apps_not_loaded.is_empty(),
+        ) {
+            let names: Vec<String> = self
+                .test_apps_not_loaded
+                .iter()
+                .map(|a| format!("\"{}\"", a.name))
+                .collect();
+            let apps = if names.len() == 1 {
+                format!("test app {} is", names[0])
+            } else {
+                format!("test apps {} are", names.join(", "))
+            };
+            return format!(
+                "tests: not analyzed here ({apps} not loaded in this engine) — {} selects them",
+                next.text(surface)
+            );
+        }
         // §8.1 completeness, always with its subject (F50).
         let status = match self.coverage.reasons.as_slice() {
             [] => "analysis complete".to_string(),
@@ -408,6 +436,7 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
             tests_calling_dependency_code: dependency_tests,
         },
         test_apps_not_loaded: Vec::new(),
+        next: None,
     }
 }
 

@@ -685,6 +685,13 @@ struct QueryTouchesCli {
     #[arg(long = "callers", default_value_t = false)]
     callers: bool,
 
+    /// One operation family in full (the workspace-global list only):
+    /// `write` lists every record-write site (Insert, Modify, ModifyAll,
+    /// Delete, DeleteAll, Rename), temporary records included and tagged
+    /// with their temp state. No other value is accepted.
+    #[arg(long = "op-family")]
+    op_family: Option<String>,
+
     /// Output format: human | json. Defaults to human.
     #[arg(long = "format", default_value = "human")]
     format: String,
@@ -2661,6 +2668,28 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
         Ok(d) => d,
         Err(msg) => return failed(msg, 1, 1),
     };
+    // Round 2 G8: `--op-family` ships one value, on the workspace-global
+    // table list only.
+    let writes_only = match t.op_family.as_deref() {
+        None => false,
+        Some("write") if t.from.is_none() && t.field.is_none() => true,
+        Some("write") => {
+            return failed(
+                "al-sem query touches: --op-family lists the workspace-global table sites; \
+                 it takes no --from or --field"
+                    .to_string(),
+                1,
+                1,
+            );
+        }
+        Some(other) => {
+            return failed(
+                format!("al-sem query touches: invalid --op-family '{other}'. Expected: write"),
+                1,
+                1,
+            );
+        }
+    };
     // `--direction down` without `--from` is rejected by `render_query_touches`
     // itself, not duplicated here: one rule in one place, and the golden family
     // covers it end to end (a second copy could drift and would test nothing).
@@ -2682,6 +2711,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.single_app,
                 )
                 .list_callers(t.callers)
+                .writes_only(writes_only)
                 .field(t.field.as_deref())
                 .show_source(t.show_source)
                 .surface(t.surface)

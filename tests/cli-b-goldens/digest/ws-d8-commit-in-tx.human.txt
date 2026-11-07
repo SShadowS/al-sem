@@ -12,13 +12,13 @@ computed: current effects of the 3 routines these files touches, in the working 
     COMMIT at ws:src/subscriber.al:11 (condition not resolved)
       path: PostSalesDoc → OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
   writes in workspace code (3 tables; operation counts are the cone's retained representative operations, at least that many):
-    Audit Entry: Insert 1 — known persistent
+    Audit Entry: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/subscriber.al:10
       path: PostSalesDoc → OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
-    Sales Header: Modify 2 — known persistent
+    Sales Header: Modify 2 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/posting.al:10
       path: PostSalesDoc (in the routine itself)
-    Sales Line: ModifyAll 1 — known persistent
+    Sales Line: ModifyAll 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       ModifyAll at ws:src/posting.al:12
       path: PostSalesDoc (in the routine itself)
   events raised (1 in workspace code, downstream): Codeunit D8PostingChain: OnAfterPostSalesDoc; 0 more only beyond dependency calls
@@ -33,7 +33,7 @@ computed: current effects of the 3 routines these files touches, in the working 
     COMMIT at ws:src/subscriber.al:11 (condition not resolved)
       path: OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Audit Entry: Insert 1 — known persistent
+    Audit Entry: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/subscriber.al:10
       path: OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
   events raised (1 in workspace code, downstream): Codeunit D8PostingChain: OnAfterPostSalesDoc; 0 more only beyond dependency calls
@@ -48,7 +48,7 @@ computed: current effects of the 3 routines these files touches, in the working 
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/subscriber.al:11 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Audit Entry: Insert 1 — known persistent
+    Audit Entry: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/subscriber.al:10
       path: HandlePosted (in the routine itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unconditional on success)

@@ -229,6 +229,41 @@ struct FieldAnswer {
     search: (String, String),
     /// References that may write, not confirmed: each `kind at file:line`.
     candidates: Vec<String>,
+    /// Round 2 G23: per-kind counts of [`Self::candidates`]: `RecordRef.Field
+    /// by number`, `TransferFields copies`.
+    candidate_kinds: (usize, usize),
+    /// The workspace source unit (`ws:src/…`) of the object declaring the
+    /// field, when a routine of that object names it.
+    declaring_unit: Option<String>,
+    /// `ws:src/…:<line>` of the field's declaration (filled in `compute`).
+    declared_at: Option<String>,
+    /// The field's own `OnValidate` trigger, by selector, when it has one.
+    on_validate: Option<String>,
+}
+
+/// Round 2 G23: the 1-based line declaring field number `number` in the
+/// workspace unit `unit` (`ws:src/…`): the first line that opens
+/// `field(<number>;`, read off the file. `None` for a dependency unit, an
+/// unreadable file or no match.
+fn field_declaration_line(workspace: &std::path::Path, unit: &str, number: i64) -> Option<String> {
+    let rel = unit.strip_prefix("ws:")?;
+    let text = std::fs::read_to_string(workspace.join(rel)).ok()?;
+    let want = number.to_string();
+    let line = text.lines().position(|l| {
+        let t = l.trim_start();
+        let Some(rest) = t
+            .get(..5)
+            .filter(|h| h.eq_ignore_ascii_case("field"))
+            .map(|_| t[5..].trim_start())
+        else {
+            return false;
+        };
+        let Some(args) = rest.strip_prefix('(') else {
+            return false;
+        };
+        args.split(';').next().is_some_and(|n| n.trim() == want)
+    })?;
+    Some(format!("{unit}:{}", line + 1))
 }
 
 /// What `resolve` hands to `compute`.
@@ -362,7 +397,15 @@ impl Job for ExplainJob<'_> {
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         let workspace = cx.inputs().workspace.clone();
-        let resolved: Resolved = cx.take_carry();
+        let mut resolved: Resolved = cx.take_carry();
+        // Round 2 G23: the field's declaration line, read off its workspace
+        // file (the model keeps no field anchor).
+        if let Some(f) = resolved.field.as_mut() {
+            f.declared_at = f
+                .declaring_unit
+                .as_deref()
+                .and_then(|u| field_declaration_line(&workspace, u, f.number));
+        }
         // `--callers-context`: each card's three callers' answers, off the
         // sited graph and the detector run (agent-tasks §6.6).
         // The graph is declared only with `--callers-context` (read it only
@@ -791,6 +834,38 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
             ))
         })
         .collect();
+    let candidate_kinds = (
+        candidates
+            .iter()
+            .filter(|c| c.starts_with("RecordRef.Field by number"))
+            .count(),
+        candidates
+            .iter()
+            .filter(|c| c.starts_with("TransferFields copy"))
+            .count(),
+    );
+    // Round 2 G23: the declaring object's workspace unit and the field's own
+    // OnValidate trigger (the card's follow-up).
+    let of_object: Vec<&ModelRoutine> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.object_id == mf.declaring_object_id)
+        .collect();
+    let declaring_unit = of_object
+        .iter()
+        .map(|r| r.source_anchor.source_unit_id.clone())
+        .find(|u| u.starts_with("ws:"));
+    let on_validate = of_object
+        .iter()
+        .find(|r| {
+            r.kind == "trigger"
+                && r.name.eq_ignore_ascii_case("OnValidate")
+                && r.enclosing_member
+                    .as_deref()
+                    .is_some_and(|m| m.eq_ignore_ascii_case(&mf.name))
+        })
+        .map(|r| r.stable_routine_id.clone());
     Resolved {
         roots: writers.keys().cloned().collect(),
         diagnostics: vec![],
@@ -803,6 +878,10 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
             writers,
             search,
             candidates,
+            candidate_kinds,
+            declaring_unit,
+            declared_at: None,
+            on_validate,
         }),
         unresolved: false,
     }
@@ -2028,10 +2107,14 @@ fn render(
 
     let mut human = header.human();
     if let Some(f) = &resolved.field {
-        human.push_str(&field_human(&ix, f, entry));
+        human.push_str(&field_human(&ix, f, entry, fcx));
     }
-    for c in &cards {
-        human.push_str(&c.3);
+    // Round 2 G23: a field answer is the field card only; its writers'
+    // cards are follow-up calls (the JSON keeps them).
+    if resolved.field.is_none() {
+        for c in &cards {
+            human.push_str(&c.3);
+        }
     }
     if cards.is_empty() && resolved.field.is_none() && resolved.diagnostics.is_empty() {
         human.push_str("explain: no routine resolved\n");
@@ -2319,7 +2402,12 @@ fn field_json(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -
     })
 }
 
-fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -> String {
+fn field_human(
+    ix: &Indexes<'_>,
+    f: &FieldAnswer,
+    entry: Option<&FieldWriters>,
+    fcx: crate::engine::follow_up::Cx,
+) -> String {
     // Output validation V2 (§4.2, F17): a count with its search, never a
     // bare `0`; confirmed writers and reference candidates counted apart.
     let quote = |s: &str| {
@@ -2335,6 +2423,10 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
         quote(&f.field),
         f.number
     );
+    // Round 2 G23: where the field is declared.
+    if let Some(at) = &f.declared_at {
+        out.push_str(&format!(" declared at {at}"));
+    }
     if let Ok(Some(c)) = one_text(&f.captions) {
         out.push_str(&format!(", caption \"{c}\""));
     }
@@ -2368,9 +2460,8 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
         for (_, a) in sites {
             let (_, site) = index_site(entry, id, a);
             let rules = site.map_or(&[][..], |s| s.rules.as_slice());
-            if rules.is_empty() {
-                out.push_str(&format!("    at {}: no rule\n", anchor_human(a)));
-            }
+            // Round 2 G23: a site with no rule prints nothing (the card
+            // lists the rules a site has; `no rule` said nothing checked).
             for i in rules {
                 out.push_str(&format!(
                     "    at {}: {}\n",
@@ -2388,13 +2479,16 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
             }
         }
     }
+    // Round 2 G23: the reference candidates counted per kind.
     out.push_str(&format!(
-        "  references that may write, not confirmed (kinds: RecordRef.Field by number, \
-         TransferFields copies): {}\n",
+        "  references that may write, not confirmed (RecordRef.Field by number {}, \
+         TransferFields copies {}): {}\n",
+        f.candidate_kinds.0,
+        f.candidate_kinds.1,
         if f.candidates.is_empty() {
             "none observed (search below)".to_string()
         } else {
-            let mut s = format!("{}: ", f.candidates.len());
+            let mut s = String::new();
             s.push_str(
                 &f.candidates
                     .iter()
@@ -2413,7 +2507,38 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
     out.push_str(&format!(
         "  searched: {searched}; not searched: {not_searched}\n"
     ));
-    out.push_str("  reads, filters and validations: alsem_query_touches with table and field\n");
+    // Round 2 G23: complete calls for both follow-ups: the field's own
+    // trigger (its card is not repeated here) and its other uses.
+    use crate::engine::follow_up::{FollowUp, Tool};
+    if let Some(t) = &f.on_validate {
+        let call = FollowUp::new(Tool::Explain, fcx, "the field's OnValidate trigger")
+            .arg("routines", vec![ix.names.selector(t)]);
+        out.push_str(&format!(
+            "  the field's OnValidate: {}\n",
+            call.text(fcx.surface)
+        ));
+    }
+    let writer_cards: Vec<String> = f
+        .writers
+        .keys()
+        .filter(|w| f.on_validate.as_ref() != Some(*w))
+        .map(|w| ix.names.selector(w))
+        .collect();
+    if !writer_cards.is_empty() {
+        let call =
+            FollowUp::new(Tool::Explain, fcx, "the writers' cards").arg("routines", writer_cards);
+        out.push_str(&format!(
+            "  the writers' cards: {}\n",
+            call.text(fcx.surface)
+        ));
+    }
+    let touches = FollowUp::new(Tool::QueryTouches, fcx, "reads, filters and validations")
+        .arg("table", f.table.clone())
+        .arg("field", f.field.clone());
+    out.push_str(&format!(
+        "  reads, filters and validations: {}\n",
+        touches.text(fcx.surface)
+    ));
     out.push('\n');
     out
 }
@@ -2830,6 +2955,9 @@ struct RunBy {
     /// A page action's own card: its `reached from` list is the action
     /// itself, which `entry point: this action` already says (G26).
     action: bool,
+    /// A table or page trigger (round 2 G4, W3): the card keeps its
+    /// `callers:` line beside `run by:`.
+    keep_callers: bool,
 }
 
 /// How many `Validate` sites a `run by:` line names by default.
@@ -2861,6 +2989,7 @@ impl RunBy {
                 human,
                 json: json!({"kind": "page-action", "directCodeCallers": direct.total}),
                 action: true,
+                keep_callers: false,
             });
         }
         let name = r.name.to_ascii_lowercase();
@@ -2870,7 +2999,22 @@ impl RunBy {
         if field_trigger && let Some(rb) = Self::field(ix, r, &name, opts) {
             return Some(rb);
         }
-        // Table and page triggers (W3 lists what runs them).
+        // Round 2 G4 (W3 rows): a table's record trigger and a page trigger.
+        let object_level = r.enclosing_member.is_none();
+        if object_level
+            && matches!(r.object_type.as_str(), "Table" | "TableExtension")
+            && matches!(
+                name.as_str(),
+                "oninsert" | "onmodify" | "ondelete" | "onrename"
+            )
+            && let Some(rb) = Self::table_trigger(ix, rows, r, opts)
+        {
+            return Some(rb);
+        }
+        if matches!(r.object_type.as_str(), "Page" | "PageExtension") {
+            return Some(Self::page_trigger(ix, rows, first, r, opts));
+        }
+        // Other triggers (a codeunit's OnRun, report triggers, …).
         (direct.total == 0).then(|| {
             let human = "direct code callers: none found (what runs a trigger is not listed for \
                          this kind yet)"
@@ -2880,6 +3024,7 @@ impl RunBy {
                 human,
                 json: json!({"kind": "not-listed", "directCodeCallers": 0}),
                 action: false,
+                keep_callers: false,
             }
         })
     }
@@ -2950,6 +3095,7 @@ impl RunBy {
             json: json!({"kind": "event-subscriber", "publishers": publishers,
                          "directCodeCallers": direct.total}),
             action: false,
+            keep_callers: false,
         }
     }
 
@@ -2957,19 +3103,18 @@ impl RunBy {
     /// `OnAssistEdit` (no code call runs them), with the pages on the
     /// field's table as potential UI surfaces. `None` when the field is not
     /// found in the model's tables.
-    fn field(ix: &Indexes<'_>, r: &ModelRoutine, name: &str, opts: RenderOpts) -> Option<RunBy> {
-        use crate::engine::l4::field_touches::{field_key, field_touches};
-        use crate::program::body::record_op::FieldUse;
+    /// The table a table or table-extension routine `r` belongs to (the
+    /// table's id is `<app>/table/<number>`, not the object id).
+    fn trigger_table<'m>(ix: &Indexes<'m>, r: &ModelRoutine) -> Option<&'m ModelTable> {
         let model = ix.model;
-        let tables = table_by_id_preferring_real(&model.workspace.tables);
-        let table: &ModelTable = match r.object_type.as_str() {
-            // The table's id is `<app>/table/<number>`, not the object id.
+        match r.object_type.as_str() {
             "Table" => model.workspace.tables.iter().find(|t| {
                 !t.is_extension_stub
                     && t.app_guid == r.app_guid
                     && t.table_number == r.object_number
-            })?,
+            }),
             _ => {
+                let tables = table_by_id_preferring_real(&model.workspace.tables);
                 let base = ix
                     .data
                     .declaring
@@ -2977,17 +3122,18 @@ impl RunBy {
                     .extends_target_name
                     .as_deref()?;
                 match resolve_table_selector(model, base) {
-                    Resolution::Resolved(t) => tables.get(t.id.as_str()).copied()?,
-                    _ => return None,
+                    Resolution::Resolved(t) => tables.get(t.id.as_str()).copied(),
+                    _ => None,
                 }
             }
-        };
-        let member = field_key(r.enclosing_member.as_deref()?);
-        let field = table.fields.iter().find(|f| field_key(&f.name) == member)?;
-        // Potential UI surfaces: the pages whose source table is the field's
-        // table (the sited graph's rule for a lifecycle site from a page into
-        // its source table's triggers, `impact_graph::project`). Page columns
-        // are not indexed, so whether a page shows the field is not known.
+        }
+    }
+
+    /// Potential UI surfaces of a table: the pages whose source table it is
+    /// (the sited graph's rule for a lifecycle site from a page into its
+    /// source table's triggers, `impact_graph::project`), sorted.
+    fn pages_on_table(model: &Model, table: &ModelTable) -> Vec<String> {
+        use crate::engine::l4::field_touches::field_key;
         let table_key = field_key(&table.name);
         let mut pages: Vec<String> = model
             .workspace
@@ -3003,6 +3149,245 @@ impl RunBy {
             .collect();
         pages.sort();
         pages.dedup();
+        pages
+    }
+
+    /// A table's record trigger (`OnInsert`, `OnModify`, `OnDelete`,
+    /// `OnRename`; round 2 G4's W3 row): the record operations whose
+    /// implicit-trigger edge reaches it (the resolver's dispatch rule: a
+    /// `RunTrigger` that is not literally false for Insert/Modify/Delete,
+    /// Rename by its own rule; the sited graph's `TriggerOf` sites are
+    /// projected from these edges), and the pages on the table as potential
+    /// UI surfaces.
+    fn table_trigger(
+        ix: &Indexes<'_>,
+        rows: &[usize],
+        r: &ModelRoutine,
+        opts: RenderOpts,
+    ) -> Option<RunBy> {
+        use crate::program::model::taxonomy::DispatchKind;
+        let model = ix.model;
+        let table = Self::trigger_table(ix, r)?;
+        let ids: HashSet<&str> = rows.iter().map(|&i| ix.row(i).id.as_str()).collect();
+        let mut sites: Vec<(String, u32, String, String)> = Vec::new();
+        for e in model.calls.edges.iter().filter(|e| {
+            e.dispatch_kind == DispatchKind::ImplicitTrigger
+                && e.to.as_deref().is_some_and(|t| ids.contains(t))
+        }) {
+            let from = e.from_ix.get();
+            let Some(op) = ix
+                .row(from)
+                .record_operations
+                .iter()
+                .find(|o| o.id == e.operation_id)
+            else {
+                continue;
+            };
+            sites.push((
+                op.source_anchor.source_unit_id.clone(),
+                op.source_anchor.start_line + 1,
+                op.op.clone(),
+                ix.qualified(from),
+            ));
+        }
+        sites.sort_by(|a, b| (&a.0, a.1, &a.2).cmp(&(&b.0, b.1, &b.2)));
+        sites.dedup();
+        let pages = Self::pages_on_table(model, table);
+        let table_display = format!("\"{}\"", table.name.replace('"', "\"\""));
+        let surfaces = if pages.is_empty() {
+            format!("potential UI surfaces: no page on table {table_display} in the loaded program")
+        } else {
+            format!(
+                "potential UI surfaces: {} on table {table_display} ({})",
+                rf_plural(pages.len(), "page", "pages"),
+                pages.join(", ")
+            )
+        };
+        let ops = if sites.is_empty() {
+            crate::engine::vocab::none_observed(
+                "every record operation of the loaded program on this table",
+                "operations on a RecordRef or a record whose table is not resolved",
+            )
+        } else {
+            let cap = if opts.detail {
+                usize::MAX
+            } else {
+                RUN_BY_SITES
+            };
+            let shown: Vec<String> = sites
+                .iter()
+                .take(cap)
+                .map(|(f, l, op, who)| format!("{op} at {f}:{l} in {who}"))
+                .collect();
+            format!(
+                "{} ({}{})",
+                rf_plural(sites.len(), "site", "sites"),
+                shown.join("; "),
+                if sites.len() > shown.len() {
+                    format!("; … +{}", sites.len() - shown.len())
+                } else {
+                    String::new()
+                }
+            )
+        };
+        let ops_short = if sites.is_empty() {
+            "none observed".to_string()
+        } else {
+            rf_plural(sites.len(), "site", "sites")
+        };
+        let json_sites: Vec<Value> = sites
+            .iter()
+            .map(|(f, l, op, who)| json!({"op": op, "routine": who, "file": f, "line": l}))
+            .collect();
+        Some(RunBy {
+            human: format!("run by: record operations that run it: {ops}; {surfaces}"),
+            summary: format!(
+                "run by: record operations: {ops_short}; potential UI surfaces: {}",
+                rf_plural(pages.len(), "page", "pages")
+            ),
+            json: json!({"kind": "table-trigger", "table": table.name,
+                         "recordOperations": json_sites, "potentialUiSurfaces": pages}),
+            action: false,
+            keep_callers: true,
+        })
+    }
+
+    /// A page trigger (round 2 G4's W3 row): one a run of the page runs
+    /// (`run_reaches_trigger`: `OnOpenPage`, `OnInit`, …) is run by the code
+    /// runs of the page and the page actions whose `RunObject` opens it; any
+    /// other page trigger runs while a user works in the open page.
+    fn page_trigger(
+        ix: &Indexes<'_>,
+        rows: &[usize],
+        first: usize,
+        r: &ModelRoutine,
+        opts: RenderOpts,
+    ) -> RunBy {
+        use crate::program::model::taxonomy::DispatchKind;
+        let model = ix.model;
+        let ids: HashSet<&str> = rows.iter().map(|&i| ix.row(i).id.as_str()).collect();
+        let runs: BTreeSet<String> = model
+            .calls
+            .edges
+            .iter()
+            .filter(|e| {
+                e.dispatch_kind == DispatchKind::PageRun
+                    && e.to.as_deref().is_some_and(|t| ids.contains(t))
+            })
+            .map(|e| ix.qualified(e.from_ix.get()))
+            .collect();
+        let actions: Vec<String> = ix
+            .run_by_trigger(first)
+            .into_iter()
+            .map(|(oi, a, _)| {
+                let page = &model.workspace.objects[oi];
+                let caption = one_text(&a.caption).ok().flatten();
+                action_display(&page.object_type, &page.name, &a.name, caption.as_deref())
+            })
+            .collect();
+        let object = crate::engine::l5::routine_rollup::format_object(
+            &r.object_type,
+            ix.object_of(first).1,
+            None,
+        );
+        let reaches = !actions.is_empty()
+            || !runs.is_empty()
+            || ix.row(first).kind == "trigger" && {
+                let kind = if r.object_type == "PageExtension" {
+                    al_syntax::ir::ObjectKind::PageExtension
+                } else {
+                    al_syntax::ir::ObjectKind::Page
+                };
+                crate::program::impact_graph::reverse::run_reaches_trigger(
+                    kind,
+                    &r.name.to_ascii_lowercase(),
+                    r.enclosing_member.is_some(),
+                )
+            };
+        if !reaches {
+            let human = format!(
+                "run by: the page's lifecycle while a user works in {object} (a run of the page \
+                 does not run this trigger by itself; no code call runs it)"
+            );
+            return RunBy {
+                summary: "run by: a user working in the open page".to_string(),
+                human,
+                json: json!({"kind": "page-trigger", "runByRun": false}),
+                action: false,
+                keep_callers: true,
+            };
+        }
+        let list = |v: &[String]| -> String {
+            let cap = if opts.detail {
+                usize::MAX
+            } else {
+                RUN_BY_SITES
+            };
+            let shown: Vec<&str> = v.iter().take(cap).map(String::as_str).collect();
+            format!(
+                "{}{}",
+                shown.join(", "),
+                if v.len() > shown.len() {
+                    format!(", … +{}", v.len() - shown.len())
+                } else {
+                    String::new()
+                }
+            )
+        };
+        let runs: Vec<String> = runs.into_iter().collect();
+        let runs_text = if runs.is_empty() {
+            crate::engine::vocab::none_observed(
+                "every resolved Page.Run and RunModal of the loaded program",
+                "runs of a page held in a variable",
+            )
+        } else {
+            format!(
+                "{} ({})",
+                rf_plural(runs.len(), "routine", "routines"),
+                list(&runs)
+            )
+        };
+        let actions_text = if actions.is_empty() {
+            "none observed".to_string()
+        } else {
+            format!(
+                "{} ({})",
+                rf_plural(actions.len(), "page action", "page actions"),
+                list(&actions)
+            )
+        };
+        RunBy {
+            human: format!(
+                "run by: code runs of the page: {runs_text}; page actions that open it: \
+                 {actions_text}"
+            ),
+            summary: format!(
+                "run by: code runs of the page: {}; page actions that open it: {}",
+                if runs.is_empty() {
+                    "none observed".to_string()
+                } else {
+                    rf_plural(runs.len(), "routine", "routines")
+                },
+                rf_plural(actions.len(), "action", "actions")
+            ),
+            json: json!({"kind": "page-trigger", "runByRun": true, "codeRuns": runs,
+                         "pageActions": actions}),
+            action: false,
+            keep_callers: true,
+        }
+    }
+
+    fn field(ix: &Indexes<'_>, r: &ModelRoutine, name: &str, opts: RenderOpts) -> Option<RunBy> {
+        use crate::engine::l4::field_touches::{field_key, field_touches};
+        use crate::program::body::record_op::FieldUse;
+        let model = ix.model;
+        let table = Self::trigger_table(ix, r)?;
+        let member = field_key(r.enclosing_member.as_deref()?);
+        let field = table.fields.iter().find(|f| field_key(&f.name) == member)?;
+        // Potential UI surfaces: the pages whose source table is the field's
+        // table. Page columns are not indexed, so whether a page shows the
+        // field is not known.
+        let pages = Self::pages_on_table(model, table);
         let table_display = format!("\"{}\"", table.name.replace('"', "\"\""));
         let what_page = if name == "onvalidate" {
             "shows or edits"
@@ -3040,6 +3425,7 @@ impl RunBy {
                              "table": table.name, "field": field.name,
                              "potentialUiSurfaces": pages}),
                 action: false,
+                keep_callers: false,
             });
         }
         let touches = field_touches(model, table, field, &|_| true);
@@ -3133,6 +3519,7 @@ impl RunBy {
                          "searched": searched, "notSearched": not,
                          "potentialUiSurfaces": pages}),
             action: false,
+            keep_callers: false,
         })
     }
 }
@@ -4014,7 +4401,7 @@ impl Card {
         let sections = Sections {
             commits: commit_lines(&rollup, full, rcx, opts),
             workspace: workspace_write_lines(&rollup, full, rcx, opts, &fields_of),
-            caller_dependent: caller_dependent_lines(&rollup, full),
+            caller_dependent: caller_dependent_lines(&rollup, full, rcx),
             beyond: beyond_lines(&rollup, full, rcx, opts),
             no_path: no_path_lines(&rollup, full, rcx, opts),
             dead: literal_dead_lines(&rollup, opts),
@@ -4284,6 +4671,15 @@ impl Card {
         // runs it (`run by:`) instead of `callers: none`.
         let actions = self.reached_from.len();
         match &self.run_by {
+            // Round 2 G4 (W3): a table or page trigger keeps its direct
+            // callers' line (the routines whose operation or run reaches it).
+            Some(rb) if rb.keep_callers && self.direct.total > 0 => {
+                line(&rb.human);
+                line(&format!(
+                    "callers: {}",
+                    self.direct.human(detail, self.opts.detail_input())
+                ));
+            }
             Some(rb) => line(&rb.human),
             // §5.3: `callers: none` with no page action is the summary's own
             // clause.
@@ -4366,9 +4762,21 @@ impl Card {
         // Agent-tasks C-7: the sibling test apps are discovered, never
         // analyzed here (no test universe is built for explain).
         let siblings = self.test_scope.as_ref().filter(|s| !s.apps.is_empty());
+        // Round 2 G60: the complete tests call for this routine.
+        let selector = self.routine["selector"]
+            .as_str()
+            .or_else(|| self.routine["id"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        let tests_call = crate::engine::follow_up::FollowUp::new(
+            crate::engine::follow_up::Tool::Tests,
+            crate::engine::follow_up::Cx::new(self.opts.surface, false),
+            "selects the tests",
+        )
+        .arg("routines", vec![selector]);
         let not_here = format!(
             "not analyzed in this call — {} selects them",
-            crate::engine::follow_up::Tool::Tests.on(self.opts.surface)
+            tests_call.text(self.opts.surface)
         );
         if self.tests.is_empty() {
             line(&match (self.totals.tests_loaded, siblings) {
