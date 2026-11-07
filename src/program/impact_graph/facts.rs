@@ -68,6 +68,10 @@ pub struct ObjectFacts {
     /// The `RunObject` subset of [`Self::opens`]: what its actions run (an
     /// entry a user starts, agent-tasks design §3.3).
     pub action_runs: Vec<RunTarget>,
+    /// Per page action with a `RunObject`: what it runs and the action's
+    /// name as declared (round-2 r2 §2.1 step 3: a page action is one entry
+    /// whether it runs through its `OnAction` trigger or its `RunObject`).
+    pub action_run_names: Vec<(RunTarget, String)>,
     /// A table's `LookupPageId` and `DrillDownPageId` pages.
     pub lookup_pages: Vec<RunTarget>,
     /// An XmlPort's table elements: an import inserts their records.
@@ -143,6 +147,7 @@ pub fn extract_source_facts(
                     slot.test_pages.extend(of.test_pages);
                     slot.opens.extend(of.opens);
                     slot.action_runs.extend(of.action_runs);
+                    slot.action_run_names.extend(of.action_run_names);
                     slot.lookup_pages.extend(of.lookup_pages);
                     slot.tables.extend(of.tables);
                 }
@@ -246,6 +251,8 @@ pub fn extract_source_facts(
         }
         f.tables.sort();
         f.tables.dedup();
+        f.action_run_names.sort();
+        f.action_run_names.dedup();
     }
     let (configured, catalog) =
         super::configured_dispatch::extract(super::configured_dispatch::CATALOG, graph, units);
@@ -279,6 +286,16 @@ fn object_facts(
         .run_objects
         .iter()
         .filter_map(|v| runnable_type(v, obj_id, graph, index))
+        .collect();
+    let action_run_names: Vec<(RunTarget, String)> = obj
+        .actions
+        .iter()
+        .flat_map(|a| {
+            a.run_object
+                .iter()
+                .filter_map(|v| runnable_type(v, obj_id, graph, index))
+                .map(|t| (t, a.name.clone()))
+        })
         .collect();
     let mut opens = action_runs.clone();
     opens.extend(prop("cardpageid").filter_map(page_ref));
@@ -318,6 +335,7 @@ fn object_facts(
             .collect(),
         opens,
         action_runs,
+        action_run_names,
         lookup_pages,
         tables,
         // Filled after the walk, from every copy of the page.

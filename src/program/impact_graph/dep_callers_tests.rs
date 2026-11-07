@@ -317,3 +317,54 @@ fn source_folder_dependency() {
 fn package_dependency() {
     check_form(Form::Package);
 }
+
+/// Round-2 r2 §2.1 step 2: impact reads its tier from R0's `Tier` and
+/// tracks no app identity of its own, which is sound because, in the
+/// production universe (the dependency a package), R0's `flag::LOCAL` and
+/// `is_dependency_node` agree on every app-owned node: `LOCAL ==
+/// !is_dependency_node`. Hubs are outside the equality and are tested apart
+/// (impact's `a_mixed_path_over_navigation_and_a_hub_…`): they carry no
+/// `LOCAL` flag, and `is_dependency_node` is false for them. A callbacks hub
+/// (`h:callbacks:<app>`) does name an app (`node_app` is `Some`), so the
+/// equality skips every `HUB` node, not only the app-less ones. With the
+/// dependency loaded as a SOURCE FOLDER (trust tier local source) R0 counts
+/// it `LOCAL` while `is_dependency_node` does not: the equality is the
+/// production universe's, and does not hold there (also checked).
+///
+/// DISCRIMINATION (2026-11-07): marking every app `LOCAL` in the sited
+/// graph's builder (`local_apps` gaining every object's app) fails "LOCAL
+/// == !is_dependency_node" on the first dependency node.
+#[test]
+fn local_flag_and_app_identity_agree_on_every_app_owned_node() {
+    let w = world(Form::Package);
+    let g = &w.g;
+    let mut checked = (0usize, 0usize);
+    for n in 0..g.node_count() as u32 {
+        if g.node_app(n).is_none() || g.flags(n) & super::super::sited::flag::HUB != 0 {
+            continue;
+        }
+        let local = g.flags(n) & super::super::sited::flag::LOCAL != 0;
+        assert_eq!(
+            local,
+            !is_dependency_node(g, n),
+            "LOCAL == !is_dependency_node: {}",
+            g.display(n)
+        );
+        if local {
+            checked.0 += 1;
+        } else {
+            checked.1 += 1;
+        }
+    }
+    assert!(
+        checked.0 > 3 && checked.1 > 3,
+        "precondition: workspace and dependency nodes: {checked:?}"
+    );
+    let s = world(Form::SourceFolder);
+    assert!(
+        (0..s.g.node_count() as u32)
+            .any(|n| is_dependency_node(&s.g, n)
+                && s.g.flags(n) & super::super::sited::flag::LOCAL != 0),
+        "a local-source dependency is LOCAL to R0 and a dependency by app identity"
+    );
+}

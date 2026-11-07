@@ -593,3 +593,84 @@ fn root_kinds_equal_the_models_classification() {
     }
     assert!(checked > 10, "checked {checked}");
 }
+
+/// A recorder whose consumer bits come from the sites it steps over: the
+/// site id's low bits, OR-ed along the path, masked by `mask`. With mask 7
+/// every state fits the dense visited set; with mask 15 some reach `ext` 8
+/// and above and take the hash fallback.
+struct Bits {
+    rec: Recorder,
+    mask: u8,
+}
+
+impl ConeVisitor for Bits {
+    fn reach(&mut self, root: u32, s: WalkState, hops: u32, via: Via, from: Option<WalkState>) {
+        self.rec.reach(root, s, hops, via, from);
+    }
+    fn hidden(&mut self, root: u32, n: NodeIx, ch: HiddenChannel) {
+        self.rec.hidden(root, n, ch);
+    }
+    fn entry(&mut self, root: u32, n: NodeIx, kinds: &[EntryKind], s: WalkState, hops: u32) {
+        self.rec.entry(root, n, kinds, s, hops);
+    }
+    fn external(&mut self, root: u32, n: NodeIx, why: ExternalWhy, s: WalkState, hops: u32) {
+        self.rec.external(root, n, why, s, hops);
+    }
+    fn source(&mut self, root: u32, s: WalkState, hops: u32) {
+        self.rec.source(root, s, hops);
+    }
+    fn step(&mut self, _: &SitedGraph, from: WalkState, site: SiteIx) -> Option<u8> {
+        Some((from.ext | (1u8 << (site % 4))) & self.mask)
+    }
+}
+
+/// Round-2 r2 §2.1 Cost (a): the dense visited set (`ext` 0–7, one `u64`
+/// per node) keeps exactly the states the hash fallback keeps. Every walk
+/// of the fixture, from every routine at once, gives the same reports with
+/// the dense set as with every state in the hash set, for bits that all fit
+/// the dense set (mask 7) and for bits that partly need the fallback
+/// (mask 15).
+///
+/// DISCRIMINATION (2026-11-07): dropping the `ext` term from the dense bit
+/// (`(s.tier as u32) * 2 + crossed`, so two states of one node that differ
+/// only in `ext` share a bit) fails "the dense set keeps every state" for
+/// mask 7: the dense walk loses states the hash walk keeps.
+#[test]
+fn the_dense_visited_set_keeps_what_the_hash_set_keeps() {
+    let (g, _) = fixture_graph();
+    let roots: Vec<NodeIx> = (0..g.node_count() as u32)
+        .filter(|&n| g.stable_id(n).is_some())
+        .collect();
+    assert!(roots.len() > 10, "precondition: many roots");
+    for mask in [7u8, 15] {
+        let run = |mut scratch: WalkScratch| {
+            let mut v = Bits {
+                rec: Recorder::default(),
+                mask,
+            };
+            let stats = walk_multi(&g, &roots, &WalkOptions::default(), &mut scratch, &mut v);
+            (stats, v.rec)
+        };
+        let (ds, dense) = run(WalkScratch::default());
+        let (hs, hash) = run(WalkScratch::hash_only());
+        let mixed = dense.states.iter().filter(|x| x.1.ext != 0).count();
+        assert!(mixed > 0, "precondition: states carry consumer bits");
+        if mask == 15 {
+            assert!(
+                dense.states.iter().any(|x| x.1.ext >= DENSE_EXT),
+                "precondition: some states take the hash fallback"
+            );
+        }
+        assert_eq!(ds, hs, "mask {mask}: the walk's stats");
+        assert_eq!(
+            dense.states.len(),
+            hash.states.len(),
+            "mask {mask}: the dense set keeps every state"
+        );
+        assert_eq!(dense.states, hash.states, "mask {mask}: states");
+        assert_eq!(dense.entries, hash.entries, "mask {mask}: entries");
+        assert_eq!(dense.external, hash.external, "mask {mask}: external");
+        assert_eq!(dense.sources, hash.sources, "mask {mask}: sources");
+        assert_eq!(dense.hidden, hash.hidden, "mask {mask}: hidden");
+    }
+}

@@ -130,8 +130,9 @@ fn impact_summary(
         json!({"routine": named(r), "stableId": r["stableId"], "status": r["status"],
                "testStatus": r["tests"]["status"].as_str()
                    .map(crate::engine::vocab::test_status),
-               // Round-2 r2 §2.1 (W1, additive): the reach has no relation.
-               "relationRecorded": false})
+               // Round-2 r2 §2.1 (additive): the reach is classified by
+               // relation (W2); its populations are in the routine's JSON.
+               "relationRecorded": r["up"]["relationRecorded"].as_bool().unwrap_or(false)})
     };
     crate::engine::result_index::with_index(
         json!({
@@ -562,54 +563,49 @@ fn effects_analysis(e: &Value) -> Option<crate::engine::result_header::Analysis>
     }
 }
 
-/// A node's short name with its hops and, when the path is not local, its
-/// tier in the words `tests` uses (`Page X (3 hops)`, `Page Y (5 hops, only
-/// over open sites)`). An open-site (hub) witness is a possibility, not a
-/// path: round-1 c20 printed a `run:report` hub's witness as a plain one.
+/// An event that raises the routine itself, with its tier and its relation
+/// (an event dispatch is code; round-2 r2 §5: impact mixes relations, so
+/// every item prints both axes): `[via-dependency, code] Table Customer
+/// (18)::OnAfterDeleteEvent (1 hop)`.
 fn node_short(n: &Value) -> String {
-    // §8.1: the tier first, in its own words.
     format!(
-        "[{}] {} ({})",
+        "[{}, {}] {} ({})",
         crate::engine::vocab::tier_key(s(n, "tier")),
+        crate::engine::vocab::RELATION_CODE,
         s(n, "display"),
         plural(u(n, "hops"), "hop", "hops")
     )
 }
 
-/// Where an ancestor's path goes, in plain words (round-2 r2 §2.1, W1
-/// interim): the walk records no relation, so its population never carries a
-/// bracketed tier.
-fn tier_words(tier: &str) -> &'static str {
-    match crate::engine::vocab::tier_key(tier) {
-        "local" => "within the workspace",
-        "via-dependency" => "through a dependency",
-        _ => "over a hub",
+/// A classified witness (round-2 r2 §2.1, W2): `[<tier>, <relation>]`, its
+/// display (a page with the action an action-run site stands for), what
+/// kind of entry it is, its hops, and whether a candidate's path also needs
+/// UI navigation: `[via-dependency, UI navigation] Page "Sales Invoice"
+/// (page action, 3 hops)`.
+fn witness_text(w: &Value) -> String {
+    let mut what = s(w, "display").to_string();
+    if let Some(a) = w["action"].as_str() {
+        what = format!("{what} action {}", al_name(a));
     }
+    let kind = w["entry"].as_str().or(w["kind"].as_str());
+    let mut tail = match kind {
+        Some(k) if w["kind"].is_null() => format!("{k}, "),
+        _ => String::new(),
+    };
+    tail.push_str(&plural(u(w, "hops"), "hop", "hops"));
+    if w["needsNavigation"] == json!(true) {
+        tail.push_str("; the path also needs UI navigation");
+    }
+    format!("[{}, {}] {what} ({tail})", s(w, "tier"), s(w, "relation"))
 }
 
-/// An ancestor of the unclassified population: its display, where its path
-/// goes and its hops (`Page X (through a dependency, 3 hops)`).
-fn node_plain(n: &Value) -> String {
-    format!(
-        "{} ({}, {})",
-        s(n, "display"),
-        tier_words(s(n, "tier")),
-        plural(u(n, "hops"), "hop", "hops")
-    )
-}
-
-/// The witnesses of every legacy bucket whose §8.1 kind is `kind`, in the
-/// order one bucket's list keeps them ([`super::up`]'s `Firsts::first`):
-/// every witness with no open site first, nearest first, then the via-hub
-/// ones; a stable sort, so ties keep bucket order.
-fn kind_firsts<'v>(entries: &[&'v Value], kind: &str) -> Vec<&'v Value> {
-    let mut all: Vec<&Value> = entries
-        .iter()
-        .filter(|e| crate::engine::vocab::entry_key(s(e, "kind")).0 == kind)
-        .flat_map(|e| e["first"].as_array().into_iter().flatten())
-        .collect();
-    all.sort_by_key(|n| (s(n, "tier") == "onlyOpen", u(n, "hops")));
-    all
+/// A name as AL writes it: quoted only when it needs quotes.
+fn al_name(n: &str) -> String {
+    if !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        n.to_string()
+    } else {
+        format!("\"{n}\"")
+    }
 }
 
 /// The direct callers and event publishers a routine lists with `detail`
@@ -617,161 +613,306 @@ fn kind_firsts<'v>(entries: &[&'v Value], kind: &str) -> Vec<&'v Value> {
 /// routine, not ten items per list).
 const DETAIL_ITEMS: usize = 3;
 
-/// The declared-entry share at which a reach's list folds (§3.2: start at
-/// 50%).
+/// The share of the program's entries at which a population's list folds
+/// (§3.2: start at 50%).
 const FOLD_SHARE_PERCENT: usize = 50;
 
-/// The declared-entry share at which a reach's counts by kind fold too
-/// (round-2 r2 §2.1: 90%, not equality, since the changed routine is left
-/// out and the counts move with every correctness fix).
+/// The share of the program's entries at which a population is
+/// `program-wide` and its counts by kind fold too (round-2 r2 §2.1: 90%, not
+/// equality, since the changed routine is left out and the counts move with
+/// every correctness fix).
 const WIDE_SHARE_PERCENT: usize = 90;
 
+/// A population's share of the program's canonical entries, in percent:
+/// `None` for a limited walk (it claims no share) or a walk with no
+/// classified counts. `key` is a `programShare` key (`code`, `all`, …).
+pub(crate) fn population_share(up: &Value, key: &str) -> Option<usize> {
+    if !up["limited"].is_null() {
+        return None;
+    }
+    let sh = &up["programShare"][key];
+    let program = sh["program"].as_u64()?;
+    let reached = sh["reached"].as_u64()?;
+    (reached * 100)
+        .checked_div(program)
+        .map(|p| p.min(100) as usize)
+}
+
+/// The share clause of a population line: `program-wide` from 90% (its
+/// counts by kind folded), `broad reach` from 50%, the share below, or no
+/// entry at all; a limited walk states its limit instead of any share.
+fn share_clause(up: &Value, key: &str, detail: bool, detail_in: &str) -> (String, bool) {
+    if let Some(l) = up["limited"].as_str() {
+        return (format!("; analysis partial (limit: {l})"), false);
+    }
+    let sh = &up["programShare"][key];
+    let (n, total) = (u(sh, "reached"), u(sh, "program"));
+    match population_share(up, key) {
+        Some(p) if p >= WIDE_SHARE_PERCENT => (
+            format!(
+                "; program-wide: {p}% of the program's entries ({} of {}){}",
+                thousands(n),
+                thousands(total),
+                if detail {
+                    String::new()
+                } else {
+                    format!("; counts by kind folded ({detail_in} prints them)")
+                }
+            ),
+            !detail,
+        ),
+        Some(p) if p >= FOLD_SHARE_PERCENT => (
+            format!(
+                "; broad reach ({p}% of the program's entries, {} of {}{})",
+                thousands(n),
+                thousands(total),
+                if detail { "" } else { "; list folded" }
+            ),
+            false,
+        ),
+        Some(p) if n > 0 => (
+            format!(
+                "; {} of the program's entries ({} of {})",
+                if p == 0 {
+                    "under 1%".to_string()
+                } else {
+                    format!("{p}%")
+                },
+                thousands(n),
+                thousands(total)
+            ),
+            false,
+        ),
+        _ => ("; no entry among them".to_string(), false),
+    }
+}
+
+/// A population's entries by kind and by context, when it has any.
+fn kind_lines(up: &Value, key: &str, indent: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let line = |m: &Value, plural_of: &dyn Fn(&str) -> String| -> Option<String> {
+        let o = m.as_object()?;
+        // Print order: the entry kinds' (a user or a job first), not the
+        // JSON object's alphabetical one.
+        let rank = |k: &str| {
+            crate::program::impact_graph::reverse::EntryKind::ALL
+                .iter()
+                .position(|x| crate::engine::vocab::entry_kind(*x) == k)
+                .unwrap_or(usize::MAX)
+        };
+        let mut rows: Vec<(&String, &Value)> = o.iter().collect();
+        rows.sort_by_key(|(k, _)| rank(k));
+        (!o.is_empty()).then(|| {
+            rows.iter()
+                .map(|(k, n)| {
+                    format!(
+                        "{} {}",
+                        plural_of(k),
+                        thousands(n.as_u64().unwrap_or(0) as usize)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+    };
+    if let Some(l) = line(&up["entriesByKind"][key], &|k| {
+        crate::engine::vocab::entry_kind_plural(k)
+    }) {
+        out.push(format!("{indent}  entries by kind: {l}"));
+    }
+    if let Some(l) = line(&up["entriesByContext"][key], &|k| k.to_string()) {
+        out.push(format!(
+            "{indent}  by context (contexts may overlap; not summed): {l}"
+        ));
+    }
+    out
+}
+
+/// The ancestors of a population key in `byRelation.ancestors`.
+fn population_count(up: &Value, key: &str) -> usize {
+    let a = &up["byRelation"]["ancestors"];
+    match key {
+        "code" | "uiNavigation" => u(&a[key], "local") + u(&a[key], "viaDependency"),
+        "overConfiguration" => {
+            let c = &a["candidates"]["overConfiguration"];
+            u(c, "code") + u(c, "uiNavigation")
+        }
+        k => u(&a["candidates"], k),
+    }
+}
+
 /// The lines of a reach beyond the direct code callers (output validation
-/// V2, §3.2, F12; round-2 r2 §2.1, the W1 interim): the ancestors as one
-/// population of every relation (the walk records none), where their paths
-/// go in plain words; the share of the program's declared entries they hold
-/// (one predicate on both sides, `up::declaredEntries`); entries by kind and
-/// by execution context unless that share is at least
-/// [`WIDE_SHARE_PERCENT`]; the first entry per kind with `detail`, each
-/// tagged `[relation not recorded]`; the hubs on the paths (`hubs`: the
-/// answer's one hubs line).
+/// V2, §3.2, F12; round-2 r2 §2.1 Output, W2): one line per population, code
+/// first with its nearest witness whatever its size, then UI navigation,
+/// then the candidates over configuration, then the candidates whose
+/// relation is not established (over a rule edge, over a hub). Each
+/// established population names its relation and its tiers and its share of
+/// the program's entries (`program-wide` from 90%, counts by kind folded);
+/// when no single population reaches 90% but their union does, one line says
+/// so. `external:` belongs to the code population. With `detail`, each
+/// population's first entry of each kind. The hubs on the paths close it
+/// (`hubs`: the answer's one hubs line). `direct_both`: the routine has
+/// direct code callers and raising events both (the code population counts
+/// both ways in once).
 fn reach_lines(
     up: &Value,
     detail: bool,
     indent: &str,
     surface: crate::engine::follow_up::Surface,
     hubs: bool,
+    direct_both: bool,
 ) -> Vec<String> {
-    use crate::engine::vocab;
     let detail_in = crate::engine::follow_up::Input::Detail.on(surface);
     let mut out = Vec::new();
-    let a = &up["ancestors"];
-    out.push(format!(
-        "{indent}reached beyond it: {} by code calls, UI navigation, configuration or a hub \
-         (relation not recorded by this walk): within the workspace {}, through a dependency {}, \
-         over a hub {}",
-        plural(u(a, "total"), "ancestor", "ancestors"),
-        thousands(u(a, "local")),
-        thousands(u(a, "throughDependency")),
-        thousands(u(a, "onlyOpen"))
-    ));
-    let entries: Vec<&Value> = up["entries"].as_array().into_iter().flatten().collect();
-    if entries.is_empty() {
-        out.push(format!(
-            "{indent}  entries among them: none (no page action, API page, job, trigger, \
-             subscriber or test reaches it)"
-        ));
-        return out;
-    }
-    // By kind (§8.1 words; the legacy buckets that name one kind are added,
-    // and a node in two legacy buckets may count twice until the entries are
-    // classified disjointly) and by context.
-    let mut kinds: Vec<(&str, usize, usize)> = Vec::new();
-    let mut contexts: Vec<(&str, usize)> = Vec::new();
-    for e in &entries {
-        let (kind, ctx) = vocab::entry_key(s(e, "kind"));
-        match kinds.iter_mut().find(|(k, _, _)| *k == kind) {
-            Some(x) => {
-                x.1 += u(e, "count");
-                x.2 += u(e, "onlyOpen");
-            }
-            None => kinds.push((kind, u(e, "count"), u(e, "onlyOpen"))),
-        }
-        if let Some(c) = ctx {
-            match contexts.iter_mut().find(|(k, _)| *k == c) {
-                Some(x) => x.1 += u(e, "count"),
-                None => contexts.push((c, u(e, "count"))),
-            }
-        }
-    }
-    // Round-2 r2 §2.1 (W1 interim): the share of the program's declared
-    // entries these ancestors hold, one predicate on both sides (never the
-    // bucket sum). A limited walk claims no share.
-    let declared = &up["declaredEntries"];
-    let share = if up["limited"].is_null() {
-        declared["percent"].as_u64().map(|p| p as usize)
-    } else {
-        None
-    };
-    let wide = share.is_some_and(|p| p >= WIDE_SHARE_PERCENT);
-    match share {
-        Some(p) if wide => out.push(format!(
-            "{indent}  these ancestors hold {p}% of the program's declared entries ({} of {}; \
-             pages run by an action's RunObject, background targets and roots.config entries \
-             are counted on neither side){}",
-            thousands(u(declared, "reached")),
-            thousands(u(declared, "program")),
-            if detail {
-                String::new()
-            } else {
-                format!("; counts by kind folded ({detail_in} prints them)")
-            }
-        )),
-        Some(p) if p >= FOLD_SHARE_PERCENT => out.push(format!(
-            "{indent}  broad reach ({p}% of the program's declared entries{})",
-            if detail { "" } else { "; list folded" }
-        )),
-        // Below the fold the share still prints, with its counts (measured
-        // on CDO, 2026-11-07: c12, c20's first routine and n09 hold 30%, so
-        // without this line the share would never be shown there).
-        Some(p) if u(declared, "reached") > 0 => out.push(format!(
-            "{indent}  these ancestors hold {p}% of the program's declared entries ({} of {}; \
-             pages run by an action's RunObject, background targets and roots.config entries \
-             are counted on neither side)",
-            thousands(u(declared, "reached")),
-            thousands(u(declared, "program")),
-        )),
-        _ => {}
-    }
-    if !wide || detail {
-        out.push(format!(
-            "{indent}  entries among them, by kind (counted per legacy bucket: an entry in two \
-             buckets counts in both): {}",
-            kinds
-                .iter()
-                .map(|(k, n, open)| {
-                    let open = if *open > 0 {
-                        format!(" (over a hub {})", thousands(*open))
-                    } else {
-                        String::new()
-                    };
-                    format!("{} {}{open}", vocab::entry_kind_plural(k), thousands(*n))
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        if !contexts.is_empty() {
+    let a = &up["byRelation"]["ancestors"];
+    let limited = up["limited"].as_str();
+    let candidates = population_count(up, "overConfiguration")
+        + population_count(up, "overRule")
+        + population_count(up, "overHub");
+    let firsts = |out: &mut Vec<String>, key: &str| {
+        for w in up["firstByKind"][key].as_array().into_iter().flatten() {
             out.push(format!(
-                "{indent}  by context (contexts may overlap; not summed): {}",
-                contexts
-                    .iter()
-                    .map(|(c, n)| format!("{c} {}", thousands(*n)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "{indent}    first {}: {}",
+                s(w, "kind"),
+                witness_text(w)
             ));
         }
-    }
-    // The first entry per kind, with `detail` only, each tagged: the walk
-    // records no relation. The kind's count adds every legacy bucket of that
-    // kind (codeunit OnRun = `onrun-codeunit` + `background-start` + …), so
-    // its first witness is the nearest over the same buckets (round-2
-    // c12/c20: the background bucket's 21-hop witness printed beside the
-    // merged count while the OnRun bucket held one at 3 hops).
-    if detail {
-        let mut printed: Vec<&str> = Vec::new();
-        for e in &entries {
-            let kind = vocab::entry_key(s(e, "kind")).0;
-            if printed.contains(&kind) {
-                continue;
-            }
-            printed.push(kind);
-            if let Some(n) = kind_firsts(&entries, kind).into_iter().next() {
+    };
+    let nearest = |out: &mut Vec<String>, key: &str| {
+        let w = &up["nearest"][key];
+        if !w.is_null() {
+            let label = if w["entry"].is_null() {
+                "nearest"
+            } else {
+                "nearest entry"
+            };
+            out.push(format!("{indent}  {label}: {}", witness_text(w)));
+        }
+    };
+    let mut wide_any = false;
+    for (key, words) in [("code", "code"), ("uiNavigation", "UI navigation")] {
+        let n = population_count(up, key);
+        if n == 0 {
+            if key == "code" {
                 out.push(format!(
-                    "{indent}    first {kind}: [relation not recorded] {}",
-                    node_plain(n)
+                    "{indent}reached by code: none — no established code-path witness in the \
+                     analyzed graph{}",
+                    match limited {
+                        Some(l) => format!("; analysis partial (limit: {l})"),
+                        None if candidates > 0 => {
+                            " (the candidates below are not decided)".to_string()
+                        }
+                        None => " (every candidate decided)".to_string(),
+                    }
+                ));
+            }
+            continue;
+        }
+        let (share, folded) = share_clause(up, key, detail, detail_in);
+        wide_any |= population_share(up, key).is_some_and(|p| p >= WIDE_SHARE_PERCENT);
+        out.push(format!(
+            "{indent}reached by {words}: {}{} — local {}, via-dependency {}{share}",
+            plural(n, "ancestor", "ancestors"),
+            if key == "code" && direct_both {
+                ", through its direct callers and its publisher together"
+            } else {
+                ""
+            },
+            thousands(u(&a[key], "local")),
+            thousands(u(&a[key], "viaDependency")),
+        ));
+        nearest(&mut out, key);
+        if !folded {
+            out.extend(kind_lines(up, key, indent));
+        }
+        if detail {
+            firsts(&mut out, key);
+        }
+        if key == "code" {
+            // `external:` prints for the code population only.
+            let ext: Vec<String> = up["externalCode"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| format!("{} {}", s(e, "why"), thousands(u(e, "count"))))
+                .collect();
+            if !ext.is_empty() {
+                out.push(format!(
+                    "{indent}  external: apps outside the program may call routines of its code \
+                     population (by reason, routines): {}",
+                    ext.join(", ")
                 ));
             }
         }
+    }
+    let conf = population_count(up, "overConfiguration");
+    if conf > 0 {
+        let c = &a["candidates"]["overConfiguration"];
+        out.push(format!(
+            "{indent}candidates over configuration (depends on configuration data not read): {} \
+             (code {}, UI navigation {})",
+            plural(conf, "ancestor", "ancestors"),
+            thousands(u(c, "code")),
+            thousands(u(c, "uiNavigation")),
+        ));
+        nearest(&mut out, "overConfiguration");
+        if detail {
+            out.extend(kind_lines(up, "overConfiguration", indent));
+            firsts(&mut out, "overConfiguration");
+        }
+    }
+    let (rule, hub) = (
+        population_count(up, "overRule"),
+        population_count(up, "overHub"),
+    );
+    if rule + hub > 0 {
+        out.push(format!(
+            "{indent}candidates (relation not established): over a rule edge {}, over a hub {}",
+            thousands(rule),
+            plural(hub, "ancestor", "ancestors"),
+        ));
+        if detail {
+            for key in ["overRule", "overHub"] {
+                nearest(&mut out, key);
+            }
+        }
+    }
+    // §R2.4 landing changes 1-2: the totals say what they include that is
+    // not one entry per action or per run.
+    let notes = &up["entryNotes"];
+    let pages = u(&notes["pagesWithUnnamedActions"], "reached");
+    let bg = u(&notes["backgroundTargetsWithoutOnRun"], "reached");
+    if pages + bg > 0 {
+        let mut parts = Vec::new();
+        if pages > 0 {
+            parts.push(format!(
+                "{} counted once each (their actions are not named)",
+                plural(pages, "page", "pages")
+            ));
+        }
+        if bg > 0 {
+            parts.push(format!(
+                "{} with no OnRun found (counted apart)",
+                plural(bg, "background target", "background targets")
+            ));
+        }
+        out.push(format!(
+            "{indent}entry totals include {}",
+            parts.join(", and ")
+        ));
+    }
+    // Round-2 r2 §2.1 Rules: no single population reaches the threshold,
+    // but their union does.
+    if !wide_any
+        && let Some(p) = population_share(up, "all")
+        && p >= WIDE_SHARE_PERCENT
+    {
+        let sh = &up["programShare"]["all"];
+        out.push(format!(
+            "{indent}together these populations reach {p}% of the program's entries ({} of {})",
+            thousands(u(sh, "reached")),
+            thousands(u(sh, "program"))
+        ));
     }
     if !hubs {
         return out;
@@ -782,7 +923,7 @@ fn reach_lines(
         .flatten()
         .map(|h| {
             let at = s(h, "at");
-            vocab::hub(s(h, "kind"), None, (!at.is_empty()).then_some(at))
+            crate::engine::vocab::hub(s(h, "kind"), None, (!at.is_empty()).then_some(at))
         })
         .collect();
     if !hubs.is_empty() {
@@ -1519,7 +1660,7 @@ pub fn render(
         tail.push("the whole change:".to_string());
         // Round-2 r2 §2.1: the hubs line prints once per answer, here
         // (the union holds every routine's).
-        tail.extend(reach_lines(un, false, "  ", opts.surface, true));
+        tail.extend(reach_lines(un, false, "  ", opts.surface, true, false));
     }
     if let Ok(d) = delta {
         before_after_tail(&mut tail, d, opts);
@@ -1697,9 +1838,21 @@ fn impact_header(
         .filter(|l| !l.starts_with("callers and entries not computed"))
         .cloned()
         .collect();
-    h.scope = "callers and entries over the whole program, dependency code in its own tier; \
-               effects through every resolved call with literal arguments"
-        .to_string();
+    // §R2.4 landing change 3: once per answer, what the callers do not
+    // count.
+    let local_source = up
+        .as_ref()
+        .is_ok_and(|u| u["localSourceDependencies"] == json!(true));
+    h.scope = format!(
+        "callers and entries over the whole program, dependency code in its own tier; test code \
+         is not in these callers (tests: reports it); the roots.config entry overlay is not \
+         applied{}; effects through every resolved call with literal arguments",
+        if local_source {
+            "; local includes dependencies loaded from source folders"
+        } else {
+            ""
+        }
+    );
     if !opts.detail && !roots.is_empty() {
         h.more.push(format!(
             "{} lists each routine's direct callers and its first entry of each kind",
@@ -1817,8 +1970,21 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                     None => s(f, "display").to_string(),
                 })
                 .collect();
+            // §R2.4 landing change 6: a changed routine that is an entry
+            // says so (its kind first among its own).
+            if let Some(k) = up["rootEntryKinds"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(Value::as_str)
+            {
+                out.push(format!(
+                    "      the changed routine is a {} (an entry itself)",
+                    crate::engine::vocab::entry_key(k).0
+                ));
+            }
             out.push(if u(c, "count") == 0 {
-                "      direct code callers: none found".to_string()
+                "      direct code callers: none found (test code is not counted; see tests:)"
+                    .to_string()
             } else {
                 let rest = u(c, "count").saturating_sub(first.len());
                 format!(
@@ -1832,7 +1998,15 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                     }
                 )
             });
-            out.extend(reach_lines(up, opts.detail, "      ", opts.surface, hubs));
+            let direct_both = u(c, "count") > 0 && u(&up["eventPublishers"]["direct"], "count") > 0;
+            out.extend(reach_lines(
+                up,
+                opts.detail,
+                "      ",
+                opts.surface,
+                hubs,
+                direct_both,
+            ));
             // Round-2 n09: "raised by" is the events that raise the routine
             // itself (its own subscriptions); the publishers anywhere among
             // its ancestors are a different count, said so.
@@ -1856,18 +2030,10 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                     list(direct, node_short)
                 ));
             }
-            // The publishers anywhere among the ancestors are of the
-            // unclassified population: no bracketed tier (round-2 r2 §2.1).
-            if u(p, "count") > 0 {
-                out.push(format!(
-                    "      event publishers among its ancestors: {} (first: {})",
-                    thousands(u(p, "count")),
-                    list(p, node_plain)
-                ));
-            }
-            // `external:` is not printed (round-2 r2 §2.1, W1): it belongs
-            // to the code population, which this walk does not record; the
-            // JSON keeps it with the population named.
+            // §R2.4 landing change 4: the publishers anywhere among the
+            // ancestors are a legacy list of every relation, not a
+            // population: dropped from the human text (JSON
+            // `eventPublishers` keeps it). The direct `raised by:` stays.
         }
         if !r["tests"].is_null() {
             out.push(format!("      {}", tests_clause(&r["tests"])));
@@ -2160,12 +2326,18 @@ fn summary_text(
         "current effects; no before/after (no base given). First by rank:".into()
     });
     for r in roots.iter().take(5) {
+        let up = &r["up"];
         out.push(format!(
-            "  {} — {}; {} ancestors (relation not recorded), {} user or job entries",
+            "  {} — {}; ancestors: by code {}, by UI navigation {}, candidates {}",
             named(r),
             effects_clause(&r["effects"]),
-            u(&r["up"]["ancestors"], "total"),
-            u(&r["up"], "userOrJobEntries")
+            thousands(population_count(up, "code")),
+            thousands(population_count(up, "uiNavigation")),
+            thousands(
+                population_count(up, "overConfiguration")
+                    + population_count(up, "overRule")
+                    + population_count(up, "overHub")
+            ),
         ));
     }
     if roots.len() > 5 {

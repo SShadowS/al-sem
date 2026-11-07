@@ -377,7 +377,7 @@
       ],
       "limits": [],
       "reasons": [],
-      "scope": "callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments",
+      "scope": "callers and entries over the whole program, dependency code in its own tier; test code is not in these callers (tests: reports it); the roots.config entry overlay is not applied; effects through every resolved call with literal arguments",
       "universe": "cross-app"
     },
     "selection": {
@@ -473,8 +473,49 @@
         "ancestors": {
           "local": 1,
           "onlyOpen": 0,
+          "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
           "throughDependency": 0,
           "total": 1
+        },
+        "byRelation": {
+          "ancestors": {
+            "candidates": {
+              "overConfiguration": {
+                "code": 0,
+                "uiNavigation": 0
+              },
+              "overHub": 0,
+              "overRule": 0
+            },
+            "code": {
+              "local": 1,
+              "viaDependency": 0
+            },
+            "total": 1,
+            "uiNavigation": {
+              "local": 0,
+              "viaDependency": 0
+            }
+          },
+          "entries": {
+            "candidates": {
+              "overConfiguration": {
+                "code": 0,
+                "uiNavigation": 0
+              },
+              "overHub": 0,
+              "overRule": 0
+            },
+            "code": {
+              "local": 0,
+              "viaDependency": 0
+            },
+            "total": 0,
+            "uiNavigation": {
+              "local": 0,
+              "viaDependency": 0
+            }
+          }
         },
         "callers": {
           "count": 1,
@@ -488,15 +529,34 @@
           ],
           "local": 1
         },
-        "declaredEntries": {
-          "percent": 0,
-          "program": 2,
-          "reached": 0,
-          "rule": "nodes whose root kinds hold an entry kind; the changed routines excluded on both sides; pages run by an action's RunObject, background targets and roots.config entries counted on neither side"
-        },
         "display": "Codeunit \"TU Core\"::Calc",
         "entries": [],
+        "entriesByContext": {
+          "code": {},
+          "overConfiguration": {},
+          "overHub": {},
+          "overRule": {},
+          "uiNavigation": {}
+        },
+        "entriesByKind": {
+          "code": {},
+          "overConfiguration": {},
+          "overHub": {},
+          "overRule": {},
+          "uiNavigation": {}
+        },
         "entryBuckets": 0,
+        "entryNotes": {
+          "backgroundTargetsWithoutOnRun": {
+            "program": 0,
+            "reached": 0
+          },
+          "pagesWithUnnamedActions": {
+            "program": 0,
+            "reached": 0
+          },
+          "unnamedActionRunSites": 0
+        },
         "eventPublishers": {
           "count": 0,
           "direct": {
@@ -531,6 +591,19 @@
             "why": "public"
           }
         ],
+        "externalCode": [
+          {
+            "count": 2,
+            "why": "public"
+          }
+        ],
+        "firstByKind": {
+          "code": [],
+          "overConfiguration": [],
+          "overHub": [],
+          "overRule": [],
+          "uiNavigation": []
+        },
         "hidden": {
           "byChannel": {},
           "universalHub": false
@@ -538,6 +611,20 @@
         "hubs": [],
         "limited": null,
         "maxHops": 1,
+        "nearest": {
+          "code": {
+            "display": "Codeunit \"TU Core\"::Post",
+            "established": true,
+            "hops": 1,
+            "relation": "code",
+            "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
+            "tier": "local"
+          },
+          "overConfiguration": null,
+          "overHub": null,
+          "overRule": null,
+          "uiNavigation": null
+        },
         "nearestAncestors": [
           {
             "display": "Codeunit \"TU Core\"::Post",
@@ -546,9 +633,48 @@
           }
         ],
         "nodes": 1,
-        "population": "all ancestors (code, UI navigation, configuration, hub)",
         "programEntries": 2,
-        "relationRecorded": false,
+        "programEntriesByKind": {
+          "event subscriber": 2
+        },
+        "programShare": {
+          "all": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          },
+          "candidates": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          },
+          "code": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          },
+          "overConfiguration": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          },
+          "overHub": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          },
+          "overRule": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          },
+          "uiNavigation": {
+            "percent": 0,
+            "program": 2,
+            "reached": 0
+          }
+        },
+        "relationRecorded": true,
         "rootEntryKinds": [],
         "rootUserOrJob": false,
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
@@ -700,17 +826,77 @@
     "ancestors": {
       "local": 1,
       "onlyOpen": 0,
+      "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
       "throughDependency": 0,
       "total": 1
     },
-    "declaredEntries": {
-      "percent": 0,
-      "program": 2,
-      "reached": 0,
-      "rule": "nodes whose root kinds hold an entry kind; the changed routines excluded on both sides; pages run by an action's RunObject, background targets and roots.config entries counted on neither side"
+    "byRelation": {
+      "ancestors": {
+        "candidates": {
+          "overConfiguration": {
+            "code": 0,
+            "uiNavigation": 0
+          },
+          "overHub": 0,
+          "overRule": 0
+        },
+        "code": {
+          "local": 1,
+          "viaDependency": 0
+        },
+        "total": 1,
+        "uiNavigation": {
+          "local": 0,
+          "viaDependency": 0
+        }
+      },
+      "entries": {
+        "candidates": {
+          "overConfiguration": {
+            "code": 0,
+            "uiNavigation": 0
+          },
+          "overHub": 0,
+          "overRule": 0
+        },
+        "code": {
+          "local": 0,
+          "viaDependency": 0
+        },
+        "total": 0,
+        "uiNavigation": {
+          "local": 0,
+          "viaDependency": 0
+        }
+      }
     },
     "entries": [],
+    "entriesByContext": {
+      "code": {},
+      "overConfiguration": {},
+      "overHub": {},
+      "overRule": {},
+      "uiNavigation": {}
+    },
+    "entriesByKind": {
+      "code": {},
+      "overConfiguration": {},
+      "overHub": {},
+      "overRule": {},
+      "uiNavigation": {}
+    },
     "entryBuckets": 0,
+    "entryNotes": {
+      "backgroundTargetsWithoutOnRun": {
+        "program": 0,
+        "reached": 0
+      },
+      "pagesWithUnnamedActions": {
+        "program": 0,
+        "reached": 0
+      },
+      "unnamedActionRunSites": 0
+    },
     "eventPublishers": {
       "count": 0,
       "direct": {
@@ -745,6 +931,19 @@
         "why": "public"
       }
     ],
+    "externalCode": [
+      {
+        "count": 2,
+        "why": "public"
+      }
+    ],
+    "firstByKind": {
+      "code": [],
+      "overConfiguration": [],
+      "overHub": [],
+      "overRule": [],
+      "uiNavigation": []
+    },
     "hidden": {
       "byChannel": {},
       "universalHub": false
@@ -752,9 +951,62 @@
     "hubs": [],
     "limited": null,
     "maxHops": 1,
-    "population": "all ancestors (code, UI navigation, configuration, hub)",
+    "nearest": {
+      "code": {
+        "display": "Codeunit \"TU Core\"::Post",
+        "established": true,
+        "hops": 1,
+        "relation": "code",
+        "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
+        "tier": "local"
+      },
+      "overConfiguration": null,
+      "overHub": null,
+      "overRule": null,
+      "uiNavigation": null
+    },
     "programEntries": 2,
-    "relationRecorded": false,
+    "programEntriesByKind": {
+      "event subscriber": 2
+    },
+    "programShare": {
+      "all": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      },
+      "candidates": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      },
+      "code": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      },
+      "overConfiguration": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      },
+      "overHub": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      },
+      "overRule": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      },
+      "uiNavigation": {
+        "percent": 0,
+        "program": 2,
+        "reached": 0
+      }
+    },
+    "relationRecorded": true,
     "rootEntryKinds": [],
     "rootUserOrJob": false,
     "states": 2,

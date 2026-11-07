@@ -513,12 +513,14 @@ fn impact_parts_are_answered_off_the_revision_and_a_repeat_fills_nothing() {
         &w,
     ];
     let mut front = front(&ws);
-    // A part's answer as JSON, its one wall-clock field (the up part's
-    // `cost.walkMs`) blanked: the rest is the CLI's to the byte.
+    // A part's answer as JSON, its wall-clock fields (the up part's
+    // `cost.walkMs` and `cost.walksUs`) blanked: the rest is the CLI's to
+    // the byte.
     let part = |out: (Vec<u8>, Vec<u8>, u8)| -> (serde_json::Value, Vec<u8>, u8) {
         let mut v: serde_json::Value = serde_json::from_slice(&out.0).unwrap();
         if let Some(c) = v.get_mut("cost").and_then(|c| c.as_object_mut()) {
             c.remove("walkMs");
+            c.remove("walksUs");
         }
         (v, out.1, out.2)
     };
