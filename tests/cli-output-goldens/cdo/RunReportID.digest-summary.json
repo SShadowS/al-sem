@@ -56,8 +56,10 @@
         "entryPoints": {
           "atLeast": true,
           "count": 44,
+          "routines": 47,
           "sites": 54,
           "withWrites": 15,
+          "withWritesRoutines": 16,
           "withWritesSites": 17
         },
         "events": {

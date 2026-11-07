@@ -123,7 +123,7 @@
     "lineBase": 1,
     "result": {
       "scope": {
-        "analysis": "complete",
+        "analysis": "partial",
         "assumptions": [
           "loaded program; unloaded implementations and subscribers are not enumerated"
         ],
@@ -185,7 +185,9 @@
           }
         },
         "limits": [],
-        "reasons": [],
+        "reasons": [
+          "beyondDependencyCalls, locks, reads, validate, writes: 2 calls not resolved, 1 interface dispatch open world"
+        ],
         "scope": "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments; dependencies: 1 app",
         "universe": "cross-app"
       }
@@ -387,6 +389,7 @@
       ],
       "beyondWrites": {
         "entryPoints": 2,
+        "routinesEntered": 2,
         "sites": 2,
         "tables": 15,
         "tablesOnlyBeyond": 14

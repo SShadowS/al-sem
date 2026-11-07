@@ -1190,6 +1190,15 @@ fn cdo_write_lines_have_a_path_or_a_reason() {
 /// (`entry_points` = the writing crossings, `crossing_sites` their summed
 /// sites) fails at "IssueReminder: scope says 14 entry points, the sections
 /// 12 + 15"; restored, passes.
+///
+/// Round-2 c11 (2026-11-07): the lines say "dependency routines entered",
+/// so the counts are distinct routines (a multi-target entry point enters
+/// several). Discrimination (cdo profile): counting entry points again
+/// (`EntryCount::routines` = the points, `routines_entered` = the entry
+/// points) fails here at "IssueReminder: scope says 43 routines entered at
+/// 54 sites; the --detail lines enter 46 distinct routines at 54 distinct
+/// sites" (and `cdo_rendering_goldens` at the query answer's "through 15
+/// dependency routines entered", 16 now); restored, passes.
 #[test]
 fn cdo_entry_point_counts_agree() {
     let Some(a) = cdo_answers() else { return };
