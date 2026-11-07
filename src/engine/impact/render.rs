@@ -393,6 +393,70 @@ fn buckets_short(b: &Value) -> String {
     parts.join(", ")
 }
 
+/// Round 2 G7: the written tables of a root's effect evidence
+/// (`effects.evidence.tables`, explain's tables-when-few), each with its
+/// operations, site and the fields its owning routine assigns:
+/// `CDO Setup (Modify at …:60; the routine assigns "A", "B")`. `None` when
+/// the evidence names no table (more than three, or none).
+fn evidence_tables(evidence: &Value) -> Option<String> {
+    let tables = evidence["tables"].as_array().filter(|t| !t.is_empty())?;
+    let quote = |f: &str| format!("\"{}\"", f.replace('"', "\"\""));
+    let items: Vec<String> = tables
+        .iter()
+        .map(|t| {
+            let name = s(t, "table");
+            if t["beyondDependencyCall"] == json!(true) {
+                return format!("{name} (beyond a dependency call)");
+            }
+            let ops: Vec<&str> = t["ops"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let mut parts = vec![match t["at"].as_str() {
+                Some(at) => format!("{} at {at}", ops.join(", ")),
+                None => ops.join(", "),
+            }];
+            for a in t["assigns"].as_array().into_iter().flatten() {
+                let fields: Vec<String> = a["fields"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(quote)
+                    .collect();
+                if fields.is_empty() {
+                    continue;
+                }
+                parts.push(match a["by"].as_str() {
+                    Some(by) => format!("{by} assigns {}", fields.join(", ")),
+                    None => format!("the routine assigns {}", fields.join(", ")),
+                });
+            }
+            format!("{name} ({})", parts.join("; "))
+        })
+        .collect();
+    Some(items.join(", "))
+}
+
+/// Round 2 G7: the company context of a root's writes, explain's words:
+/// `target company: not established by this analysis (ChangeCompany at …)`,
+/// when its cone calls `ChangeCompany`.
+fn target_company_line(e: &Value) -> Option<String> {
+    let sites: Vec<&str> = e["evidence"]["changeCompany"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    (!sites.is_empty()).then(|| {
+        format!(
+            "target company: not established by this analysis (ChangeCompany at {})",
+            sites.join(", ")
+        )
+    })
+}
+
 /// The effects clause of one root (its `RollupTotals` JSON).
 fn effects_clause(e: &Value) -> String {
     if e.is_null() {
@@ -413,12 +477,17 @@ fn effects_clause(e: &Value) -> String {
             )
         ));
     } else {
-        let mut x = format!(
-            "may write {} ({} owned by this app, {} by dependencies)",
-            plural(writes, "table", "tables"),
-            u(w, "ownedByApp"),
-            u(w, "byDependencies")
-        );
+        // Round 2 G7: the tables by name when few, explain's evidence.
+        let named = evidence_tables(&e["evidence"]);
+        let mut x = match named {
+            Some(t) => format!("may write {t}"),
+            None => format!(
+                "may write {} ({} owned by this app, {} by dependencies)",
+                plural(writes, "table", "tables"),
+                u(w, "ownedByApp"),
+                u(w, "byDependencies")
+            ),
+        };
         if unresolved > 0 {
             x.push_str(&format!(
                 " and {} on a table not resolved",
@@ -1868,6 +1937,9 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
             if d.is_null() { "" } else { "now: " },
             effects_clause(&r["effects"])
         ));
+        if let Some(l) = target_company_line(&r["effects"]) {
+            out.push(format!("        {l}"));
+        }
         // Round-2 r2 §3.9 (G15): the routine's direct callees, explain's
         // `calls:` line.
         if let Some(c) = r["callsLine"].as_str() {

@@ -873,12 +873,30 @@ fn digest_summary_through_mcp_on_the_fixture() {
         "{summary}"
     );
     assert!(text.len() <= 40_000, "{} characters", text.len());
-    let r = &summary["routines"][0];
+    // Round 2 G10: the listed row is compact (its index row, selector, short
+    // answer, test status); its identity and totals are in the result index.
+    let listed = &summary["routines"][0];
+    assert_eq!(listed["index"], 1, "{summary}");
     assert_eq!(
-        r["routine"], "Codeunit \"Out Issue Document\"::IssueDoc",
+        listed["selector"], "Codeunit \"Out Issue Document\"::IssueDoc",
         "{summary}"
     );
-    // W2-2 (design §3.1, T-W2-13): the summary is the rollup's one
+    assert!(
+        listed["answer"].as_str().is_some_and(
+            |a| a.starts_with("may write 16 tables (1 owned by this app, 15 by dependencies)")
+        ),
+        "{summary}"
+    );
+    let index: Value = serde_json::from_str(
+        &std::fs::read_to_string(summary["index"]["path"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let r = &index["rows"][0];
+    assert_eq!(
+        r["routine"], "Codeunit \"Out Issue Document\"::IssueDoc",
+        "{index}"
+    );
+    // W2-2 (design §3.1, T-W2-13): the index row keeps the rollup's one
     // `RollupTotals` serialization, here against numbers counted by hand from
     // the fixture's AL.
     let t = &r["summary"];
@@ -2065,7 +2083,14 @@ fn prove_states_coverage_assumptions_and_limits() {
     // Output validation V4 (§5.2): the header's answer line and its third
     // line (analysis · assumptions · limits · scope).
     let yes = run(ISSUE_DOC, "may-commit", "human");
-    assert!(yes.contains("\nanswer: yes\n"), "{yes}");
+    // Round 2 G16: a `yes` names its first witness.
+    assert!(
+        yes.contains(
+            "\nanswer: yes — COMMIT beyond Codeunit Base Poster::OnRun, entered at \
+             ws:src/OutIssueDocument.Codeunit.al:15 (condition not resolved)\n"
+        ),
+        "{yes}"
+    );
     for l in [
         "\nanalysis partial (",
         " · assumptions: ",

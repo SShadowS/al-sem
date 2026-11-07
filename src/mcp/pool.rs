@@ -756,7 +756,14 @@ impl Pool {
                             "outcome": cli_outcome,
                         });
                         match stdout {
-                            Stdout::Text(t) => e["stdoutText"] = json!(t),
+                            Stdout::Text(t) => {
+                                // Round 2 G12: a large inline JSON answer
+                                // gets the summary too.
+                                if call.opts.json && inline_needs_summary(&t) {
+                                    e["summary"] = inline_summary(summary);
+                                }
+                                e["stdoutText"] = json!(t)
+                            }
                             Stdout::File(f) => {
                                 // §5.2: the summary and its result index.
                                 place_index(shared, call.command.tool, &f, &mut summary);
@@ -988,7 +995,16 @@ impl Pool {
                             "outcome": r.outcome,
                         });
                         match stdout {
-                            Stdout::Text(t) => e["stdoutText"] = json!(t),
+                            Stdout::Text(t) => {
+                                // Round 2 G12: a large inline JSON answer
+                                // gets the summary too.
+                                if flag_value(&call.command.argv, "format") == Some("json")
+                                    && inline_needs_summary(&t)
+                                {
+                                    e["summary"] = inline_summary(r.summary);
+                                }
+                                e["stdoutText"] = json!(t)
+                            }
                             Stdout::File(f) => {
                                 // §5.2: the summary and its result index.
                                 let mut summary = r.summary;
@@ -1916,6 +1932,22 @@ fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
         .find_map(|a| a.strip_prefix(&prefix))
 }
 
+/// Round 2 G12 (output validation r2 §3.6): an inline JSON answer over the
+/// summary cap (8 KiB) carries the summary a file answer carries.
+fn inline_needs_summary(text: &str) -> bool {
+    text.len() > crate::engine::batch::output::SUMMARY_CAP_BYTES
+}
+
+/// A summary for an inline answer (round 2 G12): no index file, since the
+/// full result is inline, so the index rows are dropped; the summary keeps
+/// its own overflow accounting (`summaryTruncated`).
+fn inline_summary(mut summary: Value) -> Value {
+    if let Some(m) = summary.as_object_mut() {
+        m.remove(crate::engine::result_index::ROWS_KEY);
+    }
+    bounded_summary(summary)
+}
+
 /// A renderer's summary as the envelope carries it. The renderer keeps its
 /// summary under [`SUMMARY_CAP_BYTES`] itself (degrading to counts, MCP output
 /// plan 1b); one over it anyway (a renderer bug) is replaced by its size,
@@ -2181,6 +2213,11 @@ fn run_command(
                         (Stdout::File(f), Some(mut s)) => {
                             place_index(shared, call.tool, f, &mut s);
                             Some(bounded_summary(s))
+                        }
+                        // Round 2 G12: a large inline JSON answer gets the
+                        // summary too (no index file: the result is inline).
+                        (Stdout::Text(t), Some(s)) if json_format && inline_needs_summary(t) => {
+                            Some(inline_summary(s))
                         }
                         _ => None,
                     };

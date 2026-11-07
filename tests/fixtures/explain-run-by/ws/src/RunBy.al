@@ -100,3 +100,53 @@ codeunit 51205 "RB Subscriber"
     begin
     end;
 }
+
+table 51206 "RB Journal"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+        }
+    }
+
+    trigger OnInsert()
+    begin
+    end;
+}
+
+page 51207 "RB Journal Card"
+{
+    PageType = Card;
+    SourceTable = "RB Journal";
+
+    trigger OnOpenPage()
+    begin
+    end;
+
+    trigger OnInsertRecord(BelowxRec: Boolean): Boolean
+    begin
+    end;
+}
+
+codeunit 51208 "RB Runner"
+{
+    procedure OpensCard()
+    begin
+        Page.Run(Page::"RB Journal Card");
+    end;
+
+    procedure Inserter()
+    var
+        Journal: Record "RB Journal";
+    begin
+        Journal.Insert(true);
+    end;
+
+    procedure InsertsQuietly()
+    var
+        Journal: Record "RB Journal";
+    begin
+        Journal.Insert();
+    end;
+}

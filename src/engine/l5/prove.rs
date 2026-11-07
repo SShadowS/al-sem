@@ -476,7 +476,12 @@ fn build_obligation_blockers(
         });
     }
 
-    if !oblg.coverage_complete {
+    // Round 2 G13: `coverage incomplete` is a blocker of its own only when
+    // a reason of it is not already a listed blocker; when every reason is
+    // (interface open world as open-world rows, a call not resolved as an
+    // unresolved call site), it shows as the analysis line's reason and is
+    // not counted twice.
+    if !oblg.coverage_complete && !coverage_reasons_listed(&entry.coverage_reasons, &blockers) {
         blockers.push(ProveBlocker {
             kind: "coverage-incomplete",
             detail: format!("coverage status: {}", entry.coverage_status),
@@ -501,6 +506,28 @@ fn build_obligation_blockers(
     }
 
     blockers
+}
+
+/// The blocker kind that lists a coverage reason's sites, or `None` for a
+/// reason no blocker lists (a cap, an opaque body, a parse gap, …).
+fn blocker_kind_of_coverage_reason(reason: &str) -> Option<&'static str> {
+    match reason {
+        INTERFACE_OPEN_WORLD => Some("open-world-dispatch"),
+        "unresolved-call" | "member-not-found" | "ambiguous-overload" | "dynamic-dispatch" => {
+            Some("unresolved-callsite")
+        }
+        _ => None,
+    }
+}
+
+/// Round 2 G13: whether every coverage reason is a blocker already listed
+/// (so `coverage-incomplete` would count it twice). No reason at all (an
+/// unknown coverage record) is not listed.
+fn coverage_reasons_listed(reasons: &[String], blockers: &[ProveBlocker]) -> bool {
+    !reasons.is_empty()
+        && reasons.iter().all(|r| {
+            blocker_kind_of_coverage_reason(r).is_some_and(|k| blockers.iter().any(|b| b.kind == k))
+        })
 }
 
 /// Deterministic blocker sort key: NUL-delimited (kind, anchor file, 10-digit line, detail).
@@ -2114,6 +2141,7 @@ pub fn format_prove_human(
     let no_evidence = prove_result.evidence.as_ref().is_none_or(Vec::is_empty);
     let blockers: &[ProveBlocker] = prove_result.blocked_by.as_deref().unwrap_or(&[]);
     let kinds = blocker_kind_counts(blockers);
+    let answer_line = lines.len();
     lines.push(match &prove_result.answer {
         // (`paths` is `None` only for the no-root document: nothing was
         // looked at there.) Output validation V2 (§8.1): an `unknown` names
@@ -2180,19 +2208,83 @@ pub fn format_prove_human(
                 })
                 .unwrap_or(usize::MAX)
         };
+        // Round 2 G16: workspace sites before dependency ones, for the
+        // witnessed row (then the shortest path) and the folded rows alike.
+        // Rank: 0 a workspace site of the effect itself, 1 an effect beyond
+        // a dependency call entered from workspace code (the effect is in
+        // dependency code), 2 a dependency site.
+        let in_dependency = |i: usize| -> u8 {
+            let ws = effects[i]
+                .evidence
+                .file
+                .as_deref()
+                .is_some_and(|f| f.starts_with("ws:"));
+            match (ws, is_group(&effects[i])) {
+                (true, false) => 0,
+                (true, true) => 1,
+                (false, _) => 2,
+            }
+        };
+        let mut ordered: Vec<usize> = indices.clone();
+        ordered.sort_by_key(|&i| in_dependency(i));
         let mut witnessed: BTreeMap<&str, usize> = BTreeMap::new();
-        for &i in indices {
+        for &i in &ordered {
             let t = effects[i].effect_type.as_str();
             match witnessed.get(t) {
-                Some(&j) if path_len(j) <= path_len(i) => {}
+                Some(&j) if (in_dependency(j), path_len(j)) <= (in_dependency(i), path_len(i)) => {}
                 _ => {
                     witnessed.insert(t, i);
                 }
             }
         }
+        // Round 2 G16: a `yes` names its first witness's site and condition
+        // on the answer line.
+        if prove_result.answer == ProveAnswer::Yes
+            && let Some(&first) = witnessed
+                .values()
+                .min_by_key(|&&i| (in_dependency(i), path_len(i)))
+        {
+            let eff = &effects[first];
+            let at = match (&eff.evidence.file, eff.evidence.line) {
+                (Some(f), Some(l)) => match paths {
+                    Some(p) => p.cx.location(f, l),
+                    None => format!("{f}:{}", shown(l)),
+                },
+                (Some(f), None) => f.clone(),
+                _ => "no position kept".to_string(),
+            };
+            let place = match eff.detail.iter().find(|(k, _)| k == "boundary") {
+                Some((_, b)) if is_group(eff) => format!("beyond {b}, entered at {at}"),
+                _ => format!("at {at}"),
+            };
+            let more = if indices.len() > 1 {
+                format!(
+                    ", and {} more",
+                    crate::engine::l5::routine_rollup::thousands(indices.len() - 1)
+                )
+            } else {
+                String::new()
+            };
+            // An implicit error names its operation (G17).
+            let what = match (eff.effect_type.as_str(), paths) {
+                ("ERROR_IMPLICIT", Some(p)) => eff
+                    .origin_operation_ids
+                    .iter()
+                    .find_map(|o| p.cx.op_kind(o))
+                    .map_or_else(
+                        || eff.effect_type.clone(),
+                        |k| format!("{k} (implicit error)"),
+                    ),
+                _ => eff.effect_type.clone(),
+            };
+            lines[answer_line] = format!(
+                "  answer:   yes — {what} {place} ({}){more}",
+                crate::engine::vocab::condition(eff.conditionality)
+            );
+        }
         // Per type: the folded rows' places, and how many more.
         let mut folded: BTreeMap<&str, (Vec<String>, usize)> = BTreeMap::new();
-        for &i in indices {
+        for &i in &ordered {
             let eff = &effects[i];
             let t = eff.effect_type.as_str();
             if !detail && witnessed.get(t) != Some(&i) {
@@ -2241,12 +2333,31 @@ pub fn format_prove_human(
                     });
                 continue;
             }
-            lines.push(row);
-            if eff.conditionality != "unknown" {
-                lines.push(format!(
-                    "      condition: {}",
+            // Round 2 G17: an implicit error names its operation, c27's form
+            // (`Get (implicit error) at …:50 (in a loop)`).
+            let implicit_op = (eff.effect_type == "ERROR_IMPLICIT" && !group)
+                .then(|| {
+                    paths.and_then(|p| {
+                        eff.origin_operation_ids
+                            .iter()
+                            .find_map(|o| p.cx.op_kind(o))
+                    })
+                })
+                .flatten();
+            match implicit_op {
+                Some(op) => lines.push(format!(
+                    "    {op} (implicit error) at {at} ({})",
                     crate::engine::vocab::condition(eff.conditionality)
-                ));
+                )),
+                None => {
+                    lines.push(row);
+                    if eff.conditionality != "unknown" {
+                        lines.push(format!(
+                            "      condition: {}",
+                            crate::engine::vocab::condition(eff.conditionality)
+                        ));
+                    }
+                }
             }
             let Some(p) = paths else {
                 continue;
@@ -2335,6 +2446,42 @@ pub fn format_prove_human(
     // share prints once, under a segment id.
     let evidence = lines.split_off(evidence_start);
     lines.extend(crate::engine::path_segments::segment(evidence));
+
+    // Round 2 G17: on `throws-error`, the root's own TryFunction
+    // declaration (printed only when it is one) and the follow-up that asks
+    // whether a caller traps the error.
+    if matches!(parse_question(question), Some(ProveQuestion::ThrowsError))
+        && prove_result.answer != ProveAnswer::No
+        && let Some(p) = paths
+    {
+        let try_function =
+            p.cx.model
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.stable_routine_id == p.root)
+                .any(|r| {
+                    crate::program::attributes::find_attribute(&r.attributes_parsed, "TryFunction")
+                        .is_some()
+                });
+        if try_function {
+            lines.push(
+                "  declared TryFunction; interception depends on how the caller invokes it (an \
+                 error still propagates when the caller ignores the Boolean result)"
+                    .to_string(),
+            );
+        }
+        let f = crate::engine::follow_up::FollowUp::prove(
+            p.fcx,
+            &p.selector(),
+            "callers-intercept-errors",
+            "whether a caller traps it",
+        );
+        lines.push(format!(
+            "  whether a caller traps it: {}",
+            f.text(p.fcx.surface)
+        ));
+    }
 
     // Blockers
     if let Some(ref blockers) = prove_result.blocked_by
@@ -4173,6 +4320,112 @@ mod tests {
         // obligations: openWorldRows=1, unresolvedCallsites=0
         assert_eq!(result.obligations.open_world_rows, 1);
         assert_eq!(result.obligations.unresolved_callsites, 0);
+    }
+
+    /// Round 2 G16: a `yes` names its first witness on the answer line, and a
+    /// workspace site is that witness before a dependency one (n01: the
+    /// pathed witness was a dependency activation-wizard commit). Hand-stated:
+    /// a dependency COMMIT listed first, then a workspace COMMIT in a loop.
+    #[test]
+    fn a_yes_leads_with_a_workspace_witness() {
+        let commit = |file: &str, line: u32, cond: &'static str| DigestEffectFull {
+            effect_type: "COMMIT".to_string(),
+            detail: vec![],
+            provenance: "transitive",
+            evidence: crate::engine::l5::digest_cli::FullAnchor {
+                source_kind: "source",
+                file: Some(file.to_string()),
+                line: Some(line),
+                column: None,
+                excerpt: None,
+            },
+            via_paths: vec![],
+            via_paths_truncated: false,
+            conditionality: cond,
+            transaction_context: "unknown",
+            guarantees: vec![],
+            fact_id: format!("f{line}"),
+            scoped_guarantees: vec![],
+            group_resources: vec![],
+            group_resource_paths: vec![],
+            group_terminal_path: None,
+            own_path: None,
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: false,
+            crossing: None,
+        };
+        let entry = minimal_entry(
+            "complete",
+            vec![],
+            vec![
+                commit("dep:Core:src/Wizard.al", 117, "unconditional-on-success"),
+                commit("ws:src/Dispatcher.al", 228, "loop-body"),
+            ],
+            vec![],
+            false,
+        );
+        let result = prove(&entry, 0, &ProveQuestion::MayCommit);
+        assert_eq!(result.answer, ProveAnswer::Yes);
+        let text = format_prove_human(
+            "TestRoutine",
+            "",
+            "may-commit",
+            &result,
+            &entry.effects,
+            None,
+        );
+        assert!(
+            text.contains(
+                "  answer:   yes — COMMIT at ws:src/Dispatcher.al:229 (in a loop), and 1 more"
+            ),
+            "{text}"
+        );
+        let ws = text
+            .find("[COMMIT] at ws:src/Dispatcher.al:229")
+            .expect("ws row");
+        let dep = text.find("dep:Core:src/Wizard.al:118").expect("dep row");
+        assert!(ws < dep, "workspace site first: {text}");
+    }
+
+    /// Round 2 G13: partial coverage whose only reason is interface open
+    /// world, with that open-world row listed, is one blocker (the row), not
+    /// two; a coverage reason no blocker lists (an opaque body) keeps
+    /// `coverage-incomplete` as a blocker. Hand-stated reasons.
+    #[test]
+    fn coverage_incomplete_is_not_counted_twice() {
+        let mut entry = minimal_entry(
+            "partial",
+            vec![unresolved_item(Some(true))],
+            vec![],
+            vec![],
+            false,
+        );
+        entry.coverage_reasons = vec![INTERFACE_OPEN_WORLD.to_string()];
+        let result = prove(&entry, 0, &ProveQuestion::MayCommit);
+        assert_eq!(result.answer, ProveAnswer::Unknown);
+        let kinds: Vec<&str> = result
+            .blocked_by
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|b| b.kind)
+            .collect();
+        assert_eq!(kinds, ["open-world-dispatch"], "{kinds:?}");
+        entry.coverage_reasons = vec![INTERFACE_OPEN_WORLD.to_string(), "opaque-body".to_string()];
+        let result = prove(&entry, 0, &ProveQuestion::MayCommit);
+        let kinds: Vec<&str> = result
+            .blocked_by
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|b| b.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            ["coverage-incomplete", "open-world-dispatch"],
+            "an unlisted reason stays a blocker: {kinds:?}"
+        );
     }
 
     /// Verify that open-world rows do NOT contribute to unresolvedCallsites.

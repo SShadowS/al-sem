@@ -172,10 +172,14 @@ fn closed_world_waives_only_fully_loaded_interface_sites() {
     // reason here, so `closedWorld` removes the coverage blocker too, and the
     // line says it removes every blocker (the closed-world answer below is a
     // `no`). Discrimination (2026-11-06): see the V2 fix commit.
+    // Round 2 G13: interface open world is the coverage's only reason and
+    // its row is a listed blocker, so `coverage incomplete` is not counted
+    // a second time (the obligations still say the coverage is partial).
     assert!(
-        kinds(&open).contains(&"coverage-incomplete".to_string()),
-        "precondition: the coverage blocks too: {open}"
+        !kinds(&open).contains(&"coverage-incomplete".to_string()),
+        "the coverage is not a second blocker: {open}"
     );
+    assert_eq!(open["obligations"]["coverageComplete"], false, "{open}");
     let id = id_of("UseLogger");
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args([

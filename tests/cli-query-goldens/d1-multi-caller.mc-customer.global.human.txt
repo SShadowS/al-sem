@@ -5,8 +5,12 @@ more: --all lists every witness, no fold; --format json for every row
   dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
   by object: Codeunit D1 Multi Caller 4 sites
   transitive: 4 workspace routines reach one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
-  key-relevant (not exhaustive; their sites listed first): Get 0 (primary key), SetCurrentKey 0, SetRange/SetFilter on key fields 0
-    [Modify] at ws:src/D1MultiCaller.al:19 in Codeunit "D1 Multi Caller"::ModifyHelper
+  record writes: 1 site in 1 routine — Modify 1 (temporary records: 0)
+    [Modify] at ws:src/D1MultiCaller.al:19 in Codeunit "D1 Multi Caller"::ModifyHelper (caller-dependent: parameter 1)
+  locks: none observed
+  keys: primary key "No."
+  key-relevant (not exhaustive): Get 0 (primary key), SetCurrentKey 0, SetRange/SetFilter on key fields 0; not searched: key and ordering uses in declarations (page SourceTableView, report DataItemTableView)
+  reads: 3 sites — FindSet 3
     [FindSet] at ws:src/D1MultiCaller.al:25 in Codeunit "D1 Multi Caller"::CallerA
     [FindSet] at ws:src/D1MultiCaller.al:33 in Codeunit "D1 Multi Caller"::CallerB
     [FindSet] at ws:src/D1MultiCaller.al:41 in Codeunit "D1 Multi Caller"::CallerC

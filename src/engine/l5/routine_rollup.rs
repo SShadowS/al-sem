@@ -680,7 +680,17 @@ pub struct RollupCx<'m> {
     /// overloads, and objects of one name in two apps), for the JSON
     /// `handle`.
     shared: HashMap<String, Vec<&'m str>>,
+    /// Round 2 G14: per record operation id, the triggers its
+    /// implicit-trigger edges run and its table-event subscribers, built on
+    /// first use ([`Self::table_events_line`]).
+    /// Owned keys: a borrowed `&'m str` inside a `OnceLock` would make the
+    /// context invariant in `'m`.
+    table_events: std::sync::OnceLock<TableEventIndex>,
 }
+
+/// Round 2 G14: record operation id → (the triggers it runs, its
+/// table-event subscribers).
+type TableEventIndex = HashMap<String, (BTreeSet<String>, BTreeSet<String>)>;
 
 /// Who owns an operation (design §3.5): the qualified owner routine, its
 /// anchor, its app and whether that app is a dependency.
@@ -718,6 +728,7 @@ impl<'m> RollupCx<'m> {
                 .map(|(i, o)| (o.id.as_str(), i))
                 .collect(),
             shared: HashMap::new(),
+            table_events: std::sync::OnceLock::new(),
         };
         let mut shared: HashMap<String, Vec<&'m str>> = HashMap::new();
         for (i, r) in model.workspace.routines.iter().enumerate() {
@@ -1006,6 +1017,88 @@ impl<'m> RollupCx<'m> {
     pub fn op_kind(&self, op: &str) -> Option<&'m str> {
         let c = self.ops.claims(op).first()?;
         self.ops.original_kind(c)
+    }
+
+    /// Round 2 G14: what the table events of a write ran, from the resolved
+    /// edges of its record operations `ops` (operation kinds `kinds`): the
+    /// triggers its implicit-trigger edges run (the resolver runs one only
+    /// when the operation does: `Validate`, `Rename`, or a `RunTrigger` that
+    /// is not literally false), and the subscribers of the platform table
+    /// events it raises (raised whatever the `RunTrigger`), which the cone
+    /// follows. `runs: no OnModify trigger run; table-event subscribers:
+    /// none in the loaded program`.
+    #[must_use]
+    pub fn table_events_line<'a>(
+        &self,
+        ops: impl IntoIterator<Item = &'a str>,
+        kinds: &BTreeSet<String>,
+    ) -> String {
+        use crate::program::model::taxonomy::DispatchKind;
+        let index = self.table_events.get_or_init(|| {
+            let names: HashMap<&str, &str> = self
+                .model
+                .workspace
+                .routines
+                .iter()
+                .map(|r| (r.id.as_str(), r.name.as_str()))
+                .collect();
+            let mut m = TableEventIndex::new();
+            for e in &self.model.calls.edges {
+                let Some(to) = e.to.as_deref() else { continue };
+                match e.dispatch_kind {
+                    DispatchKind::ImplicitTrigger => {
+                        let name = names.get(to).copied().unwrap_or(to);
+                        m.entry(e.operation_id.clone())
+                            .or_default()
+                            .0
+                            .insert(name.to_string());
+                    }
+                    DispatchKind::TableEvent => {
+                        m.entry(e.operation_id.clone())
+                            .or_default()
+                            .1
+                            .insert(to.to_string());
+                    }
+                    _ => {}
+                }
+            }
+            m
+        });
+        let mut triggers: BTreeSet<&str> = BTreeSet::new();
+        let mut subscribers: BTreeSet<&str> = BTreeSet::new();
+        for op in ops {
+            if let Some((t, s)) = index.get(op) {
+                triggers.extend(t.iter().map(String::as_str));
+                subscribers.extend(s.iter().map(String::as_str));
+            }
+        }
+        let trigger = if triggers.is_empty() {
+            match kinds.iter().next() {
+                Some(k) if kinds.len() == 1 && !k.starts_with("Write") => {
+                    format!("no On{} trigger run", k.trim_end_matches("All"))
+                }
+                _ => "no table trigger run".to_string(),
+            }
+        } else {
+            format!(
+                "{} {}",
+                triggers.iter().copied().collect::<Vec<_>>().join(", "),
+                if triggers.len() == 1 {
+                    "trigger"
+                } else {
+                    "triggers"
+                }
+            )
+        };
+        let subs = if subscribers.is_empty() {
+            "none in the loaded program".to_string()
+        } else {
+            format!(
+                "{} (followed: their effects are in this cone)",
+                thousands(subscribers.len())
+            )
+        };
+        format!("runs: {trigger}; table-event subscribers: {subs}")
     }
 
     /// Who owns `op` (design §3.5).
@@ -2923,11 +3016,13 @@ pub fn workspace_write_lines(
     );
     for t in &folded.shown {
         let rep = &entry.effects[t.rep];
+        // Round 2 G14: the table line says what the write's table events ran.
         out.push(format!(
-            "  {}: {} — {}",
+            "  {}: {} — {}; {}",
             t.table,
             representative_counts(t, entry, cx),
-            class_note(&t.classes)
+            class_note(&t.classes),
+            write_table_events(t, entry, cx)
         ));
         // Path and anchor of one witness (F13): the representative row's.
         let rep_kind = rep
@@ -3022,9 +3117,25 @@ fn representative_counts(t: &TableWrites, entry: &DigestEntryFull, cx: &RollupCx
         .join(", ")
 }
 
-/// `caller-dependent writes` (design §4.1 section 11).
+/// Round 2 G14: [`RollupCx::table_events_line`] over one table record's
+/// rows (their operation ids and kinds).
+fn write_table_events(t: &TableWrites, entry: &DigestEntryFull, cx: &RollupCx<'_>) -> String {
+    let ops = t
+        .rows
+        .iter()
+        .flat_map(|&i| entry.effects[i].origin_operation_ids.iter())
+        .map(String::as_str);
+    cx.table_events_line(ops, &t.kinds)
+}
+
+/// `caller-dependent writes` (design §4.1 section 11). Each table line says
+/// what its write's table events ran (round 2 G14).
 #[must_use]
-pub fn caller_dependent_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<String> {
+pub fn caller_dependent_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    cx: &RollupCx<'_>,
+) -> Vec<String> {
     if r.caller_dependent.is_empty() {
         return Vec::new();
     }
@@ -3035,11 +3146,12 @@ pub fn caller_dependent_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec
     )];
     for t in &r.caller_dependent {
         out.push(format!(
-            "  {}: {} — {} at {}",
+            "  {}: {} — {} at {}; {}",
             t.table,
             t.kinds.iter().cloned().collect::<Vec<_>>().join(", "),
             class_note(&t.classes),
-            row_anchor(&entry.effects[t.rep])
+            row_anchor(&entry.effects[t.rep]),
+            write_table_events(t, entry, cx)
         ));
     }
     out

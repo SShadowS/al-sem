@@ -27,50 +27,50 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
       path: [segment S5: 3 hops] → Codeunit "CSC Core" (6192833)::IsAppActiveOrAskToActivate → Codeunit "CSC Core Mgt." (6192832)::StartActivationWizard2 (COMMIT at dep:Continia Core:src/Source/Core/CoreMgt.Codeunit.al:118)
     and 6 more (detail: true prints their paths): COMMIT at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241 (condition not resolved); COMMIT at ws:src/Platform/Licensing/CDOUsageManagement.Codeunit.al:35 (condition not resolved); Codeunit Email (8901)::Send, entered at ws:src/Features/Email/Sending/CDOSendMailManagement.Codeunit.al:260; Codeunit "CSC Core" (6192833)::IsAppActiveOrAskToActivate, entered at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:480; Codeunit "CTS-CDN Network Doc. Mgt." (6225516)::SendNetworkDocument(Variant, var Variant, var Codeunit "CSC XML Document"), entered at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:225; Codeunit "CTS-CDN Network Doc. Mgt." (6225516)::SendNetworkDocument(Variant, var Variant, var Codeunit "CSC XML Document", var Codeunit "Temp Blob", Boolean), entered at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:223
   writes in workspace code (12 tables and writes on a table not resolved; operation counts are the cone's retained representative operations, at least that many):
-    CDO Azure Application Setup: Modify 1 — known persistent
+    CDO Azure Application Setup: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/Integration/Azure/CDOAzureApplicationSetup.Table.al:133
       path: [S3] → [segment S6: 4 hops] → SendMSGraphMail → Codeunit "CDO Microsoft Graph Rest Api"::GetClientSecretAccessToken → Table "CDO Azure Application Setup"::RequestToken
-    CDO Document Template Line: Modify 1 — known persistent
+    CDO Document Template Line: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1045
       path: [S5] → RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text])
       fields CreateAndSendMail assigns on this table (not operation-specific): Attach Open Documents, Attach/Merge Open Documents
-    CDO E-Mail Log: Insert 1, Modify 1 — known persistent, temp state not joined
+    CDO E-Mail Log: Insert 1, Modify 1 — known persistent, temp state not joined; runs: OnInsert trigger; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:392
       path: [S3] → Codeunit "CDO Log Management"::CreateSkipLogEntries(Record "CDO Document Template Line", RecordRef) → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text) → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text, Dictionary of [Code[10], Text], Boolean)
       fields CreateEDocLogEntries assigns on this table (not operation-specific): E-Mail, Table No.; fields MoveEmailLog assigns on this table (not operation-specific; 8 fields): Log is moved from Document, Moved From Table No., Primary Key Field 1 No., Primary Key Field 1 Value, Primary Key Field 2 No., Primary Key Field 2 Value, … +2 fields
-    CDO E-Mail Template Header: Modify 1 — known persistent
+    CDO E-Mail Template Header: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/Features/Recipients/CDORecipientMgt.Codeunit.al:86
       path: [S5] → [segment S7: 5 hops] → Codeunit "CDO Recipient Mgt."::MoveRecipientFromHeaderToTable
       fields MoveRecipientFromHeaderToTable assigns on this table (not operation-specific): E-Mail Address Field, E-Mail Recipients Field
-    CDO File: Insert 1, Modify 1 — temp state unknown
+    CDO File: Insert 1, Modify 1 — temp state unknown; runs: no table trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/Features/ESeal/CDOUniversigneSealService.Codeunit.al:183
       path: [S5] → RunReportID → Codeunit "CDO E-Mail Template Management"::SaveDocToFile(Record "CDO E-Mail Template Header", Record "CDO Document Template Line", Integer, RecordRef, Variant, Integer, var Record "CDO File") → Codeunit "CDO eSeal Service Mgt"::SealDocument → [interface] Codeunit "CDO Universign eSeal Service"::SealDocument → ProcessSealResponse
       fields GetFile assigns on this table (not operation-specific): Entry No.
-    CDO File Download Document: Insert 1 — known persistent
+    CDO File Download Document: Insert 1 — known persistent; runs: OnInsert trigger; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/Printing/CDOFileDownloadDocument.Table.al:74
       path: [S5] → RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateDocuments(var RecordRef, Record "CDO E-Mail Template Header", Record "CDO Document Template Line", Integer, Boolean, Boolean, Boolean, var Record "CDO File", var Record "CDO File", var Record "CDO File") → CreateDocumentsForRecord → Table "CDO File"::SaveToDocumentFolder → Table "CDO File Download Document"::Create
       fields Create assigns on this table (not operation-specific): Filedata, Filename, Path
-    CDO Html Color: Insert 1 — known persistent
+    CDO Html Color: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/HtmlEditor/CDOHtmlColor.Table.al:212
       path: [S3] → Codeunit "CDO Mail Management"::NewMail(Text, Text, Text, var Record "CDO File", Code[20], var Record "CDO E-Mail Template Header", var Record "CDO Document Template Line", var RecordRef, Dictionary of [Code[10], Text]) → GetSubject → Table "CDO Document Template Line"::InsertMergeFields → Table "CDO Email Template Merge Table"::GetHtmlTable(var RecordRef, var Record "CDO Template Line Attachment", Code[10]) → GetHtmlTableAsRows → Table "CDO Merge Table Field"::GetCssStyle → GetTableStyleAsCss → Table "CDO Html Table Style Line"::GetStyleAsCss → GetColor → Table "CDO Html Color"::CreateColors → CreateColorWithCode
       fields CreateColorWithCode assigns on this table (not operation-specific): Color, Color Code, Name, Sort Order, White Text
-    CDO Log Attachment: DeleteAll 1, Insert 1 — known persistent
+    CDO Log Attachment: DeleteAll 1, Insert 1 — known persistent; runs: OnInsert trigger; table-event subscribers: none in the loaded program
       DeleteAll at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:380
       path: [S3] → Codeunit "CDO Log Management"::CreateSkipLogEntries(Record "CDO Document Template Line", RecordRef) → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text) → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text, Dictionary of [Code[10], Text], Boolean)
       fields MoveFilesToLogAttachment assigns on this table (not operation-specific): Attachment, Entry No., File Name, Log Entry No.
-    CDO Print document: Insert 1 — known persistent
+    CDO Print document: Insert 1 — known persistent; runs: OnInsert trigger; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/Printing/CDOPrintdocument.Table.al:115
       path: [S3] → PrintDocuments(Record "CDO E-Mail Template Header", Record "CDO Document Template Line", Integer, RecordRef, Variant, Boolean, Text[250], Integer, var Record "CDO File" temporary, Boolean) → Table "CDO Print document"::Create
       fields Create assigns on this table (not operation-specific): Filedata, Filename, Filetype, Log entry no., Print on computername, Printername, User ID
-    CDO Queue Entry: Insert 1 — known persistent
+    CDO Queue Entry: Insert 1 — known persistent; runs: OnInsert trigger; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/Email/Templates/CDODocumentTemplateLine.Table.al:1713
       path (re-enters workspace code beyond Codeunit "Reminder-Issue" (393)::OnRun; no listed workspace route runs with these literal arguments): IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → [run] Codeunit "Gen. Jnl.-Post Line" (12)::OnRun → RunWithCheck → Code → PostGenJnlLine → PostFixedAsset → Codeunit "FA Jnl.-Post Line" (5632)::GenJnlPostLine → Codeunit "Duplicate Depr. Book" (5640)::DuplicateGenJnlLine → CreateLine → InsertLine → [event] Codeunit "Workflow Event Handling" (1520)::RunWorkflowOnAfterInsertGeneralJournalLine → Codeunit "Workflow Management" (1501)::HandleEvent → HandleEventWithxRec → ExecuteResponses → ExecuteQueuedEvents → ExecuteResponses → Codeunit "Workflow Response Handling" (1521)::ExecuteResponse → PostDocument → [run] Codeunit "Sales-Post" (80)::OnRun → RunWithCheck → FinalizePosting → OnAfterFinalizePosting → [event] Codeunit "CDO Subscribers"::OnAfterFinalizePostingSalesPost → AutoSendPostedSalesDocs → RunDocHandleIsolated → [run] Codeunit "CDO Auto-Send Runner"::OnRun → Codeunit "CDO E-Mail Handler"::DocHandle → RunReport → RunReportID → Table "CDO Document Template Line"::QueueMail → QueueMailCombined
       fields QueueMailCombined assigns on this table (not operation-specific; 10 fields): Batch No., Combine Documents to one PDF, Date Time, E-Mail Template Code, Language Code, Record ID, … +4 fields
-    CDO Template Recipient Setup: Insert 1 — known persistent
+    CDO Template Recipient Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/Recipients/CDORecipientMgt.Codeunit.al:73
       path: [S5] → [S7] → Codeunit "CDO Recipient Mgt."::MoveRecipientFromHeaderToTable
       fields MoveRecipientFromHeaderToTable assigns on this table (not operation-specific): E-Mail Address Field, E-Mail Recipients Field, E-Mail Template Code, Priority
-    Incoming Document Attachment: Insert 1 — temp state not joined
+    Incoming Document Attachment: Insert 1 — temp state not joined; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:182
       path: [S1] → [interface] Codeunit "CDO Legacy eDoc Dispatcher"::DispatchDocument → DoDispatch → HandleDelivery → Codeunit "CDO Electronic Document Mgt."::CreateSalesSourceDocs
     table not resolved (determined at run time or not resolved): Modify — at ws:src/Features/HandledState/CDOHandledFieldsManagement.Codeunit.al:247
@@ -119,7 +119,7 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
   background tasks at 3 places: BACKGROUND_TASK beyond Codeunit "Reminder-Issue" (393)::OnRun; BACKGROUND_TASK beyond Codeunit "CSC Core" (6192833)::LogUsageExtended; BACKGROUND_TASK beyond Codeunit "CSC Core" (6192833)::UploadUsageAsync
   isolated storage at 16 places: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:182 (guarded-by-IsHandled); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:185 (guarded-by-IsHandled); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (condition not resolved); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:223 (condition not resolved); ISOLATED_STORAGE at ws:src/Platform/Setup/CDOSetup.Table.al:678 (guarded-by-IsHandled); ISOLATED_STORAGE at ws:src/Platform/Setup/CDOSetup.Table.al:683 (guarded-by-IsHandled); … +10 places (detail: true lists them)
   errors at 301 places: ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOEDocumentResponse.Codeunit.al:29 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOEDocumentResponse.Codeunit.al:43 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:64 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:219 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:21 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:27 (condition not resolved); … +295 places (detail: true lists them)
-  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem_tests selects them
+  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem_tests {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} selects them
   gaps in workspace code (16 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81

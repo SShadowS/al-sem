@@ -2131,6 +2131,37 @@ fn blocker_place(b: &ProveBlocker) -> String {
         .unwrap_or_default()
 }
 
+/// `to narrow it:` (round 2 G20, r1 §7.5): what the user can change for
+/// each blocker kind that carries an action, before the other blockers — a
+/// guard the analysis does not recognize (where), a `roots.config.json` to
+/// add, a publication file it does not read. `None` with no such blocker.
+fn narrow_line(a: &CallersAnswer) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for key in ACTION_KINDS {
+        let Some(&n) = a.blocked_counts.get(key) else {
+            continue;
+        };
+        let first = a.blocked_by.iter().find(|b| b.kind == *key);
+        let place = first.map(blocker_place).unwrap_or_default();
+        parts.push(match *key {
+            "unrecognized-guard" if n == 1 => format!("the guard{place} is not recognized"),
+            "unrecognized-guard" => {
+                format!("{n} guards are not recognized (the first{place})")
+            }
+            "publication-unknown" => {
+                "a roots.config.json would name the background targets (job-queue entries and \
+                 published web services live in data, not in source)"
+                    .to_string()
+            }
+            _ => first.map_or_else(
+                || crate::engine::vocab::blocker(key).to_string(),
+                |b| b.detail.clone(),
+            ),
+        });
+    }
+    (!parts.is_empty()).then(|| format!("  to narrow it: {}", parts.join("; ")))
+}
+
 /// `blocked by:` on one line (§7.5, F45): the kinds that carry an action
 /// first, each with its first example (what to change and where), then
 /// every other kind's count, largest first. `detail` lists examples of each
@@ -2426,6 +2457,10 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
     // the answer does not support, and the input that removes a blocker.
     if a.answer == ProveAnswer::Unknown {
         lines.push(plain_reading(a));
+        // Round 2 G20: the blockers that carry an action, first.
+        if let Some(l) = narrow_line(a) {
+            lines.push(l);
+        }
         lines.push(format!("  not established: {}", not_established(q)));
         if let Some(l) = reanalysis_line(a, detail, hcx) {
             lines.push(l);

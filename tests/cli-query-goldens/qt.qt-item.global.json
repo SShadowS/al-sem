@@ -31,6 +31,53 @@
     },
     "up": {
       "directSites": {
+        "byFamily": {
+          "keyRelevant": {
+            "byOp": {
+              "Get": 1,
+              "SetCurrentKey": 1,
+              "SetRange": 1
+            },
+            "routines": 2,
+            "sites": 3
+          },
+          "locks": {
+            "byOp": {},
+            "routines": 0,
+            "sites": 0
+          },
+          "other": {
+            "byOp": {
+              "SetFilter": 1
+            },
+            "routines": 1,
+            "sites": 1
+          },
+          "reads": {
+            "byOp": {
+              "FindFirst": 2
+            },
+            "routines": 2,
+            "sites": 2
+          },
+          "recordWrites": {
+            "byOp": {
+              "Delete": 1,
+              "Insert": 2,
+              "Modify": 1
+            },
+            "routines": 3,
+            "sites": 4,
+            "temporary": 1
+          },
+          "validations": {
+            "byOp": {
+              "Validate": 1
+            },
+            "routines": 1,
+            "sites": 1
+          }
+        },
         "dependencyByOp": {},
         "dependencyRoutines": 0,
         "dependencySites": 0,
@@ -40,7 +87,7 @@
           "SetRange/SetFilter on key fields": 1
         },
         "workspaceByObject": {
-          "Codeunit QT Touches": 10
+          "Codeunit QT Touches": 11
         },
         "workspaceByOp": {
           "Delete": 1,
@@ -50,10 +97,11 @@
           "Modify": 1,
           "SetCurrentKey": 1,
           "SetFilter": 1,
-          "SetRange": 1
+          "SetRange": 1,
+          "Validate": 1
         },
-        "workspaceRoutines": 5,
-        "workspaceSites": 10
+        "workspaceRoutines": 6,
+        "workspaceSites": 11
       },
       "index": "operations-one-routine-deep",
       "note": "workspace-global: every workspace routine whose transitive cone touches this table, by the per-operation index (one routine into dependency code). A routine whose only touch is deeper in dependency code, or on a table not resolved, is not listed. Scope it with --from <routine> --direction up.",
@@ -63,7 +111,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 97,
+            "line": 98,
             "role": "definition"
           },
           "display": "Keyed",
@@ -77,7 +125,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 107,
+            "line": 108,
             "role": "definition"
           },
           "display": "Entry",
@@ -91,7 +139,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 77,
+            "line": 78,
             "role": "definition"
           },
           "display": "Top1",
@@ -105,7 +153,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 39,
+            "line": 40,
             "role": "definition"
           },
           "display": "TempOnly",
@@ -119,7 +167,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 34,
+            "line": 35,
             "role": "definition"
           },
           "display": "WriteItem",
@@ -133,7 +181,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 61,
+            "line": 62,
             "role": "definition"
           },
           "display": "Mixed",
@@ -147,7 +195,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 54,
+            "line": 55,
             "role": "definition"
           },
           "display": "CallWithReal",
@@ -161,7 +209,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 47,
+            "line": 48,
             "role": "definition"
           },
           "display": "CallWithTemp",
@@ -175,7 +223,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 83,
+            "line": 84,
             "role": "definition"
           },
           "display": "Top2",

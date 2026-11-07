@@ -1,5 +1,5 @@
 prove Codeunit D8PostingChain::PostSalesDoc publishes-event:OnAfterPostSalesDoc (published by Codeunit D8PostingChain::OnAfterPostSalesDoc)   [cross-app]
-answer: yes
+answer: yes — EVENT_PUBLISH at ws:src/posting.al:13 (condition not resolved)
 analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops
   evidence: 1 effect

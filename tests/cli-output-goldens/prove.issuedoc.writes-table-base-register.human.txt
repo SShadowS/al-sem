@@ -1,5 +1,5 @@
 prove Codeunit "Out Issue Document"::IssueDoc writes-table:Base Register (table 70020, Out Base)   [cross-app]
-answer: yes
+answer: yes — DB_MODIFY beyond Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 (condition not resolved)
 analysis partial (2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 1 app
 more: --format json for every evidence row and its hops
   evidence: 1 effect

@@ -2,6 +2,7 @@ query touches Codeunit D8BadSubscriber::HandlePosted vs Sales Line (11111111-000
 answer: up: 1 of 2 transitive callers touches it through other branches, 1 does not, 0 unknown; not touching: Codeunit D8PostingChain::OnAfterPostSalesDoc
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: per operation, one routine into dependency code; dependencies: 0 apps
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row
+  defined at ws:src/subscriber.al:4
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (the tests and impact tools follow it); paths through dependency code are listed apart, before the caller list
   through dependency code: not applicable (no dependency code loaded)
     shared first touch (1 of 1 caller): [ModifyAll] write at ws:src/posting.al:12 in Codeunit D8PostingChain::PostSalesDoc; touches on persistent records

@@ -9,7 +9,8 @@
 // - Top3 calls Leaf and touches nothing else (a caller that does not touch it);
 // - Keyed: key-relevant sites for table mode (output validation §9.3): a
 //   SetCurrentKey, a SetRange on the key field "No." (key-relevant) and a
-//   SetFilter on Qty (in no key: not key-relevant).
+//   SetFilter on Qty (in no key: not key-relevant);
+// - Validates: a Validate, a validation and not a record write (round 2 G8).
 table 50700 "QT Item"
 {
     fields
@@ -110,5 +111,14 @@ codeunit 50700 "QT Touches"
         Top2();
         Top3();
         Mixed();
+    end;
+
+    // Round 2 G8: a validation, which table mode counts apart from the
+    // record writes (a validation may lead to a write; it is not one).
+    procedure Validates()
+    var
+        Item: Record "QT Item";
+    begin
+        Item.Validate(Qty, 1);
     end;
 }

@@ -2,11 +2,12 @@ query touches Codeunit "QT Touches"::Leaf vs QT Item (07070707-0000-4000-8000-00
 answer: up: 3 of 4 transitive callers touch it through other branches, 1 does not, 0 unknown; not touching: Codeunit "QT Touches"::Top3
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: per operation, one routine into dependency code; dependencies: 0 apps
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row
+  defined at ws:src/QTTouches.al:71
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (the tests and impact tools follow it); paths through dependency code are listed apart, before the caller list
   through dependency code: not applicable (no dependency code loaded)
-    shared first touch (2 of 3 callers): [Delete] write at ws:src/QTTouches.al:89 in Codeunit "QT Touches"::Top2; touches on persistent records
+    shared first touch (2 of 3 callers): [Delete] write at ws:src/QTTouches.al:90 in Codeunit "QT Touches"::Top2; touches on persistent records
     callers (3 routines in 1 object), by object, nearest first; each with its definition line and hops:
       Codeunit "QT Touches" (3) — ws:src/QTTouches.al:
-        Top1 :77 +1 hop — first touch: [Insert] write at ws:src/QTTouches.al:36 in Codeunit "QT Touches"::WriteItem
-        Top2 :83 +1 hop
-        Entry :107 +2 hops — touches 4 on persistent records, 0 on possibly persistent records, 3 on temporary records
+        Top1 :78 +1 hop — first touch: [Insert] write at ws:src/QTTouches.al:37 in Codeunit "QT Touches"::WriteItem
+        Top2 :84 +1 hop
+        Entry :108 +2 hops — touches 4 on persistent records, 0 on possibly persistent records, 3 on temporary records

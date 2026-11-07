@@ -2,6 +2,7 @@ query touches Codeunit "QT Touches"::TempOnly vs QT Item (07070707-0000-4000-800
 answer: down: yes — 2 record touches: 0 on persistent records, 0 on possibly persistent records, 2 on temporary records
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 0 apps
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row
+  defined at ws:src/QTTouches.al:40
   down: yes — 2 record touches: 0 on persistent records, 0 on possibly persistent records, 2 on temporary records
     temporary records: 2 touches in 1 routine (Codeunit "QT Touches"::TempOnly 2) — --all lists them
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (the tests and impact tools follow it); paths through dependency code are listed apart, before the caller list

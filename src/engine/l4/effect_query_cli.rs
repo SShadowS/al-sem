@@ -267,6 +267,9 @@ enum QueryAsk<'a> {
         /// `--field` (agent-tasks D): the field's consumers, not the table's
         /// record operations ([`super::field_touches`]).
         field: Option<&'a str>,
+        /// `--op-family write` (round 2 G8): table mode lists every
+        /// record-write site.
+        writes_only: bool,
     },
     Effects {
         routine: &'a str,
@@ -325,8 +328,19 @@ impl<'a> QueryJob<'a> {
             all,
             callers: false,
             field: None,
+            writes_only: false,
         };
         Self::with(inputs, ask, alsem_ver, deterministic, single_app)
+    }
+
+    /// `query touches --op-family write` (round 2 G8): table mode lists
+    /// every record-write site, temporary records included and tagged.
+    #[must_use]
+    pub fn writes_only(mut self, only: bool) -> QueryJob<'a> {
+        if let QueryAsk::Touches { writes_only, .. } = &mut self.ask {
+            *writes_only = only;
+        }
+        self
     }
 
     /// `query touches --field F` (agent-tasks D): every code consumer of
@@ -574,6 +588,7 @@ impl Job for QueryJob<'_> {
                 all,
                 callers,
                 field: _,
+                writes_only,
             } => render_query_touches_body(
                 &substrate,
                 table,
@@ -581,6 +596,7 @@ impl Job for QueryJob<'_> {
                 direction,
                 all,
                 callers,
+                writes_only,
                 self.alsem_ver,
                 self.deterministic,
                 cone,
@@ -1925,6 +1941,7 @@ pub fn render_query_touches(
             direction,
             all,
             callers,
+            false,
             alsem_ver,
             deterministic,
             None,
@@ -2003,6 +2020,7 @@ impl QueryHeaderCx {
                 all,
                 callers,
                 field,
+                ..
             } => QueryHeaderCx {
                 surface,
                 single_app,
@@ -2115,6 +2133,10 @@ fn query_with_header(
             if let Some(f) = families {
                 h.analysis = std::mem::replace(&mut h.analysis, Analysis::Complete)
                     .and(Analysis::of_families(f));
+                // Round 2 G14: the limits the body states (`locks: none
+                // observed (one dependency routine deep; …)`) are the
+                // header's limits too.
+                h.limits.extend(family_limits(f));
             }
         }
     }
@@ -2143,6 +2165,37 @@ fn query_with_header(
         out.push('\n');
     }
     out
+}
+
+/// The header limits a query effects document's families state (round 2
+/// G14): the families inventoried one dependency routine deep and not
+/// exhaustively, as one limit (`reads, locks and validations one dependency
+/// routine deep`). The writes family counts only when no whole-cone
+/// `beyondDependencyCalls` family follows the writes past it.
+fn family_limits(families: &Value) -> Vec<String> {
+    let whole_cone_writes = families.get("beyondDependencyCalls").is_some();
+    let words: Vec<&str> = [
+        ("reads", "reads"),
+        ("locks", "locks"),
+        ("validate", "validations"),
+        ("writes", "writes"),
+    ]
+    .into_iter()
+    .filter(|(k, _)| !(*k == "writes" && whole_cone_writes))
+    .filter(|(k, _)| {
+        families[*k]["depth"] == "oneDependencyRoutine"
+            && families[*k]["inventory"] == "notExhaustive"
+    })
+    .map(|(_, w)| w)
+    .collect();
+    match words.as_slice() {
+        [] => Vec::new(),
+        [one] => vec![format!("{one} one dependency routine deep")],
+        [init @ .., last] => vec![format!(
+            "{} and {last} one dependency routine deep",
+            init.join(", ")
+        )],
+    }
 }
 
 /// [`query_with_header`], then (W2-7, 2g) `--show-source` excerpts
@@ -2185,6 +2238,7 @@ fn render_query_touches_body(
     direction: Direction,
     all: bool,
     callers: bool,
+    writes_only: bool,
     alsem_ver: &str,
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
@@ -2373,7 +2427,15 @@ fn render_query_touches_body(
                                     .map(String::as_str),
                                 &key_fields,
                             ),
-                            record_ref: o.receiver_is_record_ref,
+                            unresolved: if unknown {
+                                unresolved_table_reason(r, o)
+                            } else {
+                                String::new()
+                            },
+                            temp: o
+                                .temp_state
+                                .as_ref()
+                                .map_or(TempStateKind::Unknown, TempStateKind::from_p_temp_state),
                         });
                     } else {
                         dep_routines.insert(r.stable_routine_id.as_str());
@@ -2487,46 +2549,154 @@ fn render_query_touches_body(
                     "workspace routines reach"
                 ),
             ));
-            if !ws_sites.is_empty() {
-                let parts: Vec<String> = KEY_USES
+            // Round 2 G8: the sites by family, record writes first, each
+            // family with its own count and its share of the samples. `all`
+            // lists every site; `opFamily: "write"` every record write.
+            let every_site =
+                all || fold_len(ws_sites.len(), GLOBAL_LIST_CAP, false) == ws_sites.len();
+            let samples: Vec<&TableSite> = if every_site && !writes_only {
+                let mut v: Vec<&TableSite> = ws_sites.iter().collect();
+                v.sort_by_key(|s| s.family());
+                v
+            } else if writes_only {
+                ws_sites
                     .iter()
-                    .filter(|k| !(unknown && **k == KEY_FILTER))
-                    .map(|k| {
-                        let n = by_key.get(k).copied().unwrap_or(0);
-                        match *k {
-                            KEY_GET => format!("{k} {} (primary key)", thousands(n)),
-                            _ => format!("{k} {}", thousands(n)),
-                        }
-                    })
-                    .collect();
-                human.push_str(&format!(
-                    "  key-relevant (not exhaustive; their sites listed first): {}\n",
-                    parts.join(", ")
-                ));
-            }
-            // The key-relevant sites first, then the others; `all` lists
-            // every site.
-            let mut listed: Vec<&TableSite> = ws_sites.iter().filter(|s| s.key.is_some()).collect();
-            listed.extend(ws_sites.iter().filter(|s| s.key.is_none()));
-            let shown_sites = fold_len(listed.len(), GLOBAL_LIST_CAP, all);
-            for s in &listed[..shown_sites] {
-                let table_note = if unknown {
-                    format!(
-                        " — table: not resolved ({})",
-                        if s.record_ref { "RecordRef" } else { "Record" }
-                    )
-                } else {
-                    String::new()
+                    .filter(|s| s.family() == SiteFamily::Write)
+                    .collect()
+            } else {
+                family_samples(&ws_sites)
+            };
+            let mut family_json = Map::new();
+            for f in SiteFamily::ALL {
+                let of: Vec<&TableSite> = ws_sites.iter().filter(|s| s.family() == f).collect();
+                let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+                for s in &of {
+                    *by.entry(s.op.as_str()).or_default() += 1;
+                }
+                let routines_of: BTreeSet<&str> = of.iter().map(|s| s.who.as_str()).collect();
+                let temporary = of.iter().filter(|s| s.is_temporary()).count();
+                let mut fj = json!({
+                    "sites": of.len(),
+                    "routines": routines_of.len(),
+                    "byOp": by,
+                });
+                if f == SiteFamily::Write {
+                    fj["temporary"] = temporary.into();
+                }
+                family_json.insert(f.key().into(), fj);
+                if ws_sites.is_empty() {
+                    continue;
+                }
+                let by_text = by_op_text(&ranked(&by));
+                let header = match f {
+                    SiteFamily::Write if of.is_empty() => {
+                        "  record writes: none observed\n".to_string()
+                    }
+                    SiteFamily::Write => format!(
+                        "  record writes: {} in {} — {} (temporary records: {})\n",
+                        plural(of.len(), "site", "sites"),
+                        plural(routines_of.len(), "routine", "routines"),
+                        by_text,
+                        thousands(temporary)
+                    ),
+                    SiteFamily::Validate if of.is_empty() => String::new(),
+                    SiteFamily::Validate => format!(
+                        "  validations: {} (a validation may lead to a write; it is not one)\n",
+                        plural(of.len(), "site", "sites")
+                    ),
+                    SiteFamily::Lock if of.is_empty() => "  locks: none observed\n".to_string(),
+                    SiteFamily::Lock => format!(
+                        "  locks: {} — {by_text}\n",
+                        plural(of.len(), "site", "sites")
+                    ),
+                    SiteFamily::Key => {
+                        let parts: Vec<String> = KEY_USES
+                            .iter()
+                            .filter(|k| !(unknown && **k == KEY_FILTER))
+                            .map(|k| {
+                                let n = by_key.get(k).copied().unwrap_or(0);
+                                match *k {
+                                    KEY_GET => format!("{k} {} (primary key)", thousands(n)),
+                                    _ => format!("{k} {}", thousands(n)),
+                                }
+                            })
+                            .collect();
+                        // Round 2 G22: the table's keys first, and what the
+                        // key-relevant count does not search.
+                        let keys = if unknown {
+                            String::new()
+                        } else {
+                            table_keys_line(resolved, &table.id)
+                        };
+                        format!(
+                            "{keys}  key-relevant (not exhaustive): {}; not searched: key and \
+                             ordering uses in declarations (page SourceTableView, report \
+                             DataItemTableView)\n",
+                            parts.join(", ")
+                        )
+                    }
+                    SiteFamily::Read | SiteFamily::Other if of.is_empty() => String::new(),
+                    SiteFamily::Read => format!(
+                        "  reads: {} — {by_text}\n",
+                        plural(of.len(), "site", "sites")
+                    ),
+                    SiteFamily::Other => format!(
+                        "  other operations: {} — {by_text}\n",
+                        plural(of.len(), "site", "sites")
+                    ),
                 };
-                human.push_str(&format!(
-                    "    [{}] at {}:{} in {}{table_note}\n",
-                    s.op, s.file, s.line, s.who
-                ));
+                human.push_str(&header);
+                for s in samples.iter().filter(|s| s.family() == f) {
+                    let table_note = if unknown {
+                        format!(" — table: not resolved ({})", s.unresolved)
+                    } else {
+                        String::new()
+                    };
+                    let temp = if f == SiteFamily::Write {
+                        temp_note(&s.temp)
+                    } else {
+                        String::new()
+                    };
+                    human.push_str(&format!(
+                        "    [{}] at {}:{} in {}{temp}{table_note}\n",
+                        s.op, s.file, s.line, s.who
+                    ));
+                }
             }
-            if shown_sites < listed.len() {
+            if let Some(up) = payload.get_mut("up") {
+                up["directSites"]["byFamily"] = Value::Object(family_json);
+                if writes_only {
+                    // Round 2 G8: `opFamily: "write"`, every record-write
+                    // site with its own temp state.
+                    up["opFamily"] = "write".into();
+                    up["writeSites"] = ws_sites
+                        .iter()
+                        .filter(|s| s.family() == SiteFamily::Write)
+                        .map(|s| {
+                            json!({
+                                "op": s.op,
+                                "file": s.file,
+                                "line": s.line,
+                                "routine": s.who,
+                                "tempState": temp_state_str(&s.temp),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+            }
+            let listed = if writes_only {
+                ws_sites
+                    .iter()
+                    .filter(|s| s.family() == SiteFamily::Write)
+                    .count()
+            } else {
+                ws_sites.len()
+            };
+            if samples.len() < listed {
                 human.push_str(&format!(
                     "    … +{} — {} lists them, and every routine\n",
-                    plural(listed.len() - shown_sites, "site", "sites"),
+                    plural(listed - samples.len(), "site", "sites"),
                     Input::All.on(surface)
                 ));
             }
@@ -2595,6 +2765,9 @@ fn render_query_touches_body(
             };
 
             human.push_str(&format!("--- {} vs {table_label} ---\n", rr.header));
+            // Round 2 G19: where the routine is (with `--show-source`, the
+            // excerpt of its first statements follows).
+            human.push_str(&format!("  defined at {}:{}\n", rr.file, shown(rr.line)));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
             human.push_str(if beyond.is_some() {
                 TOUCHES_SCOPE_LINE_CONE
@@ -2672,7 +2845,238 @@ struct TableSite {
     who: String,
     object: String,
     key: Option<&'static str>,
-    record_ref: bool,
+    /// Round 2 G21: when the table is not resolved, the receiver and why
+    /// ([`unresolved_table_reason`]).
+    unresolved: String,
+    /// The operation's own temp state (the body walk's, not a caller's).
+    temp: TempStateKind,
+}
+
+/// Round 2 G22: the `keys:` line of table mode — the primary key and the
+/// other declared keys by their field names, or nothing when the table
+/// declares none in the loaded program.
+fn table_keys_line(model: &Model, table_id: &str) -> String {
+    let quoted = |n: &str| format!("\"{}\"", n.replace('"', "\"\""));
+    let mut keys: Vec<String> = Vec::new();
+    // The table itself first (its first key is the primary key), then any
+    // extension's keys; with no base table loaded, no primary key is named.
+    let mut entries: Vec<_> = model
+        .workspace
+        .tables
+        .iter()
+        .filter(|t| t.id == table_id)
+        .collect();
+    entries.sort_by_key(|t| t.is_extension_stub);
+    if entries.first().is_none_or(|t| t.is_extension_stub) {
+        return String::new();
+    }
+    for t in entries {
+        for k in &t.keys {
+            let names: Vec<String> = k
+                .fields
+                .iter()
+                .filter_map(|f| {
+                    t.fields
+                        .iter()
+                        .find(|x| x.id == *f)
+                        .map(|x| quoted(&x.name))
+                })
+                .collect();
+            if !names.is_empty() {
+                keys.push(names.join(", "));
+            }
+        }
+    }
+    let Some((pk, rest)) = keys.split_first() else {
+        return String::new();
+    };
+    const SHOWN: usize = 4;
+    let mut line = format!("  keys: primary key {pk}");
+    if !rest.is_empty() {
+        let shown: Vec<String> = rest.iter().take(SHOWN).map(|k| format!("({k})")).collect();
+        line.push_str(&format!("; other keys: {}", shown.join(", ")));
+        if rest.len() > SHOWN {
+            line.push_str(&format!(", … +{}", rest.len() - SHOWN));
+        }
+    }
+    line.push('\n');
+    line
+}
+
+/// Round 2 G21 (r1 §8.1's target-resolution words): why a record
+/// operation's table is not resolved, as `<receiver kind> <name>: <reason>`.
+/// A `RecordRef` is opened from a value the analysis does not resolve
+/// (`RecRef.Open(x)`), set by `GetTable`, passed by the caller, or not opened
+/// in the routine; a `Record` names a table the loaded program does not hold.
+fn unresolved_table_reason(
+    r: &crate::program::model::workspace::ModelRoutine,
+    o: &crate::program::model::workspace::ModelRecordOperation,
+) -> String {
+    use crate::program::body::features::PCallee;
+    let v = o.record_variable_name.as_str();
+    if !o.receiver_is_record_ref {
+        return format!("Record {v}: its table is not in the loaded program");
+    }
+    let set_by = r.call_sites.iter().find_map(|c| match &c.callee {
+        PCallee::Member { receiver, method } if receiver.eq_ignore_ascii_case(v) => {
+            match method.to_ascii_lowercase().as_str() {
+                "open" => Some("opened from a variable"),
+                "gettable" => Some("set by GetTable from a record whose table is not resolved"),
+                _ => None,
+            }
+        }
+        _ => None,
+    });
+    let reason = match set_by {
+        Some(why) => why,
+        None if r.parameters.iter().any(|p| p.name.eq_ignore_ascii_case(v)) => {
+            "passed by the caller"
+        }
+        None => "not opened in this routine",
+    };
+    format!("RecordRef {v}: {reason}")
+}
+
+impl TableSite {
+    /// The site's family in table mode (round 2 G8): record writes,
+    /// validations, locks, key-relevant uses, reads, other operations.
+    fn family(&self) -> SiteFamily {
+        match op_family(&self.op) {
+            "write" => SiteFamily::Write,
+            "validate" => SiteFamily::Validate,
+            "lock" => SiteFamily::Lock,
+            _ if self.key.is_some() => SiteFamily::Key,
+            "read" => SiteFamily::Read,
+            _ => SiteFamily::Other,
+        }
+    }
+
+    /// Whether the site is on a record known to be temporary.
+    fn is_temporary(&self) -> bool {
+        self.temp == TempStateKind::Known(true)
+    }
+}
+
+/// A table-mode site family (round 2 G8), in the order the answer prints
+/// them: record writes first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SiteFamily {
+    Write,
+    Validate,
+    Lock,
+    Key,
+    Read,
+    Other,
+}
+
+impl SiteFamily {
+    const ALL: [SiteFamily; 6] = [
+        SiteFamily::Write,
+        SiteFamily::Validate,
+        SiteFamily::Lock,
+        SiteFamily::Key,
+        SiteFamily::Read,
+        SiteFamily::Other,
+    ];
+
+    /// The JSON key of the family's counts.
+    fn key(self) -> &'static str {
+        match self {
+            SiteFamily::Write => "recordWrites",
+            SiteFamily::Validate => "validations",
+            SiteFamily::Lock => "locks",
+            SiteFamily::Key => "keyRelevant",
+            SiteFamily::Read => "reads",
+            SiteFamily::Other => "other",
+        }
+    }
+}
+
+/// One family's sites with their operation kinds taken in turn (round 2
+/// G8), so a family's samples show each kind before a second site of any:
+/// the kinds by count (largest first, then name), each kind's sites in file
+/// and line order.
+fn interleave_ops<'s>(sites: &[&'s TableSite]) -> Vec<&'s TableSite> {
+    let mut by_op: BTreeMap<&str, Vec<&'s TableSite>> = BTreeMap::new();
+    for s in sites {
+        by_op.entry(s.op.as_str()).or_default().push(s);
+    }
+    let mut ops: Vec<Vec<&'s TableSite>> = by_op.into_values().collect();
+    ops.sort_by(|a, b| b.len().cmp(&a.len()).then(a[0].op.cmp(&b[0].op)));
+    let mut out = Vec::with_capacity(sites.len());
+    let mut round = 0;
+    while out.len() < sites.len() {
+        for v in &ops {
+            if let Some(s) = v.get(round) {
+                out.push(*s);
+            }
+        }
+        round += 1;
+    }
+    out
+}
+
+/// How many of table mode's default samples ([`GLOBAL_LIST_CAP`]) may be
+/// record writes (round 2 G8).
+const WRITE_SAMPLES: usize = 6;
+
+/// The default samples of table mode (round 2 G8): up to
+/// [`GLOBAL_LIST_CAP`] sites shared by family, so every family present is
+/// represented. Record writes take up to [`WRITE_SAMPLES`] first; the other
+/// families then take one site each in their order, round after round,
+/// until the budget is spent. Within the key-relevant family a key-field
+/// `SetRange`/`SetFilter` comes before a `SetCurrentKey`, and both before a
+/// `Get`. Each family's sites keep their file and line order. The result is
+/// in family order.
+fn family_samples(sites: &[TableSite]) -> Vec<&TableSite> {
+    let key_rank = |s: &TableSite| match s.key {
+        Some(KEY_FILTER) => 0,
+        Some(KEY_CURRENT) => 1,
+        _ => 2,
+    };
+    let mut by_family: BTreeMap<SiteFamily, Vec<&TableSite>> = BTreeMap::new();
+    for s in sites {
+        by_family.entry(s.family()).or_default().push(s);
+    }
+    for (f, v) in by_family.iter_mut() {
+        if *f == SiteFamily::Key {
+            v.sort_by_key(|s| key_rank(s));
+        } else {
+            *v = interleave_ops(v);
+        }
+    }
+    let mut taken: BTreeMap<SiteFamily, usize> = BTreeMap::new();
+    let writes = by_family
+        .get(&SiteFamily::Write)
+        .map_or(0, |v| v.len().min(WRITE_SAMPLES));
+    taken.insert(SiteFamily::Write, writes);
+    let mut budget = GLOBAL_LIST_CAP - writes;
+    loop {
+        let mut progressed = false;
+        for f in &SiteFamily::ALL[1..] {
+            if budget == 0 {
+                break;
+            }
+            let have = by_family.get(f).map_or(0, Vec::len);
+            let t = taken.entry(*f).or_default();
+            if *t < have {
+                *t += 1;
+                budget -= 1;
+                progressed = true;
+            }
+        }
+        if budget == 0 || !progressed {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    for f in SiteFamily::ALL {
+        let n = taken.get(&f).copied().unwrap_or(0);
+        if let Some(v) = by_family.get(&f) {
+            out.extend(v.iter().take(n).copied());
+        }
+    }
+    out
 }
 
 /// The key-relevant uses table mode counts (§9.3, F59; not exhaustive).
@@ -2702,6 +3106,10 @@ fn key_relevance(
         _ => None,
     }
 }
+
+/// Round 2 G62: what a query effects answer with no operation is about.
+const ZERO_OPS_SCOPE: &str =
+    "record operations only; not page-context restrictions or non-record effects";
 
 /// The scope line every routine-scoped touches answer prints after its title.
 const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code\n";
@@ -4487,10 +4895,48 @@ fn render_query_effects_body(
         "effects": rows,
         "result": {"scope": {"families": families}},
     });
+    // Round 2 G62 (query 4.x, additive): a zero-operation answer states its
+    // scope in the JSON too.
+    let mut payload = payload;
+    if effects.is_empty() {
+        payload["result"]["scope"]["covers"] = ZERO_OPS_SCOPE.into();
+    }
 
     // Human (design §4.5): summary first, then the buckets; every row with
     // --all.
     let mut human = format!("--- effects of {} ---\n", rr.header);
+    // Round 2 G19: where the routine is, and the route to its first write
+    // (each hop the first direct callee holding the write's row).
+    human.push_str(&format!("  defined at {}:{}\n", rr.file, shown(rr.line)));
+    if let Some(first) = effects
+        .iter()
+        .find(|t| matches!(bucket(t), "writes" | "callerDependent"))
+    {
+        let mut route: Vec<String> = vec![routine.name.clone()];
+        let mut cur = *first;
+        for _ in 0..32 {
+            if cur.via == crate::engine::l4::effect_store::ViaRank::Direct {
+                break;
+            }
+            let Ok(c) = hops.of(&cur) else { break };
+            route.push(hop_label(c));
+            let Some(next) = query.all_effects(c).into_iter().find(|t| {
+                (t.operation_id, t.table_id, t.op) == (cur.operation_id, cur.table_id, cur.op)
+            }) else {
+                break;
+            };
+            cur = next;
+        }
+        let at = match ops.get(first.operation_id, &join) {
+            Some(o) => format!(" at {}:{}", o.file, shown(o.line)),
+            None => String::new(),
+        };
+        human.push_str(&format!(
+            "  route to the first write: {} → {}{at}\n",
+            route.join(" → "),
+            first.op
+        ));
+    }
     // Output validation V2 (§4.1, F14): a caller-dependent write is a write
     // risk; with no may-persist write the summary leads with it and its
     // condition, then the absence of any other write.
@@ -4658,6 +5104,10 @@ fn render_query_effects_body(
              beyond (explain and prove follow the whole cone); operations ruled out by literal \
              arguments are listed (explain and prove drop them)\n",
         );
+    }
+    // Round 2 G62: a zero-operation answer says what it is about.
+    if effects.is_empty() {
+        human.push_str(&format!("  scope: {ZERO_OPS_SCOPE}\n"));
     }
     let ops_text = |m: &BTreeMap<&str, usize>| -> String {
         let mut v: Vec<(&&str, &usize)> = m.iter().collect();
@@ -5967,6 +6417,96 @@ fn render_field_touches(
 mod tests {
     use super::*;
     use crate::program::model::workspace::{ModelDeclarationOnlyRoutine, ModelObject, ModelTable};
+
+    fn site(op: &str, line: u32, key: Option<&'static str>) -> TableSite {
+        TableSite {
+            file: "ws:a.al".into(),
+            line,
+            op: op.into(),
+            who: format!("R{line}"),
+            object: "Codeunit X".into(),
+            key,
+            unresolved: String::new(),
+            temp: TempStateKind::Known(false),
+        }
+    }
+
+    /// Round 2 G14: the header's `limits:` agrees with the body. A query
+    /// effects body that states a limit (`deeper dependency locks are not
+    /// inventoried`, the families inventoried one dependency routine deep)
+    /// never has `limits: none`. Hand-stated body and families (c11's
+    /// shape: writes beyond dependency calls followed whole cone).
+    #[test]
+    fn a_body_limit_clause_implies_header_limits() {
+        let one_deep = json!({"depth": "oneDependencyRoutine", "inventory": "notExhaustive",
+                              "blockers": {"callNotResolved": 0, "interfaceDispatchOpenWorld": 0}});
+        let families = json!({
+            "reads": one_deep, "locks": one_deep, "validate": one_deep, "writes": one_deep,
+            "beyondDependencyCalls": {"depth": "wholeCone", "inventory": "exhaustive",
+                "blockers": {"callNotResolved": 0, "interfaceDispatchOpenWorld": 0}},
+        });
+        let body = "--- effects of Codeunit X::Y ---\n  summary: 1 operation — locks: none \
+                    observed (one dependency routine deep; deeper dependency locks are not \
+                    inventoried)\n";
+        let hc = QueryHeaderCx {
+            surface: Surface::Cli,
+            single_app: false,
+            effects: true,
+            all: false,
+            callers: false,
+            up: false,
+            asked: "Y".into(),
+        };
+        let out = query_with_header(body, 0, 0, &hc, Some(&families));
+        let third = out.lines().nth(2).unwrap();
+        assert!(out.contains("not inventoried"), "{out}");
+        assert!(!third.contains("limits: none"), "{third}");
+        assert!(
+            third.contains("limits: reads, locks and validations one dependency routine deep"),
+            "{third}"
+        );
+    }
+
+    /// Round 2 G8: a table with many key-relevant reads, a few writes and a
+    /// validation (hand-stated, the n03 shape): the default samples carry
+    /// every record write (at most six), the validation and a key-field
+    /// filter before the Gets, and stay within the cap.
+    #[test]
+    fn family_samples_spread_over_families_writes_first() {
+        let mut sites: Vec<TableSite> = (1..=30).map(|l| site("Get", l, Some(KEY_GET))).collect();
+        sites.push(site("SetRange", 40, Some(KEY_FILTER)));
+        sites.push(site("Validate", 50, None));
+        for l in 60..68 {
+            sites.push(site("Modify", l, None));
+        }
+        sites.push(site("Insert", 68, None));
+        sites.push(site("DeleteAll", 69, None));
+        sites.push(site("CalcFields", 70, None));
+        let got = family_samples(&sites);
+        assert_eq!(got.len(), GLOBAL_LIST_CAP);
+        let ops: Vec<&str> = got.iter().map(|s| s.op.as_str()).collect();
+        // The writes first, each kind once before a second Modify.
+        assert_eq!(
+            &ops[..WRITE_SAMPLES],
+            &[
+                "Modify",
+                "DeleteAll",
+                "Insert",
+                "Modify",
+                "Modify",
+                "Modify"
+            ],
+            "{ops:?}"
+        );
+        assert!(ops.contains(&"Validate"), "{ops:?}");
+        assert!(ops.contains(&"CalcFields"), "{ops:?}");
+        let filter = ops.iter().position(|o| *o == "SetRange").expect("filter");
+        let get = ops.iter().position(|o| *o == "Get").expect("get");
+        assert!(
+            filter < get,
+            "a key-field filter is sampled before the Gets: {ops:?}"
+        );
+    }
 
     fn table(app: &str, number: i64, name: &str, stub: bool) -> ModelTable {
         ModelTable {

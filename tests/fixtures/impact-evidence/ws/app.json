@@ -1,0 +1,13 @@
+{
+  "id": "8d4f1c27-3a6e-4b95-9f02-7c1e5a3b9d48",
+  "name": "Impact Evidence Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 51300,
+      "to": 51399
+    }
+  ]
+}

@@ -10,8 +10,8 @@ Codeunit "CDO Telemetry"::UpdateLastUpload  defined at ws:src/Platform/Telemetry
   calls: none (no call to a routine; builtins aside)
   callers: 1 direct — 1 routine: Codeunit "CDO Telemetry"::QueueUpload
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    CDO Setup: Modify — depends on the caller's record argument at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48
+    CDO Setup: Modify — depends on the caller's record argument at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
   errors at 1 place: ERROR_IMPLICIT at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 (unconditional on success)
-  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem_tests selects them
+  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem_tests {"routines": ["Codeunit \"CDO Telemetry\"::UpdateLastUpload"]} selects them
   next: alsem_explain {"routines": ["Codeunit \"CDO Telemetry\"::UpdateLastUpload"], "callersContext": true} — its callers' pending writes, intercepted errors and non-interactive entries
 

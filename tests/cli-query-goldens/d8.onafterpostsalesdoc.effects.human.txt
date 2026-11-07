@@ -1,7 +1,9 @@
 query effects Codeunit D8PostingChain::OnAfterPostSalesDoc   [cross-app]
 answer: 1 operation — writes that may persist 1 on 1 table (1 not temporary, 0 temp state not resolved); locks: none observed (one dependency routine deep; deeper dependency locks are not inventoried); reads: none observed (one dependency routine deep; deeper dependency reads are not inventoried)
-analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 0 apps
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: reads, locks and validations one dependency routine deep · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 0 apps
 more: --all lists every operation; --format json for every row
+  defined at ws:src/posting.al:19
+  route to the first write: OnAfterPostSalesDoc → Codeunit D8BadSubscriber::HandlePosted → Insert at ws:src/subscriber.al:10
   writes that may persist (1 table):
     Audit Entry: Insert 1 — first Insert at ws:src/subscriber.al:10 in Codeunit D8BadSubscriber::HandlePosted (event subscriber)
   next: alsem prove 'Codeunit D8PostingChain::OnAfterPostSalesDoc' 'writes-table:Audit Entry' — follows the whole cone for one table, with its witness

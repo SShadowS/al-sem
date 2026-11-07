@@ -429,6 +429,10 @@
           "distinct": 0,
           "inWorkspaceCode": 0
         },
+        "evidence": {
+          "changeCompany": [],
+          "tables": []
+        },
         "gaps": {
           "dependency": 0,
           "notPlaced": 0,

@@ -1,5 +1,5 @@
 prove Codeunit D8BadSubscriber::HandlePosted commits-on-success-path   [cross-app]
-answer: yes
+answer: yes — COMMIT at ws:src/subscriber.al:11 (unconditional on success)
 analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops
   evidence: 1 effect

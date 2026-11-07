@@ -38,7 +38,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
-            "line": 44,
+            "line": 45,
             "role": "operation",
             "routine": "r:1"
           },
@@ -51,7 +51,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
-            "line": 43,
+            "line": 44,
             "role": "operation",
             "routine": "r:1"
           },
@@ -83,7 +83,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 39,
+          "line": 40,
           "role": "definition"
         },
         "display": "TempOnly",
