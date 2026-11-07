@@ -13,17 +13,27 @@
 //! - Once over every root, [`walk_multi`]: the union (how many distinct
 //!   entries the whole change is reachable from).
 //!
+//! **Relation and tier** (round-2 r2 §2.1, W2): the visitor's
+//! [`ConeVisitor::step`] sets [`bit`]s on each state from the site it crosses
+//! ([`site_bits`]: UI navigation, a rule edge, configured dispatch), so a
+//! node's best state names its [`Population`]: established code, established
+//! UI navigation, or a candidate (over configuration, over a rule edge, over
+//! a hub). Ancestors and canonical entries
+//! ([`crate::program::impact_graph::entries`]) are counted per population;
+//! each population's witness is the state that put the node in it.
+//!
 //! The walk is R0's own; this module only aggregates.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 
 use crate::engine::test_select::select::{direct_callers, display};
+use crate::program::impact_graph::entries::EntryInventory;
 use crate::program::impact_graph::reverse::{
     ConeVisitor, EntryKind, ExternalWhy, HiddenChannel, Limit, NodeIx, SiteIx, Tier, Via,
-    WalkOptions, WalkScratch, WalkState, walk_multi, walk_one,
+    WalkOptions, WalkScratch, WalkState, object_run_reaches, tier_over, walk_multi, walk_one,
 };
 use crate::program::impact_graph::sited::{Boundary, SitedGraph, flag};
 
@@ -60,6 +70,249 @@ pub fn user_or_job(k: EntryKind) -> bool {
             | EntryKind::ReportTrigger
             | EntryKind::TriggerPage
     )
+}
+
+/// Impact's consumer bits on a walk state ([`WalkState::ext`]; round-2 r2
+/// §2.1 step 1). Bits are only set along a path, never cleared, so the
+/// weakest step decides and a known navigation step stays known when the
+/// path later crosses a hub. Three bits: every state fits R0's dense visited
+/// set ([`crate::program::impact_graph::reverse::DENSE_EXT`]).
+pub mod bit {
+    /// The path takes a UI-navigation step: a page's lifecycle into a
+    /// trigger a user starts (an action, a field trigger, a part, a page it
+    /// opens, its tables' triggers), or an action's `RunObject`.
+    pub const NAV: u8 = 1;
+    /// The path takes a rule edge: a routine or object declaring a
+    /// `TestPage`/`TestRequestPage` variable (`declaredRunnable` with no call
+    /// site). Its relation is not established.
+    pub const RULE: u8 = 2;
+    /// The path takes a site labelled `configuredDispatch`: it runs only
+    /// when configuration data selects it.
+    pub const CONFIGURED: u8 = 4;
+}
+
+/// The bits site `s` sets (round-2 r2 §2.1 step 1's table):
+///
+/// - code, no bit: a direct or interface call, an object run and the trigger
+///   it runs, a record operation's trigger or table event, an event dispatch
+///   (a deliberate superset of `is_code_call_site`, which takes `eventFlow`
+///   only: running a publisher is code), an object node's lifecycle into a
+///   trigger the run runs ([`object_run_reaches`]), a static background start
+///   (the context axis labels it), a test runner or handler, a dispatching
+///   builtin on a receiver typed as one object (`declaredRunnable` at a call
+///   site: the builtin runs the object);
+/// - [`bit::NAV`]: every other lifecycle site, and an action-run site;
+/// - [`bit::RULE`]: `declaredRunnable` with no call site (a `TestPage`
+///   declaration);
+/// - an `Open` site sets nothing: the walk's tier says "over a hub";
+/// - [`bit::CONFIGURED`], beside the row's own: a `configuredDispatch` site.
+#[must_use]
+pub fn site_bits(g: &SitedGraph, s: SiteIx) -> u8 {
+    let st = &g.sites()[s as usize];
+    let relation = match st.boundary {
+        Boundary::Lifecycle => {
+            let code =
+                !g.is_routine(st.from) && !g.is_action_run(s) && object_run_reaches(g, st.to);
+            if code { 0 } else { bit::NAV }
+        }
+        Boundary::Run if st.via() == "declaredRunnable" && st.anchor.is_none() => bit::RULE,
+        Boundary::Sync
+        | Boundary::Run
+        | Boundary::Background
+        | Boundary::EventDispatch
+        | Boundary::TriggerOf { .. }
+        | Boundary::TestHandler
+        | Boundary::TestRunner
+        | Boundary::Open => 0,
+    };
+    let configured = if g.is_configured_dispatch(s) {
+        bit::CONFIGURED
+    } else {
+        0
+    };
+    relation | configured
+}
+
+/// The class of a walk state (round-2 r2 §2.1 step 2), in its total order,
+/// best first: established code, established UI navigation, then the
+/// candidates over configuration (code before UI navigation), over a rule
+/// edge, over a hub. Configuration can be decided by reading data; a hub
+/// cannot (r1 §8.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Population {
+    /// Established: every step is code, the tier `local` or `via-dependency`.
+    Code,
+    /// Established: some step is UI navigation, none a rule edge or a hub.
+    Navigation,
+    /// A candidate over configuration whose steps are code.
+    ConfiguredCode,
+    /// A candidate over configuration with a UI-navigation step.
+    ConfiguredNavigation,
+    /// A candidate over a rule edge (relation not established).
+    OverRule,
+    /// A candidate over a hub (relation not established).
+    OverHub,
+}
+
+impl Population {
+    /// Every class, best first.
+    pub const ALL: [Population; 6] = [
+        Population::Code,
+        Population::Navigation,
+        Population::ConfiguredCode,
+        Population::ConfiguredNavigation,
+        Population::OverRule,
+        Population::OverHub,
+    ];
+
+    /// The class of a state of `tier` with impact's bits `ext`. The tier
+    /// comes from R0 as it is: a path over a hub is `via-hub` whatever its
+    /// bits.
+    #[must_use]
+    pub fn of(tier: Tier, ext: u8) -> Population {
+        if tier == Tier::OnlyOpen {
+            Population::OverHub
+        } else if ext & bit::RULE != 0 {
+            Population::OverRule
+        } else if ext & bit::CONFIGURED != 0 {
+            if ext & bit::NAV != 0 {
+                Population::ConfiguredNavigation
+            } else {
+                Population::ConfiguredCode
+            }
+        } else if ext & bit::NAV != 0 {
+            Population::Navigation
+        } else {
+            Population::Code
+        }
+    }
+
+    /// Established evidence: the tier is `local` or `via-dependency` and the
+    /// relation is known.
+    #[must_use]
+    pub fn established(self) -> bool {
+        matches!(self, Population::Code | Population::Navigation)
+    }
+
+    /// The class's JSON key.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Population::Code => "code",
+            Population::Navigation => "uiNavigation",
+            Population::ConfiguredCode => "overConfigurationCode",
+            Population::ConfiguredNavigation => "overConfigurationUiNavigation",
+            Population::OverRule => "overRule",
+            Population::OverHub => "overHub",
+        }
+    }
+
+    /// The relation a witness of this class prints (§5's bracket form).
+    #[must_use]
+    pub fn relation(self) -> &'static str {
+        match self {
+            Population::Code | Population::ConfiguredCode => crate::engine::vocab::RELATION_CODE,
+            Population::Navigation | Population::ConfiguredNavigation => {
+                crate::engine::vocab::RELATION_NAVIGATION
+            }
+            Population::OverRule | Population::OverHub => "relation not established",
+        }
+    }
+}
+
+/// The tier a state shows (round-2 r2 §2.1 step 2): R0's `OnlyOpen` is
+/// `via-hub`; else configured dispatch is `via-configuration`; else R0's
+/// `ThroughDependency` is `via-dependency`; else `local`. Impact tracks no
+/// app identity of its own.
+#[must_use]
+pub fn shown_tier(tier: Tier, ext: u8) -> &'static str {
+    match tier {
+        Tier::OnlyOpen => "via-hub",
+        _ if ext & bit::CONFIGURED != 0 => crate::engine::vocab::VIA_CONFIGURATION,
+        Tier::ThroughDependency => "via-dependency",
+        Tier::Local => "local",
+    }
+}
+
+/// [`shown_tier`]'s rank within a class: the better tier first.
+fn tier_rank(tier: Tier, ext: u8) -> u8 {
+    match shown_tier(tier, ext) {
+        "local" => 0,
+        "via-dependency" => 1,
+        "via-hub" => 3,
+        _ => 2,
+    }
+}
+
+/// One state as a class witness: what it reached, how, and when it arrived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Witness {
+    tier: Tier,
+    ext: u8,
+    hops: u32,
+    /// The node that shows it (an entry's node: a page for an action an
+    /// action-run site stands for).
+    node: NodeIx,
+    /// Arrival order (ties keep it).
+    at: usize,
+}
+
+impl Witness {
+    fn population(&self) -> Population {
+        Population::of(self.tier, self.ext)
+    }
+
+    /// The total order: class, then the better tier, then fewer hops.
+    fn key(&self) -> (Population, u8, u32) {
+        (self.population(), tier_rank(self.tier, self.ext), self.hops)
+    }
+
+    /// A path over a hub or a rule edge that also takes a UI-navigation
+    /// step (r2 §2.1 step 2: "a path that also needs navigation says so").
+    fn needs_navigation(&self) -> bool {
+        self.ext & bit::NAV != 0
+    }
+}
+
+/// The best class witness per id (a node, or a canonical entry).
+#[derive(Default)]
+struct Classed {
+    best: HashMap<u32, Witness>,
+    arrivals: usize,
+}
+
+impl Classed {
+    /// A state of `(tier, ext)` reaching `id` at `hops` (shown by `node`):
+    /// kept when it is better than the best so far (an equal one keeps the
+    /// earlier arrival).
+    fn add(&mut self, id: u32, node: NodeIx, tier: Tier, ext: u8, hops: u32) {
+        self.arrivals += 1;
+        let w = Witness {
+            tier,
+            ext,
+            hops,
+            node,
+            at: self.arrivals,
+        };
+        let e = self.best.entry(id).or_insert(w);
+        if w.key() < e.key() {
+            *e = w;
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        self.best.capacity() * (std::mem::size_of::<(u32, Witness)>() + 8)
+    }
+
+    /// The nearest witness of class `p`: the better tier, then fewer hops,
+    /// then arrival.
+    fn nearest(&self, p: Population) -> Option<(u32, Witness)> {
+        self.best
+            .iter()
+            .filter(|(_, w)| w.population() == p)
+            .min_by_key(|(_, w)| (w.key(), w.at))
+            .map(|(&id, &w)| (id, w))
+    }
 }
 
 /// A list's distinct nodes, each with its best witness state, and the first
@@ -116,12 +369,40 @@ impl Firsts {
     }
 }
 
+/// A node's best states: by tier alone (the legacy `ancestors` tiers), and
+/// by class (round-2 r2 §2.1 step 2).
+#[derive(Clone, Copy, Debug)]
+struct NodeBest {
+    /// The best `(tier, hops)`.
+    tier: Tier,
+    hops: u32,
+    /// The best state in the class order; its witness is that state's.
+    class: Witness,
+}
+
+/// What every walk of one answer shares: the program's canonical entries
+/// and the changed routines' entries (left out on both sides of every
+/// share).
+struct Shared<'g> {
+    inv: &'g EntryInventory,
+    changed: HashSet<u32>,
+}
+
 /// One walk's visitor (one root, or the union).
 struct Up<'g> {
     g: &'g SitedGraph,
     keep: Keep,
-    /// Per node, its best tier (first reached at its shortest hops per tier).
-    best: HashMap<NodeIx, (Tier, u32)>,
+    shared: &'g Shared<'g>,
+    /// Per node, its best tier (first reached at its shortest hops per tier)
+    /// and its best class.
+    best: HashMap<NodeIx, NodeBest>,
+    /// The canonical entries reached (changed routines' left out), each with
+    /// its best class witness.
+    canon: Classed,
+    /// The hop count of the state the walk last reached: the walk steps over
+    /// a state's sites right after reaching it.
+    cur_hops: u32,
+    arrivals: usize,
     entries: BTreeMap<EntryKind, Firsts>,
     external: BTreeMap<&'static str, Firsts>,
     publishers: Firsts,
@@ -144,12 +425,34 @@ struct Up<'g> {
     max_hops: u32,
 }
 
+impl<'g> Shared<'g> {
+    /// The answer's shared state: `changed` holds every changed routine's
+    /// nodes (each `#if` arm, symbol-only copies too).
+    fn new(g: &'g SitedGraph, changed: &BTreeSet<NodeIx>) -> Shared<'g> {
+        let inv = g.entry_inventory();
+        Shared {
+            inv,
+            changed: changed.iter().filter_map(|&n| inv.of_node(n)).collect(),
+        }
+    }
+
+    /// The program's entries a share counts: the inventory, the changed
+    /// routines' left out.
+    fn program(&self) -> usize {
+        self.inv.len() - self.changed.len()
+    }
+}
+
 impl<'g> Up<'g> {
-    fn new(g: &'g SitedGraph, keep: Keep, roots: &[NodeIx]) -> Up<'g> {
+    fn new(g: &'g SitedGraph, keep: Keep, roots: &[NodeIx], shared: &'g Shared<'g>) -> Up<'g> {
         Up {
             g,
             keep,
+            shared,
             best: HashMap::new(),
+            canon: Classed::default(),
+            cur_hops: 0,
+            arrivals: 0,
             entries: BTreeMap::new(),
             external: BTreeMap::new(),
             publishers: Firsts::default(),
@@ -170,7 +473,8 @@ impl<'g> Up<'g> {
     /// retains beside the walk's own scratch (round-2 r2 §2.1 Cost).
     fn bytes(&self) -> usize {
         use std::mem::size_of;
-        self.best.capacity() * (size_of::<NodeIx>() + size_of::<(Tier, u32)>() + 8)
+        self.best.capacity() * (size_of::<NodeIx>() + size_of::<NodeBest>() + 8)
+            + self.canon.bytes()
             + self.entries.values().map(Firsts::bytes).sum::<usize>()
             + self.external.values().map(Firsts::bytes).sum::<usize>()
             + self.publishers.bytes()
@@ -184,9 +488,25 @@ impl ConeVisitor for Up<'_> {
     fn reach(&mut self, _: u32, s: WalkState, hops: u32, via: Via, _: Option<WalkState>) {
         self.states += 1;
         self.max_hops = self.max_hops.max(hops);
-        let e = self.best.entry(s.node).or_insert((s.tier, hops));
-        if (s.tier, hops) < *e {
-            *e = (s.tier, hops);
+        self.cur_hops = hops;
+        self.arrivals += 1;
+        let w = Witness {
+            tier: s.tier,
+            ext: s.ext,
+            hops,
+            node: s.node,
+            at: self.arrivals,
+        };
+        let e = self.best.entry(s.node).or_insert(NodeBest {
+            tier: s.tier,
+            hops,
+            class: w,
+        });
+        if (s.tier, hops) < (e.tier, e.hops) {
+            (e.tier, e.hops) = (s.tier, hops);
+        }
+        if w.key() < e.class.key() {
+            e.class = w;
         }
         if let Via::Site(site) = via {
             let st = &self.g.sites()[site as usize];
@@ -224,6 +544,14 @@ impl ConeVisitor for Up<'_> {
         for k in kinds {
             self.entries.entry(*k).or_default().add(n, hops, s.tier);
         }
+        // Round-2 r2 §2.1 step 3: the node's canonical entry. A page R0
+        // reports over an action's `RunObject` is no entry by itself (the
+        // actions the site stands for are counted in `step`).
+        if let Some(e) = self.shared.inv.of_node(n)
+            && !self.shared.changed.contains(&e)
+        {
+            self.canon.add(e, n, s.tier, s.ext, hops);
+        }
     }
     fn external(&mut self, _: u32, n: NodeIx, why: ExternalWhy, s: WalkState, hops: u32) {
         self.external
@@ -235,12 +563,21 @@ impl ConeVisitor for Up<'_> {
         self.limit = Some(l);
     }
     fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx) -> Option<u8> {
+        let st = &g.sites()[site as usize];
+        let ext = from.ext | site_bits(g, site);
         if g.is_action_run(site) {
-            self.action_site
-                .entry(g.sites()[site as usize].from)
-                .or_insert(site);
+            self.action_site.entry(st.from).or_insert(site);
+            // Round-2 r2 §2.1 step 3: each action the site stands for is one
+            // canonical page-action entry, reached by the state this step
+            // makes (the walk reached `from` just before, at `cur_hops`).
+            let tier = tier_over(g, site, from.tier);
+            for &e in self.shared.inv.of_site(site) {
+                if !self.shared.changed.contains(&e) {
+                    self.canon.add(e, st.from, tier, ext, self.cur_hops + 1);
+                }
+            }
         }
-        Some(from.ext)
+        Some(ext)
     }
 }
 
@@ -353,57 +690,252 @@ fn node_json(g: &SitedGraph, n: NodeIx, hops: u32, tier: Tier) -> Value {
     v
 }
 
-/// The population every walk's ancestors are, until the walk records a
-/// relation (round-2 r2 §2.1, the W1 interim).
+/// What the legacy `ancestors` tiers count: every relation together (the
+/// classified counts are `byRelation`).
 pub const POPULATION: &str = "all ancestors (code, UI navigation, configuration, hub)";
 
-/// The one eligibility predicate of the declared-entry share (round-2 r2
-/// §2.1, W1 interim): a node counts when its root-kind mask holds an entry
-/// kind, the test `programEntries` uses. Pages an action's `RunObject` runs,
-/// static background targets and roots.config entries are R0 entries outside
-/// that mask: counted on neither side.
-fn declared_entry(g: &SitedGraph, n: NodeIx) -> bool {
-    !EntryKind::of_root_kinds(g.root_kinds(n)).is_empty()
+/// Counts per class and tier, in `byRelation`'s shape (round-2 r2 §2.1
+/// step 5): `{code: {local, viaDependency}, uiNavigation: {local,
+/// viaDependency}, candidates: {overConfiguration: {code, uiNavigation},
+/// overRule, overHub}, total}`.
+fn by_relation(ws: impl Iterator<Item = Witness>) -> Value {
+    let mut n: BTreeMap<(Population, bool), usize> = BTreeMap::new();
+    let mut total = 0usize;
+    for w in ws {
+        total += 1;
+        *n.entry((w.population(), w.tier == Tier::Local))
+            .or_default() += 1;
+    }
+    let get = |p: Population, local: bool| n.get(&(p, local)).copied().unwrap_or(0);
+    let both = |p: Population| get(p, true) + get(p, false);
+    json!({
+        "code": {"local": get(Population::Code, true), "viaDependency": get(Population::Code, false)},
+        "uiNavigation": {"local": get(Population::Navigation, true),
+                         "viaDependency": get(Population::Navigation, false)},
+        "candidates": {
+            "overConfiguration": {"code": both(Population::ConfiguredCode),
+                                  "uiNavigation": both(Population::ConfiguredNavigation)},
+            "overRule": both(Population::OverRule),
+            "overHub": both(Population::OverHub),
+        },
+        "total": total,
+    })
 }
 
-/// The denominator side of the declared-entry share, built once per answer:
-/// the changed routines' nodes (excluded on both sides) and the program's
-/// nodes passing [`declared_entry`] that are not among them.
-struct Declared {
-    changed: BTreeSet<NodeIx>,
-    program: usize,
+/// A witness as the answer names it: the node, its hops, the tier it shows
+/// and its relation (round-2 r2 §5's `[<tier>, <relation>]`), and whether a
+/// candidate's path also takes a UI-navigation step.
+fn witness_json(g: &SitedGraph, w: &Witness) -> Value {
+    let p = w.population();
+    let mut v = json!({"display": display(g, w.node), "hops": w.hops,
+                       "tier": shown_tier(w.tier, w.ext), "relation": p.relation(),
+                       "established": p.established()});
+    if matches!(p, Population::OverRule | Population::OverHub) {
+        v["needsNavigation"] = json!(w.needs_navigation());
+    }
+    if let Some(id) = g.stable_id(w.node) {
+        v["stableId"] = json!(id);
+    }
+    v
 }
 
-impl Declared {
-    fn new(g: &SitedGraph, changed: BTreeSet<NodeIx>) -> Declared {
-        let program = (0..g.node_count() as u32)
-            .filter(|&n| declared_entry(g, n) && !changed.contains(&n))
-            .count();
-        Declared { changed, program }
-    }
+/// A share of the program's canonical entries.
+fn share_json(reached: usize, program: usize) -> Value {
+    json!({"reached": reached, "program": program,
+           "percent": (reached * 100).checked_div(program).map(|p| p.min(100))})
+}
 
-    /// `(reached, program)`: the walk's reached nodes passing the predicate
-    /// (from every reached state, never from `Up.entries`, which also holds
-    /// R0's out-of-mask entries), the changed routines excluded. So
-    /// `reached <= program` by construction.
-    fn share(&self, g: &SitedGraph, up: &Up<'_>) -> (usize, usize) {
-        let reached = up
-            .best
-            .keys()
-            .filter(|&&n| declared_entry(g, n) && !self.changed.contains(&n))
-            .count();
-        (reached, self.program)
+/// The classes a population key gathers: the five a population line prints
+/// (`overConfiguration` holds both relations).
+const POPULATIONS: [(&str, &[Population]); 5] = [
+    ("code", &[Population::Code]),
+    ("uiNavigation", &[Population::Navigation]),
+    (
+        "overConfiguration",
+        &[Population::ConfiguredCode, Population::ConfiguredNavigation],
+    ),
+    ("overRule", &[Population::OverRule]),
+    ("overHub", &[Population::OverHub]),
+];
+
+/// The classified part of a walk's summary (round-2 r2 §2.1 steps 2-5):
+/// ancestors and canonical entries per population, the entries by kind and
+/// context, the program's share, each population's nearest witness, and the
+/// external callers of the code population.
+fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
+    use crate::engine::vocab;
+    let inv = up.shared.inv;
+    let ancestors: Vec<Witness> = up
+        .best
+        .iter()
+        .filter(|(n, _)| !up.root_nodes.contains(n) && g.flags(**n) & flag::HUB == 0)
+        .map(|(_, b)| b.class)
+        .collect();
+    let entries: Vec<(u32, Witness)> = up.canon.best.iter().map(|(&e, &w)| (e, w)).collect();
+    let program = up.shared.program();
+    let mut by_kind = serde_json::Map::new();
+    let mut by_context = serde_json::Map::new();
+    let mut share = serde_json::Map::new();
+    let mut nearest = serde_json::Map::new();
+    let mut first_by_kind = serde_json::Map::new();
+    for (key, classes) in POPULATIONS {
+        let mine: Vec<&(u32, Witness)> = entries
+            .iter()
+            .filter(|(_, w)| classes.contains(&w.population()))
+            .collect();
+        let mut kinds: BTreeMap<EntryKind, usize> = BTreeMap::new();
+        let mut contexts: BTreeMap<&str, usize> = BTreeMap::new();
+        // Per kind, the nearest entry (class order, then arrival).
+        let mut firsts: BTreeMap<EntryKind, (u32, Witness)> = BTreeMap::new();
+        for &&(e, w) in &mine {
+            let k = inv.kind(e);
+            *kinds.entry(k).or_default() += 1;
+            let ctx: BTreeSet<&str> = inv.kinds(e).filter_map(vocab::entry_context).collect();
+            for c in ctx {
+                *contexts.entry(c).or_default() += 1;
+            }
+            let f = firsts.entry(k).or_insert((e, w));
+            if (w.key(), w.at) < (f.1.key(), f.1.at) {
+                *f = (e, w);
+            }
+        }
+        // Kinds by their §8.1 words, merged (`page trigger` holds the API
+        // pages' triggers too), in print order.
+        let mut words: Vec<(&str, usize)> = Vec::new();
+        for (k, n) in &kinds {
+            let w = vocab::entry_kind(*k);
+            match words.iter_mut().find(|(x, _)| *x == w) {
+                Some(x) => x.1 += n,
+                None => words.push((w, *n)),
+            }
+        }
+        by_kind.insert(
+            key.into(),
+            Value::Object(
+                words
+                    .iter()
+                    .map(|(w, n)| ((*w).to_string(), json!(n)))
+                    .collect(),
+            ),
+        );
+        by_context.insert(
+            key.into(),
+            Value::Object(
+                contexts
+                    .iter()
+                    .map(|(c, n)| ((*c).to_string(), json!(n)))
+                    .collect(),
+            ),
+        );
+        share.insert(key.into(), share_json(mine.len(), program));
+        let mut printed: Vec<&str> = Vec::new();
+        let mut list: Vec<Value> = Vec::new();
+        for (k, (e, w)) in &firsts {
+            let word = vocab::entry_kind(*k);
+            if printed.contains(&word) {
+                continue;
+            }
+            printed.push(word);
+            let mut v = witness_json(g, w);
+            v["kind"] = json!(word);
+            if let Some(a) = inv.action(*e) {
+                v["action"] = json!(a);
+            }
+            list.push(v);
+        }
+        first_by_kind.insert(key.into(), Value::Array(list));
+        // The nearest witness: an entry of the population, else its nearest
+        // ancestor.
+        let entry = classes
+            .iter()
+            .filter_map(|p| up.canon.nearest(*p))
+            .min_by_key(|(_, w)| (w.key(), w.at));
+        let w = match entry {
+            Some((e, w)) => {
+                let mut v = witness_json(g, &w);
+                v["entry"] = json!(vocab::entry_kind(inv.kind(e)));
+                if let Some(a) = inv.action(e) {
+                    v["action"] = json!(a);
+                }
+                Some(v)
+            }
+            None => ancestors
+                .iter()
+                .filter(|w| classes.contains(&w.population()))
+                .min_by_key(|w| (w.key(), w.at))
+                .map(|w| witness_json(g, w)),
+        };
+        nearest.insert(key.into(), w.unwrap_or(Value::Null));
     }
+    let candidates = entries
+        .iter()
+        .filter(|(_, w)| !w.population().established())
+        .count();
+    share.insert("candidates".into(), share_json(candidates, program));
+    share.insert("all".into(), share_json(entries.len(), program));
+    let program_by_kind: Vec<(&str, usize)> = {
+        let mut words: Vec<(&str, usize)> = Vec::new();
+        for (k, n) in inv.by_kind(|_| true) {
+            let w = vocab::entry_kind(k);
+            match words.iter_mut().find(|(x, _)| *x == w) {
+                Some(x) => x.1 += n,
+                None => words.push((w, n)),
+            }
+        }
+        words
+    };
+    // `external:` belongs to the code population: the external callers whose
+    // best state is established code.
+    let external_code: Vec<Value> = up
+        .external
+        .iter()
+        .map(|(why, f)| {
+            let n = f
+                .best
+                .keys()
+                .filter(|n| {
+                    up.best
+                        .get(n)
+                        .is_some_and(|b| b.class.population() == Population::Code)
+                })
+                .count();
+            json!({"why": why, "count": n})
+        })
+        .filter(|v| v["count"] != json!(0))
+        .collect();
+    let mut m = serde_json::Map::new();
+    m.insert("relationRecorded".into(), json!(true));
+    m.insert(
+        "byRelation".into(),
+        json!({"ancestors": by_relation(ancestors.iter().copied()),
+               "entries": by_relation(entries.iter().map(|(_, w)| *w))}),
+    );
+    m.insert("entriesByKind".into(), Value::Object(by_kind));
+    m.insert("entriesByContext".into(), Value::Object(by_context));
+    m.insert(
+        "programEntriesByKind".into(),
+        Value::Object(
+            program_by_kind
+                .iter()
+                .map(|(w, n)| ((*w).to_string(), json!(n)))
+                .collect(),
+        ),
+    );
+    m.insert("programShare".into(), Value::Object(share));
+    m.insert("nearest".into(), Value::Object(nearest));
+    m.insert("firstByKind".into(), Value::Object(first_by_kind));
+    m.insert("externalCode".into(), json!(external_code));
+    m
 }
 
 /// What one walk found, as JSON.
-fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions, declared: &Declared) -> Value {
+fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
     let (mut local, mut dep, mut open) = (0usize, 0usize, 0usize);
-    for (n, (t, _)) in &up.best {
+    for (n, b) in &up.best {
         if up.root_nodes.contains(n) || g.flags(*n) & flag::HUB != 0 {
             continue;
         }
-        match t {
+        match b.tier {
             Tier::Local => local += 1,
             Tier::ThroughDependency => dep += 1,
             Tier::OnlyOpen => open += 1,
@@ -480,20 +1012,11 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions, declared: &Decl
         .filter(|&n| !EntryKind::of_root_kinds(g.root_kinds(n)).is_empty())
         .count();
     let entry_total: usize = up.entries.values().map(Firsts::count).sum();
-    let (reached, program) = declared.share(g, up);
-    json!({
-        // Round-2 r2 §2.1 (W1 interim, additive): the walk records no
-        // relation; its ancestors are one population of every relation.
-        "relationRecorded": false,
+    let mut out = json!({
+        // The legacy `ancestors` tiers and entry buckets mix every relation
+        // (round-2 r2 §2.1 step 5: they stay until the next impact version;
+        // the classified counts are `byRelation`).
         "population": POPULATION,
-        "declaredEntries": {
-            "reached": reached,
-            "program": program,
-            "percent": (reached * 100).checked_div(program).map(|p| p.min(100)),
-            "rule": "nodes whose root kinds hold an entry kind; the changed routines excluded on \
-                     both sides; pages run by an action's RunObject, background targets and \
-                     roots.config entries counted on neither side",
-        },
         "rootEntryKinds": up.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
         "rootUserOrJob": up.root_entry.iter().any(|k| user_or_job(*k)),
         "hubs": hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
@@ -516,7 +1039,11 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions, declared: &Decl
             Limit::StateBudget(n) => format!("state budget {n}"),
             Limit::Cancelled => "cancelled".to_string(),
         }),
-    })
+    });
+    if let Value::Object(o) = &mut out {
+        o.extend(classified(up, g));
+    }
+    out
 }
 
 /// The direct callers of `r`'s nodes (explain's definition), each with its
@@ -591,10 +1118,11 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
     let mut roots_out = Vec::with_capacity(args.roots.len());
     let started = std::time::Instant::now();
     // Every changed routine's nodes (each `#if` arm, symbol-only copies
-    // too): excluded from both sides of every walk's declared-entry share.
-    let declared = Declared::new(
+    // too): their entries are left out of both sides of every walk's share.
+    let shared = Shared::new(
         g,
-        args.roots
+        &args
+            .roots
             .iter()
             .flat_map(|id| g.nodes_with_stable_id(id))
             .collect(),
@@ -614,7 +1142,7 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
             continue;
         }
         all_nodes.extend(&nodes);
-        let mut v = Up::new(g, args.keep, &nodes);
+        let mut v = Up::new(g, args.keep, &nodes, &shared);
         let t = std::time::Instant::now();
         // One root's nodes (its `#if` arms) walk together.
         if nodes.len() == 1 {
@@ -625,7 +1153,7 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
         walks_us += t.elapsed().as_micros() as u64;
         states += v.states;
         visitor_bytes = visitor_bytes.max(v.bytes());
-        let mut s = summary(&v, g, captions, &declared);
+        let mut s = summary(&v, g, captions);
         s["stableId"] = json!(id);
         s["status"] = json!("walked");
         s["display"] = json!(display(g, nodes[0]));
@@ -637,7 +1165,7 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
                 .filter_map(|&n| {
                     g.stable_id(n).map(|id| {
                         json!({"stableId": id, "display": display(g, n),
-                                                               "hops": v.best.get(&n).map(|b| b.1)})
+                                                               "hops": v.best.get(&n).map(|b| b.hops)})
                     })
                 })
                 .collect::<Vec<_>>()
@@ -646,12 +1174,12 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
     }
     all_nodes.sort_unstable();
     all_nodes.dedup();
-    let mut u = Up::new(g, args.keep, &all_nodes);
+    let mut u = Up::new(g, args.keep, &all_nodes, &shared);
     let t = std::time::Instant::now();
     let ustats = walk_multi(g, &all_nodes, &opts, &mut scratch, &mut u);
     walks_us += t.elapsed().as_micros() as u64;
     visitor_bytes = visitor_bytes.max(u.bytes());
-    let union = summary(&u, g, captions, &declared);
+    let union = summary(&u, g, captions);
     json!({
         "schema": SCHEMA,
         "version": 1,
@@ -663,7 +1191,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
                  // The walks alone (per root and the union), without the
                  // summaries and captions: the up-walk phase's own time.
                  "walksUs": walks_us,
-                 "scratchBytes": scratch.bytes(), "visitorBytes": visitor_bytes},
+                 "scratchBytes": scratch.bytes(), "visitorBytes": visitor_bytes,
+                 "inventoryBytes": shared.inv.bytes()},
     })
 }
 
@@ -724,7 +1253,7 @@ mod tests {
     /// another). Declared entries (root kinds with an entry kind): `R`,
     /// `Opened.OnOpenPage`, `Bg.OnRun` and the unreached `Other.OnOpenPage`.
     /// Returns the graph and the nodes `(R, Opened.OnOpenPage, Bg.OnRun)`.
-    fn entry_world() -> (SitedGraph, NodeIx, NodeIx, NodeIx) {
+    pub(super) fn entry_world() -> (SitedGraph, NodeIx, NodeIx, NodeIx) {
         let mut w = World::default();
         let a = w.app("W");
         let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
@@ -782,8 +1311,9 @@ mod tests {
         (g, r, open_t, on_run)
     }
 
-    fn walked(g: &SitedGraph, r: NodeIx) -> Value {
-        let mut v = Up::new(g, Keep::new(false), &[r]);
+    pub(super) fn walked(g: &SitedGraph, r: NodeIx) -> Value {
+        let shared = Shared::new(g, &[r].into_iter().collect());
+        let mut v = Up::new(g, Keep::new(false), &[r], &shared);
         walk_one(
             g,
             r,
@@ -791,23 +1321,21 @@ mod tests {
             &mut WalkScratch::default(),
             &mut v,
         );
-        let declared = Declared::new(g, [r].into_iter().collect());
-        summary(&v, g, &mut Captions::new(HashMap::new()), &declared)
+        summary(&v, g, &mut Captions::new(HashMap::new()))
     }
 
-    /// Round-2 r2 §2.1 (W1 interim): the declared-entry share takes one
-    /// predicate on both sides (root kinds with an entry kind), counts the
-    /// reached nodes passing it, never `Up.entries` (which also holds R0's
-    /// out-of-mask entries: the page an action's `RunObject` opens and the
-    /// codeunit a background start enters), and leaves the changed routine
-    /// out of both. So `reached <= program`.
+    /// Round-2 r2 §2.1 steps 3-4 (W2, replacing W1's mask predicate): the
+    /// share counts canonical entries on both sides, out-of-mask entries
+    /// included (the page whose action's `RunObject` runs on the path, the
+    /// codeunit object a background start enters), the changed routine left
+    /// out of both. So `reached <= program`, and every reached entry is one
+    /// the program counts.
     ///
-    /// DISCRIMINATION (2026-11-07): taking `reached` from `Up.entries` (the
-    /// distinct nodes over every bucket) instead of the reached states fails
-    /// the first assert: the action-run page and the background codeunit
-    /// count (4 reached against 3 in the program).
+    /// DISCRIMINATION (2026-11-07): counting the changed routine's entry in
+    /// the program (`Shared::program` returning `inv.len()`) fails "4 of 5"
+    /// (4 of 6).
     #[test]
-    fn declared_entry_share_counts_one_predicate_on_both_sides() {
+    fn the_entry_share_counts_canonical_entries_on_both_sides() {
         let (g, r, open_t, on_run) = entry_world();
         let s = walked(&g, r);
         let kinds: Vec<&str> = s["entries"]
@@ -820,19 +1348,21 @@ mod tests {
             kinds.contains(&"background-start") && kinds.contains(&"page-action"),
             "precondition: R0 reports the out-of-mask entries: {kinds:?}"
         );
-        let d = &s["declaredEntries"];
+        let inv = g.entry_inventory();
+        assert!(inv.of_node(open_t).is_some() && inv.of_node(on_run).is_some());
+        assert!(inv.of_node(r).is_some(), "precondition: R itself is one");
+        let d = &s["programShare"]["all"];
         let (reached, program) = (d["reached"].as_u64(), d["program"].as_u64());
         assert!(
             reached <= program,
             "reached {reached:?} <= program {program:?}"
         );
-        // Opened.OnOpenPage and Bg.OnRun; the program adds Other.OnOpenPage,
-        // and leaves the changed routine R out.
-        assert_eq!((reached, program), (Some(2), Some(3)), "{d:#}");
-        assert_eq!(d["percent"], json!(66));
-        assert!(declared_entry(&g, open_t) && declared_entry(&g, on_run));
-        assert!(declared_entry(&g, r), "precondition: R itself is declared");
-        assert_eq!(s["relationRecorded"], json!(false));
+        // Reached: Opened.OnOpenPage, Bg.OnRun, the Bg object (a background
+        // target) and Card's action-run page; the program adds
+        // Other.OnOpenPage and leaves R out.
+        assert_eq!((reached, program), (Some(4), Some(5)), "{d:#}");
+        assert_eq!(d["percent"], json!(80));
+        assert_eq!(s["relationRecorded"], json!(true));
         assert_eq!(s["population"], json!(POPULATION));
     }
 
@@ -864,5 +1394,12 @@ mod tests {
         );
         assert_eq!(s["rootEntryKinds"], json!(["page-action", "trigger-page"]));
         assert_eq!(s["rootUserOrJob"], json!(true));
+        // Nor is it one of its own canonical entries, in any population.
+        let all = &s["programShare"]["all"];
+        assert_eq!(all["reached"], json!(4), "{all:#}");
     }
 }
+
+#[cfg(test)]
+#[path = "up_tests.rs"]
+mod relation_tests;

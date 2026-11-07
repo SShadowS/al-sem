@@ -242,6 +242,13 @@ pub struct SitedGraph {
     stable_of: Vec<u32>,
     /// The lifecycle sites a page's action makes (`RunObject`), sorted.
     action_run_sites: Vec<u32>,
+    /// Per action-run site with named actions, sorted by site: the actions
+    /// that run its target, each `(the object declaring it, its name)`
+    /// (round-2 r2 §2.1 step 3).
+    action_run_actions: Vec<(u32, Vec<(crate::program::node::ObjectNodeId, Box<str>)>)>,
+    /// The program's canonical entries (round-2 r2 §2.1 step 4), built once
+    /// on first use ([`Self::entry_inventory`]).
+    entry_inventory: std::sync::OnceLock<super::entries::EntryInventory>,
     /// The reverse index: the sites into node `n` are
     /// `rev_sites[rev_off[n]..rev_off[n + 1]]`, ascending.
     rev_off: Vec<u32>,
@@ -447,6 +454,45 @@ impl SitedGraph {
     #[must_use]
     pub fn is_action_run(&self, s: u32) -> bool {
         self.action_run_sites.binary_search(&s).is_ok()
+    }
+
+    /// The actions an action-run site stands for, each `(the object
+    /// declaring it, its name as declared)`; empty for any other site, and
+    /// for an action-run site whose actions the facts do not name.
+    #[must_use]
+    pub fn action_run_actions(&self, s: u32) -> &[(crate::program::node::ObjectNodeId, Box<str>)] {
+        self.action_run_actions
+            .binary_search_by_key(&s, |(x, _)| *x)
+            .map_or(&[], |i| self.action_run_actions[i].1.as_slice())
+    }
+
+    /// Whether node `ix` is a routine (not an object or a hub); no
+    /// allocation, for a walk's per-site test.
+    #[must_use]
+    pub fn is_routine(&self, ix: u32) -> bool {
+        matches!(self.nodes.get(ix as usize), Some(Key::Routine(_)))
+    }
+
+    /// Whether site `s` carries `configuredDispatch` (a mask test).
+    #[must_use]
+    pub fn is_configured_dispatch(&self, s: u32) -> bool {
+        static MASK: std::sync::LazyLock<u8> =
+            std::sync::LazyLock::new(|| condition_mask(["configuredDispatch"]));
+        self.sites[s as usize].conditions & *MASK != 0
+    }
+
+    /// Every action-run site, ascending.
+    #[must_use]
+    pub fn action_run_sites(&self) -> &[u32] {
+        &self.action_run_sites
+    }
+
+    /// The program's canonical entries, built on first use and kept with the
+    /// graph.
+    #[must_use]
+    pub fn entry_inventory(&self) -> &super::entries::EntryInventory {
+        self.entry_inventory
+            .get_or_init(|| super::entries::EntryInventory::of(self))
     }
 
     /// The universal hub's node, when an edge names it.
@@ -675,6 +721,19 @@ impl SitedGraph {
             + self.stable.capacity() * size_of::<StableEntry>()
             + self.stable_of.capacity() * size_of::<u32>()
             + self.action_run_sites.capacity() * size_of::<u32>()
+            + self
+                .action_run_actions
+                .iter()
+                .map(|(_, a)| {
+                    size_of::<(u32, Vec<()>)>()
+                        + a.iter()
+                            .map(|(_, n)| {
+                                size_of::<(crate::program::node::ObjectNodeId, Box<str>)>()
+                                    + n.len()
+                            })
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
             + (self.rev_off.capacity() + self.rev_sites.capacity()) * size_of::<u32>()
             + self
                 .stable_objects
@@ -728,6 +787,8 @@ pub(crate) struct SitedBuilder {
     unit_ix: HashMap<Box<str>, u32>,
     /// The lifecycle sites a page action's `RunObject` makes.
     pub(crate) action_run_sites: Vec<u32>,
+    /// Per action-run site with named actions: those actions.
+    pub(crate) action_run_actions: Vec<(u32, Vec<(crate::program::node::ObjectNodeId, Box<str>)>)>,
     /// The sites the projection labelled `configuredDispatch`, in site order.
     pub(crate) configured_arms: Vec<(u32, ConfiguredArm)>,
 }
@@ -742,6 +803,7 @@ impl SitedBuilder {
             units: Vec::new(),
             unit_ix: HashMap::new(),
             action_run_sites: Vec::new(),
+            action_run_actions: Vec::new(),
             configured_arms: Vec::new(),
         };
         for r in graph.routines.iter() {
@@ -1061,6 +1123,10 @@ impl SitedBuilder {
         action_run_sites.sort_unstable();
         action_run_sites.dedup();
         action_run_sites.shrink_to_fit();
+        let mut action_run_actions = self.action_run_actions;
+        action_run_actions.sort();
+        action_run_actions.dedup_by_key(|(s, _)| *s);
+        action_run_actions.shrink_to_fit();
         let mut apps = HashMap::new();
         for k in &self.nodes {
             let app = match k {
@@ -1095,6 +1161,8 @@ impl SitedBuilder {
             stable,
             stable_of,
             action_run_sites,
+            action_run_actions,
+            entry_inventory: std::sync::OnceLock::new(),
             rev_off,
             rev_sites,
             local_names,

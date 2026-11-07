@@ -129,82 +129,109 @@ fn a_root_line_prints_its_display_not_its_handle() {
     assert!(!text.contains("R0/2"), "{text}");
 }
 
-/// Round-2 c12/c20: a kind's count adds every legacy bucket of that kind
-/// (codeunit OnRun = `background-start` + `onrun-codeunit`), so its first
-/// witness is the nearest over the same buckets — never the first bucket's
-/// first witness. Hand-stated: the background bucket comes first and holds
-/// only a 21-hop witness; the OnRun bucket holds one at 3 hops.
-///
-/// DISCRIMINATION (2026-11-06): printing the first bucket's witnesses
-/// (`e["first"]` for `kind_firsts(..)` in `reach_lines`, as before) fails at
-/// the 3-hop assert (it prints Codeunit 9081, 21 hops); restored, passes.
-#[test]
-fn a_kind_first_witness_is_the_nearest_over_its_buckets() {
-    let (main, mut up, delta) = parts(1, 0);
-    up["roots"][0]["entries"] = json!([
-        {"kind": "background-start", "count": 18, "onlyOpen": 12, "userOrJob": true, "first": [
-            {"display": "Codeunit 9081", "stableId": "d:9081", "hops": 21, "tier": "throughDependency"}]},
-        {"kind": "onrun-codeunit", "count": 429, "onlyOpen": 120, "userOrJob": false, "first": [
-            {"display": "Codeunit 6175300", "stableId": "w:1", "hops": 3, "tier": "throughDependency"},
-            {"display": "Codeunit 9081", "stableId": "d:9081", "hops": 21, "tier": "throughDependency"}]}]);
-    // Round-2 r2 §2.1 (W1): the first entries print with `detail` only,
-    // tagged, with no bracketed tier.
-    let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
-    assert!(
-        text.contains("codeunit OnRun 447 (over a hub 132)"),
-        "{text}"
-    );
-    assert!(
-        text.contains(
-            "first codeunit OnRun: [relation not recorded] Codeunit 6175300 (through a \
-             dependency, 3 hops)\n"
-        ),
-        "{text}"
-    );
+/// One routine's classified reach (round-2 r2 §2.1, W2), hand-stated: `code`
+/// and `nav` ancestors (local) and entries, of `program` entries in all.
+fn classified(code: usize, nav: usize, entries: (usize, usize), program: usize) -> Value {
+    let share = |n: usize| {
+        json!({"reached": n, "program": program,
+               "percent": (n * 100).checked_div(program)})
+    };
+    json!({
+        "relationRecorded": true,
+        "byRelation": {"ancestors": {
+            "code": {"local": code, "viaDependency": 0},
+            "uiNavigation": {"local": nav, "viaDependency": 0},
+            "candidates": {"overConfiguration": {"code": 0, "uiNavigation": 0},
+                           "overRule": 0, "overHub": 2},
+            "total": code + nav + 2}},
+        "entriesByKind": {"code": {"page action": entries.0},
+                          "uiNavigation": {"page action": entries.1}},
+        "programShare": {"code": share(entries.0), "uiNavigation": share(entries.1),
+                         "all": share(entries.0 + entries.1)},
+        "nearest": {"code": {"display": "Page \"Card\"", "hops": 3, "tier": "local",
+                             "relation": "code", "entry": "page action", "established": true},
+                    "uiNavigation": {"display": "Page \"Sales Invoice\"", "hops": 2,
+                                     "tier": "via-dependency", "relation": "UI navigation",
+                                     "action": "Open Card", "entry": "page action",
+                                     "established": true}},
+        "externalCode": [{"why": "public", "count": 4}],
+    })
 }
 
-/// A witness only an open site (a hub) reaches says so, and so does the
-/// count of such entries (round-1 c20: a `run:report` hub's witness was
-/// printed beside the real path as a plain "reached from" entry). A path
-/// through dependency code is named too; a local one carries no label.
+/// Round-2 r2 §2.1 Rules: a population whose canonical entries are at least
+/// 90% of the program's is `program-wide` and folds its counts by kind; a
+/// narrow population prints its share and its kinds; a limited walk prints
+/// neither a share nor an absence verdict.
 ///
-/// Output validation V2 (§3.2, §8.1): every witness starts with its tier in
-/// the word table's words, and the entry count says how many are via-hub.
-///
-/// Round-2 r2 §2.1 (W1 interim): the walk records no relation, so its
-/// witnesses say where their path goes in plain words (`within the
-/// workspace`, `through a dependency`, `over a hub`), never a bracketed tier.
-///
-/// Break: drop the tier from `node_plain` → the `over a hub` witness assert
-/// fails (2026-11-06, recorded in the V2 commit; the words moved in W1).
+/// DISCRIMINATION (2026-11-07): computing the share against the reached
+/// set instead of the program's entries (`population_share` dividing by
+/// `program.min(reached)`) fails the first assert: the navigation line
+/// prints 100%, not 95%, and the narrow population turns program-wide.
 #[test]
-fn an_open_site_witness_is_labelled_with_its_tier() {
+fn program_wide_needs_the_programs_entries_and_an_unlimited_walk() {
     let (main, mut up, delta) = parts(1, 0);
-    up["roots"][0]["entries"] = json!([{"kind": "report-trigger", "count": 3, "onlyOpen": 1,
-        "userOrJob": true, "first": [
-            {"display": "Report 357::company::onpostdataitem", "hops": 2, "tier": "local"},
-            {"display": "Report 202::header::onaftergetrecord", "hops": 3, "tier": "throughDependency"},
-            {"display": "Report 50100::onprereport", "hops": 5, "tier": "onlyOpen"}]},
-        {"kind": "onrun-codeunit", "count": 1, "onlyOpen": 1, "userOrJob": false, "first": [
-            {"display": "Codeunit 50200", "hops": 6, "tier": "onlyOpen"}]}]);
-    let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
-    assert!(text.contains("report triggers 3 (over a hub 1)"), "{text}");
-    // With `detail`, the nearest entry of each kind, tagged.
+    let base = up["roots"][0].clone();
+    let with = |c: Value| {
+        let mut r = base.clone();
+        r.as_object_mut()
+            .unwrap()
+            .extend(c.as_object().unwrap().clone());
+        r
+    };
+    up["roots"][0] = with(classified(3, 40, (2, 95), 100));
+    let text = human(&main, &up, delta, RenderOpts::default());
     assert!(
         text.contains(
-            "first report trigger: [relation not recorded] Report 357::company::onpostdataitem \
-             (within the workspace, 2 hops)\n"
+            "reached by UI navigation: 40 ancestors — local 40, via-dependency 0; program-wide: \
+             95% of the program's entries (95 of 100); counts by kind folded (--detail prints \
+             them)"
         ),
         "{text}"
     );
     assert!(
         text.contains(
-            "first codeunit OnRun: [relation not recorded] Codeunit 50200 (over a hub, 6 hops)\n"
+            "reached by code: 3 ancestors — local 3, via-dependency 0; 2% of the \
+                       program's entries (2 of 100)"
+        ),
+        "the narrow population is not program-wide: {text}"
+    );
+    assert!(
+        text.contains("      entries by kind: page actions 2\n"),
+        "{text}"
+    );
+    assert!(!text.contains("page actions 95"), "folded: {text}");
+    assert!(
+        text.contains(
+            "nearest entry: [via-dependency, UI navigation] Page \"Sales Invoice\" action \
+             \"Open Card\" (page action, 2 hops)"
         ),
         "{text}"
     );
     assert!(
-        !text.contains("[local]") && !text.contains("[via-hub]"),
+        text.contains(
+            "external: apps outside the program may call routines of its code population"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "candidates (relation not established): over a rule edge 0, over a hub 2 ancestors"
+        ),
+        "{text}"
+    );
+    // A limited walk: no share, no absence verdict.
+    let (main, mut up, delta) = parts(1, 0);
+    let mut r = with(classified(0, 40, (0, 95), 100));
+    r["limited"] = json!("state budget 2000000");
+    up["roots"][0] = r;
+    let text = human(&main, &up, delta, RenderOpts::default());
+    assert!(!text.contains("program-wide"), "{text}");
+    assert!(!text.contains("every candidate decided"), "{text}");
+    assert!(
+        text.contains(
+            "reached by code: none — no code path reaches it in the analyzed graph; \
+                       analysis partial (limit: state budget 2000000)"
+        ),
         "{text}"
     );
 }

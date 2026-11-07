@@ -9,8 +9,11 @@ current effects of the 1 changed routine; ranked: reached from a user or a job f
       effects: may write 16 tables (1 owned by this app, 15 by dependencies); 1 table whose temporary state the caller decides; commits: may (0 own commit sites); errors 5; HTTP 1; background tasks 1; 2 events; analysis partial (interface-open-world; object-run-unresolved; 1 interface call open world, 2 dynamic calls not resolved)
       calls: Codeunit "Base Poster" (70100): OnRun (:15); Codeunit "Base Calc" (70101): OnRun (:16); Codeunit "Out Log Mgt": WriteLog (:17); +5 more
       direct code callers: none found
-      reached beyond it: 2 ancestors by code calls, UI navigation, configuration or a hub (relation not recorded by this walk): within the workspace 2, through a dependency 0, over a hub 0
-        these ancestors hold 16% of the program's declared entries (1 of 6; pages run by an action's RunObject, background targets and roots.config entries are counted on neither side)
-        entries among them, by kind (counted per legacy bucket: an entry in two buckets counts in both): page actions 1, page triggers 1
+      reached by code: 1 ancestor — local 1, via-dependency 0; 14% of the program's entries (1 of 7)
+        nearest entry: [local, code] Page "Out Doc Card".action(Issue)::OnAction (page action, 1 hop)
+        entries by kind: page actions 1
+        external: apps outside the program may call routines of its code population (by reason, routines): public 1
+      reached by UI navigation: 1 ancestor — local 1, via-dependency 0; no entry among them
+        nearest: [local, UI navigation] Page "Out Doc Card" (2 hops)
       tests: no modeled path (its cone is complete)
 tests: run first: no test with a modeled path; selection complete; workspace 1 [Test]; 0 test apps (none found)

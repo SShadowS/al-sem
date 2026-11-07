@@ -14,8 +14,9 @@ current effects of the 1 changed routine; ranked: reached from a user or a job f
       effects: writes that may persist: none observed (searched: the cone through every resolved call; not searched: calls not resolved); commits: no (every candidate decided) (0 own commit sites)
       calls: none (no call to a routine; builtins aside)
       direct code callers: 1 (Codeunit "TU Core"::Post at src/Core.al:18)
-      reached beyond it: 1 ancestor by code calls, UI navigation, configuration or a hub (relation not recorded by this walk): within the workspace 1, through a dependency 0, over a hub 0
-        entries among them: none (no page action, API page, job, trigger, subscriber or test reaches it)
+      reached by code: 1 ancestor — local 1, via-dependency 0; no entry among them
+        nearest: [local, code] Codeunit "TU Core"::Post (1 hop)
+        external: apps outside the program may call routines of its code population (by reason, routines): public 2
       tests: tests with a modeled path: 2 (2 by a local path); nearest Codeunit "TU Core Tests"::CalcAddsOne (local, 1 hop)
 schema: 2 field, key or field group lines changed (current revision only; a base gives the schema findings)
 tests: run first (app "TU Production Tests"): codeunits 50850 — whole codeunits, so every test in them runs: a superset of the 2 tests picked on a local path; selection complete; workspace 0 [Test]; 1 test app (TU Production Tests)

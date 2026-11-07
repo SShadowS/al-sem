@@ -482,7 +482,7 @@ struct ImpactCli {
     no_delta: bool,
 
     /// With --base: neither read nor write the impact-base cache
-    /// (~/.al-sem/cache/impact-base/v1).
+    /// (~/.al-sem/cache/impact-base/v2).
     #[arg(long = "no-base-cache", default_value_t = false)]
     no_base_cache: bool,
 

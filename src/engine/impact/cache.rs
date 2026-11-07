@@ -29,10 +29,12 @@ use serde_json::{Value, json};
 
 /// The entry header's schema.
 pub const ENTRY_SCHEMA: &str = "al-sem.impact-base";
-/// The entry format's version (the folder name's `v1` too).
-pub const ENTRY_VERSION: u32 = 1;
+/// The entry format's version (the folder name's `v2` too). 2 since round-2
+/// r2 §2.1 (W2): the impact answer classifies its reach by relation, so an
+/// entry written before it is not served.
+pub const ENTRY_VERSION: u32 = 2;
 /// The namespace under `~/.al-sem/`.
-pub const NAMESPACE: &str = "cache/impact-base/v1";
+pub const NAMESPACE: &str = "cache/impact-base/v2";
 /// Overrides the folder (tests, probes).
 pub const DIR_ENV: &str = "AL_SEM_IMPACT_BASE_CACHE";
 const EXT: &str = "ib";
