@@ -82,6 +82,12 @@ impl Firsts {
         }
     }
 
+    /// The list's heap bytes (capacities), for the walk's cost report.
+    fn bytes(&self) -> usize {
+        self.best.capacity()
+            * (std::mem::size_of::<NodeIx>() + std::mem::size_of::<(bool, u32, Tier, usize)>() + 8)
+    }
+
     /// How many distinct nodes.
     fn count(&self) -> usize {
         self.best.len()
@@ -158,6 +164,19 @@ impl<'g> Up<'g> {
             states: 0,
             max_hops: 0,
         }
+    }
+
+    /// The visitor's heap bytes (capacities): what one walk's aggregation
+    /// retains beside the walk's own scratch (round-2 r2 §2.1 Cost).
+    fn bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.best.capacity() * (size_of::<NodeIx>() + size_of::<(Tier, u32)>() + 8)
+            + self.entries.values().map(Firsts::bytes).sum::<usize>()
+            + self.external.values().map(Firsts::bytes).sum::<usize>()
+            + self.publishers.bytes()
+            + self.direct_publishers.bytes()
+            + self.action_site.capacity() * (size_of::<NodeIx>() + size_of::<SiteIx>() + 8)
+            + self.ancestors.capacity() * size_of::<NodeIx>()
     }
 }
 
@@ -581,6 +600,9 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
             .collect(),
     );
     let mut states = 0usize;
+    // The largest visitor any one walk held (one is alive at a time).
+    let mut visitor_bytes = 0usize;
+    let mut walks_us = 0u64;
     for id in args.roots {
         let nodes: Vec<NodeIx> = g
             .nodes_with_stable_id(id)
@@ -593,13 +615,16 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
         }
         all_nodes.extend(&nodes);
         let mut v = Up::new(g, args.keep, &nodes);
+        let t = std::time::Instant::now();
         // One root's nodes (its `#if` arms) walk together.
         if nodes.len() == 1 {
             walk_one(g, nodes[0], &opts, &mut scratch, &mut v);
         } else {
             walk_multi(g, &nodes, &opts, &mut scratch, &mut v);
         }
+        walks_us += t.elapsed().as_micros() as u64;
         states += v.states;
+        visitor_bytes = visitor_bytes.max(v.bytes());
         let mut s = summary(&v, g, captions, &declared);
         s["stableId"] = json!(id);
         s["status"] = json!("walked");
@@ -622,7 +647,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
     all_nodes.sort_unstable();
     all_nodes.dedup();
     let mut u = Up::new(g, args.keep, &all_nodes);
+    let t = std::time::Instant::now();
     let ustats = walk_multi(g, &all_nodes, &opts, &mut scratch, &mut u);
+    walks_us += t.elapsed().as_micros() as u64;
+    visitor_bytes = visitor_bytes.max(u.bytes());
     let union = summary(&u, g, captions, &declared);
     json!({
         "schema": SCHEMA,
@@ -632,7 +660,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
         "union": union,
         "cost": {"perRootStates": states, "unionStates": ustats.states,
                  "walkMs": started.elapsed().as_millis() as u64,
-                 "scratchBytes": scratch.bytes()},
+                 // The walks alone (per root and the union), without the
+                 // summaries and captions: the up-walk phase's own time.
+                 "walksUs": walks_us,
+                 "scratchBytes": scratch.bytes(), "visitorBytes": visitor_bytes},
     })
 }
 
