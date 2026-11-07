@@ -72,6 +72,69 @@ n09) found answers whose count or label did not match their own facts.
   it, or in the condition of a branch around it. The same rule applies to the rules in force
   at a write. Fixture `tests/fixtures/caller-rule-paths/`.
 
+### Fixed (a Temp Blob stream is not file access)
+
+`TempBlob.CreateOutStream` was a FILE effect (`fileOp: "write-blob"`, ported from al-sem's
+`file-blob.ts`). A `Temp Blob` stream is in memory, so `explain`, `digest`, `query
+effects`, `prove` and the ordering engine reported memory streams as file I/O. Round-2
+fact check n10: `explain --callers-context` on `CDO E-Mail Handler::DocSave` printed "FILE
+at …CDOeDocumentsDispatcher.Codeunit.al:286" for `PdfTempBlob.CreateOutStream(WriteStream)`;
+c25: digest counted `CDOUniversigneSealService.Codeunit.al:218` `TempBlob.CreateOutStream`
+under `kinds.file`.
+
+- One rule, `capability::io::is_file_write_call`, shared by the body's capability
+  extractor and the capability cone's (two hand copies before). A FILE write is a method
+  of the AL `File` type that writes the server's file system (`Create`, `Copy`,
+  `WriteAllText`). Not file I/O: a `Temp Blob` (or the old `TempBlob` table), a BLOB
+  field, an `InStream` / `OutStream`; `UploadIntoStream` / `DownloadFromStream` stay
+  client file dialogs (`UI_FILE_DIALOG`, G26); a `File Management` call is a call into
+  Base Application, whose loaded body reaches the `File` methods. No consumer needs a
+  separate in-memory-stream label, so none was added.
+- Population (static count): `Temp Blob` `CreateOutStream` calls on the CDO baseline,
+  3 in the workspace, 159 in dependency source (Base Application 91, System Application
+  57, Continia Delivery Network 11); each was a FILE effect. The CDO renderings moved
+  only where a Temp Blob was the whole FILE story: `IssueReminder` FILE effects 6 → 3
+  (`file at 4 places` → 1), `RunReportID` 4 → 2 (the `Data Compression` and Temp Blob
+  `SendNetworkDocument` entries drop out; entry points 44 → 42). On the fact-check calls,
+  n10's `file at 5 places` is now 2 (both real `File` I/O in Base Application's
+  `IC Outbox Export`), and c25 holds no FILE effect (total effects 1,788 → 1,780).
+- Tests: `tests/cli/cli_temp_blob_not_file.rs` (explain and digest through the binary,
+  a `File.Create` as the positive control); `r4_cross_app_program::temp_blob_is_not_file_io`
+  now asserts the workspace's own `Temp Blob` call has no FILE fact either.
+
+### Fixed (a named return value of a record type is a record variable)
+
+A procedure's named return value (`procedure P() Ret: Record T`) is a variable of that
+routine, scoped like a local. The body walk took only globals, parameters and locals as
+record receivers, so `Ret.Get(…)`, `Ret.Insert()` and `Ret."Field" := …` were not record
+operations or field accesses: `query touches` left them out, and `explain`, `digest`,
+`query effects` and `prove` saw no write on the returned record. Round-2 fact check c30:
+`query touches --table "CDO E-Mail Template Header"` answered 199 sites in 121 routines
+without `CDOEMailTemplateManagement.Codeunit.al:259` `EMailTemplateHeader.Get(…)` (in
+`GetEmailTemplateFromRecord`, `:243`); CDO Send Code missed
+`CDOeDocsSendCodeMigration.Codeunit.al:207` and `CDOSetupData.Codeunit.al:650`, and
+`CreateDefaulteDocsSendCode`'s `SendCode.Insert()` (`:663`) was no write at all.
+
+- One definition, `ir_walk::named_return_var`, read by the body walk's receiver sets
+  (record operations, field accesses, RecordRef receivers), its record variables (a row
+  typed to the return type's table, temporary when declared `temporary`) and the
+  resolver's site extraction (`extract::routine_rvars`), so the two engines classify the
+  same calls as record operations (a named return's `Insert` now raises the table's
+  `OnAfterInsertEvent` like a local's). A bare name that is the return value is no longer
+  an implicit field access of a same-named field. A return value that shares a parameter's
+  or local's name (a compile error) is declined, as `receiver::caller_scope_symbol`
+  declines it; a `Rec` return in an object with an implicit `Rec` keeps the implicit row
+  (#299).
+- Population (static count over the CDO baseline `bc3ccb18` and its dependency source):
+  4 workspace routines with a record-typed named return hold 4 operations on it (Get 3,
+  Insert 1); in dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
+  System Application 6 / 5, Base Application 2 / 5). `aldump --program-call-graph-stats`
+  on CDO: edges unchanged (whole program 46,426, primary 21,014), `unknown` 0 → 0.
+- Tests: `tests/cli/cli_named_return_record.rs` through the binary (query touches counts,
+  explain's write and its table-event subscriber write, digest's persistent and temporary
+  writes, the scalar return named like a field, the RecordRef return);
+  `ir_walk::…::named_return_record_variable_rows` (the clash and `Rec` rules).
+
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 
 Output validation round 1, milestone V5 (spec

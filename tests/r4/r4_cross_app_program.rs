@@ -834,17 +834,20 @@ fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
     assert!(differ.is_empty(), "cross-app != single-app on {differ:?}");
 }
 
-/// S7.6 triage fix, through the cross-app base: the dependency's own
-/// `Temp Blob.CreateOutStream`, which calls `TempBlobImpl.CreateOutStream` on a
-/// `Codeunit "Temp Blob Impl."`, gets no FILE fact (an in-memory stream). The
-/// substring match took `Temp Blob Impl.` for `Temp Blob`, and CDO's d47 then
-/// reported the same stream twice, once inside the System Application.
+/// Through the cross-app base: a `Temp Blob` stream is in memory, so neither the
+/// workspace's `TempBlob.CreateOutStream` nor the dependency's own
+/// `TempBlobImpl.CreateOutStream` (on a `Codeunit "Temp Blob Impl."`) gets a
+/// FILE fact. S7.6 first stopped the substring match that took `Temp Blob Impl.`
+/// for `Temp Blob` (CDO's d47 reported one stream twice); the r2 fact check
+/// (n10, c25) then found the workspace's own `Temp Blob` call reported as file
+/// access, and `capability::io::is_file_write_call` dropped the `Temp Blob` arm.
+/// A `File` write is still one (the positive control).
 ///
-/// Discrimination (2026-10-06): restoring `contains("temp blob")` in
-/// `capability::io::is_temp_blob_type` gives `CreateOutStream` a FILE fact and
-/// fails the test; restored, it passes.
+/// Discrimination (2026-11-06): giving `is_file_write_call` back a
+/// `Temp Blob` + `createoutstream` arm puts a FILE fact on `Go` and fails the
+/// first assertion; restored, it passes.
 #[test]
-fn temp_blob_impl_is_not_file_io() {
+fn temp_blob_is_not_file_io() {
     use al_sem::engine::l4::capability_cone::project_r3a5_cross_app;
     let dir = tempfile::tempdir().unwrap();
     let ws = dir.path();
@@ -856,7 +859,7 @@ fn temp_blob_impl_is_not_file_io() {
     );
     write(
         &ws.join("src/Main.al"),
-        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        B: Codeunit \"Temp Blob\";\n        S: OutStream;\n    begin\n        B.CreateOutStream(S);\n    end;\n}\n",
+        "codeunit 50201 \"Ws Main\"\n{\n    procedure Go()\n    var\n        B: Codeunit \"Temp Blob\";\n        S: OutStream;\n    begin\n        B.CreateOutStream(S);\n    end;\n\n    procedure WriteFile()\n    var\n        F: File;\n    begin\n        F.Create('out.txt');\n    end;\n}\n",
     );
     let symbols = format!(
         r#"{{"RuntimeVersion":"13.0","AppId":"{DEP_GUID}","Name":"XDep","Publisher":"probe","Version":"1.0.0.0"}}"#
@@ -880,23 +883,20 @@ fn temp_blob_impl_is_not_file_io() {
         "",
     );
     let p = project_r3a5_cross_app(ws, "x");
-    let dep_file_facts: Vec<String> = p
+    let file_facts: Vec<(String, bool)> = p
         .summaries
         .iter()
-        .filter(|s| s.is_dep_routine)
-        .flat_map(|s| s.capability_facts_direct.iter())
-        .filter(|f| f.resource_kind == "file")
-        .map(|f| f.op.clone())
+        .flat_map(|s| {
+            s.capability_facts_direct
+                .iter()
+                .filter(|f| f.resource_kind == "file")
+                .map(move |_| (s.routine_id.clone(), s.is_dep_routine))
+        })
         .collect();
-    assert!(dep_file_facts.is_empty(), "{dep_file_facts:?}");
-    // Not hollow: the workspace's own `Temp Blob` call is still classified.
-    let ws_file = p
-        .summaries
-        .iter()
-        .filter(|s| !s.is_dep_routine)
-        .flat_map(|s| s.capability_facts_direct.iter())
-        .any(|f| f.resource_kind == "file");
-    assert!(ws_file, "the workspace's Temp Blob call has its FILE fact");
+    // One FILE fact, in the workspace: `WriteFile`'s `File.Create`. No Temp Blob
+    // routine on either side has one (`Go`, `Temp Blob`, `Temp Blob Impl.`).
+    assert_eq!(file_facts.len(), 1, "{file_facts:?}");
+    assert!(!file_facts[0].1, "{file_facts:?}");
 }
 
 /// A routine raises an IsHandled event and writes inside `guard`; a subscriber

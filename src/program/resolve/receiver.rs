@@ -9985,7 +9985,9 @@ codeunit 50100 "C"
     /// END-TO-END (real lowerer through Step 2): the binding is referenced as
     /// the FIRST statement in the body (used-before-assignment — the engine
     /// is not flow-sensitive, so this resolves identically regardless of
-    /// statement position).
+    /// statement position). The member is `TableCaption`, not a record
+    /// operation: a record operation on a named return value is a `RecordOp`
+    /// site (`extract::routine_rvars`), so it never reaches Step 2's member path.
     #[test]
     fn step2_named_return_binding_resolves_from_real_lowered_source_used_before_assignment() {
         let src = r#"
@@ -9993,11 +9995,11 @@ codeunit 50100 "C"
 {
     procedure GetItem() Ret: Record Customer
     begin
-        Ret.Get('1');
+        Message(Ret.TableCaption());
     end;
 }
 "#;
-        let (file, receiver_text, receiver_id) = parse_member_site(src, "get");
+        let (file, receiver_text, receiver_id) = parse_member_site(src, "tablecaption");
         assert_eq!(receiver_text.to_ascii_lowercase(), "ret");
 
         let (graph, app) = build_test_graph();

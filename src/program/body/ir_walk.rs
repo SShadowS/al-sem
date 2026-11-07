@@ -204,6 +204,30 @@ fn is_record_ty(v: &VarDecl) -> bool {
     v.ty.as_deref().map(is_record_receiver_ty).unwrap_or(false)
 }
 
+/// The routine's named return value as `(name, type text)` (`procedure P() Ret:
+/// Record T` gives `("Ret", "Record T")`). AL scopes it like a local: a body that
+/// writes `Ret.Get(…)` or `Ret."No."` uses a variable of this routine. `None` for an
+/// anonymous `: Type` return, no return, or a name a parameter or local also
+/// declares (a compile error in AL; declined, as `receiver::caller_scope_symbol`
+/// declines it, rather than picking one).
+///
+/// The one definition the body walk's receiver sets ([`build_scope`]), its record
+/// variables ([`ir_record_variables`]) and the resolver's site extraction
+/// (`resolve::extract::routine_rvars`) share, so the two engines agree on which
+/// calls are record operations (r2 fact check, c30: `EMailTemplateHeader.Get` on a
+/// named return value was not a touch).
+pub(crate) fn named_return_var(routine: &RoutineDecl) -> Option<(&str, &str)> {
+    let name = routine.return_name.as_deref()?;
+    let ty = routine.return_type.as_deref()?;
+    let clashes = routine
+        .params
+        .iter()
+        .map(|p| &p.name)
+        .chain(routine.locals.iter().map(|v| &v.name))
+        .any(|n| n.eq_fold_identifier(name));
+    (!clashes).then_some((name, ty))
+}
+
 /// The AL `RecordRef` type, exactly (Q4): not `Record …`, not `RecordId`.
 fn is_record_ref_ty(ty: Option<&str>) -> bool {
     ty.is_some_and(|t| t.trim().eq_ignore_ascii_case("recordref"))
@@ -220,6 +244,9 @@ fn record_ref_names(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> Has
             v.name.to_ascii_lowercase(),
             is_record_ref_ty(v.ty.as_deref()),
         );
+    }
+    if let Some((name, ty)) = named_return_var(routine) {
+        by_name.insert(name.to_ascii_lowercase(), is_record_ref_ty(Some(ty)));
     }
     for p in &routine.params {
         by_name.insert(
@@ -351,6 +378,12 @@ fn build_scope(
                 .filter(|v| is_record_ty(v))
                 .map(|v| v.name.to_ascii_lowercase()),
         )
+        // A named return value of a record type is a record variable too.
+        .chain(
+            named_return_var(routine)
+                .filter(|(_, ty)| is_record_receiver_ty(ty))
+                .map(|(name, _)| name.to_ascii_lowercase()),
+        )
         .collect();
 
     let mut rvars = globals;
@@ -368,6 +401,7 @@ fn build_scope(
         .iter()
         .map(|p| p.name.to_ascii_lowercase())
         .chain(routine.locals.iter().map(|v| v.name.to_ascii_lowercase()))
+        .chain(routine.return_name.iter().map(|n| n.to_ascii_lowercase()))
         .chain(o.globals.iter().map(|v| v.name.to_ascii_lowercase()))
         .chain(o.dataitems.iter().map(|(n, _)| n.to_ascii_lowercase()))
         .chain(object_procedure_names.iter().cloned())
@@ -2535,8 +2569,8 @@ pub(crate) fn is_record_type_str(ty: &str) -> bool {
 /// Per-routine `record_variables` (`PRecordVariable`) from the owned IR: record
 /// parameters, local record vars, and the implicit `Rec` of a table/page/pageext/
 /// codeunit-TableNo method. Mirrors `scope::extract_record_variables` + the
-/// implicit-Rec seeding in `project_routine_features`. NOT yet modelled (needs IR
-/// extensions): a named return-value record, and report dataitem record vars.
+/// implicit-Rec seeding in `project_routine_features`, plus a named return value of
+/// a record type ([`named_return_var`]) and the report's dataitem names.
 pub fn ir_record_variables(
     file: &AlFile,
     object_idx: usize,
@@ -2570,6 +2604,27 @@ pub fn ir_record_variables(
             temp_state,
             is_parameter: true,
             parameter_index: Some(i as u32),
+            scope: None,
+            is_receiver: false,
+        });
+    }
+
+    // The named return value of a record type (AL scope order: parameters, the
+    // return value, locals). It is the routine's own copy, as temporary as its
+    // declared type says. Not a `Rec` in an object with an implicit `Rec`: #299
+    // keeps the implicit row there and does not guess which one AL binds.
+    if let Some((name, ty)) = named_return_var(routine)
+        && is_record_type_str(ty)
+        && !(name.eq_fold_identifier("rec")
+            && (has_implicit_rec(o, source_table_name) || routine.dataitem_source_table.is_some()))
+    {
+        out.push(PRecordVariable {
+            id: format!("{}/rv/{}", routine_id, name.to_lowercase()),
+            name: name.to_string(),
+            table_name: parse_record_table_name(ty),
+            temp_state: ts_known(ty.to_ascii_lowercase().contains("temporary")),
+            is_parameter: false,
+            parameter_index: None,
             scope: None,
             is_receiver: false,
         });
@@ -3789,5 +3844,67 @@ page 50007 Pg
         .map(|(n, (k, i))| (n.to_string(), k, i))
         .collect();
         assert_eq!(got, want);
+    }
+
+    /// A named return value is a record variable only when no other declaration
+    /// takes its name: a parameter or local of the same name (a compile error in
+    /// AL) keeps the routine's rows name-unique, and a `Rec` return in an object
+    /// with an implicit `Rec` leaves the implicit row alone (#299). An ordinary
+    /// one is a row typed to its table, temporary when declared so.
+    #[test]
+    fn named_return_record_variable_rows() {
+        const SRC: &str = r#"
+codeunit 50010 C
+{
+    procedure Plain() Ret: Record B
+    begin
+    end;
+    procedure Temp() Ret: Record B temporary
+    begin
+    end;
+    procedure ClashParam(Ret: Record A) Ret: Record B
+    begin
+    end;
+    procedure ClashLocal() Ret: Record B
+    var
+        Ret: Record A;
+    begin
+    end;
+}
+table 50011 T
+{
+    fields { field(1; K; Integer) { } }
+    procedure RecReturn() Rec: Record B
+    begin
+    end;
+}
+"#;
+        let file = al_syntax::parse(SRC);
+        let mut got: Vec<(String, String, Option<String>, bool)> = Vec::new();
+        for (oi, o) in file.objects.iter().enumerate() {
+            for r in &o.routines {
+                for v in super::ir_record_variables(&file, oi, r, "rid", None) {
+                    got.push((
+                        r.name.clone(),
+                        v.name,
+                        v.table_name,
+                        v.temp_state.value == Some(true),
+                    ));
+                }
+            }
+        }
+        let row = |r: &str, n: &str, t: Option<&str>, temp: bool| {
+            (r.to_string(), n.to_string(), t.map(str::to_string), temp)
+        };
+        assert_eq!(
+            got,
+            vec![
+                row("Plain", "Ret", Some("B"), false),
+                row("Temp", "Ret", Some("B"), true),
+                row("ClashParam", "Ret", Some("A"), false),
+                row("ClashLocal", "Ret", Some("A"), false),
+                row("RecReturn", "Rec", None, false),
+            ]
+        );
     }
 }

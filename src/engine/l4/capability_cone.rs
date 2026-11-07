@@ -232,7 +232,7 @@ fn parse_data_scope(text: &str) -> String {
     }
 }
 
-use crate::program::body::capability::io::is_temp_blob_type;
+use crate::program::body::capability::io::is_file_write_call;
 
 /// True when a declared type names a Page or Report (al-sem
 /// `ui-window-open.ts` `isPageOrReportType`).
@@ -901,17 +901,13 @@ pub(crate) fn direct_facts_for_routine(
     }
 
     // ── file-blob family (al-sem file-blob.ts) ─────────────────────────────
-    // Write-side File / TempBlob member methods. op=write-blob, resourceKind=file.
+    // Write-side `File` member methods (`is_file_write_call`; an in-memory
+    // `Temp Blob` stream is not file I/O). op=write-blob, resourceKind=file.
     for cs in &call_sites {
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        let method_lc = method.to_lowercase();
-        let receiver_type = receiver_type_of(receiver);
-        let is_file = receiver_type == "File"
-            && matches!(method_lc.as_str(), "create" | "writealltext" | "copy");
-        let is_temp_blob = is_temp_blob_type(&receiver_type) && method_lc == "createoutstream";
-        if !is_file && !is_temp_blob {
+        if !is_file_write_call(&receiver_type_of(receiver), &method.to_lowercase()) {
             continue;
         }
         let arg_source = match cs.argument_infos.first() {
