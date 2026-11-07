@@ -104,6 +104,56 @@ today" names what was checked).
 - **`opFamily` values `lock`, `validate`, `filter`:** cut. Only `write` ships (§3.2).
 - **Owner decisions (2026-11-07):** recorded in §5 (c08, c25, c02, c20, new words).
 
+### R2.4 W2 as built: cost result and departures (for review before landing)
+
+**Cost, measured** (release-fast, the up walk alone on CDO, median of 3; before is the commit
+that only adds the cost fields, after is the W2 binary):
+
+| Call | States | Walk time | Scratch | Visitor | Peak RSS |
+|---|---|---|---|---|---|
+| c12 | 70,466 → 137,937 (1.96×) | 52.0 → 134.4 ms (2.59×) | 1.13 → 2.12 MB | 1.33 → 3.17 MB | 2.48 → 2.48 GB |
+| c20 | 38,772 → 100,992 (2.60×) | 33.2 → 108.7 ms (3.27×) | 0.87 → 2.07 MB | 1.33 → 3.17 MB | 2.44 → 2.48 GB |
+| n09 | 38,757 → 100,977 (2.61×) | 30.8 → 107.9 ms (3.51×) | 0.87 → 2.07 MB | 1.33 → 3.17 MB | 2.46 → 2.46 GB |
+
+The states target (≤ 2×) holds on c12 only; the time target (≤ 1.5×) is missed on all three.
+Two per-step costs were already removed (an allocation per step and a name scan). By §2.1, W2
+stops here.
+
+**Proposal (to decide):**
+- **(A, recommended) Accept the measured cost; pruning stays a later item.** The up walk is
+  under 0.14 s on calls of about 10 s (≈1.3%); peak RSS does not move; scratch plus visitor
+  stay under 6 MB. The relative targets were a guard against state explosion. The states grow
+  2–2.6×, which is bounded by the 8 `ext` values and is far from explosion. The pruning design,
+  with its dominance proof, becomes a register item. It is built only if a later measurement
+  shows the walk matters (for example, a multi-routine impact over a hub).
+- **(B) Write and review the pruning design now**, and land W2 only with it.
+
+**Departures from §2.1 / §2.2 as written:**
+1. **Hubs in the `LOCAL` test.** A callbacks hub (`h:callbacks:<app>`) does own an app, so the test
+   skips every `HUB` node, not only nodes with no app. When a dependency is loaded as a source
+   folder, R0 treats it as local, so `LOCAL == !is_dependency_node` holds for the package form
+   only. The test pins that form and checks that the source-folder form differs.
+2. **Page-action identity.** The facts now record each `RunObject` action's name, and the sited
+   graph keeps the names per action-run site. That is what lets "a page action with both a
+   trigger and a `RunObject` counts once" hold. An action-run site whose actions are not named
+   counts as one entry for its page.
+3. **No `roots.config` overlay on either side.** Impact walks without extra entries today, so
+   overlay entries are in neither the numerator nor the denominator.
+4. **"(every candidate decided)"** prints only when there are no candidates. Otherwise the line
+   says "(the candidates below are not decided)". The UI-navigation line is left out when its
+   population is empty.
+5. **n09's "raised by … Customer deletes at <k> sites" clause is not built.** The existing
+   `raised by:` line stays, now tagged `[tier, code]`. The §2.2 expectation was wrong on the
+   source: the subscriber exits when `RunTrigger` is false. Within 2 hops of the publisher there
+   is no routine, only the Customer pages, which delete by navigation. Code: 1 ancestor (the
+   publisher). UI navigation: 14,528 (25%).
+6. **c12 is not program-wide.** UI navigation reaches 25% of the program's entries (11,231 of
+   43,793). That is below the 50% threshold, so neither `program-wide` nor `broad reach` fires
+   on these calls. The thresholds stay as written.
+
+A check on real output: in every walk the population totals add up to the old ancestor total
+(c12: 0 + 14,527 + 2,016 + 5,654 = 22,197).
+
 ---
 
 ## 0. Summary
