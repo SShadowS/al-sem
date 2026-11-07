@@ -280,8 +280,8 @@ fn the_run_first_line_states_what_its_codeunits_cover() {
         text.contains(
             "tests: run first (app \"T\"): codeunits 69000 — whole codeunits, so every test in \
              them runs: a superset of the 1 test picked on a local path; 677 tests have a \
-             modeled path only via dependency code (446) or via a hub (231) and are not in this \
-             filter; then the whole suite"
+             modeled path only via dependency code (446) or via a hub (231), outside this pick \
+             (the whole-codeunit filter may still run some of them); then the whole suite"
         ),
         "{text}"
     );
