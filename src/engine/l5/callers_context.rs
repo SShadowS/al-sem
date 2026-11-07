@@ -246,14 +246,14 @@ pub struct CallersAnswer {
 
 /// The fold note of a witness list (round-3 c02): `detail` (in `detail`'s
 /// words) lists the `kept_hidden` kept ones with their paths; the
-/// `counted` others are counted, not kept, so nothing lists them.
+/// `counted` others are counted, not kept, so nothing lists them
+/// (`--detail lists 2 more; 12 only counted`).
 fn more_words(kept_hidden: usize, counted: usize, detail: &str) -> String {
+    // Short: c02's answer has a size ratchet.
     match (kept_hidden, counted) {
-        (0, c) => format!("{c} counted, not kept; no option lists them"),
-        (k, 0) => format!("{detail} lists {k} more with their paths"),
-        (k, c) => {
-            format!("{detail} lists {k} more with their paths; the other {c} are counted, not kept")
-        }
+        (0, c) => format!("{c} only counted"),
+        (k, 0) => format!("{detail} lists {k} more"),
+        (k, c) => format!("{detail} lists {k} more; {c} only counted"),
     }
 }
 

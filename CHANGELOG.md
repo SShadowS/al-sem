@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table or path cap.
 - **c02 wording.** "unknown because of 9545 callers that reach it only over a hub"; the
   callers' answer line says "unknown because of"; a fold note says what `detail` adds
-  (`--detail lists 2 more with their paths; the other 12 are counted, not kept`).
+  (`--detail lists 2 more; 12 only counted`).
 - **c10, explain `--field`'s scope** names whose cone the depth clause is about (`the
   writer card's effects: dependency code: none reached`); the field search itself reads
   dependency bodies and says so on its `searched:` line.

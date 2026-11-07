@@ -1975,18 +1975,21 @@ fn detail_words(fcx: Option<crate::engine::follow_up::Cx>) -> &'static str {
 /// name quoted where it needs it (`Codeunit "CSC Core"::…`, round-3 m04).
 /// A shape it does not know (a quoted member, no `::`) is left as it is.
 fn quoted_boundary(b: &str) -> String {
-    let Some((ty, rest)) = b.split_once(' ') else {
-        return b.to_string();
-    };
-    match rest.rsplit_once("::") {
-        Some((name, routine)) if !name.contains('"') => {
+    // A chain of crossings is `X::A, Table Y::OnInsert`: each part alone.
+    let one = |p: &str| -> Option<String> {
+        let (ty, rest) = p.split_once(' ')?;
+        let (name, routine) = rest.rsplit_once("::")?;
+        (!name.contains('"') && !name.contains("::")).then(|| {
             crate::engine::l4::effect_query_cli::owner_qualified(
                 &crate::engine::l4::effect_query_cli::object_display(ty, name),
                 routine,
             )
-        }
-        _ => b.to_string(),
-    }
+        })
+    };
+    b.split(", ")
+        .map(one)
+        .collect::<Option<Vec<_>>>()
+        .map_or_else(|| b.to_string(), |parts| parts.join(", "))
 }
 
 /// What prove's four header lines need beyond the answer's own lines

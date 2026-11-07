@@ -1638,8 +1638,15 @@ fn direct_callees(
                 .split_once("::")
                 .map_or(display.as_str(), |(o, _)| o)
                 .to_string();
+            // The method in its documented spelling (source may say `RUN`).
             let method = match &c.callee {
-                crate::program::body::features::PCallee::Member { method, .. } => method.clone(),
+                crate::program::body::features::PCallee::Member { method, .. } => {
+                    match method.to_ascii_lowercase().as_str() {
+                        "run" => "Run".to_string(),
+                        "runmodal" => "RunModal".to_string(),
+                        _ => method.clone(),
+                    }
+                }
                 _ => "Run".to_string(),
             };
             if seen.insert(format!("run {object} {method}")) {
