@@ -1,7 +1,7 @@
 digest files src/D48Neg.Codeunit.al → Codeunit "D48 Sender Neg"::SendOnce   [cross-app]
 answer: writes: no (every candidate decided)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every effect row
+more: --detail lists every list in full; --format json for every effect row
 computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D48 Sender Neg"::SendOnce ---
   transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed

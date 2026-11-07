@@ -19,9 +19,10 @@
       }
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effects": {
       "e:1": {
         "class": "physical",
@@ -95,11 +96,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 35,
-                    "to": "r:1c7f167f4b5f"
-                  }
+                  [
+                    "direct-call",
+                    35,
+                    "r:1c7f167f4b5f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
@@ -120,11 +121,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 35,
-                    "to": "r:1c7f167f4b5f"
-                  }
+                  [
+                    "direct-call",
+                    35,
+                    "r:1c7f167f4b5f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
@@ -234,11 +235,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 43,
-                    "to": "r:1c7f167f4b5f"
-                  }
+                  [
+                    "direct-call",
+                    43,
+                    "r:1c7f167f4b5f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
@@ -259,11 +260,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 43,
-                    "to": "r:1c7f167f4b5f"
-                  }
+                  [
+                    "direct-call",
+                    43,
+                    "r:1c7f167f4b5f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
@@ -373,11 +374,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 27,
-                    "to": "r:1c7f167f4b5f"
-                  }
+                  [
+                    "direct-call",
+                    27,
+                    "r:1c7f167f4b5f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
@@ -398,11 +399,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 27,
-                    "to": "r:1c7f167f4b5f"
-                  }
+                  [
+                    "direct-call",
+                    27,
+                    "r:1c7f167f4b5f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",

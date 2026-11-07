@@ -1630,7 +1630,15 @@ pub(crate) fn query_write_tables(
         .unwrap()
         .iter()
         .flat_map(|p| p["tables"].as_array().unwrap().iter())
-        .filter_map(|t| t["tableId"].as_str().map(String::from))
+        .filter_map(|t| match t {
+            // Query 5.0.0 (round-2 G34): `["t:<n>", <op>…]` into
+            // `payload.tables`.
+            Value::Array(a) => a[0]
+                .as_str()
+                .and_then(|r| q["payload"]["tables"][r]["id"].as_str())
+                .map(String::from),
+            _ => t["tableId"].as_str().map(String::from),
+        })
         .collect();
     (own, beyond)
 }
@@ -1870,13 +1878,18 @@ fn locks_are_their_own_class_in_query_effects() {
     let (human, err, code) =
         run_alsem(&["query", "effects", &ws, "--routine", "Out Field Ops.RunAll"]);
     assert_eq!(code, 0, "{err}");
-    // Output validation §5.2: the summary is the header's `answer:` line.
-    let summary = human.lines().nth(1).unwrap();
+    // Round-2 G29: the answer is the operation count; the writes are their
+    // own line, the locks theirs (below).
     assert!(
-        summary.contains("answer: 9 operations — writes that may persist 5 on 2 tables")
-            && summary.contains("locks 2 on 2 tables")
-            && summary.contains("on a RecordRef (table not resolved: RecordRef) 1 in 1 routine")
-            && !summary.contains("; table not resolved"),
+        human.contains("answer: 9 operations (writes, reads and locks below)"),
+        "{human}"
+    );
+    let writes = human
+        .lines()
+        .find(|l| l.starts_with("  writes: "))
+        .unwrap_or_else(|| panic!("{human}"));
+    assert!(
+        writes.contains("may persist 5 on 2 tables") && !writes.contains("table not resolved"),
         "{human}"
     );
     let writes: Vec<&str> = human

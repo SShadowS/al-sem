@@ -5,5 +5,6 @@ more: --format json for every evidence row and its hops
   evidence: 1 effect
     [DB_DELETE] beyond Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
       path: IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
-  top callees not resolved: Codeunit.Run(<dynamic>) ×2, Handler.Handle ×1
+  top callees not resolved: Codeunit.Run(<dynamic>) ×2
+  top interface dispatch (open world): Handler.Handle ×1
   next: alsem explain --routine 'Codeunit "Out Issue Document"::IssueDoc' — lists the workspace ones under gaps

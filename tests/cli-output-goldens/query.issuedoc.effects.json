@@ -8,17 +8,10 @@
       "via": "inherited"
     },
     "dependencies": {
-      "apps": [
-        {
-          "appId": "d0d00001-0000-4000-8000-0000000000b1",
-          "name": "Out Base",
-          "publisher": "probe",
-          "source": "embedded",
-          "version": "1.0.0.0"
-        }
-      ],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:8e0182909e090c4c",
+    "dependencyCount": 1,
     "effectCount": 6,
     "effects": [
       {
@@ -30,14 +23,12 @@
         "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
         "origin": {
           "column": 8,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+          "file": "f:1",
           "line": 58,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
-        "tableName": "Out Log",
+        "table": "t:1",
         "tempState": "temporary"
       },
       {
@@ -46,14 +37,12 @@
         "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0",
         "origin": {
           "column": 8,
-          "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-          "fileDisplay": "dep:Out Base:src/BasePoster.Codeunit.al",
+          "file": "f:2",
           "line": 7,
           "role": "operation",
           "routine": "r:2"
         },
-        "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70021",
-        "tableName": "Base Doc Line",
+        "table": "t:2",
         "tempState": "not temporary"
       },
       {
@@ -62,8 +51,7 @@
         "operationId": "51168e57cf87e49c/4dfc5ec56855389b4864017d8e40ec6609ddddc2a942d9f9bcc235293f787830/op0",
         "origin": {
           "column": 11,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+          "file": "f:1",
           "line": 40,
           "role": "operation",
           "routine": "r:3"
@@ -81,14 +69,12 @@
         "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
         "origin": {
           "column": 8,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+          "file": "f:1",
           "line": 61,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
-        "tableName": "Out Log",
+        "table": "t:1",
         "tempState": "not temporary"
       },
       {
@@ -96,16 +82,14 @@
         "operationId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/op1",
         "origin": {
           "column": 8,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+          "file": "f:1",
           "line": 14,
           "role": "operation",
           "routine": "r:4"
         },
         "parameterName": "Doc",
         "parameterPosition": 1,
-        "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
-        "tableName": "Out Doc",
+        "table": "t:3",
         "tempState": "caller-dependent (parameter 1)",
         "via": "direct"
       },
@@ -115,8 +99,7 @@
         "operationId": "51168e57cf87e49c/4dfc5ec56855389b4864017d8e40ec6609ddddc2a942d9f9bcc235293f787830/op1",
         "origin": {
           "column": 18,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
+          "file": "f:1",
           "line": 42,
           "role": "operation",
           "routine": "r:3"
@@ -126,6 +109,16 @@
         "tempState": "not resolved"
       }
     ],
+    "files": {
+      "f:1": {
+        "display": "ws:src/OutIssueDocument.Codeunit.al",
+        "file": "ws:src/OutIssueDocument.Codeunit.al"
+      },
+      "f:2": {
+        "display": "dep:Out Base:src/BasePoster.Codeunit.al",
+        "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al"
+      }
+    },
     "lineBase": 1,
     "result": {
       "scope": {
@@ -151,10 +144,7 @@
               "interfaceDispatchOpenWorld": 1
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for locks"
-            ]
+            "inventory": "notExhaustive"
           },
           "reads": {
             "blockers": {
@@ -162,10 +152,7 @@
               "interfaceDispatchOpenWorld": 1
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for reads"
-            ]
+            "inventory": "notExhaustive"
           },
           "validate": {
             "blockers": {
@@ -173,10 +160,7 @@
               "interfaceDispatchOpenWorld": 1
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for validations"
-            ]
+            "inventory": "notExhaustive"
           },
           "writes": {
             "blockers": {
@@ -184,10 +168,7 @@
               "interfaceDispatchOpenWorld": 1
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for writes"
-            ]
+            "inventory": "notExhaustive"
           }
         },
         "limits": [],
@@ -213,7 +194,6 @@
         },
         "display": "WriteLog",
         "objectDisplay": "Codeunit \"Out Log Mgt\"",
-        "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
         "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
         "signature": "(Text[100])",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
@@ -227,7 +207,6 @@
         },
         "display": "OnRun",
         "objectDisplay": "Codeunit \"Base Poster\"",
-        "qualifiedDisplay": "Codeunit \"Base Poster\" (70100)::OnRun",
         "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
         "signature": "()",
         "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
@@ -241,7 +220,6 @@
         },
         "display": "ScanFields",
         "objectDisplay": "Codeunit \"Out Issue Document\"",
-        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::ScanFields",
         "selector": "Codeunit \"Out Issue Document\"::ScanFields",
         "signature": "(Integer)",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
@@ -255,7 +233,6 @@
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit \"Out Issue Document\"",
-        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
         "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
         "signature": "(var Record \"Out Doc\")",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
@@ -269,104 +246,62 @@
             "ws:src/OutIssueDocument.Codeunit.al:15"
           ],
           "tables": [
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 01",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 02",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70002"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 03",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70003"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 04",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70004"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 05",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70005"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 06",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70006"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 07",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70007"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 08",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70008"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 09",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70009"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 10",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70010"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 11",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70011"
-            },
-            {
-              "ops": [
-                "DB_INSERT"
-              ],
-              "table": "Base Ledger 12",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70012"
-            },
-            {
-              "ops": [
-                "DB_MODIFY"
-              ],
-              "table": "Base Register",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70020"
-            },
-            {
-              "ops": [
-                "DB_DELETE"
-              ],
-              "table": "Base Doc Line",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70021"
-            }
+            [
+              "t:4",
+              "DB_INSERT"
+            ],
+            [
+              "t:5",
+              "DB_INSERT"
+            ],
+            [
+              "t:6",
+              "DB_INSERT"
+            ],
+            [
+              "t:7",
+              "DB_INSERT"
+            ],
+            [
+              "t:8",
+              "DB_INSERT"
+            ],
+            [
+              "t:9",
+              "DB_INSERT"
+            ],
+            [
+              "t:10",
+              "DB_INSERT"
+            ],
+            [
+              "t:11",
+              "DB_INSERT"
+            ],
+            [
+              "t:12",
+              "DB_INSERT"
+            ],
+            [
+              "t:13",
+              "DB_INSERT"
+            ],
+            [
+              "t:14",
+              "DB_INSERT"
+            ],
+            [
+              "t:15",
+              "DB_INSERT"
+            ],
+            [
+              "t:16",
+              "DB_MODIFY"
+            ],
+            [
+              "t:2",
+              "DB_DELETE"
+            ]
           ],
           "targets": [
             "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
@@ -379,13 +314,10 @@
             "ws:src/OutIssueDocument.Codeunit.al:16"
           ],
           "tables": [
-            {
-              "ops": [
-                "DB_MODIFY"
-              ],
-              "table": "Base Price",
-              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70022"
-            }
+            [
+              "t:17",
+              "DB_MODIFY"
+            ]
           ],
           "targets": [
             "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
@@ -502,6 +434,76 @@
         "operations": 2,
         "tables": 2,
         "tempStateUnknown": 0
+      }
+    },
+    "tables": {
+      "t:1": {
+        "id": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+        "name": "Out Log"
+      },
+      "t:10": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70007",
+        "name": "Base Ledger 07"
+      },
+      "t:11": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70008",
+        "name": "Base Ledger 08"
+      },
+      "t:12": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70009",
+        "name": "Base Ledger 09"
+      },
+      "t:13": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70010",
+        "name": "Base Ledger 10"
+      },
+      "t:14": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70011",
+        "name": "Base Ledger 11"
+      },
+      "t:15": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70012",
+        "name": "Base Ledger 12"
+      },
+      "t:16": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020",
+        "name": "Base Register"
+      },
+      "t:17": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70022",
+        "name": "Base Price"
+      },
+      "t:2": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70021",
+        "name": "Base Doc Line"
+      },
+      "t:3": {
+        "id": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
+        "name": "Out Doc"
+      },
+      "t:4": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001",
+        "name": "Base Ledger 01"
+      },
+      "t:5": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70002",
+        "name": "Base Ledger 02"
+      },
+      "t:6": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70003",
+        "name": "Base Ledger 03"
+      },
+      "t:7": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70004",
+        "name": "Base Ledger 04"
+      },
+      "t:8": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70005",
+        "name": "Base Ledger 05"
+      },
+      "t:9": {
+        "id": "d0d00001-0000-4000-8000-0000000000b1/table/70006",
+        "name": "Base Ledger 06"
       }
     }
   },

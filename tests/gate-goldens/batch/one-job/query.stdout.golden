@@ -8,9 +8,10 @@
       "via": "direct"
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effectCount": 2,
     "effects": [
       {
@@ -18,14 +19,12 @@
         "operationId": "c8d0efe535357e91/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0",
         "origin": {
           "column": 8,
-          "file": "ws:src/D1MultiCaller.al",
-          "fileDisplay": "ws:src/D1MultiCaller.al",
+          "file": "f:1",
           "line": 25,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "11111111-0000-0000-0000-00000000d01a/table/50101",
-        "tableName": "MC Customer",
+        "table": "t:1",
         "tempState": "not temporary"
       },
       {
@@ -34,18 +33,22 @@
         "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0",
         "origin": {
           "column": 8,
-          "file": "ws:src/D1MultiCaller.al",
-          "fileDisplay": "ws:src/D1MultiCaller.al",
+          "file": "f:1",
           "line": 19,
           "role": "operation",
           "routine": "r:2"
         },
-        "tableId": "11111111-0000-0000-0000-00000000d01a/table/50101",
-        "tableName": "MC Customer",
+        "table": "t:1",
         "tempState": "not temporary",
         "via": "inherited"
       }
     ],
+    "files": {
+      "f:1": {
+        "display": "ws:src/D1MultiCaller.al",
+        "file": "ws:src/D1MultiCaller.al"
+      }
+    },
     "lineBase": 1,
     "result": {
       "scope": {
@@ -69,10 +72,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for locks"
-            ]
+            "inventory": "notExhaustive"
           },
           "reads": {
             "blockers": {
@@ -80,10 +80,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for reads"
-            ]
+            "inventory": "notExhaustive"
           },
           "validate": {
             "blockers": {
@@ -91,10 +88,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for validations"
-            ]
+            "inventory": "notExhaustive"
           },
           "writes": {
             "blockers": {
@@ -102,10 +96,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for writes"
-            ]
+            "inventory": "notExhaustive"
           }
         },
         "limits": [],
@@ -129,7 +120,6 @@
         },
         "display": "CallerA",
         "objectDisplay": "Codeunit \"D1 Multi Caller\"",
-        "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
         "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
         "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
@@ -143,7 +133,6 @@
         },
         "display": "ModifyHelper",
         "objectDisplay": "Codeunit \"D1 Multi Caller\"",
-        "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
         "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
         "signature": "(var Record \"MC Customer\")",
         "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
@@ -219,6 +208,12 @@
         "operations": 1,
         "tables": 1,
         "tempStateUnknown": 0
+      }
+    },
+    "tables": {
+      "t:1": {
+        "id": "11111111-0000-0000-0000-00000000d01a/table/50101",
+        "name": "MC Customer"
       }
     }
   },

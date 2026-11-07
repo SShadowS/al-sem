@@ -1,11 +1,11 @@
 explain Codeunit "Calls Post"::ForwardPost   [cross-app]
 answer: writes: may modify persistent Calls Order records (Modify at :33) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every row
+more: --detail lists every list in full; --format json for every row
 Codeunit "Calls Post"::ForwardPost  defined at ws:src/post.al:28
   transaction, UI and errors: commits: no (every candidate decided); errors at 5 places
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: none; tests: none (no test code loaded)
+  callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: Codeunit "Calls Checks"::CheckOrder (called at :32)
   rules: none of its own

@@ -1,6 +1,6 @@
 query touches Codeunit "CDO Telemetry"::UpdateLastUpload vs Table "CDO Setup" (f4b69b55-c90d-4937-8f53-2742898fa948/table/6175281)   [cross-app]
 answer: down: yes — 1 record touch: 0 on persistent records, 1 on a possibly persistent record (caller-dependent), 0 on temporary records
-analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 11 apps
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; dependencies: 11 apps
 more: all: true lists every witness, no fold; callers: true names every caller; format: "json" for every row
   defined at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:45
     [Modify] write at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 in Codeunit "CDO Telemetry"::UpdateLastUpload (caller-dependent: parameter 1)

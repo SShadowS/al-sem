@@ -1054,6 +1054,32 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
 
     // §5.2: the run line is the header's `answer:`.
     let mut out: Vec<String> = vec![header.human().trim_end().to_string()];
+    // Round-2 G28: the test scope and why the selection is incomplete are
+    // one clause (the missing test-library apps and the fix are in the
+    // JSON); the answer line already says to run the whole suite.
+    let mut scope_text = scope_text;
+    if !complete {
+        let why: Vec<String> = fallback
+            .iter()
+            .map(|f| {
+                if s(f, "reason") == "unresolved-test-calls" && next.is_some() {
+                    format!(
+                        "{} ({} missing; {} lists them and the fix)",
+                        n_of(
+                            u(f, "count"),
+                            "unresolved test call",
+                            "unresolved test calls"
+                        ),
+                        n_of(missing_names.len(), "test-library app", "test-library apps"),
+                        crate::engine::follow_up::Input::FormatJson.on(opts.surface)
+                    )
+                } else {
+                    s(f, "detail").to_string()
+                }
+            })
+            .collect();
+        scope_text.push_str(&format!("; selection incomplete: {}", why.join("; ")));
+    }
     out.push(scope_text);
     if !any_scope {
         out.push(format!(
@@ -1130,6 +1156,18 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             thousands(code_tests.len()),
             thousands(nav_tests.len())
         ));
+        // Round-2 G32: the tier totals first, then each group with its path
+        // on its own line, so a run of hops the paths share prints once
+        // (prove's shared segments).
+        out.push(format!(
+            "  by tier: {}",
+            tiers_of(&picked)
+                .iter()
+                .map(|(w, n)| format!("{w} {}", thousands(*n)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        let groups_start = out.len();
         for (k, v) in groups.iter().take(5) {
             let first = v[0];
             let path: Vec<String> = first["path"]
@@ -1158,14 +1196,19 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             // Round-2 r2 §2.2 (§5): tests mix relations, so each item
             // prints both axes; the navigation caveat is the headline's.
             out.push(format!(
-                "  {k}: {}{dist}; first [{}, {}] {} (first: {}; via {})",
+                "  {k}: {}{dist}; first [{}, {}] {} (first: {})",
                 n_of(v.len(), "test", "tests"),
                 crate::engine::vocab::tier_key(s(first, "tier")),
                 relation(first),
                 n_of(u(first, "hops"), "hop", "hops"),
                 first["procedure"].as_str().unwrap_or(s(first, "display")),
-                path.join(" → ")
             ));
+            if !path.is_empty() {
+                out.push(format!(
+                    "    path: {}",
+                    path.join(crate::engine::path_segments::SEP)
+                ));
+            }
         }
         if groups.len() > 5 {
             let rest: usize = groups.iter().skip(5).map(|g| g.1.len()).sum();
@@ -1175,6 +1218,8 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 n_of(rest, "test", "tests")
             ));
         }
+        let listed = out.split_off(groups_start);
+        out.extend(crate::engine::path_segments::segment(listed));
     }
     let thr = count("throughDependency");
     let tier_note = format!(
@@ -1207,28 +1252,6 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     }
     if complete {
         out.push("selection complete".into());
-    } else {
-        out.push(format!(
-            "selection incomplete — run the whole suite as well (requiredFallback): {}",
-            fallback
-                .iter()
-                .map(|f| {
-                    // F64: the missing symbols are named once, below.
-                    if s(f, "reason") == "unresolved-test-calls" && next.is_some() {
-                        format!(
-                            "test code makes {} that resolve nowhere (missing test-library symbols, below); a library may call back into this code",
-                            n_of(u(f, "count"), "call", "calls")
-                        )
-                    } else {
-                        s(f, "detail").to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        ));
-    }
-    if let Some(n) = &next {
-        out.push(n.clone());
     }
     // "Static reachability, not coverage" is the header's assumption (§5.2).
     Rendered {

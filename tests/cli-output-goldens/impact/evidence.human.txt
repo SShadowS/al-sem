@@ -6,7 +6,7 @@ impact of the named routines; one-shot run (no resident revision)
 input: 1 changed routine resolved
 current effects of the 1 changed routine; ranked: reached from a user or a job first, then by ancestors; all shown:
   Codeunit "IE Mgt"::Configure (ws:src/Evidence.al:24) — changed
-      effects: may write IE Setup (Modify at ws:src/Evidence.al:32; the routine assigns "Blob Folder", "Container Name"); commits: no (every candidate decided) (0 own commit sites); errors 2
+      effects: may write "IE Setup" (Modify at ws:src/Evidence.al:32; the routine assigns "Blob Folder", "Container Name"); commits: no (every candidate decided) (0 own commit sites); errors 2
         target company: not established by this analysis (ChangeCompany at ws:src/Evidence.al:37)
       calls: ::SwitchCompany (called at :28)
       direct code callers: none found (test code is not counted; see tests:)

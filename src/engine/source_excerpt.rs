@@ -133,7 +133,12 @@ pub fn with_excerpts(text: &str, sources: &SourceTexts) -> String {
             // (a procedure, trigger, action or field header) shows the
             // routine's first statement instead, the excerpt starting there.
             let (n, range) = match first_statement(lines, n) {
-                Some(s) => (s, s..=(s + 4).min(lines.len())),
+                Some(s) => {
+                    // Round-2 G26: the excerpt says which line it shows
+                    // when it is not the cited one.
+                    out.push_str(&format!("{:indent$}first statement at :{s}\n", ""));
+                    (s, s..=(s + 4).min(lines.len()))
+                }
                 None => (n, n.saturating_sub(2).max(1)..=(n + 2).min(lines.len())),
             };
             for k in range {

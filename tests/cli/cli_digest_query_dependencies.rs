@@ -40,6 +40,11 @@ fn json(args: &[&str]) -> (Value, i32) {
     if a.first() == Some(&"digest") {
         a.extend(["--schema", "2"]);
     }
+    // Round-2 G38: query 5.0.0 carries the dependency count and digest, not
+    // the app list these checks read; the 4.0.0 document keeps it.
+    if a.first() == Some(&"query") {
+        a.extend(["--schema", "4"]);
+    }
     let (out, code) = alsem(&a);
     (
         crate::as_v3(serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"))),
@@ -539,7 +544,13 @@ fn without_dependencies_cross_app_equals_single_app() {
     let mut runs: Vec<Vec<String>> = Vec::new();
     for fixture in crate::cli_b_digest_differential::DIGEST_CORPUS {
         let ws = corpus.join(fixture);
-        let mut argv = vec!["digest".to_string(), ws.to_string_lossy().to_string()];
+        // The indented document (round-2 G35: compact is the default), so
+        // the mode string below is found as written.
+        let mut argv = vec![
+            "digest".to_string(),
+            ws.to_string_lossy().to_string(),
+            "--compact=false".to_string(),
+        ];
         for f in crate::cli_b_digest_differential::collect_al_files(&ws) {
             argv.push("--file".to_string());
             argv.push(f);

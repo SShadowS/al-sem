@@ -1,7 +1,7 @@
 digest Codeunit "Out Issue Document"::IssueDoc   [cross-app]
 answer: writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit "Base Poster" (70100)::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); may modify persistent Out Doc records (Modify at :14) when the record its caller passes (parameter 1) is not temporary
 analysis partial (interface-open-world; object-run-unresolved; 1 interface call open world, 2 dynamic calls not resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments (2 dependency routines entered at 2 dependency calls); no lock facts; dependencies: 1 app
-more: --detail lists every list complete; --format json for every effect row
+more: --detail lists every list in full; --format json for every effect row
 --- Codeunit "Out Issue Document"::IssueDoc ---
   transaction, UI and errors: commits: may (1 dependency routine entered that commits); errors at 5 places
   other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place

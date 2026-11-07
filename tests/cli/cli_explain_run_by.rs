@@ -42,13 +42,9 @@ fn explain(routine: &str, json: bool) -> String {
 #[test]
 fn callers_count_direct_page_actions() {
     let human = explain(r#"Codeunit "RB Mgt"::Target"#, false);
-    assert!(
-        human.contains(
-            "callers and tests: callers: 3 direct (2 routines, 1 page action); 2 page actions \
-             reach it in all;"
-        ),
-        "{human}"
-    );
+    // Round-2 G25: the summary's `callers and tests:` line is not printed
+    // beside the `callers:` line below (one copy).
+    assert!(!human.contains("callers and tests:"), "{human}");
     assert!(
         human.contains(
             r#"callers: 3 direct — 2 routines: Codeunit "RB Mgt"::Middle, Codeunit "RB Mgt"::ProcB; 1 page action in 1 object (--detail lists them); 2 page actions reach it in all (directly or through callers)"#
@@ -81,12 +77,8 @@ fn a_trigger_says_what_runs_it() {
         ),
         "{validate}"
     );
-    assert!(
-        validate.contains(
-            "callers and tests: run by: Validate calls: 1 site; potential UI surfaces: 1 page;"
-        ),
-        "{validate}"
-    );
+    // Round-2 G25: one `run by:` line (no summary copy).
+    assert_eq!(validate.matches("run by:").count(), 1, "{validate}");
     let lookup = explain(r#"Table "RB Ledger".Amount::OnLookup"#, false);
     assert!(
         lookup.contains("run by: no code call (AL code cannot run a field's OnLookup; a user's lookup does); potential UI surfaces: 1 page on table \"RB Ledger\""),

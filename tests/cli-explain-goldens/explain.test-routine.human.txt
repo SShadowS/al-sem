@@ -1,11 +1,11 @@
 explain Codeunit "Explain Tests"::PostUnreleasedFails   [cross-app]
 answer: writes: may write 1 table (1 owned by this app, 0 by dependencies): Explain Order (Modify)
 analysis partial (external-target) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: symbol-only-dependency 2 · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every row
+more: --detail lists every list in full; --format json for every row
 Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
   transaction, UI and errors: commits: none observed (searched: the cone through every resolved call; not searched: calls not resolved); UI at 1 place; errors at 3 places
   other effects: events: 1 (1 raised in workspace code)
-  callers and tests: callers: none; tests: none of 1 loaded
+  callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 2 not placed
   calls: Codeunit "Explain Post"::PostOrder (called at :14)
   UI route: UI_MESSAGE via PostUnreleasedFails → PostOrder

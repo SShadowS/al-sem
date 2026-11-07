@@ -18,9 +18,10 @@
       }
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effects": {
       "e:1": {
         "confidence": "static",
@@ -257,11 +258,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 25,
-                    "to": "r:723e54933af9"
-                  }
+                  [
+                    "direct-call",
+                    25,
+                    "r:723e54933af9"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/NormalCU.al",
@@ -301,11 +302,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 25,
-                    "to": "r:723e54933af9"
-                  }
+                  [
+                    "direct-call",
+                    25,
+                    "r:723e54933af9"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/NormalCU.al",
@@ -329,11 +330,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 25,
-                    "to": "r:723e54933af9"
-                  }
+                  [
+                    "direct-call",
+                    25,
+                    "r:723e54933af9"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/NormalCU.al",

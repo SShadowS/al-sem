@@ -9,4 +9,3 @@ more: --format json for every evidence row and its hops
       coverage status: partial
     call not resolved: 1
       Lib.Outer in CallChain
-  top callees not resolved: Lib.Outer ×1

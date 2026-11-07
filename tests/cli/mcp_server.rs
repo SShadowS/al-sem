@@ -791,12 +791,15 @@ fn the_inline_only_path_delivers_inline() {
         "PostOrder",
         "--deterministic",
         "--surface=mcp",
+        // The indented document (round-2 G35: `compact: false`), so the
+        // answer is over the summary cap.
+        "--compact=false",
     ];
     let expected = cli(&argv);
     let env = envelope(&s.call(
         1,
         "alsem_digest",
-        json!({"routines": ["PostOrder"], "deterministic": true}),
+        json!({"routines": ["PostOrder"], "deterministic": true, "compact": false}),
     ));
     assert!(env["stdoutText"].is_string(), "{env}");
     assert!(env.get("stdoutFile").is_none(), "{env}");

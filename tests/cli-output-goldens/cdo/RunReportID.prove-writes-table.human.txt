@@ -11,5 +11,6 @@ more: format: "json" for every evidence row and its hops
     also [DB_MODIFY]: beyond Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179 (detail: true lists every row with its path)
     path segments (each [Sn] in a path above stands for these hops):
       S1: RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text]) → Codeunit "CDO Log Management"::CreateSkipLogEntries(Record "CDO Document Template Line", RecordRef) → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text)
-  top callees not resolved: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8
+  top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
+  top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO E-Mail Handler\"::RunReportID"]} — lists the workspace ones under gaps

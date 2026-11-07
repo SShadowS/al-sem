@@ -180,6 +180,195 @@ pub fn segment(lines: Vec<String>) -> Vec<String> {
 }
 
 /// A chosen segment's placeholder index.
+/// The AL object kinds a hop's display can start with (`Codeunit "X"`).
+const OBJECT_KINDS: &[&str] = &[
+    "Codeunit",
+    "Table",
+    "Page",
+    "Report",
+    "XmlPort",
+    "Xmlport",
+    "Query",
+    "PageExtension",
+    "TableExtension",
+    "ReportExtension",
+    "Enum",
+    "EnumExtension",
+    "Interface",
+    "ControlAddIn",
+    "PermissionSet",
+    "Profile",
+];
+
+/// The location roles a hop's suffix can carry (`(called at f:l)`).
+const ROLES: &[&str] = &[" (called at ", " (raised at ", " (operation at "];
+
+/// (tag, display, (role, place) of the location suffix).
+type HopParts<'h> = (&'h str, &'h str, Option<(&'h str, &'h str)>);
+
+/// One hop split for elision: (tag prefix like `[event] `, the display,
+/// the location suffix's role and place), or `None` for a hop that resets
+/// the context (a hub, a segment reference, any other bracketed hop).
+fn hop_parts(hop: &str) -> Option<HopParts<'_>> {
+    let (tag, rest) = match hop.strip_prefix('[') {
+        Some(r) => {
+            let close = r.find("] ")?;
+            if r[..close].contains(' ') {
+                return None;
+            }
+            hop.split_at(close + 3)
+        }
+        None => ("", hop),
+    };
+    let loc = ROLES.iter().find_map(|role| {
+        let at = rest.rfind(role)?;
+        let place = rest[at + role.len()..].strip_suffix(')')?;
+        Some((at, &role[2..role.len() - 1], place))
+    });
+    Some(match loc {
+        Some((at, role, place)) => (tag, &rest[..at], Some((role, place))),
+        None => (tag, rest, None),
+    })
+}
+
+/// The object part of a display (before its last `::` at bracket depth 0,
+/// outside quotes), or the whole display when it has none (an object hop).
+fn object_of(display: &str) -> (&str, Option<&str>) {
+    let (mut depth, mut quoted, mut cut) = (0i32, false, None);
+    let b = display.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' => quoted = !quoted,
+            b'(' | b'[' if !quoted => depth += 1,
+            b')' | b']' if !quoted => depth -= 1,
+            b':' if !quoted && depth == 0 && b.get(i + 1) == Some(&b':') => {
+                cut = Some(i);
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    match cut {
+        Some(c) => (&display[..c], Some(&display[c + 2..])),
+        None => (display, None),
+    }
+}
+
+/// `true` when a display names an object (`Codeunit "X" (5)`), not a bare
+/// member.
+fn is_object_display(display: &str) -> bool {
+    display
+        .split_once(' ')
+        .is_some_and(|(k, _)| OBJECT_KINDS.contains(&k))
+}
+
+/// Round-2 G33: a path's hops with the repeated object and file elided on
+/// consecutive hops: a hop in the same object as the hop before it prints
+/// its member only, a location in the same file as the one before it
+/// prints `:<line>`. A hub, a segment reference or another bracketed hop
+/// resets the context, so the hop after it prints in full.
+fn elide_hops(hops: &[&str]) -> Vec<String> {
+    let (mut obj, mut file): (Option<String>, Option<String>) = (None, None);
+    let mut out = Vec::with_capacity(hops.len());
+    for h in hops {
+        let Some((tag, display, loc)) = hop_parts(h) else {
+            (obj, file) = (None, None);
+            out.push((*h).to_string());
+            continue;
+        };
+        let (o, member) = object_of(display);
+        let shown = match member {
+            Some(m) if obj.as_deref() == Some(o) && !is_object_display(m) => m.to_string(),
+            _ => display.to_string(),
+        };
+        obj = Some(o.to_string());
+        let loc_text = match loc {
+            Some((role, place)) => {
+                let (f, l) = place.rsplit_once(':').unwrap_or((place, ""));
+                let text = if file.as_deref() == Some(f) {
+                    format!(" ({role} :{l})")
+                } else {
+                    format!(" ({role} {place})")
+                };
+                file = Some(f.to_string());
+                text
+            }
+            None => String::new(),
+        };
+        out.push(format!("{tag}{shown}{loc_text}"));
+    }
+    out
+}
+
+/// [`elide_hops`]' inverse over one line's hops.
+fn unelide_hops(hops: &[&str]) -> Vec<String> {
+    let (mut obj, mut file): (Option<String>, Option<String>) = (None, None);
+    let mut out = Vec::with_capacity(hops.len());
+    for h in hops {
+        let Some((tag, display, loc)) = hop_parts(h) else {
+            (obj, file) = (None, None);
+            out.push((*h).to_string());
+            continue;
+        };
+        let full = match (object_of(display), &obj) {
+            ((_, None), Some(o)) if !is_object_display(display) => format!("{o}::{display}"),
+            _ => display.to_string(),
+        };
+        obj = Some(object_of(&full).0.to_string());
+        let loc_text = match loc {
+            Some((role, place)) => {
+                let full_place = match (place.strip_prefix(':'), &file) {
+                    (Some(l), Some(f)) => format!("{f}:{l}"),
+                    _ => place.to_string(),
+                };
+                file = full_place.rsplit_once(':').map(|(f, _)| f.to_string());
+                format!(" ({role} {full_place})")
+            }
+            None => String::new(),
+        };
+        out.push(format!("{tag}{full}{loc_text}"));
+    }
+    out
+}
+
+/// [`elide_hops`] over every path line and segment listing line of `lines`
+/// (round-2 G33); other lines are unchanged. Run after [`segment`].
+#[must_use]
+pub fn elide(lines: Vec<String>) -> Vec<String> {
+    let mut in_listing = None;
+    lines
+        .into_iter()
+        .map(|l| {
+            let indent = l.len() - l.trim_start().len();
+            if l.trim() == LISTING {
+                in_listing = Some(indent);
+                return l;
+            }
+            if let Some(li) = in_listing {
+                match l.trim_start().split_once(": ") {
+                    Some((id, hops)) if indent > li && id.starts_with('S') => {
+                        let hops: Vec<&str> = hops.split(SEP).collect();
+                        return format!(
+                            "{}{id}: {}",
+                            " ".repeat(indent),
+                            elide_hops(&hops).join(SEP)
+                        );
+                    }
+                    _ => in_listing = None,
+                }
+            }
+            match path_line(&l) {
+                Some((n, label, hops)) => {
+                    format!("{}{label}{}", " ".repeat(n), elide_hops(&hops).join(SEP))
+                }
+                None => l,
+            }
+        })
+        .collect()
+}
+
 fn hole(h: &str) -> Option<usize> {
     h.strip_prefix('\u{0}').and_then(|k| k.parse().ok())
 }
@@ -213,10 +402,11 @@ fn replace(hops: &[String], run: &[String], with: &str) -> Vec<String> {
 #[must_use]
 pub fn expand(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    let Some(at) = lines.iter().position(|l| l.trim() == LISTING) else {
-        return text.to_string();
-    };
-    let indent = lines[at].len() - lines[at].trim_start().len();
+    let at = lines
+        .iter()
+        .position(|l| l.trim() == LISTING)
+        .unwrap_or(lines.len());
+    let indent = lines.get(at).map_or(0, |l| l.len() - l.trim_start().len());
     let mut segments: HashMap<String, String> = HashMap::new();
     let mut end = at + 1;
     while end < lines.len() {
@@ -228,6 +418,8 @@ pub fn expand(text: &str) -> String {
         if !deeper || !id.starts_with('S') {
             break;
         }
+        // Restored with the whole line below: a segment's first hop may
+        // be elided against the hop before its reference.
         segments.insert(id.to_string(), hops.to_string());
         end += 1;
     }
@@ -253,7 +445,15 @@ pub fn expand(text: &str) -> String {
                     .unwrap_or_else(|| (*h).to_string())
             })
             .collect();
-        out.push(format!("{}{label}{}", " ".repeat(n), full.join(SEP)));
+        // Round-2 G33: the elided objects and files back, over the whole
+        // expanded line (each hop in the context of the hop before it).
+        let full = full.join(SEP);
+        let hops: Vec<&str> = full.split(SEP).collect();
+        out.push(format!(
+            "{}{label}{}",
+            " ".repeat(n),
+            unelide_hops(&hops).join(SEP)
+        ));
     }
     let mut s = out.join("\n");
     if text.ends_with('\n') {
@@ -297,7 +497,51 @@ mod tests {
             text.contains(&format!("  {LISTING}\n    S1: {tail}")),
             "{text}"
         );
-        assert_eq!(expand(&text), before);
+        // Round-2 G33: `expand` also restores an elided object (a bare
+        // `SetFiles` after a hop in `Codeunit "E-Mail Handler"`).
+        let want = before.replace(
+            "RunReportID → SetFiles",
+            "RunReportID → Codeunit \"E-Mail Handler\"::SetFiles",
+        );
+        assert_eq!(expand(&text), want);
+    }
+
+    /// Round-2 G33: eliding the repeated object and file on consecutive
+    /// hops loses nothing — `expand` rebuilds every hop exactly: a member
+    /// after a hop in its object, a location in the file of the previous
+    /// location, an object hop, a hub (which resets the context, so the hop
+    /// after it is never elided), an event tag and a parameter list holding
+    /// `::`-free text. Discrimination: see the commit (break `unelide_hops`'
+    /// file rebuild).
+    #[test]
+    fn elided_paths_expand_to_every_hop() {
+        let hops = [
+            "Codeunit \"Job Queue\" (448)",
+            "Codeunit \"Job Queue\" (448)::OnRun (called at dep:Base:src/JQ.al:48)",
+            "Codeunit \"Job Queue\" (448)::Handle(Record \"Job Queue Entry\") (called at dep:Base:src/JQ.al:102)",
+            "[hub Codeunit.Run of a variable at dep:Base:src/JQ.al:110]",
+            "Codeunit \"Job Queue\" (448)::After (called at dep:Base:src/JQ.al:120)",
+            "[event] Codeunit Subs::OnAfter (raised at ws:src/S.al:7)",
+            "Codeunit Subs::Work (called at ws:src/S.al:9)",
+            "Table \"CDO File\".\"Name\"::OnValidate",
+        ];
+        let line = p(&hops.join(SEP));
+        let elided = elide(vec![line.clone()]);
+        let text = &elided[0];
+        assert!(
+            text.contains(" → OnRun (called at dep:Base:src/JQ.al:48) → Handle("),
+            "{text}"
+        );
+        assert!(text.contains("(called at :102)"), "{text}");
+        assert!(
+            text.contains(
+                "] → Codeunit \"Job Queue\" (448)::After (called at dep:Base:src/JQ.al:120)"
+            ),
+            "the hop after a hub is full: {text}"
+        );
+        assert!(text.contains(" → Work (called at :9)"), "{text}");
+        assert!(text.len() < line.len());
+        assert_eq!(expand(text), line);
     }
 
     /// A path's last hop is never inside a segment, even when another path

@@ -8,9 +8,10 @@
       "via": "inherited"
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "direction": "down",
     "down": {
       "answerable": true,
@@ -36,8 +37,7 @@
           "operationId": "46598e8ae640a0a8/df980d5b2960e89e21f2452e4999035332235f104bbebfa4faac1c33412033e1/op0",
           "origin": {
             "column": 8,
-            "file": "ws:src/QTTouches.al",
-            "fileDisplay": "ws:src/QTTouches.al",
+            "file": "f:1",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -46,6 +46,12 @@
           "touchClass": "temporary"
         }
       ]
+    },
+    "files": {
+      "f:1": {
+        "display": "ws:src/QTTouches.al",
+        "file": "ws:src/QTTouches.al"
+      }
     },
     "from": {
       "resolution": "resolved",
@@ -75,7 +81,6 @@
         },
         "display": "WriteItem",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
         "selector": "Codeunit \"QT Touches\"::WriteItem",
         "signature": "(var Record \"QT Item\")",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
@@ -89,7 +94,6 @@
         },
         "display": "CallWithTemp",
         "objectDisplay": "Codeunit \"QT Touches\"",
-        "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithTemp",
         "selector": "Codeunit \"QT Touches\"::CallWithTemp",
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#e638f22869d8fa1ba69c0c5ea9d3deec52cbf1271e9c38dfedb76176d2ccac80"

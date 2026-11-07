@@ -14,9 +14,10 @@
       }
     ],
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "direction": "up",
     "field": {
       "dataType": "Decimal",
@@ -114,7 +115,6 @@
         },
         "display": "CallsKinds",
         "objectDisplay": "Codeunit \"FT Callers\"",
-        "qualifiedDisplay": "Codeunit \"FT Callers\"::CallsKinds",
         "selector": "Codeunit \"FT Callers\"::CallsKinds",
         "signature": "()",
         "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50801#e5a6540abf796ad2f364c8a758d938ce762720975b1a9b4368dd599c5ee823ed"
@@ -128,7 +128,6 @@
         },
         "display": "Kinds",
         "objectDisplay": "Codeunit \"FT Consumers\"",
-        "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
         "selector": "Codeunit \"FT Consumers\"::Kinds",
         "signature": "(var Record \"FT Item\")",
         "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"

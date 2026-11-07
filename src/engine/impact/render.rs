@@ -404,7 +404,9 @@ fn evidence_tables(evidence: &Value) -> Option<String> {
     let items: Vec<String> = tables
         .iter()
         .map(|t| {
-            let name = s(t, "table");
+            // r1 §2.1's formatter: an object name AL-quoted when it needs
+            // quotes (round-2 W4 follow-up: `may write "CDO Setup"`).
+            let name = crate::engine::l5::routine_rollup::al_name(s(t, "table"));
             if t["beyondDependencyCall"] == json!(true) {
                 return format!("{name} (beyond a dependency call)");
             }
@@ -605,6 +607,15 @@ fn witness_text(w: &Value) -> String {
     format!("[{}, {}] {what} ({tail})", s(w, "tier"), s(w, "relation"))
 }
 
+/// `a page action`, `an event subscriber`, `an install trigger`.
+fn with_article(kind: &str) -> String {
+    let an = kind
+        .chars()
+        .next()
+        .is_some_and(|c| "aeiouAEIOU".contains(c));
+    format!("{} {kind}", if an { "an" } else { "a" })
+}
+
 /// A name as AL writes it: quoted only when it needs quotes.
 fn al_name(n: &str) -> String {
     if !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -693,6 +704,14 @@ fn share_clause(up: &Value, key: &str, detail: bool, detail_in: &str) -> (String
     }
 }
 
+/// How much of a reach [`reach_lines`] prints (round-2 G37).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    Full,
+    Nearest,
+    Counts,
+}
+
 /// A population's entries by kind and by context, when it has any.
 fn kind_lines(up: &Value, key: &str, indent: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -760,6 +779,11 @@ fn population_count(up: &Value, key: &str) -> usize {
 /// (`hubs`: the answer's one hubs line). `direct_both`: the routine has
 /// direct code callers and raising events both (the code population counts
 /// both ways in once).
+///
+/// Round-2 G37: `level` [`Reach::Full`] prints all of that; a routine's
+/// block in a change of several routines prints [`Reach::Nearest`] (each
+/// population's line and its nearest entry), and the whole change
+/// [`Reach::Counts`] (the population lines only, then the hubs line once).
 fn reach_lines(
     up: &Value,
     detail: bool,
@@ -767,7 +791,9 @@ fn reach_lines(
     surface: crate::engine::follow_up::Surface,
     hubs: bool,
     direct_both: bool,
+    level: Reach,
 ) -> Vec<String> {
+    let detail = detail && level == Reach::Full;
     let detail_in = crate::engine::follow_up::Input::Detail.on(surface);
     let mut out = Vec::new();
     let a = &up["byRelation"]["ancestors"];
@@ -786,7 +812,7 @@ fn reach_lines(
     };
     let nearest = |out: &mut Vec<String>, key: &str| {
         let w = &up["nearest"][key];
-        if !w.is_null() {
+        if !w.is_null() && level != Reach::Counts {
             let label = if w["entry"].is_null() {
                 "nearest"
             } else {
@@ -828,7 +854,7 @@ fn reach_lines(
             thousands(u(&a[key], "viaDependency")),
         ));
         nearest(&mut out, key);
-        if !folded {
+        if !folded && level == Reach::Full {
             out.extend(kind_lines(up, key, indent));
         }
         if detail {
@@ -1480,8 +1506,18 @@ pub fn render(
             }
         ));
     }
-    if !hunks_outside.is_empty() {
-        let show = if opts.detail { usize::MAX } else { 5 };
+    if !hunks_outside.is_empty() && !opts.detail {
+        // Round-2 G30: folded to its count of files; `detail` lists them.
+        let files: std::collections::BTreeSet<&str> =
+            hunks_outside.iter().map(|h| s(h, "file")).collect();
+        out.push(format!(
+            "  hunks outside routines: {} in {} ({} lists them)",
+            hunks_outside.len(),
+            plural(files.len(), "file", "files"),
+            opts.input(crate::engine::follow_up::Input::Detail),
+        ));
+    } else if !hunks_outside.is_empty() {
+        let show = usize::MAX;
         let first: Vec<String> = hunks_outside
             .iter()
             .take(show)
@@ -1666,7 +1702,15 @@ pub fn render(
         tail.push("the whole change:".to_string());
         // Round-2 r2 §2.1: the hubs line prints once per answer, here
         // (the union holds every routine's).
-        tail.extend(reach_lines(un, false, "  ", opts.surface, true, false));
+        tail.extend(reach_lines(
+            un,
+            false,
+            "  ",
+            opts.surface,
+            true,
+            false,
+            Reach::Counts,
+        ));
     }
     if let Ok(d) = delta {
         before_after_tail(&mut tail, d, opts);
@@ -1984,8 +2028,8 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                 .and_then(Value::as_str)
             {
                 out.push(format!(
-                    "      the changed routine is a {} (an entry itself)",
-                    crate::engine::vocab::entry_key(k).0
+                    "      the changed routine is {} (an entry itself)",
+                    with_article(crate::engine::vocab::entry_key(k).0)
                 ));
             }
             out.push(if u(c, "count") == 0 {
@@ -2012,6 +2056,7 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                 opts.surface,
                 hubs,
                 direct_both,
+                if hubs { Reach::Full } else { Reach::Nearest },
             ));
             // Round-2 n09: "raised by" is the events that raise the routine
             // itself (its own subscriptions); the publishers anywhere among
@@ -2030,11 +2075,22 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
             };
             let direct = &p["direct"];
             if u(direct, "count") > 0 {
-                out.push(format!(
-                    "      raised by: {} ({})",
-                    plural(u(direct, "count"), "event", "events"),
-                    list(direct, node_short)
-                ));
+                // §R2.4 item 9: a publisher the code population's nearest
+                // line already names is not printed a second time.
+                let items = list(direct, node_short);
+                let nearest = &up["nearest"]["code"];
+                let same =
+                    u(direct, "count") == 1 && !nearest.is_null() && witness_text(nearest) == items;
+                out.push(if same {
+                    "      raised by: 1 event (its publisher is the nearest code ancestor above)"
+                        .to_string()
+                } else {
+                    format!(
+                        "      raised by: {} ({})",
+                        plural(u(direct, "count"), "event", "events"),
+                        items
+                    )
+                });
             }
             // §R2.4 landing change 4: the publishers anywhere among the
             // ancestors are a legacy list of every relation, not a
@@ -2156,11 +2212,11 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
     }
     // §6.1: a command with no MCP tool is named so (`alsem diff`).
     let not_computed = s(sc, "notComputed");
+    // Round-2 G30: over MCP no pointer (the command has no tool there).
     let not_computed = match opts.surface {
-        crate::engine::follow_up::Surface::Mcp => not_computed.replace(
-            "(alsem diff <base> <new> gives them)",
-            "(the CLI's diff command gives them; it is not available over MCP)",
-        ),
+        crate::engine::follow_up::Surface::Mcp => not_computed
+            .replace(" (alsem diff <base> <new> gives them)", "")
+            .replace("(alsem diff <base> <new> gives them)", ""),
         crate::engine::follow_up::Surface::Cli => not_computed.to_string(),
     };
     out.push(format!("  not computed here: {not_computed}"));

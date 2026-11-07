@@ -3406,7 +3406,7 @@ fn digest_header(
     let s = render.surface;
     if !facts.is_empty() && !render.detail {
         h.more
-            .push(format!("{} lists every list complete", Input::Detail.on(s)));
+            .push(format!("{} lists every list in full", Input::Detail.on(s)));
     }
     h.more
         .push(format!("{} for every effect row", Input::FormatJson.on(s)));

@@ -1264,3 +1264,18 @@ fn cdo_impact_ratchets() {
 fn cdo_impact_base_ratchets() {
     crate::cli_impact_base::cdo_impact_base_ratchets();
 }
+
+/// The commit-sites CDO case
+/// (`cli_commit_sites_up_chain::cdo_run_report_id_lists_calc_sales_disc_commits`),
+/// here so `cdo-gate` runs it: it said so in its doc but sat outside the filter.
+#[test]
+fn cdo_run_report_id_lists_calc_sales_disc_commits() {
+    crate::cli_commit_sites_up_chain::cdo_run_report_id_lists_calc_sales_disc_commits();
+}
+
+/// Round-2 W5's size ratchets (`output_invariants_w3::cdo_round2_size_ratchets`),
+/// here so `cdo-gate` runs them.
+#[test]
+fn cdo_round2_size_ratchets() {
+    crate::output_invariants_w3::cdo_round2_size_ratchets();
+}

@@ -369,6 +369,11 @@ pub struct ObligationPointers {
     pub workspace_open_world: usize,
     /// The three most frequent callees, `(display, count)`.
     pub top_callees: Vec<(String, usize)>,
+    /// Round-2 G31: the three most frequent callees by kind, for the human
+    /// lines: calls not resolved, and interface calls counted open world
+    /// (`interface dispatch (open world)`, never "not resolved").
+    pub top_not_resolved: Vec<(String, usize)>,
+    pub top_open_world: Vec<(String, usize)>,
 }
 
 impl ObligationPointers {
@@ -377,6 +382,8 @@ impl ObligationPointers {
     pub fn of(entry: &DigestEntryFull, world: World) -> ObligationPointers {
         let mut p = ObligationPointers::default();
         let mut callees: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut not_resolved: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut open_world: BTreeMap<&str, usize> = BTreeMap::new();
         for item in entry.unresolved.iter().filter(|i| !world_waives(i, world)) {
             if item
                 .callsite_file
@@ -390,14 +397,23 @@ impl ObligationPointers {
                 }
             }
             *callees.entry(item.callee_display.as_str()).or_default() += 1;
+            let by_kind = if item.open_world == Some(true) {
+                &mut open_world
+            } else {
+                &mut not_resolved
+            };
+            *by_kind.entry(item.callee_display.as_str()).or_default() += 1;
         }
-        let mut top: Vec<(String, usize)> = callees
-            .into_iter()
-            .map(|(c, n)| (c.to_string(), n))
-            .collect();
-        top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        top.truncate(3);
-        p.top_callees = top;
+        let top = |m: BTreeMap<&str, usize>| {
+            let mut top: Vec<(String, usize)> =
+                m.into_iter().map(|(c, n)| (c.to_string(), n)).collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            top.truncate(3);
+            top
+        };
+        p.top_callees = top(callees);
+        p.top_not_resolved = top(not_resolved);
+        p.top_open_world = top(open_world);
         p
     }
 
@@ -1991,6 +2007,7 @@ pub(crate) fn header_and_body(
     let mut body: Vec<String> = Vec::new();
     let mut gaps_follow_up = false;
     let mut folded = false;
+    let mut tops: Vec<String> = Vec::new();
     for line in text.lines() {
         if let Some(r) = line
             .strip_prefix("--- ")
@@ -2023,7 +2040,9 @@ pub(crate) fn header_and_body(
             analysis = Analysis::of(complete, reasons);
             for p in parts {
                 if let Some(top) = p.strip_prefix("top: ") {
-                    body.push(format!("  top callees not resolved: {top}"));
+                    tops.push(format!("  top callees not resolved: {top}"));
+                } else if let Some(top) = p.strip_prefix("top open world: ") {
+                    tops.push(format!("  top interface dispatch (open world): {top}"));
                 } else if p.starts_with("alsem explain lists") {
                     gaps_follow_up = true;
                 }
@@ -2035,8 +2054,18 @@ pub(crate) fn header_and_body(
                 limits.extend(l.split("; ").map(str::to_string));
             }
         } else {
+            // Round-2 G25: the header counts the stopped paths; the
+            // `stopped:` line below says where (one copy of the line).
             if let Some(s) = line.strip_prefix("  stopped: ") {
-                analysis = analysis.and(Analysis::Partial(vec![format!("stopped: {s}")]));
+                let n: usize = s
+                    .split("; ")
+                    .filter_map(|p| p.split(' ').next()?.replace(',', "").parse::<usize>().ok())
+                    .sum();
+                let paths = if n == 1 { "path" } else { "paths" };
+                analysis = analysis.and(Analysis::Partial(vec![format!(
+                    "{} {paths} stopped; stopped: says where",
+                    crate::engine::l5::routine_rollup::thousands(n)
+                )]));
             }
             if line.contains(" lists every one") || line.contains(" lists them") {
                 folded = true;
@@ -2046,6 +2075,18 @@ pub(crate) fn header_and_body(
     }
     if routine.is_empty() {
         return (text.to_string(), None);
+    }
+    // Round-2 G31: a top-callees line prints only when it adds to the
+    // blocker list (some callee it names is not on a body line already).
+    for t in tops {
+        let names = t.split_once(": ").map_or("", |(_, r)| r);
+        let adds = names.split(", ").any(|c| {
+            let callee = c.rsplit_once(" ×").map_or(c, |(n, _)| n);
+            !body.iter().any(|l| l.contains(callee))
+        });
+        if adds {
+            body.push(t);
+        }
     }
     let mut h = Header::new("prove", format!("{routine} {question}"), hc.fcx.single_app);
     h.answer = answer;
@@ -2827,14 +2868,22 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
         coverage.push_str(&format!(" — {}", parts.join(", ")));
     }
     if let Some(p) = pointers.filter(|p| !p.top_callees.is_empty()) {
-        coverage.push_str(&format!(
-            "; top: {}",
-            p.top_callees
-                .iter()
-                .map(|(c, n)| format!("{c} ×{n}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+        // Round-2 G31: by kind; an interface call is open world, not "not
+        // resolved".
+        for (label, top) in [
+            ("top", &p.top_not_resolved),
+            ("top open world", &p.top_open_world),
+        ] {
+            if !top.is_empty() {
+                coverage.push_str(&format!(
+                    "; {label}: {}",
+                    top.iter()
+                        .map(|(c, n)| format!("{c} ×{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
         if p.workspace_unresolved + p.workspace_open_world > 0 {
             coverage.push_str("; alsem explain lists the workspace ones under gaps");
         }

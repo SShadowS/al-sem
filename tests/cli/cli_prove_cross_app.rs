@@ -706,7 +706,9 @@ fn single_app_flag_reaches_prove() {
         // `result.followUps`, additive; the human answer's four header lines,
         // the top callees not resolved as their own line; the routine
         // anchor's `role: definition`, F78), then round-2 W4 (schema
-        // 2.11.0: `volatile: []`; `objectDisplay` quoted as AL needs, G41).
+        // 2.11.0: `volatile: []`; `objectDisplay` quoted as AL needs, G41),
+        // then round-2 W5 (G31: no top-callees line that only repeats the
+        // blocker list; JSON `directCallersAnalyzed` is callers-only).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

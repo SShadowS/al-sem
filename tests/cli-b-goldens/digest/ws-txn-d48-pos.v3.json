@@ -19,9 +19,10 @@
       }
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effects": {
       "e:1": {
         "confidence": "static",
@@ -174,16 +175,16 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "direct-call",
-                    "line": 32,
-                    "to": "r:20ab43ac5fd3"
-                  },
-                  {
-                    "edge": "variable-typed-call",
-                    "line": 40,
-                    "to": "r:1c088b4fbe9f"
-                  }
+                  [
+                    "direct-call",
+                    32,
+                    "r:20ab43ac5fd3"
+                  ],
+                  [
+                    "variable-typed-call",
+                    40,
+                    "r:1c088b4fbe9f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D48Pos.Codeunit.al",
@@ -284,11 +285,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "variable-typed-call",
-                    "line": 40,
-                    "to": "r:1c088b4fbe9f"
-                  }
+                  [
+                    "variable-typed-call",
+                    40,
+                    "r:1c088b4fbe9f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D48Pos.Codeunit.al",
@@ -389,11 +390,11 @@
             "paths": [
               {
                 "hops": [
-                  {
-                    "edge": "variable-typed-call",
-                    "line": 54,
-                    "to": "r:1c088b4fbe9f"
-                  }
+                  [
+                    "variable-typed-call",
+                    54,
+                    "r:1c088b4fbe9f"
+                  ]
                 ],
                 "terminal": {
                   "file": "ws:src/D48Pos.Codeunit.al",

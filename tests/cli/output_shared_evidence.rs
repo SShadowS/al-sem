@@ -62,6 +62,10 @@ fn pair(args: &[&str], new: Option<&str>, old: &str, code: i32) -> (Value, Value
 /// digest selector (its one candidate array), query effects with writes
 /// beyond a dependency call (`beyondDependencyCalls`, `origin.fileDisplay`)
 /// and the touches documents.
+///
+/// Round-2 W5: every field is rebuilt but `dependencies.apps`, which 5.0.0
+/// replaces by `dependencyCount` and `dependencyClosure` (G38; §4.6 names no
+/// reconstruction for it); the 4.0.0 side is compared without it.
 #[test]
 fn every_v4_document_is_rebuilt_from_v5() {
     use al_sem::engine::l4::query_v5;
@@ -86,7 +90,7 @@ fn every_v4_document_is_rebuilt_from_v5() {
     );
     assert_eq!(
         digest_v5::document_to_v4(v5)["payload"],
-        v4["payload"],
+        without_apps(&v4["payload"]),
         "digest --writes-table"
     );
     // An ambiguous selector: no answer (exit 2), its candidates once.
@@ -100,7 +104,7 @@ fn every_v4_document_is_rebuilt_from_v5() {
     }
     assert_eq!(
         digest_v5::document_to_v4(v5)["payload"],
-        v4["payload"],
+        without_apps(&v4["payload"]),
         "digest ambiguous"
     );
     let queries: Vec<Vec<&str>> = vec![
@@ -133,10 +137,29 @@ fn every_v4_document_is_rebuilt_from_v5() {
         assert!(!v5.to_string().contains("\"entryPoint"), "{args:?}: {v5:#}");
         assert_eq!(
             query_v5::document_to_v4(v5)["payload"],
-            v4["payload"],
+            without_apps(&v4["payload"]),
             "{args:?}"
         );
     }
+}
+
+/// A 4.0.0 payload without `dependencies.apps` (and without `dependencies`
+/// when nothing else is in it), as `to_v4` rebuilds it.
+fn without_apps(p: &Value) -> Value {
+    let mut p = p.clone();
+    if let Some(m) = p.as_object_mut() {
+        let empty = m
+            .get_mut("dependencies")
+            .and_then(Value::as_object_mut)
+            .map(|d| {
+                d.remove("apps");
+                d.is_empty()
+            });
+        if empty == Some(true) {
+            m.remove("dependencies");
+        }
+    }
+    p
 }
 
 /// A digest of two roots, one of which (IssueDoc) calls the other

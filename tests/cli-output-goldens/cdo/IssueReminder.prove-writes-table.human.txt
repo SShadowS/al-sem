@@ -7,5 +7,6 @@ more: format: "json" for every evidence row and its hops
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → InsertIssuedReminderHeader (Insert at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:474)
     [DB_MODIFY] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → OnAfterIssueReminder → [event] Codeunit "Issue Reminder Event Handler" (6756)::UpdateStatusWhenReminderIsIssued (Modify at dep:Base Application:src/Sales/Reminder/Automation/Actions/IssueReminders/IssueReminderEventHandler.Codeunit.al:61)
-  top callees not resolved: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8
+  top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
+  top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps

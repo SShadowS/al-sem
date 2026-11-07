@@ -345,7 +345,8 @@ fn only_test_code_gives_null_ratio() {
         "ratio key absent: {b}"
     );
     assert!(
-        raw.contains("\"ratio\": null"),
+        // Compact by default (round-2 G35) or indented.
+        raw.contains("\"ratio\":null") || raw.contains("\"ratio\": null"),
         "raw text lacks `\"ratio\": null`: {raw}"
     );
 }

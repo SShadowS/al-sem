@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (round-2 output validation, W5: noise and size)
+
+Milestone W5 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.1-§4.4,
+G24-G38, and §R2.4 item 9). Output only: no engine fact changes. The schema breaks go into
+query 5.0.0 and digest 5.0.0 (not released yet; consumer notice below, under W4's).
+
+- **G24, explain with `callersContext`** leads with the callers: `answer:` is the three
+  callers' answers (`pending writes: yes (8 witnesses); intercepted errors: unknown;
+  non-interactive: unknown`); then own state changes, each answer with what was found
+  among a computed population (`none found among 43 analyzed direct callers; unknown
+  because 2 routines other apps may call`; JSON `directCallersAnalyzed`, also on prove's
+  callers' result), `locks held by callers: not analyzed (no lock facts)`, the `callers:`
+  line, and the effects as summary lines only (`detail: true` for the rows, the captions and
+  the page objects). A pending write behind a call names its operation and table (`Modify on
+  "CDO E-Mail Template Header" in DocOutput.GetRecipientsDescription, before the call at …`).
+- **G25, one copy of each line**: prove's `stopped:` once (the header counts the paths);
+  explain's `callers and tests:` summary line is not printed beside the `callers:` /
+  `run by:` and `tests:` lines; query touches' result line under its answer prints as
+  `consumers (as in answer):`, `filters: none observed (same search)`, the legend once
+  before the per-object list; status's `not checked:` line under a no-engine headline goes;
+  `detail: true lists every list in full`. A callers' `unknown` no longer repeats the `to
+  narrow it:` examples on its `blocked by:` line.
+- **G26**: an excerpt that starts at the first statement says so (`first statement at :183`).
+- **G27**: query touches down says `dependency code: none reached` when the cone stays in
+  workspace code.
+- **G28**: tests' `test scope:` line carries `selection incomplete: 4,701 unresolved test
+  calls (7 test-library apps missing; format: "json" lists them and the fix)`; the two
+  paragraphs go.
+- **G29**: query effects' answer is the operation count; `writes:`, `reads:`, `locks:` print
+  on their own lines; with `all` the operation rows print before the deep-write summary.
+- **G30**: impact's hunk list folds to `25 in 25 files (detail: true lists them)`; over MCP
+  `not computed here:` has no CLI pointer.
+- **G31**: prove's `top callees not resolved` prints only when it adds to the blocker list;
+  interface calls print apart as `top interface dispatch (open world)`.
+- **G32**: tests start with a `by tier:` totals line, and each group's path is its own line,
+  so shared runs print once (prove's segments).
+- **G33**: a callers' question prints one candidate (`detail: true` lists every kept one),
+  and a path elides the repeated object and file on consecutive hops (`OnRun (called at
+  :22)`); `path_segments::expand` rebuilds every hop.
+- **G34**: query 5.0.0 rows name their table and file through `payload.tables` (`t:<n>`:
+  `{id, name}`) and `payload.files` (`f:<n>`: `{file, display}`, absorbing `fileDisplay`);
+  a routine's `qualifiedDisplay` is left out when derivable (its selector, else object, a
+  dependency object's number, `::`, display; `""` when it had none); per-table rows of
+  `summary.beyondDependencyCalls[].tables` fold to `["t:<n>", <op>…]`; the envelope's
+  `summary.writes.byTable` is complete up to 20 tables.
+- **G35**: digest 5.0.0 hops are arrays (`[edge, line, to, file?]`, a tail reference as its
+  `t:<n>` id); the 5.0.0 JSON is compact by default (`--compact=false`, MCP `compact:
+  false`, for the indented form; schemas 4, 3, 2 stay indented).
+- **G36**: query touches up lists each object's callers by hop distance (`+3 hops: A :1, B
+  :2`); the callers whose first touch is another say so in one line; the disjointness line
+  names the three populations.
+- **G37**: in a change of several routines, a routine's block prints each population's line
+  and nearest entry; `the whole change:` prints the counts, then the hubs line once.
+- **G38**: query 5.0.0 and digest 5.0.0 carry `dependencyCount` and `dependencyClosure`
+  (`apps-v1:<blake3 of the sorted appId@version>`) in place of `dependencies.apps`; query
+  `families` drops the four constant one-routine-deep sentences (the schema doc states
+  them; `--schema 4` keeps them).
+- **§R2.4 item 9 (n09)**: `raised by:` does not name a publisher the code population's
+  nearest line already names; `the changed routine is an event subscriber`.
+- **Impact** effect lines quote table names (`may write "CDO Setup"`).
+- **Sizes on CDO** (`bc3ccb18`, release-fast, the round-2 arguments; ratchets in
+  `output_invariants_w3::cdo_round2_size_ratchets`): n10 41,189 → 4,947 B (§5 ~5 KB); c02
+  7,399 → 4,065 B (3.5 KB); c08 788,752 → 600,333 B (~480 KB); c17 72,701 → 62,552 B
+  (< 60 KB); c20 10,014 → 6,056 B (~4.6 KB); c25 638,308 → 372,752 B (~290 KB). Only n10
+  meets its §5 value; the others are pinned at the measured size after every cut the
+  design names.
+
 ### Changed (round-2 output validation, W4: consistency)
 
 Milestone W4 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.5 G39–G45,
@@ -84,6 +151,16 @@ binary on the fixture).
   `dependencyCall` (`summary.mayWriteTables.mostBeyond`), `throughEntryPoint` →
   `throughDependencyCall` (`effects[].paths[]`). `volatile` (G44). The 4.x document gains
   `tableRef` and `candidateRows` additively, from which 5.0.0 is built.
+- **W5 additions to 5.0.0** (G34, G35, G38): query `effects[].tableId` / `tableName` →
+  `table: "t:<n>"` into `payload.tables`; every `origin.file` → `"f:<n>"` into
+  `payload.files` (`{file, display}`; W4's `origin.fileDisplay` is `display` there);
+  `routines[].qualifiedDisplay` left out when derivable (`""`: none);
+  `summary.beyondDependencyCalls[].tables[]` → `["t:<n>", <op>…]`;
+  `result.scope.families.{reads,locks,validate,writes}.reasons` (constant) left out.
+  Digest: hops `[edge, line, to, file?]` and a tail reference `"t:<n>"`; the default JSON is
+  one compact line. Both: `dependencies.apps` → `dependencyCount` + `dependencyClosure`.
+  `to_v4` rebuilds every 4.0.0 field but `dependencies.apps` (no reconstruction, §4.6);
+  `--schema 4` still writes the exact 4.0.0 document.
 - **Envelope summaries** (not versioned): query effects `byTempState` keys (above); digest
   rows `asked` + `tableRef` in place of `table: {name}`, `sharedWith` in place of `shared`,
   `effectCounts` beside `effectsByType`.
@@ -91,11 +168,13 @@ binary on the fixture).
   `al-sem.explain/4`, impact version 1, `al-sem.tests/2`, `alsem graph`.
 - **Who must move**: ConTinAI `work/scripts/effects.py` (query rows): read
   `summary.beyondDependencyCalls[].dependencyCall` and `summary.beyondWrites.dependencyCalls`
-  (were `beyondEntryPoints[].entryPoint`, `beyondWrites.entryPoints`); `origin.file` is
-  unchanged, `origin.fileDisplay` is new; or pass `schema: 4` for one release.
+  (were `beyondEntryPoints[].entryPoint`, `beyondWrites.entryPoints`), resolve
+  `effects[].table` and `origin.file` through `payload.tables` / `payload.files` (W5), and
+  read beyond table rows as `["t:<n>", <op>…]`; or pass `schema: 4` for one release.
   bc-dev-mcp `risk.ts` / `alsem-writes.ts` (digest and query JSON): `tableAnswers[].asked`
   / `tableRef` (was `table`), `dependencyCalls` / `throughDependencyCall` for the entry-point
-  keys, and an ambiguity's `candidates[].selector` (was `candidateSelectors`); the
+  keys, an ambiguity's `candidates[].selector` (was `candidateSelectors`), hop arrays and
+  `dependencyCount` in place of `dependencies.apps` (W5); the
   envelope summary's `byTempState` words. al-lsp-for-agents: display strings quote object
   names as AL needs (`Codeunit "CDO Log Management"`), and the `calls:` line reads
   `Object::Routine (called at :N)`; nothing parses them today.

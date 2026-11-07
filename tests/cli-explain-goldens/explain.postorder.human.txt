@@ -1,11 +1,10 @@
 explain Codeunit "Explain Post"::PostOrder   [cross-app]
 answer: writes: may modify persistent Explain Order records (Modify at :18) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
-more: --detail lists every list complete; --format json for every row
+more: --detail lists every list in full; --format json for every row
 Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
   transaction, UI and errors: commits: no (every candidate decided); UI at 1 place; errors at 3 places
   other effects: events: 1 (1 raised in workspace code)
-  callers and tests: callers: 2 direct (1 routine, 1 page action); 1 page action reaches it in all; tests: 1
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: ::OnBeforePostOrder (called at :13)
   doc: Posts a released order. / It marks the order posted.

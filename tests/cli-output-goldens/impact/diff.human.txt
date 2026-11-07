@@ -5,7 +5,7 @@ more: --detail lists each routine's direct callers and its first entry of each k
 computed: current effects of the 1 routine this diff touches, in the working tree (the diff's lines match it: yes); no before/after computed — --base <ref> gives it
 impact of a diff (2 files); HEAD not a git repository; diff blake3:ffae8ba8abdd; one-shot run (no resident revision)
 input: 1 changed routine resolved; changed lines 6 = routine bodies 2, signatures 0, object declarations 2 (fields 2), outside objects 0, unmapped 2 (not AL 2)
-  hunks outside routines: 2 (App/src/Core.al:8-10 field 2; App/notes.md:1-1 unmapped 2)
+  hunks outside routines: 2 in 2 files (--detail lists them)
   files not mapped: 1 (App/notes.md (not AL, 2 lines))
   root diagnostics: 1 (diff-file-not-al 1)
     changed-roots: diff-file-not-al App/notes.md

@@ -8,9 +8,10 @@
       "via": "direct"
     },
     "dependencies": {
-      "apps": [],
       "mode": "crossApp"
     },
+    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
+    "dependencyCount": 0,
     "effectCount": 4,
     "effects": [
       {
@@ -18,14 +19,12 @@
         "operationId": "a5194b0bfeaa35df/2678d0c8a24b9998e299b622476daa2c736e056269327bd183211233733752e8/op1",
         "origin": {
           "column": 8,
-          "file": "ws:src/Codeunit.al",
-          "fileDisplay": "ws:src/Codeunit.al",
+          "file": "f:1",
           "line": 18,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "2a000000-0000-0000-0000-0000000002aa/table/50901",
-        "tableName": "Sales Line",
+        "table": "t:1",
         "tempState": "not temporary"
       },
       {
@@ -33,14 +32,12 @@
         "operationId": "a5194b0bfeaa35df/2678d0c8a24b9998e299b622476daa2c736e056269327bd183211233733752e8/op0",
         "origin": {
           "column": 8,
-          "file": "ws:src/Codeunit.al",
-          "fileDisplay": "ws:src/Codeunit.al",
+          "file": "f:1",
           "line": 17,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "2a000000-0000-0000-0000-0000000002aa/table/50900",
-        "tableName": "Customer",
+        "table": "t:2",
         "tempState": "not temporary"
       },
       {
@@ -48,8 +45,7 @@
         "operationId": "a5194b0bfeaa35df/2678d0c8a24b9998e299b622476daa2c736e056269327bd183211233733752e8/op3",
         "origin": {
           "column": 8,
-          "file": "ws:src/Codeunit.al",
-          "fileDisplay": "ws:src/Codeunit.al",
+          "file": "f:1",
           "line": 20,
           "role": "operation",
           "routine": "r:1"
@@ -62,17 +58,21 @@
         "operationId": "a5194b0bfeaa35df/2678d0c8a24b9998e299b622476daa2c736e056269327bd183211233733752e8/op2",
         "origin": {
           "column": 8,
-          "file": "ws:src/Codeunit.al",
-          "fileDisplay": "ws:src/Codeunit.al",
+          "file": "f:1",
           "line": 19,
           "role": "operation",
           "routine": "r:1"
         },
-        "tableId": "2a000000-0000-0000-0000-0000000002aa/table/50900",
-        "tableName": "Customer",
+        "table": "t:2",
         "tempState": "temporary"
       }
     ],
+    "files": {
+      "f:1": {
+        "display": "ws:src/Codeunit.al",
+        "file": "ws:src/Codeunit.al"
+      }
+    },
     "lineBase": 1,
     "result": {
       "scope": {
@@ -96,10 +96,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for locks"
-            ]
+            "inventory": "notExhaustive"
           },
           "reads": {
             "blockers": {
@@ -107,10 +104,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for reads"
-            ]
+            "inventory": "notExhaustive"
           },
           "validate": {
             "blockers": {
@@ -118,10 +112,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for validations"
-            ]
+            "inventory": "notExhaustive"
           },
           "writes": {
             "blockers": {
@@ -129,10 +120,7 @@
               "interfaceDispatchOpenWorld": 0
             },
             "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [
-              "dependency code deeper than one routine is not inventoried for writes"
-            ]
+            "inventory": "notExhaustive"
           }
         },
         "limits": [],
@@ -156,7 +144,6 @@
         },
         "display": "DeclaredVars",
         "objectDisplay": "Codeunit \"R2a Records\"",
-        "qualifiedDisplay": "Codeunit \"R2a Records\"::DeclaredVars",
         "selector": "Codeunit \"R2a Records\"::DeclaredVars",
         "signature": "()",
         "stableId": "2a000000-0000-0000-0000-0000000002aa:Codeunit:50900#c55cfb62b11616f98ad594b5e23d52bf9acef88743a0f51a3b687dff45ce314e"
@@ -218,6 +205,16 @@
         "operations": 0,
         "tables": 0,
         "tempStateUnknown": 0
+      }
+    },
+    "tables": {
+      "t:1": {
+        "id": "2a000000-0000-0000-0000-0000000002aa/table/50901",
+        "name": "Sales Line"
+      },
+      "t:2": {
+        "id": "2a000000-0000-0000-0000-0000000002aa/table/50900",
+        "name": "Customer"
       }
     }
   },
