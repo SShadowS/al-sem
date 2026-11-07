@@ -67,12 +67,40 @@ fn relation(t: &Value) -> &'static str {
         .flatten()
         .skip(1)
         .filter_map(Value::as_str)
-        .any(|h| (h.starts_with("Page ") || h.starts_with("PageExtension ")) && !h.contains("::"));
+        .any(is_navigation_hop);
     if nav {
         crate::engine::vocab::RELATION_NAVIGATION
     } else {
         crate::engine::vocab::RELATION_CODE
     }
+}
+
+/// Whether a path hop's printed name is a page the path opens: a bare page
+/// object (no `::`), the page's lifecycle edge. The one rule for a path's
+/// relation, here and in the select part's per-root relations.
+pub(crate) fn is_navigation_hop(h: &str) -> bool {
+    (h.starts_with("Page ") || h.starts_with("PageExtension ")) && !h.contains("::")
+}
+
+/// The pages the navigation-only tests open (round-3 n02): each test's
+/// first page hop, distinct, in rank order.
+fn opened_pages(nav_tests: &[&Value]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in nav_tests {
+        let first = t["path"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .skip(1)
+            .filter_map(Value::as_str)
+            .find(|h| is_navigation_hop(h));
+        if let Some(p) = first
+            && !out.iter().any(|x| x == p)
+        {
+            out.push(p.to_string());
+        }
+    }
+    out
 }
 
 /// The changed routine's own object part and trigger name, when the answer
@@ -94,16 +122,29 @@ fn navigation_target(changed: &[Value]) -> &'static str {
     }
 }
 
-/// The user step a navigation-only path still needs, once, in the headline
-/// (round-2 r2 §2.2), from the target's routine kind: a table field's
-/// trigger is reached through a page on the field's table (never "a page
-/// that shows the field": page columns are not indexed); a page field's or
-/// action's through its page.
-fn navigation_caveat(changed: &[Value]) -> String {
+/// The navigation caveat, once, in the headline (round-2 r2 §2.2): which
+/// pages the tests open, from their paths, and the user step the target
+/// still needs, from its routine kind. Round-3 n02: it says only what is
+/// computed: the pages each test opens (its path's first page hop: named, at
+/// most three, then counted), never which table they are on.
+fn navigation_caveat(changed: &[Value], nav_tests: &[&Value]) -> String {
+    let pages = opened_pages(nav_tests);
+    let opened = match pages.len() {
+        0 => "each path opens a page".to_string(),
+        n => format!(
+            "the first page each path opens: {}{}",
+            pages[..n.min(3)].join(", "),
+            if n > 3 {
+                format!(", … +{}", n_of(n - 3, "page", "pages"))
+            } else {
+                String::new()
+            }
+        ),
+    };
+    let generic =
+        format!("{opened}; whether a test takes the step each path needs is not established");
     let Some((object, name)) = one_target(changed) else {
-        return "each path opens a page; whether a user takes the step each one needs is not \
-                established"
-            .to_string();
+        return generic;
     };
     let field_step = match name.to_ascii_lowercase().as_str() {
         "onvalidate" => Some("edits"),
@@ -114,22 +155,13 @@ fn navigation_caveat(changed: &[Value]) -> String {
     let table = object.starts_with("Table ") || object.starts_with("TableExtension ");
     let page = object.starts_with("Page ") || object.starts_with("PageExtension ");
     match (table, page, field_step) {
-        (true, _, Some("edits")) => "each opens a page on the field's table; whether the page \
-                                     shows or edits the field is not established"
-            .to_string(),
-        (true, _, Some(step)) => format!(
-            "each opens a page on the field's table; whether the user {step} the field there is \
-             not established"
-        ),
         (_, true, _) if object.contains(".action(") => {
-            "each opens the action's page; whether the user invokes the action is not established"
-                .to_string()
+            format!("{opened}; whether a test invokes the action is not established")
         }
-        (_, true, Some(step)) => {
-            format!("each opens the page; whether the user {step} the field is not established")
+        (true, _, Some(step)) | (_, true, Some(step)) => {
+            format!("{opened}; whether a test {step} the field is not established")
         }
-        _ => "each path opens a page; whether a user takes the step it needs is not established"
-            .to_string(),
+        _ => generic,
     }
 }
 
@@ -340,17 +372,44 @@ fn u(v: &Value, k: &str) -> usize {
 /// The returned tests under a cap of `cap` (round 2 G11): `picked` is the
 /// selection in its global rank (code relation before navigation, then
 /// tier, hops, codeunit, display). In `changed` order, each changed
-/// routine takes its nearest test (the first in that rank that reaches it:
-/// attributed to it by the walk, or named as its own nearest test);
+/// routine takes its nearest test: of the tests that reach it (`reachesAll`,
+/// every root a test reaches, or the walk's label `reaches`; or the
+/// routine's own nearest test), the first by ITS path to this routine (code
+/// relation before navigation, then tier, hops; then the global rank);
 /// a test already taken for an earlier routine is skipped, so it counts
 /// once; the remaining slots fill by the global rank. The result keeps the
 /// global rank's order.
 fn spread_cap<'v>(picked: &[&'v Value], changed: &[Value], cap: usize) -> Vec<&'v Value> {
     let mut taken: Vec<usize> = Vec::new();
-    let reaches = |t: &Value, id: &str| match &t["reaches"] {
-        Value::String(r) => r == id,
-        Value::Array(rs) => rs.iter().any(|r| r.as_str() == Some(id)),
-        _ => false,
+    let tier_rank = |t: &str| match t {
+        "local" => 0,
+        "throughDependency" => 1,
+        _ => 2,
+    };
+    let rel_rank = |r: &str| usize::from(r != crate::engine::vocab::RELATION_CODE);
+    // The test's path to routine `id`, ranked: (relation, tier, hops), or
+    // None when it does not reach it.
+    let reach_key = |t: &Value, id: &str, nearest: Option<&str>| -> Option<(usize, usize, usize)> {
+        let own = || (rel_rank(relation(t)), tier_rank(s(t, "tier")), u(t, "hops"));
+        if let Some(all) = t["reachesAll"].as_array() {
+            if let Some(r) = all.iter().find(|r| s(r, "stableId") == id) {
+                return Some((
+                    rel_rank(s(r, "relation")),
+                    tier_rank(s(r, "tier")),
+                    u(r, "hops"),
+                ));
+            }
+        } else {
+            let label = match &t["reaches"] {
+                Value::String(r) => r == id,
+                Value::Array(rs) => rs.iter().any(|r| r.as_str() == Some(id)),
+                _ => false,
+            };
+            if label {
+                return Some(own());
+            }
+        }
+        nearest.is_some_and(|n| s(t, "display") == n).then(own)
     };
     let same = |a: &Value, b: &Value| a["stableId"] == b["stableId"];
     for c in changed {
@@ -358,14 +417,14 @@ fn spread_cap<'v>(picked: &[&'v Value], changed: &[Value], cap: usize) -> Vec<&'
             break;
         }
         let id = s(c, "stableId");
-        // A test reaches the routine when the walk attributed it there
-        // (`reaches`: one root per test) or when it is the routine's own
-        // nearest test (`nearest.test`, from the per-root search).
         let nearest = c["nearest"]["test"].as_str();
-        if let Some(i) = picked.iter().position(|t| {
-            (reaches(t, id) || nearest.is_some_and(|n| s(t, "display") == n))
-                && !taken.iter().any(|&j| same(picked[j], t))
-        }) {
+        if let Some((_, i)) = picked
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !taken.iter().any(|&j| same(picked[j], t)))
+            .filter_map(|(i, t)| reach_key(t, id, nearest).map(|k| (k, i)))
+            .min()
+        {
             taken.push(i);
         }
     }
@@ -504,9 +563,34 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                              // §8.1, §8.3 (additive): the test-status words.
                              "testStatus": crate::engine::vocab::test_status(&best),
                              "nearestTestedCaller": Value::Null});
-        if let Some(r) = per.iter().find(|r| r.get("nearest").is_some()) {
+        // Over the parts: a code test first, then tier, hops (round-3 c21).
+        let near_key = |r: &&&Value| {
+            (
+                usize::from(
+                    r.get("nearestRelation")
+                        .and_then(Value::as_str)
+                        .is_some_and(|x| x != crate::engine::vocab::RELATION_CODE),
+                ),
+                match s(r, "nearestTier") {
+                    "local" => 0,
+                    "throughDependency" => 1,
+                    _ => 2,
+                },
+                u(r, "nearestHops"),
+            )
+        };
+        if let Some(r) = per
+            .iter()
+            .filter(|r| r.get("nearest").is_some())
+            .min_by_key(near_key)
+        {
             out["nearest"] =
                 json!({"test": r["nearest"], "tier": r["nearestTier"], "hops": r["nearestHops"]});
+            // Round-3 c21 (additive): the nearest test's relation (a code
+            // test first, else a UI-navigation one).
+            if let Some(rel) = r.get("nearestRelation") {
+                out["nearest"]["relation"] = rel.clone();
+            }
         }
         changed_out.push(out);
     }
@@ -808,7 +892,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 }
             ),
             navigation_target(&changed_out),
-            navigation_caveat(&changed_out),
+            navigation_caveat(&changed_out, &line_nav),
             if capped {
                 codeunits_of(&shown)
             } else {
@@ -827,7 +911,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             codeunits_of(&line_code),
             thousands(line_nav.len()),
             codeunits_of(&line_nav),
-            navigation_caveat(&changed_out),
+            navigation_caveat(&changed_out, &line_nav),
         )
     } else if capped {
         format!(
@@ -951,6 +1035,10 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             (crate::engine::vocab::RELATION_CODE.to_string(), json!(code_tests.len())),
             (crate::engine::vocab::RELATION_NAVIGATION.to_string(), json!(nav_tests.len())),
         ]),
+        // Round-3 c21 (additive): whether each `runFirst[].reaches` lists
+        // every changed routine its test reaches (a walk per changed
+        // routine), or only the one of its shortest path (many routines).
+        "reachesComplete": ok_parts.iter().all(|p| p["reachesComplete"] == json!(true)),
     });
     let test_row = |t: &Value| {
         json!({"row": "test", "test": t["display"], "stableId": t["stableId"],
@@ -967,37 +1055,74 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         })
         .collect();
     index_rows.extend(shown.iter().map(|t| test_row(t)));
-    let summary = crate::engine::result_index::with_index(
-        json!({
-            "kind": "tests",
-            "answer": header.answer,
-            "analysis": header.analysis.human(),
-            "runTarget": {"testApps": test_apps, "codeunits": codeunit_ids},
-            "selectionComplete": complete,
-            "fallback": selection["fallback"],
-            "total": picked.len(),
-            "returned": shown.len(),
-            "capAsked": opts.max_tests,
-            "truncated": shown.len() < picked.len(),
-            "changed": changed_out.len(),
-            "selectedTests": shown.iter().map(|t| test_row(t)).collect::<Vec<_>>(),
-        }),
-        "selectedTests",
-        "test",
-        index_rows,
-    );
+    // Round-3 B1 (astra): the run target is the returned tests' codeunits (a
+    // whole-codeunit superset of them); under a cap the full selection's
+    // codeunits are a field of their own, never the run target.
+    let returned_codeunits: Vec<String> = {
+        let mut ids: Vec<String> = Vec::new();
+        for t in &shown {
+            if let Some(n) = t["codeunitId"].as_i64().map(|n| n.to_string())
+                && !ids.contains(&n)
+            {
+                ids.push(n);
+            }
+        }
+        ids
+    };
+    let mut summary_core = json!({
+        "kind": "tests",
+        "answer": header.answer,
+        "analysis": header.analysis.human(),
+        "runTarget": {"testApps": test_apps, "codeunits": returned_codeunits,
+                      "supersetOf": "returnedTests"},
+        "selectionComplete": complete,
+        "fallback": selection["fallback"],
+        "total": picked.len(),
+        "returned": shown.len(),
+        "capAsked": opts.max_tests,
+        "truncated": shown.len() < picked.len(),
+        "changed": changed_out.len(),
+        "selectedTests": shown.iter().map(|t| test_row(t)).collect::<Vec<_>>(),
+    });
+    if capped {
+        summary_core["selectionRunTarget"] = json!({"testApps": test_apps,
+            "codeunits": codeunit_ids, "supersetOf": "selectedTests", "tests": picked.len()});
+    }
+    let summary =
+        crate::engine::result_index::with_index(summary_core, "selectedTests", "test", index_rows);
 
     if opts.json {
         let run_first: Vec<Value> = shown
             .iter()
             .map(|t| {
-                json!({"stableId": t["stableId"], "codeunitId": t["codeunitId"], "codeunit": t["codeunit"],
+                // Round-3 c21: every changed routine the test reaches (the
+                // select part's `reachesAll`), with its hops beside it; the
+                // ones it reaches only by UI navigation are listed apart.
+                let (reaches, hops, nav_only) = match t["reachesAll"].as_array() {
+                    Some(all) => (
+                        all.iter().map(|r| r["stableId"].clone()).collect::<Vec<_>>(),
+                        all.iter().map(|r| r["hops"].clone()).collect::<Vec<_>>(),
+                        all.iter()
+                            .filter(|r| {
+                                s(r, "relation") == crate::engine::vocab::RELATION_NAVIGATION
+                            })
+                            .map(|r| r["stableId"].clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                    None => (vec![t["reaches"].clone()], vec![t["hops"].clone()], Vec::new()),
+                };
+                let mut row = json!({"stableId": t["stableId"], "codeunitId": t["codeunitId"], "codeunit": t["codeunit"],
                        "procedure": t["procedure"], "file": t["file"], "tier": t["tier"],
-                       "class": t["class"], "hops": t["hops"], "reaches": [t["reaches"]],
+                       "class": t["class"], "hops": t["hops"], "reaches": reaches,
+                       "reachesHops": hops,
                        "path": t["path"],
                        // §3.3, §8.3 (additive): the §8.1 words beside `tier`.
                        "pathTier": crate::engine::vocab::tier_key(s(t, "tier")),
-                       "relation": relation(t)})
+                       "relation": relation(t)});
+                if !nav_only.is_empty() {
+                    row["reachesByNavigationOnly"] = json!(nav_only);
+                }
+                row
             })
             .collect();
         let doc = json!({
@@ -1128,17 +1253,21 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         }
     ));
     if picked.is_empty() {
-        // §3.3: the nearest test is labelled with its tier and as not a
-        // focused test.
+        // §3.3: the nearest test is labelled with its tier, its relation
+        // (round-3 c21) and as not a focused test.
         let nearest = changed_out
             .iter()
             .find_map(|c| c.get("nearest").cloned())
             .map(|n| {
                 format!(
-                    "; nearest [{}]: {} ({} hops) (not a focused test)",
+                    "; nearest [{}{}]: {} ({} hops) (not a focused test)",
                     match s(&n, "tier") {
                         "" => "local",
                         t => crate::engine::vocab::tier_key(t),
+                    },
+                    match s(&n, "relation") {
+                        "" => String::new(),
+                        r => format!(", {r}"),
                     },
                     s(&n, "test"),
                     n["hops"]
@@ -1238,12 +1367,42 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             "[via-dependency] {}{}",
             n_of(thr, "test", "tests"),
             if same {
-                // Round 2 G18: the input that gives their codeunit filter.
+                // Round-3 c07: what the sameness rule measured (each test's
+                // path enters dependency code whose own cone covers over half
+                // the graph), never a claim about what the tests are.
+                let via: Vec<&Value> = tests
+                    .iter()
+                    .filter(|t| s(t, "tier") == "throughDependency")
+                    .collect();
+                let codeunits = via
+                    .iter()
+                    .filter_map(|t| t["codeunitId"].as_i64())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                let suite: usize = u(roots, "workspaceTests")
+                    + ok_parts.iter().map(|p| u(p, "testsLoaded")).sum::<usize>();
+                let of_suite = if suite > 0 {
+                    format!(" of the suite's {}", thousands(suite))
+                } else {
+                    String::new()
+                };
+                // The nearest of them (code first, as ranked), unless the
+                // `tests on …: none; nearest` line already named it.
+                let nearest = match via.first() {
+                    Some(t) if !picked.is_empty() => format!(
+                        "; nearest: {} [{}] ({})",
+                        s(t, "display"),
+                        relation(t),
+                        n_of(u(t, "hops"), "hop", "hops")
+                    ),
+                    _ => String::new(),
+                };
                 format!(
-                    " — effectively the suite's posting tests, not specific to this change; {} \
-                     gives the {} tests' codeunit filter",
+                    " in {}{of_suite}, not listed at this tier — a broad set: each one's path \
+                     enters dependency code that may run more than half of the program{nearest}; \
+                     {} lists them",
+                    n_of(codeunits, "codeunit", "codeunits"),
                     crate::engine::follow_up::Input::TierDependency.on(opts.surface),
-                    thousands(thr)
                 )
             } else {
                 tier_note.clone()
@@ -1400,9 +1559,9 @@ mod tests {
         assert!(
             human.contains(
                 "answer: no modeled code-call witness in the selected scope; 1 test reaches this \
-                 trigger by UI navigation only (each opens a page on the field's table; whether \
-                 the page shows or edits the field is not established) — candidates: codeunits \
-                 50001 (a superset: whole codeunits)"
+                 trigger by UI navigation only (the first page each path opens: Page \"Ledger \
+                 Card\"; whether a test edits the field is not established) — candidates: \
+                 codeunits 50001 (a superset: whole codeunits)"
             ),
             "{human}"
         );
@@ -1520,5 +1679,152 @@ mod tests {
             .map(|t| t["stableId"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["t1", "t4"], "r2's nearest test: {v:#}");
+    }
+
+    /// Round-3 c21: under a cap each changed routine takes its nearest test by
+    /// THAT test's path to the routine (code before navigation), not by the
+    /// test's own best path. Hand-stated `reachesAll`: `x` is a code test
+    /// (its path to r3 is code) that reaches r2 only by UI navigation; `y` is
+    /// a navigation test (its only path to r1 opens a page) that reaches r2
+    /// by code, in more hops; `t1` reaches r1 only. A cap of 2: r1 takes
+    /// `t1`, r2 takes `y`, never `x`. Every returned row lists every routine
+    /// its test reaches, with its hops, and the routines it reaches only by
+    /// navigation. The summary's run target is the returned rows' codeunits.
+    ///
+    /// DISCRIMINATION (2026-11-07): ranking r2's candidates by the global
+    /// rank (the `reach_key` relation, tier and hops replaced by the test's
+    /// own) returns `x`: fails "r2 takes y".
+    #[test]
+    fn a_capped_selection_takes_each_routines_code_test_first() {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Codeunit X::A"},
+                      {"stableId": "r2", "display": "Codeunit X::B"},
+                      {"stableId": "r3", "display": "Codeunit X::C"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 3,
+        });
+        let reach = |id: &str, hops: u64, rel: &str| json!({"stableId": id, "tier": "local", "hops": hops, "relation": rel});
+        let t1 = json!({"stableId": "t1", "codeunitId": 50001, "codeunit": "T1",
+            "procedure": "t1", "tier": "local", "hops": 1, "reaches": "r1",
+            "reachesAll": [reach("r1", 1, "code")],
+            "display": "Codeunit T1::t1", "path": ["Codeunit T1::t1", "Codeunit X::A"]});
+        let x = json!({"stableId": "x", "codeunitId": 50002, "codeunit": "T2",
+            "procedure": "x", "tier": "local", "hops": 1, "reaches": "r3",
+            "reachesAll": [reach("r2", 2, "UI navigation"), reach("r3", 1, "code")],
+            "display": "Codeunit T2::x", "path": ["Codeunit T2::x", "Codeunit X::C"]});
+        let y = json!({"stableId": "y", "codeunitId": 50003, "codeunit": "T3",
+            "procedure": "y", "tier": "local", "hops": 2, "reaches": "r1",
+            "reachesAll": [reach("r1", 2, "UI navigation"), reach("r2", 6, "code")],
+            "display": "Codeunit T3::y",
+            "path": ["Codeunit T3::y", "Page Card", "Codeunit X::A"]});
+        let part = Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({"roots": [{"stableId": "r1", "status": "reached"},
+                                        {"stableId": "r2", "status": "reached"},
+                                        {"stableId": "r3", "status": "reached"}],
+                              "tests": [t1, x, y], "reachesComplete": true})),
+        };
+        let r = render(
+            &roots,
+            &[part],
+            RenderOpts {
+                tier: TierPick::Local,
+                max_tests: Some(2),
+                json: true,
+                surface: Default::default(),
+                single_app: false,
+                schema: 2,
+            },
+        );
+        let v: Value = serde_json::from_str(&r.text).unwrap();
+        let ids: Vec<&str> = v["runFirst"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["stableId"].as_str().unwrap())
+            .collect();
+        // Precondition: in the global rank `x` (code) is ahead of `y`.
+        assert_eq!(
+            relation(&json!({"path": ["Codeunit T2::x", "Codeunit X::C"]})),
+            "code"
+        );
+        assert_eq!(ids, ["t1", "y"], "r2 takes y: {v:#}");
+        let y_row = &v["runFirst"][1];
+        assert_eq!(y_row["reaches"], json!(["r1", "r2"]), "{y_row:#}");
+        assert_eq!(y_row["reachesHops"], json!([2, 6]), "{y_row:#}");
+        assert_eq!(y_row["reachesByNavigationOnly"], json!(["r1"]), "{y_row:#}");
+        assert_eq!(v["result"]["selection"]["reachesComplete"], true, "{v:#}");
+        assert_eq!(
+            r.summary["runTarget"]["codeunits"],
+            json!(["50001", "50003"]),
+            "{:#}",
+            r.summary
+        );
+    }
+
+    /// Round-3 B1 (astra): under a cap the summary's run target is the
+    /// RETURNED tests' codeunits (a whole-codeunit superset of them), and the
+    /// full selection's codeunits are a field of their own. Hand-stated: four
+    /// tests in four codeunits over two routines; a cap of 2 returns t1 and
+    /// t4, so the dropped tests' codeunits 50002 and 50003 are not in the run
+    /// target.
+    ///
+    /// DISCRIMINATION (2026-11-07): `runTarget.codeunits` built from the full
+    /// selection again (`codeunit_ids` for `returned_codeunits`) fails the
+    /// first assert; restored, it passes.
+    #[test]
+    fn a_capped_run_target_is_the_returned_tests_codeunits() {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Codeunit X::A"},
+                      {"stableId": "r2", "display": "Codeunit X::B"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 4,
+        });
+        let test = |id: &str, cu: i64, hops: u64, reaches: &str| {
+            json!({"stableId": id, "codeunitId": cu, "codeunit": format!("T{cu}"),
+                "procedure": id, "tier": "local", "hops": hops, "reaches": reaches,
+                "display": format!("Codeunit T{cu}::{id}"),
+                "path": [format!("Codeunit T{cu}::{id}"), "Codeunit X::A"]})
+        };
+        let part = Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({"roots": [{"stableId": "r1", "status": "reached"},
+                                        {"stableId": "r2", "status": "reached"}],
+                              "tests": [test("t1", 50001, 1, "r1"), test("t2", 50002, 2, "r1"),
+                                        test("t3", 50003, 3, "r1"), test("t4", 50004, 4, "r2")]})),
+        };
+        let r = render(
+            &roots,
+            &[part],
+            RenderOpts {
+                tier: TierPick::Local,
+                max_tests: Some(2),
+                json: false,
+                surface: Default::default(),
+                single_app: false,
+                schema: 2,
+            },
+        );
+        let returned: Vec<&str> = r.summary["selectedTests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["stableId"].as_str().unwrap())
+            .collect();
+        assert_eq!(returned, ["t1", "t4"], "precondition: {:#}", r.summary);
+        assert_eq!(
+            r.summary["runTarget"]["codeunits"],
+            json!(["50001", "50004"]),
+            "{:#}",
+            r.summary
+        );
+        assert_eq!(r.summary["runTarget"]["supersetOf"], "returnedTests");
+        assert_eq!(
+            r.summary["selectionRunTarget"]["codeunits"],
+            json!(["50001", "50002", "50003", "50004"]),
+            "{:#}",
+            r.summary
+        );
+        assert_eq!(r.summary["selectionRunTarget"]["tests"], 4);
     }
 }
