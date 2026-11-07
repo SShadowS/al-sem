@@ -2443,6 +2443,7 @@ mod walk_paths_tests {
             table_case: None,
             field_exit_guard: None,
             table_exit_guard: None,
+            junction_guards: None,
         }
     }
     fn call(id: &str) -> PCFNNode {

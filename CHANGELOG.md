@@ -50,6 +50,42 @@ Field Value Part"` (`InsertAllowed = false`) selected 7 tests for the variant en
   page, so `Editable = false` blocks stay certain everywhere else (`Customer List` loses
   its insert, modify, rename and validate edges and keeps delete).
 
+### Fixed (round-3 fact check: witnesses on paths that cannot run)
+
+- **An `Error(..)` behind a literal Boolean argument is no error on that path (m04).**
+  `alsem prove 'Codeunit "CDO Subscribers"::OnAfterCreateCustomerFromTemplate' throws-error`
+  listed an ERROR_THROW at Continia Core's `CredentialManagement.Codeunit.al:148`, which
+  fires only under `if ShowError and not IsClientCredentialValid then Error(..)`, while
+  its one route calls `HasValidCredentials(false)`. Two defects stacked:
+  - an `Error(..)` statement's statement-tree leaf carries its call-site id, while its
+    `error-throw` fact names its `error-call` operation id, so no parameter guard ever
+    reached an explicit error, not even `if ShowError then Error(..)`. Each `error-call`
+    operation now takes the guard of the call site at the same place
+    (`param_guard::alias_error_ops`, the pairing `control_context` already used);
+  - only a whole-condition guard (`P`, `not P`, `P = false`) was read. Now the simple
+    guards among the operands of an `and` chain guard its THEN branch, and those of an
+    `or` chain guard (negated) its ELSE branch and what follows `if … then exit;`
+    (`PCFNNode::junction_guards`, in memory only; L2 output unchanged).
+  Both the cone's guard (singleton SCCs) and the per-root literal reach (recursive SCCs,
+  dependency code included) read these frames, so every reader of literal-dead effects
+  (prove, digest, explain, query) moves together. On CDO the answer stays `yes` on the
+  two ERROR_IMPLICIT rows; the ERROR_THROW row is gone. `explain DocSave` now counts
+  412 tables written (was 415) and errors at 305 places (was 308).
+- **A record operation that runs no trigger is no "hub record trigger" (c02).** A
+  `RecordRef.Modify();` on a RecordRef opened from a table-number parameter
+  (`UpgradeBaseApp.Codeunit.al:2022`) became the hub `h:record:modify`, which expands to
+  every table's `OnModify`, so `prove … callers-may-run-noninteractive` printed `[hub
+  record trigger (Modify) at …:2022]` and a path into `Table "CAL Test Line"::OnModify`.
+  An `Insert`/`Modify`/`Delete`/`DeleteAll`/`ModifyAll` whose RunTrigger is left out or a
+  literal `false` runs no trigger of any table. Such a site on a table not resolved now
+  gets the bound `OpenBound::RecordEvents` and the hub `h:record-events:<op>` (node
+  `hub: "record-events"`, shown as `table events (Modify, no trigger)`), which expands to
+  the platform table events only (`OnBefore/OnAfter<Op>Event`, raised whatever the
+  RunTrigger). `Rename` and `Validate` take no RunTrigger and keep the trigger hub. Spec
+  row added to `2026-10-13-callgraph-export-design.md` §4.5; the `alsem graph` export
+  gains the new hub class (additive; a consumer that switches on the hub class, such as
+  bc-dev-mcp's parser, should learn `record-events`: not checked from here).
+
 ### Changed (round-2 output validation, W5: noise and size)
 
 Milestone W5 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.1-§4.4,

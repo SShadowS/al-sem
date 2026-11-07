@@ -800,6 +800,7 @@ fn walk_cfg(
                 table_case: None,
                 field_exit_guard: None,
                 table_exit_guard: None,
+                junction_guards: None,
             };
             loop_stack.push(LoopFrame::default());
             let mut body_pre = pre;
@@ -1935,6 +1936,7 @@ mod tests {
             table_case: None,
             field_exit_guard: None,
             table_exit_guard: None,
+            junction_guards: None,
         }
     }
 

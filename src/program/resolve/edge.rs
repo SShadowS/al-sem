@@ -437,8 +437,31 @@ pub enum OpenBound {
     /// Any trigger the record operation `op` can fire: `insert`, `modify`,
     /// `delete`, `rename` or `validate`.
     Record { op: &'static str },
+    /// Round-3 c02: only the platform table events (`OnBefore<Op>Event`,
+    /// `OnAfter<Op>Event`) of the operation `op`, which the platform raises
+    /// whatever the RunTrigger: an `Insert`/`Modify`/`Delete`/`DeleteAll`/
+    /// `ModifyAll` whose RunTrigger is left out or a literal `false`
+    /// (`applicability::TriggerSiteRule`) runs no table trigger.
+    RecordEvents { op: &'static str },
     /// Anything: the call names nothing the engine can bound.
     Any,
+}
+
+impl OpenBound {
+    /// The record bound of trigger family `op` at a site whose rule is
+    /// `rule`: [`OpenBound::RecordEvents`] when its RunTrigger is false (left
+    /// out or a literal), [`OpenBound::Record`] otherwise.
+    #[must_use]
+    pub fn record(
+        op: &'static str,
+        rule: &crate::program::resolve::applicability::TriggerSiteRule,
+    ) -> Self {
+        if rule.run_trigger == Some(false) {
+            OpenBound::RecordEvents { op }
+        } else {
+            OpenBound::Record { op }
+        }
+    }
 }
 
 /// The record operation a method name fires triggers for, folded to the
