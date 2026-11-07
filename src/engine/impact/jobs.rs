@@ -406,6 +406,9 @@ impl Job for MainJob<'_> {
         let temp_states = DbTempStates::new(resolved, &cx.view().l4().bundle);
         let owners = OwnerIndex::build(resolved);
         let rcx = RollupCx::new(resolved, &dependencies.apps);
+        // Round 2 G7: explain's effect evidence (tables, assigned fields,
+        // company context), its index built once for every root.
+        let evidence_index = crate::engine::l5::explain::EffectEvidenceIndex::new(resolved);
         // One rollup per root, each entry dropped once its totals are taken.
         let mut totals: HashMap<String, Value> = HashMap::new();
         let mut handles: HashMap<String, String> = HashMap::new();
@@ -435,6 +438,8 @@ impl Job for MainJob<'_> {
                 let mut t = r.totals.to_json();
                 let a = crate::engine::l5::routine_rollup::entry_analysis(&e);
                 t["analysis"] = json!({"status": a.key(), "reasons": a.reasons()});
+                t["evidence"] =
+                    crate::engine::l5::explain::effect_evidence(&e, &r, &rcx, &evidence_index);
                 totals.insert(e.routine_id.clone(), t);
                 if let Some(names) = &names
                     && let Some(s) =

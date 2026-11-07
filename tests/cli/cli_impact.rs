@@ -642,3 +642,31 @@ pub(crate) fn cdo_impact_ratchets() {
         .collect();
     assert_eq!(names, vec!["CDO Telemetry Tests"; 3]);
 }
+
+/// Round 2 G7 (spec §3.1, goldens only): impact's effects line names the
+/// table a changed routine writes, with its operation, site and the fields
+/// the routine assigns, and the company context of the write
+/// (`tests/fixtures/impact-evidence`: `Configure` modifies "IE Setup" after
+/// a `ChangeCompany` in a routine it calls).
+#[test]
+fn impact_names_the_tables_fields_and_company() {
+    let t = tempfile::tempdir().unwrap();
+    copy_dir(
+        &repo_root().join("tests/fixtures/impact-evidence"),
+        t.path(),
+    );
+    std::fs::create_dir(t.path().join(".git")).unwrap();
+    let ws = t.path().join("ws");
+    let (human, err, code) = impact(
+        &ws,
+        &[
+            "--routine",
+            "IE Mgt::Configure",
+            "--no-tests",
+            "--single-app",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "{human}{err}");
+    golden("evidence.human.txt", &human, t.path());
+}

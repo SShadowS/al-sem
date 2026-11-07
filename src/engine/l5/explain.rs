@@ -1613,48 +1613,177 @@ fn change_company_sites(
     model: &crate::program::model::workspace::Model,
     root: &str,
 ) -> Vec<String> {
-    let routines = &model.workspace.routines;
-    let Some(start) = routines.iter().position(|r| r.stable_routine_id == root) else {
-        return Vec::new();
-    };
-    let by_id: HashMap<&str, usize> = routines
+    EffectEvidenceIndex::new(model).change_company_sites(root)
+}
+
+/// What the effect evidence of a routine reads, built once per model and
+/// shared by every routine asked (round 2 G7: impact asks it per changed
+/// routine): the call adjacency for the `ChangeCompany` cone, the rows by
+/// stable id, and per row the fields it assigns on each table (explain's
+/// own field-write index).
+pub(crate) struct EffectEvidenceIndex<'m> {
+    model: &'m Model,
+    by_id: HashMap<&'m str, usize>,
+    by_stable: HashMap<&'m str, usize>,
+    out_edges: HashMap<&'m str, Vec<&'m str>>,
+    row_fields: std::sync::OnceLock<HashMap<usize, HashMap<String, BTreeSet<String>>>>,
+}
+
+impl<'m> EffectEvidenceIndex<'m> {
+    pub(crate) fn new(model: &'m Model) -> EffectEvidenceIndex<'m> {
+        let routines = &model.workspace.routines;
+        let mut by_stable: HashMap<&str, usize> = HashMap::new();
+        for (i, r) in routines.iter().enumerate() {
+            by_stable.entry(r.stable_routine_id.as_str()).or_insert(i);
+        }
+        let mut out_edges: HashMap<&str, Vec<&str>> = HashMap::new();
+        for e in &model.calls.edges {
+            if let Some(to) = &e.to {
+                out_edges
+                    .entry(e.from.as_str())
+                    .or_default()
+                    .push(to.as_str());
+            }
+        }
+        EffectEvidenceIndex {
+            model,
+            by_id: routines
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (r.id.as_str(), i))
+                .collect(),
+            by_stable,
+            out_edges,
+            row_fields: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The `ChangeCompany` call sites of `root`'s cone ([`change_company_sites`]).
+    pub(crate) fn change_company_sites(&self, root: &str) -> Vec<String> {
+        let routines = &self.model.workspace.routines;
+        let Some(&start) = self.by_stable.get(root) else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::from([start]);
+        let mut queue = VecDeque::from([start]);
+        let mut sites = BTreeSet::new();
+        while let Some(i) = queue.pop_front() {
+            let r = &routines[i];
+            for c in &r.call_sites {
+                let t = c.callee_text.to_ascii_lowercase();
+                if t == "changecompany" || t.ends_with(".changecompany") {
+                    sites.insert(format!(
+                        "{}:{}",
+                        c.source_anchor.source_unit_id,
+                        c.source_anchor.start_line + 1
+                    ));
+                }
+            }
+            for to in self.out_edges.get(r.id.as_str()).into_iter().flatten() {
+                if let Some(&j) = self.by_id.get(to)
+                    && seen.insert(j)
+                {
+                    queue.push_back(j);
+                }
+            }
+        }
+        sites.into_iter().collect()
+    }
+
+    /// The fields row `row` assigns on table `table_id` (explain's
+    /// `row_fields`, the same field-write index).
+    fn assigned(&self, row: usize, table_id: &str) -> Option<&BTreeSet<String>> {
+        let index = self.row_fields.get_or_init(|| {
+            let mut m: HashMap<usize, HashMap<String, BTreeSet<String>>> = HashMap::new();
+            for w in field_writes(self.model) {
+                m.entry(w.routine_ix)
+                    .or_default()
+                    .entry(w.table_id.to_string())
+                    .or_default()
+                    .insert(w.field.to_string());
+            }
+            m
+        });
+        index.get(&row)?.get(table_id)
+    }
+}
+
+/// How many written tables the effect evidence names (explain's
+/// tables-when-few rule).
+const EVIDENCE_TABLES: usize = 3;
+
+/// Round 2 G7 (r1 F56, F75): a routine's effect evidence by explain's rules,
+/// for impact's effects clause. When it may write 1 to 3 tables: each table
+/// with its operation kinds, the representative site, and the fields its
+/// owning routine assigns on it (Insert and Modify, a routine-level fact as
+/// explain says); a table written only beyond a dependency call says so.
+/// When the cone writes, its `ChangeCompany` sites (the target company is
+/// not established). JSON: `{tables: [{table, ops, at, assigns: [{by,
+/// fields}], beyondDependencyCall}], changeCompany: [..]}`; `by` is null for
+/// the routine itself.
+pub(crate) fn effect_evidence(
+    entry: &DigestEntryFull,
+    r: &crate::engine::l5::routine_rollup::RoutineRollup,
+    rcx: &RollupCx<'_>,
+    index: &EffectEvidenceIndex<'_>,
+) -> Value {
+    let mut tables: Vec<Value> = Vec::new();
+    if (1..=EVIDENCE_TABLES).contains(&r.may_write.len()) {
+        for (id, name) in &r.may_write {
+            let Some(t) = r.workspace_code.iter().find(|t| &t.table_id == id) else {
+                tables.push(json!({"table": name, "beyondDependencyCall": true}));
+                continue;
+            };
+            let rep = &entry.effects[t.rep];
+            let at = match (&rep.evidence.file, rep.evidence.line) {
+                (Some(f), Some(l)) => Some(format!("{f}:{}", crate::engine::line_base::shown(l))),
+                _ => None,
+            };
+            // The fields each owning routine assigns on the table.
+            let mut by_owner: BTreeMap<Option<String>, BTreeSet<String>> = BTreeMap::new();
+            for &i in &t.rows {
+                for op in &entry.effects[i].origin_operation_ids {
+                    if !matches!(rcx.op_kind(op), Some("Insert" | "Modify")) {
+                        continue;
+                    }
+                    let Some(owner) = rcx.op_owner(op) else {
+                        continue;
+                    };
+                    let Some(&row) = index.by_stable.get(owner.stable_id.as_str()) else {
+                        continue;
+                    };
+                    if let Some(fields) = index.assigned(row, id) {
+                        let by =
+                            (owner.stable_id != entry.routine_id).then(|| owner.display.clone());
+                        by_owner
+                            .entry(by)
+                            .or_default()
+                            .extend(fields.iter().cloned());
+                    }
+                }
+            }
+            tables.push(json!({
+                "table": name,
+                "ops": t.kinds,
+                "at": at,
+                "assigns": by_owner
+                    .into_iter()
+                    .map(|(by, fields)| json!({"by": by, "fields": fields}))
+                    .collect::<Vec<_>>(),
+                "beyondDependencyCall": false,
+            }));
+        }
+    }
+    let writes = entry
+        .effects
         .iter()
-        .enumerate()
-        .map(|(i, r)| (r.id.as_str(), i))
-        .collect();
-    let mut out_edges: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in &model.calls.edges {
-        if let Some(to) = &e.to {
-            out_edges
-                .entry(e.from.as_str())
-                .or_default()
-                .push(to.as_str());
-        }
-    }
-    let mut seen = HashSet::from([start]);
-    let mut queue = VecDeque::from([start]);
-    let mut sites = BTreeSet::new();
-    while let Some(i) = queue.pop_front() {
-        let r = &routines[i];
-        for c in &r.call_sites {
-            let t = c.callee_text.to_ascii_lowercase();
-            if t == "changecompany" || t.ends_with(".changecompany") {
-                sites.insert(format!(
-                    "{}:{}",
-                    c.source_anchor.source_unit_id,
-                    c.source_anchor.start_line + 1
-                ));
-            }
-        }
-        for to in out_edges.get(r.id.as_str()).into_iter().flatten() {
-            if let Some(&j) = by_id.get(to)
-                && seen.insert(j)
-            {
-                queue.push_back(j);
-            }
-        }
-    }
-    sites.into_iter().collect()
+        .any(|f| f.effect_type.starts_with("DB_"));
+    let company = if writes {
+        index.change_company_sites(&entry.routine_id)
+    } else {
+        Vec::new()
+    };
+    json!({"tables": tables, "changeCompany": company})
 }
 
 /// One card's callers through dependency code under `--callers-context`

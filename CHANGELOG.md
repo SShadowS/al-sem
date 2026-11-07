@@ -13,6 +13,14 @@ Milestone W3 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§3
 W3 rows). Output only, except a lazily built index of each record operation's trigger and
 table-event edges for the write lines (no engine fact changes).
 
+- **impact names the tables, fields and company context** (G7, c20, n09): when a changed
+  routine may write 1 to 3 tables, its effects line names them with explain's evidence —
+  `effects: may write CDO Setup (Modify at …:60; the routine assigns "Azure Blob Folder",
+  …)` (a table written only beyond a dependency call says so) — and a cone that calls
+  `ChangeCompany` adds `target company: not established by this analysis (ChangeCompany at
+  …)`. One shared function (`explain::effect_evidence`, its index built once per impact
+  run); JSON `effects.evidence` (`tables`, `changeCompany`). Impact's reach and entries are
+  unchanged.
 - **touches on a table shows each operation family, writes first** (G8, n03, c18, c30):
   the workspace sites print by family — `record writes: 16 sites in 14 routines — Modify 13,
   DeleteAll 1, Insert 1, ModifyAll 1 (temporary records: 2)`, `validations: 5 sites (a

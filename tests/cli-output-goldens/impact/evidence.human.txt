@@ -1,0 +1,15 @@
+impact routines → 1 changed routine   [single-app]
+answer: 1 changed routine resolved; ranked first: Codeunit "IE Mgt"::Configure
+analysis complete · assumptions: current effects only: no base was built, so there is no before/after and no routine is called added or deleted; callers and entries are static may-paths over the sited graph (R0's reverse walk); tests are static reachability, not coverage · limits: none · scope: callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments
+more: --detail lists each routine's direct callers and its first entry of each kind; --format json for every routine with its callers, effects and tests
+impact of the named routines; one-shot run (no resident revision)
+input: 1 changed routine resolved
+current effects of the 1 changed routine; ranked: reached from a user or a job first, then by ancestors; all shown:
+  Codeunit "IE Mgt"::Configure (ws:src/Evidence.al:24) — changed
+      effects: may write IE Setup (Modify at ws:src/Evidence.al:32; the routine assigns "Blob Folder", "Container Name"); commits: no (every candidate decided) (0 own commit sites); errors 2
+        target company: not established by this analysis (ChangeCompany at ws:src/Evidence.al:37)
+      calls: this object: SwitchCompany (:28)
+      direct code callers: none found
+      reached beyond it: 0 ancestors by code calls, UI navigation, configuration or a hub (relation not recorded by this walk): within the workspace 0, through a dependency 0, over a hub 0
+        entries among them: none (no page action, API page, job, trigger, subscriber or test reaches it)
+tests: not asked (--no-tests)
