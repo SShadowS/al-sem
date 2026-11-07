@@ -125,6 +125,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/posting.al",
+          "fileDisplay": "ws:src/posting.al",
           "line": 12,
           "role": "operation",
           "routine": "r:2"
@@ -134,5 +135,5 @@
       }
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

@@ -298,7 +298,7 @@ fn embedded_dependency_leaf_effects_and_workspace_scoped_selectors() {
     assert_eq!(code, 0, "{q}");
     assert_eq!(
         q["payload"]["routine"]["routine"]["objectDisplay"],
-        "Codeunit Ws Work"
+        "Codeunit \"Ws Work\""
     );
     let (d, code) = json(&["digest", &ws, "--routine", "DoWork"]);
     assert_eq!(code, 0, "{d}");

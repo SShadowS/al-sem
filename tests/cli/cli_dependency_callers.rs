@@ -156,7 +156,7 @@ fn touches_up(extra: &[&str]) -> Value {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert_eq!(v["schemaVersion"], "4.0.0");
+    assert_eq!(v["schemaVersion"], al_sem::engine::l4::query_v5::VERSION);
     crate::as_v3(v)["payload"]["up"].clone()
 }
 
@@ -202,12 +202,13 @@ fn query_touches_up_lists_the_callers_through_dependency_code() {
     assert_eq!(
         rows,
         vec![
-            ("Codeunit DC Both::Mixed".into(), "code".into(), 5),
-            ("Codeunit DC Caller::Start".into(), "code".into(), 5),
-            ("Codeunit DC Outer::Outer".into(), "code".into(), 6),
-            ("Codeunit DC Toucher::Touch".into(), "code".into(), 6),
+            // Round-2 G41: owners quoted as AL needs them.
+            ("Codeunit \"DC Both\"::Mixed".into(), "code".into(), 5),
+            ("Codeunit \"DC Caller\"::Start".into(), "code".into(), 5),
+            ("Codeunit \"DC Outer\"::Outer".into(), "code".into(), 6),
+            ("Codeunit \"DC Toucher\"::Touch".into(), "code".into(), 6),
             (
-                "Codeunit DC Approver::Approve".into(),
+                "Codeunit \"DC Approver\"::Approve".into(),
                 "configured".into(),
                 5
             ),
@@ -219,7 +220,7 @@ fn query_touches_up_lists_the_callers_through_dependency_code() {
     for (name, ..) in &rows {
         assert!(!solve.contains(name), "{name} is not also a solve caller");
     }
-    assert!(solve.contains("Codeunit DC Both::Direct"), "{solve:?}");
+    assert!(solve.contains("Codeunit \"DC Both\"::Direct"), "{solve:?}");
     // The witness ends at the root and names the event and the configured arm.
     let start = &list[1];
     // V3 §2.1/§2.2: the one display (AL quoting; a dependency object by
@@ -328,7 +329,7 @@ fn callers_context_human_text_names_dependency_locations_by_app_name() {
         &ws,
     );
     assert!(
-        human.contains("Codeunit \"DC Engine\" (52901)::Process (dep:"),
+        human.contains("Codeunit \"DC Engine\" (52901)::Process (called at dep:"),
         "precondition: a witness path through dependency code: {human}"
     );
     assert!(
@@ -337,7 +338,7 @@ fn callers_context_human_text_names_dependency_locations_by_app_name() {
     );
     assert!(
         human.contains(
-            "Codeunit \"DC Engine\" (52901)::Process (dep:Base Application:src/Engine.al:23)"
+            "Codeunit \"DC Engine\" (52901)::Process (called at dep:Base Application:src/Engine.al:23)"
         ),
         "{human}"
     );

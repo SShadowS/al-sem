@@ -36,9 +36,9 @@ pub const VERSION: &str = "4.0.0";
 /// The keys of a row's routine that the routine table replaces by its id.
 const FULL: &str = "routine";
 /// `firstHop`: a projection of the routine (display, objectDisplay,
-/// stableId), restored as that projection.
+/// stableId and, round-2 G41, selector), restored as that projection.
 const HOP: &str = "firstHop";
-const HOP_KEYS: &[&str] = &["display", "objectDisplay", "stableId"];
+const HOP_KEYS: &[&str] = &["display", "objectDisplay", "stableId", "selector"];
 
 /// The 4.0.0 payload of a 3.x payload (module doc).
 #[must_use]

@@ -1,4 +1,2 @@
 query touches No Such Table At All   [cross-app]
 answer: no answer — query.touches: table "No Such Table At All" matched no table
-not analyzed (the input did not resolve) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
-more: --format json for every row

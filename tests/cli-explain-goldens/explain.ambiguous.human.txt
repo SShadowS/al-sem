@@ -1,8 +1,5 @@
 explain CheckAmount   [cross-app]
-answer: no answer — explain: 'CheckAmount' names 2 routines
-not analyzed (no routine resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
-more: --format json for every row
-explain: 'CheckAmount' names 2 routines
+answer: no answer — 'CheckAmount' names 2 routines (differs in: the object)
   1. Codeunit "Explain Post"::CheckAmount(Decimal) at ws:src/post.al:38
   2. Codeunit "Explain Other"::CheckAmount(Decimal) at ws:src/post.al:53
-  both: routines: ["Codeunit \"Explain Post\"::CheckAmount", "Codeunit \"Explain Other\"::CheckAmount"]
+  complete call: alsem explain --routine 'Codeunit "Explain Post"::CheckAmount' --routine 'Codeunit "Explain Other"::CheckAmount'

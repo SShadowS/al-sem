@@ -37,6 +37,16 @@ mod git;
 /// fields; any other document is returned as it is.
 pub(crate) fn as_v3(doc: serde_json::Value) -> serde_json::Value {
     let kind = doc["kind"].as_str().unwrap_or("").to_string();
+    // Round-2 §4.6: a 5.0.0 document reads back through 4.0.0 first.
+    let doc = match doc["schemaVersion"].as_str() {
+        Some(al_sem::engine::l5::digest_v5::VERSION) if kind == "digest" => {
+            al_sem::engine::l5::digest_v5::document_to_v4(doc)
+        }
+        Some(al_sem::engine::l4::query_v5::VERSION) if kind.starts_with("query.") => {
+            al_sem::engine::l4::query_v5::document_to_v4(doc)
+        }
+        _ => doc,
+    };
     match doc["schemaVersion"].as_str() {
         Some(al_sem::engine::l5::digest_v4::VERSION) if kind == "digest" => {
             al_sem::engine::l5::digest_v4::document_to_v3(doc)

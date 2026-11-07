@@ -87,7 +87,7 @@
           "SetRange/SetFilter on key fields": 1
         },
         "workspaceByObject": {
-          "Codeunit QT Touches": 11
+          "Codeunit \"QT Touches\"": 11
         },
         "workspaceByOp": {
           "Delete": 1,
@@ -115,7 +115,7 @@
             "role": "definition"
           },
           "display": "Keyed",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::Keyed",
           "selector": "Codeunit \"QT Touches\"::Keyed",
           "signature": "()",
@@ -129,7 +129,7 @@
             "role": "definition"
           },
           "display": "Entry",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
           "selector": "Codeunit \"QT Touches\"::Entry",
           "signature": "()",
@@ -143,7 +143,7 @@
             "role": "definition"
           },
           "display": "Top1",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::Top1",
           "selector": "Codeunit \"QT Touches\"::Top1",
           "signature": "()",
@@ -157,7 +157,7 @@
             "role": "definition"
           },
           "display": "TempOnly",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
           "selector": "Codeunit \"QT Touches\"::TempOnly",
           "signature": "()",
@@ -171,7 +171,7 @@
             "role": "definition"
           },
           "display": "WriteItem",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
           "selector": "Codeunit \"QT Touches\"::WriteItem",
           "signature": "(var Record \"QT Item\")",
@@ -185,7 +185,7 @@
             "role": "definition"
           },
           "display": "Mixed",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
           "selector": "Codeunit \"QT Touches\"::Mixed",
           "signature": "()",
@@ -199,7 +199,7 @@
             "role": "definition"
           },
           "display": "CallWithReal",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithReal",
           "selector": "Codeunit \"QT Touches\"::CallWithReal",
           "signature": "()",
@@ -213,7 +213,7 @@
             "role": "definition"
           },
           "display": "CallWithTemp",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithTemp",
           "selector": "Codeunit \"QT Touches\"::CallWithTemp",
           "signature": "()",
@@ -227,7 +227,7 @@
             "role": "definition"
           },
           "display": "Top2",
-          "objectDisplay": "Codeunit QT Touches",
+          "objectDisplay": "Codeunit \"QT Touches\"",
           "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
           "selector": "Codeunit \"QT Touches\"::Top2",
           "signature": "()",
@@ -237,5 +237,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

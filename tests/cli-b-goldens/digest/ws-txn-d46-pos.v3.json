@@ -237,7 +237,7 @@
             "sourceKind": "source"
           },
           "display": "OnInstallAppPerCompany",
-          "objectDisplay": "Codeunit Install Handler",
+          "objectDisplay": "Codeunit \"Install Handler\"",
           "qualifiedDisplay": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
           "selector": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
           "signature": "()",
@@ -248,10 +248,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -403,7 +403,7 @@
             "sourceKind": "source"
           },
           "display": "DoSetup",
-          "objectDisplay": "Codeunit Install Handler",
+          "objectDisplay": "Codeunit \"Install Handler\"",
           "qualifiedDisplay": "Codeunit \"Install Handler\"::DoSetup",
           "selector": "Codeunit \"Install Handler\"::DoSetup",
           "signature": "()",
@@ -414,10 +414,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -569,7 +569,7 @@
             "sourceKind": "source"
           },
           "display": "DoUpgrade",
-          "objectDisplay": "Codeunit Upgrade Handler",
+          "objectDisplay": "Codeunit \"Upgrade Handler\"",
           "qualifiedDisplay": "Codeunit \"Upgrade Handler\"::DoUpgrade",
           "selector": "Codeunit \"Upgrade Handler\"::DoUpgrade",
           "signature": "()",
@@ -580,10 +580,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -753,7 +753,7 @@
             "sourceKind": "source"
           },
           "display": "OnUpgradePerCompany",
-          "objectDisplay": "Codeunit Upgrade Handler",
+          "objectDisplay": "Codeunit \"Upgrade Handler\"",
           "qualifiedDisplay": "Codeunit \"Upgrade Handler\"::OnUpgradePerCompany",
           "selector": "Codeunit \"Upgrade Handler\"::OnUpgradePerCompany",
           "signature": "()",
@@ -764,10 +764,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -866,5 +866,6 @@
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

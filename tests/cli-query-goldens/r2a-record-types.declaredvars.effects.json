@@ -19,6 +19,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/Codeunit.al",
+          "fileDisplay": "ws:src/Codeunit.al",
           "line": 18,
           "role": "operation",
           "routine": "r:1"
@@ -33,6 +34,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/Codeunit.al",
+          "fileDisplay": "ws:src/Codeunit.al",
           "line": 17,
           "role": "operation",
           "routine": "r:1"
@@ -47,6 +49,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/Codeunit.al",
+          "fileDisplay": "ws:src/Codeunit.al",
           "line": 20,
           "role": "operation",
           "routine": "r:1"
@@ -60,6 +63,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/Codeunit.al",
+          "fileDisplay": "ws:src/Codeunit.al",
           "line": 19,
           "role": "operation",
           "routine": "r:1"
@@ -151,7 +155,7 @@
           "role": "definition"
         },
         "display": "DeclaredVars",
-        "objectDisplay": "Codeunit R2a Records",
+        "objectDisplay": "Codeunit \"R2a Records\"",
         "qualifiedDisplay": "Codeunit \"R2a Records\"::DeclaredVars",
         "selector": "Codeunit \"R2a Records\"::DeclaredVars",
         "signature": "()",
@@ -159,9 +163,9 @@
       }
     },
     "summary": {
-      "beyondEntryPoints": [],
+      "beyondDependencyCalls": [],
       "beyondWrites": {
-        "entryPoints": 0,
+        "dependencyCalls": 0,
         "routinesEntered": 0,
         "sites": 0,
         "tables": 0,
@@ -217,5 +221,5 @@
       }
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

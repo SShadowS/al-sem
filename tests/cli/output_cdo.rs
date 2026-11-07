@@ -567,7 +567,7 @@ fn cdo_digest_json_fits_its_size_budgets() {
     for label in ["IssueReminder", "RunReportID"] {
         let doc = &a.answers[&format!("{label} digest json")].stdout;
         let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
-        assert_eq!(v["schemaVersion"], "4.0.0", "{label}");
+        assert_eq!(v["schemaVersion"], "5.0.0", "{label}");
         strip(&mut v);
         let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
         eprintln!(
@@ -739,7 +739,11 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // shared run, each path printing `[Sn]` instead of its hops):
         // IssueReminder 142 lines / 32,926 B, RunReportID 155 / 37,461 B
         // (were 140 / 43,000 and 150 / 49,500).
-        ("IssueReminder", "explain human") => (145, 34_000),
+        // Round-2 W4 (G41, G45): object names AL-quoted everywhere, the
+        // `calls:` line in the one display with `called at`, path hops with
+        // their location's role: IssueReminder 142 lines / 34,031 B,
+        // RunReportID 155 / 38,844 B (2026-11-07).
+        ("IssueReminder", "explain human") => (145, 34_500),
         ("RunReportID", "explain human") => (160, 39_000),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),

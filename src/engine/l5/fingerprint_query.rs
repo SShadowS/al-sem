@@ -791,7 +791,7 @@ pub(crate) fn resolve_routine_selectors(
     let mut diagnostics = Vec::new();
     for sel in selectors {
         let (matches, matched_form) = resolve_selector(sel, idx);
-        let matches = narrow_to_owner(sel, matched_form, matches, |id| owners.object_display(id));
+        let matches = narrow_to_owner(sel, matched_form, matches, |id| owners.object_key(id));
         if matches.is_empty() {
             diagnostics.push(FingerprintQueryDiagnostic::SelectorUnresolved {
                 selector: sel.clone(),

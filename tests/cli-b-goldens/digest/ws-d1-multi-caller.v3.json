@@ -153,7 +153,7 @@
             "sourceKind": "source"
           },
           "display": "CallerB",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerB",
           "selector": "Codeunit \"D1 Multi Caller\"::CallerB",
           "signature": "()",
@@ -164,10 +164,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -292,7 +292,7 @@
             "sourceKind": "source"
           },
           "display": "CallerC",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerC",
           "selector": "Codeunit \"D1 Multi Caller\"::CallerC",
           "signature": "()",
@@ -303,10 +303,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -431,7 +431,7 @@
             "sourceKind": "source"
           },
           "display": "CallerA",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
           "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
           "signature": "()",
@@ -442,10 +442,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -557,7 +557,7 @@
             "sourceKind": "source"
           },
           "display": "ModifyHelper",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
           "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
           "signature": "(var Record \"MC Customer\")",
@@ -568,10 +568,10 @@
           "callerDependentTables": 1,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -670,5 +670,6 @@
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

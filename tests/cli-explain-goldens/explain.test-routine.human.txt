@@ -7,7 +7,7 @@ Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
   other effects: events: 1 (1 raised in workspace code)
   callers and tests: callers: none; tests: none of 1 loaded
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 2 not placed
-  calls: Codeunit "Explain Post": PostOrder (:14)
+  calls: Codeunit "Explain Post"::PostOrder (called at :14)
   UI route: UI_MESSAGE via PostUnreleasedFails → PostOrder
   commits: none observed (searched: the cone through every resolved call; not searched: external-target)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
@@ -15,7 +15,7 @@ Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
       Modify at ws:src/post.al:18
       path: PostUnreleasedFails → Codeunit "Explain Post"::PostOrder
       fields PostOrder assigns on this table (not operation-specific): Posted, Status
-  events raised (1 in workspace code, downstream): Codeunit Explain Post: OnBeforePostOrder; 0 more only beyond dependency calls; publishes: none of its own
+  events raised (1 in workspace code, downstream): Codeunit "Explain Post": OnBeforePostOrder; 0 more only beyond dependency calls; publishes: none of its own
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
   errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)

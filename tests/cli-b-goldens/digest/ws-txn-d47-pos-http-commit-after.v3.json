@@ -234,7 +234,7 @@
             "sourceKind": "source"
           },
           "display": "SendThenCommit",
-          "objectDisplay": "Codeunit D47 Sender",
+          "objectDisplay": "Codeunit \"D47 Sender\"",
           "qualifiedDisplay": "Codeunit \"D47 Sender\"::SendThenCommit",
           "selector": "Codeunit \"D47 Sender\"::SendThenCommit",
           "signature": "()",
@@ -245,10 +245,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -327,5 +327,6 @@
     },
     "workspaceFingerprint": "b8c1a945e4edfea887c05e1dfe4a05cd92953972fc5ee005c195f03c170a5e84"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

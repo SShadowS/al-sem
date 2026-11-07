@@ -234,7 +234,7 @@
             "sourceKind": "source"
           },
           "display": "ExportAfterModify",
-          "objectDisplay": "Codeunit D47 Sender",
+          "objectDisplay": "Codeunit \"D47 Sender\"",
           "qualifiedDisplay": "Codeunit \"D47 Sender\"::ExportAfterModify",
           "selector": "Codeunit \"D47 Sender\"::ExportAfterModify",
           "signature": "()",
@@ -245,10 +245,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -343,5 +343,6 @@
     },
     "workspaceFingerprint": "e50d20fccb69854fbbf2a517d67bd58d54002d8dc6f3519c8618126ba3683e47"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

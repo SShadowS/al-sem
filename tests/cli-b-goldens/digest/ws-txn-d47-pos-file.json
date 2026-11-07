@@ -264,7 +264,7 @@
             "sourceKind": "source"
           },
           "display": "ExportAfterModify",
-          "objectDisplay": "Codeunit D47 Sender",
+          "objectDisplay": "Codeunit \"D47 Sender\"",
           "stableId": "11111111-0000-0000-0000-0000000d4706:Codeunit:50000#8eddb8fcb017e354df7f111bc5a03539c310344f795db1755a2e0bf490ecd9f5"
         },
         "unresolved": [
@@ -297,5 +297,6 @@
     },
     "workspaceFingerprint": "e50d20fccb69854fbbf2a517d67bd58d54002d8dc6f3519c8618126ba3683e47"
   },
-  "schemaVersion": "2.3.0"
+  "schemaVersion": "2.3.0",
+  "volatile": []
 }

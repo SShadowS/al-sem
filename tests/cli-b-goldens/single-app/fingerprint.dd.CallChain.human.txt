@@ -1,6 +1,6 @@
 Rendering 1 of 4 root classifications.
 
-Codeunit Ws Work::CallChain  [public-procedure]
+Codeunit "Ws Work"::CallChain  [public-procedure]
   coverage:   partial — external-target
               1 opaque/unresolved targets: CallChain
   writes:     none known reachable

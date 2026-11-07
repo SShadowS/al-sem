@@ -31,18 +31,112 @@ pub(crate) fn qt_workspace() -> String {
         .into_owned()
 }
 
-/// `alsem <args> --format json` at the default schema and at `--schema
-/// <old>`, both parsed.
+/// `alsem <args> --format json` at `--schema 4` (the 4.0.0 document these
+/// tests read back) and at `--schema <old>`, both parsed.
 fn both(args: &[&str], old: &str) -> (Value, Value) {
+    pair(args, Some("4"), old, 0)
+}
+
+/// `alsem <args> --format json` at `--schema <new>` (`None`: the default)
+/// and at `--schema <old>`, both parsed; each run exits `code`.
+fn pair(args: &[&str], new: Option<&str>, old: &str, code: i32) -> (Value, Value) {
     let run = |extra: &[&str]| -> Value {
         let mut a: Vec<&str> = args.to_vec();
         a.extend(["--format", "json"]);
         a.extend(extra);
-        let (out, err, code) = run_alsem(&a);
-        assert_eq!(code, 0, "{a:?}: {err}\n{out}");
+        let (out, err, got) = run_alsem(&a);
+        assert_eq!(got, code, "{a:?}: {err}\n{out}");
         serde_json::from_str(&out).unwrap_or_else(|e| panic!("{a:?}: {e}\n{out}"))
     };
-    (run(&[]), run(&["--schema", old]))
+    let first = match new {
+        Some(n) => run(&["--schema", n]),
+        None => run(&[]),
+    };
+    (first, run(&["--schema", old]))
+}
+
+/// Round-2 §4.6, the previous schema's reconstruction rule: the default
+/// digest 5.0.0 and query 5.0.0 documents read back through `to_v4` equal
+/// the `--schema 4` document of the same input, payload for payload — a
+/// digest with `--writes-table` (its `tableRef` / `asked`), an ambiguous
+/// digest selector (its one candidate array), query effects with writes
+/// beyond a dependency call (`beyondDependencyCalls`, `origin.fileDisplay`)
+/// and the touches documents.
+#[test]
+fn every_v4_document_is_rebuilt_from_v5() {
+    use al_sem::engine::l4::query_v5;
+    use al_sem::engine::l5::digest_v5;
+    let ws = workspace().to_string_lossy().into_owned();
+    let digest = [
+        "digest",
+        ws.as_str(),
+        "--routine",
+        ISSUE_DOC,
+        "--routine",
+        WRITE_LOG,
+        "--writes-table",
+        "Out Log",
+    ];
+    let (v5, v4) = pair(&digest, None, "4", 0);
+    assert_eq!(v5["schemaVersion"], digest_v5::VERSION);
+    let answers = v5["payload"]["entries"][0]["tableAnswers"].to_string();
+    assert!(
+        answers.contains("\"tableRef\"") && answers.contains("\"asked\""),
+        "precondition: a table answer in 5.0.0's shape: {answers}"
+    );
+    assert_eq!(
+        digest_v5::document_to_v4(v5)["payload"],
+        v4["payload"],
+        "digest --writes-table"
+    );
+    // An ambiguous selector: no answer (exit 2), its candidates once.
+    let qt = qt_workspace();
+    let ambiguous = ["digest", ws.as_str(), "--routine", "CheckAmount"];
+    let (v5, v4) = pair(&ambiguous, None, "4", 2);
+    let d = &v5["payload"]["changedRootsDiagnostics"][0];
+    if d["kind"] == "selector-ambiguous" {
+        assert!(d["candidates"][0]["stableId"].is_string(), "{d:#}");
+        assert!(d.get("candidateRoutines").is_none(), "{d:#}");
+    }
+    assert_eq!(
+        digest_v5::document_to_v4(v5)["payload"],
+        v4["payload"],
+        "digest ambiguous"
+    );
+    let queries: Vec<Vec<&str>> = vec![
+        vec!["query", "effects", &ws, "--routine", ISSUE_DOC_Q],
+        vec![
+            "query",
+            "touches",
+            &qt,
+            "--table",
+            "QT Item",
+            "--from",
+            "Leaf",
+            "--direction",
+            "up",
+            "--callers",
+        ],
+        vec![
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            "Base Register",
+            "--from",
+            ISSUE_DOC_Q,
+        ],
+    ];
+    for args in &queries {
+        let (v5, v4) = pair(args, None, "4", 0);
+        assert_eq!(v5["schemaVersion"], query_v5::VERSION, "{args:?}");
+        assert!(!v5.to_string().contains("\"entryPoint"), "{args:?}: {v5:#}");
+        assert_eq!(
+            query_v5::document_to_v4(v5)["payload"],
+            v4["payload"],
+            "{args:?}"
+        );
+    }
 }
 
 /// A digest of two roots, one of which (IssueDoc) calls the other

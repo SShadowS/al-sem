@@ -142,7 +142,7 @@
             "sourceKind": "source"
           },
           "display": "PostThenError",
-          "objectDisplay": "Codeunit D51 Sender",
+          "objectDisplay": "Codeunit \"D51 Sender\"",
           "qualifiedDisplay": "Codeunit \"D51 Sender\"::PostThenError",
           "selector": "Codeunit \"D51 Sender\"::PostThenError",
           "signature": "()",
@@ -153,10 +153,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -235,5 +235,6 @@
     },
     "workspaceFingerprint": "7b850fecf8bc63d2216a6d8e134dbdee8afdd0ceb51be87ffc52197fcef36875"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

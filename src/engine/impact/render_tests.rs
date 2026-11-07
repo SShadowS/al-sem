@@ -202,8 +202,8 @@ fn program_wide_needs_the_programs_entries_and_an_unlimited_walk() {
     assert!(!text.contains("page actions 95"), "folded: {text}");
     assert!(
         text.contains(
-            "nearest entry: [via-dependency, UI navigation] Page \"Sales Invoice\" action \
-             \"Open Card\" (page action, 2 hops)"
+            "nearest entry: [via-dependency, UI navigation] Page \"Sales Invoice\".action(\"Open \
+             Card\")::OnAction (page action, 2 hops)"
         ),
         "{text}"
     );

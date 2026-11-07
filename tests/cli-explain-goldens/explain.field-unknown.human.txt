@@ -1,5 +1,2 @@
 explain field Explain Order."NoSuchField"   [cross-app]
-answer: no answer — explain: table 'Explain Order' has no field 'NoSuchField'
-not analyzed (no routine resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
-more: --format json for every row
-explain: table 'Explain Order' has no field 'NoSuchField'
+answer: no answer — table 'Explain Order' has no field 'NoSuchField'

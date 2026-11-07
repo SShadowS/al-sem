@@ -142,7 +142,7 @@
             "sourceKind": "source"
           },
           "display": "GetThenError",
-          "objectDisplay": "Codeunit D51 NegSender",
+          "objectDisplay": "Codeunit \"D51 NegSender\"",
           "qualifiedDisplay": "Codeunit \"D51 NegSender\"::GetThenError",
           "selector": "Codeunit \"D51 NegSender\"::GetThenError",
           "signature": "()",
@@ -153,10 +153,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -235,5 +235,6 @@
     },
     "workspaceFingerprint": "cce9f4a181c0dc8ab6f329a35c9ae37a2adb0432613af167f388719bb9d5bb05"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

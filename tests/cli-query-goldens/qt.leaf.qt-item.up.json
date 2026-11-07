@@ -39,7 +39,7 @@
           "role": "definition"
         },
         "display": "Leaf",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Leaf",
         "selector": "Codeunit \"QT Touches\"::Leaf",
         "signature": "()",
@@ -53,7 +53,7 @@
           "role": "definition"
         },
         "display": "WriteItem",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
         "selector": "Codeunit \"QT Touches\"::WriteItem",
         "signature": "(var Record \"QT Item\")",
@@ -67,7 +67,7 @@
           "role": "definition"
         },
         "display": "Top1",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Top1",
         "selector": "Codeunit \"QT Touches\"::Top1",
         "signature": "()",
@@ -81,7 +81,7 @@
           "role": "definition"
         },
         "display": "Top2",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
         "selector": "Codeunit \"QT Touches\"::Top2",
         "signature": "()",
@@ -95,7 +95,7 @@
           "role": "definition"
         },
         "display": "Entry",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
         "selector": "Codeunit \"QT Touches\"::Entry",
         "signature": "()",
@@ -109,7 +109,7 @@
           "role": "definition"
         },
         "display": "Top3",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Top3",
         "selector": "Codeunit \"QT Touches\"::Top3",
         "signature": "()",
@@ -195,6 +195,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/QTTouches.al",
+          "fileDisplay": "ws:src/QTTouches.al",
           "line": 37,
           "role": "operation",
           "routine": "r:2"
@@ -208,6 +209,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/QTTouches.al",
+          "fileDisplay": "ws:src/QTTouches.al",
           "line": 90,
           "role": "operation",
           "routine": "r:4"
@@ -222,6 +224,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/QTTouches.al",
+          "fileDisplay": "ws:src/QTTouches.al",
           "line": 90,
           "role": "operation",
           "routine": "r:4"
@@ -231,5 +234,5 @@
       }
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

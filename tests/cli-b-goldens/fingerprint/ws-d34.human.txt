@@ -1,6 +1,6 @@
 Rendering 4 root classifications.
 
-Codeunit D34 Demo::TransitiveCommit  [public-procedure]
+Codeunit "D34 Demo"::TransitiveCommit  [public-procedure]
   coverage:   complete
   commit:     yes
 
@@ -11,7 +11,7 @@ Codeunit D34 Demo::TransitiveCommit  [public-procedure]
           → direct commit at ws:src/Codeunit.al:48:8
 
 
-Codeunit D34 Demo::DirectCommitInLoop  [public-procedure]
+Codeunit "D34 Demo"::DirectCommitInLoop  [public-procedure]
   coverage:   complete
   commit:     yes
 
@@ -21,7 +21,7 @@ Codeunit D34 Demo::DirectCommitInLoop  [public-procedure]
         direct commit at ws:src/Codeunit.al:10:12
 
 
-Codeunit D34 Demo::NestedCommit  [public-procedure]
+Codeunit "D34 Demo"::NestedCommit  [public-procedure]
   coverage:   complete
   commit:     yes
 
@@ -31,7 +31,7 @@ Codeunit D34 Demo::NestedCommit  [public-procedure]
         direct commit at ws:src/Codeunit.al:22:16
 
 
-Codeunit D34 Demo::CommitAfterLoop  [public-procedure]
+Codeunit "D34 Demo"::CommitAfterLoop  [public-procedure]
   coverage:   complete
   commit:     yes
 

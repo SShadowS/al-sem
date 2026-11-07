@@ -79,7 +79,7 @@
             "sourceKind": "source"
           },
           "display": "JustFetch",
-          "objectDisplay": "Codeunit D47 Sender",
+          "objectDisplay": "Codeunit \"D47 Sender\"",
           "qualifiedDisplay": "Codeunit \"D47 Sender\"::JustFetch",
           "selector": "Codeunit \"D47 Sender\"::JustFetch",
           "signature": "()",
@@ -90,10 +90,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -171,5 +171,6 @@
     },
     "workspaceFingerprint": "9a26de0865bbcbff926a04804ba7498aecbc802ada68e2c5c834dbc7c66ddbd9"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

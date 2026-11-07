@@ -151,7 +151,7 @@
             "sourceKind": "source"
           },
           "display": "ModifyThenMessage",
-          "objectDisplay": "Codeunit D49 Sender",
+          "objectDisplay": "Codeunit \"D49 Sender\"",
           "stableId": "11111111-0000-0000-0000-0000000d4901:Codeunit:50000#62ac09d40ac27912236d1c7a1170a332ba0d8e8605d00dda84e62c8f20a35dfe"
         },
         "unresolved": [],
@@ -171,5 +171,6 @@
     },
     "workspaceFingerprint": "e098e48fbdfcefab8d69f8ae58dcd79175c85fe80556a3eaa5f3fd8cbac40957"
   },
-  "schemaVersion": "2.3.0"
+  "schemaVersion": "2.3.0",
+  "volatile": []
 }

@@ -8,7 +8,7 @@ Codeunit "Calls Post"::RecursivePost  defined at ws:src/post.al:44
   callers and tests: callers: none; tests: none (no test code loaded)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: table-trigger-rules-skipped 1
-  calls: Codeunit "Calls Checks": PingCheck (:48)
+  calls: Codeunit "Calls Checks"::PingCheck (called at :48)
   rules: none of its own
   inherits via PingCheck: rejects when Order.Amount < 0: "The amount is negative."  [Error ws:src/checks.al:70]
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary

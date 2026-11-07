@@ -193,6 +193,31 @@ fn capitalize(s: &str) -> String {
 /// under a complete analysis.
 pub const NO_EVERY_CANDIDATE_DECIDED: &str = "no (every candidate decided)";
 
+/// The verb a record write prints (round-2 output validation G39: an
+/// operation prints its own verb): `delete` for `Delete`/`DeleteAll`,
+/// `insert`, `modify` for `Modify`/`ModifyAll`, `rename`; `change` when the
+/// kinds mix (or none is known).
+#[must_use]
+pub fn write_verb<'k>(kinds: impl IntoIterator<Item = &'k str>) -> &'static str {
+    let verb_of = |k: &str| match k {
+        "Delete" | "DeleteAll" => "delete",
+        "Insert" => "insert",
+        "Modify" | "ModifyAll" => "modify",
+        "Rename" => "rename",
+        _ => "change",
+    };
+    let mut verb: Option<&'static str> = None;
+    for k in kinds {
+        let v = verb_of(k);
+        match verb {
+            None => verb = Some(v),
+            Some(w) if w == v => {}
+            Some(_) => return "change",
+        }
+    }
+    verb.unwrap_or("change")
+}
+
 /// `none observed (searched: …; not searched: …)`: nothing found by a partial
 /// analysis or an index search, with its search.
 #[must_use]

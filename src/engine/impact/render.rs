@@ -584,8 +584,14 @@ fn node_short(n: &Value) -> String {
 /// (page action, 3 hops)`.
 fn witness_text(w: &Value) -> String {
     let mut what = s(w, "display").to_string();
+    // Round-2 G41: the action an action-run site stands for, in the one
+    // display (`Page "CDO Unhandled".action(StatementsAction)::OnAction`).
     if let Some(a) = w["action"].as_str() {
-        what = format!("{what} action {}", al_name(a));
+        what = if what.contains("::") {
+            format!("{what} action {}", al_name(a))
+        } else {
+            format!("{what}.action({})::OnAction", al_name(a))
+        };
     }
     let kind = w["entry"].as_str().or(w["kind"].as_str());
     let mut tail = match kind {

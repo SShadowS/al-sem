@@ -52,6 +52,9 @@ pub struct DigestRender {
     /// `--schema 3`: the 3.x document, kept for one release after 4.0.0
     /// (output validation V5, §7.3). The default is 4.0.0 (`digest_v4`).
     pub schema3: bool,
+    /// `--schema 4`: the 4.0.0 document, kept for one release after 5.0.0
+    /// (round-2 output validation §4.6). The default is 5.0.0 (`digest_v5`).
+    pub schema4: bool,
     /// `--detail`: unfolded 3.x.
     pub detail: bool,
     /// `--compact`: no indentation.
@@ -456,6 +459,7 @@ fn effect_v3(
     root: &str,
     rt: &RoutineTable,
     crossings: &BTreeMap<String, String>,
+    boundary_names: &BTreeMap<String, String>,
     opts: RenderOpts,
 ) -> Value {
     let mut m = Map::new();
@@ -479,6 +483,15 @@ fn effect_v3(
         if k != "resources" {
             detail.insert(k.clone(), v.clone().into());
         }
+    }
+    // Round-2 G41: a group's boundary in the one display (the crossing's
+    // own name, `Codeunit "CTS-SYS Azure Blob" (6225924)::Put`), never the
+    // snapshot's unquoted identity display.
+    if is_group(e)
+        && detail.contains_key("boundary")
+        && let Some(name) = boundary_names.get(&crossing_key(e))
+    {
+        detail.insert("boundary".into(), name.clone().into());
     }
     m.insert("detail".into(), Value::Object(detail));
     m.insert(
@@ -630,6 +643,11 @@ pub fn entry_v3(
     // Crossings, keyed `c:` + hash of the boundary identity.
     let ids: BTreeSet<String> = r.crossings.iter().map(|c| c.id.clone()).collect();
     let ckeys = hashed_keys("c:", &ids);
+    let boundary_names: BTreeMap<String, String> = r
+        .crossings
+        .iter()
+        .map(|c| (c.id.clone(), c.name.clone()))
+        .collect();
     let mut crossings = Map::new();
     let prefixed = prefixed_crossings(entry, opts);
     for c in &r.crossings {
@@ -657,7 +675,7 @@ pub fn entry_v3(
     let mut more: BTreeMap<&str, BTreeMap<String, Vec<String>>> = BTreeMap::new();
     for (e, o) in entry.effects.iter().zip(row_opts(entry, opts)) {
         match o {
-            Some(o) => effects.push(effect_v3(e, root, rt, &ckeys, o)),
+            Some(o) => effects.push(effect_v3(e, root, rt, &ckeys, &boundary_names, o)),
             None => {
                 let (place, item) = more_site(e, &ckeys);
                 more.entry(e.effect_type.as_str())

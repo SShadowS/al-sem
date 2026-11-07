@@ -127,7 +127,7 @@
             "sourceKind": "source"
           },
           "display": "TransitiveCommit",
-          "objectDisplay": "Codeunit D34 Demo",
+          "objectDisplay": "Codeunit \"D34 Demo\"",
           "qualifiedDisplay": "Codeunit \"D34 Demo\"::TransitiveCommit",
           "selector": "Codeunit \"D34 Demo\"::TransitiveCommit",
           "signature": "()",
@@ -138,10 +138,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "may",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -227,7 +227,7 @@
             "sourceKind": "source"
           },
           "display": "DirectCommitInLoop",
-          "objectDisplay": "Codeunit D34 Demo",
+          "objectDisplay": "Codeunit \"D34 Demo\"",
           "qualifiedDisplay": "Codeunit \"D34 Demo\"::DirectCommitInLoop",
           "selector": "Codeunit \"D34 Demo\"::DirectCommitInLoop",
           "signature": "()",
@@ -238,10 +238,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "may",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -343,7 +343,7 @@
             "sourceKind": "source"
           },
           "display": "Persist",
-          "objectDisplay": "Codeunit D34 Demo",
+          "objectDisplay": "Codeunit \"D34 Demo\"",
           "qualifiedDisplay": "Codeunit \"D34 Demo\"::Persist",
           "selector": "Codeunit \"D34 Demo\"::Persist",
           "signature": "(Integer)",
@@ -354,10 +354,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -421,7 +421,7 @@
             "sourceKind": "source"
           },
           "display": "DoWork",
-          "objectDisplay": "Codeunit D34 Demo",
+          "objectDisplay": "Codeunit \"D34 Demo\"",
           "qualifiedDisplay": "Codeunit \"D34 Demo\"::DoWork",
           "selector": "Codeunit \"D34 Demo\"::DoWork",
           "signature": "(Integer)",
@@ -432,10 +432,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -521,7 +521,7 @@
             "sourceKind": "source"
           },
           "display": "NestedCommit",
-          "objectDisplay": "Codeunit D34 Demo",
+          "objectDisplay": "Codeunit \"D34 Demo\"",
           "qualifiedDisplay": "Codeunit \"D34 Demo\"::NestedCommit",
           "selector": "Codeunit \"D34 Demo\"::NestedCommit",
           "signature": "()",
@@ -532,10 +532,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "may",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -637,7 +637,7 @@
             "sourceKind": "source"
           },
           "display": "CommitAfterLoop",
-          "objectDisplay": "Codeunit D34 Demo",
+          "objectDisplay": "Codeunit \"D34 Demo\"",
           "qualifiedDisplay": "Codeunit \"D34 Demo\"::CommitAfterLoop",
           "selector": "Codeunit \"D34 Demo\"::CommitAfterLoop",
           "signature": "()",
@@ -648,10 +648,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -762,5 +762,6 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

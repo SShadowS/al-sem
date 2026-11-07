@@ -65,7 +65,7 @@
         "sourceKind": "source"
       },
       "display": "CallChain",
-      "objectDisplay": "Codeunit Ws Work",
+      "objectDisplay": "Codeunit \"Ws Work\"",
       "qualifiedDisplay": "Codeunit \"Ws Work\"::CallChain",
       "selector": "Codeunit \"Ws Work\"::CallChain",
       "signature": "()",
@@ -73,5 +73,6 @@
     },
     "workspaceFingerprint": "205bfd298c228dc5e0b1082339118d4ba526231e65c8f5f36b68984aa499201d"
   },
-  "schemaVersion": "2.10.0"
+  "schemaVersion": "2.11.0",
+  "volatile": []
 }

@@ -3,16 +3,16 @@
   "diagnostics": [
     {
       "candidateRoutines": [
-        "Codeunit Explain Post::CheckAmount(Decimal) at ws:src/post.al:38 (stable id 44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#43b2110c9c105ec9af45ce434f2e633f3b659b84356a2720606f2ffeb28da9b1)",
-        "Codeunit Explain Other::CheckAmount(Decimal) at ws:src/post.al:53 (stable id 44444444-e491-0000-0000-0000000e4a11:Codeunit:50402#43b2110c9c105ec9af45ce434f2e633f3b659b84356a2720606f2ffeb28da9b1)"
+        "Codeunit \"Explain Post\"::CheckAmount(Decimal) at ws:src/post.al:38 (stable id 44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#43b2110c9c105ec9af45ce434f2e633f3b659b84356a2720606f2ffeb28da9b1)",
+        "Codeunit \"Explain Other\"::CheckAmount(Decimal) at ws:src/post.al:53 (stable id 44444444-e491-0000-0000-0000000e4a11:Codeunit:50402#43b2110c9c105ec9af45ce434f2e633f3b659b84356a2720606f2ffeb28da9b1)"
       ],
       "candidateSelectors": [
         "Codeunit \"Explain Post\"::CheckAmount",
         "Codeunit \"Explain Other\"::CheckAmount"
       ],
       "candidates": [
-        "Codeunit Explain Post::CheckAmount",
-        "Codeunit Explain Other::CheckAmount"
+        "Codeunit \"Explain Post\"::CheckAmount",
+        "Codeunit \"Explain Other\"::CheckAmount"
       ],
       "kind": "routine-ambiguous",
       "selector": "CheckAmount"

@@ -1768,8 +1768,11 @@ pub fn writes_summary(r: &RoutineRollup, entry: &DigestEntryFull) -> String {
                     None => "when the record its caller passes is not temporary".to_string(),
                 }
             };
+            // Round-2 G39: the operation's own verb (`may delete`), `may
+            // change` for mixed kinds.
             format!(
-                "may modify persistent {} records ({kinds} at {at}) {condition}",
+                "may {} persistent {} records ({kinds} at {at}) {condition}",
+                crate::engine::vocab::write_verb(t.kinds.iter().map(String::as_str)),
                 t.table
             )
         })

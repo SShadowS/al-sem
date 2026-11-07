@@ -29,6 +29,14 @@ const TABLE_OWNER: &str = "Table OD Item";
 const TABLE_EXT_OWNER: &str = "TableExtension OD Item Ext";
 const CODEUNIT_OWNER: &str = "Codeunit OD Cu";
 
+/// An owner (`<Type> <name>`, as these tests spell it) as the one display
+/// prints it: its name quoted as AL needs it (round-2 output validation G41:
+/// `Codeunit "Sel A"`, `Interface IFoo`).
+fn shown(owner: &str) -> String {
+    let (t, n) = owner.split_once(' ').unwrap_or((owner, ""));
+    al_sem::engine::l4::effect_query_cli::object_display(t, n)
+}
+
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -210,7 +218,8 @@ fn digest_entries_name_their_owning_object() {
                 ]);
                 assert_eq!(qcode, 0, "{q}");
                 assert_eq!(
-                    q["payload"]["routine"]["routine"]["objectDisplay"], owner,
+                    q["payload"]["routine"]["routine"]["objectDisplay"],
+                    shown(owner).as_str(),
                     "precondition: query effects owner of {display}: {q}"
                 );
             }
@@ -222,7 +231,7 @@ fn digest_entries_name_their_owning_object() {
                     .unwrap_or("<missing>")
                     .to_string(),
             ));
-            want.push((file.to_string(), display.to_string(), owner.to_string()));
+            want.push((file.to_string(), display.to_string(), shown(owner)));
         }
         docs.push_str(&format!("\n{file}: {doc}"));
     }
@@ -276,7 +285,11 @@ fn fingerprint_block_names_its_owning_object() {
         serde_json::json!(["trigger-table"]),
         "precondition: OnInsert is root-classified: {doc}"
     );
-    assert_eq!(b["routine"]["objectDisplay"], TABLE_OWNER, "{doc}");
+    assert_eq!(
+        b["routine"]["objectDisplay"],
+        shown(TABLE_OWNER).as_str(),
+        "{doc}"
+    );
 }
 
 /// A4. `alsem prove` on the real table's `OnInsert`, selected by its stable id,
@@ -304,7 +317,7 @@ fn prove_names_its_owning_object() {
     let r = &doc["payload"]["routine"];
     assert_eq!(r["stableId"], id.as_str(), "{doc}");
     assert_eq!(r["display"], "OnInsert", "{doc}");
-    assert_eq!(r["objectDisplay"], TABLE_OWNER, "{doc}");
+    assert_eq!(r["objectDisplay"], shown(TABLE_OWNER).as_str(), "{doc}");
 }
 
 /// Spawn `alsem <args>` -> (stdout text, exit code).
@@ -331,7 +344,7 @@ fn human_headers_name_the_owning_object() {
     let ws = dir.path();
     let w = ws.to_str().unwrap();
     let id = stable_id_of(ws, "src/a_Table.al", "OnInsert");
-    let header = format!("{TABLE_OWNER}::OnInsert");
+    let header = format!("{}::OnInsert", shown(TABLE_OWNER));
     // V3 §2.1: digest and prove print the one routine display (AL quotes);
     // fingerprint (not in V3's scope) keeps the owner display.
     let v3_header = "Table \"OD Item\"::OnInsert";
@@ -450,7 +463,11 @@ fn owner_qualified_selector_narrows_to_its_owner() {
     );
     let es = entries(&d);
     assert_eq!(es.len(), 1, "{d}");
-    assert_eq!(es[0]["routine"]["objectDisplay"], SEL_A, "{d}");
+    assert_eq!(
+        es[0]["routine"]["objectDisplay"],
+        shown(SEL_A).as_str(),
+        "{d}"
+    );
 
     let (fp, code) = alsem(&[
         "fingerprint",
@@ -464,11 +481,19 @@ fn owner_qualified_selector_narrows_to_its_owner() {
     assert_eq!(code, 0, "{fp}");
     let blocks = fp["payload"]["blocks"].as_array().unwrap();
     assert_eq!(blocks.len(), 1, "{fp}");
-    assert_eq!(blocks[0]["routine"]["objectDisplay"], SEL_A, "{fp}");
+    assert_eq!(
+        blocks[0]["routine"]["objectDisplay"],
+        shown(SEL_A).as_str(),
+        "{fp}"
+    );
 
     let (p, code) = alsem(&["prove", w, &sel, "may-commit", "--deterministic"]);
     assert_eq!(code, 0, "{p}");
-    assert_eq!(p["payload"]["routine"]["objectDisplay"], SEL_A, "{p}");
+    assert_eq!(
+        p["payload"]["routine"]["objectDisplay"],
+        shown(SEL_A).as_str(),
+        "{p}"
+    );
 }
 
 /// A7 (CR2). An ambiguous selector's candidates name their owners, in the
@@ -488,7 +513,10 @@ fn ambiguous_selector_candidates_name_their_owner() {
     assert_eq!(diag["kind"], "selector-ambiguous", "{d}");
     assert_eq!(
         diag["candidates"],
-        serde_json::json!([format!("{SEL_A}::Persist"), format!("{SEL_B}::Persist")]),
+        serde_json::json!([
+            format!("{}::Persist", shown(SEL_A)),
+            format!("{}::Persist", shown(SEL_B))
+        ]),
         "{d}"
     );
 
@@ -503,6 +531,7 @@ fn ambiguous_selector_candidates_name_their_owner() {
     ]);
     assert_eq!(code, 2, "{err}");
     for owner in [SEL_A, SEL_B] {
+        let owner = shown(owner);
         assert!(
             err.lines()
                 .any(|l| l.starts_with(&format!("  - {owner}::Persist  ("))),
@@ -630,6 +659,7 @@ fn per_command(w: &str, sel: &str) -> [String; 3] {
 
 /// `per_command` when `sel` selects exactly `owner`'s routine `id`.
 fn selects(owner: &str, id: &str) -> [String; 3] {
+    let owner = shown(owner);
     [
         format!("digest 0 [{owner}|{id}] []"),
         format!("fingerprint 0 [{owner}|{id}] []"),
@@ -677,7 +707,8 @@ fn owner_qualified_selector_with_no_such_routine_is_unmatched() {
     );
     assert!(
         err.contains(&format!(
-            "\n  no routine of that name on the named owner; declared as: {SEL_B}::Persist"
+            "\n  no routine of that name on the named owner; declared as: {}::Persist",
+            shown(SEL_B)
         )),
         "{err}"
     );
@@ -721,7 +752,11 @@ fn shared_bare_name_is_ambiguous_and_typed_owner_is_exact() {
     assert_eq!(
         per_command(w, "Sel B::Persist"),
         [
-            format!("digest 2 [] [selector-ambiguous({SEL_B}::Persist, {TABLE_SEL_B}::Persist)]"),
+            format!(
+                "digest 2 [] [selector-ambiguous({}::Persist, {}::Persist)]",
+                shown(SEL_B),
+                shown(TABLE_SEL_B)
+            ),
             "fingerprint 2 [] [selector-ambiguous]".to_string(),
             "prove 2 [|Sel B::Persist] unknown".to_string(),
         ]
@@ -739,6 +774,7 @@ fn shared_bare_name_is_ambiguous_and_typed_owner_is_exact() {
     let listed: Vec<&str> = err.lines().filter(|l| l.starts_with("  - ")).collect();
     assert_eq!(listed.len(), 2, "{err}");
     for owner in [SEL_B, TABLE_SEL_B] {
+        let owner = shown(owner);
         assert!(
             listed
                 .iter()
@@ -850,7 +886,7 @@ fn escaped_names_are_logical_in_query_effects() {
     assert_eq!(code, 0, "{q}");
     let p = &q["payload"];
     assert_eq!(
-        p["routine"]["routine"]["objectDisplay"], "Codeunit C \"Q\" U",
+        p["routine"]["routine"]["objectDisplay"], "Codeunit \"C \"\"Q\"\" U\"",
         "{q}"
     );
     let effects = p["effects"].as_array().unwrap();
@@ -858,7 +894,7 @@ fn escaped_names_are_logical_in_query_effects() {
     assert_eq!(effects[0]["tableName"], "T \"Q\" X", "{q}");
     assert_eq!(effects[0]["tableId"], esc_table_id(), "{q}");
     assert_eq!(
-        effects[0]["origin"]["routine"]["objectDisplay"], "Codeunit C \"Q\" U",
+        effects[0]["origin"]["routine"]["objectDisplay"], "Codeunit \"C \"\"Q\"\" U\"",
         "{q}"
     );
 }
@@ -898,7 +934,11 @@ fn escaped_names_are_logical_in_digest() {
         }
     }
     owners.sort();
-    assert_eq!(owners, vec!["Codeunit C \"Q\" U", "Interface A \"B\" C"]);
+    // Round-2 G41: the logical names, quoted as AL needs them.
+    assert_eq!(
+        owners,
+        vec!["Codeunit \"C \"\"Q\"\" U\"", "Interface \"A \"\"B\"\" C\""]
+    );
     assert_eq!(
         resources,
         vec![("T \"Q\" X".to_string(), esc_table_id())],
@@ -1394,7 +1434,10 @@ fn a_parameter_list_selects_one_overload() {
         ("(Text, Integer)", 13),
         ("(Code[20], var Record \"Ov Table\")", 18),
     ] {
-        let want = format!("Codeunit Sel A::Persist{sig} at ws:src/a.al:{line} (stable id {GUID}:");
+        let want = format!(
+            "{}::Persist{sig} at ws:src/a.al:{line} (stable id {GUID}:",
+            shown(SEL_A)
+        );
         assert!(
             listed.iter().any(|l| l.starts_with(&want)),
             "{want}: {listed:?}"
@@ -1402,20 +1445,28 @@ fn a_parameter_list_selects_one_overload() {
     }
     let (out, err, code) = alsem_out(&["prove", w, "Persist", "may-commit", "--format", "human"]);
     assert_eq!(code, 2, "{out}{err}");
-    // V3 §2.4: each candidate's complete display and declaration, and the
-    // ready value of the three selectors.
+    // V3 §2.4: each candidate's complete display and declaration; round-2
+    // G40: in source order, and one complete prove call per candidate.
     assert!(
         out.contains("Codeunit \"Sel A\"::Persist(Text, Integer) at ws:src/a.al:13"),
         "{out}"
     );
-    assert!(
-        out.contains(
-            "all 3: routines: [\"Codeunit \\\"Sel A\\\"::Persist(Integer)\", \
-             \"Codeunit \\\"Sel A\\\"::Persist(Code[20], var Record \\\"Ov Table\\\")\", \
-             \"Codeunit \\\"Sel A\\\"::Persist(Text, Integer)\"]"
-        ),
-        "{out}"
-    );
+    for (i, sig) in [
+        "(Integer)",
+        "(Text, Integer)",
+        "(Code[20], var Record \"Ov Table\")",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert!(
+            out.contains(&format!(
+                "  call {}: alsem prove 'Codeunit \"Sel A\"::Persist{sig}' may-commit",
+                i + 1
+            )),
+            "{out}"
+        );
+    }
 
     // Each spelling selects one overload: the prove root's declaration line.
     let printed = listed

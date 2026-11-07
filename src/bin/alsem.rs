@@ -718,7 +718,8 @@ struct QueryTouchesCli {
     show_source: bool,
 
     /// `3`: the 3.x JSON document (each row with its routine and witness
-    /// inline), kept for one release after 4.0.0. The default is 4.0.0.
+    /// inline), kept for one release after 4.0.0. `4`: the 4.0.0 document,
+    /// kept for one release after 5.0.0. The default is 5.0.0.
     #[arg(long = "schema", value_parser = parse_query_schema)]
     schema: Option<u32>,
 }
@@ -732,12 +733,13 @@ fn parse_tests_schema(s: &str) -> Result<u32, String> {
     }
 }
 
-/// `--schema` of `alsem query`: 3 or 4.
+/// `--schema` of `alsem query`: 3, 4 or 5.
 fn parse_query_schema(s: &str) -> Result<u32, String> {
     match s {
         "3" => Ok(3),
         "4" => Ok(4),
-        other => Err(format!("unknown --schema {other}. Expected: 3 or 4")),
+        "5" => Ok(5),
+        other => Err(format!("unknown --schema {other}. Expected: 3, 4 or 5")),
     }
 }
 
@@ -783,7 +785,8 @@ struct QueryEffectsCli {
     show_source: bool,
 
     /// `3`: the 3.x JSON document (each row with its routine inline), kept
-    /// for one release after 4.0.0. The default is 4.0.0.
+    /// for one release after 4.0.0. `4`: the 4.0.0 document, kept for one
+    /// release after 5.0.0. The default is 5.0.0.
     #[arg(long = "schema", value_parser = parse_query_schema)]
     schema: Option<u32>,
 }
@@ -1427,8 +1430,9 @@ struct DigestCli {
     /// full release, bc-dev-mcp's pin moving past 2.x, and 90 days; the date
     /// goes into the CHANGELOG at release preparation). Not with --detail,
     /// --max-paths or --compact. `3`: the 3.x document (every root's effects,
-    /// crossings and paths in full), kept for one release after 4.0.0. The
-    /// default is 4.0.0 (`4`).
+    /// crossings and paths in full), kept for one release after 4.0.0. `4`:
+    /// the 4.0.0 document, kept for one release after 5.0.0. The default is
+    /// 5.0.0 (`5`).
     #[arg(long = "schema")]
     schema: Option<u32>,
 
@@ -2715,7 +2719,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                 .field(t.field.as_deref())
                 .show_source(t.show_source)
                 .surface(t.surface)
-                .schema(t.schema.unwrap_or(4))
+                .schema(t.schema.unwrap_or(5))
                 .written(t.format == "json", t.out.as_deref()),
             )
         },
@@ -2744,7 +2748,7 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
                     .all_rows(e.all)
                     .show_source(e.show_source)
                     .surface(e.surface)
-                    .schema(e.schema.unwrap_or(4))
+                    .schema(e.schema.unwrap_or(5))
                     .written(e.format == "json", e.out.as_deref()),
             )
         },
@@ -3154,9 +3158,10 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
     // W2-2 (design §5): `--schema 2` is the 2.x document, which has no folds
     // or caps to set; any other schema is unknown. Usage errors: exit 2.
     let render = match d.schema {
-        None | Some(3) | Some(4) => al_sem::engine::l5::digest_v3::DigestRender {
+        None | Some(3) | Some(4) | Some(5) => al_sem::engine::l5::digest_v3::DigestRender {
             schema2: false,
             schema3: d.schema == Some(3),
+            schema4: d.schema == Some(4),
             detail: d.detail,
             compact: d.compact,
             max_paths: d.max_paths,
@@ -3176,7 +3181,7 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
         },
         Some(n) => {
             return failed(
-                format!("al-sem digest: unknown --schema {n}. Expected: 2, 3 or 4"),
+                format!("al-sem digest: unknown --schema {n}. Expected: 2, 3, 4 or 5"),
                 2,
                 1,
             );

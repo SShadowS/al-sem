@@ -705,7 +705,8 @@ fn single_app_flag_reaches_prove() {
         // output validation V4 (schema 2.10.0: `result.scope` and
         // `result.followUps`, additive; the human answer's four header lines,
         // the top callees not resolved as their own line; the routine
-        // anchor's `role: definition`, F78).
+        // anchor's `role: definition`, F78), then round-2 W4 (schema
+        // 2.11.0: `volatile: []`; `objectDisplay` quoted as AL needs, G41).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

@@ -28,8 +28,8 @@
             "recordRef": 2
           },
           {
+            "dependencyCalls": 2,
             "dependencyOperations": 1,
-            "entryPoints": 2,
             "kind": "dependency-depth"
           },
           {
@@ -41,7 +41,7 @@
       "answerable": true,
       "beyond": [
         {
-          "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
+          "dependencyCall": "Codeunit \"Base Poster\" (70100)::OnRun",
           "ops": [
             "DB_MODIFY"
           ],
@@ -92,7 +92,7 @@
           "role": "definition"
         },
         "display": "IssueDoc",
-        "objectDisplay": "Codeunit Out Issue Document",
+        "objectDisplay": "Codeunit \"Out Issue Document\"",
         "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
         "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
         "signature": "(var Record \"Out Doc\")",
@@ -111,7 +111,7 @@
           "kind": "action",
           "name": "Issue"
         },
-        "objectDisplay": "Page Out Doc Card",
+        "objectDisplay": "Page \"Out Doc Card\"",
         "qualifiedDisplay": "Page \"Out Doc Card\".action(Issue \"Issue\")::OnAction",
         "selector": "Page \"Out Doc Card\".action(Issue)::OnAction",
         "signature": "()",
@@ -163,5 +163,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

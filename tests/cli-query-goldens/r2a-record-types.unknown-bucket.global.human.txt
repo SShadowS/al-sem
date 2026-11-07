@@ -4,7 +4,7 @@ analysis complete · assumptions: loaded program; unloaded implementations and s
 more: --all lists every witness, no fold; --format json for every row
   dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
   table not resolved: each site's table is decided by a value the analysis does not resolve, and an unresolved write can be any table
-  by object: Codeunit R2a Records 1 site
+  by object: Codeunit "R2a Records" 1 site
   transitive: 1 workspace routine reaches one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code is not counted)
   record writes: none observed
   locks: none observed

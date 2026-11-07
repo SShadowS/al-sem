@@ -37,6 +37,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/D1MultiCaller.al",
+            "fileDisplay": "ws:src/D1MultiCaller.al",
             "line": 19,
             "role": "operation",
             "routine": "r:1"
@@ -73,7 +74,7 @@
           "role": "definition"
         },
         "display": "ModifyHelper",
-        "objectDisplay": "Codeunit D1 Multi Caller",
+        "objectDisplay": "Codeunit \"D1 Multi Caller\"",
         "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
         "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
         "signature": "(var Record \"MC Customer\")",
@@ -104,5 +105,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

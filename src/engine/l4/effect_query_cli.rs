@@ -294,8 +294,9 @@ pub struct QueryJob<'a> {
     show_source: bool,
     /// `--surface` (output validation §6.1): the words of every follow-up.
     surface: Surface,
-    /// `--schema`: 4 (the default, [`super::query_v4`]) or 3 (the 3.x
-    /// document, kept for one release).
+    /// `--schema`: 5 (the default, [`super::query_v5`]), 4 (the 4.0.0
+    /// document) or 3 (the 3.x document), each previous one kept for one
+    /// release.
     schema: u32,
 }
 
@@ -404,12 +405,13 @@ impl<'a> QueryJob<'a> {
             out: None,
             show_source: false,
             surface: Surface::Cli,
-            schema: 4,
+            schema: 5,
         }
     }
 
-    /// `--schema 3` (output validation §7.2): the 3.x document, kept for one
-    /// release; any other value is 4.0.0.
+    /// `--schema 3` (output validation §7.2): the 3.x document; `--schema 4`
+    /// (round-2 §4.6): the 4.0.0 document; each kept for one release; any
+    /// other value is 5.0.0.
     #[must_use]
     pub fn schema(mut self, schema: u32) -> QueryJob<'a> {
         self.schema = schema;
@@ -638,7 +640,8 @@ impl Job for QueryJob<'_> {
                 let text = match (self.json, self.schema) {
                     (false, _) => r.human_text,
                     (true, 3) => r.json_text,
-                    (true, _) => v4_text(&r.json_text),
+                    (true, 4) => v4_text(&r.json_text),
+                    (true, _) => v5_text(&r.json_text),
                 };
                 (text, r.exit_code, r.summary)
             }),
@@ -651,6 +654,18 @@ impl Job for QueryJob<'_> {
 fn v4_text(v3: &str) -> String {
     match serde_json::from_str::<Value>(v3) {
         Ok(doc) => serialize_document_value(super::query_v4::document_from_v3(doc)),
+        Err(_) => v3.to_string(),
+    }
+}
+
+/// The 5.0.0 text of a 3.x query document ([`super::query_v4`] then
+/// [`super::query_v5`], round-2 output validation §4.6); a text that does
+/// not parse is returned as it is.
+fn v5_text(v3: &str) -> String {
+    match serde_json::from_str::<Value>(v3) {
+        Ok(doc) => serialize_document_value(super::query_v5::document_from_v4(
+            super::query_v4::document_from_v3(doc),
+        )),
         Err(_) => v3.to_string(),
     }
 }
@@ -1105,7 +1120,7 @@ pub fn resolve_routine_selector<'a>(
     // V3 §2.1: a member form (`Object."Field"::Trigger`,
     // `Object.action(Name)::OnAction`), the one display of a member trigger.
     let member: Vec<&ModelRoutine> = if qualified.is_empty() {
-        let owner_display = |r: &ModelRoutine| object_display(&r.object_type, object_name(r));
+        let owner_display = |r: &ModelRoutine| object_key(&r.object_type, object_name(r));
         let rows = routines().filter_map(|r| {
             Some(crate::engine::l5::selector_index::MemberRow {
                 id: &r.stable_routine_id,
@@ -1263,10 +1278,21 @@ impl<'a> RoutineJoin<'a> {
     }
 }
 
-/// The one owner rule: `"<ObjectType> <ObjectName>"`, the bare type when the
-/// name is missing. `query effects`, digest, fingerprint and prove all print it
-/// (#78).
+/// The one owner display: `<ObjectType> <ObjectName>` with the name quoted as
+/// AL needs it (`Codeunit "CDO Log Management"`, `Table Customer`), the bare
+/// type when the name is missing. `query effects`, digest, fingerprint and
+/// prove all print it (#78; round-2 output validation G41: through r1 §2.1's
+/// formatter, [`crate::engine::l5::routine_rollup::format_object`]).
 pub fn object_display(object_type: &str, object_name: &str) -> String {
+    crate::engine::l5::routine_rollup::format_object(object_type, object_name, None)
+        .trim()
+        .to_string()
+}
+
+/// An owner's matching key: `<ObjectType> <ObjectName>` unquoted, what a
+/// selector's owner part is compared with ([`crate::engine::l5::selector_index`]
+/// reads both the unquoted and the as-written owner). Never printed.
+pub fn object_key(object_type: &str, object_name: &str) -> String {
     format!("{object_type} {object_name}").trim().to_string()
 }
 
@@ -1338,6 +1364,15 @@ impl<'a> OwnerIndex<'a> {
         self.by_stable_id
             .get(stable_id)
             .map(|(t, n)| object_display(t, n))
+            .unwrap_or_default()
+    }
+
+    /// The owner's matching key ([`object_key`], unquoted), or `""`: what a
+    /// selector's owner part is compared with.
+    pub fn object_key(&self, stable_id: &str) -> String {
+        self.by_stable_id
+            .get(stable_id)
+            .map(|(t, n)| object_key(t, n))
             .unwrap_or_default()
     }
 
@@ -1577,7 +1612,16 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
     let (mut unknown, mut physical_writes) = (0u64, 0u64);
     for e in effects {
         *by_op.entry(e.op).or_default() += 1;
-        *by_temp.entry(temp_state_str(e.temp_state)).or_default() += 1;
+        // Round-2 G43: the §8.1 temp-state words (`temporary`, `not
+        // temporary`, `caller-dependent`, `not resolved`), never
+        // `known(false)`.
+        let word = match e.temp_state {
+            TempStateKind::Known(true) => "temporary",
+            TempStateKind::Known(false) => "not temporary",
+            TempStateKind::ParameterDependent(_) => "caller-dependent",
+            _ => "not resolved",
+        };
+        *by_temp.entry(word.to_string()).or_default() += 1;
         if is_unknown_table(e.table_id) {
             unknown += 1;
         } else {
@@ -1776,6 +1820,12 @@ fn routine_failure_doc(
             if listed.len() != labels.len() {
                 (serde_json::Map::new(), None)
             } else {
+                // Round-2 G40: in source order (file, then line).
+                let mut listed = listed;
+                listed.sort_by_key(|c| {
+                    let (file, line) = c.at.rsplit_once(':').unwrap_or((c.at.as_str(), ""));
+                    (file.to_string(), line.parse::<u32>().unwrap_or(0))
+                });
                 let mut m = serde_json::Map::new();
                 m.insert(
                     "candidateSelectors".into(),
@@ -1788,7 +1838,7 @@ fn routine_failure_doc(
         }
         _ => {
             let owners = OwnerIndex::build(model);
-            let hints = si::selector_hints(&names, |id| owners.object_display(id), selector);
+            let hints = si::selector_hints(&names, |id| owners.object_key(id), selector);
             let mut lines = vec![crate::engine::l5::explain::unmatched_line(
                 &format!("{kind}: {selector_field}: "),
                 selector,
@@ -2159,7 +2209,13 @@ fn query_with_header(
     while body.last().is_some_and(|l| l.is_empty()) {
         body.pop();
     }
-    let mut out = h.human();
+    // Round-2 G40: a lookup miss is its failure sentence once, then what
+    // helps the next call.
+    let mut out = if title.is_none() && exit == 2 {
+        h.miss_human()
+    } else {
+        h.human()
+    };
     for l in body {
         out.push_str(&l);
         out.push('\n');
@@ -2223,6 +2279,45 @@ fn finish_human(
         hc,
         families.as_ref(),
     );
+    // Round-2 G40: an ambiguous routine selector offers the complete calls,
+    // one per candidate, in this surface's words.
+    if r.exit_code == 2
+        && let Ok(doc) = serde_json::from_str::<Value>(&r.json_text)
+    {
+        fn find<'v>(v: &'v Value, key: &str) -> Option<&'v Value> {
+            match v {
+                Value::Object(m) => m.get(key).or_else(|| m.values().find_map(|x| find(x, key))),
+                Value::Array(a) => a.iter().find_map(|x| find(x, key)),
+                _ => None,
+            }
+        }
+        if let Some(Value::Array(sels)) = find(&doc, "candidateSelectors") {
+            use crate::engine::follow_up::{Cx, Tool};
+            let sels: Vec<String> = sels
+                .iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect();
+            let (tool, args) = if hc.effects {
+                (Tool::QueryEffects, Vec::new())
+            } else {
+                let table = doc
+                    .pointer("/payload/table/selector")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                (Tool::QueryTouches, vec![("table", table)])
+            };
+            let args: Vec<(&str, Value)> = args.into_iter().filter(|(_, v)| !v.is_null()).collect();
+            for l in crate::engine::l5::selector_index::complete_call_lines(
+                tool,
+                Cx::new(hc.surface, hc.single_app),
+                &sels,
+                &args,
+            ) {
+                r.human_text.push_str(&l);
+                r.human_text.push('\n');
+            }
+        }
+    }
     if let Some(s) = sources {
         r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
     }
@@ -2316,7 +2411,8 @@ fn render_query_touches_body(
     let mut human = String::new();
     let mut ancestor_witnesses_built = 0;
     let table_label = match &table.name {
-        Some(n) => format!("{n} ({})", table.id),
+        // Round-2 G41: the table through r1 §2.1's formatter.
+        Some(n) => format!("{} ({})", object_display("Table", n), table.id),
         None => format!(
             "{} — the UNRESOLVED-TABLE bucket, not a table",
             UNKNOWN_TABLE_ID
@@ -2710,8 +2806,9 @@ fn render_query_touches_body(
             for &ix in &routines[..shown_n] {
                 let internal = query.bundle().routine_id(ix);
                 match join.get(internal) {
+                    // Round-2 G45: the location's role (its definition).
                     Some(rr) => human.push_str(&format!(
-                        "    {} — {}:{}\n",
+                        "    {} (defined at {}:{})\n",
                         rr.qualified(),
                         rr.file,
                         shown(rr.line)
@@ -3303,7 +3400,13 @@ impl<'a> TouchCx<'_, 'a> {
     fn caller_line(&self, ix: crate::engine::l4::routine_interner::SolveIx) -> String {
         let internal = self.query.bundle().routine_id(ix);
         match self.join.get(internal) {
-            Some(x) => format!("{} — {}:{}", x.qualified(), x.file, shown(x.line)),
+            // Round-2 G45: the location's role.
+            Some(x) => format!(
+                "{} (defined at {}:{})",
+                x.qualified(),
+                x.file,
+                shown(x.line)
+            ),
             None => internal.to_string(),
         }
     }
@@ -4654,11 +4757,17 @@ fn render_query_effects_body(
                             join.get(internal).map_or_else(
                                 || json!({"display": internal}),
                                 |x| {
-                                    json!({
+                                    let mut h = json!({
                                         "display": x.display,
                                         "objectDisplay": x.object_display,
                                         "stableId": x.stable_id,
-                                    })
+                                    });
+                                    // Round-2 G41 (additive): every routine
+                                    // row carries its guaranteed selector.
+                                    if let Some(s) = x.identity.get("selector") {
+                                        h["selector"] = s.clone();
+                                    }
+                                    h
                                 },
                             ),
                         );
@@ -4970,9 +5079,11 @@ fn render_query_effects_body(
                 }
                 _ => "when the record its caller passes is not temporary".to_string(),
             };
+            // Round-2 G39: the operation's own verb.
             format!(
-                "may modify persistent {name} records ({} at {at}) {condition}",
-                kinds.into_iter().collect::<Vec<_>>().join(", ")
+                "may {} persistent {name} records ({} at {at}) {condition}",
+                crate::engine::vocab::write_verb(kinds.iter().copied()),
+                kinds.iter().copied().collect::<Vec<_>>().join(", ")
             )
         })
         .collect();
@@ -6184,7 +6295,10 @@ fn render_field_touches(
     // Human.
     let mut human = format!(
         "--- touches field {} \"{}\" of {} ({}) ---\n",
-        field.field_number, field.name, table.name, table.id
+        field.field_number,
+        field.name,
+        object_display("Table", &table.name),
+        table.id
     );
     human.push_str(&format!(
         "  field: {}, {}\n",

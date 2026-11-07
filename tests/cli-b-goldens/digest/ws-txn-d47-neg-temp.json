@@ -111,7 +111,7 @@
             "sourceKind": "source"
           },
           "display": "SendAfterTempInsert",
-          "objectDisplay": "Codeunit D47 Sender",
+          "objectDisplay": "Codeunit \"D47 Sender\"",
           "stableId": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba"
         },
         "unresolved": [],
@@ -131,5 +131,6 @@
     },
     "workspaceFingerprint": "d7511a4fe3bcaed11cec5244ebdc7b282e2294c2cf2e3782c9f106718516fe98"
   },
-  "schemaVersion": "2.3.0"
+  "schemaVersion": "2.3.0",
+  "volatile": []
 }

@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (round-2 output validation, W4: consistency)
+
+Milestone W4 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.5 G39–G45,
+§4.6). Output only: no engine fact, digest payload fact or resolution changes.
+
+- **"writes" means a record write** (G39, c10, c25): a field's writers are named by the new
+  words — `answer: the field is assigned or validated by 1 routine`, `confirmed field writers
+  (assignment or validation): 1` (was `confirmed writers`). A caller-dependent write prints
+  its operation's own verb: `may delete persistent … records (Delete at …)`, `may insert`,
+  `may modify`, `may rename`, and `may change` when the kinds mix (was always `may modify`).
+- **not-found and ambiguous answers** (G40, c03, c26, n06, n08): a lookup miss prints its
+  failure sentence once, on the `answer:` line (was three copies), with no analysis,
+  assumptions, limits, scope or `more:` line; the nearest names or the candidates follow.
+  A member-form selector (`Page X.action(SendEMailActio)::OnAction`) is near by its
+  member's name, so n06 offers `SendEMailAction` first (it ranked by the trigger name
+  every action shares). An ambiguity lists its candidates in source order, says what tells
+  them apart (`differs in: a trailing Boolean`, `parameter 3 (Integer or Text)`, `the
+  object`, `the number of parameters (7, 9, 11)`) and ends with a complete call in the
+  surface's words (`complete call: alsem_explain {"routines": [<both selectors>]}`; prove
+  and query effects, which take one routine, print `call 1:`, `call 2:` …), in place of the
+  `both: routines: [...]` value. Ambiguity never picks a routine (exit 2, `outcome:
+  ambiguous`, unchanged).
+- **names residue** (G41): every object name in renderer-owned text and JSON display fields
+  goes through r1 §2.1's formatter (AL quoting): the by-object lists of query touches (c18,
+  c30, n03) and field mode (c22), explain's `most actions` and `by publisher` (n10), the
+  routines' JSON `objectDisplay` (c16, c18, n05), test coverage's `uncovered[].objectDisplay`
+  (c25), digest effects' `detail.boundary` (now the crossing's own display, `Codeunit
+  "CTS-SYS Azure Blob" (6225924)::Put`, c15, c25), the query touches header (`Table "CDO
+  Queue Entry"`, c22, c30), prove's routine line (c27), explain's pending-write witness
+  (`may write Table "CDO E-Mail Template Header"`, was `Table 6175283 (app f4b69b55-…)`,
+  c06), impact's action entry (`Page "CDO Unhandled".action(StatementsAction)::OnAction`,
+  was `Page "CDO Unhandled" action StatementsAction`, n09), the tests JSON root `display`,
+  and the `calls:` line (`calls: Codeunit "X"::A (called at :184); ::B (called at :190)`,
+  was `Codeunit "X": A (:184); this object: B (:190)`, c05, n09). A query document's
+  `firstHop` routine carries its `selector` (c08's two routines without one). Selector
+  matching still reads the unquoted owner key, so an unquoted selector resolves as before.
+- **one JSON shape per field** (G42, c15, c16): digest `tableAnswers[].tableRef` is prove's
+  table object (`{id, name, number, app, appId}`, `null` when the name is no table), in the
+  document and in the summary rows; a summary row that shares its answer says
+  `sharedWith: "s1"` (was `shared`); summary and index rows carry `effectCounts` (always a
+  map) beside `effectsByType`. A blocker with no source site keeps its kind and `site:
+  null` (unchanged).
+- **legacy words in JSON** (G43, c08, c15): the query envelope summary's `byTempState` keys
+  are `temporary` / `not temporary` / `caller-dependent` / `not resolved` (were
+  `known(true)` / `known(false)` / `parameter-dependent(…)` / `unknown`); the documents'
+  `entryPoints` keys move in query 5.0.0 and digest 5.0.0 (below).
+- **`volatile`** (G44, c16): prove and digest documents carry `volatile: ["generatedAt"]`
+  beside `deterministic` (`[]` under `--deterministic`, which pins it). Prove 2.11.0
+  (filtered 2.12.0), additive.
+- **a location says its role** (G45, c29, c30): a witness path's hop location reads
+  `(called at …:345)` (`raised at` for an event hop, `operation at` for a table trigger
+  hop), was `(…:345)`; query touches' transitive list and `callers: true` list read
+  `(defined at …:243)`, was `— …:243`.
+
+#### Schema majors (consumer notice)
+
+Each major keeps the previous document for one release behind `--schema 4` (MCP `schema:
+4`); `--schema 3` still writes the 3.x document. `schema: 4` is rebuilt exactly from the 5.0.0
+document (`query_v5::to_v4`, `digest_v5::to_v4`, tested on every shape and through the
+binary on the fixture).
+
+- **query 5.0.0** (G43, G41): `summary.beyondEntryPoints` → `summary.beyondDependencyCalls`,
+  each item's `entryPoint` → `dependencyCall`; `summary.beyondWrites.entryPoints` →
+  `dependencyCalls`; `summary.byTable[].beyond[].entryPoint` → `dependencyCall`;
+  `down.beyond[].entryPoint` → `dependencyCall`; `down.absence.reasons[].entryPoints` →
+  `dependencyCalls` (`result.scope.families.beyondDependencyCalls` is unchanged). Every
+  `origin` gains `fileDisplay` (`dep:Base Application:src/…`); `origin.file` keeps its guid
+  form. Additive: a `firstHop` routine's `selector`.
+- **digest 5.0.0** (G40, G42, G43): `entries[].tableAnswers[]`: `table` (the asked string)
+  → `asked`, plus `tableRef` (prove's table object). A `selector-ambiguous` entry of
+  `changedRootsDiagnostics` has one `candidates` array of `{selector, display, signature,
+  stableId, definedAt}` in source order, in place of the string lists `candidates`,
+  `candidateRoutines` and `candidateSelectors`. `entryPoints` → `dependencyCalls` (in
+  `entries[].summary` and `summary.commits`, `commits.literalDead`), `entryPoint` →
+  `dependencyCall` (`summary.mayWriteTables.mostBeyond`), `throughEntryPoint` →
+  `throughDependencyCall` (`effects[].paths[]`). `volatile` (G44). The 4.x document gains
+  `tableRef` and `candidateRows` additively, from which 5.0.0 is built.
+- **Envelope summaries** (not versioned): query effects `byTempState` keys (above); digest
+  rows `asked` + `tableRef` in place of `table: {name}`, `sharedWith` in place of `shared`,
+  `effectCounts` beside `effectsByType`.
+- **Unchanged**: prove's shapes (2.11.0 / 2.12.0 add `volatile` only), explain
+  `al-sem.explain/4`, impact version 1, `al-sem.tests/2`, `alsem graph`.
+- **Who must move**: ConTinAI `work/scripts/effects.py` (query rows): read
+  `summary.beyondDependencyCalls[].dependencyCall` and `summary.beyondWrites.dependencyCalls`
+  (were `beyondEntryPoints[].entryPoint`, `beyondWrites.entryPoints`); `origin.file` is
+  unchanged, `origin.fileDisplay` is new; or pass `schema: 4` for one release.
+  bc-dev-mcp `risk.ts` / `alsem-writes.ts` (digest and query JSON): `tableAnswers[].asked`
+  / `tableRef` (was `table`), `dependencyCalls` / `throughDependencyCall` for the entry-point
+  keys, and an ambiguity's `candidates[].selector` (was `candidateSelectors`); the
+  envelope summary's `byTempState` words. al-lsp-for-agents: display strings quote object
+  names as AL needs (`Codeunit "CDO Log Management"`), and the `calls:` line reads
+  `Object::Routine (called at :N)`; nothing parses them today.
+
 ### Changed (round-2 output validation, W3: missing information)
 
 Milestone W3 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§3, §2.4's
