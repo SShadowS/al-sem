@@ -18,4 +18,4 @@ current effects of the 1 changed routine; ranked: reached from a user or a job f
       external: apps outside the program may call routines of its cone (by reason, routines): public 2
       tests: tests with a modeled path: 2 (2 by a local path); nearest Codeunit "TU Core Tests"::CalcAddsOne (local, 1 hop)
 schema: 2 field, key or field group lines changed (current revision only; a base gives the schema findings)
-tests: run first (app "TU Production Tests"): codeunits 50850 — a superset: whole codeunits, for the 2 tests with a modeled path (2 by a local path); selection complete; workspace 0 [Test]; 1 test app (TU Production Tests)
+tests: run first (app "TU Production Tests"): codeunits 50850 — whole codeunits, so every test in them runs: a superset of the 2 tests picked on a local path; selection complete; workspace 0 [Test]; 1 test app (TU Production Tests)

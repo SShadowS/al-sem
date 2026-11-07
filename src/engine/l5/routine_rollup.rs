@@ -1308,11 +1308,17 @@ pub struct RollupTotals {
     /// crossing id for a crossing with no anchor). The scope line's counts.
     pub entry_points: usize,
     pub crossing_sites: usize,
+    /// The distinct dependency routines those entry points enter (a
+    /// multi-target entry point enters several): what a line that says
+    /// "dependency routines entered" counts (round-2 c11).
+    pub routines_entered: usize,
     /// Those of [`Self::entry_points`] with a may-persist write beyond them,
     /// and their distinct sites: the `writes beyond dependency entry points`
     /// header's counts. The rest write only temporary records or no table.
     pub writing_entry_points: usize,
     pub writing_sites: usize,
+    /// The distinct routines [`Self::writing_entry_points`] enter.
+    pub writing_routines: usize,
     /// Explain only: known routine callers, page actions, tests.
     pub callers: Option<usize>,
     pub page_actions: Option<usize>,
@@ -1389,6 +1395,9 @@ impl RollupTotals {
                 "sites": self.crossing_sites,
                 "withWrites": self.writing_entry_points,
                 "withWritesSites": self.writing_sites,
+                // Round-2 c11 (additive): the distinct routines entered.
+                "routines": self.routines_entered,
+                "withWritesRoutines": self.writing_routines,
             },
         });
         if self.commit_sites_partial {
@@ -2260,10 +2269,12 @@ impl RoutineRollup {
             literal_dead_tables: self.literal_dead.len(),
             no_path_operations: self.no_path.len(),
             no_path_tables: no_path_tables.len(),
-            entry_points: points.all.0,
-            crossing_sites: points.all.1,
-            writing_entry_points: points.writing.0,
-            writing_sites: points.writing.1,
+            entry_points: points.all.points,
+            crossing_sites: points.all.sites,
+            routines_entered: points.all.routines,
+            writing_entry_points: points.writing.points,
+            writing_sites: points.writing.sites,
+            writing_routines: points.writing.routines,
             callers: None,
             page_actions: None,
             tests: None,
@@ -2515,6 +2526,48 @@ impl HeaderFacts {
     }
 }
 
+/// The completeness of one entry's effects: its coverage status and
+/// reasons, and the open-world interface and dynamic calls its cone holds,
+/// counted. Explain's and digest's `analysis` line, and each impact
+/// root's (round-2 n09: impact said "analysis complete" where explain on
+/// the same routine said "partial (… 8 interface calls open world)").
+#[must_use]
+pub fn entry_analysis(entry: &DigestEntryFull) -> crate::engine::result_header::Analysis {
+    let mut reasons = entry.coverage_reasons.clone();
+    let counts = open_dynamic_counts(entry);
+    if !counts.is_empty() {
+        reasons.push(counts.join(", "));
+    }
+    crate::engine::result_header::Analysis::of(entry.coverage_status == "complete", reasons)
+}
+
+/// The open-world interface calls and dynamic calls of an entry's cone, as
+/// the analysis line counts them (`8 interface calls open world`).
+fn open_dynamic_counts(entry: &DigestEntryFull) -> Vec<String> {
+    let (mut open, mut dynamic) = (0usize, 0usize);
+    for u in &entry.unresolved {
+        match u.status.as_str() {
+            "polymorphic" => open += 1,
+            "dynamic-target" => dynamic += 1,
+            _ => {}
+        }
+    }
+    let mut counts = Vec::new();
+    if open > 0 {
+        counts.push(format!(
+            "{} open world",
+            plural(open, "interface call", "interface calls")
+        ));
+    }
+    if dynamic > 0 {
+        counts.push(format!(
+            "{} not resolved",
+            plural(dynamic, "dynamic call", "dynamic calls")
+        ));
+    }
+    counts
+}
+
 /// The header facts of one card (`extra_limits`: the caller's own, explain's
 /// gaps).
 #[must_use]
@@ -2524,28 +2577,35 @@ pub fn header_facts(
     extra_limits: &[String],
 ) -> HeaderFacts {
     let lines = header_lines(r, entry, extra_limits);
-    let mut reasons = entry.coverage_reasons.clone();
-    // The open-world and dynamic counts the analysis line names.
-    if let Some(i) = lines[1].find(" — ") {
-        reasons.push(lines[1][i + " — ".len()..].to_string());
-    }
-    let analysis =
-        crate::engine::result_header::Analysis::of(entry.coverage_status == "complete", reasons);
+    let analysis = entry_analysis(entry);
     let limits_line = lines[3].strip_prefix("limits: ").unwrap_or("none");
     let limits = if limits_line == "none" {
         Vec::new()
     } else {
         limits_line.split("; ").map(str::to_string).collect()
     };
+    // Round-2 n07: the rollup's entry points are the crossings that carry an
+    // effect row; a cone that enters dependency code with no effect beyond
+    // it (CDO File::SetFilename → File Management::GetFileName) has none.
+    // Whether dependency code is reached at all is the cone walk's fact.
+    let reached = entry.unresolved_traversal.dependency_routines;
     let depth = if r.totals.entry_points == 0 && r.totals.crossing_sites == 0 {
-        "dependency code: none reached".to_string()
+        if reached == 0 {
+            "dependency code: none reached".to_string()
+        } else {
+            format!(
+                "dependency code followed through every resolved call ({} reached; no effect \
+                 beyond them)",
+                plural(reached, "dependency routine", "dependency routines")
+            )
+        }
     } else {
         format!(
             "dependency code followed through every resolved call with literal arguments \
              ({}{} entered at {}{})",
             at_least(r.totals.entry_points_partial),
             plural(
-                r.totals.entry_points,
+                r.totals.routines_entered,
                 "dependency routine",
                 "dependency routines"
             ),
@@ -2574,14 +2634,6 @@ fn header_lines(
     extra_limits: &[String],
 ) -> Vec<String> {
     let mut out = vec![r.totals.human(&writes_summary(r, entry))];
-    let (mut open, mut dynamic) = (0usize, 0usize);
-    for u in &entry.unresolved {
-        match u.status.as_str() {
-            "polymorphic" => open += 1,
-            "dynamic-target" => dynamic += 1,
-            _ => {}
-        }
-    }
     // §8.1 completeness: always with its subject (`analysis complete`,
     // `analysis partial (<reasons>)`).
     let mut cov = match entry.coverage_status.as_str() {
@@ -2592,19 +2644,7 @@ fn header_lines(
     if !entry.coverage_reasons.is_empty() {
         cov.push_str(&format!(" ({})", entry.coverage_reasons.join(", ")));
     }
-    let mut counts = Vec::new();
-    if open > 0 {
-        counts.push(format!(
-            "{} open world",
-            plural(open, "interface call", "interface calls")
-        ));
-    }
-    if dynamic > 0 {
-        counts.push(format!(
-            "{} not resolved",
-            plural(dynamic, "dynamic call", "dynamic calls")
-        ));
-    }
+    let counts = open_dynamic_counts(entry);
     if !counts.is_empty() {
         cov.push_str(&format!(" — {}", counts.join(", ")));
     }
@@ -2652,7 +2692,7 @@ fn header_lines(
          counts are distinct tables unless a line says operations; lines are 1-based; --detail \
          lists everything",
         at_least(r.totals.entry_points_partial),
-        thousands(r.totals.entry_points),
+        thousands(r.totals.routines_entered),
         at_least(r.totals.entry_points_partial),
         plural(
             r.totals.crossing_sites,
@@ -3015,36 +3055,64 @@ struct EntryPoint<'r> {
     /// Its sites by identity: each `file:line`, or the crossing id of a
     /// crossing with no anchor (so it still counts once).
     site_keys: BTreeSet<&'r str>,
+    /// The dependency routines it enters, by stable id (a crossing with no
+    /// known target by its crossing id, so it still counts once). A
+    /// multi-target crossing (an event with three subscribers) is ONE entry
+    /// point and several routines entered.
+    routine_keys: BTreeSet<&'r str>,
+}
+
+/// One population's counts: its entry points, the distinct dependency
+/// routines they enter and the distinct sites they are entered at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EntryCount {
+    pub points: usize,
+    pub routines: usize,
+    pub sites: usize,
 }
 
 /// The entry-point counts every human line states (final CDO output
 /// review, item 3; design §3.6 "a total is a union by identity, never a
-/// sum"): `(entry points, distinct sites)` over every entry point, over
-/// those with a may-persist write beyond them, and over the rest. The
-/// entry points partition (each is one or the other), so `all.0 ==
-/// writing.0 + other.0`; the sites are unions, so `all.1` is the size of the
-/// union of the other two sets (a site entering both kinds counts once).
+/// sum"): entry points, distinct routines entered and distinct sites over
+/// every entry point, over those with a may-persist write beyond them, and
+/// over the rest. The entry points partition (each is one or the other), so
+/// `all.points == writing.points + other.points`; the routines and sites are
+/// unions, so a routine or site in both kinds counts once in `all`.
 /// Before, the scope line counted writing CROSSINGS and summed their sites
 /// (IssueReminder on CDO: "14 entry points at 14 sites") while the sections
-/// counted entry points ("12 … at 14 sites", "15 … at 17 sites").
+/// counted entry points ("12 … at 14 sites", "15 … at 17 sites"). A line
+/// that says "dependency routines entered" states `routines` (round-2 c11:
+/// one event entry point into three subscribers printed "1 dependency
+/// routine entered" beside the three routines' names).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntryPointCounts {
-    pub all: (usize, usize),
-    pub writing: (usize, usize),
-    pub other: (usize, usize),
+    pub all: EntryCount,
+    pub writing: EntryCount,
+    pub other: EntryCount,
 }
 
 impl EntryPointCounts {
     #[must_use]
     pub fn of(r: &RoutineRollup) -> EntryPointCounts {
-        let points = entry_points(r);
+        Self::of_points(&entry_points(r))
+    }
+
+    fn of_points(points: &[EntryPoint<'_>]) -> EntryPointCounts {
         let count = |pred: &dyn Fn(&EntryPoint<'_>) -> bool| {
             let chosen: Vec<&EntryPoint<'_>> = points.iter().filter(|p| pred(p)).collect();
+            let routines: BTreeSet<&str> = chosen
+                .iter()
+                .flat_map(|p| p.routine_keys.iter().copied())
+                .collect();
             let sites: BTreeSet<&str> = chosen
                 .iter()
                 .flat_map(|p| p.site_keys.iter().copied())
                 .collect();
-            (chosen.len(), sites.len())
+            EntryCount {
+                points: chosen.len(),
+                routines: routines.len(),
+                sites: sites.len(),
+            }
         };
         EntryPointCounts {
             all: count(&|_| true),
@@ -3141,6 +3209,7 @@ fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
                 temp_only: true,
                 crossings: Vec::new(),
                 site_keys: BTreeSet::new(),
+                routine_keys: BTreeSet::new(),
             });
             out.len() - 1
         });
@@ -3151,6 +3220,12 @@ fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
             p.site_keys.insert(c.id.as_str());
         } else {
             p.site_keys.extend(c.sites.iter().map(String::as_str));
+        }
+        if c.target_ids.is_empty() {
+            p.routine_keys.insert(c.id.as_str());
+        } else {
+            p.routine_keys
+                .extend(c.target_ids.iter().map(String::as_str));
         }
         p.tables
             .extend(c.tables.iter().map(|(k, v)| (k.as_str(), v.as_str())));
@@ -3232,6 +3307,23 @@ pub fn beyond_writes(r: &RoutineRollup) -> Vec<BeyondWrites<'_>> {
         .collect()
 }
 
+/// The distinct dependency routines `ws` enter (an entry point with no known
+/// target counts once, by its display): what a line that says "dependency
+/// routines entered" states; `ws.len()` is the entry points (round-2 c11).
+#[must_use]
+pub fn routines_entered(ws: &[BeyondWrites<'_>]) -> usize {
+    ws.iter()
+        .flat_map(|w| {
+            if w.targets.is_empty() {
+                vec![w.name]
+            } else {
+                w.targets.clone()
+            }
+        })
+        .collect::<BTreeSet<&str>>()
+        .len()
+}
+
 /// `writes beyond dependency entry points` (design §4.1 section 12).
 #[must_use]
 pub fn beyond_lines(
@@ -3273,11 +3365,11 @@ pub fn beyond_lines(
             "writes beyond dependency calls: {verdict}; {} at {} write only temporary records \
              or no table, which does not directly persist them)",
             plural(
-                counts.other.0,
+                counts.other.routines,
                 "dependency routine entered",
                 "dependency routines entered"
             ),
-            plural(counts.other.1, "dependency call", "dependency calls"),
+            plural(counts.other.sites, "dependency call", "dependency calls"),
         )];
     }
     let mut out = vec![format!(
@@ -3285,12 +3377,12 @@ pub fn beyond_lines(
         plural(tables.len(), "table", "tables"),
         at_least(r.totals.entry_points_partial),
         plural(
-            counts.writing.0,
+            counts.writing.routines,
             "dependency routine entered",
             "dependency routines entered"
         ),
         at_least(r.totals.entry_points_partial),
-        plural(counts.writing.1, "dependency call", "dependency calls")
+        plural(counts.writing.sites, "dependency call", "dependency calls")
     )];
     let line = |p: &EntryPoint<'_>| -> String {
         let kinds: Vec<String> = p
@@ -3428,7 +3520,11 @@ pub fn beyond_lines(
         out.push(format!(
             "  … +{} with {} — {} lists them",
             plural(
-                shown.hidden,
+                writing[shown.shown.len()..]
+                    .iter()
+                    .flat_map(|p| p.routine_keys.iter())
+                    .collect::<BTreeSet<_>>()
+                    .len(),
                 "dependency routine entered",
                 "dependency routines entered"
             ),
@@ -3449,11 +3545,11 @@ pub fn beyond_lines(
             out.push(format!(
                 "  {} at {} write only temporary records or no table:",
                 plural(
-                    counts.other.0,
+                    counts.other.routines,
                     "dependency routine entered",
                     "dependency routines entered"
                 ),
-                plural(counts.other.1, "dependency call", "dependency calls")
+                plural(counts.other.sites, "dependency call", "dependency calls")
             ));
             for p in others {
                 out.push(format!("  {}", line(p).trim_start()));
@@ -3462,11 +3558,11 @@ pub fn beyond_lines(
             out.push(format!(
                 "  {} at {} write only temporary records or no table ({} lists them)",
                 plural(
-                    counts.other.0,
+                    counts.other.routines,
                     "dependency routine entered",
                     "dependency routines entered"
                 ),
-                plural(counts.other.1, "dependency call", "dependency calls"),
+                plural(counts.other.sites, "dependency call", "dependency calls"),
                 o.detail_input()
             ));
         }
@@ -4079,14 +4175,20 @@ mod tests {
             ..RoutineRollup::default()
         };
         let c = EntryPointCounts::of(&r);
-        assert_eq!(c.writing, (1, 2), "one entry point at two sites");
-        assert_eq!(c.other, (3, 3), "three temp-only entry points: {c:?}");
+        let n = |points, routines, sites| EntryCount {
+            points,
+            routines,
+            sites,
+        };
+        assert_eq!(c.writing, n(1, 1, 2), "one entry point at two sites");
+        // Round-2 c11: the multi-target entry point enters two routines.
+        assert_eq!(c.other, n(3, 4, 3), "three temp-only entry points: {c:?}");
         assert_eq!(
-            c.all.0,
-            c.writing.0 + c.other.0,
+            c.all.points,
+            c.writing.points + c.other.points,
             "entry points partition: {c:?}"
         );
-        assert_eq!(c.all, (4, 4), "the union: a shared site counts once");
+        assert_eq!(c.all, n(4, 5, 4), "the union: a shared site counts once");
     }
 
     #[test]

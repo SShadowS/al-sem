@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (counts and labels the round-2 fact check found)
+
+The round-2 fact check of the output validation (calls c06, c11, c12, c20, n07, n08,
+n09) found answers whose count or label did not match their own facts.
+
+- **impact, first entry per kind** (c12, c20): a kind's count adds every legacy bucket of
+  that kind (codeunit OnRun = `onrun-codeunit` + `background-start` + …), but its "first"
+  witness was the first bucket's first witness: `first codeunit OnRun: Codeunit "Check Gen.
+  Jnl. Line. Backgr." (9081) (21 hops)` beside an OnRun bucket that held one at 3 hops. The
+  witness is now the nearest over the same buckets (no open site first, then hops).
+- **impact, run first** (c20): `codeunits 69000 — a superset: whole codeunits, for the 678
+  tests with a modeled path` claimed the codeunits cover every test with a modeled path.
+  They cover the tests `runFirst` picked (local paths by default). The line now says
+  `a superset of the 1 test picked on a local path; 677 tests have a modeled path only via
+  dependency code (446) or via a hub (231) and are not in this filter`. With no local test
+  it no longer says "no test with a modeled path" when some reach it through dependency
+  code or a hub.
+- **"dependency routines entered" counts routines** (c11): one entry point that raises an
+  event into three subscribers printed `through 1 dependency routine entered` beside the
+  three routines' names. Every line that says "dependency routines entered" (explain,
+  digest and query's `writes beyond dependency calls`, the scope line, the header's depth,
+  query's answer and touches) now counts distinct routines; JSON adds
+  `entryPoints.routines` / `withWritesRoutines` (digest, explain, impact) and
+  `beyondWrites.routinesEntered` (query). `entryPoints.count` keeps counting entry points.
+- **impact, raised by** (n09): `raised by: 368 event publishers` counted publishers anywhere
+  among the routine's ancestors. `raised by:` now lists only the events that raise the
+  routine itself (JSON `eventPublishers.direct`, additive), and the ancestor count prints as
+  `event publishers among its ancestors: 368`.
+- **impact, completeness** (n09): impact said `analysis complete` where explain on the same
+  routine said `analysis partial (interface-open-world; … 8 interface calls open world)`.
+  Impact's header read only whether the reverse walk ran. Each root's effects now carry
+  their digest entry's completeness (`effects.analysis`, the same function explain and
+  digest use), the routine's effects line names it, and the header is partial when any
+  root's effects are.
+- **explain and digest, dependency depth** (n07): `dependency code: none reached` was decided
+  from the entry points, which exist only for dependency calls that carry an effect. A cone
+  that enters dependency code with no effect beyond it (`CDO File::SetFilename → File
+  Management::GetFileName`) said "none reached". The cone walk now counts the dependency
+  routines it visits, and the line says `dependency code followed through every resolved
+  call (N dependency routines reached; no effect beyond them)`.
+- **digest, rootsRequested** (n08): a request naming one ambiguous routine printed
+  `rootsRequested: 0`; each routine selector that resolved to none or to several now counts.
+- **MCP outcome from the resolution, not the words** (n08, c26): the envelope said `outcome:
+  not-found` for an ambiguous selector whose answer went to a file, because the outcome was
+  read from the answer's text and a filed answer had none. explain, digest, prove and query
+  now put `outcome` in their summary from their structured resolution diagnostics
+  (`…-ambiguous` → `ambiguous`, `…-not-found` / `…-unmatched` → `not-found`;
+  `result_header::outcome_of_kinds`), impact already did, and the envelope takes it from
+  there (`outcome_of_answer`); the words stay only for an answer with no structured outcome.
+- **query effects, completeness from its families** (astra M1, c08): `result.scope.analysis`
+  said `complete` beside `families.beyondDependencyCalls.blockers {callNotResolved: 21,
+  interfaceDispatchOpenWorld: 267}`. A document that reports families is now `partial`
+  whenever one has an unresolved call or an open-world dispatch, with one reason per blocker
+  set naming its families (`Analysis::of_families`, applied in the shared
+  `Header::scope_json`); the human header says the same. The per-family fields stay.
+- **explain, caller rules** (c06): `checked by 2 callers; no equivalent check recognized in
+  41` missed four callers that run the same `VariantRec.IsRecord` check through
+  `HasRecipients → FindEMailTemplateLine`. The walk already looks through calls (unbounded
+  but for its 512-deep chain limit); what it missed was the caller side: only a top-level
+  call counted before the call site, and those four callers make both calls inside `if
+  DOActiveInCompany … if ActionsEnabled`. A step now counts when it runs on every path to
+  the site by the routine's statement tree: before it in the same block or a block around
+  it, or in the condition of a branch around it. The same rule applies to the rules in force
+  at a write. Fixture `tests/fixtures/caller-rule-paths/`.
+
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 
 Output validation round 1, milestone V5 (spec

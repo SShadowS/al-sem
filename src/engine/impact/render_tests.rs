@@ -129,6 +129,32 @@ fn a_root_line_prints_its_display_not_its_handle() {
     assert!(!text.contains("R0/2"), "{text}");
 }
 
+/// Round-2 c12/c20: a kind's count adds every legacy bucket of that kind
+/// (codeunit OnRun = `background-start` + `onrun-codeunit`), so its first
+/// witness is the nearest over the same buckets — never the first bucket's
+/// first witness. Hand-stated: the background bucket comes first and holds
+/// only a 21-hop witness; the OnRun bucket holds one at 3 hops.
+///
+/// DISCRIMINATION (2026-11-06): printing the first bucket's witnesses
+/// (`e["first"]` for `kind_firsts(..)` in `reach_lines`, as before) fails at
+/// the 3-hop assert (it prints Codeunit 9081, 21 hops); restored, passes.
+#[test]
+fn a_kind_first_witness_is_the_nearest_over_its_buckets() {
+    let (main, mut up, delta) = parts(1, 0);
+    up["roots"][0]["entries"] = json!([
+        {"kind": "background-start", "count": 18, "onlyOpen": 12, "userOrJob": true, "first": [
+            {"display": "Codeunit 9081", "stableId": "d:9081", "hops": 21, "tier": "throughDependency"}]},
+        {"kind": "onrun-codeunit", "count": 429, "onlyOpen": 120, "userOrJob": false, "first": [
+            {"display": "Codeunit 6175300", "stableId": "w:1", "hops": 3, "tier": "throughDependency"},
+            {"display": "Codeunit 9081", "stableId": "d:9081", "hops": 21, "tier": "throughDependency"}]}]);
+    let text = human(&main, &up, delta, RenderOpts::default());
+    assert!(text.contains("codeunit OnRun 447 (via-hub 132)"), "{text}");
+    assert!(
+        text.contains("first codeunit OnRun: [via-dependency] Codeunit 6175300 (3 hops)\n"),
+        "{text}"
+    );
+}
+
 /// A witness only an open site (a hub) reaches says so, and so does the
 /// count of such entries (round-1 c20: a `run:report` hub's witness was
 /// printed beside the real path as a plain "reached from" entry). A path
@@ -162,4 +188,56 @@ fn an_open_site_witness_is_labelled_with_its_tier() {
         text.contains("[via-hub] Report 50100::onprereport (5 hops)"),
         "{text}"
     );
+}
+
+/// Round-2 c20: the run-first codeunits cover the tests the block picked
+/// (its tier, local by default), not every test with a modeled path. The
+/// line states what the codeunits cover and counts the others apart, by
+/// tier. Hand-stated: one local test in codeunit 69000, 446 tests through
+/// dependency code and 231 over a hub.
+///
+/// DISCRIMINATION (2026-11-06): printing every test with a modeled path as
+/// the ones the codeunits cover (`picked + rest` for `picked` in
+/// `tests_line`) fails at "a superset of the 1 test picked on a local
+/// path"; restored, passes.
+#[test]
+fn the_run_first_line_states_what_its_codeunits_cover() {
+    let (main, up, delta) = parts(1, 0);
+    let doc = json!({
+        "scope": {"apps": [{"name": "T"}], "workspaceTests": 0},
+        "runFirst": [{"codeunitId": 69000, "procedure": "A"}],
+        "runFirstTotal": 1,
+        "tier": "local",
+        "byTier": {"local": 1, "throughDependency": 446, "onlyOpen": 231},
+        "selectionComplete": false,
+        "requiredFallback": [{"reason": "unresolved-test-calls"}],
+        "changed": [],
+    });
+    let tests = Ok(TestsOutcome {
+        doc,
+        parts: Vec::new(),
+        nearest: Default::default(),
+    });
+    let text = render(
+        &Comparison {
+            source: "base",
+            ..Default::default()
+        },
+        &main,
+        &Ok(up),
+        &tests,
+        &Ok(delta),
+        RenderOpts::default(),
+    )
+    .text;
+    assert!(
+        text.contains(
+            "tests: run first (app \"T\"): codeunits 69000 — whole codeunits, so every test in \
+             them runs: a superset of the 1 test picked on a local path; 677 tests have a \
+             modeled path only via dependency code (446) or via a hub (231) and are not in this \
+             filter; then the whole suite"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("for the 678 tests"), "{text}");
 }

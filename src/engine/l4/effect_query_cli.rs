@@ -1698,7 +1698,12 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
         "per operation, one routine into dependency code"
     };
     h.scope = format!("{depth}; {}", dependencies_clause(deps.apps.len()));
-    h.scope_json(Map::new())
+    // The families' blockers decide `analysis` too (`Header::scope_json`).
+    let mut extra = Map::new();
+    if let Some(f) = payload.pointer("/result/scope/families") {
+        extra.insert("families".into(), f.clone());
+    }
+    h.scope_json(extra)
 }
 
 /// Render an unresolved/ambiguous selector as its own (exit-2) document, so a
@@ -1835,11 +1840,14 @@ fn selector_failure_doc_with<T>(
         }
         s
     };
+    // §6.3 (round-2 n08): the outcome from the resolution, not the words.
+    let summary = crate::engine::result_header::outcome_of_kinds([resolution.label()])
+        .map_or(Value::Null, |o| json!({"kind": kind, "outcome": o}));
     QueryRunResult {
         json_text: envelope(kind, payload, deps, alsem_ver, deterministic),
         human_text: human,
         exit_code: 2,
-        summary: Value::Null,
+        summary,
         ancestor_witnesses_built: 0,
     }
 }
@@ -2019,7 +2027,13 @@ impl QueryHeaderCx {
 /// `scope:` line; the title is the header's inputs, the first result line
 /// its answer, the scope line its scope clause. Every other line stays, in
 /// order. An answer with no title (a selector failure) is `no answer`.
-fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> String {
+fn query_with_header(
+    text: &str,
+    deps: usize,
+    exit: u8,
+    hc: &QueryHeaderCx,
+    families: Option<&Value>,
+) -> String {
     use crate::engine::result_header::{Analysis, Header, dependencies_clause};
     let tool = if hc.effects {
         "query effects"
@@ -2098,6 +2112,10 @@ fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> S
                 h.analysis =
                     Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
             }
+            if let Some(f) = families {
+                h.analysis = std::mem::replace(&mut h.analysis, Analysis::Complete)
+                    .and(Analysis::of_families(f));
+            }
         }
     }
     scope.push(dependencies_clause(deps));
@@ -2136,7 +2154,22 @@ fn finish_human(
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
     hc: &QueryHeaderCx,
 ) -> QueryRunResult {
-    r.human_text = query_with_header(&r.human_text, deps.apps.len(), r.exit_code, hc);
+    // Round-2 astra M1: the header's analysis is the document's
+    // (`payload.result.scope`, which counts the families' blockers).
+    let families = if hc.effects {
+        serde_json::from_str::<Value>(&r.json_text)
+            .ok()
+            .and_then(|d| d.pointer("/payload/result/scope/families").cloned())
+    } else {
+        None
+    };
+    r.human_text = query_with_header(
+        &r.human_text,
+        deps.apps.len(),
+        r.exit_code,
+        hc,
+        families.as_ref(),
+    );
     if let Some(s) = sources {
         r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
     }
@@ -3057,7 +3090,7 @@ fn absence_reasons(
             ),
         ));
     }
-    let entry_points = cone.map_or(0, |b| b.rollup.totals.entry_points);
+    let entry_points = cone.map_or(0, |b| b.rollup.totals.routines_entered);
     if entry_points > 0 || dependency_ops > 0 {
         let at = if entry_points > 0 {
             format!(
@@ -3304,9 +3337,14 @@ fn render_touches_down(
         ));
     }
     if beyond_n > 0 {
-        let points: Vec<String> = beyond_writes
+        use crate::engine::l5::routine_rollup::routines_entered;
+        let table_writes: Vec<_> = beyond_writes
             .iter()
             .filter(|w| w.tables.contains_key(table_id))
+            .cloned()
+            .collect();
+        let points: Vec<String> = table_writes
+            .iter()
             .map(|w| {
                 let kinds: Vec<&str> = w
                     .types_of
@@ -3324,7 +3362,7 @@ fn render_touches_down(
             text.push_str(&format!(
                 "; … +{} — {} lists them",
                 plural(
-                    points.len() - shown_n,
+                    routines_entered(&table_writes[shown_n..]),
                     "dependency routine entered",
                     "dependency routines entered"
                 ),
@@ -3342,7 +3380,7 @@ fn render_touches_down(
             "  beyond dependency calls (the whole cone, literal arguments followed): may write it \
              beyond {}: {text} — {} gives the path\n",
             plural(
-                beyond_n,
+                routines_entered(&table_writes),
                 "dependency routine entered",
                 "dependency routines entered"
             ),
@@ -4375,6 +4413,8 @@ fn render_query_effects_body(
         "beyondWrites": {
             "tables": beyond_tables.len(),
             "entryPoints": beyond_writes.len(),
+            // Round-2 c11 (additive): the distinct routines they enter.
+            "routinesEntered": crate::engine::l5::routine_rollup::routines_entered(&beyond_writes),
             "sites": beyond_writes.iter().map(|w| w.sites.len().max(1)).sum::<usize>(),
             "tablesOnlyBeyond": beyond_tables.difference(&own_write_tables).count(),
         },
@@ -4534,7 +4574,7 @@ fn render_query_effects_body(
             "writes beyond dependency calls on {} through {} ({} only there)",
             plural(beyond_tables.len(), "table", "tables"),
             plural(
-                beyond_writes.len(),
+                crate::engine::l5::routine_rollup::routines_entered(&beyond_writes),
                 "dependency routine entered",
                 "dependency routines entered"
             ),
@@ -4964,7 +5004,7 @@ fn render_query_effects_body(
                 "tables"
             ),
             plural(
-                beyond_writes.len(),
+                crate::engine::l5::routine_rollup::routines_entered(&beyond_writes),
                 "dependency routine entered",
                 "dependency routines entered"
             ),

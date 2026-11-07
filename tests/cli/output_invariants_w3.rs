@@ -264,6 +264,46 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
     assert!(!human.contains("none reach it"), "{human}");
 }
 
+/// Round-2 n09: impact's completeness agrees with explain's on the same
+/// routine. `IssueDoc`'s cone holds an open-world interface call and two
+/// dynamic calls; explain says "analysis partial (…)". Impact said
+/// "analysis complete": its header read only whether the reverse walk ran,
+/// never the effects' coverage. Now its header and the routine's effects
+/// line carry the same reasons.
+///
+/// DISCRIMINATION (2026-11-06): not attaching `analysis` to a root's
+/// effects (the `t["analysis"] = …` line in `jobs.rs` removed) leaves
+/// "analysis complete": fails at "impact is partial like explain";
+/// restored, passes.
+#[test]
+fn impact_completeness_agrees_with_explain() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (explain, _, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC]);
+    assert_eq!(code, 0, "{explain}");
+    let line = explain
+        .lines()
+        .find(|l| l.starts_with("analysis "))
+        .expect("an analysis line");
+    let reasons = line
+        .strip_prefix("analysis partial (")
+        .and_then(|r| r.split(") · ").next())
+        .unwrap_or_else(|| panic!("explain is partial: {line}"));
+    let (impact, err, code) = run_alsem(&["impact", &ws, "--routine", ISSUE_DOC, "--no-tests"]);
+    assert_eq!(code, 0, "{impact}{err}");
+    let head = impact
+        .lines()
+        .find(|l| l.starts_with("analysis "))
+        .expect("an analysis line");
+    assert!(
+        head.starts_with(&format!("analysis partial (effects: {reasons})")),
+        "impact is partial like explain: {head}\nexplain: {line}"
+    );
+    assert!(
+        impact.contains(&format!("; analysis partial ({reasons})")),
+        "the effects line names them: {impact}"
+    );
+}
+
 /// MCP output plan 3b: one routine selector grammar for every tool. Each
 /// spelling the instructions name (`Owner::Routine`, `Owner.Routine`, either
 /// with the owner's type word or AL quotes, a unique bare name) selects the
@@ -1315,11 +1355,41 @@ pub(crate) fn entry_point_lines(text: &str) -> EntryPointLines {
     out
 }
 
+/// The routines one entry-point line names before `, entered at`: its
+/// targets' displays, `, `-separated (a multi-target entry point names
+/// several), split outside parentheses and quotes (an overload's display
+/// carries `(A, B)`).
+fn entered_routines(head: &str) -> Vec<String> {
+    let (mut out, mut cur) = (Vec::new(), String::new());
+    let (mut depth, mut quoted) = (0usize, false);
+    let mut chars = head.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.saturating_sub(1),
+            ',' if !quoted && depth == 0 && chars.peek() == Some(&' ') => {
+                chars.next();
+                out.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    out.push(cur);
+    out
+}
+
+/// One `--detail` entry-point line: its sites (`entered at a; b — …`, an
+/// anchorless one as its whole line, so it still counts once) and the
+/// routines it enters.
+pub(crate) type DetailEntryPoint = (Vec<String>, Vec<String>);
+
 /// The entry-point lines of a `--detail` card's `writes beyond dependency
 /// entry points` section, split into those with may-persist writes and the
-/// rest: each line's sites (`entered at a; b — …`), an anchorless one as
-/// its whole line (so it still counts once).
-pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+/// rest.
+pub(crate) fn detail_entry_points(text: &str) -> (Vec<DetailEntryPoint>, Vec<DetailEntryPoint>) {
     let (mut writing, mut other) = (Vec::new(), Vec::new());
     let mut section: Option<usize> = None;
     let mut in_other = false;
@@ -1342,7 +1412,7 @@ pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<Stri
             in_other = true;
             continue;
         }
-        let Some((_, rest)) = t.split_once(", entered at ") else {
+        let Some((head, rest)) = t.split_once(", entered at ") else {
             continue;
         };
         let sites = rest.split(" — ").next().unwrap_or("");
@@ -1351,22 +1421,25 @@ pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<Stri
         } else {
             sites.split("; ").map(str::to_string).collect()
         };
+        let point = (sites, entered_routines(head));
         if in_other {
-            other.push(sites);
+            other.push(point);
         } else {
-            writing.push(sites);
+            writing.push(point);
         }
     }
     (writing, other)
 }
 
 /// Final CDO review, item 3 (design §3.3, §3.6: a total is a union by
-/// identity): the scope line's entry points are the section's writing ones
-/// plus the temporary-only ones (they partition), and its sites are the
-/// union of both sets' sites, counted from the `--detail` card's own lines
-/// (`detail`); each section's counts are its own lines'. `query` (query
-/// effects' human answer of the same routine) states the same writing and
-/// temporary-only counts as the card.
+/// identity): each count is the union by identity of what the `--detail`
+/// card's own lines (`detail`) name. Round-2 c11: the lines say
+/// "dependency routines entered", so the first number is the distinct
+/// routines the lines enter (a multi-target entry point enters several),
+/// the second the distinct sites; the scope line's are the union over both
+/// sections, each section's its own lines'. `query` (query effects' human
+/// answer of the same routine) states the same writing and temporary-only
+/// counts as the card.
 pub(crate) fn entry_point_failures(
     label: &str,
     card: &str,
@@ -1376,9 +1449,10 @@ pub(crate) fn entry_point_failures(
     let mut f = Vec::new();
     let c = entry_point_lines(card);
     let (writing, other) = detail_entry_points(detail);
-    let union = |sets: &[&Vec<Vec<String>>]| -> usize {
+    let union = |sets: &[&Vec<DetailEntryPoint>], routines: bool| -> usize {
         sets.iter()
-            .flat_map(|s| s.iter().flatten())
+            .flat_map(|s| s.iter())
+            .flat_map(|(sites, names)| if routines { names } else { sites })
             .collect::<BTreeSet<_>>()
             .len()
     };
@@ -1388,27 +1462,31 @@ pub(crate) fn entry_point_failures(
     };
     let w = c.writing.unwrap_or((0, 0));
     let o = c.other.unwrap_or((0, 0));
-    if scope.0 != w.0 + o.0 {
-        f.push(format!(
-            "{label}: scope says {} entry points, the sections {} + {}",
-            scope.0, w.0, o.0
-        ));
-    }
     let checks = [
         (
             "scope",
             scope,
-            writing.len() + other.len(),
-            union(&[&writing, &other]),
+            union(&[&writing, &other], true),
+            union(&[&writing, &other], false),
         ),
-        ("writes beyond", w, writing.len(), union(&[&writing])),
-        ("temporary only", o, other.len(), union(&[&other])),
+        (
+            "writes beyond",
+            w,
+            union(&[&writing], true),
+            union(&[&writing], false),
+        ),
+        (
+            "temporary only",
+            o,
+            union(&[&other], true),
+            union(&[&other], false),
+        ),
     ];
-    for (what, (n, s), lines, sites) in checks {
-        if (n, s) != (lines, sites) {
+    for (what, (n, s), routines, sites) in checks {
+        if (n, s) != (routines, sites) {
             f.push(format!(
-                "{label}: {what} says {n} entry points at {s} sites; the --detail lines \
-                 are {lines} at {sites} distinct sites"
+                "{label}: {what} says {n} routines entered at {s} sites; the --detail lines \
+                 enter {routines} distinct routines at {sites} distinct sites"
             ));
         }
     }
@@ -1466,4 +1544,56 @@ fn write_lines_have_a_path_and_entry_point_counts_agree() {
         "precondition: write records checked ({checked})"
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Round-2 astra M1: a document that reports families is no more complete
+/// than they say. Query effects on `IssueDoc` reports
+/// `beyondDependencyCalls.blockers` with calls not resolved and an
+/// open-world interface dispatch; `result.scope.analysis` said `complete`.
+/// It is `partial` with the families' reasons, the families keep their
+/// fields, and the human header says the same.
+///
+/// DISCRIMINATION (2026-11-07): computing `analysis` without the families
+/// (`Header::scope_json` taking `self.analysis` only) fails at "the scope
+/// counts the families' blockers"; restored, passes.
+#[test]
+fn query_analysis_counts_the_families_blockers() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (json, err, code) = run_alsem(&[
+        "query",
+        "effects",
+        &ws,
+        "--routine",
+        ISSUE_DOC_Q,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&json).unwrap();
+    let scope = &doc["payload"]["result"]["scope"];
+    let b = &scope["families"]["beyondDependencyCalls"]["blockers"];
+    assert!(
+        b["callNotResolved"].as_u64().unwrap() + b["interfaceDispatchOpenWorld"].as_u64().unwrap()
+            > 0,
+        "precondition: a blocker: {scope}"
+    );
+    assert_eq!(
+        scope["analysis"], "partial",
+        "the scope counts the families' blockers: {scope}"
+    );
+    assert!(
+        scope["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r.as_str().unwrap().contains("beyondDependencyCalls")),
+        "{scope}"
+    );
+    let (human, _, _) = run_alsem(&["query", "effects", &ws, "--routine", ISSUE_DOC_Q]);
+    let head = human
+        .lines()
+        .find(|l| l.starts_with("analysis "))
+        .expect("an analysis line");
+    assert!(head.starts_with("analysis partial ("), "{head}");
+    assert!(head.contains("beyondDependencyCalls"), "{head}");
 }

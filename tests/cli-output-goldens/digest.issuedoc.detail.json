@@ -792,8 +792,10 @@
           },
           "entryPoints": {
             "count": 2,
+            "routines": 2,
             "sites": 2,
             "withWrites": 2,
+            "withWritesRoutines": 2,
             "withWritesSites": 2
           },
           "events": {

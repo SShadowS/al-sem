@@ -466,7 +466,29 @@ fn effects_clause(e: &Value) -> String {
     if ev > 0 {
         parts.push(plural(ev, "event", "events"));
     }
+    // Round-2 n09: the effects' completeness, as explain states it.
+    if let Some(a) = effects_analysis(e) {
+        parts.push(a.human());
+    }
     format!("effects: {}", parts.join("; "))
+}
+
+/// A root's effects completeness (`effects.analysis`, from its digest
+/// entry), or `None` when complete or not stated.
+fn effects_analysis(e: &Value) -> Option<crate::engine::result_header::Analysis> {
+    use crate::engine::result_header::Analysis;
+    let a = &e["analysis"];
+    let reasons: Vec<String> = a["reasons"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(str::to_string))
+        .collect();
+    match s(a, "status") {
+        "partial" => Some(Analysis::Partial(reasons)),
+        "notAnalyzed" => Some(Analysis::NotAnalyzed(reasons.join("; "))),
+        _ => None,
+    }
 }
 
 /// A node's short name with its hops and, when the path is not local, its
@@ -481,6 +503,20 @@ fn node_short(n: &Value) -> String {
         s(n, "display"),
         plural(u(n, "hops"), "hop", "hops")
     )
+}
+
+/// The witnesses of every legacy bucket whose §8.1 kind is `kind`, in the
+/// order one bucket's list keeps them ([`super::up`]'s `Firsts::first`):
+/// every witness with no open site first, nearest first, then the via-hub
+/// ones; a stable sort, so ties keep bucket order.
+fn kind_firsts<'v>(entries: &[&'v Value], kind: &str) -> Vec<&'v Value> {
+    let mut all: Vec<&Value> = entries
+        .iter()
+        .filter(|e| crate::engine::vocab::entry_key(s(e, "kind")).0 == kind)
+        .flat_map(|e| e["first"].as_array().into_iter().flatten())
+        .collect();
+    all.sort_by_key(|n| (s(n, "tier") == "onlyOpen", u(n, "hops")));
+    all
 }
 
 /// The direct callers and event publishers a routine lists with `detail`
@@ -610,8 +646,12 @@ fn reach_lines(
             }
         }
         _ => {
-            // One line per kind: two legacy buckets of one kind (codeunit
-            // OnRun and background starts) print the first one's witnesses.
+            // One line per kind. The kind's count adds every legacy bucket
+            // of that kind (codeunit OnRun = `onrun-codeunit` +
+            // `background-start` + …), so its first witness is the nearest
+            // over the same buckets (round-2 c12/c20: the background
+            // bucket's 21-hop witness printed beside the merged count while
+            // the OnRun bucket held one at 3 hops).
             let mut printed: Vec<&str> = Vec::new();
             for e in &entries {
                 let kind = vocab::entry_key(s(e, "kind")).0;
@@ -619,19 +659,14 @@ fn reach_lines(
                     continue;
                 }
                 printed.push(kind);
-                let firsts: Vec<String> = e["first"]
-                    .as_array()
+                // `detail` takes the per-tier branch above, so one here.
+                let firsts: Vec<String> = kind_firsts(&entries, kind)
                     .into_iter()
-                    .flatten()
-                    .take(if detail { 10 } else { 1 })
+                    .take(1)
                     .map(node_short)
                     .collect();
                 if !firsts.is_empty() {
-                    out.push(format!(
-                        "{indent}    first {}: {}",
-                        vocab::entry_key(s(e, "kind")).0,
-                        firsts.join("; ")
-                    ));
+                    out.push(format!("{indent}    first {kind}: {}", firsts.join("; ")));
                 }
             }
         }
@@ -1535,6 +1570,31 @@ fn impact_header(
         }
         _ => Analysis::Complete,
     };
+    // Round-2 n09: the effects' completeness counts too (it said "analysis
+    // complete" where explain on the same routine said "partial (… 8
+    // interface calls open world)"). One routine names its reasons; several
+    // are counted, each routine's effects line naming its own.
+    let partial: Vec<Analysis> = roots
+        .iter()
+        .filter_map(|r| effects_analysis(&r["effects"]))
+        .collect();
+    match partial.as_slice() {
+        [] => {}
+        [one] if roots.len() == 1 => {
+            h.analysis = std::mem::replace(&mut h.analysis, Analysis::Complete).and(
+                Analysis::Partial(vec![format!("effects: {}", one.reasons().join("; "))]),
+            );
+        }
+        many => {
+            h.analysis = std::mem::replace(&mut h.analysis, Analysis::Complete).and(
+                Analysis::Partial(vec![format!(
+                    "effects partial for {} of {} (each routine's effects line says why)",
+                    many.len(),
+                    plural(roots.len(), "changed routine", "changed routines")
+                )]),
+            );
+        }
+    }
     h.assumptions = assumptions.to_vec();
     h.limits = limits
         .iter()
@@ -1666,19 +1726,34 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
                 )
             });
             out.extend(reach_lines(up, opts.detail, "      ", opts.surface));
+            // Round-2 n09: "raised by" is the events that raise the routine
+            // itself (its own subscriptions); the publishers anywhere among
+            // its ancestors are a different count, said so.
             let p = &up["eventPublishers"];
+            let take = if opts.detail { DETAIL_ITEMS } else { 1 };
+            let list = |v: &Value| {
+                v["first"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(take)
+                    .map(node_short)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            let direct = &p["direct"];
+            if u(direct, "count") > 0 {
+                out.push(format!(
+                    "      raised by: {} ({})",
+                    plural(u(direct, "count"), "event", "events"),
+                    list(direct)
+                ));
+            }
             if u(p, "count") > 0 {
                 out.push(format!(
-                    "      raised by: {} (first: {})",
-                    plural(u(p, "count"), "event publisher", "event publishers"),
-                    p["first"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .take(if opts.detail { DETAIL_ITEMS } else { 1 })
-                        .map(node_short)
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                    "      event publishers among its ancestors: {} (first: {})",
+                    thousands(u(p, "count")),
+                    list(p)
                 ));
             }
             if let Some(x) = external_clause(up) {
@@ -1819,7 +1894,6 @@ fn tests_line(d: &Value) -> String {
         .map(|a| s(a, "name").to_string())
         .collect();
     let by = &d["byTier"];
-    let total = u(by, "local") + u(by, "throughDependency") + u(by, "onlyOpen");
     let complete = d["selectionComplete"] == json!(true);
     let reasons: Vec<String> = d["requiredFallback"]
         .as_array()
@@ -1842,20 +1916,65 @@ fn tests_line(d: &Value) -> String {
     }
     // Output validation V2 (§9.5, F63): what to run first, in the test
     // app's terms, then the selection's completeness and the fallback.
-    let run = if codeunits.is_empty() {
-        "run first: no test with a modeled path".to_string()
+    // Round-2 c20: the codeunits cover the tests `runFirst` picked (the
+    // block's tier, local by default), not every test with a modeled path;
+    // the others are counted apart, by tier.
+    let (picked_on, left_out) = match s(d, "tier") {
+        "all" => ("on any path", Vec::new()),
+        "dependency" => (
+            "on a local or via-dependency path",
+            vec![("via a hub", u(by, "onlyOpen"))],
+        ),
+        _ => (
+            "on a local path",
+            vec![
+                ("via dependency code", u(by, "throughDependency")),
+                ("via a hub", u(by, "onlyOpen")),
+            ],
+        ),
+    };
+    let picked = d["runFirstTotal"]
+        .as_u64()
+        .map_or(d["runFirst"].as_array().map_or(0, Vec::len), |n| n as usize);
+    let rest: usize = left_out.iter().map(|(_, n)| n).sum();
+    let rest_clause = if rest == 0 {
+        String::new()
     } else {
         format!(
-            "run first ({}): codeunits {} — a superset: whole codeunits, for the {} tests with a \
-             modeled path ({} by a local path)",
+            "{} {} a modeled path only {} and {} not in this filter",
+            thousands(rest),
+            if rest == 1 { "test has" } else { "tests have" },
+            left_out
+                .iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(w, n)| format!("{w} ({})", thousands(*n)))
+                .collect::<Vec<_>>()
+                .join(" or "),
+            if rest == 1 { "is" } else { "are" },
+        )
+    };
+    let run = if codeunits.is_empty() {
+        if rest == 0 {
+            "run first: no test with a modeled path".to_string()
+        } else {
+            format!("run first: no test {picked_on}; {rest_clause}")
+        }
+    } else {
+        format!(
+            "run first ({}): codeunits {} — whole codeunits, so every test in them runs: a \
+             superset of the {} picked {picked_on}{}",
             if apps.is_empty() {
                 "the workspace".to_string()
             } else {
                 format!("app \"{}\"", apps.join("\", \""))
             },
             codeunits.join("|"),
-            thousands(total),
-            thousands(u(by, "local"))
+            plural(picked, "test", "tests"),
+            if rest_clause.is_empty() {
+                String::new()
+            } else {
+                format!("; {rest_clause}")
+            }
         )
     };
     format!(
