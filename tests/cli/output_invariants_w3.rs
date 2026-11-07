@@ -1608,8 +1608,8 @@ const C20_DIFF: &str = "diff --git a/Cloud/src/Features/SendOnPosting/CDOSubscri
 /// every cut the design names (see the W5 report): c02 (3.5 KB; 4,065 B),
 /// c08 (~480 KB; 600,333 B), c17 (< 60 KB; 62,552 B), c20 (~4.6 KB; 6,056 B),
 /// c25 (~290 KB compact; 372,752 B). Size only: no discrimination proof.
-#[test]
-fn cdo_round2_size_ratchets() {
+/// Run by `output_cdo::cdo_round2_size_ratchets` (the module `cdo-gate` runs).
+pub(crate) fn cdo_round2_size_ratchets() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };

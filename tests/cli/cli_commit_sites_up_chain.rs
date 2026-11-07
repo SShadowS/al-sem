@@ -368,13 +368,13 @@ fn a_site_beyond_the_depth_bound_makes_the_counts_a_lower_bound() {
 }
 
 /// The reported case on the CDO baseline (skipped unless `CDO_WS` names it;
-/// run by `scripts/cdo-gate`): from `RunReportID`, `CalcSalesDisc`'s own
+/// run by `output_cdo::cdo_run_report_id_lists_calc_sales_disc_commits`, the
+/// module `scripts/cdo-gate` runs): from `RunReportID`, `CalcSalesDisc`'s own
 /// `Commit()` (`CDOFile.Table.al:128`) and the COMMIT beyond `Sales-Calc.
 /// Discount::OnRun` (entered at `:125`) are rows beside the nearer one at
 /// `CDOEMailTemplateManagement.Codeunit.al:1241`. Before the fix only `:1241`
 /// was.
-#[test]
-fn cdo_run_report_id_lists_calc_sales_disc_commits() {
+pub(crate) fn cdo_run_report_id_lists_calc_sales_disc_commits() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
