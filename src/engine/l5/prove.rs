@@ -4115,6 +4115,7 @@ mod tests {
                 truncated: cone_truncated,
                 max_depth: 64,
                 visited_routines: 1,
+                dependency_routines: 0,
             },
             entry_diagnostics,
             declaration_only: false,

@@ -1315,11 +1315,41 @@ pub(crate) fn entry_point_lines(text: &str) -> EntryPointLines {
     out
 }
 
+/// The routines one entry-point line names before `, entered at`: its
+/// targets' displays, `, `-separated (a multi-target entry point names
+/// several), split outside parentheses and quotes (an overload's display
+/// carries `(A, B)`).
+fn entered_routines(head: &str) -> Vec<String> {
+    let (mut out, mut cur) = (Vec::new(), String::new());
+    let (mut depth, mut quoted) = (0usize, false);
+    let mut chars = head.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.saturating_sub(1),
+            ',' if !quoted && depth == 0 && chars.peek() == Some(&' ') => {
+                chars.next();
+                out.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    out.push(cur);
+    out
+}
+
+/// One `--detail` entry-point line: its sites (`entered at a; b — …`, an
+/// anchorless one as its whole line, so it still counts once) and the
+/// routines it enters.
+pub(crate) type DetailEntryPoint = (Vec<String>, Vec<String>);
+
 /// The entry-point lines of a `--detail` card's `writes beyond dependency
 /// entry points` section, split into those with may-persist writes and the
-/// rest: each line's sites (`entered at a; b — …`), an anchorless one as
-/// its whole line (so it still counts once).
-pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+/// rest.
+pub(crate) fn detail_entry_points(text: &str) -> (Vec<DetailEntryPoint>, Vec<DetailEntryPoint>) {
     let (mut writing, mut other) = (Vec::new(), Vec::new());
     let mut section: Option<usize> = None;
     let mut in_other = false;
@@ -1342,7 +1372,7 @@ pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<Stri
             in_other = true;
             continue;
         }
-        let Some((_, rest)) = t.split_once(", entered at ") else {
+        let Some((head, rest)) = t.split_once(", entered at ") else {
             continue;
         };
         let sites = rest.split(" — ").next().unwrap_or("");
@@ -1351,22 +1381,25 @@ pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<Stri
         } else {
             sites.split("; ").map(str::to_string).collect()
         };
+        let point = (sites, entered_routines(head));
         if in_other {
-            other.push(sites);
+            other.push(point);
         } else {
-            writing.push(sites);
+            writing.push(point);
         }
     }
     (writing, other)
 }
 
 /// Final CDO review, item 3 (design §3.3, §3.6: a total is a union by
-/// identity): the scope line's entry points are the section's writing ones
-/// plus the temporary-only ones (they partition), and its sites are the
-/// union of both sets' sites, counted from the `--detail` card's own lines
-/// (`detail`); each section's counts are its own lines'. `query` (query
-/// effects' human answer of the same routine) states the same writing and
-/// temporary-only counts as the card.
+/// identity): each count is the union by identity of what the `--detail`
+/// card's own lines (`detail`) name. Round-2 c11: the lines say
+/// "dependency routines entered", so the first number is the distinct
+/// routines the lines enter (a multi-target entry point enters several),
+/// the second the distinct sites; the scope line's are the union over both
+/// sections, each section's its own lines'. `query` (query effects' human
+/// answer of the same routine) states the same writing and temporary-only
+/// counts as the card.
 pub(crate) fn entry_point_failures(
     label: &str,
     card: &str,
@@ -1376,9 +1409,10 @@ pub(crate) fn entry_point_failures(
     let mut f = Vec::new();
     let c = entry_point_lines(card);
     let (writing, other) = detail_entry_points(detail);
-    let union = |sets: &[&Vec<Vec<String>>]| -> usize {
+    let union = |sets: &[&Vec<DetailEntryPoint>], routines: bool| -> usize {
         sets.iter()
-            .flat_map(|s| s.iter().flatten())
+            .flat_map(|s| s.iter())
+            .flat_map(|(sites, names)| if routines { names } else { sites })
             .collect::<BTreeSet<_>>()
             .len()
     };
@@ -1388,27 +1422,31 @@ pub(crate) fn entry_point_failures(
     };
     let w = c.writing.unwrap_or((0, 0));
     let o = c.other.unwrap_or((0, 0));
-    if scope.0 != w.0 + o.0 {
-        f.push(format!(
-            "{label}: scope says {} entry points, the sections {} + {}",
-            scope.0, w.0, o.0
-        ));
-    }
     let checks = [
         (
             "scope",
             scope,
-            writing.len() + other.len(),
-            union(&[&writing, &other]),
+            union(&[&writing, &other], true),
+            union(&[&writing, &other], false),
         ),
-        ("writes beyond", w, writing.len(), union(&[&writing])),
-        ("temporary only", o, other.len(), union(&[&other])),
+        (
+            "writes beyond",
+            w,
+            union(&[&writing], true),
+            union(&[&writing], false),
+        ),
+        (
+            "temporary only",
+            o,
+            union(&[&other], true),
+            union(&[&other], false),
+        ),
     ];
-    for (what, (n, s), lines, sites) in checks {
-        if (n, s) != (lines, sites) {
+    for (what, (n, s), routines, sites) in checks {
+        if (n, s) != (routines, sites) {
             f.push(format!(
-                "{label}: {what} says {n} entry points at {s} sites; the --detail lines \
-                 are {lines} at {sites} distinct sites"
+                "{label}: {what} says {n} routines entered at {s} sites; the --detail lines \
+                 enter {routines} distinct routines at {sites} distinct sites"
             ));
         }
     }

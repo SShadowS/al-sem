@@ -53,6 +53,11 @@ pub struct UnresolvedTraversal {
     pub truncated: bool,
     pub max_depth: u32,
     pub visited_routines: usize,
+    /// Of the visited routines, those of a dependency app (the tree's
+    /// boundary rule), the root excluded: whether the cone reaches
+    /// dependency code at all, effects or not (round-2 n07). 0 when the tree
+    /// carries no boundary (single-app).
+    pub dependency_routines: usize,
 }
 
 pub struct UnresolvedConeResult {
@@ -262,6 +267,12 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
 
     let mut all_items: Vec<UnresolvedConeItem> = items_by_csid.into_values().collect();
     all_items.sort_by(item_order);
+    let dependency_routines = snap.boundary.as_ref().map_or(0, |b| {
+        visited
+            .iter()
+            .filter(|v| v.as_str() != root && b.dependency_app.contains_key(v.as_str()))
+            .count()
+    });
 
     UnresolvedConeResult {
         items: all_items,
@@ -269,6 +280,7 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
             truncated,
             max_depth,
             visited_routines: visited.len(),
+            dependency_routines,
         },
         visited_ids: visited,
     }
@@ -569,5 +581,66 @@ mod tests {
         }
         let r = unresolved_cone(&snap, "r#0");
         assert!(!r.traversal.truncated);
+    }
+
+    /// Round-2 n07: the walk counts the dependency routines it visits (the
+    /// tree's boundary rule; the root never counts), effects or not, so a
+    /// cone whose only dependency calls carry no effect still says it
+    /// reaches dependency code. Hand-stated: `r#0` (workspace) calls `r#1`
+    /// (workspace), which calls `d#2` (dependency), which calls `d#3`.
+    ///
+    /// DISCRIMINATION (2026-11-06): counting nothing (`dependency_routines`
+    /// set to 0 in `unresolved_cone`) fails at "2 dependency routines";
+    /// restored, passes.
+    #[test]
+    fn the_walk_counts_the_dependency_routines_it_reaches() {
+        let mut snap = empty_snap();
+        let ids = ["r#0", "r#1", "d#2", "d#3"];
+        for id in ids {
+            let t = std::sync::Arc::make_mut(&mut snap.identities);
+            t.stable_ids.push(id.into());
+            t.display_names.push(id.into());
+        }
+        for (i, w) in ids.windows(2).enumerate() {
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(SnapshotGraphEdge::DirectCall {
+                kind: "direct-call",
+                callsite_id: format!("cs{i}"),
+                from: w[0].into(),
+                to: w[1].into(),
+                source_anchor: SnapshotSourceAnchor {
+                    source_unit_id: "ws:src/Chain.al".into(),
+                    range: SnapshotRange {
+                        start_line: 0,
+                        start_column: 0,
+                        end_line: 0,
+                        end_column: 1,
+                    },
+                    enclosing_routine_id: w[0].into(),
+                    syntax_kind: "call_expression".into(),
+                },
+                edge_id: format!("e{i}"),
+            });
+        }
+        assert_eq!(
+            unresolved_cone(&snap, "r#0").traversal.dependency_routines,
+            0,
+            "no boundary rule (single-app): none"
+        );
+        snap.boundary = Some(crate::engine::l5::snapshot::BoundaryRule {
+            dependency_app: ["d#2", "d#3"]
+                .into_iter()
+                .map(|d| (d.to_string(), std::sync::Arc::from("Dep")))
+                .collect(),
+        });
+        assert_eq!(
+            unresolved_cone(&snap, "r#0").traversal.dependency_routines,
+            2,
+            "2 dependency routines"
+        );
+        assert_eq!(
+            unresolved_cone(&snap, "d#2").traversal.dependency_routines,
+            1,
+            "a dependency root does not count itself"
+        );
     }
 }

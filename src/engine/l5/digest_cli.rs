@@ -2156,6 +2156,7 @@ pub fn run_digest_query_full_from_entries(
                     truncated: false,
                     max_depth: DEFAULT_MAX_DEPTH,
                     visited_routines: 0,
+                    dependency_routines: 0,
                 },
                 entry_diagnostics: Vec::new(),
                 declaration_only: true,
@@ -4538,6 +4539,7 @@ mod tests {
                 truncated: false,
                 max_depth: 64,
                 visited_routines: 1,
+                dependency_routines: 0,
             },
             entry_diagnostics: diagnostics,
             declaration_only: false,
@@ -4696,6 +4698,88 @@ mod tests {
             gap[0].starts_with("writes beyond dependency calls: none observed ("),
             "a gap is not a no: {gap:?}"
         );
+    }
+
+    /// Round-2 c11: one event entry point into three subscribers is one
+    /// entry point, three dependency routines entered and one dependency
+    /// call. The `writes beyond dependency calls` header says "dependency
+    /// routines entered", so it counts the routines (it printed "1
+    /// dependency routine entered" beside the three names). Hand-stated
+    /// row: one write group whose crossing has three targets and one site.
+    ///
+    /// DISCRIMINATION (2026-11-06): counting `points` in the header again
+    /// (`counts.writing.points` for `counts.writing.routines` in
+    /// `beyond_lines`) fails at "3 dependency routines entered"; restored,
+    /// passes.
+    #[test]
+    fn beyond_header_counts_the_routines_an_entry_point_enters() {
+        use crate::engine::l5::digest::{Crossing, CrossingSite, SiteAnchor};
+        let opts = crate::engine::l5::routine_rollup::RenderOpts {
+            detail: false,
+            path_cap: 0,
+            surface: crate::engine::follow_up::Surface::Cli,
+        };
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let mut e = entry_with(vec![]);
+        let mut w = effect(
+            "DB_INSERT",
+            &[],
+            &[("dep/table/1", "T1"), ("dep/table/2", "T2")],
+        );
+        w.crossing = Some(std::sync::Arc::new(Crossing {
+            id: "ev:OnAfterModify@ws:a.al:953".to_string(),
+            site: CrossingSite::Event("ev".to_string()),
+            edges: Vec::new(),
+            targets: vec![
+                "dep:A".to_string(),
+                "dep:B".to_string(),
+                "dep:C".to_string(),
+            ],
+            sites: vec![SiteAnchor {
+                file: Some("ws:a.al".to_string()),
+                line: Some(952),
+                column: Some(0),
+            }],
+        }));
+        e.effects = vec![w];
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let lines = crate::engine::l5::routine_rollup::beyond_lines(&r, &e, &cx, opts);
+        assert!(
+            lines[0].contains("through 3 dependency routines entered at 1 dependency call"),
+            "{lines:?}"
+        );
+        assert_eq!(r.totals.entry_points, 1, "one entry point");
+        assert_eq!(r.totals.routines_entered, 3, "three routines entered");
+    }
+
+    /// Round-2 n07: "dependency code: none reached" only when the cone walk
+    /// reached no dependency routine. A cone that enters dependency code
+    /// with no effect beyond it has no entry point (entry points are the
+    /// crossings that carry an effect row), and said "none reached".
+    /// Hand-stated: an entry with no effect row whose walk reached 2
+    /// dependency routines, and the same with 0.
+    ///
+    /// DISCRIMINATION (2026-11-06): deciding the depth on the entry points
+    /// alone (`reached` forced to 0 in `header_facts`) prints "none
+    /// reached" for the first entry: fails at "2 dependency routines
+    /// reached"; restored, passes.
+    #[test]
+    fn depth_says_dependency_code_is_reached_without_an_effect() {
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let depth = |reached: usize| {
+            let mut e = entry_with(vec![]);
+            e.unresolved_traversal.dependency_routines = reached;
+            let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+            crate::engine::l5::routine_rollup::header_facts(&r, &e, &[]).depth
+        };
+        assert_eq!(
+            depth(2),
+            "dependency code followed through every resolved call (2 dependency routines \
+             reached; no effect beyond them)"
+        );
+        assert_eq!(depth(0), "dependency code: none reached");
     }
 
     fn unresolved(callee: &str, status: &str, file: &str) -> UnresolvedConeItem {

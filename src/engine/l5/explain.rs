@@ -2507,6 +2507,7 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
             truncated: false,
             max_depth: 0,
             visited_routines: 0,
+            dependency_routines: 0,
         },
         entry_diagnostics: Vec::new(),
         declaration_only: false,
