@@ -264,6 +264,46 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
     assert!(!human.contains("none reach it"), "{human}");
 }
 
+/// Round-2 n09: impact's completeness agrees with explain's on the same
+/// routine. `IssueDoc`'s cone holds an open-world interface call and two
+/// dynamic calls; explain says "analysis partial (…)". Impact said
+/// "analysis complete": its header read only whether the reverse walk ran,
+/// never the effects' coverage. Now its header and the routine's effects
+/// line carry the same reasons.
+///
+/// DISCRIMINATION (2026-11-06): not attaching `analysis` to a root's
+/// effects (the `t["analysis"] = …` line in `jobs.rs` removed) leaves
+/// "analysis complete": fails at "impact is partial like explain";
+/// restored, passes.
+#[test]
+fn impact_completeness_agrees_with_explain() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (explain, _, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC]);
+    assert_eq!(code, 0, "{explain}");
+    let line = explain
+        .lines()
+        .find(|l| l.starts_with("analysis "))
+        .expect("an analysis line");
+    let reasons = line
+        .strip_prefix("analysis partial (")
+        .and_then(|r| r.split(") · ").next())
+        .unwrap_or_else(|| panic!("explain is partial: {line}"));
+    let (impact, err, code) = run_alsem(&["impact", &ws, "--routine", ISSUE_DOC, "--no-tests"]);
+    assert_eq!(code, 0, "{impact}{err}");
+    let head = impact
+        .lines()
+        .find(|l| l.starts_with("analysis "))
+        .expect("an analysis line");
+    assert!(
+        head.starts_with(&format!("analysis partial (effects: {reasons})")),
+        "impact is partial like explain: {head}\nexplain: {line}"
+    );
+    assert!(
+        impact.contains(&format!("; analysis partial ({reasons})")),
+        "the effects line names them: {impact}"
+    );
+}
+
 /// MCP output plan 3b: one routine selector grammar for every tool. Each
 /// spelling the instructions name (`Owner::Routine`, `Owner.Routine`, either
 /// with the owner's type word or AL quotes, a unique bare name) selects the

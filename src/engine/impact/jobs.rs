@@ -424,7 +424,12 @@ impl Job for MainJob<'_> {
             for e in q.entries {
                 let r = RoutineRollup::build(&e, &rcx);
                 handles.insert(e.routine_id.clone(), rcx.handle(&e.routine_id));
-                totals.insert(e.routine_id.clone(), r.totals.to_json());
+                // Round-2 n09: the effects' completeness, as explain states
+                // it for the same routine (`analysis` beside the totals).
+                let mut t = r.totals.to_json();
+                let a = crate::engine::l5::routine_rollup::entry_analysis(&e);
+                t["analysis"] = json!({"status": a.key(), "reasons": a.reasons()});
+                totals.insert(e.routine_id.clone(), t);
                 if let Some(names) = &names
                     && let Some(s) =
                         super::keys::summarize(names, &e.routine_id, Some(&e), Some(&r.totals))
