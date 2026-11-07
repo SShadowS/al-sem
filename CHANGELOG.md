@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (round-2 output validation, W1: what misled)
+
+Milestone W1 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§2.1 interim,
+§2.2-2.4, §3.9). Output only: no engine walk changes.
+
+- **impact's reach has no relation, and says so** (G1, c12, c20, n09): the reverse walk
+  does not record whether a path is a code call, UI navigation, configuration or a hub, but
+  the reach printed under tier brackets that read like code paths (`via-dependency 16,749`).
+  It now prints as one population: `reached beyond it: 22,378 ancestors by code calls, UI
+  navigation, configuration or a hub (relation not recorded by this walk): within the
+  workspace 0, through a dependency 16,749, over a hub 5,629`. No bracketed tier on that
+  population (the first entry per kind moves behind `detail`, tagged `[relation not
+  recorded]`; the ancestor publishers print the plain words). JSON adds
+  `relationRecorded: false` and `population` per walk, and the envelope summary's routine
+  rows carry `relationRecorded: false`.
+- **impact's share of the program** (G1): the fold share divided a bucket sum by a
+  distinct count. It now counts the reached nodes whose root kinds hold an entry kind
+  against the program's nodes passing the same test, the changed routines left out of both
+  (JSON `declaredEntries`: `reached <= program` by construction). From 90% it prints
+  `these ancestors hold 99% of the program's declared entries (n of N; pages run by an
+  action's RunObject, background targets and roots.config entries are counted on neither
+  side); counts by kind folded`; from 50% `broad reach (…; list folded)`. A limited walk
+  prints no share.
+- **impact, smaller W1 items** (G1, G15): the changed routine is no longer listed as its
+  own entry (JSON `rootEntryKinds`, `rootUserOrJob` keep its kinds for the ranking); the
+  hubs line prints once per answer (the whole change's, with several routines); `external:`
+  is not printed (it belongs to a code population this walk does not record; JSON keeps
+  it); `reached by code callers: no …` becomes the computed `direct code callers: none
+  found`; each routine prints explain's `calls:` line (JSON `callsLine`).
+- **tests on a navigation-only selection** (G2, n02): 37 tests whose every witness needs UI
+  navigation were headlined `run first`. The headline now says `no modeled code-call
+  witness in the selected scope; 37 tests reach this trigger by UI navigation only (each
+  opens a page on the field's table; whether the page shows or edits the field is not
+  established) — candidates: codeunits …`; with some code paths, `run first: n tests by code
+  calls (…); m more by UI navigation only (…)`. Items print both axes (`[local, UI
+  navigation]`), the count line adds `by relation: code 0, UI navigation 37`, and JSON
+  `result.selection.byRelation` is added.
+- **explain's callers are one set** (G3, c06, n10): `callers: 13` left out the page actions
+  whose trigger calls the routine directly, while the caller-rule line counted them. Now
+  `callers: 43 direct (13 routines and page triggers, 30 page actions); 118 page actions
+  reach it in all`, the same set as the caller rules. JSON adds `callers` (`direct`,
+  `directRoutines`, `directPageActions`, `pageActionsInAll`); `summary.callers` and
+  `reachedFromSummary.actions` keep their meaning.
+- **explain says what runs a trigger** (G4's W1 rows, n07, c10, c05): `callers: none` on a
+  trigger becomes `run by:`: a field's `OnValidate` by its `Validate` calls (searched and not
+  searched stated) and the pages on its table as potential UI surfaces; `OnLookup` and
+  `OnAssistEdit` by no code call; a page action `entry point: this action (no code caller)`
+  (no longer "reached from" itself); a subscriber by its publisher plus any direct code
+  caller. Other table and page triggers print `direct code callers: none found (what runs a
+  trigger is not listed for this kind yet)` (W3 lists them). JSON adds `runBy`.
+
 ### Fixed (counts and labels the round-2 fact check found)
 
 The round-2 fact check of the output validation (calls c06, c11, c12, c20, n07, n08,
