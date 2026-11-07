@@ -190,6 +190,29 @@ run_build() { require_grammar || return 1; cargo build --release; }
 
 run_perf_bounds() { require_grammar || return 1; require_rttime || return 1; cargo test --release --test perf_bounds; }
 
+# ⟨2026-11-07⟩ A record that a WHOLE `task` or `all` run passed, so
+# `scripts/merge-and-push` can skip re-running the task gate when the merge it
+# makes has exactly the tree that passed (the owner approved this on 2026-11-07:
+# one landing ran the whole suite 4-6 times on identical trees). The record is a
+# file named after the tree hash, in the git directory every worktree shares, so
+# a gate run in an integration worktree counts when the main checkout lands it.
+# It is written only when the work tree was CLEAN before and after the run (no
+# tracked change, and no untracked file outside .gitignore): then the run saw
+# exactly HEAD's tree and nothing else. A run with an untracked file that the
+# commit would leave out records nothing, so a skip can never miss a file.
+clean_tree_id() {
+    [ -z "$(git status --porcelain --untracked-files=normal)" ] || return 1
+    git rev-parse 'HEAD^{tree}'
+}
+
+record_gate_pass() { # <step> <tree id taken before the run>
+    local after dir
+    after="$(clean_tree_id)" || return 0
+    [ "$after" = "$2" ] || return 0
+    dir="$(git rev-parse --path-format=absolute --git-common-dir)/gate-passed"
+    mkdir -p "$dir" && printf '%s %s\n' "$1" "$(date -Iseconds)" > "$dir/$2"
+}
+
 case "$step" in
     fmt)         run_fmt ;;
     clippy)      run_clippy ;;
@@ -218,6 +241,7 @@ case "$step" in
         ;;
     task)
         rc=0
+        tree_before="$(clean_tree_id)" || tree_before=""
         for s in fmt clippy-dev gen-syntax test; do
             echo "=== ci-steps: $s ==="
             if ! "$0" "$s"; then
@@ -225,6 +249,7 @@ case "$step" in
                 rc=1
             fi
         done
+        if [[ "$rc" -eq 0 && -n "$tree_before" ]]; then record_gate_pass task "$tree_before"; fi
         exit "$rc"
         ;;
     # Exactly what CI runs. Part of the branch gate (with `scripts/cdo-gate`),
@@ -238,6 +263,7 @@ case "$step" in
     # build's output is printed after the test output, under its own header.
     all)
         rc=0
+        tree_before="$(clean_tree_id)" || tree_before=""
         for s in fmt clippy gen-syntax; do
             echo "=== ci-steps: $s ==="
             if ! "$0" "$s"; then
@@ -268,6 +294,7 @@ case "$step" in
             echo "ci-steps: FAILED at 'perf-bounds'" >&2
             rc=1
         fi
+        if [[ "$rc" -eq 0 && -n "$tree_before" ]]; then record_gate_pass all "$tree_before"; fi
         exit "$rc"
         ;;
     *)
