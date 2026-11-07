@@ -202,8 +202,11 @@ pub struct TableEventMeta {
     /// The event graph's id of the event (`…/event/onaftermodifyevent`, or
     /// `…/event/onaftervalidateevent/<field>`).
     pub event_id: String,
-    /// The subscription may be skipped (its program route carries a dispatch
-    /// condition).
+    /// The subscription may be skipped: its program route carries a dispatch
+    /// condition, or the subscriber exits first thing on a situation the
+    /// raising site does not decide (`if Rec.IsTemporary() then exit;` on a
+    /// record whose temp state the caller decides, `if not RunTrigger then
+    /// exit;` with a computed RunTrigger; `program::table_event_guard`).
     pub conditional: bool,
 }
 

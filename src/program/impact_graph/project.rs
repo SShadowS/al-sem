@@ -218,6 +218,9 @@ struct Builder<'a> {
     cancel: &'a dyn Fn() -> bool,
     cancelled: bool,
     added: u64,
+    /// The [`Site::guard`] bits of the sites being added (set around one
+    /// engine route in [`Self::engine_edges`]; 0 otherwise).
+    site_guard: u8,
 }
 
 /// How many sites a sited-graph build adds between cancellation checks
@@ -275,6 +278,7 @@ impl<'a> Builder<'a> {
             cancel,
             cancelled: false,
             added: 0,
+            site_guard: 0,
         }
     }
 
@@ -344,6 +348,7 @@ impl<'a> Builder<'a> {
             conditions: condition_mask(conditions),
             boundary,
             anchor: line,
+            guard: self.site_guard,
         };
         // A catalogued configured-dispatch arm (design r2 §4.3): a label in
         // the conditions mask; boundary, `via` and confidence stay the site's.
@@ -422,7 +427,9 @@ impl<'a> Builder<'a> {
                 match &r.target {
                     RouteTarget::Builtin(_) | RouteTarget::Unresolved => {}
                     RouteTarget::Routine(rid) => {
-                        self.engine_route(&from, e.kind, e.shape, rid, line, conditions)
+                        self.site_guard = self.table_event_guard(&ce.obligation_id, rid);
+                        self.engine_route(&from, e.kind, e.shape, rid, line, conditions);
+                        self.site_guard = 0;
                     }
                     RouteTarget::AbiSymbol { key } => {
                         let Some(oid) = self.abi_object(key) else {
@@ -560,6 +567,44 @@ impl<'a> Builder<'a> {
                     BTreeSet::new(),
                 );
             }
+        }
+    }
+
+    /// The [`Site::guard`] bits of the route to `rid` of the edge `ob`
+    /// ([`crate::program::table_event_guard`]): for a record operation's
+    /// table-event route, what the operation proves (read off its call site's
+    /// facts); for a platform publisher's route to a subscriber, what the
+    /// subscriber exits on first thing (its source facts). 0 otherwise.
+    fn table_event_guard(&self, ob: &ObligationId, rid: &RoutineNodeId) -> u8 {
+        match ob {
+            ObligationId::TableEvent {
+                caller,
+                span,
+                callee_fp,
+            } => self
+                .inp
+                .edges
+                .site_facts
+                .get(&ObligationId::CallSite {
+                    caller: caller.clone(),
+                    span: span.clone(),
+                    callee_fp: *callee_fp,
+                })
+                .and_then(|f| f.table_event_raise)
+                .map_or(0, |c| c.as_exits().bits()),
+            ObligationId::Publisher(p)
+                if self.rtn_by_id.get(p).is_some_and(|n| {
+                    n.publisher_kind
+                        == Some(crate::program::resolve::event::PublisherKind::Platform)
+                }) =>
+            {
+                self.inp
+                    .facts
+                    .routines
+                    .get(rid)
+                    .map_or(0, |f| f.table_event_exits.bits())
+            }
+            _ => 0,
         }
     }
 
@@ -847,12 +892,25 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        // A page declared `SourceTableTemporary = true` works on temporary
+        // records of its source table: the table events its record operations
+        // raise come with the record temporary (`Site::guard`).
+        let mut temporary_source: Option<ObjectNodeId> = None;
         if oid.kind == ObjectKind::Page
             && let Some(st) = &obj.source_table
             && let Some(RunTarget::Object(table)) = self.resolve_ref(oid, ObjectKind::Table, st)
         {
             if let Some(f) = self.inp.facts.objects.get(&table) {
                 opens.extend(f.lookup_pages.iter().map(|t| self.run_target_key(t)));
+            }
+            if self
+                .inp
+                .facts
+                .objects
+                .get(oid)
+                .is_some_and(|f| f.source_table_temporary)
+            {
+                temporary_source = Some(table.clone());
             }
             tables.push(table);
         }
@@ -873,20 +931,26 @@ impl<'a> Builder<'a> {
             }
         }
         for table in tables {
-            let mut targets: Vec<RoutineNodeId> = self
+            let mut targets: Vec<(RoutineNodeId, u8)> = self
                 .triggers_with_extensions(&table)
                 .into_iter()
-                .map(|r| r.id.clone())
+                .map(|r| (r.id.clone(), 0))
                 .collect();
+            let event_guard = if temporary_source.as_ref() == Some(&table) {
+                crate::program::table_event_guard::EntryExits::TEMPORARY_REC.bits()
+            } else {
+                0
+            };
             targets.extend(
                 self.routines_of
                     .get(&table)
                     .into_iter()
                     .flatten()
                     .filter(|r| r.publisher_kind == Some(PublisherKind::Platform))
-                    .map(|r| r.id.clone()),
+                    .map(|r| (r.id.clone(), event_guard)),
             );
-            for t in targets {
+            for (t, guard) in targets {
+                self.site_guard = guard;
                 self.simple(
                     from.clone(),
                     Key::Routine(t),
@@ -894,6 +958,7 @@ impl<'a> Builder<'a> {
                     Conf::OverApprox,
                     "lifecycle",
                 );
+                self.site_guard = 0;
             }
         }
         if obj.tier == TrustTier::SymbolOnly {

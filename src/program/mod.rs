@@ -19,6 +19,7 @@ pub mod node_set;
 pub mod pack;
 pub mod physical;
 pub mod profile;
+pub mod recordref_table;
 pub mod registry;
 pub mod resolve;
 pub mod resolved;
@@ -27,6 +28,7 @@ pub mod sig_fp;
 pub mod site_key;
 pub mod source_deps;
 pub mod str_pool;
+pub mod table_event_guard;
 pub mod topology;
 
 pub use build::{

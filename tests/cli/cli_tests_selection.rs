@@ -504,7 +504,7 @@ fn named_test_apps_and_unresolved_routines() {
 /// on a master + reach + F1 probe build: no hidden node, the same as the
 /// full integration). The C-6 fixture test still pins the `hidden-callers`
 /// reason. And (milestone C item 4, C-12 on CDO) RunReportID's human answer prints
-/// the dependency-tier sameness line exactly: its 377 through-dependency
+/// the dependency-tier sameness line exactly: its 376 through-dependency
 /// tests reach it via dependency nodes that may execute most of the program.
 /// History (all 2026-11-06, measured on the release-fast build of each):
 /// 301 before; the declaredRunnable narrowing alone gave 283 (18 reached it
@@ -515,7 +515,10 @@ fn named_test_apps_and_unresolved_routines() {
 /// reach it); both together give 377 (`integrate/outval-r1-fixes`), because
 /// the narrowing removes only `declaredRunnable` edges (and the test walk
 /// skips `clientEvent` ones), so 220 of F1's 597 (the 18 above and 202 of
-/// the ones F1 added) reached it only over such an edge.
+/// the ones F1 added) reached it only over such an edge. 376 since the
+/// round-2 table-event guard fix (2026-11-07): one test reached it only
+/// through a table event raised on a temporary record (or with RunTrigger
+/// false) whose subscriber exits on it first thing.
 /// DISCRIMINATION (2026-11-05, cdo profile): `render`'s `same` never true
 /// fails it ("through dependency code: 301 tests (--tier dependency lists
 /// them)"); restored, passes.
@@ -529,7 +532,7 @@ pub(crate) fn cdo_selection_ratchets() {
     assert_eq!(code, 0, "{human}");
     assert!(
         human.lines().any(|l| l
-            == "[via-dependency] 377 tests — effectively the suite's posting tests, not specific to this change"),
+            == "[via-dependency] 376 tests — effectively the suite's posting tests, not specific to this change"),
         "{human}"
     );
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);

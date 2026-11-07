@@ -155,6 +155,17 @@ pub struct Site {
     /// `None` for an edge no call site makes (a rule, a hub expansion, a
     /// publisher's event flow).
     pub anchor: Option<Anchor>,
+    /// Table-event dead dispatch ([`crate::program::table_event_guard`]), in
+    /// `EntryExits` bits; 0 for every other site. On a platform publisher's
+    /// `eventFlow` site: what the subscriber exits on first thing. On a
+    /// `tableEvent` site: what the raising operation proves (its record
+    /// temporary, RunTrigger false); on the `lifecycle` site from a page
+    /// declared `SourceTableTemporary = true` into its source table's platform
+    /// publishers: the record temporary. The reverse walk carries the first up
+    /// to the publisher and does not cross a raising site that proves one of
+    /// them ([`super::reverse`]). Not exported: the call-graph JSONL keeps the
+    /// may-execute edge (one publisher node serves every raising site).
+    pub(crate) guard: u8,
 }
 
 impl Site {

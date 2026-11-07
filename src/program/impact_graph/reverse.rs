@@ -110,6 +110,15 @@ pub struct WalkState {
     pub crossed_event: bool,
     /// The consumer's bits ([`ConeVisitor::step`]); 0 unless it sets them.
     pub ext: u8,
+    /// The walk's own table-event bits ([`crate::program::table_event_guard`]):
+    /// on a platform publisher reached backwards from a subscriber, what that
+    /// subscriber exits on first thing ([`super::sited::Site::guard`]); 0
+    /// everywhere else. A raising site that proves one of them (its record
+    /// temporary, RunTrigger false; [`super::sited::Site::guard`]) is not
+    /// crossed: it runs the subscriber's guard only. A publisher reached from
+    /// two subscribers with different guards is two states, so a path never
+    /// passes a raising site through a subscriber that site cannot run.
+    pub guard: u8,
 }
 
 /// How a state was first reached.
@@ -368,7 +377,7 @@ impl WalkScratch {
 
     /// Marks `s` visited; `false` when it already was.
     fn insert(&mut self, s: WalkState) -> bool {
-        if s.ext != 0 {
+        if s.ext != 0 || s.guard != 0 {
             return self.seen_ext.insert(s);
         }
         let bit = 1u8 << (s.tier as u8 * 2 + u8::from(s.crossed_event));
@@ -428,6 +437,7 @@ pub fn walk_multi(
             tier: tier_at(g, r, Tier::Local, false),
             crossed_event: false,
             ext: 0,
+            guard: 0,
         };
         if scratch.insert(s) {
             scratch.level.push((i as u32, s, None, Via::Root(i as u32)));
@@ -462,6 +472,15 @@ pub fn walk_multi(
                 if open && !opts.follow_open {
                     continue;
                 }
+                // Table-event dead dispatch: carry a subscriber's guard up to
+                // its publisher; drop a raising site that proves it.
+                let guard = match st.via() {
+                    "eventFlow" => st.guard,
+                    // A raising site (a record operation's `tableEvent`, a
+                    // temporary-source page's lifecycle) that proves it.
+                    _ if s.guard & st.guard != 0 => continue,
+                    _ => 0,
+                };
                 let Some(ext) = v.step(g, s, site) else {
                     continue;
                 };
@@ -470,6 +489,7 @@ pub fn walk_multi(
                     tier: tier_at(g, st.from, s.tier, open),
                     crossed_event: s.crossed_event || st.boundary == Boundary::EventDispatch,
                     ext,
+                    guard,
                 };
                 if g.is_action_run(site) && scratch.action_entries.insert(n) {
                     v.entry(root, n.node, &[EntryKind::PageAction], n, hops + 1);
@@ -488,6 +508,7 @@ pub fn walk_multi(
                 tier: Tier::OnlyOpen,
                 crossed_event: false,
                 ext: 0,
+                guard: 0,
             };
             if scratch.insert(s) {
                 scratch.next.push((0, s, None, Via::Universal));
