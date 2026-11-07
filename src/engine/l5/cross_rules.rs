@@ -99,10 +99,25 @@
 //! share them, as they always did, and no other run sees them. A budget or
 //! depth stop in one request therefore never shows in the next.
 //!
+//! **Before a site** (caller rules, the rules in force at a write): a call
+//! step counts when it ends before the site and runs on every path to it —
+//! `top-level`, or, by the routine's statement tree, evaluated in a
+//! statement before the one holding the site in the same block or a block
+//! around it, or in the condition of a branch around the site (round-2 c06:
+//! `if A then begin R := HasRecipients(..); SetReportSelectionUsage(..)`
+//! applies `HasRecipients`' rules to the second call; before, only a
+//! `top-level` step counted, so four callers' check was missed). The depth
+//! across calls is unchanged and unbounded but for [`MAX_DEPTH`]: `all` of
+//! the step's target follows its `top-level` calls, and theirs.
+//!
 //! **Stated limits.** A call after an early `if C then exit;` is `conditional`,
-//! not `top-level`, so its rules are not inherited even though the write after
-//! it is also past the exit. A call inside a branch is not inherited even when
-//! every write is in the same branch. Writes made by event subscribers are not
+//! not `top-level`, so its rules are not inherited by the routine's callers
+//! (`all`, `pre`) even though the write after it is also past the exit. A
+//! routine's `all` and `pre` still take `top-level` steps only. The statement
+//! tree lists both arms of an `#if` in one block, so a call in one arm counts
+//! before a later site as if it always ran (the control context the
+//! `top-level` test reads is built from the same tree). Writes made by event
+//! subscribers are not
 //! counted as writes of the publisher's caller. A callee's `FieldCompare` and
 //! similar atoms keep the callee's record-variable names (the `via` path says
 //! whose). A check in a `while` / `for` / `foreach` body never counts for a
@@ -286,6 +301,84 @@ fn pos_end(a: &PAnchor) -> (u32, u32) {
 /// `a` ends before `b` starts (same routine, so the same file).
 fn ends_before(a: &PAnchor, b: &PAnchor) -> bool {
     pos_end(a) <= pos_start(b)
+}
+
+/// A step's site as the statement tree names it.
+#[derive(Clone, Copy)]
+enum LeafId<'a> {
+    Call(&'a str),
+    Op(&'a str),
+}
+
+/// Statement-tree range `r` holds `site` (the same basis: 0-based row,
+/// utf16 column).
+fn range_holds(r: (u32, u32, u32, u32), site: &PAnchor) -> bool {
+    (r.0, r.1) <= pos_start(site) && pos_end(site) <= (r.2, r.3)
+}
+
+/// Node `n` evaluates `id` whenever it is reached: `n` is that call or
+/// operation, or `id` is one of the leaves its own expressions evaluate (an
+/// assignment's value, an argument, an `if` / `case` / loop condition), not
+/// one inside a nested block. A leaf from one alternative of a ternary may
+/// not run (`PathHint::MayRun`).
+fn evaluates(n: &crate::program::body::features::PCFNNode, id: LeafId<'_>) -> bool {
+    use crate::program::body::features::PathHint;
+    if n.path_hint == Some(PathHint::MayRun) {
+        return false;
+    }
+    let me = match id {
+        LeafId::Call(c) => n.callsite_id.as_deref() == Some(c),
+        LeafId::Op(o) => n.operation_id.as_deref() == Some(o),
+    };
+    me || n
+        .condition_leaves
+        .iter()
+        .flatten()
+        .any(|l| evaluates(l, id))
+}
+
+/// `id` runs before `site` on every path that reaches `site` (structured
+/// code: the block that holds `site`, or one enclosing it, evaluates `id`
+/// in a statement before the one that holds `site`, or a branching
+/// statement around `site` evaluates it in its own condition). Round-2 c06:
+/// `if A then begin X := HasRecipients(..); SetReportSelectionUsage(..)`
+/// runs `HasRecipients` before the call on every path, though neither is
+/// top-level.
+fn runs_before(
+    nodes: &[crate::program::body::features::PCFNNode],
+    id: LeafId<'_>,
+    site: &PAnchor,
+) -> bool {
+    for (i, n) in nodes.iter().enumerate() {
+        if !n.source_range.is_some_and(|r| range_holds(r, site)) {
+            continue;
+        }
+        if nodes[..i].iter().any(|p| evaluates(p, id)) {
+            return true;
+        }
+        let nested = n.children.iter().chain(n.else_children.iter());
+        let mut inside = false;
+        for list in nested {
+            if list
+                .iter()
+                .any(|c| c.source_range.is_some_and(|r| range_holds(r, site)))
+            {
+                inside = true;
+                if runs_before(list, id, site) {
+                    return true;
+                }
+            }
+        }
+        // A site in a nested block of `n` comes after `n`'s condition. (A
+        // `repeat`'s `until` runs after its body; it also ends after any site
+        // in the body, so the caller's `ends_before` already rules it out.)
+        return inside
+            && n.condition_leaves
+                .iter()
+                .flatten()
+                .any(|l| evaluates(l, id));
+    }
+    false
 }
 
 fn same_site(a: &PAnchor, b: &PAnchor) -> bool {
@@ -867,9 +960,29 @@ impl<'m> CrossRules<'m> {
         plain
     }
 
+    /// Step `s` of `row` runs on every path to `site`: it is `top-level`, or
+    /// the routine's statement tree evaluates it before `site` in the block
+    /// that holds `site` or one around it ([`runs_before`]). The depth
+    /// across calls is unchanged: `all` of the step's target follows every
+    /// `top-level` call beneath it (memoised, cycles cut, [`MAX_DEPTH`]).
+    fn on_every_path(&self, row: usize, s: &Step<'_>, site: &PAnchor) -> bool {
+        if s.top_level {
+            return true;
+        }
+        let id = match (s.call, s.op) {
+            (Some(c), _) => LeafId::Call(c.id.as_str()),
+            (None, Some(o)) => LeafId::Op(o.id.as_str()),
+            (None, None) => return false,
+        };
+        self.row(row)
+            .statement_tree
+            .as_deref()
+            .is_some_and(|t| runs_before(std::slice::from_ref(t), id, site))
+    }
+
     /// The rules `caller` runs before `site` (its own that are on the path to
-    /// it, [`PRule::guards`], and `all` of each `top-level` step that ends
-    /// before it).
+    /// it, [`PRule::guards`], and `all` of each step that ends before it and
+    /// runs on every path to it, [`Self::on_every_path`]).
     fn before_site(&self, caller: usize, site: &PAnchor) -> Vec<Inh> {
         let mut out: Vec<Inh> = self
             .own(caller)
@@ -879,7 +992,7 @@ impl<'m> CrossRules<'m> {
         let steps = self.steps(caller);
         for s in steps
             .iter()
-            .filter(|s| s.top_level && ends_before(s.anchor, site))
+            .filter(|s| ends_before(s.anchor, site) && self.on_every_path(caller, s, site))
         {
             let mut low = usize::MAX;
             let sub = self.compute(s.to, Kind::All, &mut low);
