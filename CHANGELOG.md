@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (gates: no second task gate on a tree that already passed)
+
+- **`scripts/merge-and-push` skips its task gate when the merged tree already
+  passed.** A whole `scripts/ci-steps task` or `scripts/ci-steps all` that passes on a
+  clean work tree (no tracked change, no untracked file outside `.gitignore`, before
+  and after the run) writes `<git common dir>/gate-passed/<tree hash>`; the directory is
+  shared by every worktree. `merge-and-push` looks up the merged commit's tree there and
+  runs the task gate only when no record exists, which is the case whenever master
+  moved since the branch gate. Owner decision 2026-11-07: one landing ran the whole
+  suite 4-6 times on identical trees.
+
 ### Fixed (round-3 fact check: a page's permissions decide what a user runs through it)
 
 Round-3 fact check n09 and m03. A page's lifecycle site into its source table's record

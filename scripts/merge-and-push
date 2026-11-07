@@ -10,7 +10,11 @@
 #     push never rewrites or races the remote;
 #   - a merge conflict aborts the merge and stops, leaving master as it was;
 #   - the task gate (`scripts/ci-steps task`) must pass on the merged master,
-#     else master is reset back to where it was and nothing is pushed.
+#     else master is reset back to where it was and nothing is pushed. It is
+#     skipped only when a whole `ci-steps task` or `ci-steps all` already passed
+#     on a clean work tree with EXACTLY the merged tree (the record
+#     `ci-steps` writes under `<git common dir>/gate-passed/<tree hash>`), which
+#     is the usual case after the branch gate when master has not moved.
 # Then `git push origin master` (a plain fast-forward; never --force).
 #
 # Usage: scripts/merge-and-push <branch>
@@ -49,11 +53,18 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; then
     fi
 fi
 
-log=$(mktemp -t merge-and-push-gate.XXXXXX.log)
-echo "merge-and-push: running the task gate on $(git rev-parse --short HEAD) (log: $log)"
-if ! scripts/ci-steps task >"$log" 2>&1; then
-    git reset --quiet --hard "$before"
-    die "the task gate failed (see $log); master reset to ${before:0:8}, nothing pushed"
+tree=$(git rev-parse 'HEAD^{tree}') || die "cannot read the merged tree"
+pass="$(git rev-parse --path-format=absolute --git-common-dir)/gate-passed/$tree"
+if [ -f "$pass" ]; then
+    read -r pass_step pass_when <"$pass"
+    echo "merge-and-push: the merged tree ${tree:0:8} already passed 'ci-steps ${pass_step}' (${pass_when}) on a clean work tree; not running the task gate again"
+else
+    log=$(mktemp -t merge-and-push-gate.XXXXXX.log)
+    echo "merge-and-push: running the task gate on $(git rev-parse --short HEAD) (log: $log)"
+    if ! scripts/ci-steps task >"$log" 2>&1; then
+        git reset --quiet --hard "$before"
+        die "the task gate failed (see $log); master reset to ${before:0:8}, nothing pushed"
+    fi
 fi
 
 git push origin master || die "git push origin master failed; master is merged locally at $(git rev-parse --short HEAD)"
