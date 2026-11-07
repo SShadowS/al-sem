@@ -629,8 +629,10 @@ pub(crate) fn cdo_impact_ratchets() {
     // +686 since round-2 W2 (the reach split into populations, each
     // established one with its nearest witness, entries by kind and share,
     // and `external:` for the code population): each block is longer, so
-    // four fewer fit; the ranking is unchanged.
-    assert!(human.contains("  … +686 routines"), "{human}");
+    // four fewer fit; the ranking is unchanged. +685 with the review's
+    // landing changes (§R2.4: the ancestor-publishers line leaves the human
+    // text, the entry and test-code qualifiers join): one more fits.
+    assert!(human.contains("  … +685 routines"), "{human}");
 
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
     let r = &v["roots"][0];
