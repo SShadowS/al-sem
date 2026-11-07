@@ -1970,6 +1970,28 @@ fn detail_words(fcx: Option<crate::engine::follow_up::Cx>) -> &'static str {
     )
 }
 
+/// A group's `boundary` (`Codeunit CSC Core::IsAppActiveInCompany`, the
+/// unquoted matching key the effect keeps) in the one display, the object
+/// name quoted where it needs it (`Codeunit "CSC Core"::…`, round-3 m04).
+/// A shape it does not know (a quoted member, no `::`) is left as it is.
+fn quoted_boundary(b: &str) -> String {
+    // A chain of crossings is `X::A, Table Y::OnInsert`: each part alone.
+    let one = |p: &str| -> Option<String> {
+        let (ty, rest) = p.split_once(' ')?;
+        let (name, routine) = rest.rsplit_once("::")?;
+        (!name.contains('"') && !name.contains("::")).then(|| {
+            crate::engine::l4::effect_query_cli::owner_qualified(
+                &crate::engine::l4::effect_query_cli::object_display(ty, name),
+                routine,
+            )
+        })
+    };
+    b.split(", ")
+        .map(one)
+        .collect::<Option<Vec<_>>>()
+        .map_or_else(|| b.to_string(), |parts| parts.join(", "))
+}
+
 /// What prove's four header lines need beyond the answer's own lines
 /// (output validation §5.2).
 pub(crate) struct ProveHeaderCx {
@@ -2330,8 +2352,30 @@ pub fn format_prove_human(
                 (Some(f), None) => f.clone(),
                 _ => "no position kept".to_string(),
             };
+            // Round-3 m04: a group's witness ends at an operation in
+            // dependency code; the headline names it and where it is.
+            let terminal = match (is_group(eff), paths) {
+                (true, Some(p)) => eff
+                    .group_terminal_path
+                    .as_ref()
+                    .and_then(|w| w.as_ref().ok())
+                    .map(|w| {
+                        let kind =
+                            p.cx.terminal_kind(&w.terminal.operation_id, &eff.effect_type);
+                        let loc = match (&w.terminal.file, w.terminal.line) {
+                            (Some(f), Some(l)) => format!("at {}, ", p.cx.location(f, l)),
+                            _ => String::new(),
+                        };
+                        (kind, loc)
+                    }),
+                _ => None,
+            };
             let place = match eff.detail.iter().find(|(k, _)| k == "boundary") {
-                Some((_, b)) if is_group(eff) => format!("beyond {b}, entered at {at}"),
+                Some((_, b)) if is_group(eff) => format!(
+                    "{}beyond {}, entered at {at}",
+                    terminal.as_ref().map_or("", |(_, loc)| loc.as_str()),
+                    quoted_boundary(b)
+                ),
                 _ => format!("at {at}"),
             };
             let more = if indices.len() > 1 {
@@ -2344,6 +2388,16 @@ pub fn format_prove_human(
             };
             // An implicit error names its operation (G17).
             let what = match (eff.effect_type.as_str(), paths) {
+                ("ERROR_IMPLICIT", Some(_))
+                    if terminal
+                        .as_ref()
+                        .is_some_and(|(k, _)| *k != eff.effect_type) =>
+                {
+                    format!(
+                        "{} (implicit error)",
+                        terminal.as_ref().map_or("", |(k, _)| *k)
+                    )
+                }
                 ("ERROR_IMPLICIT", Some(p)) => eff
                     .origin_operation_ids
                     .iter()
@@ -2387,7 +2441,11 @@ pub fn format_prove_human(
                 .find(|(k, _)| k == "boundary")
                 .map(|(_, v)| v.as_str());
             let row = match (group, boundary) {
-                (true, Some(b)) => format!("    [{}] beyond {b}, entered at {at}", eff.effect_type),
+                (true, Some(b)) => format!(
+                    "    [{}] beyond {}, entered at {at}",
+                    eff.effect_type,
+                    quoted_boundary(b)
+                ),
                 _ => format!("    [{}] at {at}", eff.effect_type),
             };
             if !full {

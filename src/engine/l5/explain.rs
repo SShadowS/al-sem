@@ -1525,47 +1525,7 @@ pub(crate) fn calls_line(
     names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
     root: &str,
 ) -> Option<String> {
-    let routines = &model.workspace.routines;
-    let r = routines.iter().find(|r| r.stable_routine_id == root)?;
-    let stable_of: HashMap<&str, &str> = routines
-        .iter()
-        .map(|x| (x.id.as_str(), x.stable_routine_id.as_str()))
-        .collect();
-    // A callee in the routine's own object prints as `::Name` (the header
-    // names the object); one elsewhere by its whole display.
-    let own: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = routines
-        .iter()
-        .filter(|x| x.object_id == r.object_id)
-        .map(|x| (x.stable_routine_id.as_str(), x))
-        .collect();
-    let to_of: HashMap<&str, &str> = model
-        .calls
-        .edges
-        .iter()
-        .filter(|e| e.from == r.id)
-        .filter_map(|e| Some((e.callsite_id.as_str(), e.to.as_deref()?)))
-        .collect();
-    let mut sites: Vec<&crate::program::body::features::PCallSite> = r.call_sites.iter().collect();
-    sites.sort_by_key(|c| (c.source_anchor.start_line, c.source_anchor.start_column));
-    let mut seen = HashSet::new();
-    let mut items: Vec<(String, u32)> = Vec::new();
-    for c in sites {
-        let Some(to) = to_of.get(c.id.as_str()) else {
-            continue;
-        };
-        let Some(stable) = stable_of.get(to) else {
-            continue;
-        };
-        if !seen.insert(*stable) {
-            continue;
-        }
-        let display = names.display(stable);
-        let shown = match (own.get(stable), display.split_once("::")) {
-            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => format!("::{rest}"),
-            _ => display.clone(),
-        };
-        items.push((shown, c.source_anchor.start_line + 1));
-    }
+    let (mut items, _) = direct_callees(model, names, root)?;
     if items.is_empty() {
         return Some("calls: none (no call to a routine; builtins aside)".to_string());
     }
@@ -1587,6 +1547,123 @@ pub(crate) fn calls_line(
             String::new()
         }
     ))
+}
+
+/// The objects the routine runs in source order, at most [`CALLS_SHOWN`]
+/// named (round-3 m10): `runs: Page "X" (RunModal at :105)`. A page, report
+/// or codeunit run is not a call of one trigger (the model gives a page run
+/// one edge per trigger), so it is not on the `calls:` line. `None` when the
+/// routine runs no object.
+pub(crate) fn runs_line(
+    model: &crate::program::model::workspace::Model,
+    names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
+    root: &str,
+) -> Option<String> {
+    let (_, mut runs) = direct_callees(model, names, root)?;
+    if runs.is_empty() {
+        return None;
+    }
+    let more = runs.len().saturating_sub(CALLS_SHOWN);
+    runs.truncate(CALLS_SHOWN);
+    let shown: Vec<String> = runs
+        .iter()
+        .map(|(object, method, line)| format!("{object} ({method} at :{line})"))
+        .collect();
+    Some(format!(
+        "runs: {}{}",
+        shown.join("; "),
+        if more > 0 {
+            format!("; +{more} more")
+        } else {
+            String::new()
+        }
+    ))
+}
+
+/// A routine's direct callees (display, 1-based line) and object runs
+/// (object display, run method, 1-based line), each once, in source order.
+type DirectCallees = (Vec<(String, u32)>, Vec<(String, String, u32)>);
+
+fn direct_callees(
+    model: &crate::program::model::workspace::Model,
+    names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
+    root: &str,
+) -> Option<DirectCallees> {
+    let routines = &model.workspace.routines;
+    let r = routines.iter().find(|r| r.stable_routine_id == root)?;
+    let stable_of: HashMap<&str, &str> = routines
+        .iter()
+        .map(|x| (x.id.as_str(), x.stable_routine_id.as_str()))
+        .collect();
+    // A callee in the routine's own object prints as `::Name` (the header
+    // names the object); one elsewhere by its whole display.
+    let own: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = routines
+        .iter()
+        .filter(|x| x.object_id == r.object_id)
+        .map(|x| (x.stable_routine_id.as_str(), x))
+        .collect();
+    // Round-3 m10: an object run (`Page.RunModal`) has one edge per trigger
+    // of the object it runs (OnOpenPage, OnClosePage, …); the call is the
+    // run, not whichever trigger edge came last.
+    use crate::program::model::taxonomy::DispatchKind;
+    let to_of: HashMap<&str, (&str, bool)> = model
+        .calls
+        .edges
+        .iter()
+        .filter(|e| e.from == r.id)
+        .filter_map(|e| {
+            let run = matches!(
+                e.dispatch_kind,
+                DispatchKind::PageRun | DispatchKind::ReportRun | DispatchKind::CodeunitRun
+            );
+            Some((e.callsite_id.as_str(), (e.to.as_deref()?, run)))
+        })
+        .collect();
+    let mut sites: Vec<&crate::program::body::features::PCallSite> = r.call_sites.iter().collect();
+    sites.sort_by_key(|c| (c.source_anchor.start_line, c.source_anchor.start_column));
+    let mut seen = HashSet::new();
+    let mut items: Vec<(String, u32)> = Vec::new();
+    let mut runs: Vec<(String, String, u32)> = Vec::new();
+    for c in sites {
+        let Some(&(to, run)) = to_of.get(c.id.as_str()) else {
+            continue;
+        };
+        let Some(stable) = stable_of.get(to) else {
+            continue;
+        };
+        let display = names.display(stable);
+        let line = c.source_anchor.start_line + 1;
+        if run {
+            let object = display
+                .split_once("::")
+                .map_or(display.as_str(), |(o, _)| o)
+                .to_string();
+            // The method in its documented spelling (source may say `RUN`).
+            let method = match &c.callee {
+                crate::program::body::features::PCallee::Member { method, .. } => {
+                    match method.to_ascii_lowercase().as_str() {
+                        "run" => "Run".to_string(),
+                        "runmodal" => "RunModal".to_string(),
+                        _ => method.clone(),
+                    }
+                }
+                _ => "Run".to_string(),
+            };
+            if seen.insert(format!("run {object} {method}")) {
+                runs.push((object, method, line));
+            }
+            continue;
+        }
+        let shown = match (own.get(stable), display.split_once("::")) {
+            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => format!("::{rest}"),
+            _ => display.clone(),
+        };
+        if !seen.insert(shown.clone()) {
+            continue;
+        }
+        items.push((shown, line));
+    }
+    Some((items, runs))
 }
 
 /// How many direct callees explain's `calls:` line names.
@@ -2023,6 +2100,9 @@ fn render(
             if let Some(l) = calls_line(model, &rcx.names, rid) {
                 lead.push(l);
             }
+            if let Some(l) = runs_line(model, &rcx.names, rid) {
+                lead.push(l);
+            }
             if let Some(e) = entry.and_then(|e| {
                 e.effects
                     .iter()
@@ -2418,6 +2498,14 @@ fn explain_header(
         [] => String::new(),
         _ => "dependency code followed through every resolved call with literal arguments"
             .to_string(),
+    };
+    // Round-3 c10: in field mode the depth clause is about the writer cards'
+    // effect cones, not the field search (which reads dependency bodies and
+    // says so on its `searched:` line).
+    let depth = match (&resolved.field, cards.len()) {
+        (Some(_), 1) if !depth.is_empty() => format!("the writer card's effects: {depth}"),
+        (Some(_), n) if n > 1 => format!("the writer cards' effects: {depth}"),
+        _ => depth,
     };
     let mut scope: Vec<String> = Vec::new();
     if !depth.is_empty() {
@@ -5306,4 +5394,81 @@ fn rule_human(r: &PRule) -> String {
         r.kind,
         anchor_human(&r.anchor)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
+
+    /// Round-3 m10, hand-stated: a routine that calls a procedure and runs a
+    /// page whose OnOpenPage and OnClosePage both have bodies (so the run has
+    /// an edge to each trigger). The page run is on `runs:`, by the object
+    /// and the run method, never on `calls:` as one of its triggers.
+    #[test]
+    fn a_page_run_is_a_run_of_the_page_not_a_call_of_a_trigger() {
+        let src = "page 50100 \"Recipients\"
+{
+    trigger OnOpenPage()
+    begin
+        Message('open');
+    end;
+
+    trigger OnClosePage()
+    begin
+        Message('close');
+    end;
+}
+
+codeunit 50100 Handler
+{
+    procedure SetRecipients()
+    begin
+        Helper();
+        Page.RunModal(Page::\"Recipients\");
+    end;
+
+    procedure Helper()
+    begin
+    end;
+}
+";
+        let model = assemble_and_resolve_inline_program_default(
+            &[("src/Code.al".to_string(), src.to_string())],
+            "11111111-0000-0000-0000-0000000a0010",
+        );
+        let root = &model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "SetRecipients")
+            .expect("root")
+            .stable_routine_id;
+        // Precondition: the run has an edge to each trigger.
+        let r = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "SetRecipients")
+            .expect("root");
+        let run_edges = model
+            .calls
+            .edges
+            .iter()
+            .filter(|e| {
+                e.from == r.id
+                    && e.dispatch_kind == crate::program::model::taxonomy::DispatchKind::PageRun
+            })
+            .count();
+        assert_eq!(run_edges, 2, "precondition: one page-run edge per trigger");
+        let names = crate::engine::l5::routine_rollup::RoutineNames::new(&model, &[]);
+        assert_eq!(
+            calls_line(&model, &names, root).as_deref(),
+            Some("calls: ::Helper (called at :18)")
+        );
+        assert_eq!(
+            runs_line(&model, &names, root).as_deref(),
+            Some("runs: Page Recipients (RunModal at :19)")
+        );
+    }
 }

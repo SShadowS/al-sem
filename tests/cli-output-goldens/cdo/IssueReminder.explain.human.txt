@@ -6,7 +6,8 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
   transaction, UI and errors: commits: may (5 sites, 7 dependency routines entered that commit, 3 sites and 3 dependency routines entered more under literal arguments that cannot run); UI at 17 places; errors at 298 places
   other effects: events: 538 (75 raised in workspace code); HTTP at 20 places; file at 1 place; background tasks at 3 places; isolated storage at 16 places; telemetry at 23 places
   uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
-  calls: Codeunit "Reminder-Issue" (393)::Set (called at :18); Codeunit "Reminder-Issue" (393)::OnRun (called at :19); Codeunit "Reminder-Issue" (393)::GetIssuedReminder (called at :21); +1 more
+  calls: Codeunit "Reminder-Issue" (393)::Set (called at :18); Codeunit "Reminder-Issue" (393)::GetIssuedReminder (called at :21); Codeunit "CDO E-Mail Handler"::DocHandle (called at :23)
+  runs: Codeunit "Reminder-Issue" (393) (Run at :19)
   UI route: UI_CONFIRM via IssueReminder → DocHandle → RunReport
   target company: not established by this analysis (ChangeCompany at ws:src/Platform/Setup/CDOAzureBlobFolderMgt.Codeunit.al:403)
   callers: 1 direct — 1 page action in 1 object (detail: true lists them); 1 page action reaches it in all (directly or through callers)

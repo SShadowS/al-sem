@@ -125,6 +125,47 @@ Field Value Part"` (`InsertAllowed = false`) selected 7 tests for the variant en
   `the first page each path opens: Page "CDO E-Mail Template Card", Page "CDO Setup", Page
   "CDO Setup Wizard"; whether a test edits the field is not established`.
 
+### Fixed (counts and labels the round-3 fact check found)
+
+- **n03, a key on a system field.** A table key may name a system field (Base
+  Application's Customer: `key(Key17; SystemModifiedAt)`), which no table declares as a
+  `field`. The model dropped that member, so the key had no fields and `query touches`'
+  `keys:` line left it out ("+13" for 14 hidden keys). Key members now resolve the five
+  system fields to their fixed numbers (SystemId 2000000000 … SystemModifiedBy
+  2000000004), the keys line counts every declared key and prints the system field by
+  name, and the key-relevant test and `--field` mode's key names read the same names.
+  The keys line also stopped adding the keys of a tableextension stub whose id collides
+  with the table (G-5).
+- **c17, touches callers.** "first touch not the shared one" listed callers whose first
+  touch was the shared one, reached through an event subscriber. The callers are now
+  grouped by the touch's site; one that reaches the shared touch another way is on its
+  own line, `the shared first touch, reached another way (3 callers): … (through an
+  event subscriber)`.
+- **c18, the reason of an unresolved RecordRef.** The reason named the first `Open` or
+  `GetTable` anywhere in the routine. It now names the origins that reach the operation
+  (a reaching-definitions walk over the statement tree): `copied by Duplicate() from the
+  global RecRefFilter, which SetRecRefFilter sets` at `CDOEMailHandler.Codeunit.al:450`;
+  both branches where both reach (`…; or set by GetTable from a record whose table is
+  not resolved`).
+- **m10, a page run.** explain's `calls:` line showed `Page.RunModal(Page::"X")` as one
+  of the page's trigger edges (`Page "X"::OnClosePage`). Object runs are now on their
+  own line, `runs: Page "CDO E-Mail Recipients" (RunModal at :105)` (impact's
+  `runsLine` beside `callsLine`).
+- **m04, prove's headline on a dependency group** names the operation the witness ends
+  at and where (`Insert (implicit error) at dep:…:514, beyond Codeunit "CTS-CDN DO Page
+  Helpers"::InsertDefaultCustomerSetup, entered at …`); a group's boundary is printed in
+  the one display (`Codeunit "CSC Core"::…`).
+- **n08/m01, digest on an ambiguous selector** gives the complete follow-up over the
+  candidates (`complete call: alsem_digest {"routines": [...]}`, and `summary.next`),
+  and a lookup failure's summary carries no effect totals; its payload has no routine
+  table or path cap.
+- **c02 wording.** "unknown because of 9545 callers that reach it only over a hub"; the
+  callers' answer line says "unknown because of"; a fold note says what `detail` adds
+  (`--detail lists 2 more; 12 only counted`).
+- **c10, explain `--field`'s scope** names whose cone the depth clause is about (`the
+  writer card's effects: dependency code: none reached`); the field search itself reads
+  dependency bodies and says so on its `searched:` line.
+
 ### Changed (round-2 output validation, W5: noise and size)
 
 Milestone W5 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.1-§4.4,

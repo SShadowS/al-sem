@@ -1,11 +1,11 @@
 prove Codeunit "CDO Issue Document"::IssueReminder writes-table:Issued Reminder Header (table 297, Base Application)   [cross-app]
-answer: yes — DB_INSERT beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19 (condition not resolved), and 1 more
+answer: yes — DB_INSERT beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19 (condition not resolved), and 1 more
 analysis partial (21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 2 effects
-    [DB_INSERT] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+    [DB_INSERT] beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → InsertIssuedReminderHeader (Insert at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:474)
-    [DB_MODIFY] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+    [DB_MODIFY] beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → OnAfterIssueReminder → [event] Codeunit "Issue Reminder Event Handler" (6756)::UpdateStatusWhenReminderIsIssued (Modify at dep:Base Application:src/Sales/Reminder/Automation/Actions/IssueReminders/IssueReminderEventHandler.Codeunit.al:61)
   top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
   top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8

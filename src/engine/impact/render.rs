@@ -2016,6 +2016,10 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
         if let Some(c) = r["callsLine"].as_str() {
             out.push(format!("      {c}"));
         }
+        // Round-3 m10: the objects it runs, explain's `runs:` line.
+        if let Some(c) = r["runsLine"].as_str() {
+            out.push(format!("      {c}"));
+        }
         let up = &r["up"];
         if up.is_null() {
             out.push("      reached from: not computed".into());

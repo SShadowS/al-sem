@@ -100,6 +100,24 @@ fn the_outcome_says_what_the_exit_code_means() {
     assert_eq!(env["exitCode"], 2, "{env}");
     assert_eq!(env["outcome"], "ambiguous", "a filed ambiguity: {env}");
     assert_eq!(env["summary"]["rootsRequested"], 1, "rootsRequested: {env}");
+    // Round-3 n08/m01: the complete digest call over the candidates, and no
+    // effect totals on a lookup failure.
+    let next = &env["summary"]["next"];
+    assert_eq!(next["tool"], "alsem_digest", "summary.next: {env}");
+    let routines = next["arguments"]["routines"].as_array().expect("routines");
+    assert_eq!(routines.len(), 2, "one selector per candidate: {env}");
+    assert!(
+        routines
+            .iter()
+            .all(|r| r.as_str().is_some_and(|s| s.contains("CheckAmount"))),
+        "{env}"
+    );
+    for k in ["totalEffects", "totalUnresolved", "routines", "shared"] {
+        assert!(
+            env["summary"].get(k).is_none(),
+            "no {k} on a lookup failure: {env}"
+        );
+    }
     let (stdout, _, _) = cli_bytes(&env);
     let doc: Value = serde_json::from_slice(&stdout).unwrap();
     assert_eq!(

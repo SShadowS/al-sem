@@ -2494,10 +2494,7 @@ fn render_query_touches_body(
                 .flat_map(|t| {
                     t.keys.iter().flat_map(move |k| {
                         k.fields.iter().filter_map(move |f| {
-                            t.fields
-                                .iter()
-                                .find(|x| x.id == *f)
-                                .map(|x| super::field_touches::field_key(&x.name))
+                            t.field_name(f).map(super::field_touches::field_key)
                         })
                     })
                 })
@@ -2533,7 +2530,7 @@ fn render_query_touches_body(
                                 &key_fields,
                             ),
                             unresolved: if unknown {
-                                unresolved_table_reason(r, o)
+                                unresolved_table_reason(resolved, r, o)
                             } else {
                                 String::new()
                             },
@@ -2968,38 +2965,39 @@ struct TableSite {
 /// Round 2 G22: the `keys:` line of table mode — the primary key and the
 /// other declared keys by their field names, or nothing when the table
 /// declares none in the loaded program.
+///
+/// Every declared key counts (round-3 n03: a key on a system field,
+/// Customer's `SystemModifiedAt`, was dropped, so "+13" hid one of 18). The
+/// keys are the real table's own: a `tableextension` stub sharing the id is
+/// another object (G-5), and the model does not attach an extension's keys
+/// to the table it extends.
 fn table_keys_line(model: &Model, table_id: &str) -> String {
     let quoted = |n: &str| format!("\"{}\"", n.replace('"', "\"\""));
-    let mut keys: Vec<String> = Vec::new();
-    // The table itself first (its first key is the primary key), then any
-    // extension's keys; with no base table loaded, no primary key is named.
-    let mut entries: Vec<_> = model
+    // With no base table loaded, no primary key is named.
+    let Some(t) = model
         .workspace
         .tables
         .iter()
-        .filter(|t| t.id == table_id)
-        .collect();
-    entries.sort_by_key(|t| t.is_extension_stub);
-    if entries.first().is_none_or(|t| t.is_extension_stub) {
+        .find(|t| t.id == table_id && !t.is_extension_stub)
+    else {
         return String::new();
-    }
-    for t in entries {
-        for k in &t.keys {
+    };
+    let keys: Vec<String> = t
+        .keys
+        .iter()
+        .map(|k| {
             let names: Vec<String> = k
                 .fields
                 .iter()
-                .filter_map(|f| {
-                    t.fields
-                        .iter()
-                        .find(|x| x.id == *f)
-                        .map(|x| quoted(&x.name))
-                })
+                .filter_map(|f| t.field_name(f).map(quoted))
                 .collect();
-            if !names.is_empty() {
-                keys.push(names.join(", "));
+            if names.is_empty() {
+                "fields not resolved".to_string()
+            } else {
+                names.join(", ")
             }
-        }
-    }
+        })
+        .collect();
     let Some((pk, rest)) = keys.split_first() else {
         return String::new();
     };
@@ -3018,36 +3016,22 @@ fn table_keys_line(model: &Model, table_id: &str) -> String {
 
 /// Round 2 G21 (r1 §8.1's target-resolution words): why a record
 /// operation's table is not resolved, as `<receiver kind> <name>: <reason>`.
-/// A `RecordRef` is opened from a value the analysis does not resolve
-/// (`RecRef.Open(x)`), set by `GetTable`, passed by the caller, or not opened
-/// in the routine; a `Record` names a table the loaded program does not hold.
+/// A `RecordRef`'s reason names the origins that reach the operation
+/// ([`super::recref_origin`], round-3 c18): opened from a value the analysis
+/// does not resolve, set by `GetTable`, copied from another RecordRef (a
+/// global named with the routines that set it), passed by the caller, or not
+/// opened in the routine; a `Record` names a table the loaded program does
+/// not hold.
 fn unresolved_table_reason(
+    model: &Model,
     r: &crate::program::model::workspace::ModelRoutine,
     o: &crate::program::model::workspace::ModelRecordOperation,
 ) -> String {
-    use crate::program::body::features::PCallee;
-    let v = o.record_variable_name.as_str();
     if !o.receiver_is_record_ref {
+        let v = o.record_variable_name.as_str();
         return format!("Record {v}: its table is not in the loaded program");
     }
-    let set_by = r.call_sites.iter().find_map(|c| match &c.callee {
-        PCallee::Member { receiver, method } if receiver.eq_ignore_ascii_case(v) => {
-            match method.to_ascii_lowercase().as_str() {
-                "open" => Some("opened from a variable"),
-                "gettable" => Some("set by GetTable from a record whose table is not resolved"),
-                _ => None,
-            }
-        }
-        _ => None,
-    });
-    let reason = match set_by {
-        Some(why) => why,
-        None if r.parameters.iter().any(|p| p.name.eq_ignore_ascii_case(v)) => {
-            "passed by the caller"
-        }
-        None => "not opened in this routine",
-    };
-    format!("RecordRef {v}: {reason}")
+    super::recref_origin::recref_reason(model, r, o)
 }
 
 impl TableSite {
@@ -3309,6 +3293,17 @@ fn via_note(v: crate::engine::l4::effect_store::ViaRank) -> &'static str {
     }
 }
 
+/// How a caller reaches a touch, in words ([`via_note`]'s route).
+fn reach_words(v: crate::engine::l4::effect_store::ViaRank) -> &'static str {
+    use crate::engine::l4::effect_store::ViaRank;
+    match v {
+        ViaRank::Direct | ViaRank::Inherited => "through plain calls",
+        ViaRank::Dynamic => "through dynamic dispatch",
+        ViaRank::EventSubscriber => "through an event subscriber",
+        ViaRank::ImplicitTrigger => "through a table trigger",
+    }
+}
+
 /// What the touches renderers share: the query and the two joins.
 struct TouchCx<'q, 'a> {
     query: &'q DbEffectQuery<'a>,
@@ -3361,16 +3356,23 @@ impl<'a> TouchCx<'_, 'a> {
     /// [`Self::witness_line`] without its `through` clause: the touch
     /// itself, `[Op] <family> at <file>:<line> in <owner><temp><via>`.
     fn touch_core(&self, t: &TableTouch<'a>) -> String {
+        format!("{}{}", self.touch_site(t), via_note(t.via))
+    }
+
+    /// The touch's site alone, `[Op] <family> at <file>:<line> in
+    /// <owner><temp>`: [`Self::touch_core`] without how the caller reaches
+    /// it (round-3 c17: two callers reaching one site differ only in the
+    /// route, not in the touch).
+    fn touch_site(&self, t: &TableTouch<'a>) -> String {
         let at = match self.ops.get(t.operation_id, self.join) {
             Some(o) => format!("at {}:{} in {}", o.file, shown(o.line), o.owner.qualified()),
             None => format!("(outside the workspace: {})", t.operation_id),
         };
         format!(
-            "[{}] {} {at}{}{}",
+            "[{}] {} {at}{}",
             t.op,
             op_family(t.op),
-            temp_note(t.temp_state),
-            via_note(t.via)
+            temp_note(t.temp_state)
         )
     }
 
@@ -3454,9 +3456,15 @@ fn callers_by_object<'a>(
     if touchers.is_empty() {
         return out;
     }
+    // The first touch's site and class; its route apart (round-3 c17: the
+    // site is what callers share or not, the route only how they reach it).
     let first = |c: &CallerTouch<'a>| {
         let w = c.witnesses.as_ref().expect("a touching caller");
-        (cx.touch_core(&w.first), class_words(&w.counts))
+        (cx.touch_site(&w.first), class_words(&w.counts))
+    };
+    let route = |c: &CallerTouch<'a>| {
+        let w = c.witnesses.as_ref().expect("a touching caller");
+        via_note(w.first.via)
     };
     // The most common first touch and class (ties: the nearest caller's).
     let most = |key: &dyn Fn(&CallerTouch<'a>) -> String| -> (String, usize) {
@@ -3473,25 +3481,40 @@ fn callers_by_object<'a>(
     };
     let (touch, with_touch) = most(&|c| first(c).0);
     let (class, _) = most(&|c| first(c).1);
+    // The route most of the callers sharing the site take (ties: the
+    // nearest caller's).
+    let shared_route = {
+        let mut n: Vec<(&str, usize)> = Vec::new();
+        for c in touchers.iter().filter(|c| first(c).0 == touch) {
+            match n.iter_mut().find(|(r, _)| *r == route(c)) {
+                Some((_, k)) => *k += 1,
+                None => n.push((route(c), 1)),
+            }
+        }
+        n.iter()
+            .rev()
+            .max_by_key(|(_, k)| *k)
+            .map_or("", |(r, _)| *r)
+    };
     out.push_str(&format!(
-        "    shared first touch ({} of {}): {touch}; touches {class}\n",
+        "    shared first touch ({} of {}): {touch}{shared_route}; touches {class}\n",
         with_touch,
         plural(touchers.len(), "caller", "callers"),
     ));
     // Round-2 G36: the listed callers whose first touch is another, in one
     // line (each with its own first touch), not inside the caller list.
+    let name_of = |c: &CallerTouch<'a>| {
+        let internal = cx.query.bundle().routine_id(c.routine);
+        cx.join
+            .get(internal)
+            .map_or_else(|| internal.to_string(), |r| r.qualified())
+    };
     let own: Vec<String> = touchers[..listed]
         .iter()
         .filter_map(|c| {
             let (own_touch, _) = first(c);
-            (own_touch != touch).then(|| {
-                let internal = cx.query.bundle().routine_id(c.routine);
-                let name = cx
-                    .join
-                    .get(internal)
-                    .map_or_else(|| internal.to_string(), |r| r.qualified());
-                format!("{name} (first touch: {own_touch})")
-            })
+            (own_touch != touch)
+                .then(|| format!("{} (first touch: {own_touch}{})", name_of(c), route(c)))
         })
         .collect();
     if !own.is_empty() {
@@ -3499,6 +3522,24 @@ fn callers_by_object<'a>(
             "    first touch not the shared one ({}): {}\n",
             plural(own.len(), "caller", "callers"),
             own.join("; ")
+        ));
+    }
+    // Round-3 c17: a caller whose first touch is the shared one, reached
+    // another way (an event subscriber, a table trigger), says so apart: the
+    // touch is the same.
+    let other_route: Vec<String> = touchers[..listed]
+        .iter()
+        .filter(|c| first(c).0 == touch && route(c) != shared_route)
+        .map(|c| {
+            let w = c.witnesses.as_ref().expect("a touching caller");
+            format!("{} ({})", name_of(c), reach_words(w.first.via))
+        })
+        .collect();
+    if !other_route.is_empty() {
+        out.push_str(&format!(
+            "    the shared first touch, reached another way ({}): {}\n",
+            plural(other_route.len(), "caller", "callers"),
+            other_route.join("; ")
         ));
     }
     // By object, in the order of each object's nearest caller.
@@ -6183,13 +6224,7 @@ fn render_field_touches(
             v
         })
         .collect();
-    let field_name_of = |id: &str| {
-        table
-            .fields
-            .iter()
-            .find(|f| f.id == id)
-            .map_or(id.to_string(), |f| f.name.clone())
-    };
+    let field_name_of = |id: &str| table.field_name(id).unwrap_or(id).to_string();
     let keys_json: Vec<Value> = answer
         .declared_keys
         .iter()
@@ -6569,6 +6604,52 @@ mod tests {
             unresolved: String::new(),
             temp: TempStateKind::Known(false),
         }
+    }
+
+    /// Round-3 n03, hand-stated: Base Application's Customer shape, a key on
+    /// a system field (`SystemModifiedAt`, never a declared `field`) among
+    /// ordinary keys, and one whose member names no field. Every declared key
+    /// counts: 1 primary + 6 others, 4 shown and `+2`; the system field
+    /// prints by its name.
+    #[test]
+    fn a_key_on_a_system_field_counts_and_prints() {
+        let src = "table 50100 Cust
+{
+    fields
+    {
+        field(1; \"No.\"; Code[20]) { }
+        field(2; Name; Text[100]) { }
+        field(3; City; Text[30]) { }
+    }
+    keys
+    {
+        key(Key1; \"No.\") { Clustered = true; }
+        key(Key2; Name) { }
+        key(Key3; City) { }
+        key(Key4; SystemModifiedAt) { }
+        key(Key5; Name, City) { }
+        key(Key6; SystemId, Name) { }
+        key(Key7; NotAField) { }
+    }
+}
+";
+        let model =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("src/Tab.al".to_string(), src.to_string())],
+                "11111111-0000-0000-0000-0000000a0003",
+            );
+        let id = &model
+            .workspace
+            .tables
+            .iter()
+            .find(|t| t.name == "Cust")
+            .expect("table")
+            .id;
+        assert_eq!(
+            table_keys_line(&model, id),
+            "  keys: primary key \"No.\"; other keys: (\"Name\"), (\"City\"), \
+             (\"SystemModifiedAt\"), (\"Name\", \"City\"), … +2\n"
+        );
     }
 
     /// Round 2 G14: the header's `limits:` agrees with the body. A query

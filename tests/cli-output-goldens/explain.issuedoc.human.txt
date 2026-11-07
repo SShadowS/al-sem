@@ -6,7 +6,8 @@ Codeunit "Out Issue Document"::IssueDoc  defined at ws:src/OutIssueDocument.Code
   transaction, UI and errors: commits: may (1 dependency routine entered that commits); errors at 5 places
   other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
   uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
-  calls: Codeunit "Base Poster" (70100)::OnRun (called at :15); Codeunit "Base Calc" (70101)::OnRun (called at :16); Codeunit "Out Log Mgt"::WriteLog (called at :17); +5 more
+  calls: Codeunit "Out Log Mgt"::WriteLog (called at :17); Codeunit "Out Sender"::Notify (called at :18); ::GetHandler (called at :22); +3 more
+  runs: Codeunit "Base Poster" (70100) (Run at :15); Codeunit "Base Calc" (70101) (Run at :16)
   rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
   inherited rules: none
   callers: 1 direct — 1 page action in 1 object (--detail lists them); 1 page action reaches it in all (directly or through callers)
