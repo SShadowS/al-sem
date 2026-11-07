@@ -1618,7 +1618,13 @@ pub(crate) fn cdo_round2_size_ratchets() {
             "c02",
             "alsem_prove",
             json!({"routine": "Codeunit \"CDO CDN E-Doc Embed Req. Subs.\"::SetFiles", "question": "callers-may-run-noninteractive"}),
-            4_100,
+            // 4_100 -> 4_150 on 2026-11-07 (round-3 integration, measured
+            // 4,108 B): `fix/r3-feasible-witness` replaced the answer line's
+            // impossible third hub (a RecordRef Modify() with no trigger) with
+            // the real Codeunit.Run hub at ElectronicDocumentFormat.Table.al:204,
+            // whose text is longer; `fix/r3-labels` had shortened the fold note
+            // to fit 4,100 before the two met.
+            4_150,
         ),
         (
             "c08",
