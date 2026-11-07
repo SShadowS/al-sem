@@ -1698,7 +1698,12 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
         "per operation, one routine into dependency code"
     };
     h.scope = format!("{depth}; {}", dependencies_clause(deps.apps.len()));
-    h.scope_json(Map::new())
+    // The families' blockers decide `analysis` too (`Header::scope_json`).
+    let mut extra = Map::new();
+    if let Some(f) = payload.pointer("/result/scope/families") {
+        extra.insert("families".into(), f.clone());
+    }
+    h.scope_json(extra)
 }
 
 /// Render an unresolved/ambiguous selector as its own (exit-2) document, so a
@@ -2022,7 +2027,13 @@ impl QueryHeaderCx {
 /// `scope:` line; the title is the header's inputs, the first result line
 /// its answer, the scope line its scope clause. Every other line stays, in
 /// order. An answer with no title (a selector failure) is `no answer`.
-fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> String {
+fn query_with_header(
+    text: &str,
+    deps: usize,
+    exit: u8,
+    hc: &QueryHeaderCx,
+    families: Option<&Value>,
+) -> String {
     use crate::engine::result_header::{Analysis, Header, dependencies_clause};
     let tool = if hc.effects {
         "query effects"
@@ -2101,6 +2112,10 @@ fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> S
                 h.analysis =
                     Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
             }
+            if let Some(f) = families {
+                h.analysis = std::mem::replace(&mut h.analysis, Analysis::Complete)
+                    .and(Analysis::of_families(f));
+            }
         }
     }
     scope.push(dependencies_clause(deps));
@@ -2139,7 +2154,22 @@ fn finish_human(
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
     hc: &QueryHeaderCx,
 ) -> QueryRunResult {
-    r.human_text = query_with_header(&r.human_text, deps.apps.len(), r.exit_code, hc);
+    // Round-2 astra M1: the header's analysis is the document's
+    // (`payload.result.scope`, which counts the families' blockers).
+    let families = if hc.effects {
+        serde_json::from_str::<Value>(&r.json_text)
+            .ok()
+            .and_then(|d| d.pointer("/payload/result/scope/families").cloned())
+    } else {
+        None
+    };
+    r.human_text = query_with_header(
+        &r.human_text,
+        deps.apps.len(),
+        r.exit_code,
+        hc,
+        families.as_ref(),
+    );
     if let Some(s) = sources {
         r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
     }

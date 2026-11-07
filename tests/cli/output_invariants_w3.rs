@@ -1545,3 +1545,55 @@ fn write_lines_have_a_path_and_entry_point_counts_agree() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Round-2 astra M1: a document that reports families is no more complete
+/// than they say. Query effects on `IssueDoc` reports
+/// `beyondDependencyCalls.blockers` with calls not resolved and an
+/// open-world interface dispatch; `result.scope.analysis` said `complete`.
+/// It is `partial` with the families' reasons, the families keep their
+/// fields, and the human header says the same.
+///
+/// DISCRIMINATION (2026-11-07): computing `analysis` without the families
+/// (`Header::scope_json` taking `self.analysis` only) fails at "the scope
+/// counts the families' blockers"; restored, passes.
+#[test]
+fn query_analysis_counts_the_families_blockers() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (json, err, code) = run_alsem(&[
+        "query",
+        "effects",
+        &ws,
+        "--routine",
+        ISSUE_DOC_Q,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&json).unwrap();
+    let scope = &doc["payload"]["result"]["scope"];
+    let b = &scope["families"]["beyondDependencyCalls"]["blockers"];
+    assert!(
+        b["callNotResolved"].as_u64().unwrap() + b["interfaceDispatchOpenWorld"].as_u64().unwrap()
+            > 0,
+        "precondition: a blocker: {scope}"
+    );
+    assert_eq!(
+        scope["analysis"], "partial",
+        "the scope counts the families' blockers: {scope}"
+    );
+    assert!(
+        scope["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r.as_str().unwrap().contains("beyondDependencyCalls")),
+        "{scope}"
+    );
+    let (human, _, _) = run_alsem(&["query", "effects", &ws, "--routine", ISSUE_DOC_Q]);
+    let head = human
+        .lines()
+        .find(|l| l.starts_with("analysis "))
+        .expect("an analysis line");
+    assert!(head.starts_with("analysis partial ("), "{head}");
+    assert!(head.contains("beyondDependencyCalls"), "{head}");
+}
