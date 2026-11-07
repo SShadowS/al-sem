@@ -140,6 +140,10 @@ pub struct Anchor {
     pub end_col: u32,
 }
 
+/// A page action an action-run site stands for: the object declaring it and
+/// its name as declared.
+pub type RunAction = (crate::program::node::ObjectNodeId, Box<str>);
+
 /// One site: one edge the builder added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Site {
@@ -245,7 +249,7 @@ pub struct SitedGraph {
     /// Per action-run site with named actions, sorted by site: the actions
     /// that run its target, each `(the object declaring it, its name)`
     /// (round-2 r2 §2.1 step 3).
-    action_run_actions: Vec<(u32, Vec<(crate::program::node::ObjectNodeId, Box<str>)>)>,
+    action_run_actions: Vec<(u32, Vec<RunAction>)>,
     /// The program's canonical entries (round-2 r2 §2.1 step 4), built once
     /// on first use ([`Self::entry_inventory`]).
     entry_inventory: std::sync::OnceLock<super::entries::EntryInventory>,
@@ -788,7 +792,7 @@ pub(crate) struct SitedBuilder {
     /// The lifecycle sites a page action's `RunObject` makes.
     pub(crate) action_run_sites: Vec<u32>,
     /// Per action-run site with named actions: those actions.
-    pub(crate) action_run_actions: Vec<(u32, Vec<(crate::program::node::ObjectNodeId, Box<str>)>)>,
+    pub(crate) action_run_actions: Vec<(u32, Vec<RunAction>)>,
     /// The sites the projection labelled `configuredDispatch`, in site order.
     pub(crate) configured_arms: Vec<(u32, ConfiguredArm)>,
 }
