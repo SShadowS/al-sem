@@ -12,7 +12,7 @@
     {
       "analysis": "partial",
       "answer": "writes: may write 415 tables (12 owned by this app, 403 by dependencies) and 2 writes on a table not resolved; 250 of them beyond Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment (entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179)",
-      "effects": 767,
+      "effects": 765,
       "effectsByType": {
         "BACKGROUND_TASK": 5,
         "COMMIT": 16,
@@ -22,7 +22,7 @@
         "ERROR_IMPLICIT": 228,
         "ERROR_THROW": 115,
         "EVENT_PUBLISH": 93,
-        "FILE": 4,
+        "FILE": 2,
         "HTTP": 23,
         "ISOLATED_STORAGE": 17,
         "TELEMETRY": 25,
@@ -55,9 +55,9 @@
         },
         "entryPoints": {
           "atLeast": true,
-          "count": 44,
-          "routines": 47,
-          "sites": 54,
+          "count": 42,
+          "routines": 45,
+          "sites": 52,
           "withWrites": 15,
           "withWritesRoutines": 16,
           "withWritesSites": 17
@@ -74,7 +74,7 @@
         "kinds": {
           "backgroundTasks": 5,
           "errors": 304,
-          "file": 4,
+          "file": 2,
           "http": 21,
           "isolatedStorage": 17,
           "telemetry": 23,
@@ -103,6 +103,6 @@
   ],
   "routinesListed": 1,
   "shared": {},
-  "totalEffects": 767,
+  "totalEffects": 765,
   "totalUnresolved": 288
 }
