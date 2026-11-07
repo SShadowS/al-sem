@@ -94,11 +94,12 @@ fn zero_roots_exits_2_with_valid_document() {
         Some(0),
         "zero-roots → no entries"
     );
-    // rootsRequested counts query diagnostics too (#5). With a single unmatched
-    // selector there are 0 resolved roots and 0 query diagnostics (the diagnostic is
-    // a changed-roots selector-unmatched, not a digestQuery diagnostic), so
-    // rootsRequested == 0.
-    assert_eq!(v["payload"]["summary"]["rootsRequested"].as_u64(), Some(0));
+    // rootsRequested counts query diagnostics too (#5), and since round-2 n08
+    // each routine selector that resolved to none or to several: the request
+    // named one routine, so rootsRequested == 1 (it was 0) and rootsResolved
+    // == 0.
+    assert_eq!(v["payload"]["summary"]["rootsRequested"].as_u64(), Some(1));
+    assert_eq!(v["payload"]["summary"]["rootsResolved"].as_u64(), Some(0));
     // A changed-roots selector-unmatched diagnostic is surfaced.
     let crd = v["payload"]["changedRootsDiagnostics"]
         .as_array()

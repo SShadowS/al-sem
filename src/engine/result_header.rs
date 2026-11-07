@@ -295,6 +295,50 @@ pub fn outcome(exit: u8, stdout: Option<&str>, stderr: &[String]) -> &'static st
     }
 }
 
+/// The §6.3 outcome of a no-answer from its structured resolution
+/// diagnostics' `kind`s (round-2 n08, c26: the outcome came from the
+/// rendered words, and a filed answer had none): `ambiguous` when any input
+/// names several things (`selector-ambiguous`, `routine-ambiguous`,
+/// `table-ambiguous`, …), else `not-found` when one names nothing
+/// (`…-not-found`, `…-unmatched`, `unresolved`), else `None`. Each tool puts
+/// it in its summary as `outcome`; the MCP envelope takes it from there.
+#[must_use]
+pub fn outcome_of_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    let mut found = None;
+    for k in kinds {
+        if k.ends_with("ambiguous") {
+            return Some("ambiguous");
+        }
+        if k.ends_with("not-found") || k.ends_with("unmatched") || k == "unresolved" {
+            found = Some("not-found");
+        }
+    }
+    found
+}
+
+/// What a CLI answer's exit code means (§6.3), from the tool's structured
+/// `summary.outcome` when it states one (round-2 n08: an ambiguous selector
+/// is `ambiguous` because its diagnostic says so, whether the answer was
+/// inlined or filed), else from the answer's words ([`outcome`]).
+#[must_use]
+pub fn outcome_of_answer(
+    exit: u8,
+    summary: Option<&Value>,
+    stdout: Option<&str>,
+    stderr: &[String],
+) -> &'static str {
+    let stated = summary
+        .and_then(|s| s.get("outcome"))
+        .and_then(Value::as_str);
+    match (exit, stated) {
+        (2, Some("ambiguous")) => "ambiguous",
+        (2, Some("not-found")) => "not-found",
+        (2, Some("input-not-mapped")) => "input-not-mapped",
+        (0, Some("no-routine-changed")) => "no-routine-changed",
+        _ => outcome(exit, stdout, stderr),
+    }
+}
+
 /// `dependencies: N apps` (§5.3, F32): the one form of the dependencies line;
 /// the full list only with `all`/`detail`, and in the envelope's `universe`.
 #[must_use]

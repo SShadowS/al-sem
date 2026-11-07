@@ -263,6 +263,29 @@ pub enum ChangedRootsDiagnostic {
     },
 }
 
+impl ChangedRootsResult {
+    /// The roots the request asked for: the resolved ones, each query
+    /// diagnostic's root, and each routine selector that resolved to none
+    /// (`selector-unmatched`) or to several (`selector-ambiguous`). Round-2
+    /// n08: a request naming one ambiguous routine printed `rootsRequested:
+    /// 0` beside `changed.routines` holding it.
+    #[must_use]
+    pub fn roots_requested(&self, query_diagnostics: usize) -> usize {
+        let unresolved_selectors = self
+            .diagnostics
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d,
+                    ChangedRootsDiagnostic::SelectorUnmatched { .. }
+                        | ChangedRootsDiagnostic::SelectorAmbiguous { .. }
+                )
+            })
+            .count();
+        self.roots.len() + query_diagnostics + unresolved_selectors
+    }
+}
+
 impl ChangedRootsDiagnostic {
     /// The `kind` string, shared by the JSON and the human output (#340).
     fn kind(&self) -> &'static str {
@@ -2936,8 +2959,9 @@ pub fn project_digest_document(
     v3: Option<V3Inputs<'_>>,
 ) -> String {
     // payload.summary
-    // rootsRequested = roots.length + queryResult.diagnostics.length (contracts/digest.ts:443).
-    let roots_requested = changed_roots_result.roots.len() + query_diagnostics.len();
+    // rootsRequested = roots + query diagnostics + unresolved routine selectors
+    // (`ChangedRootsResult::roots_requested`).
+    let roots_requested = changed_roots_result.roots_requested(query_diagnostics.len());
     let roots_resolved = entries.len();
     let total_effects: usize = entries.iter().map(|e| e.effects.len()).sum();
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
@@ -4089,8 +4113,9 @@ fn digest_view(
         .iter()
         .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
         .collect();
-    // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let roots_requested = changed_roots.roots.len() + query_diagnostics.len();
+    // rootsRequested as `payload.summary` counts it (roots, query diagnostics
+    // and unresolved routine selectors).
+    let roots_requested = changed_roots.roots_requested(query_diagnostics.len());
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
     // `--tests` plan always builds the tree, roots or not (`digest_plan`).
@@ -4247,6 +4272,21 @@ fn digest_view(
     drop(rollup_cx);
     cx.release(Cell::L4);
     cx.release(Cell::Effects);
+
+    // §6.3 (round-2 n08): a no-answer's outcome from its changed-roots
+    // diagnostics' kinds (`selector-ambiguous` → `ambiguous`).
+    let mut summary = summary;
+    if exit_code == 2
+        && let Some(o) = crate::engine::result_header::outcome_of_kinds(
+            changed_roots
+                .diagnostics
+                .iter()
+                .map(ChangedRootsDiagnostic::kind),
+        )
+        && let serde_json::Value::Object(m) = &mut summary
+    {
+        m.insert("outcome".into(), o.into());
+    }
 
     DigestRunResult {
         json_text,

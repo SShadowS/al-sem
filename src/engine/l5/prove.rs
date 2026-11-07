@@ -3154,11 +3154,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             },
         );
 
+        // §6.3 (round-2 n08): the outcome from the blockers' kinds
+        // (`routine-ambiguous` / `routine-not-found`), not from the words.
+        let summary = crate::engine::result_header::outcome_of_kinds(
+            dummy_result.blocked_by.iter().flatten().map(|b| b.kind),
+        )
+        .map_or(
+            serde_json::Value::Null,
+            |o| serde_json::json!({"kind": "prove", "outcome": o}),
+        );
         return Ok(ProveRunResult {
             json_text,
             human_text,
             exit_code: 2,
-            summary: serde_json::Value::Null,
+            summary,
         });
     }
 

@@ -2039,7 +2039,19 @@ fn render(
         human.push_str(&name_apps(&d.human, apps));
         human.push('\n');
     }
-    let summary = explain_summary(&cards, resolved.diagnostics.len(), &header);
+    let mut summary = explain_summary(&cards, resolved.diagnostics.len(), &header);
+    // §6.3 (round-2 c26): a no-answer's outcome from its diagnostics' kinds.
+    if resolved.unresolved
+        && let Some(o) = crate::engine::result_header::outcome_of_kinds(
+            resolved
+                .diagnostics
+                .iter()
+                .filter_map(|d| d.json["kind"].as_str()),
+        )
+        && let Value::Object(m) = &mut summary
+    {
+        m.insert("outcome".into(), o.into());
+    }
     // W2-7 (2g): `--show-source` excerpts (read while the locations still
     // name their app by guid), then readable dependency locations (the JSON
     // keeps the guid).

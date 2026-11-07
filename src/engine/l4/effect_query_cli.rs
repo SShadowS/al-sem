@@ -1835,11 +1835,14 @@ fn selector_failure_doc_with<T>(
         }
         s
     };
+    // §6.3 (round-2 n08): the outcome from the resolution, not the words.
+    let summary = crate::engine::result_header::outcome_of_kinds([resolution.label()])
+        .map_or(Value::Null, |o| json!({"kind": kind, "outcome": o}));
     QueryRunResult {
         json_text: envelope(kind, payload, deps, alsem_ver, deterministic),
         human_text: human,
         exit_code: 2,
-        summary: Value::Null,
+        summary,
         ancestor_witnesses_built: 0,
     }
 }
