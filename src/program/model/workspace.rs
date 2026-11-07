@@ -192,7 +192,8 @@ pub struct ModelKey {
     /// Internal key id: `${tableId}/key/${index}` (mirrors al-sem `encodeKeyId`).
     pub id: String,
     /// Resolved member field internal ids (`${tableId}/${fieldNumber}`), in
-    /// declaration order. A key field not found in this object is silently
+    /// declaration order; a system field by its fixed number
+    /// ([`SYSTEM_FIELDS`]). A key field not found in this object is silently
     /// skipped (mirrors al-sem's `fieldsByName` resolution).
     pub fields: Vec<String>,
 }
@@ -223,6 +224,41 @@ pub struct ModelTable {
     /// `SymbolTable`), otherwise ops on the real table render the EXTENSION's
     /// name in rootCause text. Additive — ModelTable is not golden-serialized.
     pub is_extension_stub: bool,
+}
+
+/// The system fields the platform adds to every table, as (lowercased name,
+/// display name, field number). A key may name one (Base Application's
+/// Customer has `key(Key17; SystemModifiedAt)`), though no table declares it
+/// as a `field`. Provenance: the BC "system fields" reference (SystemId
+/// 2000000000, SystemCreatedAt 2000000001, SystemCreatedBy 2000000002,
+/// SystemModifiedAt 2000000003, SystemModifiedBy 2000000004).
+pub const SYSTEM_FIELDS: [(&str, &str, i64); 5] = [
+    ("systemid", "SystemId", 2_000_000_000),
+    ("systemcreatedat", "SystemCreatedAt", 2_000_000_001),
+    ("systemcreatedby", "SystemCreatedBy", 2_000_000_002),
+    ("systemmodifiedat", "SystemModifiedAt", 2_000_000_003),
+    ("systemmodifiedby", "SystemModifiedBy", 2_000_000_004),
+];
+
+impl ModelTable {
+    /// The name of the table's field `id` (`${tableId}/${fieldNumber}`): a
+    /// declared field (an extension's merged in), else a system field
+    /// ([`SYSTEM_FIELDS`]) of this table.
+    #[must_use]
+    pub fn field_name(&self, id: &str) -> Option<&str> {
+        if let Some(f) = self.fields.iter().find(|f| f.id == id) {
+            return Some(f.name.as_str());
+        }
+        let number: i64 = id
+            .strip_prefix(self.id.as_str())?
+            .strip_prefix('/')?
+            .parse()
+            .ok()?;
+        SYSTEM_FIELDS
+            .iter()
+            .find(|(_, _, n)| *n == number)
+            .map(|(_, name, _)| *name)
+    }
 }
 
 /// G-5: build an id → table map over `tables` where a REAL table always wins an
@@ -901,10 +937,19 @@ fn index_table_ir(
         .enumerate()
         .map(|(index, members)| ModelKey {
             id: format!("{table_id}/key/{index}"),
-            // `members` are already unquoted + lowercased by the lowerer.
+            // `members` are already unquoted + lowercased by the lowerer. A
+            // system field (`SystemModifiedAt`) is no declared field; it has
+            // its fixed number (round-3 n03: Customer's Key17 was dropped).
             fields: members
                 .iter()
-                .filter_map(|name| fields_by_name.get(name).cloned())
+                .filter_map(|name| {
+                    fields_by_name.get(name).cloned().or_else(|| {
+                        SYSTEM_FIELDS
+                            .iter()
+                            .find(|(lc, _, _)| lc == name)
+                            .map(|(_, _, n)| format!("{table_id}/{n}"))
+                    })
+                })
                 .collect(),
         })
         .collect();

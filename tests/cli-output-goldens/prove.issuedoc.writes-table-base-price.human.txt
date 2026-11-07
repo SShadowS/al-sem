@@ -1,9 +1,9 @@
 prove Codeunit "Out Issue Document"::IssueDoc writes-table:Base Price (table 70022, Out Base)   [cross-app]
-answer: yes — DB_MODIFY beyond Codeunit Base Calc::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 (condition not resolved)
+answer: yes — DB_MODIFY beyond Codeunit "Base Calc"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 (condition not resolved)
 analysis partial (2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 1 app
 more: --format json for every evidence row and its hops
   evidence: 1 effect
-    [DB_MODIFY] beyond Codeunit Base Calc::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16
+    [DB_MODIFY] beyond Codeunit "Base Calc"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16
       path: IssueDoc → [run] Codeunit "Base Calc" (70101)::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   top callees not resolved: Codeunit.Run(<dynamic>) ×2
   top interface dispatch (open world): Handler.Handle ×1

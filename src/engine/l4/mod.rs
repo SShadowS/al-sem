@@ -51,6 +51,8 @@ pub mod inherited_facts;
 // MCP output wave 2 (W2-0a): operation id → every claiming routine row.
 pub mod operation_index;
 pub(crate) mod param_guard;
+// Round-3 c18: where an unresolved RecordRef's table comes from, per site.
+pub(crate) mod recref_origin;
 // #69 D1 — the transitive producer solve: parameter-dependent writes resolved
 // in every routine's own frame, outside the shared capability cone.
 pub mod pd_solve;

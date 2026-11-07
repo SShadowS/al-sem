@@ -4,7 +4,7 @@ analysis complete · assumptions: loaded program; unloaded implementations and s
 more: --all lists every witness, no fold; --format json for every row
   dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
   by object: Codeunit "QT Touches" 11 sites
-  transitive: 9 workspace routines reach one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+  transitive: 12 workspace routines reach one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
   record writes: 4 sites in 3 routines — Insert 2, Delete 1, Modify 1 (temporary records: 1)
     [Insert] at ws:src/QTTouches.al:37 in Codeunit "QT Touches"::WriteItem (caller-dependent: parameter 1)
     [Insert] at ws:src/QTTouches.al:44 in Codeunit "QT Touches"::TempOnly (temporary record)
@@ -12,8 +12,8 @@ more: --all lists every witness, no fold; --format json for every row
     [Delete] at ws:src/QTTouches.al:90 in Codeunit "QT Touches"::Top2
   validations: 1 site (a validation may lead to a write; it is not one)
   locks: none observed
-  keys: primary key "No."
+  keys: primary key "No."; other keys: ("SystemModifiedAt")
   key-relevant (not exhaustive): Get 1 (primary key), SetCurrentKey 1, SetRange/SetFilter on key fields 1; not searched: key and ordering uses in declarations (page SourceTableView, report DataItemTableView)
   reads: 2 sites — FindFirst 2
   other operations: 1 site — SetFilter 1
-  the 9 routines that touch it transitively: --all lists them
+  the 12 routines that touch it transitively: --all lists them

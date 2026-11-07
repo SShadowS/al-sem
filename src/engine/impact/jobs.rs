@@ -307,6 +307,10 @@ impl Job for MainJob<'_> {
                 {
                     v["callsLine"] = json!(c);
                 }
+                // Round-3 m10: the objects it runs, apart from the calls.
+                if let Some(c) = crate::engine::l5::explain::runs_line(model, &routine_names, id) {
+                    v["runsLine"] = json!(c);
+                }
                 v
             })
             .collect();

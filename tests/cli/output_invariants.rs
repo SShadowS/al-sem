@@ -2099,10 +2099,12 @@ fn prove_states_coverage_assumptions_and_limits() {
     // Output validation V4 (§5.2): the header's answer line and its third
     // line (analysis · assumptions · limits · scope).
     let yes = run(ISSUE_DOC, "may-commit", "human");
-    // Round 2 G16: a `yes` names its first witness.
+    // Round 2 G16: a `yes` names its first witness; round-3 m04: a group's
+    // witness names where it ends, and the boundary in the one display.
     assert!(
         yes.contains(
-            "\nanswer: yes — COMMIT beyond Codeunit Base Poster::OnRun, entered at \
+            "\nanswer: yes — COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46, beyond \
+             Codeunit \"Base Poster\"::OnRun, entered at \
              ws:src/OutIssueDocument.Codeunit.al:15 (condition not resolved)\n"
         ),
         "{yes}"

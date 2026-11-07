@@ -94,6 +94,32 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
+          "line": 130,
+          "role": "definition"
+        },
+        "display": "Publisher",
+        "objectDisplay": "Codeunit \"QT Touches\"",
+        "selector": "Codeunit \"QT Touches\"::Publisher",
+        "signature": "()",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#989ece52aa2427548206c6ee46613758f58892c34435f6338ccfd63fa79234d7"
+      },
+      "r:6": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 142,
+          "role": "definition"
+        },
+        "display": "RunTop2OnEvent",
+        "objectDisplay": "Codeunit \"QT Touches\"",
+        "selector": "Codeunit \"QT Touches\"::RunTop2OnEvent",
+        "signature": "()",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#092eeb086152af563b227571448cefdaf5d660c2480b9aac81b5fa2d14fd88d0"
+      },
+      "r:7": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
           "line": 108,
           "role": "definition"
         },
@@ -103,7 +129,20 @@
         "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
       },
-      "r:6": {
+      "r:8": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 137,
+          "role": "definition"
+        },
+        "display": "OnTop2",
+        "objectDisplay": "Codeunit \"QT Touches\"",
+        "selector": "Codeunit \"QT Touches\"::OnTop2",
+        "signature": "()",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#ddcd6ebf0149743338191785e52ca10cb60120959f18621072d71e916fd632b6"
+      },
+      "r:9": {
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
@@ -151,7 +190,35 @@
           },
           "depth": 1,
           "firstWitness": "w:2",
+          "routine": "r:5",
+          "witnessCount": 2
+        },
+        {
+          "counts": {
+            "knownPersistent": 2,
+            "possiblyPersistent": {
+              "callerDependent": 0,
+              "tempStateUnknown": 0
+            },
+            "temporary": 0
+          },
+          "depth": 1,
+          "firstWitness": "w:3",
           "routine": "r:4",
+          "witnessCount": 2
+        },
+        {
+          "counts": {
+            "knownPersistent": 2,
+            "possiblyPersistent": {
+              "callerDependent": 0,
+              "tempStateUnknown": 0
+            },
+            "temporary": 0
+          },
+          "depth": 2,
+          "firstWitness": "w:2",
+          "routine": "r:6",
           "witnessCount": 2
         },
         {
@@ -164,19 +231,33 @@
             "temporary": 3
           },
           "depth": 2,
-          "firstWitness": "w:3",
-          "routine": "r:5",
+          "firstWitness": "w:2",
+          "routine": "r:7",
           "witnessCount": 7
+        },
+        {
+          "counts": {
+            "knownPersistent": 2,
+            "possiblyPersistent": {
+              "callerDependent": 0,
+              "tempStateUnknown": 0
+            },
+            "temporary": 0
+          },
+          "depth": 3,
+          "firstWitness": "w:4",
+          "routine": "r:8",
+          "witnessCount": 2
         }
       ],
       "callersNotTouching": 1,
-      "callersTouching": 3,
+      "callersTouching": 6,
       "callersUnknown": 0,
       "informative": true,
       "notTouching": [
         {
           "depth": 1,
-          "routine": "r:6"
+          "routine": "r:9"
         }
       ],
       "note": "the index holds no touch of the table in this routine's cone (one routine into dependency code; not proof of absence); the touching callers reach it through other branches",
@@ -186,7 +267,7 @@
         "notApplicable": "no dependency code loaded",
         "relation": "code-calls-through-dependency"
       },
-      "transitiveCallers": 4,
+      "transitiveCallers": 7,
       "unknown": []
     },
     "witnesses": {
@@ -214,8 +295,7 @@
           "routine": "r:4"
         },
         "tempState": "not temporary",
-        "touchClass": "knownPersistent",
-        "via": "direct"
+        "touchClass": "knownPersistent"
       },
       "w:3": {
         "op": "Delete",
@@ -228,7 +308,22 @@
           "routine": "r:4"
         },
         "tempState": "not temporary",
-        "touchClass": "knownPersistent"
+        "touchClass": "knownPersistent",
+        "via": "direct"
+      },
+      "w:4": {
+        "op": "Delete",
+        "operationId": "46598e8ae640a0a8/e109d4cf8a860242c4842a5d4e219298c34fec0b8f0dd48f8a6618d9d99814cf/op1",
+        "origin": {
+          "column": 8,
+          "file": "f:1",
+          "line": 90,
+          "role": "operation",
+          "routine": "r:4"
+        },
+        "tempState": "not temporary",
+        "touchClass": "knownPersistent",
+        "via": "event-subscriber"
       }
     }
   },

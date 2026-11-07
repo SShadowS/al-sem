@@ -244,6 +244,19 @@ pub struct CallersAnswer {
     pub direct_callers: usize,
 }
 
+/// The fold note of a witness list (round-3 c02): `detail` (in `detail`'s
+/// words) lists the `kept_hidden` kept ones with their paths; the
+/// `counted` others are counted, not kept, so nothing lists them.
+fn more_words(kept_hidden: usize, counted: usize, detail: &str) -> String {
+    match (kept_hidden, counted) {
+        (0, c) => format!("{c} counted, not kept; no option lists them"),
+        (k, 0) => format!("{detail} lists {k} more with their paths"),
+        (k, c) => {
+            format!("{detail} lists {k} more with their paths; the other {c} are counted, not kept")
+        }
+    }
+}
+
 /// Witnesses kept per answer.
 pub const MAX_WITNESSES: usize = 20;
 /// Blockers kept per kind.
@@ -2403,8 +2416,9 @@ fn plain_reading(a: &CallersAnswer) -> String {
             "external callers" => {
                 format!("{} other apps may call", plural(n, "routine", "routines"))
             }
+            // Round-3 c02: a noun phrase after "because of".
             "over a hub" => format!(
-                "{} {} it only over a hub",
+                "{} that {} it only over a hub",
                 plural(n, "caller", "callers"),
                 if n == 1 { "reaches" } else { "reach" }
             ),
@@ -2570,8 +2584,9 @@ fn found_among_line(a: &CallersAnswer) -> String {
             "external callers" => {
                 format!("{} other apps may call", plural(n, "routine", "routines"))
             }
+            // Round-3 c02: a noun phrase after "because of".
             "over a hub" => format!(
-                "{} {} it only over a hub",
+                "{} that {} it only over a hub",
                 plural(n, "caller", "callers"),
                 if n == 1 { "reaches" } else { "reach" }
             ),
@@ -2579,7 +2594,7 @@ fn found_among_line(a: &CallersAnswer) -> String {
         })
         .collect();
     format!(
-        "{label}: unknown — {found}; unknown because {}",
+        "{label}: unknown — {found}; unknown because of {}",
         why.join(", ")
     )
 }
@@ -2695,9 +2710,9 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
             }
             if established > shown {
                 lines.push(format!(
-                    "    … {} more established ({} lists up to {MAX_WITNESSES})",
+                    "    … {} more established ({})",
                     established - shown,
-                    hcx.detail()
+                    more_words(firm.len() - shown, established - firm.len(), hcx.detail())
                 ));
             }
         }
@@ -2719,10 +2734,12 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
                 lines.push(format!("      path: {}", path_text(&w.path)));
             }
             if candidates > shown {
+                // Round-3 c02: say what `detail` adds, the kept candidates
+                // (at most OPEN_WITNESSES), and what no option lists.
                 lines.push(format!(
-                    "    … {} more candidates ({} lists up to {OPEN_WITNESSES})",
+                    "    … {} more candidates ({})",
                     candidates - shown,
-                    hcx.detail()
+                    more_words(open.len() - shown, candidates - open.len(), hcx.detail())
                 ));
             }
         }
