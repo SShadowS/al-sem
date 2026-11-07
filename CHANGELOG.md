@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-3 output validation: test selection)
+
+- **Every changed routine a test reaches (c21).** `runFirst[].reaches` named only the
+  changed routine at the end of the test's shortest path, so with 20 changed routines every
+  row named `SetSendUsingBCEmailAccount` while its tests also reach 12 more (BCSendMail,
+  WaitForMailLimit, …). With up to 32 changed routines (one walk each) `reaches` now lists
+  every changed routine the test reaches, in `changed[]` order, with `reachesHops` beside it
+  (same order) and `reachesByNavigationOnly` (the ones it reaches only by UI navigation,
+  left out when none). Over 32 it stays the shortest path's routine, and
+  `result.selection.reachesComplete` says which (`true`/`false`). The select part carries
+  `reachesAll` (each root with tier, hops and relation) and `reachesComplete`.
+- **Nearest test is relation-aware (c21).** A changed routine's nearest test is the first
+  code test (tier, hops), and a UI-navigation test only when no code test reaches it.
+  `changed[].nearest.relation` is new (additive), the human `nearest [via-dependency, UI
+  navigation]` label and impact's `tests:` line (`nearest … (local, code, 1 hop)`) say it.
+  Under `maxTests` each routine takes its nearest test by that test's own path to the
+  routine (code before navigation, then tier, hops), so for BCSendMail a code test is
+  returned instead of `AttachmentsAssistEdit_OpensAttachmentsPage` (UI navigation only).
+- **The capped run target is the returned tests' (round-3 B1).** The envelope summary's
+  `runTarget.codeunits` listed the full selection's codeunits (15 on c21) while the 10
+  returned tests come from 4. It now lists the returned tests' codeunits, with
+  `runTarget.supersetOf: "returnedTests"` (whole codeunits: a superset of them); under a cap
+  the full selection's codeunits move to `selectionRunTarget` (`supersetOf:
+  "selectedTests"`, with `tests`). **Consumer notice** (bc-dev-mcp and any reader of
+  `summary.runTarget`): under a cap the field's meaning changes from "the selection" to "the
+  returned tests"; read `selectionRunTarget` for the old value. Uncapped answers are
+  unchanged.
+- **"Effectively the suite's posting tests" (c07, n02, m03)** came from a cone-size rule,
+  not from the tests: on c07 only 28 of the 444 are in posting codeunits. The line now says
+  what the rule measured: `[via-dependency] 444 tests in 40 codeunits of the suite's 1,844,
+  not listed at this tier — a broad set: each one's path enters dependency code that may run
+  more than half of the program; nearest: … ; tier: "dependency" lists them`. The MCP tool
+  description no longer promises "not specific to this change".
+- **"Each opens a page on the field's table" (n02)** was not computed: the 37 tests open
+  Template Card, CDO Setup and Setup Wizard, on other tables. The navigation caveat now names
+  the first page each path opens (at most three, then counted) and the step still needed:
+  `the first page each path opens: Page "CDO E-Mail Template Card", Page "CDO Setup", Page
+  "CDO Setup Wizard"; whether a test edits the field is not established`.
+
 ### Changed (round-2 output validation, W5: noise and size)
 
 Milestone W5 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§4.1-§4.4,
