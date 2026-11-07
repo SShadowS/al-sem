@@ -1,0 +1,13 @@
+{
+  "id": "c0a1e000-0000-4000-8000-0000000c06aa",
+  "name": "CRP Caller Rule Paths",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 50900,
+      "to": 50909
+    }
+  ]
+}

@@ -10,11 +10,15 @@ codeunit 50970 "Sel Dynamic"
         V.Ping();
     end;
 
+    // A RecordRef on a computed table: the open record hub. (One opened on a
+    // literal table is that table's record, not a hub.)
     procedure InsertViaRef()
     var
         RecRef: RecordRef;
+        TableNo: Integer;
     begin
-        RecRef.Open(Database::"Sel Ledger");
+        TableNo := Database::"Sel Ledger";
+        RecRef.Open(TableNo);
         RecRef.Insert(true);
     end;
 

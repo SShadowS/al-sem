@@ -389,6 +389,50 @@ fn up_callers_equal_explains_callers() {
     }
 }
 
+/// Round-2 n09: "raised by" is the events that raise the routine itself; a
+/// publisher anywhere among the ancestors is counted apart, under its own
+/// words. `OnItemModified` subscribes to `TU Item`'s `OnAfterModifyEvent`
+/// (raised by it); `Audited`, which that subscriber calls, is raised by no
+/// event, though the same publisher is among its ancestors.
+///
+/// DISCRIMINATION (2026-11-06): counting every event-dispatch site as
+/// direct (`if self.root_nodes.contains(&st.to)` → `if true` in
+/// `Up::reach`) gives `Audited` 1 direct event: fails at "Audited is raised
+/// by no event"; restored, passes.
+#[test]
+fn raised_by_names_the_routines_own_events_apart_from_ancestor_publishers() {
+    let t = universe();
+    let ws = t.path().join("App");
+    let sub = json(
+        &ws,
+        &["--routine", "TU Subscribers::OnItemModified", "--no-tests"],
+        None,
+    );
+    let p = &sub["roots"][0]["up"]["eventPublishers"];
+    assert_eq!(p["direct"]["count"], 1, "{p:#}");
+    assert!(
+        p["direct"]["first"][0]["display"]
+            .as_str()
+            .unwrap()
+            .contains("OnAfterModifyEvent"),
+        "{p:#}"
+    );
+    let callee = json(&ws, &["--routine", "TU Core::Audited", "--no-tests"], None);
+    let p = &callee["roots"][0]["up"]["eventPublishers"];
+    assert_eq!(
+        p["direct"]["count"], 0,
+        "Audited is raised by no event: {p:#}"
+    );
+    assert!(p["count"].as_u64().unwrap() >= 1, "{p:#}");
+    let (text, err, code) = impact(&ws, &["--routine", "TU Core::Audited", "--no-tests"], None);
+    assert_eq!(code, 0, "{text}{err}");
+    assert!(!text.contains("raised by:"), "{text}");
+    assert!(
+        text.contains("event publishers among its ancestors: "),
+        "{text}"
+    );
+}
+
 /// B-3b: a diff whose new side differs from the working tree is reported,
 /// and its routines are marked position-uncertain.
 ///

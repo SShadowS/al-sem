@@ -402,6 +402,10 @@
       "delta": null,
       "display": "Codeunit \"TU Core\"::Calc",
       "effects": {
+        "analysis": {
+          "reasons": [],
+          "status": "complete"
+        },
         "callerDependentTables": 0,
         "commits": {
           "answer": "none",
@@ -410,8 +414,10 @@
         },
         "entryPoints": {
           "count": 0,
+          "routines": 0,
           "sites": 0,
           "withWrites": 0,
+          "withWritesRoutines": 0,
           "withWritesSites": 0
         },
         "events": {
@@ -478,6 +484,10 @@
         "entryBuckets": 0,
         "eventPublishers": {
           "count": 0,
+          "direct": {
+            "count": 0,
+            "first": []
+          },
           "first": [],
           "onlyOpen": 0
         },
@@ -674,6 +684,10 @@
     "entryBuckets": 0,
     "eventPublishers": {
       "count": 0,
+      "direct": {
+        "count": 0,
+        "first": []
+      },
       "first": [],
       "onlyOpen": 0
     },

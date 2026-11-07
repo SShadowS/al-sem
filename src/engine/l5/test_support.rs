@@ -154,6 +154,8 @@ pub fn routine(id: &str, kind: &str) -> ModelRoutine {
         originating_object: None,
         enclosing_member_range: None,
         entry_temp_guard_receiver: None,
+        table_event_exits: Default::default(),
+        recordref_bindings: Vec::new(),
         rules: None,
         rule_drafts: None,
         card_text: None,

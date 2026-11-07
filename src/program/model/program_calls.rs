@@ -1498,6 +1498,22 @@ fn convert<'a>(
         site_facts: view.site_facts,
         registry: ctx.registry(),
         targets: std::cell::RefCell::new(Vec::new()),
+        table_event_exits: {
+            // Per node, what EVERY row of it exits on first thing (the
+            // intersection): two `#if` arms are two rows of one node, and the
+            // dispatch is dead only if neither arm runs past its guard.
+            let mut m: HashMap<RoutineNodeId, crate::program::table_event_guard::EntryExits> =
+                HashMap::new();
+            for (ri, r) in ws.routines.iter().enumerate() {
+                if let Some(Some(n)) = row_nodes.node_of.get(ri) {
+                    m.entry(n.clone())
+                        .and_modify(|x| *x = x.intersection(r.table_event_exits))
+                        .or_insert(r.table_event_exits);
+                }
+            }
+            m.retain(|_, e| !e.is_empty());
+            m
+        },
     };
 
     // The conversion loop to the end of the adapter.
@@ -1668,6 +1684,10 @@ struct Converter<'a> {
     /// The dependency targets reached so far, in edge order (S3.3). Pushed only
     /// once an edge is final, so a site that then fails leaves none behind.
     targets: std::cell::RefCell<Vec<crate::program::model::calls::ExternalTargetRef>>,
+    /// Per node with a table-event guard: what every one of its rows exits on
+    /// first thing (`ModelRoutine::table_event_exits`, intersected over the
+    /// node's rows). Absent: nothing.
+    table_event_exits: HashMap<RoutineNodeId, crate::program::table_event_guard::EntryExits>,
 }
 
 impl<'a> Converter<'a> {
@@ -2512,7 +2532,13 @@ impl Converter<'_> {
     /// edge, sorted by `(event, to)`. A `Validate` reaches only the subscribers
     /// of its own field (the publisher collapses the fields; the subscriber's
     /// `[EventSubscriber]` element names one), and with no field argument read,
-    /// none. The events fire whatever the RunTrigger, so nothing here reads it.
+    /// none. The events fire whatever the RunTrigger and for a temporary
+    /// record too; but a subscriber whose first statements exit on
+    /// `Rec.IsTemporary()` or `not RunTrigger`
+    /// ([`ModelRoutine::table_event_exits`]) gets no edge from a site that
+    /// proves that situation (`table_event_guard::RaiseContext`, from the site
+    /// facts and the op's known temp state), and a `conditional` edge from a
+    /// site that does not decide it (the subscription may be skipped).
     /// A subscriber outside the model (a dependency's, in a single-app model)
     /// keeps its identity in `external_targets` and gets no edge, as a
     /// dependency trigger does (S3.6).
@@ -2549,6 +2575,21 @@ impl Converter<'_> {
                         .fold_identifier()
                 })
         });
+        // What the site proves about the dispatch (`table_event_guard`): the
+        // program resolver's declared-temporary / RunTrigger reading, plus the
+        // model's own temp state of the op (a `TableType = Temporary` table, an
+        // entry guard, a RecordRef opened temporary, …).
+        let mut raise = self
+            .site_facts
+            .get(&ce.obligation_id)
+            .and_then(|f| f.table_event_raise)
+            .unwrap_or_default();
+        let known_temp = op
+            .temp_state
+            .as_ref()
+            .and_then(crate::program::body::features::PTempState::known_value);
+        raise.record_temporary |= crate::program::body::features::known_temp_suppresses(known_temp);
+        let record_not_temporary = known_temp == Some(false);
         // ModifyAll/DeleteAll raise once per row, and the row set may be empty.
         let fires = if matches!(op_lc.as_str(), "modifyall" | "deleteall") {
             crate::engine::l4::combined_graph::TriggerFires::Maybe
@@ -2585,10 +2626,19 @@ impl Converter<'_> {
                 {
                     continue;
                 }
+                // What the subscriber exits on first thing, in every row of
+                // its node (`#if` arms).
+                let exits = self.table_event_exits.get(sid).copied().unwrap_or_default();
                 match self.target(route) {
-                    Target::Model(t) => {
-                        out.push((event_id.clone(), t.id.clone(), !route.conditions.is_empty()))
-                    }
+                    // A subscriber whose first statements exit on what this
+                    // site proves (its record temporary, RunTrigger false)
+                    // runs nothing from here: no edge.
+                    Target::Model(_) if raise.kills(exits) => {}
+                    Target::Model(t) => out.push((
+                        event_id.clone(),
+                        t.id.clone(),
+                        !route.conditions.is_empty() || raise.may_skip(exits, record_not_temporary),
+                    )),
                     Target::MissingFromModel => c.adapter_routes_dropped += 1,
                     Target::Outside => {
                         if self.record_target(&op.id, route) {

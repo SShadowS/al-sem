@@ -162,6 +162,7 @@
       "beyondEntryPoints": [],
       "beyondWrites": {
         "entryPoints": 0,
+        "routinesEntered": 0,
         "sites": 0,
         "tables": 0,
         "tablesOnlyBeyond": 0

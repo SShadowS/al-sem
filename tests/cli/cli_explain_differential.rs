@@ -470,6 +470,70 @@ fn inherited_rules_follow_order_conditionality_and_literals() {
     assert_eq!(n, 1, "{}", rec["rules"]["inherited"]);
 }
 
+/// Round-2 c06: a caller's checking call counts before its call when it runs
+/// on every path to it, not only when it is top-level. Fixture
+/// `tests/fixtures/caller-rule-paths/App`: `SetUsage`'s callers call
+/// `HasRecipients`, whose `FindLine` (two calls deep, as CDO's
+/// `HasRecipients → FindEMailTemplateLine`) errors on an empty number. The
+/// check counts top-level before the call, in the call's own branch before
+/// it, in the condition of the branch around it, and in the condition of a
+/// nested branch around it; not in the other branch, nor after the call.
+/// The human line names both sides.
+///
+/// DISCRIMINATION (2026-11-06): taking top-level steps only again
+/// (`on_every_path` returning `s.top_level`) drops `SameBranch` and
+/// `NestedCondition` from `appliedBy` (a call in an outermost `if`
+/// condition is already top-level, so `InCondition` stays): fails at
+/// "every path"; restored, passes.
+#[test]
+fn caller_rules_count_a_check_on_every_path_to_the_call() {
+    let ws = repo_root().join("tests/fixtures/caller-rule-paths/App");
+    let run = |format: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("explain")
+            .arg(&ws)
+            .args(["--routine", "CRP Handler::SetUsage", "--format", format])
+            .output()
+            .expect("spawn alsem");
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let doc: serde_json::Value = serde_json::from_str(&run("json")).unwrap();
+    let callers = &doc["cards"][0]["rules"]["callers"];
+    let rule = rule_with(callers, "The order has no number.");
+    assert_eq!(
+        rule["appliedBy"],
+        serde_json::json!([
+            "Codeunit \"CRP Callers\"::TopLevel",
+            "Codeunit \"CRP Callers\"::SameBranch",
+            "Codeunit \"CRP Callers\"::InCondition",
+            "Codeunit \"CRP Callers\"::NestedCondition"
+        ]),
+        "every path: {rule}"
+    );
+    assert_eq!(
+        rule["skippedBy"],
+        serde_json::json!([
+            "Codeunit \"CRP Callers\"::OtherBranch",
+            "Codeunit \"CRP Callers\"::After"
+        ]),
+        "{rule}"
+    );
+    assert_eq!(
+        rule["via"],
+        serde_json::json!(["HasRecipients", "FindLine"])
+    );
+    let human = run("human");
+    assert!(
+        human.contains("caller rule (checked by 4 callers: "),
+        "{human}"
+    );
+    assert!(
+        human.contains("; no equivalent check recognized in 2 analyzed callers: "),
+        "{human}"
+    );
+}
+
 /// Spec §4.3 caller rules and §5's table-trigger and error-collector gaps.
 #[test]
 fn caller_rules_and_trigger_and_collector_gaps() {

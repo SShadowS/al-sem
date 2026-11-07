@@ -12,7 +12,7 @@ the rest adds one case per may-execute rule and per open-site hub.
 | `Invoice.al` | an event whose subscriber is reached only through it |
 | `LegacyExport.al` | `ExportLine`, which no test reaches |
 | `Ledger.al` | a table with `OnInsert` and a field `OnValidate`, its card page (`OnAfterGetRecord`, a field `OnValidate`, an action), a report, and a subscriber to the table's `OnAfterInsertEvent` (no record operation raises it yet: `unraisedPublisher`) |
-| `Dynamic.al` | open sites: `Codeunit.Run(Id)` (run hub), a Variant member call (name hub), `RecordRef.Insert(true)` (record hub), `Report.SaveAsXml(Report::X, ...)` (run hub), an unbound subscriber |
+| `Dynamic.al` | open sites: `Codeunit.Run(Id)` (run hub), a Variant member call (name hub), `RecordRef.Insert(true)` on a RecordRef opened on a computed table (record hub; a literal table would make it that table's record), `Report.SaveAsXml(Report::X, ...)` (run hub), an unbound subscriber |
 | `Tests.al` | one test per case: a `TestPage`, a modal page handler, a record insert, the dynamic sites |
 
 Ids 50900-50999. Nothing here is compiled; the engine reads the source only.

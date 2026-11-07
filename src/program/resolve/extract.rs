@@ -230,9 +230,9 @@ fn is_record_ty(ty: &str) -> bool {
 /// Compute the set of lowercased record-receiver variable names in scope for a
 /// routine.
 ///
-/// Always includes `"rec"` and `"xrec"` (the AL implicit record vars). Any param
-/// or local whose declared type is a Record type (via [`is_record_ty`]) is also
-/// included.
+/// Always includes `"rec"` and `"xrec"` (the AL implicit record vars). Any param,
+/// local or named return value whose declared type is a Record type (via
+/// [`is_record_ty`]) is also included.
 ///
 /// Object-level globals are NOT included here — pass them via `object_globals` in
 /// [`extract_sites`].
@@ -249,6 +249,13 @@ pub fn routine_rvars(routine: &RoutineDecl) -> HashSet<String> {
         if v.ty.as_deref().map(is_record_ty).unwrap_or(false) {
             rvars.insert(v.name.fold_identifier());
         }
+    }
+    // A named return value of a record type, as the body walk sees it (the shared
+    // `named_return_var`, so the two engines classify the same calls as record ops).
+    if let Some((name, ty)) = crate::program::body::ir_walk::named_return_var(routine)
+        && is_record_ty(ty)
+    {
+        rvars.insert(name.fold_identifier());
     }
     rvars
 }

@@ -92,6 +92,54 @@ impl Analysis {
             (Analysis::Complete, Analysis::Complete) => Analysis::Complete,
         }
     }
+
+    /// The completeness the reported families state (`result.scope.families`,
+    /// each `{…, blockers: {callNotResolved, interfaceDispatchOpenWorld}}`):
+    /// `Partial` when any family has a call not resolved or an open-world
+    /// interface dispatch, with one reason per distinct blocker set naming
+    /// its families; else `Complete`. Round-2 astra M1: query effects said
+    /// `analysis: complete` beside `beyondDependencyCalls.blockers
+    /// {callNotResolved: 21, interfaceDispatchOpenWorld: 267}`.
+    #[must_use]
+    pub fn of_families(families: &Value) -> Analysis {
+        let n = |b: &Value, k: &str| b.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let mut groups: Vec<((u64, u64), Vec<&str>)> = Vec::new();
+        for (name, fam) in families.as_object().into_iter().flatten() {
+            let b = &fam["blockers"];
+            let key = (n(b, "callNotResolved"), n(b, "interfaceDispatchOpenWorld"));
+            if key == (0, 0) {
+                continue;
+            }
+            match groups.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, names)) => names.push(name),
+                None => groups.push((key, vec![name])),
+            }
+        }
+        if groups.is_empty() {
+            return Analysis::Complete;
+        }
+        Analysis::Partial(
+            groups
+                .into_iter()
+                .map(|((calls, open), names)| {
+                    let mut what = Vec::new();
+                    if calls > 0 {
+                        what.push(format!(
+                            "{calls} {} not resolved",
+                            if calls == 1 { "call" } else { "calls" }
+                        ));
+                    }
+                    if open > 0 {
+                        what.push(format!(
+                            "{open} interface {} open world",
+                            if open == 1 { "dispatch" } else { "dispatches" }
+                        ));
+                    }
+                    format!("{}: {}", names.join(", "), what.join(", "))
+                })
+                .collect(),
+        )
+    }
 }
 
 /// The default assumption of every whole-program answer (§5.3: the full
@@ -192,8 +240,14 @@ impl Header {
     #[must_use]
     pub fn scope_json(&self, extra: Map<String, Value>) -> Value {
         let mut m = Map::new();
-        m.insert("analysis".into(), json!(self.analysis.key()));
-        m.insert("reasons".into(), json!(self.analysis.reasons()));
+        // A tool that reports `families` cannot be more complete than they
+        // say (round-2 astra M1): their blockers count here, for every tool.
+        let analysis = match extra.get("families") {
+            Some(f) => self.analysis.clone().and(Analysis::of_families(f)),
+            None => self.analysis.clone(),
+        };
+        m.insert("analysis".into(), json!(analysis.key()));
+        m.insert("reasons".into(), json!(analysis.reasons()));
         m.insert("assumptions".into(), json!(self.assumptions));
         m.insert("limits".into(), json!(self.limits));
         m.insert("universe".into(), json!(self.universe()));
@@ -292,6 +346,50 @@ pub fn outcome(exit: u8, stdout: Option<&str>, stderr: &[String]) -> &'static st
             }
         }
         _ => "usage-error",
+    }
+}
+
+/// The §6.3 outcome of a no-answer from its structured resolution
+/// diagnostics' `kind`s (round-2 n08, c26: the outcome came from the
+/// rendered words, and a filed answer had none): `ambiguous` when any input
+/// names several things (`selector-ambiguous`, `routine-ambiguous`,
+/// `table-ambiguous`, …), else `not-found` when one names nothing
+/// (`…-not-found`, `…-unmatched`, `unresolved`), else `None`. Each tool puts
+/// it in its summary as `outcome`; the MCP envelope takes it from there.
+#[must_use]
+pub fn outcome_of_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    let mut found = None;
+    for k in kinds {
+        if k.ends_with("ambiguous") {
+            return Some("ambiguous");
+        }
+        if k.ends_with("not-found") || k.ends_with("unmatched") || k == "unresolved" {
+            found = Some("not-found");
+        }
+    }
+    found
+}
+
+/// What a CLI answer's exit code means (§6.3), from the tool's structured
+/// `summary.outcome` when it states one (round-2 n08: an ambiguous selector
+/// is `ambiguous` because its diagnostic says so, whether the answer was
+/// inlined or filed), else from the answer's words ([`outcome`]).
+#[must_use]
+pub fn outcome_of_answer(
+    exit: u8,
+    summary: Option<&Value>,
+    stdout: Option<&str>,
+    stderr: &[String],
+) -> &'static str {
+    let stated = summary
+        .and_then(|s| s.get("outcome"))
+        .and_then(Value::as_str);
+    match (exit, stated) {
+        (2, Some("ambiguous")) => "ambiguous",
+        (2, Some("not-found")) => "not-found",
+        (2, Some("input-not-mapped")) => "input-not-mapped",
+        (0, Some("no-routine-changed")) => "no-routine-changed",
+        _ => outcome(exit, stdout, stderr),
     }
 }
 

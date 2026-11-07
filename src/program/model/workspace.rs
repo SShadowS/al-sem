@@ -670,6 +670,19 @@ pub struct ModelRoutine {
     /// `None` for any other shape (conservative — detectors keep firing).
     /// Additive — `ModelRoutine` is NOT Serialize-derived, never reaches a golden.
     pub entry_temp_guard_receiver: Option<String>,
+    /// What the routine exits on before anything else runs, when it is a
+    /// table-event subscriber's guard: `if Rec.IsTemporary() then exit;`,
+    /// `if not RunTrigger then exit;`
+    /// ([`crate::program::table_event_guard::subscriber_entry_exits`]). A
+    /// table-event edge from a site that proves the situation is dropped
+    /// (`program_calls`). Empty for any other routine. A few bits per row,
+    /// kept by every profile.
+    pub table_event_exits: crate::program::table_event_guard::EntryExits,
+    /// The local RecordRefs whose every binding is provable
+    /// ([`crate::program::recordref_table::local_recordref_bindings_all`]):
+    /// `record_types` gives their operations the one table the bindings
+    /// name. Empty for most routines.
+    pub recordref_bindings: Vec<(String, Vec<crate::program::recordref_table::Binding>)>,
     /// The routine's rules (intent-evidence spec §4.2): `None` when the view
     /// did not declare `ViewNeeds::rules` (not built), `Some(vec![])` when they
     /// were built and the routine has none (a routine with no body, a
@@ -2188,6 +2201,12 @@ fn project_ir(
                 originating_object,
                 enclosing_member_range,
                 entry_temp_guard_receiver,
+                table_event_exits: crate::program::table_event_guard::subscriber_entry_exits(
+                    ir_file, ir_routine,
+                ),
+                recordref_bindings: crate::program::recordref_table::local_recordref_bindings_all(
+                    ir_file, ir_routine,
+                ),
                 rules: None,
                 rule_drafts,
                 card_text,

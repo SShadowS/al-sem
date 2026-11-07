@@ -721,7 +721,12 @@ impl Pool {
         let mut envelope = match rendered {
             Ok(mut r) => {
                 // §6.3 (F36): what the exit code means.
-                let cli_outcome = crate::engine::result_header::outcome(r.exit, Some(&r.text), &[]);
+                let cli_outcome = crate::engine::result_header::outcome_of_answer(
+                    r.exit,
+                    Some(&r.summary),
+                    Some(&r.text),
+                    &[],
+                );
                 let mut summary = std::mem::take(&mut r.summary);
                 let inline = crate::wire::clamp_inline(call.command.max_inline_bytes);
                 let over_budget = call.command.client_budget_chars.is_some_and(|b| {
@@ -2119,12 +2124,18 @@ fn run_command(
                         Stderr::Lines(l) => l.lines(),
                         Stderr::File(_) => Vec::new(),
                     };
+                    // Round-2 n08: the tool's structured outcome (its
+                    // summary's, from its resolution diagnostics) first; the
+                    // words only for an answer with none. A filed answer has
+                    // no text here, and every exit 2 read `not-found` (an
+                    // ambiguous digest selector included).
                     let text = match &stdout {
                         Stdout::Text(t) => Some(t.as_str()),
                         Stdout::File(_) => None,
                     };
-                    cli_outcome = Some(crate::engine::result_header::outcome(
+                    cli_outcome = Some(crate::engine::result_header::outcome_of_answer(
                         exit_code,
+                        summary.as_ref(),
                         text,
                         &stderr_lines,
                     ));

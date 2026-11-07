@@ -232,7 +232,7 @@ fn parse_data_scope(text: &str) -> String {
     }
 }
 
-use crate::program::body::capability::io::is_temp_blob_type;
+use crate::program::body::capability::io::is_file_write_call;
 
 /// True when a declared type names a Page or Report (al-sem
 /// `ui-window-open.ts` `isPageOrReportType`).
@@ -901,17 +901,13 @@ pub(crate) fn direct_facts_for_routine(
     }
 
     // ── file-blob family (al-sem file-blob.ts) ─────────────────────────────
-    // Write-side File / TempBlob member methods. op=write-blob, resourceKind=file.
+    // Write-side `File` member methods (`is_file_write_call`; an in-memory
+    // `Temp Blob` stream is not file I/O). op=write-blob, resourceKind=file.
     for cs in &call_sites {
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        let method_lc = method.to_lowercase();
-        let receiver_type = receiver_type_of(receiver);
-        let is_file = receiver_type == "File"
-            && matches!(method_lc.as_str(), "create" | "writealltext" | "copy");
-        let is_temp_blob = is_temp_blob_type(&receiver_type) && method_lc == "createoutstream";
-        if !is_file && !is_temp_blob {
+        if !is_file_write_call(&receiver_type_of(receiver), &method.to_lowercase()) {
             continue;
         }
         let arg_source = match cs.argument_infos.first() {
@@ -7508,7 +7504,7 @@ codeunit 50111 "Cell Calls"
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 221),
-        ("fixtures", 60),
+        ("fixtures", 61),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),
@@ -8407,10 +8403,17 @@ codeunit 50100 C
                 // self-loops now), and the cross-app model demands the subscribers
                 // of the table events the workspace raises (routines 33,287 ->
                 // 34,118, recursive SCCs 70 -> 106, the largest 524 -> 650).
+                // 1027 -> 972 on 2026-11-07 (round-2 fix `fix/r2-temp-events`; the
+                // oracle agreed): a table event raised by a provably temporary
+                // record, or with RunTrigger false, no longer enters a subscriber
+                // whose leading guard exits on `Rec.IsTemporary()` / `not
+                // RunTrigger`, so most subscriber self-loops close no cycle any more
+                // (self-loops 65 -> 31, recursive SCCs 106 -> 71, the largest
+                // 650 -> 633, routines 34,118 -> 34,119).
                 assert_eq!(
-                    stats.recursive_members_emitted, 1027,
+                    stats.recursive_members_emitted, 972,
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
-                     1027 since F1 (2026-11-06); a \
+                     972 since the temp-record table-event guards (2026-11-07); a \
                      different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s

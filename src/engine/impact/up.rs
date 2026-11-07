@@ -119,6 +119,9 @@ struct Up<'g> {
     entries: BTreeMap<EntryKind, Firsts>,
     external: BTreeMap<&'static str, Firsts>,
     publishers: Firsts,
+    /// Of [`Self::publishers`], those whose event raises a root directly
+    /// (an event-dispatch site into a root).
+    direct_publishers: Firsts,
     hidden: BTreeMap<&'static str, usize>,
     universal: bool,
     limit: Option<Limit>,
@@ -140,6 +143,7 @@ impl<'g> Up<'g> {
             entries: BTreeMap::new(),
             external: BTreeMap::new(),
             publishers: Firsts::default(),
+            direct_publishers: Firsts::default(),
             hidden: BTreeMap::new(),
             universal: false,
             limit: None,
@@ -164,6 +168,12 @@ impl ConeVisitor for Up<'_> {
             let st = &self.g.sites()[site as usize];
             if st.boundary == Boundary::EventDispatch {
                 self.publishers.add(st.from, hops, s.tier);
+                // Round-2 n09: the events that raise a root itself (its
+                // own subscriptions), apart from every publisher among the
+                // ancestors.
+                if self.root_nodes.contains(&st.to) {
+                    self.direct_publishers.add(st.from, hops, s.tier);
+                }
             }
         }
         if !self.root_nodes.contains(&s.node)
@@ -406,8 +416,12 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
         "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep, "onlyOpen": open},
         "entries": entries,
         "userOrJobEntries": up.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count()).sum::<usize>(),
+        // `count`: publishers anywhere among the ancestors; `direct` (round-2
+        // n09, additive): the events that raise a root itself.
         "eventPublishers": {"count": up.publishers.count(), "onlyOpen": up.publishers.only_open(),
-                            "first": firsts(&up.publishers)},
+                            "first": firsts(&up.publishers),
+                            "direct": {"count": up.direct_publishers.count(),
+                                       "first": firsts(&up.direct_publishers)}},
         "external": external,
         "hidden": {"universalHub": up.universal, "byChannel": up.hidden},
         "limited": up.limit.map(|l| match l {

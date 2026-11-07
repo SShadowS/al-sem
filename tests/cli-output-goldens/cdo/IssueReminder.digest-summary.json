@@ -11,18 +11,18 @@
   "routines": [
     {
       "analysis": "partial",
-      "answer": "writes: may write 153 tables (11 owned by this app, 142 by dependencies) and 2 writes on a table not resolved; 89 of them beyond Codeunit \"Reminder-Issue\" (393)::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19)",
-      "effects": 808,
+      "answer": "writes: may write 147 tables (11 owned by this app, 136 by dependencies) and 2 writes on a table not resolved; 83 of them beyond Codeunit \"Reminder-Issue\" (393)::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19)",
+      "effects": 806,
       "effectsByType": {
         "BACKGROUND_TASK": 5,
         "COMMIT": 18,
         "DB_DELETE": 29,
-        "DB_INSERT": 50,
+        "DB_INSERT": 51,
         "DB_MODIFY": 30,
         "ERROR_IMPLICIT": 232,
         "ERROR_THROW": 118,
         "EVENT_PUBLISH": 95,
-        "FILE": 6,
+        "FILE": 3,
         "HTTP": 24,
         "ISOLATED_STORAGE": 18,
         "TELEMETRY": 27,
@@ -35,7 +35,7 @@
         "UI_WINDOW_OPEN": 10
       },
       "guaranteeLabels": {
-        "descriptiveOnly": 403,
+        "descriptiveOnly": 401,
         "refutable": 0
       },
       "routine": "Codeunit \"CDO Issue Document\"::IssueReminder",
@@ -56,12 +56,14 @@
         "entryPoints": {
           "atLeast": true,
           "count": 43,
+          "routines": 46,
           "sites": 54,
           "withWrites": 12,
+          "withWritesRoutines": 12,
           "withWritesSites": 15
         },
         "events": {
-          "distinct": 534,
+          "distinct": 535,
           "inWorkspaceCode": 75
         },
         "gaps": {
@@ -72,20 +74,20 @@
         "kinds": {
           "backgroundTasks": 3,
           "errors": 301,
-          "file": 4,
+          "file": 1,
           "http": 20,
           "isolatedStorage": 16,
           "telemetry": 23,
           "ui": 17
         },
-        "literalDeadTables": 329,
+        "literalDeadTables": 333,
         "mayWriteTables": {
-          "byDependencies": 142,
-          "count": 153,
+          "byDependencies": 136,
+          "count": 147,
           "mostBeyond": {
             "enteredAt": "ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19",
             "entryPoint": "Codeunit \"Reminder-Issue\" (393)::OnRun",
-            "tables": 89
+            "tables": 83
           },
           "ownedByApp": 11
         },
@@ -93,7 +95,7 @@
           "operations": 0,
           "tables": 0
         },
-        "temporaryOnlyTables": 57,
+        "temporaryOnlyTables": 54,
         "unresolvedTableWrites": 2
       },
       "testStatus": "not requested"
@@ -101,6 +103,6 @@
   ],
   "routinesListed": 1,
   "shared": {},
-  "totalEffects": 808,
+  "totalEffects": 806,
   "totalUnresolved": 288
 }

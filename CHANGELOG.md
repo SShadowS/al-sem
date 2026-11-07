@@ -7,6 +7,197 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (counts and labels the round-2 fact check found)
+
+The round-2 fact check of the output validation (calls c06, c11, c12, c20, n07, n08,
+n09) found answers whose count or label did not match their own facts.
+
+- **impact, first entry per kind** (c12, c20): a kind's count adds every legacy bucket of
+  that kind (codeunit OnRun = `onrun-codeunit` + `background-start` + …), but its "first"
+  witness was the first bucket's first witness: `first codeunit OnRun: Codeunit "Check Gen.
+  Jnl. Line. Backgr." (9081) (21 hops)` beside an OnRun bucket that held one at 3 hops. The
+  witness is now the nearest over the same buckets (no open site first, then hops).
+- **impact, run first** (c20): `codeunits 69000 — a superset: whole codeunits, for the 678
+  tests with a modeled path` claimed the codeunits cover every test with a modeled path.
+  They cover the tests `runFirst` picked (local paths by default). The line now says
+  `a superset of the 1 test picked on a local path; 677 tests have a modeled path only via
+  dependency code (446) or via a hub (231) and are not in this filter`. With no local test
+  it no longer says "no test with a modeled path" when some reach it through dependency
+  code or a hub.
+- **"dependency routines entered" counts routines** (c11): one entry point that raises an
+  event into three subscribers printed `through 1 dependency routine entered` beside the
+  three routines' names. Every line that says "dependency routines entered" (explain,
+  digest and query's `writes beyond dependency calls`, the scope line, the header's depth,
+  query's answer and touches) now counts distinct routines; JSON adds
+  `entryPoints.routines` / `withWritesRoutines` (digest, explain, impact) and
+  `beyondWrites.routinesEntered` (query). `entryPoints.count` keeps counting entry points.
+- **impact, raised by** (n09): `raised by: 368 event publishers` counted publishers anywhere
+  among the routine's ancestors. `raised by:` now lists only the events that raise the
+  routine itself (JSON `eventPublishers.direct`, additive), and the ancestor count prints as
+  `event publishers among its ancestors: 368`.
+- **impact, completeness** (n09): impact said `analysis complete` where explain on the same
+  routine said `analysis partial (interface-open-world; … 8 interface calls open world)`.
+  Impact's header read only whether the reverse walk ran. Each root's effects now carry
+  their digest entry's completeness (`effects.analysis`, the same function explain and
+  digest use), the routine's effects line names it, and the header is partial when any
+  root's effects are.
+- **explain and digest, dependency depth** (n07): `dependency code: none reached` was decided
+  from the entry points, which exist only for dependency calls that carry an effect. A cone
+  that enters dependency code with no effect beyond it (`CDO File::SetFilename → File
+  Management::GetFileName`) said "none reached". The cone walk now counts the dependency
+  routines it visits, and the line says `dependency code followed through every resolved
+  call (N dependency routines reached; no effect beyond them)`.
+- **digest, rootsRequested** (n08): a request naming one ambiguous routine printed
+  `rootsRequested: 0`; each routine selector that resolved to none or to several now counts.
+- **MCP outcome from the resolution, not the words** (n08, c26): the envelope said `outcome:
+  not-found` for an ambiguous selector whose answer went to a file, because the outcome was
+  read from the answer's text and a filed answer had none. explain, digest, prove and query
+  now put `outcome` in their summary from their structured resolution diagnostics
+  (`…-ambiguous` → `ambiguous`, `…-not-found` / `…-unmatched` → `not-found`;
+  `result_header::outcome_of_kinds`), impact already did, and the envelope takes it from
+  there (`outcome_of_answer`); the words stay only for an answer with no structured outcome.
+- **query effects, completeness from its families** (astra M1, c08): `result.scope.analysis`
+  said `complete` beside `families.beyondDependencyCalls.blockers {callNotResolved: 21,
+  interfaceDispatchOpenWorld: 267}`. A document that reports families is now `partial`
+  whenever one has an unresolved call or an open-world dispatch, with one reason per blocker
+  set naming its families (`Analysis::of_families`, applied in the shared
+  `Header::scope_json`); the human header says the same. The per-family fields stay.
+- **explain, caller rules** (c06): `checked by 2 callers; no equivalent check recognized in
+  41` missed four callers that run the same `VariantRec.IsRecord` check through
+  `HasRecipients → FindEMailTemplateLine`. The walk already looks through calls (unbounded
+  but for its 512-deep chain limit); what it missed was the caller side: only a top-level
+  call counted before the call site, and those four callers make both calls inside `if
+  DOActiveInCompany … if ActionsEnabled`. A step now counts when it runs on every path to
+  the site by the routine's statement tree: before it in the same block or a block around
+  it, or in the condition of a branch around it. The same rule applies to the rules in force
+  at a write. Fixture `tests/fixtures/caller-rule-paths/`.
+
+### Fixed (a Temp Blob stream is not file access)
+
+`TempBlob.CreateOutStream` was a FILE effect (`fileOp: "write-blob"`, ported from al-sem's
+`file-blob.ts`). A `Temp Blob` stream is in memory, so `explain`, `digest`, `query
+effects`, `prove` and the ordering engine reported memory streams as file I/O. Round-2
+fact check n10: `explain --callers-context` on `CDO E-Mail Handler::DocSave` printed "FILE
+at …CDOeDocumentsDispatcher.Codeunit.al:286" for `PdfTempBlob.CreateOutStream(WriteStream)`;
+c25: digest counted `CDOUniversigneSealService.Codeunit.al:218` `TempBlob.CreateOutStream`
+under `kinds.file`.
+
+- One rule, `capability::io::is_file_write_call`, shared by the body's capability
+  extractor and the capability cone's (two hand copies before). A FILE write is a method
+  of the AL `File` type that writes the server's file system (`Create`, `Copy`,
+  `WriteAllText`). Not file I/O: a `Temp Blob` (or the old `TempBlob` table), a BLOB
+  field, an `InStream` / `OutStream`; `UploadIntoStream` / `DownloadFromStream` stay
+  client file dialogs (`UI_FILE_DIALOG`, G26); a `File Management` call is a call into
+  Base Application, whose loaded body reaches the `File` methods. No consumer needs a
+  separate in-memory-stream label, so none was added.
+- Population (static count): `Temp Blob` `CreateOutStream` calls on the CDO baseline,
+  3 in the workspace, 159 in dependency source (Base Application 91, System Application
+  57, Continia Delivery Network 11); each was a FILE effect. The CDO renderings moved
+  only where a Temp Blob was the whole FILE story: `IssueReminder` FILE effects 6 → 3
+  (`file at 4 places` → 1), `RunReportID` 4 → 2 (the `Data Compression` and Temp Blob
+  `SendNetworkDocument` entries drop out; entry points 44 → 42). On the fact-check calls,
+  n10's `file at 5 places` is now 2 (both real `File` I/O in Base Application's
+  `IC Outbox Export`), and c25 holds no FILE effect (total effects 1,788 → 1,780).
+- Tests: `tests/cli/cli_temp_blob_not_file.rs` (explain and digest through the binary,
+  a `File.Create` as the positive control); `r4_cross_app_program::temp_blob_is_not_file_io`
+  now asserts the workspace's own `Temp Blob` call has no FILE fact either.
+
+### Fixed (a named return value of a record type is a record variable)
+
+A procedure's named return value (`procedure P() Ret: Record T`) is a variable of that
+routine, scoped like a local. The body walk took only globals, parameters and locals as
+record receivers, so `Ret.Get(…)`, `Ret.Insert()` and `Ret."Field" := …` were not record
+operations or field accesses: `query touches` left them out, and `explain`, `digest`,
+`query effects` and `prove` saw no write on the returned record. Round-2 fact check c30:
+`query touches --table "CDO E-Mail Template Header"` answered 199 sites in 121 routines
+without `CDOEMailTemplateManagement.Codeunit.al:259` `EMailTemplateHeader.Get(…)` (in
+`GetEmailTemplateFromRecord`, `:243`); CDO Send Code missed
+`CDOeDocsSendCodeMigration.Codeunit.al:207` and `CDOSetupData.Codeunit.al:650`, and
+`CreateDefaulteDocsSendCode`'s `SendCode.Insert()` (`:663`) was no write at all.
+
+- One definition, `ir_walk::named_return_var`, read by the body walk's receiver sets
+  (record operations, field accesses, RecordRef receivers), its record variables (a row
+  typed to the return type's table, temporary when declared `temporary`) and the
+  resolver's site extraction (`extract::routine_rvars`), so the two engines classify the
+  same calls as record operations (a named return's `Insert` now raises the table's
+  `OnAfterInsertEvent` like a local's). A bare name that is the return value is no longer
+  an implicit field access of a same-named field. A return value that shares a parameter's
+  or local's name (a compile error) is declined, as `receiver::caller_scope_symbol`
+  declines it; a `Rec` return in an object with an implicit `Rec` keeps the implicit row
+  (#299).
+- Population (static count over the CDO baseline `bc3ccb18` and its dependency source):
+  4 workspace routines have a record-typed named return; 3 of them hold 4 operations on it
+  (Get 3, Insert 1), and the fourth (`GetSendCode`) only passes it as a `var` receiver; in
+  dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
+  System Application 6 / 5, Base Application 2 / 5). `aldump --program-call-graph-stats`
+  on CDO: edges unchanged (whole program 46,426, primary 21,014), `unknown` 0 → 0.
+- The CDO L4 frozen digests moved (re-frozen on `integrate/r2-fixes`, see
+  `tests/l4-summary-baseline/README.md`). This fix's part: 136 routines gain the new
+  operations through their cones (`GetEmailTemplateFromRecord`'s Get in 117,
+  `CreateDefaulteDocsSendCode`'s Get and Insert in 18, `GetOrCreateDefaulteDocsSendCode`'s
+  Get in 6), and `CDO Send Code::GetSendCode`'s two `Get`s go from temp state unknown to
+  not temporary in 6, where a named return is passed as the `var` receiver. The Temp Blob
+  fix moves no DB effect, and the round-2 count fixes move neither digest.
+- Tests: `tests/cli/cli_named_return_record.rs` through the binary (query touches counts,
+  explain's write and its table-event subscriber write, digest's persistent and temporary
+  writes, the scalar return named like a field, the RecordRef return);
+  `ir_walk::…::named_return_record_variable_rows` (the clash and `Rec` rules).
+
+### Fixed (table events a temporary record or `RunTrigger = false` cannot run; RecordRef on a literal table)
+
+Found by the round-2 fact check of the 2026-11-06 output validation (calls c02, c12, c20,
+n09, n10; `target/tmp/output-validation/round2/factcheck/`).
+
+- **A table-event subscriber that exits first thing no longer runs where the raising site
+  proves its guard** (`src/program/table_event_guard.rs`). Business Central raises the
+  database trigger events for temporary records and for `RunTrigger = false` too (the
+  evidence: 151 of 515 such subscribers in Base Application test `Rec.IsTemporary`, and
+  subscribers branch on `RunTrigger`; Microsoft Learn "Event types" and "Performance
+  articles for developers": `DeleteAll`/`ModifyAll` raise them once per row). So the edge
+  stays, but a subscriber whose leading statements are `if Rec.IsTemporary() then exit;`
+  or `if not RunTrigger then exit;` (or an `or` of those two tests, nothing else) runs only
+  its guard from a record operation on a record declared `temporary` (a local, a parameter,
+  a global, the `Rec` of a page with `SourceTableTemporary = true`, or a record the model
+  knows is temporary such as a `TableType = Temporary` table), or one that passes
+  `RunTrigger = false` (a literal, or left out). Effects no longer count it (the model's
+  table-event edges, so `prove`, `explain`, `digest`, `query`), and paths no longer use it
+  (the reverse walk carries the subscriber's guard to its publisher and does not cross a
+  raising site that proves it, so `impact`, `tests` and callers' context). Where the site
+  does not decide (the caller's record, a computed RunTrigger), the edge stays and is
+  marked conditional (the subscription may be skipped). A guard beside a call
+  (`if Rec.IsTemporary or Mgt.Disabled() then exit;`) still runs the call (AL evaluates
+  every operand) and keeps its edge; `#if` arms count as dead only when every arm has the
+  guard. On CDO this removes the impossible `Codeunit "Check Gen. Jnl. Line. Backgr."`
+  witness (c12, c20: `TempGenJnlLine.Insert()` into `RunWorkflowOnAfterInsertGeneralJournalLine`),
+  n09's paths through `CustomerTemp.DeleteAll()` (its first page trigger was `Page "CDO
+  E-Mail/Print Statement"::OnOpenPage`; its first page action, `Page "CDO Unhandled"`, now
+  stays only through a user's delete on that `SourceTableTemporary` page, which the page
+  lifecycle still allows although the page says `DeleteAllowed = false`), and n10's Office
+  Document Handler commit witness. The CDO renderings move with it:
+  `IssueReminder`'s `writes-table:Data Exch.` was a false `yes` through `Reminder-Issue`'s
+  `TempGenJnlLine` insert into the same Workflow subscriber and is now `unknown` (its
+  ratchet rises to 3,400 B for the folded blockers), and its cone loses 6 tables only
+  that path wrote. The call-graph JSONL (`alsem graph`)
+  keeps the may-execute edge: one publisher node serves every raising site.
+- **A local RecordRef bound only to one literal table is that table**
+  (`src/program/recordref_table.rs`). `R.Open(Database::"T")` / `R.GetTable(<record of
+  T>)`, with `R` a local never assigned, passed on, copied or re-opened on another table:
+  `R.Modify()` is T's operation, firing T's triggers by its RunTrigger and T's table
+  events, and writing T, instead of the open record hub that reached every table's
+  `OnModify` (c02: `UpgradeBaseApp.Codeunit.al:2100` was printed as a hub into `Table "CAL
+  Test Line"::OnModify`). CDO: 3 more resolved dependency obligations (table events of
+  RecordRef operations now typed), `unknown` stays 0. `derived_only_matches_raw_fold_on_cdo`'s
+  pinned recursive-member count 1,027 → 972 (the raw-fold oracle agrees; subscriber self-loops
+  65 → 31, recursive SCCs 106 → 71): a guarded subscriber no longer re-raises its own table's
+  event for a temporary record.
+- **The CDO L4 frozen digests moved** with this fix and the named-return fix above
+  (whole program `b696264e…` → `46c002a2…`, reverse index `9576f2c0…` → `ce2b1abf…`;
+  attributed per branch in `tests/l4-summary-baseline/README.md`). This fix's part: 1,068
+  routines; `CDO File::GetNextEntryNo`'s `RecRef.FindLast()` is typed to CDO File instead
+  of `unknown` in the 1,058 routines that reach it, and the 10 routines under `Page "CDO
+  E-Mail/Print Statement"`'s `CustomerTemp.DeleteAll()` lose the 10 effects of the two
+  guarded Customer `OnAfterDeleteEvent` subscribers.
+
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 
 Output validation round 1, milestone V5 (spec

@@ -60,6 +60,52 @@ fn the_outcome_says_what_the_exit_code_means() {
         assert_eq!(env["exitCode"], *exit, "{tool} {args}: {env}");
         assert_eq!(env["outcome"], *outcome, "{tool} {args}: {env}");
     }
+    // Round-2 n08 / c26: the outcome comes from the tool's structured
+    // resolution diagnostic (`summary.outcome`), not its words, so a filed
+    // answer keeps it (an ambiguous digest selector read `not-found` once its
+    // JSON went to a file); a real absence stays `not-found`. The digest
+    // also counts the one routine it asked for.
+    //
+    // DISCRIMINATION (2026-11-07): `outcome_of_answer` ignoring the summary
+    // (always the words) gives `not-found` for the filed explain ambiguity:
+    // fails at `explain {"routines":["CheckAmount"],…}`; restored, passes.
+    // (2026-11-06) `roots_requested` without the selector diagnostics gives
+    // 0: fails at "rootsRequested"; restored, passes.
+    for (id, args, outcome) in [
+        (
+            20,
+            json!({"routines": ["CheckAmount"], "maxInlineBytes": 16}),
+            "ambiguous",
+        ),
+        (
+            21,
+            json!({"routines": ["NoSuchRoutine"], "maxInlineBytes": 16}),
+            "not-found",
+        ),
+    ] {
+        let env = envelope(&s.call(id, "alsem_explain", args.clone()));
+        assert!(env["stdoutFile"].is_object(), "precondition: filed: {env}");
+        assert_eq!(env["exitCode"], 2, "{env}");
+        assert_eq!(env["outcome"], outcome, "explain {args}: {env}");
+    }
+    let env = envelope(&s.call(
+        9,
+        "alsem_digest",
+        json!({"routines": ["CheckAmount"], "format": "json", "maxInlineBytes": 16}),
+    ));
+    assert!(
+        env["stdoutFile"].is_object(),
+        "precondition: the answer is filed: {env}"
+    );
+    assert_eq!(env["exitCode"], 2, "{env}");
+    assert_eq!(env["outcome"], "ambiguous", "a filed ambiguity: {env}");
+    assert_eq!(env["summary"]["rootsRequested"], 1, "rootsRequested: {env}");
+    let (stdout, _, _) = cli_bytes(&env);
+    let doc: Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(
+        doc["payload"]["summary"]["rootsRequested"], 1,
+        "the payload counts it too: {doc}"
+    );
     assert!(s.finish().success());
 
     // Impact on the test-universe fixture (a git folder): a diff whose lines

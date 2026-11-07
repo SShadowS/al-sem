@@ -231,3 +231,41 @@ root-cause any movement before committing (the old solver is at the
   byte; with the app scope they give the new ones. CDO is one app, so every id keeps one
   common prefix and `canonical()`'s sort by `routine_id` is unchanged; only the id text
   moved. The reverse index's oracle comparison passed in the re-freezing run.
+- **2026-11-07, the round-2 fix branches** (`integrate/r2-fixes`, head `cb123d31`).
+  Whole-program `b696264e…` -> `46c002a2…`; reverse index `9576f2c0…` -> `ce2b1abf…`. (The
+  `b696264e…`/`9576f2c0…` pair was minted by F1, `58dc4781`, and recorded only in
+  CHANGELOG.) Measured on the pinned `bc3ccb18` baseline by dumping both canonical
+  serializations (a throwaway hook, not committed) at master `bd67f4df` (reproduces the old
+  digests), at each fix branch alone, and at the integration head (reproduces the new
+  ones). 5479 routines throughout, none added or removed, no field other than `db_effects`
+  moved. The head is exactly the two branches' changes added together (routines moved by
+  one branch are byte-identical to that branch; the 108 moved by both carry the union).
+  - `fix/r2-counts` (`5669e80b`): moves neither digest (both byte-identical to master).
+  - `fix/r2-inventory` (`31268307`, a named return value of a record type is a record
+    variable): 136 routines, +189 / -30 effect keys. The new operations are
+    `GetEmailTemplateFromRecord`'s `EMailTemplateHeader.Get` (CDO E-Mail Template Header,
+    117 routines), `CreateDefaulteDocsSendCode`'s `SendCode.Get` and `SendCode.Insert`
+    (CDO Send Code, 18 routines; its `eDocumentsSetup.Get` is renumbered `op0` -> `op1`) and
+    `GetOrCreateDefaulteDocsSendCode`'s `SendCode.Get` (6). `CDO Send Code::GetSendCode`'s
+    two `Get(…)` on its own `Rec` go from temp state `u` to `f` in 6 routines: codeunit
+    6175371's `GetSendCode` passes its named return `SendCode` as the `var` receiver, which
+    is now a declared, non-temporary record. The Temp Blob half of the branch touches no DB
+    effect, so it moves nothing here. Reverse index: CDO Send Code gains 2 routines.
+  - `fix/r2-temp-events` (`88ba4f76`): 1068 routines, +1058 / -1158 effect keys.
+    RecordRef on one table: `CDO File::GetNextEntryNo`'s `RecRef.FindLast()`
+    (`RecRef.GetTable(Rec)`) is now typed to CDO File instead of `unknown` in all 1058
+    routines that reach it (temp state stays `u`). Temp-record guard: page 6175284 "CDO
+    E-Mail/Print Statement"'s `UpdateFilterWithMark` runs `CustomerTemp.DeleteAll()` on a
+    `temporary` Customer with `RunTrigger` false, so Customer `OnAfterDeleteEvent`'s
+    `OnAfterDeleteCustomer` (`if not RunTrigger then exit`) and
+    `OnAfterDeleteCustomer_RemoveConflict` (`if Rec.IsTemporary() then exit`) no longer
+    enter. 10 routines (that procedure, `OnOpenPage`, 7 `OnValidate`s, and codeunit
+    6175318's `OnRun`, which runs the page) each lose the 10 effects of those subscribers'
+    cones (CDO Customer Setup, CDO E-Mail Recipient, CDO Output Profile Conflict, the queue
+    check in `IsQueueClearForSource`, and CDO Customer Setup's `OnDelete` trigger's delete of
+    CDO Cust.Template Setup). Reverse index: CDO File gains 2 (`GetNextEntryNo` and CDO File's
+    `OnInsert`); CDO Queue Entry, CDO Customer Setup and CDO Output Profile Conflict each
+    lose the 10; `unknown` loses the 29 routines whose only `unknown`-table effect was
+    `GetNextEntryNo`'s read. The per-table changes equal the ones computed from the
+    whole-program dump.
+  - The reverse index's oracle comparison passed in the re-freezing run.
