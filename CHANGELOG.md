@@ -38,8 +38,21 @@ part). Replaces W1's interim "relation not recorded" population.
 - **Cost** (§2.1 targets, the up walk alone, release-fast, CDO): states 1.96× on c12,
   2.60× on c20, 2.61× on n09 (target 2×); walk time 2.6×, 3.3×, 3.5× (target 1.5×; 52 →
   134 ms on c12); scratch and visitor memory about 2.4× (a few MB); process peak memory
-  unchanged. The targets are missed on c20 and n09 (states) and on all three (time); the
-  dominance prune is a separate design for review, not part of W2.
+  roughly stable. The review (§R2.4, option A) accepted the cost and replaced the relative
+  targets with an absolute bar: the whole up part (`walkMs`) at most 250 ms per changed
+  routine on c12. Pruning is a later register item.
+- **Review landing changes (§R2.4):** a background target codeunit and the `OnRun` it runs
+  are one entry (a target with no `OnRun` is counted apart and noted); a page whose
+  `RunObject` actions are not named is one entry per page, and the totals say so (JSON
+  `entryNotes`, human `entry totals include …`); the scope line says test code is not in
+  these callers, the `roots.config` overlay is not applied, and (when there is one) that
+  `local` includes dependencies loaded from source folders; `direct code callers: none
+  found (test code is not counted; see tests:)`; the ancestor-publishers block leaves the
+  human text (JSON keeps `eventPublishers`); JSON `programEntries` is the canonical
+  program total (the legacy mask count is gone); a changed routine that is an entry says
+  `the changed routine is a page action (an entry itself)`; the `population` label sits
+  on the legacy `ancestors` object only; `reached by code: none — no established
+  code-path witness in the analyzed graph`.
 - **Canonical entries** (§2.1 steps 3-4): one identity per entry for numerator and
   denominator (a routine's `#if` arms as one; a page action as `(object, action)`, whether
   it runs through `OnAction` or `RunObject`; static background targets and action-run
