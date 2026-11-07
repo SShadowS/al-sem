@@ -177,8 +177,15 @@ fn cov(display: &str, tests: &[&str], via_event: bool) -> (String, String, bool)
     (display.to_string(), witness(tests), via_event)
 }
 
+/// `object` is spelled `<Type> <name>`; the row prints it through the one
+/// display (round-2 G41: the name quoted as AL needs it).
 fn unc(display: &str, object: &str, reason: &str) -> (String, String, String) {
-    (display.to_string(), object.to_string(), reason.to_string())
+    let (t, n) = object.split_once(' ').unwrap_or((object, ""));
+    (
+        display.to_string(),
+        al_sem::engine::l4::effect_query_cli::object_display(t, n),
+        reason.to_string(),
+    )
 }
 
 /// The production routines of the main selection (rows 1, 2, 3, 5, 6, 7).

@@ -8,7 +8,7 @@ Codeunit "Calls Post"::QuickPost  defined at ws:src/post.al:18
   callers and tests: callers: none; tests: none (no test code loaded)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: error-collector 1, table-trigger-rules-skipped 2
-  calls: Codeunit "Calls Checks": CheckOrder (:22), LogIfBlocked (:23)
+  calls: Codeunit "Calls Checks"::CheckOrder (called at :22); Codeunit "Calls Checks"::LogIfBlocked (called at :23)
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
   inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:15]

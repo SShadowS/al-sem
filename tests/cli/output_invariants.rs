@@ -1622,7 +1622,10 @@ pub(crate) fn query_write_tables(
         .iter()
         .filter_map(|t| t["tableId"].as_str().map(String::from))
         .collect();
-    let beyond = s["beyondEntryPoints"]
+    // Query 5.0.0 (round-2 G43): `beyondDependencyCalls`; 4.x: the old key.
+    let beyond = s
+        .get("beyondDependencyCalls")
+        .unwrap_or(&s["beyondEntryPoints"])
         .as_array()
         .unwrap()
         .iter()

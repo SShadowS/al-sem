@@ -137,7 +137,7 @@
             "sourceKind": "source"
           },
           "display": "CallerB",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf"
         },
         "unresolved": [],
@@ -267,7 +267,7 @@
             "sourceKind": "source"
           },
           "display": "CallerC",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c"
         },
         "unresolved": [],
@@ -397,7 +397,7 @@
             "sourceKind": "source"
           },
           "display": "CallerA",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
         },
         "unresolved": [],
@@ -471,7 +471,7 @@
             "sourceKind": "source"
           },
           "display": "ModifyHelper",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
         },
         "unresolved": [],
@@ -491,5 +491,6 @@
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "2.3.0"
+  "schemaVersion": "2.3.0",
+  "volatile": []
 }

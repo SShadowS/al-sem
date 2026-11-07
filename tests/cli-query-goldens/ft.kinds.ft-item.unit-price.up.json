@@ -55,7 +55,7 @@
     "fieldTouches": [
       {
         "kind": "write",
-        "object": "Codeunit FT Callers",
+        "object": "Codeunit \"FT Callers\"",
         "record": "I",
         "role": "primary",
         "routine": "r:1",
@@ -113,7 +113,7 @@
           "role": "definition"
         },
         "display": "CallsKinds",
-        "objectDisplay": "Codeunit FT Callers",
+        "objectDisplay": "Codeunit \"FT Callers\"",
         "qualifiedDisplay": "Codeunit \"FT Callers\"::CallsKinds",
         "selector": "Codeunit \"FT Callers\"::CallsKinds",
         "signature": "()",
@@ -127,7 +127,7 @@
           "role": "definition"
         },
         "display": "Kinds",
-        "objectDisplay": "Codeunit FT Consumers",
+        "objectDisplay": "Codeunit \"FT Consumers\"",
         "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
         "selector": "Codeunit \"FT Consumers\"::Kinds",
         "signature": "(var Record \"FT Item\")",
@@ -179,5 +179,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

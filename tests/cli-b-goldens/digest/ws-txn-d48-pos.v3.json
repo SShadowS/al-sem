@@ -95,7 +95,7 @@
             "sourceKind": "source"
           },
           "display": "SendOne",
-          "objectDisplay": "Codeunit D48 Sender",
+          "objectDisplay": "Codeunit \"D48 Sender\"",
           "qualifiedDisplay": "Codeunit \"D48 Sender\"::SendOne",
           "selector": "Codeunit \"D48 Sender\"::SendOne",
           "signature": "()",
@@ -106,10 +106,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -206,7 +206,7 @@
             "sourceKind": "source"
           },
           "display": "ProcessAll",
-          "objectDisplay": "Codeunit D48 Loop Caller",
+          "objectDisplay": "Codeunit \"D48 Loop Caller\"",
           "qualifiedDisplay": "Codeunit \"D48 Loop Caller\"::ProcessAll",
           "selector": "Codeunit \"D48 Loop Caller\"::ProcessAll",
           "signature": "()",
@@ -217,10 +217,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -311,7 +311,7 @@
             "sourceKind": "source"
           },
           "display": "SendOne",
-          "objectDisplay": "Codeunit D48 Loop Caller",
+          "objectDisplay": "Codeunit \"D48 Loop Caller\"",
           "qualifiedDisplay": "Codeunit \"D48 Loop Caller\"::SendOne",
           "selector": "Codeunit \"D48 Loop Caller\"::SendOne",
           "signature": "()",
@@ -322,10 +322,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -416,7 +416,7 @@
             "sourceKind": "source"
           },
           "display": "DoSendOnce",
-          "objectDisplay": "Codeunit D48 Non Loop Caller",
+          "objectDisplay": "Codeunit \"D48 Non Loop Caller\"",
           "qualifiedDisplay": "Codeunit \"D48 Non Loop Caller\"::DoSendOnce",
           "selector": "Codeunit \"D48 Non Loop Caller\"::DoSendOnce",
           "signature": "()",
@@ -427,10 +427,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -517,7 +517,7 @@
             "sourceKind": "source"
           },
           "display": "ExportAll",
-          "objectDisplay": "Codeunit D48 File Loop",
+          "objectDisplay": "Codeunit \"D48 File Loop\"",
           "qualifiedDisplay": "Codeunit \"D48 File Loop\"::ExportAll",
           "selector": "Codeunit \"D48 File Loop\"::ExportAll",
           "signature": "()",
@@ -528,10 +528,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -653,5 +653,6 @@
     },
     "workspaceFingerprint": "598ae8ef367e11fc639c1b762c08ea95a321cc8e1edb679fbf999289aeeb3770"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

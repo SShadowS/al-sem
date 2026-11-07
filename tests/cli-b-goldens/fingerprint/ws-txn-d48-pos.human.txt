@@ -1,6 +1,6 @@
 Rendering 4 root classifications.
 
-Codeunit D48 Sender::SendOne  [public-procedure]
+Codeunit "D48 Sender"::SendOne  [public-procedure]
   coverage:   complete
   http:       "<unknown>"
 
@@ -10,7 +10,7 @@ Codeunit D48 Sender::SendOne  [public-procedure]
         call Client.Send at ws:src/D48Pos.Codeunit.al:15:8
 
 
-Codeunit D48 Loop Caller::ProcessAll  [public-procedure]
+Codeunit "D48 Loop Caller"::ProcessAll  [public-procedure]
   coverage:   complete
   http:       "<unknown>"
 
@@ -22,7 +22,7 @@ Codeunit D48 Loop Caller::ProcessAll  [public-procedure]
             → call Client.Send at ws:src/D48Pos.Codeunit.al:15:8
 
 
-Codeunit D48 Non Loop Caller::DoSendOnce  [public-procedure]
+Codeunit "D48 Non Loop Caller"::DoSendOnce  [public-procedure]
   coverage:   complete
   http:       "<unknown>"
 
@@ -33,7 +33,7 @@ Codeunit D48 Non Loop Caller::DoSendOnce  [public-procedure]
           → call Client.Send at ws:src/D48Pos.Codeunit.al:15:8
 
 
-Codeunit D48 File Loop::ExportAll  [public-procedure]
+Codeunit "D48 File Loop"::ExportAll  [public-procedure]
   coverage:   complete
   file:       "line"
 

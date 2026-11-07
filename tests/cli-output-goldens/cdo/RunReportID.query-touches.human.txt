@@ -1,4 +1,4 @@
-query touches Codeunit "CDO E-Mail Handler"::RunReportID vs CDO File (f4b69b55-c90d-4937-8f53-2742898fa948/table/6175301)   [cross-app]
+query touches Codeunit "CDO E-Mail Handler"::RunReportID vs Table "CDO File" (f4b69b55-c90d-4937-8f53-2742898fa948/table/6175301)   [cross-app]
 answer: down: yes — 205 record touches: 1 on a persistent record, 5 on possibly persistent records (temp state not resolved), 199 on temporary records
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 11 apps
 more: all: true lists every witness, no fold; callers: true names every caller; format: "json" for every row

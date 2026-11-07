@@ -1,4 +1,4 @@
-query touches field 3 "Unit Price" of FT Item (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
+query touches field 3 "Unit Price" of Table "FT Item" (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
 answer: consumers: 1 site, 0 candidates (1 site in 1 routine of 1 object) — uses (a site can have two): write 1; sites by record: persistent 1
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
@@ -9,6 +9,6 @@ more: --all lists every witness, no fold; --format json for every row
   filters: none observed (searched: 4 workspace routine bodies, 0 dependency routine bodies; not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded))
   declared keys: key 2 (Amount, Unit Price)
   not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed above
-  Codeunit FT Callers: 1 site in 1 routine (write 1)
+  Codeunit "FT Callers": 1 site in 1 routine (write 1)
     CallsKinds ws:src/FTFields.al:135 write [persistent, access, up, local]
       legend: access: a field named on a record (Rec.Field); persistent: the record is not temporary

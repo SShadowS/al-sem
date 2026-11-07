@@ -1,6 +1,6 @@
 Rendering 4 root classifications.
 
-Codeunit D1 Multi Caller::CallerB  [public-procedure]
+Codeunit "D1 Multi Caller"::CallerB  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d01a/table/50101"
   permissions:
@@ -26,7 +26,7 @@ Codeunit D1 Multi Caller::CallerB  [public-procedure]
         direct Cust.FindSet at ws:src/D1MultiCaller.al:33:8
 
 
-Codeunit D1 Multi Caller::CallerC  [public-procedure]
+Codeunit "D1 Multi Caller"::CallerC  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d01a/table/50101"
   permissions:
@@ -52,7 +52,7 @@ Codeunit D1 Multi Caller::CallerC  [public-procedure]
         direct Cust.FindSet at ws:src/D1MultiCaller.al:41:8
 
 
-Codeunit D1 Multi Caller::CallerA  [public-procedure]
+Codeunit "D1 Multi Caller"::CallerA  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d01a/table/50101"
   permissions:
@@ -78,7 +78,7 @@ Codeunit D1 Multi Caller::CallerA  [public-procedure]
         direct Cust.FindSet at ws:src/D1MultiCaller.al:25:8
 
 
-Codeunit D1 Multi Caller::ModifyHelper  [public-procedure]
+Codeunit "D1 Multi Caller"::ModifyHelper  [public-procedure]
   coverage:   complete
   permissions:
     TableData "11111111-0000-0000-0000-00000000d01a/table/50101" M

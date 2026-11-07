@@ -37,6 +37,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -74,7 +75,7 @@
           "role": "definition"
         },
         "display": "WriteItem",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
         "selector": "Codeunit \"QT Touches\"::WriteItem",
         "signature": "(var Record \"QT Item\")",
@@ -88,7 +89,7 @@
           "role": "definition"
         },
         "display": "CallWithReal",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithReal",
         "selector": "Codeunit \"QT Touches\"::CallWithReal",
         "signature": "()",
@@ -102,7 +103,7 @@
           "role": "definition"
         },
         "display": "CallWithTemp",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithTemp",
         "selector": "Codeunit \"QT Touches\"::CallWithTemp",
         "signature": "()",
@@ -116,7 +117,7 @@
           "role": "definition"
         },
         "display": "Top1",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Top1",
         "selector": "Codeunit \"QT Touches\"::Top1",
         "signature": "()",
@@ -130,7 +131,7 @@
           "role": "definition"
         },
         "display": "TempOnly",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
         "selector": "Codeunit \"QT Touches\"::TempOnly",
         "signature": "()",
@@ -144,7 +145,7 @@
           "role": "definition"
         },
         "display": "Mixed",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
         "selector": "Codeunit \"QT Touches\"::Mixed",
         "signature": "()",
@@ -158,7 +159,7 @@
           "role": "definition"
         },
         "display": "Top2",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
         "selector": "Codeunit \"QT Touches\"::Top2",
         "signature": "()",
@@ -172,7 +173,7 @@
           "role": "definition"
         },
         "display": "Entry",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
         "selector": "Codeunit \"QT Touches\"::Entry",
         "signature": "()",
@@ -209,6 +210,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -224,6 +226,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -239,6 +242,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -254,6 +258,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 45,
             "role": "operation",
             "routine": "r:5"
@@ -269,6 +274,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 66,
             "role": "operation",
             "routine": "r:6"
@@ -285,6 +291,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 44,
             "role": "operation",
             "routine": "r:5"
@@ -300,6 +307,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -315,6 +323,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 90,
             "role": "operation",
             "routine": "r:7"
@@ -330,6 +339,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 45,
             "role": "operation",
             "routine": "r:5"
@@ -345,6 +355,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 66,
             "role": "operation",
             "routine": "r:6"
@@ -360,6 +371,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 44,
             "role": "operation",
             "routine": "r:5"
@@ -375,6 +387,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -390,6 +403,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 37,
             "role": "operation",
             "routine": "r:1"
@@ -405,6 +419,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 89,
             "role": "operation",
             "routine": "r:7"
@@ -416,5 +431,5 @@
       ]
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

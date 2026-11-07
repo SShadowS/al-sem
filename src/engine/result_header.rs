@@ -235,6 +235,22 @@ impl Header {
         )
     }
 
+    /// A lookup miss's header (round-2 output validation G40): the inputs
+    /// line and the one failure sentence on the `answer:` line; no
+    /// analysis, assumptions, limits or scope (nothing was analyzed) and no
+    /// `more:` (there is nothing more to show). The lines that help the next
+    /// call follow it.
+    #[must_use]
+    pub fn miss_human(&self) -> String {
+        format!(
+            "{} {}   [{}]\nanswer: {}\n",
+            self.tool,
+            self.inputs,
+            self.universe(),
+            self.answer
+        )
+    }
+
     /// `result.scope` (F76): the same facts as structured fields. `extra`
     /// adds the tool's own (`families`, `selection`).
     #[must_use]
@@ -390,6 +406,19 @@ pub fn outcome_of_answer(
         (2, Some("input-not-mapped")) => "input-not-mapped",
         (0, Some("no-routine-changed")) => "no-routine-changed",
         _ => outcome(exit, stdout, stderr),
+    }
+}
+
+/// A document's `volatile` (round-2 output validation G44, beside
+/// `deterministic`): the envelope fields whose value changes from one run to
+/// the next on the same input. `["generatedAt"]` unless `--deterministic`
+/// pins it; `[]` then.
+#[must_use]
+pub fn volatile(deterministic: bool) -> Value {
+    if deterministic {
+        json!([])
+    } else {
+        json!(["generatedAt"])
     }
 }
 

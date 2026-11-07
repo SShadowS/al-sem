@@ -67,7 +67,7 @@
         "sourceKind": "source"
       },
       "display": "PostThenError",
-      "objectDisplay": "Codeunit D51 Sender",
+      "objectDisplay": "Codeunit \"D51 Sender\"",
       "qualifiedDisplay": "Codeunit \"D51 Sender\"::PostThenError",
       "selector": "Codeunit \"D51 Sender\"::PostThenError",
       "signature": "()",
@@ -75,5 +75,6 @@
     },
     "workspaceFingerprint": "7b850fecf8bc63d2216a6d8e134dbdee8afdd0ceb51be87ffc52197fcef36875"
   },
-  "schemaVersion": "2.10.0"
+  "schemaVersion": "2.11.0",
+  "volatile": []
 }

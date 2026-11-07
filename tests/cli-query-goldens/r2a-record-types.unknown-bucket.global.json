@@ -72,7 +72,7 @@
           "Get": 1
         },
         "workspaceByObject": {
-          "Codeunit R2a Records": 1
+          "Codeunit \"R2a Records\"": 1
         },
         "workspaceByOp": {
           "Get": 1
@@ -92,7 +92,7 @@
             "role": "definition"
           },
           "display": "DeclaredVars",
-          "objectDisplay": "Codeunit R2a Records",
+          "objectDisplay": "Codeunit \"R2a Records\"",
           "qualifiedDisplay": "Codeunit \"R2a Records\"::DeclaredVars",
           "selector": "Codeunit \"R2a Records\"::DeclaredVars",
           "signature": "()",
@@ -102,5 +102,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

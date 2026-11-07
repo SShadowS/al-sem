@@ -39,7 +39,7 @@
         ],
         "routine": {
           "display": "CallChain",
-          "objectDisplay": "Codeunit Ws Work",
+          "objectDisplay": "Codeunit \"Ws Work\"",
           "stableId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
         }
       }

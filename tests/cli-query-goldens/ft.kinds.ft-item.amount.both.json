@@ -67,7 +67,7 @@
     "fieldTouches": [
       {
         "kind": "read",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -87,7 +87,7 @@
       },
       {
         "kind": "read",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -106,7 +106,7 @@
       },
       {
         "kind": "validate",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -125,7 +125,7 @@
       },
       {
         "kind": "filter",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -144,7 +144,7 @@
       },
       {
         "kind": "filter",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -163,7 +163,7 @@
       },
       {
         "kind": "key-use",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -182,7 +182,7 @@
       },
       {
         "kind": "load",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -201,7 +201,7 @@
       },
       {
         "kind": "calc",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -220,7 +220,7 @@
       },
       {
         "kind": "rule",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -239,7 +239,7 @@
       },
       {
         "kind": "rule",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -258,7 +258,7 @@
       },
       {
         "kind": "metadata",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -277,7 +277,7 @@
       },
       {
         "kind": "write",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -296,7 +296,7 @@
       },
       {
         "kind": "write",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Tmp",
         "role": "primary",
         "routine": "r:1",
@@ -316,7 +316,7 @@
       {
         "copySide": "source",
         "kind": "copy-candidate",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -336,7 +336,7 @@
       {
         "copySide": "receiver",
         "kind": "copy-candidate",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "Item",
         "role": "primary",
         "routine": "r:1",
@@ -355,7 +355,7 @@
       },
       {
         "kind": "by-number",
-        "object": "Codeunit FT Consumers",
+        "object": "Codeunit \"FT Consumers\"",
         "record": "RecRef",
         "role": "primary",
         "routine": "r:1",
@@ -374,7 +374,7 @@
       },
       {
         "kind": "write",
-        "object": "Table FT Item",
+        "object": "Table \"FT Item\"",
         "record": "Rec",
         "role": "primary",
         "routine": "r:2",
@@ -393,7 +393,7 @@
       },
       {
         "kind": "read",
-        "object": "Table FT Item",
+        "object": "Table \"FT Item\"",
         "record": "Rec",
         "role": "primary",
         "routine": "r:2",
@@ -412,7 +412,7 @@
       },
       {
         "kind": "rule",
-        "object": "Table FT Item",
+        "object": "Table \"FT Item\"",
         "record": "Rec",
         "role": "primary",
         "routine": "r:2",
@@ -473,7 +473,7 @@
           "role": "definition"
         },
         "display": "Kinds",
-        "objectDisplay": "Codeunit FT Consumers",
+        "objectDisplay": "Codeunit \"FT Consumers\"",
         "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
         "selector": "Codeunit \"FT Consumers\"::Kinds",
         "signature": "(var Record \"FT Item\")",
@@ -491,7 +491,7 @@
           "kind": "field",
           "name": "Amount"
         },
-        "objectDisplay": "Table FT Item",
+        "objectDisplay": "Table \"FT Item\"",
         "qualifiedDisplay": "Table \"FT Item\".Amount::OnValidate",
         "selector": "Table \"FT Item\".Amount::OnValidate",
         "signature": "()",
@@ -543,5 +543,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

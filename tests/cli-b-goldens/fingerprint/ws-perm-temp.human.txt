@@ -1,6 +1,6 @@
 Rendering 3 root classifications.
 
-Codeunit PT Writer::ByParam  [public-procedure]
+Codeunit "PT Writer"::ByParam  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000e130/table/50300"
   permissions:
@@ -16,7 +16,7 @@ Codeunit PT Writer::ByParam  [public-procedure]
         direct R.Insert at ws:src/Writer.Codeunit.al:22:8
 
 
-Codeunit PT Writer::TempOnly  [public-procedure]
+Codeunit "PT Writer"::TempOnly  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000e130/table/50300"
 
@@ -34,7 +34,7 @@ Codeunit PT Writer::TempOnly  [public-procedure]
         direct TempRec.Get at ws:src/Writer.Codeunit.al:30:11
 
 
-Codeunit PT Writer::Mixed  [public-procedure]
+Codeunit "PT Writer"::Mixed  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000e130/table/50300"
   permissions:

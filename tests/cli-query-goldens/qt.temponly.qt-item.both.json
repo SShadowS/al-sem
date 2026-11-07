@@ -38,6 +38,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 45,
             "role": "operation",
             "routine": "r:1"
@@ -51,6 +52,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/QTTouches.al",
+            "fileDisplay": "ws:src/QTTouches.al",
             "line": 44,
             "role": "operation",
             "routine": "r:1"
@@ -87,7 +89,7 @@
           "role": "definition"
         },
         "display": "TempOnly",
-        "objectDisplay": "Codeunit QT Touches",
+        "objectDisplay": "Codeunit \"QT Touches\"",
         "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
         "selector": "Codeunit \"QT Touches\"::TempOnly",
         "signature": "()",
@@ -118,5 +120,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

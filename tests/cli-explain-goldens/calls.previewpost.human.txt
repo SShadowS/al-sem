@@ -7,7 +7,7 @@ Codeunit "Calls Post"::PreviewPost  defined at ws:src/post.al:36
   other effects: events: 0 (0 raised in workspace code)
   callers and tests: callers: none; tests: none (no test code loaded)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  calls: Codeunit "Calls Checks": CheckPreview (:40)
+  calls: Codeunit "Calls Checks"::CheckPreview (called at :40)
   rules: none of its own
   inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:23]
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:41): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]

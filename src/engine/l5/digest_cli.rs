@@ -758,7 +758,7 @@ pub(crate) fn member_rows<'m>(
             let member = r.enclosing_member.as_deref()?;
             Some(crate::engine::l5::selector_index::MemberRow {
                 id: &r.stable_routine_id,
-                owner_display: owners.object_display(&r.stable_routine_id),
+                owner_display: owners.object_key(&r.stable_routine_id),
                 member,
                 member_kind: r.member_detail.as_ref().map_or_else(
                     || {
@@ -839,8 +839,7 @@ pub fn resolve_changed_roots(
     for selector in input.routines.iter().flatten() {
         let (base, wanted) = crate::engine::l5::selector_index::split_signature(selector);
         let (matches, matched_form) = resolve_selector(base, &selector_idx);
-        let mut matches =
-            narrow_to_owner(base, matched_form, matches, |id| owners.object_display(id));
+        let mut matches = narrow_to_owner(base, matched_form, matches, |id| owners.object_key(id));
         if let Some(wanted) = &wanted {
             matches.retain(|id| {
                 rows.get(id.as_str()).is_some_and(|r| {
@@ -865,13 +864,24 @@ pub fn resolve_changed_roots(
                 selector: selector.clone(),
                 hints: crate::engine::l5::selector_index::selector_hints(
                     &names,
-                    |id| owners.object_display(id),
+                    |id| owners.object_key(id),
                     selector,
                 ),
             });
         } else if matches.len() >= 2 {
-            // candidates = `<owner>::<display>` (display falls back to the id)
-            // — deterministic (matches preserve identity-table / bucket order).
+            // candidates = `<owner>::<display>` (display falls back to the id).
+            // Round-2 G40: ordered by where each is declared (file, line), so
+            // every rendering lists an ambiguity in source order; the sort is
+            // stable, so ids with no row keep their identity-table order.
+            let mut matches = matches;
+            matches.sort_by_key(|id| {
+                rows.get(id.as_str()).map(|r| {
+                    (
+                        r.source_anchor.source_unit_id.clone(),
+                        r.source_anchor.start_line,
+                    )
+                })
+            });
             let candidates: Vec<String> = matches
                 .iter()
                 .map(|id| {
@@ -2768,6 +2778,31 @@ pub(crate) fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> s
                     listed.iter().map(|c| c.selector.clone()).collect(),
                 );
             }
+            // Round-2 G40 (additive here; digest 5.0.0's one candidate
+            // array): each candidate's selector, display, signature, stable
+            // id and declaration, in source order — every 4.x string list is
+            // rebuilt from it (`digest_v5::to_v4`).
+            if !listed.is_empty()
+                && routines.len() == listed.len()
+                && listed.iter().all(|c| !c.at.is_empty())
+            {
+                m.insert(
+                    "candidateRows".into(),
+                    listed
+                        .iter()
+                        .zip(candidates)
+                        .map(|(c, display)| {
+                            serde_json::json!({
+                                "selector": c.selector,
+                                "display": display,
+                                "signature": c.signature(),
+                                "stableId": c.stable_id,
+                                "definedAt": c.at,
+                            })
+                        })
+                        .collect(),
+                );
+            }
         }
         ChangedRootsDiagnostic::FileAmbiguous { file, candidates }
         | ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => {
@@ -3061,6 +3096,11 @@ pub fn project_digest_document(
     env.insert("generatedAt".into(), generated_at.into());
     env.insert("kind".into(), "digest".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
+    // Round-2 G44 (additive): the fields that change run to run.
+    env.insert(
+        "volatile".into(),
+        crate::engine::result_header::volatile(deterministic),
+    );
     // 1.4.0: additive `detail.tempState` on DB_* effects (#65) and
     // `payload.dependencies` {mode, apps} (#66).
     // 1.5.0: additive routine.declarationOnly, routine.anchors and the
@@ -3139,6 +3179,19 @@ pub fn project_digest_document(
             for e in es {
                 let id = e["routine"]["stableId"].as_str().unwrap_or("").to_string();
                 if let Some((values, _)) = answers.get(&id) {
+                    // Round-2 G42 (additive): the resolved table in prove's
+                    // own shape beside the asked `table`.
+                    let values: Vec<serde_json::Value> = values
+                        .iter()
+                        .map(|a| {
+                            let mut a = a.clone();
+                            if let (Some(v), Some(t)) = (v3.as_ref(), a["table"].as_str()) {
+                                a["tableRef"] =
+                                    crate::engine::l5::prove::table_ref(v.cx.model, v.cx, t);
+                            }
+                            a
+                        })
+                        .collect();
                     e["tableAnswers"] = serde_json::json!(values);
                 }
             }
@@ -3154,6 +3207,12 @@ pub fn project_digest_document(
     // (`digest_v4`); `--schema 3` keeps the 3.x document for one release.
     if v3.as_ref().is_some_and(|v| v.v4) {
         doc = sort_keys_keep_nulls(crate::engine::l5::digest_v4::document_from_v3(doc));
+    }
+    // 5.0.0 (round-2 output validation §4.6): one shape per field and the
+    // §8.1 boundary words (`digest_v5`); `--schema 4` keeps 4.0.0 for one
+    // release.
+    if v3.as_ref().is_some_and(|v| v.v4 && v.v5) {
+        doc = sort_keys_keep_nulls(crate::engine::l5::digest_v5::document_from_v4(doc));
     }
     if compact {
         let mut s = serde_json::to_string(&doc).expect("serde_json serialization");
@@ -3176,6 +3235,9 @@ pub struct V3Inputs<'a> {
     /// Output validation V5 (§7.3): the 4.0.0 document (`digest_v4`);
     /// `false` is `--schema 3`.
     pub v4: bool,
+    /// Round-2 output validation §4.6: the 5.0.0 document (`digest_v5`)
+    /// over the 4.0.0 one; `false` is `--schema 4` (or 3).
+    pub v5: bool,
 }
 
 pub struct ChangedInputContract {
@@ -3511,6 +3573,9 @@ fn digest_entry_summary(
         "shortAnswer": short_answer(&r.totals, &facts.analysis),
         "effects": e.effects.len(),
         "effectsByType": by_type,
+        // Round-2 G42: the effect counts by type under the name that is
+        // always a map (`effectsByType` leaves in the next digest major).
+        "effectCounts": by_type,
         // W2-2 (T-W2-13): the one RollupTotals serialization.
         "summary": r.totals.to_json(),
         "testStatus": test_status,
@@ -3538,8 +3603,13 @@ fn digest_entry_summary(
                 .iter()
                 .map(|a| {
                     let blockers = a["blockedBy"].as_array().map_or(0, Vec::len);
+                    // Round-2 G42: one table shape, prove's (`tableRef`:
+                    // `{id, name, number, app, appId}`, `null` for a name
+                    // that resolves to no table) beside what was asked.
+                    let asked = a["table"].as_str().unwrap_or("");
                     let mut t = json!({
-                        "table": {"name": a["table"]},
+                        "asked": asked,
+                        "tableRef": crate::engine::l5::prove::table_ref(cx.model, cx, asked),
                         "answer": a.get("answer").cloned().unwrap_or(serde_json::Value::Null),
                         "blockers": blockers,
                     });
@@ -3725,6 +3795,7 @@ const INDEX_ROW_KEYS: &[&str] = &[
     "testStatus",
     "effects",
     "effectsByType",
+    "effectCounts",
     "summary",
     "guaranteeLabels",
     "observedWrites",
@@ -3800,8 +3871,10 @@ fn compact_digest_summary(
                     x[k] = v.clone();
                 }
             }
+            // Round-2 G42: a shared answer is named by `sharedWith` (one
+            // key, one meaning), never by a polymorphic field.
             match r["shortAnswer"].as_str().and_then(|a| key_of.get(a)) {
-                Some(key) => x["shared"] = json!(key),
+                Some(key) => x["sharedWith"] = json!(key),
                 None => x["answer"] = r["shortAnswer"].clone(),
             }
             x
@@ -4367,6 +4440,7 @@ fn digest_view(
             table_answers: &table_answers,
             scope: Some(header.scope_json(serde_json::Map::new())),
             v4: !render.schema3,
+            v5: !render.schema3 && !render.schema4,
         }),
     );
 
@@ -5457,7 +5531,7 @@ mod tests {
         // case is `digest_summary_rows_fit_and_overflow_keeps_the_index`.
         assert_eq!(s["routinesListed"], 40, "{text}");
         assert!(s.get("summaryTruncated").is_none(), "{text}");
-        assert_eq!(s["routines"][0]["shared"], "s1", "{text}");
+        assert_eq!(s["routines"][0]["sharedWith"], "s1", "{text}");
         assert_eq!(s["rootsResolved"], 40);
     }
 

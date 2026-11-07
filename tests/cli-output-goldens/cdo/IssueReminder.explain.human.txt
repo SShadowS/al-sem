@@ -7,7 +7,7 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
   other effects: events: 535 (75 raised in workspace code); HTTP at 20 places; file at 1 place; background tasks at 3 places; isolated storage at 16 places; telemetry at 23 places
   callers and tests: callers: 1 direct (1 page action); 1 page action reaches it in all; tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
   uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
-  calls: Codeunit "Reminder-Issue" (393): Set (:18), OnRun (:19), GetIssuedReminder (:21); +1 more
+  calls: Codeunit "Reminder-Issue" (393)::Set (called at :18); Codeunit "Reminder-Issue" (393)::OnRun (called at :19); Codeunit "Reminder-Issue" (393)::GetIssuedReminder (called at :21); +1 more
   UI route: UI_CONFIRM via IssueReminder → DocHandle → RunReport
   target company: not established by this analysis (ChangeCompany at ws:src/Platform/Setup/CDOAzureBlobFolderMgt.Codeunit.al:403)
   callers: 1 direct — 1 page action in 1 object (detail: true lists them); 1 page action reaches it in all (directly or through callers)
@@ -102,7 +102,7 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
     34 dependency routines entered at 39 dependency calls write only temporary records or no table (detail: true lists them)
   literal arguments rule out: 333 tables (84 effect rows) the cone lists but the root cannot reach
   temporary records (writes to them do not directly persist): 6 tables in workspace code (14 effect rows): CDO E-Mail Signature, CDO File, CDO Temp Blob, CDO Template Line Attachment, CDO Template Variant Entry, Error Message; 71 tables only beyond dependency calls; only temporary: 54 tables
-  events raised (75 in workspace code, its own and downstream), by publisher (8 publishers): Codeunit CDO Events 55, Codeunit CDO Contnia Online PDF Mgt. 5, Codeunit CDO OnPremise Functions 5, Codeunit CDO Universign eSeal Service 4, Codeunit CDO eDocuments Dispatcher 2, Table CDO File 2, … +2 publishers; names: detail: true lists them; 460 more only beyond dependency calls; publishes: 1 of its own (extension points below)
+  events raised (75 in workspace code, its own and downstream), by publisher (8 publishers): Codeunit "CDO Events" 55, Codeunit "CDO Contnia Online PDF Mgt." 5, Codeunit "CDO OnPremise Functions" 5, Codeunit "CDO Universign eSeal Service" 4, Codeunit "CDO eDocuments Dispatcher" 2, Table "CDO File" 2, … +2 publishers; names: detail: true lists them; 460 more only beyond dependency calls; publishes: 1 of its own (extension points below)
     path segments (each [Sn] in a path above stands for these hops):
       S1: IssueReminder → Codeunit "CDO E-Mail Handler"::DocHandle → RunReport → RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateDocuments(var RecordRef, Record "CDO E-Mail Template Header", Record "CDO Document Template Line", Integer, Boolean, Boolean, Boolean, var Record "CDO File", var Record "CDO File", var Record "CDO File") → CreateDocumentsForRecord → Codeunit "CDO Electronic Document Mgt."::SendElectronicDocument(var Variant, Record "CDO Send Code", Record "CDO Document Template Line", Boolean, Boolean, Boolean, Boolean)
       S2: [interface] Codeunit "CDO Legacy eDoc Dispatcher"::DispatchDocument → DoDispatch → ExportDocument

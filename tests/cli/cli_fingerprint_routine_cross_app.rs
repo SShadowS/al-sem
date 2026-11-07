@@ -248,7 +248,7 @@ fn fingerprint_selector_primary_only() {
     let blocks = v["payload"]["blocks"].as_array().unwrap();
     assert_eq!(blocks.len(), 1, "{v}");
     assert_eq!(
-        blocks[0]["routine"]["objectDisplay"], "Codeunit Ws Runner",
+        blocks[0]["routine"]["objectDisplay"], "Codeunit \"Ws Runner\"",
         "{v}"
     );
     // The human selector-error arm: an owner that declares no OnRun.
@@ -579,6 +579,8 @@ fn single_app_flag_reaches_fingerprint_routine() {
         let base = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         // Since the base: schema 1.3.0, then 2.0.0 (MCP output plan 1a), whose
         // payload states `lineBase: 1` (the fixture's block has no line to move).
+        // The base file was hand-edited once since: round-2 W4 (G41) quotes the
+        // owner's `objectDisplay` as AL needs it.
         let (old, new) = (
             "\"schemaVersion\": \"1.2.0\"",
             "\"schemaVersion\": \"2.0.0\"",

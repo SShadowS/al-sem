@@ -1,4 +1,4 @@
-query touches Codeunit "QT Touches"::Leaf vs QT Item (07070707-0000-4000-8000-000000000071/table/50700)   [cross-app]
+query touches Codeunit "QT Touches"::Leaf vs Table "QT Item" (07070707-0000-4000-8000-000000000071/table/50700)   [cross-app]
 answer: up: 3 of 4 transitive callers touch it through other branches, 1 does not, 0 unknown; not touching: Codeunit "QT Touches"::Top3
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: per operation, one routine into dependency code; dependencies: 0 apps
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row

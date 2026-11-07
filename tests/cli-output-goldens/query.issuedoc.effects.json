@@ -31,6 +31,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 58,
           "role": "operation",
           "routine": "r:1"
@@ -46,6 +47,7 @@
         "origin": {
           "column": 8,
           "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+          "fileDisplay": "dep:Out Base:src/BasePoster.Codeunit.al",
           "line": 7,
           "role": "operation",
           "routine": "r:2"
@@ -61,6 +63,7 @@
         "origin": {
           "column": 11,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 40,
           "role": "operation",
           "routine": "r:3"
@@ -79,6 +82,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 61,
           "role": "operation",
           "routine": "r:1"
@@ -93,6 +97,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 14,
           "role": "operation",
           "routine": "r:4"
@@ -111,6 +116,7 @@
         "origin": {
           "column": 18,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 42,
           "role": "operation",
           "routine": "r:3"
@@ -206,7 +212,7 @@
           "role": "definition"
         },
         "display": "WriteLog",
-        "objectDisplay": "Codeunit Out Log Mgt",
+        "objectDisplay": "Codeunit \"Out Log Mgt\"",
         "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
         "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
         "signature": "(Text[100])",
@@ -220,7 +226,7 @@
           "role": "definition"
         },
         "display": "OnRun",
-        "objectDisplay": "Codeunit Base Poster",
+        "objectDisplay": "Codeunit \"Base Poster\"",
         "qualifiedDisplay": "Codeunit \"Base Poster\" (70100)::OnRun",
         "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
         "signature": "()",
@@ -234,7 +240,7 @@
           "role": "definition"
         },
         "display": "ScanFields",
-        "objectDisplay": "Codeunit Out Issue Document",
+        "objectDisplay": "Codeunit \"Out Issue Document\"",
         "qualifiedDisplay": "Codeunit \"Out Issue Document\"::ScanFields",
         "selector": "Codeunit \"Out Issue Document\"::ScanFields",
         "signature": "(Integer)",
@@ -248,7 +254,7 @@
           "role": "definition"
         },
         "display": "IssueDoc",
-        "objectDisplay": "Codeunit Out Issue Document",
+        "objectDisplay": "Codeunit \"Out Issue Document\"",
         "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
         "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
         "signature": "(var Record \"Out Doc\")",
@@ -256,9 +262,9 @@
       }
     },
     "summary": {
-      "beyondEntryPoints": [
+      "beyondDependencyCalls": [
         {
-          "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
+          "dependencyCall": "Codeunit \"Base Poster\" (70100)::OnRun",
           "sites": [
             "ws:src/OutIssueDocument.Codeunit.al:15"
           ],
@@ -368,7 +374,7 @@
           "unresolvedWrites": 0
         },
         {
-          "entryPoint": "Codeunit \"Base Calc\" (70101)::OnRun",
+          "dependencyCall": "Codeunit \"Base Calc\" (70101)::OnRun",
           "sites": [
             "ws:src/OutIssueDocument.Codeunit.al:16"
           ],
@@ -388,7 +394,7 @@
         }
       ],
       "beyondWrites": {
-        "entryPoints": 2,
+        "dependencyCalls": 2,
         "routinesEntered": 2,
         "sites": 2,
         "tables": 15,
@@ -398,7 +404,7 @@
         {
           "beyond": [
             {
-              "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
+              "dependencyCall": "Codeunit \"Base Poster\" (70100)::OnRun",
               "ops": [
                 "DB_DELETE"
               ],
@@ -499,5 +505,5 @@
       }
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

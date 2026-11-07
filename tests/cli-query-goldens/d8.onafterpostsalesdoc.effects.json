@@ -23,6 +23,7 @@
         "origin": {
           "column": 8,
           "file": "ws:src/subscriber.al",
+          "fileDisplay": "ws:src/subscriber.al",
           "line": 10,
           "role": "operation",
           "routine": "r:1"
@@ -136,9 +137,9 @@
       }
     },
     "summary": {
-      "beyondEntryPoints": [],
+      "beyondDependencyCalls": [],
       "beyondWrites": {
-        "entryPoints": 0,
+        "dependencyCalls": 0,
         "routinesEntered": 0,
         "sites": 0,
         "tables": 0,
@@ -212,5 +213,5 @@
       }
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

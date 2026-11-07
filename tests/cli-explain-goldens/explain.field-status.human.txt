@@ -1,9 +1,9 @@
 explain field Explain Order."Status"   [cross-app]
-answer: confirmed writers: 3
+answer: the field is assigned or validated by 3 routines
 analysis partial (not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
 more: --detail lists every list complete; --format json for every row
 field: "Explain Order".Status (field 2 declared at ws:src/order.al:11, caption "Order Status")
-  confirmed writers: 3
+  confirmed field writers (assignment or validation): 3
     Codeunit "Explain Post"::PostOrder — Validate (also runs the field's OnValidate) at ws:src/post.al:17
     at ws:src/post.al:17: rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
     at ws:src/post.al:17: rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:12]

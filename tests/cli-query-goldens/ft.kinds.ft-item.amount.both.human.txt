@@ -1,4 +1,4 @@
-query touches field 2 "Amount" of FT Item (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
+query touches field 2 "Amount" of Table "FT Item" (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
 answer: consumers: 19 sites, 0 candidates (19 sites in 2 routines of 2 objects) — uses (a site can have two): read 3, write 4 (1 also read), validate 1, filter 2, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 1; sites by record: temporary 1, caller-dependent 17, unknown 1
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
@@ -9,7 +9,7 @@ more: --all lists every witness, no fold; --format json for every row
   filters: 2 sites
   declared keys: key 2 (Amount, Unit Price)
   not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed above
-  Codeunit FT Consumers: 16 sites in 1 routine (read 2, write 3, validate 1, filter 2, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 1)
+  Codeunit "FT Consumers": 16 sites in 1 routine (read 2, write 3, validate 1, filter 2, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 1)
     Kinds ws:src/FTFields.al:68 read+write [caller-dependent, access, down]
       legend: access: a field named on a record (Rec.Field); caller-dependent: the record is a parameter: temporary or not as its caller passes it; implicit-access: a bare field name inside the table's own code; temporary: a temporary record; unknown: the record's temp state is not resolved; a method name (Field, SetRange, …): the record method that names the field
     Kinds ws:src/FTFields.al:69 read [caller-dependent, access, down]
@@ -18,7 +18,7 @@ more: --all lists every witness, no fold; --format json for every row
     Kinds ws:src/FTFields.al:72 filter [caller-dependent, SetFilter, down]
     Kinds ws:src/FTFields.al:73 key-use [caller-dependent, SetCurrentKey, down]
     … +10 sites — --all lists them
-  Table FT Item: 3 sites in 1 routine (read 1, write 1, rule 1)
+  Table "FT Item": 3 sites in 1 routine (read 1, write 1, rule 1)
     Amount::OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access, down]
     Amount::OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access, down]
     Amount::OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField, down]

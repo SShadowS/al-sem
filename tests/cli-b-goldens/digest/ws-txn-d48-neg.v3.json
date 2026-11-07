@@ -79,7 +79,7 @@
             "sourceKind": "source"
           },
           "display": "SendOnce",
-          "objectDisplay": "Codeunit D48 Sender Neg",
+          "objectDisplay": "Codeunit \"D48 Sender Neg\"",
           "qualifiedDisplay": "Codeunit \"D48 Sender Neg\"::SendOnce",
           "selector": "Codeunit \"D48 Sender Neg\"::SendOnce",
           "signature": "()",
@@ -90,10 +90,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -171,5 +171,6 @@
     },
     "workspaceFingerprint": "17fbcaab4eb174ec9f7c2e3d53f24d2fc8c3bbf94cf005e47d7c9d3069575c4a"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

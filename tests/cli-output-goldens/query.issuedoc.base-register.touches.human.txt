@@ -1,4 +1,4 @@
-query touches Codeunit "Out Issue Document"::IssueDoc vs Base Register (d0d00001-0000-4000-8000-0000000000b1/table/70020)   [cross-app]
+query touches Codeunit "Out Issue Document"::IssueDoc vs Table "Base Register" (d0d00001-0000-4000-8000-0000000000b1/table/70020)   [cross-app]
 answer: down: no indexed touch (per operation, one routine into dependency code); the whole cone may write it beyond dependency calls (below)
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 1 app
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row

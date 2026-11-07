@@ -107,7 +107,7 @@
             "sourceKind": "source"
           },
           "display": "PostThenError",
-          "objectDisplay": "Codeunit D51 Sender",
+          "objectDisplay": "Codeunit \"D51 Sender\"",
           "stableId": "aaaabbbb-cccc-dddd-eeee-000000000d51:Codeunit:50101#f4545c36e8d4a0d57b209e7b5fa30d1ee4a266cc2379d6e3ba408699af2356ed"
         },
         "unresolved": [],
@@ -127,5 +127,6 @@
     },
     "workspaceFingerprint": "37a0814c1077c76f9f8ac81ad844302230b98ba1e215572a5cc7a9a3541c2f28"
   },
-  "schemaVersion": "2.3.0"
+  "schemaVersion": "2.3.0",
+  "volatile": []
 }

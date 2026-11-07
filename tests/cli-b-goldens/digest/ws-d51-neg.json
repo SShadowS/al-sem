@@ -101,7 +101,7 @@
             "sourceKind": "source"
           },
           "display": "GetThenError",
-          "objectDisplay": "Codeunit D51 NegSender",
+          "objectDisplay": "Codeunit \"D51 NegSender\"",
           "stableId": "aaaabbbb-cccc-dddd-eeee-100000000d51:Codeunit:50201#2e254ac7f120ad15b09c2e5449a1513e4746dbbfba3c362dc73c040a888723e1"
         },
         "unresolved": [],
@@ -121,5 +121,6 @@
     },
     "workspaceFingerprint": "cce9f4a181c0dc8ab6f329a35c9ae37a2adb0432613af167f388719bb9d5bb05"
   },
-  "schemaVersion": "2.3.0"
+  "schemaVersion": "2.3.0",
+  "volatile": []
 }

@@ -1487,6 +1487,55 @@ pub(crate) fn group_witness_value(
 /// (output validation V3, §2.3): the JSON fields for `payload.result`
 /// (`table: {id, name, number, app, appId}`, plus `tables` when the name or
 /// number names more than one; `event: {name, kind, publishers}`) and the
+/// The tables a `writes-table` name or number names (every app's, by id,
+/// once): prove's `payload.result.table` is the first.
+fn table_hits<'m>(
+    model: &'m crate::program::model::workspace::Model,
+    q: &str,
+) -> Vec<&'m crate::program::model::workspace::ModelTable> {
+    let mut hits: Vec<&crate::program::model::workspace::ModelTable> = model
+        .workspace
+        .tables
+        .iter()
+        .filter(|t| {
+            !t.is_extension_stub
+                && (t.name.eq_ignore_ascii_case(q)
+                    || t.id.rsplit('/').next().is_some_and(|n| n == q))
+        })
+        .collect();
+    hits.sort_by(|a, b| a.id.cmp(&b.id));
+    hits.dedup_by(|a, b| a.id == b.id);
+    hits
+}
+
+/// A resolved table as prove's `payload.result.table` writes it: `{id,
+/// name, number, app, appId}`.
+fn table_row_json(
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    t: &crate::program::model::workspace::ModelTable,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": t.id,
+        "name": t.name,
+        "number": t.table_number,
+        "app": cx.app_label(&t.app_guid),
+        "appId": t.app_guid,
+    })
+}
+
+/// A `writes-table` input's resolved table in prove's own shape (round-2
+/// G42: digest's `tableAnswers[].tableRef`), or `null` when it names no
+/// table.
+pub(crate) fn table_ref(
+    model: &crate::program::model::workspace::Model,
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    table: &str,
+) -> serde_json::Value {
+    table_hits(model, table.trim())
+        .first()
+        .map_or(serde_json::Value::Null, |t| table_row_json(cx, t))
+}
+
 /// question as the human answer line prints it
 /// (`writes-table:CDO E-Mail Job (table 6175283, this app)`). Any other
 /// question: no field, the question as typed.
@@ -1509,27 +1558,8 @@ fn resolved_target(
     match question {
         ProveQuestion::WritesTable { table } => {
             let q = table.trim();
-            let mut hits: Vec<&crate::program::model::workspace::ModelTable> = model
-                .workspace
-                .tables
-                .iter()
-                .filter(|t| {
-                    !t.is_extension_stub
-                        && (t.name.eq_ignore_ascii_case(q)
-                            || t.id.rsplit('/').next().is_some_and(|n| n == q))
-                })
-                .collect();
-            hits.sort_by(|a, b| a.id.cmp(&b.id));
-            hits.dedup_by(|a, b| a.id == b.id);
-            let row = |t: &crate::program::model::workspace::ModelTable| {
-                json!({
-                    "id": t.id,
-                    "name": t.name,
-                    "number": t.table_number,
-                    "app": cx.app_label(&t.app_guid),
-                    "appId": t.app_guid,
-                })
-            };
+            let hits = table_hits(model, q);
+            let row = |t: &crate::program::model::workspace::ModelTable| table_row_json(cx, t);
             let Some(first) = hits.first() else {
                 return (out, question_text.to_string());
             };
@@ -1633,14 +1663,16 @@ fn resolved_target(
 
 /// prove's document `schemaVersion`. 2.10.0 (output validation V4,
 /// additive): `payload.result.scope` (F76) and `payload.result.followUps`
-/// (§6.1).
-pub const PROVE_SCHEMA_VERSION: &str = "2.10.0";
+/// (§6.1). 2.11.0 (round-2 output validation W4, additive): `volatile`
+/// (G44).
+pub const PROVE_SCHEMA_VERSION: &str = "2.11.0";
 
 /// A filtered prove document's `schemaVersion` (agent-tasks E1, additive:
 /// `payload.filter`, `payload.slice`, slice-shaped evidence rows). An
 /// unfiltered document keeps [`PROVE_SCHEMA_VERSION`], byte for byte (E-5).
 /// 2.11.0: V4's `result.scope` and `result.followUps`, as unfiltered.
-pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.11.0";
+/// 2.12.0: `volatile` (round-2 G44), as unfiltered.
+pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.12.0";
 
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
@@ -1841,6 +1873,10 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     env.insert("generatedAt".into(), generated_at.into());
     env.insert("kind".into(), "prove".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
+    env.insert(
+        "volatile".into(),
+        crate::engine::result_header::volatile(deterministic),
+    );
     // 1.4.0: effects' `detail.tempState` is digest's per-operation, class-
     // filtered join (#69 D4).
     // 2.0.0 (MCP output plan 1a): every `line` is 1-based (`lineBase: 1`).
@@ -1868,6 +1904,10 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // (`{count, byTier}`) and each evidence row `pathTier` (the §8.1 word
     // beside the legacy `tier`); a filtered result gains `result.filter`
     // and `result.otherSites[]`.
+    // 2.11.0 unfiltered / 2.12.0 filtered (round-2 output validation W4,
+    // additive): `volatile` beside `deterministic` (G44); a routine's
+    // `objectDisplay` and the resolved table's display names go through the
+    // one formatter (G41).
     let version = if slice.is_some() {
         PROVE_SLICE_SCHEMA_VERSION
     } else {
@@ -1933,11 +1973,7 @@ pub(crate) struct ProveHeaderCx {
 /// context) print their routine line, `question:`, `answer:`, analysis,
 /// `assumptions:` and `limits:` lines; those become the header, every other
 /// line stays in the body, in order. The routine line is `--- <display> ---`.
-pub(crate) fn with_header(text: &str, hc: &ProveHeaderCx) -> String {
-    header_and_body(text, hc).0
-}
-
-/// [`with_header`] and the header it printed (`None`: the text had no routine
+/// Returns the text and the header it printed (`None`: the text had no routine
 /// line), for `result.scope`.
 pub(crate) fn header_and_body(
     text: &str,
@@ -3277,29 +3313,46 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             resolved_target: serde_json::Map::new(),
         });
 
-        let human_text = format_prove_human(
-            routine_selector,
-            "",
-            question_text,
-            &dummy_result,
-            &[],
-            None,
+        // Round-2 G40: a lookup miss prints its failure sentence once (the
+        // `answer:` line), then the candidates or nearest names and the
+        // complete calls; no analysis, assumptions or scope clause.
+        let detail = dummy_result
+            .blocked_by
+            .as_deref()
+            .and_then(|b| b.first())
+            .map_or(String::new(), |b| b.detail.clone());
+        let mut detail_lines = detail.lines().map(str::trim_start);
+        let first = detail_lines
+            .next()
+            .unwrap_or("the selector names no routine");
+        let mut h = crate::engine::result_header::Header::new(
+            "prove",
+            format!("{routine_selector} {question_text}"),
+            job.fcx().single_app,
         );
-        let why = match dummy_result.blocked_by.as_deref() {
-            Some([b, ..]) if b.kind == "routine-ambiguous" => "the selector names several routines",
-            _ => "the selector names no routine",
-        };
-        let human_text = with_header(
-            &human_text,
-            &ProveHeaderCx {
-                fcx: job.fcx(),
-                deps: apps.len(),
-                detail: job.detail,
-                selector: None,
-                question: question_text.to_string(),
-                no_answer: Some(why.to_string()),
-            },
-        );
+        h.answer = format!("no answer — {first}");
+        let mut human_text = h.miss_human();
+        for l in detail_lines {
+            // Candidate lines keep their numbering under the answer.
+            human_text.push_str(&format!("  {l}\n"));
+        }
+        if let Some(listed) = changed_roots.diagnostics.iter().find_map(|d| match d {
+            ChangedRootsDiagnostic::SelectorAmbiguous { listed, .. } if !listed.is_empty() => {
+                Some(listed)
+            }
+            _ => None,
+        }) {
+            let sels: Vec<String> = listed.iter().map(|c| c.selector.clone()).collect();
+            for l in crate::engine::l5::selector_index::complete_call_lines(
+                crate::engine::follow_up::Tool::Prove,
+                job.fcx(),
+                &sels,
+                &[("question", serde_json::Value::from(question_text))],
+            ) {
+                human_text.push_str(&l);
+                human_text.push('\n');
+            }
+        }
 
         // §6.3 (round-2 n08): the outcome from the blockers' kinds
         // (`routine-ambiguous` / `routine-not-found`), not from the words.
@@ -3912,6 +3965,10 @@ fn callers_document(
     env.insert("kind".into(), "prove".into());
     env.insert("payload".into(), serde_json::Value::Object(payload));
     env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
+    env.insert(
+        "volatile".into(),
+        crate::engine::result_header::volatile(job.deterministic),
+    );
     let mut env = serde_json::Value::Object(env);
     crate::engine::result_header::tag_location_roles(&mut env);
     let json_text = serialize_document_value(env);

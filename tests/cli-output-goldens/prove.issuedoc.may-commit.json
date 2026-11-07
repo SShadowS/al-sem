@@ -134,7 +134,7 @@
         "sourceKind": "source"
       },
       "display": "IssueDoc",
-      "objectDisplay": "Codeunit Out Issue Document",
+      "objectDisplay": "Codeunit \"Out Issue Document\"",
       "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
       "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
       "signature": "(var Record \"Out Doc\")",
@@ -142,5 +142,6 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.10.0"
+  "schemaVersion": "2.11.0",
+  "volatile": []
 }

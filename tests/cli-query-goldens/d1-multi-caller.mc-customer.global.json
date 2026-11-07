@@ -73,7 +73,7 @@
         "dependencySites": 0,
         "keyRelevant": {},
         "workspaceByObject": {
-          "Codeunit D1 Multi Caller": 4
+          "Codeunit \"D1 Multi Caller\"": 4
         },
         "workspaceByOp": {
           "FindSet": 3,
@@ -94,7 +94,7 @@
             "role": "definition"
           },
           "display": "CallerB",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerB",
           "selector": "Codeunit \"D1 Multi Caller\"::CallerB",
           "signature": "()",
@@ -108,7 +108,7 @@
             "role": "definition"
           },
           "display": "CallerC",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerC",
           "selector": "Codeunit \"D1 Multi Caller\"::CallerC",
           "signature": "()",
@@ -122,7 +122,7 @@
             "role": "definition"
           },
           "display": "CallerA",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
           "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
           "signature": "()",
@@ -136,7 +136,7 @@
             "role": "definition"
           },
           "display": "ModifyHelper",
-          "objectDisplay": "Codeunit D1 Multi Caller",
+          "objectDisplay": "Codeunit \"D1 Multi Caller\"",
           "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
           "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
           "signature": "(var Record \"MC Customer\")",
@@ -146,5 +146,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

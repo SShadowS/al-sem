@@ -38,6 +38,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/D1MultiCaller.al",
+            "fileDisplay": "ws:src/D1MultiCaller.al",
             "line": 25,
             "role": "operation",
             "routine": "r:1"
@@ -51,6 +52,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/D1MultiCaller.al",
+            "fileDisplay": "ws:src/D1MultiCaller.al",
             "line": 19,
             "role": "operation",
             "routine": "r:2"
@@ -88,7 +90,7 @@
           "role": "definition"
         },
         "display": "CallerA",
-        "objectDisplay": "Codeunit D1 Multi Caller",
+        "objectDisplay": "Codeunit \"D1 Multi Caller\"",
         "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
         "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
         "signature": "()",
@@ -102,7 +104,7 @@
           "role": "definition"
         },
         "display": "ModifyHelper",
-        "objectDisplay": "Codeunit D1 Multi Caller",
+        "objectDisplay": "Codeunit \"D1 Multi Caller\"",
         "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
         "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
         "signature": "(var Record \"MC Customer\")",
@@ -117,5 +119,5 @@
       "selector": "MC Customer"
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

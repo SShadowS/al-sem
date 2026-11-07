@@ -74,7 +74,7 @@
         "confidence": "static",
         "crossing": "c:c01248383de2",
         "detail": {
-          "boundary": "Codeunit Base Calc::OnRun"
+          "boundary": "Codeunit \"Base Calc\" (70101)::OnRun"
         },
         "resources": [
           {
@@ -119,7 +119,7 @@
         "confidence": "static",
         "crossing": "c:1249372dd091",
         "detail": {
-          "boundary": "Codeunit Base Poster::OnRun"
+          "boundary": "Codeunit \"Base Poster\" (70100)::OnRun"
         },
         "eventsByPublisher": [
           {
@@ -151,7 +151,7 @@
         "confidence": "static",
         "crossing": "c:1249372dd091",
         "detail": {
-          "boundary": "Codeunit Base Poster::OnRun"
+          "boundary": "Codeunit \"Base Poster\" (70100)::OnRun"
         },
         "transactionContext": "unknown",
         "type": "COMMIT"
@@ -162,7 +162,7 @@
         "confidence": "static",
         "crossing": "c:1249372dd091",
         "detail": {
-          "boundary": "Codeunit Base Poster::OnRun"
+          "boundary": "Codeunit \"Base Poster\" (70100)::OnRun"
         },
         "resources": [
           {
@@ -197,7 +197,7 @@
         "confidence": "static",
         "crossing": "c:1249372dd091",
         "detail": {
-          "boundary": "Codeunit Base Poster::OnRun"
+          "boundary": "Codeunit \"Base Poster\" (70100)::OnRun"
         },
         "resources": [
           {
@@ -214,7 +214,7 @@
         "confidence": "static",
         "crossing": "c:1249372dd091",
         "detail": {
-          "boundary": "Codeunit Base Poster::OnRun"
+          "boundary": "Codeunit \"Base Poster\" (70100)::OnRun"
         },
         "resources": [
           {
@@ -311,7 +311,7 @@
         "confidence": "static",
         "crossing": "c:1249372dd091",
         "detail": {
-          "boundary": "Codeunit Base Poster::OnRun"
+          "boundary": "Codeunit \"Base Poster\" (70100)::OnRun"
         },
         "resources": [
           {
@@ -401,7 +401,7 @@
                   "line": 46,
                   "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op15"
                 },
-                "throughEntryPoint": true
+                "throughDependencyCall": true
               }
             ],
             "status": "live"
@@ -432,7 +432,7 @@
                   "line": 7,
                   "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0"
                 },
-                "throughEntryPoint": true
+                "throughDependencyCall": true
               }
             ],
             "status": "live"
@@ -486,7 +486,7 @@
                   "line": 29,
                   "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op1"
                 },
-                "throughEntryPoint": true
+                "throughDependencyCall": true
               }
             ],
             "status": "live"
@@ -569,7 +569,7 @@
                   "line": 43,
                   "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op14"
                 },
-                "throughEntryPoint": true
+                "throughDependencyCall": true
               }
             ],
             "status": "live"
@@ -606,7 +606,7 @@
                   "line": 68,
                   "operationId": "9c6111a83a31bbff/90f20db82887b2706a496b9771d490d3f493634c407e39c74800b2ee46197210/op1"
                 },
-                "throughEntryPoint": true
+                "throughDependencyCall": true
               }
             ],
             "status": "live"
@@ -701,7 +701,7 @@
             "sourceKind": "source"
           },
           "display": "IssueDoc",
-          "objectDisplay": "Codeunit Out Issue Document",
+          "objectDisplay": "Codeunit \"Out Issue Document\"",
           "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
           "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
           "signature": "(var Record \"Out Doc\")",
@@ -712,10 +712,10 @@
           "callerDependentTables": 1,
           "commits": {
             "answer": "may",
-            "entryPoints": 1,
+            "dependencyCalls": 1,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 2,
             "routines": 2,
             "sites": 2,
@@ -742,8 +742,8 @@
             "byDependencies": 15,
             "count": 16,
             "mostBeyond": {
+              "dependencyCall": "Codeunit \"Base Poster\" (70100)::OnRun",
               "enteredAt": "ws:src/OutIssueDocument.Codeunit.al:15",
-              "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
               "tables": 14
             },
             "ownedByApp": 1
@@ -898,5 +898,6 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

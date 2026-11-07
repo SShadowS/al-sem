@@ -7,7 +7,7 @@ Codeunit "Out Issue Document"::IssueDoc  defined at ws:src/OutIssueDocument.Code
   other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
   callers and tests: callers: 1 direct (1 page action); 1 page action reaches it in all; tests: none of 1 loaded
   uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
-  calls: Codeunit "Base Poster" (70100): OnRun (:15); Codeunit "Base Calc" (70101): OnRun (:16); Codeunit "Out Log Mgt": WriteLog (:17); +5 more
+  calls: Codeunit "Base Poster" (70100)::OnRun (called at :15); Codeunit "Base Calc" (70101)::OnRun (called at :16); Codeunit "Out Log Mgt"::WriteLog (called at :17); +5 more
   rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
   inherited rules: none
   callers: 1 direct — 1 page action in 1 object (--detail lists them); 1 page action reaches it in all (directly or through callers)
@@ -28,7 +28,7 @@ Codeunit "Out Issue Document"::IssueDoc  defined at ws:src/OutIssueDocument.Code
     Codeunit "Base Calc" (70101)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 — 1 table (Modify on 1): Base Price; also ERROR_IMPLICIT
       representative path (Base Price): IssueDoc → [run] Codeunit "Base Calc" (70101)::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   temporary records (writes to them do not directly persist): 1 table in workspace code (1 effect row): Out Log; 1 table only beyond dependency calls; only temporary: 0 tables
-  events raised (1 in workspace code, its own and downstream): Codeunit Out Issue Document: OnAfterIssueDoc; 1 more only beyond dependency calls; publishes: 1 of its own (extension points below)
+  events raised (1 in workspace code, its own and downstream): Codeunit "Out Issue Document": OnAfterIssueDoc; 1 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnAfterIssueDoc: 1 subscriber(s)
   HTTP at 1 place: HTTP at ws:src/OutIssueDocument.Codeunit.al:72 (unconditional on success)
   background tasks at 1 place: BACKGROUND_TASK at ws:src/OutIssueDocument.Codeunit.al:19 (unconditional on success), starts Codeunit Out Job

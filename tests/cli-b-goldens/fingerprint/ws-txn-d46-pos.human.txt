@@ -1,6 +1,6 @@
 Rendering 2 root classifications.
 
-Codeunit Install Handler::OnInstallAppPerCompany  [install-codeunit]
+Codeunit "Install Handler"::OnInstallAppPerCompany  [install-codeunit]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
@@ -30,7 +30,7 @@ Codeunit Install Handler::OnInstallAppPerCompany  [install-codeunit]
           → direct Setup.Get at ws:src/InstallCU.al:31:15
 
 
-Codeunit Upgrade Handler::OnUpgradePerCompany  [upgrade-codeunit]
+Codeunit "Upgrade Handler"::OnUpgradePerCompany  [upgrade-codeunit]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   commit:     yes

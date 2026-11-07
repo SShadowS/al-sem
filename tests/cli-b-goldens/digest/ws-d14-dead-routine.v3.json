@@ -48,10 +48,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -126,10 +126,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -204,10 +204,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "none",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 0
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -297,5 +297,6 @@
     },
     "workspaceFingerprint": "27982e562e0f7d50b80b3135bd69215672059411d7f470a27618b9037ee83d05"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

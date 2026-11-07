@@ -367,8 +367,28 @@ impl<'a> Index<'a> {
     /// A table's name for the text (`Table "Sales Header"`), from its model
     /// object id; the id itself when the model has no such object.
     fn table(&self, id: &str) -> String {
+        use crate::engine::l5::routine_rollup::format_object;
+        // Round-2 G41: a table the model holds by its table id
+        // (`<app>/table/<number>`, the write's own key) is named, never
+        // printed by number and app guid.
+        // A dependency table prints its number (§2.2).
+        if !self.objects.contains_key(id)
+            && let Some(t) = self
+                .model
+                .workspace
+                .tables
+                .iter()
+                .find(|t| t.id == id && !t.is_extension_stub)
+        {
+            let own = self
+                .model
+                .primary_app
+                .as_ref()
+                .is_some_and(|p| p.app_guid.eq_ignore_ascii_case(&t.app_guid));
+            return format_object("Table", &t.name, (!own).then_some(t.table_number));
+        }
         match self.objects.get(id) {
-            Some(o) => format!("{} \"{}\"", o.object_type, o.name),
+            Some(o) => format_object(&o.object_type, &o.name, None),
             // `<app guid>/<kind>/<number>`: a dependency object the model
             // holds no row for.
             None => match id.split('/').collect::<Vec<_>>()[..] {
@@ -2106,8 +2126,15 @@ pub(crate) fn path_text(path: &[PathHop]) -> String {
             continue;
         }
         let enters_hub = path.get(i + 1).is_some_and(|n| n.hub.is_some());
+        // Round-2 G45: a hop's location is where it leaves toward the next
+        // hop, never its definition, and says so.
+        let role = match h.boundary {
+            Some("event") => "raised at",
+            Some("trigger") => "operation at",
+            _ => "called at",
+        };
         hops.push(match (&h.file, h.line) {
-            (Some(f), Some(l)) if !enters_hub => format!("{} ({f}:{l})", h.display),
+            (Some(f), Some(l)) if !enters_hub => format!("{} ({role} {f}:{l})", h.display),
             _ => h.display.clone(),
         });
     }

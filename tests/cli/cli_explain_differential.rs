@@ -879,6 +879,27 @@ fn after_header(human: &str) -> &str {
     parts.nth(2).unwrap_or("")
 }
 
+/// A lookup miss's diagnostic as a multi-selector answer prints it (round-2
+/// G40): the miss prints its failure sentence once, on its `answer:` line,
+/// and the hint lines after it; beside a card, the diagnostic is whole.
+fn miss_block(human: &str) -> String {
+    let mut lines = human.lines();
+    assert!(
+        lines.next().is_some_and(|l| l.starts_with("explain ")),
+        "{human}"
+    );
+    let first = lines
+        .next()
+        .and_then(|l| l.strip_prefix("answer: no answer — "))
+        .unwrap_or_else(|| panic!("a miss: {human}"));
+    let mut out = format!("explain: {first}\n");
+    for l in lines {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
 /// A single-card answer's card as a card of several prints it: its
 /// `answer:` line as `summary — …` under the title (the analysis here is
 /// complete and nothing is limited, so the card adds no analysis line).
@@ -968,8 +989,8 @@ fn multi_routine_unmatched_selectors_are_diagnostics() {
         format!(
             "{}{}{}",
             after_header(&card),
-            after_header(&not_found),
-            after_header(&ambiguous)
+            miss_block(&not_found),
+            miss_block(&ambiguous)
         ),
         "the cards, then a diagnostics block"
     );

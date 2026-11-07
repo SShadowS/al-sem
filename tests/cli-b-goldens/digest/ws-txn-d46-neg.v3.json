@@ -174,7 +174,7 @@
             "sourceKind": "source"
           },
           "display": "DoSetup",
-          "objectDisplay": "Codeunit Normal Handler",
+          "objectDisplay": "Codeunit \"Normal Handler\"",
           "qualifiedDisplay": "Codeunit \"Normal Handler\"::DoSetup",
           "selector": "Codeunit \"Normal Handler\"::DoSetup",
           "signature": "()",
@@ -185,10 +185,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -358,7 +358,7 @@
             "sourceKind": "source"
           },
           "display": "RunSetup",
-          "objectDisplay": "Codeunit Normal Handler",
+          "objectDisplay": "Codeunit \"Normal Handler\"",
           "qualifiedDisplay": "Codeunit \"Normal Handler\"::RunSetup",
           "selector": "Codeunit \"Normal Handler\"::RunSetup",
           "signature": "()",
@@ -369,10 +369,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
-            "entryPoints": 0,
+            "dependencyCalls": 0,
             "ownSites": 1
           },
-          "entryPoints": {
+          "dependencyCalls": {
             "count": 0,
             "routines": 0,
             "sites": 0,
@@ -457,5 +457,6 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0",
+  "volatile": []
 }

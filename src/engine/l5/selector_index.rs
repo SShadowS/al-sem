@@ -622,6 +622,10 @@ pub(crate) fn selector_hints(
         return SelectorHints::default();
     }
     let owner = owner.as_deref().and_then(owner_part);
+    // Round-2 G40 (n06): a member form (`Page X.action(SendEMailActio)::
+    // OnAction`) is near by its member's name among the routines with that
+    // trigger name, not by the trigger name every action shares.
+    let member_ask = split_member(split_signature(selector).0).map(|m| (m.member, m.routine));
     let model = names.model;
     let mut seen = std::collections::HashSet::new();
     let primary_has = model
@@ -662,7 +666,14 @@ pub(crate) fn selector_hints(
         if !names.is_primary(id) || !seen.insert(id) {
             continue;
         }
-        let Some(d) = is_near(&asked, &r.name) else {
+        let near = match &member_ask {
+            Some((member, trigger)) => match r.enclosing_member.as_deref() {
+                Some(m) if r.name.eq_ignore_ascii_case(trigger) => is_near(member, m),
+                _ => None,
+            },
+            None => is_near(&asked, &r.name),
+        };
+        let Some(d) = near else {
             continue;
         };
         let mut p = names.parts_of(r);
@@ -788,6 +799,17 @@ pub struct AmbiguousCandidate {
     pub at: String,
     pub selector: String,
     pub types: Vec<String>,
+    /// Its stable id (round-2 G40: the candidate array names it).
+    pub stable_id: String,
+}
+
+impl AmbiguousCandidate {
+    /// The parameter list as the one display prints it: `(Integer, var
+    /// Text)` ([`signature_text`]'s form).
+    #[must_use]
+    pub fn signature(&self) -> String {
+        format!("({})", self.types.join(", "))
+    }
 }
 
 impl AmbiguousCandidate {
@@ -823,6 +845,7 @@ impl AmbiguousCandidate {
                     }
                 })
                 .collect(),
+            stable_id: id.to_string(),
         })
     }
 }
@@ -839,8 +862,13 @@ pub(crate) fn ambiguity_lines(
     selector: &str,
     cands: &[AmbiguousCandidate],
 ) -> Vec<String> {
+    // Round-2 G40: what tells the candidates apart, on the failure line.
+    let differs = match differs_in(cands) {
+        Some(d) => format!(" (differs in: {d})"),
+        None => String::new(),
+    };
     let mut out = vec![format!(
-        "{prefix}'{selector}' names {} routines",
+        "{prefix}'{selector}' names {} routines{differs}",
         cands.len()
     )];
     let shown = &cands[..cands.len().min(AMBIGUOUS_SHOWN)];
@@ -864,17 +892,104 @@ pub(crate) fn ambiguity_lines(
             cands.len() - shown.len()
         ));
     }
-    let value: Vec<String> = shown
-        .iter()
-        .map(|c| serde_json::Value::from(c.selector.as_str()).to_string())
-        .collect();
-    let word = match shown.len() {
-        2 if cands.len() == 2 => "both".to_string(),
-        n if n == cands.len() => format!("all {n}"),
-        n => format!("these {n}"),
-    };
-    out.push(format!("  {word}: routines: [{}]", value.join(", ")));
     out
+}
+
+/// What tells an ambiguity's candidates apart (round-2 G40), or `None` when
+/// nothing short says it: `the object` (one name in two objects), `a
+/// trailing Boolean` (one list extends the other by one parameter),
+/// `trailing Boolean, Text`, `parameter 3 (Integer or Text)` (same length),
+/// `the number of parameters (7, 9, 11)` (each list extends the shorter
+/// ones), else `the parameter lists`.
+#[must_use]
+pub fn differs_in(cands: &[AmbiguousCandidate]) -> Option<String> {
+    if cands.len() < 2 {
+        return None;
+    }
+    let object = |c: &AmbiguousCandidate| {
+        c.display
+            .split_once("::")
+            .map_or(String::new(), |(o, _)| o.to_string())
+    };
+    if cands.iter().any(|c| object(c) != object(&cands[0])) {
+        return Some("the object".to_string());
+    }
+    let mut by_len: Vec<&AmbiguousCandidate> = cands.iter().collect();
+    by_len.sort_by_key(|c| c.types.len());
+    let nested = by_len
+        .windows(2)
+        .all(|w| w[1].types.starts_with(&w[0].types) && w[1].types.len() > w[0].types.len());
+    if nested {
+        if let [a, b] = by_len[..] {
+            let extra = &b.types[a.types.len()..];
+            return Some(match extra {
+                [one] => format!("a trailing {one}"),
+                many => format!("trailing {}", many.join(", ")),
+            });
+        }
+        let counts: Vec<String> = by_len.iter().map(|c| c.types.len().to_string()).collect();
+        return Some(format!("the number of parameters ({})", counts.join(", ")));
+    }
+    if let [a, b] = cands
+        && a.types.len() == b.types.len()
+    {
+        let at: Vec<String> = a
+            .types
+            .iter()
+            .zip(&b.types)
+            .enumerate()
+            .filter(|(_, (x, y))| x != y)
+            .map(|(i, (x, y))| format!("parameter {} ({x} or {y})", i + 1))
+            .collect();
+        if !at.is_empty() {
+            return Some(at.join(", "));
+        }
+    }
+    Some("the parameter lists".to_string())
+}
+
+/// The complete call an ambiguity offers (round-2 G40), in `surface`'s
+/// words: a tool that takes several routines gets one call with every
+/// candidate's selector (`complete call: alsem_explain {"routines": [...]}`);
+/// a tool that takes one (prove, query effects) gets one call per candidate
+/// (`call 1: alsem_prove {"routine": …, "question": …}`). `args` are the
+/// call's other arguments as asked (prove's question).
+#[must_use]
+pub fn complete_call_lines(
+    tool: crate::engine::follow_up::Tool,
+    cx: crate::engine::follow_up::Cx,
+    selectors: &[String],
+    args: &[(&str, serde_json::Value)],
+) -> Vec<String> {
+    use crate::engine::follow_up::{FollowUp, Tool};
+    let with_args = |mut f: FollowUp| {
+        for (k, v) in args {
+            f = f.arg(k, v.clone());
+        }
+        f
+    };
+    match tool {
+        Tool::Explain | Tool::Digest | Tool::Tests | Tool::Impact => {
+            let f = with_args(
+                FollowUp::new(tool, cx, "every candidate")
+                    .arg("routines", serde_json::Value::from(selectors.to_vec())),
+            );
+            vec![format!("  complete call: {}", f.text(cx.surface))]
+        }
+        Tool::Prove | Tool::QueryEffects | Tool::QueryTouches => selectors
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let key = if tool == Tool::QueryTouches {
+                    "from"
+                } else {
+                    "routine"
+                };
+                let f = with_args(FollowUp::new(tool, cx, "one candidate").arg(key, s.as_str()));
+                format!("  call {}: {}", i + 1, f.text(cx.surface))
+            })
+            .collect(),
+    }
 }
 
 /// An `Owner::Routine` or `Owner.Routine` selector, split (MCP output plan
@@ -1614,6 +1729,23 @@ mod tests {
         dep.app_guid = "dep".into();
         dep.object_number = 2;
         rows.push(dep);
+        // Round-2 G40 (n06): three page actions, each an `OnAction` (by
+        // assignment), in an order where the nearest action is not first.
+        m.workspace
+            .objects
+            .push(object("ws/Page/3", "ws", "Posted Actions", 3));
+        for (k, action) in ["CDOEMailAction", "PrintPDFAction", "SendEMailAction"]
+            .iter()
+            .enumerate()
+        {
+            let mut r = routine("OnAction", "trigger");
+            r.stable_routine_id = format!("ws:OnAction#{k}");
+            r.object_id = "ws/Page/3".into();
+            r.object_type = "Page".into();
+            r.app_guid = "ws".into();
+            r.enclosing_member = Some((*action).into());
+            rows.push(r);
+        }
         m.workspace.routines = rows;
         let names = RoutineNames::new(&m, &[]);
         let owners = |_: &str| "Codeunit Send Mail Mgt".to_string();
@@ -1645,6 +1777,71 @@ mod tests {
         let h = selector_hints(&names, owners, "Zebra");
         assert!(h.nearest.is_empty() && h.dependency_only.is_empty());
         assert_eq!(hint_lines(&h, &[])[0], "nearest names: no close match");
+        // Round-2 G40 (n06): a member form is near by its member's name,
+        // nearest first (`SendEMailActio` → `SendEMailAction`, distance 1).
+        let h = selector_hints(
+            &names,
+            |_: &str| "Page Posted Actions".to_string(),
+            "Page \"Posted Actions\".action(SendEMailActio)::OnAction",
+        );
+        let offered: Vec<&str> = h.nearest.iter().map(|n| n.display.as_str()).collect();
+        assert_eq!(
+            offered.first().copied(),
+            Some("Page \"Posted Actions\".action(SendEMailAction)::OnAction"),
+            "the nearest action first: {offered:?}"
+        );
+        assert_eq!(h.nearest[0].distance, 1, "{offered:?}");
+        assert!(
+            !offered.iter().any(|d| d.contains("PrintPDFAction")),
+            "a far action is not offered: {offered:?}"
+        );
+    }
+
+    /// Round-2 G40: what tells an ambiguity's candidates apart, a
+    /// classification read off the hand-stated candidates.
+    #[test]
+    fn differs_in_names_what_tells_candidates_apart() {
+        let c = |display: &str, types: &[&str]| AmbiguousCandidate {
+            display: display.to_string(),
+            at: String::new(),
+            selector: String::new(),
+            types: types.iter().map(|t| t.to_string()).collect(),
+            stable_id: String::new(),
+        };
+        let nine = ["Integer"; 9];
+        let mut ten = nine.to_vec();
+        ten.push("Boolean");
+        assert_eq!(
+            differs_in(&[c("C::P(…)", &ten), c("C::P(…)", &nine)]).as_deref(),
+            Some("a trailing Boolean")
+        );
+        assert_eq!(
+            differs_in(&[c("C::P(a)", &["Integer"]), c("C::P(b)", &["Text"])]).as_deref(),
+            Some("parameter 1 (Integer or Text)")
+        );
+        assert_eq!(
+            differs_in(&[c("A::P(a)", &["Integer"]), c("B::P(a)", &["Integer"])]).as_deref(),
+            Some("the object")
+        );
+        assert_eq!(
+            differs_in(&[
+                c("C::P", &["A"]),
+                c("C::P", &["A", "B"]),
+                c("C::P", &["A", "B", "C"])
+            ])
+            .as_deref(),
+            Some("the number of parameters (1, 2, 3)")
+        );
+        assert_eq!(
+            differs_in(&[
+                c("C::P", &["A"]),
+                c("C::P", &["B", "C"]),
+                c("C::P", &["A", "B", "C"])
+            ])
+            .as_deref(),
+            Some("the parameter lists")
+        );
+        assert_eq!(differs_in(&[c("C::P", &["A"])]), None);
     }
 
     #[test]

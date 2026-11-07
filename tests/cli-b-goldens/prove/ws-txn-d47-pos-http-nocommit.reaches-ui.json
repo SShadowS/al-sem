@@ -45,7 +45,7 @@
         "sourceKind": "source"
       },
       "display": "SendAfterModify",
-      "objectDisplay": "Codeunit D47 Sender",
+      "objectDisplay": "Codeunit \"D47 Sender\"",
       "qualifiedDisplay": "Codeunit \"D47 Sender\"::SendAfterModify",
       "selector": "Codeunit \"D47 Sender\"::SendAfterModify",
       "signature": "()",
@@ -53,5 +53,6 @@
     },
     "workspaceFingerprint": "0d6c610dea8d73d6142bb6b9375463620d7e10a84ead5599d3040ada0008b395"
   },
-  "schemaVersion": "2.10.0"
+  "schemaVersion": "2.11.0",
+  "volatile": []
 }

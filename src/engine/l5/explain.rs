@@ -1513,8 +1513,8 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
 }
 
 /// The routine's direct callees in source order, at most [`CALLS_SHOWN`]
-/// named (output validation V2, §9.1, F55): `calls: X (:181), Y (:190); +2
-/// more`. Builtins and unresolved calls are not routines and are left out.
+/// named (output validation V2, §9.1, F55): `calls: Codeunit X::A (called
+/// at :181); ::B (called at :190); +2 more` (round-2 G41, G45). Builtins and unresolved calls are not routines and are left out.
 /// Impact prints the same line per changed routine (round-2 r2 §3.9, G15).
 pub(crate) fn calls_line(
     model: &crate::program::model::workspace::Model,
@@ -1544,7 +1544,7 @@ pub(crate) fn calls_line(
     let mut sites: Vec<&crate::program::body::features::PCallSite> = r.call_sites.iter().collect();
     sites.sort_by_key(|c| (c.source_anchor.start_line, c.source_anchor.start_column));
     let mut seen = HashSet::new();
-    let mut items: Vec<(String, String, u32)> = Vec::new();
+    let mut items: Vec<(String, u32)> = Vec::new();
     for c in sites {
         let Some(to) = to_of.get(c.id.as_str()) else {
             continue;
@@ -1556,38 +1556,23 @@ pub(crate) fn calls_line(
             continue;
         }
         let display = names.display(stable);
-        let (object, rest) = match (own.get(stable), display.split_once("::")) {
-            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => {
-                (String::new(), rest.to_string())
-            }
-            (_, Some((o, rest))) => (o.to_string(), rest.to_string()),
-            _ => (String::new(), display.clone()),
+        let shown = match (own.get(stable), display.split_once("::")) {
+            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => format!("::{rest}"),
+            _ => display.clone(),
         };
-        items.push((object, rest, c.source_anchor.start_line + 1));
+        items.push((shown, c.source_anchor.start_line + 1));
     }
     if items.is_empty() {
         return Some("calls: none (no call to a routine; builtins aside)".to_string());
     }
     let more = items.len().saturating_sub(CALLS_SHOWN);
     items.truncate(CALLS_SHOWN);
-    // An object prints once for a run of its routines (`Codeunit "X": A
-    // (:1), B (:2)`); the card's own object as `this object:`.
-    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-    for (object, rest, line) in &items {
-        let label = if object.is_empty() {
-            "this object".to_string()
-        } else {
-            object.clone()
-        };
-        let item = format!("{rest} (:{line})");
-        match groups.last_mut() {
-            Some((l, v)) if *l == label => v.push(item),
-            _ => groups.push((label, vec![item])),
-        }
-    }
-    let shown: Vec<String> = groups
-        .into_iter()
-        .map(|(l, v)| format!("{l}: {}", v.join(", ")))
+    // Round-2 G41, G45: each callee in the one display (`Codeunit
+    // "X"::A`; one of the card's own object as `::A`, the header names the
+    // object), with its location's role (`called at :184`).
+    let shown: Vec<String> = items
+        .iter()
+        .map(|(shown, line)| format!("{shown} (called at :{line})"))
         .collect();
     Some(format!(
         "calls: {}{}",
@@ -2208,14 +2193,18 @@ fn render(
             resolved.diagnostics.first().map_or_else(
                 || "no routine resolved".to_string(),
                 |d| {
-                    name_apps(&d.human, apps)
+                    let first = name_apps(&d.human, apps)
                         .lines()
                         .next()
                         .unwrap_or("")
-                        .to_string()
+                        .to_string();
+                    first
+                        .strip_prefix("explain: ")
+                        .map_or(first.clone(), str::to_string)
                 },
             )
         });
+    let lookup_miss = no_answer.is_some();
     let header = explain_header(
         mode,
         &cards,
@@ -2234,7 +2223,13 @@ fn render(
     crate::engine::result_header::tag_location_roles(&mut doc);
     let json_text = serialize_normalized_value(&sort_keys_keep_nulls(doc));
 
-    let mut human = header.human();
+    // Round-2 G40: a lookup miss prints its failure sentence once (the
+    // `answer:` line), then what helps the next call.
+    let mut human = if lookup_miss {
+        header.miss_human()
+    } else {
+        header.human()
+    };
     if let Some(f) = &resolved.field {
         human.push_str(&field_human(&ix, f, entry, fcx));
     }
@@ -2248,9 +2243,35 @@ fn render(
     if cards.is_empty() && resolved.field.is_none() && resolved.diagnostics.is_empty() {
         human.push_str("explain: no routine resolved\n");
     }
-    for d in &resolved.diagnostics {
-        human.push_str(&name_apps(&d.human, apps));
-        human.push('\n');
+    for (i, d) in resolved.diagnostics.iter().enumerate() {
+        let text = name_apps(&d.human, apps);
+        // The first diagnostic's first line is the miss's `answer:` line.
+        let text = if lookup_miss && i == 0 {
+            text.split_once('\n')
+                .map_or("", |(_, rest)| rest)
+                .to_string()
+        } else {
+            text
+        };
+        if !text.is_empty() {
+            human.push_str(&text);
+            human.push('\n');
+        }
+        if let Some(sels) = d.json["candidateSelectors"].as_array() {
+            let sels: Vec<String> = sels
+                .iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect();
+            for l in crate::engine::l5::selector_index::complete_call_lines(
+                crate::engine::follow_up::Tool::Explain,
+                fcx,
+                &sels,
+                &[],
+            ) {
+                human.push_str(&l);
+                human.push('\n');
+            }
+        }
     }
     let mut summary = explain_summary(&cards, resolved.diagnostics.len(), &header);
     // §6.3 (round-2 c26): a no-answer's outcome from its diagnostics' kinds.
@@ -2332,14 +2353,16 @@ fn explain_header(
     h.answer = match (&no_answer, &resolved.field, cards) {
         (Some(why), _, _) => format!("no answer — {why}"),
         (None, Some(f), _) => {
+            // Round-2 G39: "writes" means a record write; a field's
+            // writers are its field assignments and validations.
             let (searched, not_searched) = &f.search;
-            if f.writers.is_empty() {
-                format!(
-                    "confirmed writers: {}",
+            match f.writers.len() {
+                0 => format!(
+                    "the field is assigned or validated by no routine: {}",
                     crate::engine::vocab::none_observed(searched, not_searched)
-                )
-            } else {
-                format!("confirmed writers: {}", f.writers.len())
+                ),
+                1 => "the field is assigned or validated by 1 routine".to_string(),
+                n => format!("the field is assigned or validated by {n} routines"),
             }
         }
         (None, None, [one]) => one.4.1.answer().to_string(),
@@ -2563,11 +2586,14 @@ fn field_human(
     let (searched, not_searched) = &f.search;
     if f.writers.is_empty() {
         out.push_str(&format!(
-            "  confirmed writers: {}\n",
+            "  confirmed field writers (assignment or validation): {}\n",
             crate::engine::vocab::none_observed(searched, not_searched)
         ));
     } else {
-        out.push_str(&format!("  confirmed writers: {}\n", f.writers.len()));
+        out.push_str(&format!(
+            "  confirmed field writers (assignment or validation): {}\n",
+            f.writers.len()
+        ));
     }
     let kind_words = |k: WriteKind| match k {
         WriteKind::Assign => {

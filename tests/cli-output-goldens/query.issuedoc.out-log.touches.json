@@ -46,6 +46,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 58,
             "role": "operation",
             "routine": "r:1"
@@ -59,6 +60,7 @@
           "origin": {
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "fileDisplay": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 61,
             "role": "operation",
             "routine": "r:1"
@@ -95,7 +97,7 @@
           "role": "definition"
         },
         "display": "WriteLog",
-        "objectDisplay": "Codeunit Out Log Mgt",
+        "objectDisplay": "Codeunit \"Out Log Mgt\"",
         "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
         "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
         "signature": "(Text[100])",
@@ -109,7 +111,7 @@
           "role": "definition"
         },
         "display": "IssueDoc",
-        "objectDisplay": "Codeunit Out Issue Document",
+        "objectDisplay": "Codeunit \"Out Issue Document\"",
         "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
         "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
         "signature": "(var Record \"Out Doc\")",
@@ -155,5 +157,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "4.0.0"
+  "schemaVersion": "5.0.0"
 }

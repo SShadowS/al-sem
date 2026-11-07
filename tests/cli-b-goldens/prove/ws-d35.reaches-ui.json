@@ -73,7 +73,7 @@
         "sourceKind": "source"
       },
       "display": "OnBeforePrintSafe",
-      "objectDisplay": "Codeunit D35 Demo",
+      "objectDisplay": "Codeunit \"D35 Demo\"",
       "qualifiedDisplay": "Codeunit \"D35 Demo\"::OnBeforePrintSafe",
       "selector": "Codeunit \"D35 Demo\"::OnBeforePrintSafe",
       "signature": "()",
@@ -81,5 +81,6 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "2.10.0"
+  "schemaVersion": "2.11.0",
+  "volatile": []
 }
