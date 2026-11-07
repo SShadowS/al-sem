@@ -340,7 +340,8 @@ fn u(v: &Value, k: &str) -> usize {
 /// The returned tests under a cap of `cap` (round 2 G11): `picked` is the
 /// selection in its global rank (code relation before navigation, then
 /// tier, hops, codeunit, display). In `changed` order, each changed
-/// routine takes its nearest test (the first in that rank that reaches it);
+/// routine takes its nearest test (the first in that rank that reaches it:
+/// attributed to it by the walk, or named as its own nearest test);
 /// a test already taken for an earlier routine is skipped, so it counts
 /// once; the remaining slots fill by the global rank. The result keeps the
 /// global rank's order.
@@ -357,10 +358,14 @@ fn spread_cap<'v>(picked: &[&'v Value], changed: &[Value], cap: usize) -> Vec<&'
             break;
         }
         let id = s(c, "stableId");
-        if let Some(i) = picked
-            .iter()
-            .position(|t| reaches(t, id) && !taken.iter().any(|&j| same(picked[j], t)))
-        {
+        // A test reaches the routine when the walk attributed it there
+        // (`reaches`: one root per test) or when it is the routine's own
+        // nearest test (`nearest.test`, from the per-root search).
+        let nearest = c["nearest"]["test"].as_str();
+        if let Some(i) = picked.iter().position(|t| {
+            (reaches(t, id) || nearest.is_some_and(|n| s(t, "display") == n))
+                && !taken.iter().any(|&j| same(picked[j], t))
+        }) {
             taken.push(i);
         }
     }
@@ -1468,5 +1473,29 @@ mod tests {
         shared.insert(0, test("t0", 50000, 0, json!(["r1", "r2"])));
         let (ids, v) = returned(shared);
         assert_eq!(ids, ["t0", "t4"], "t0 counts once: {v:#}");
+        // The CDO shape (c21): the walk attributes every test to one root;
+        // r2's own nearest test, from the per-root search, still counts as
+        // reaching r2.
+        let one_root = vec![
+            test("t1", 50001, 1, json!("r1")),
+            test("t2", 50002, 2, json!("r1")),
+            test("t4", 50004, 4, json!("r1")),
+        ];
+        let part = Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({"roots": [{"stableId": "r1", "status": "reached"},
+                                        {"stableId": "r2", "status": "reached",
+                                         "nearest": "Codeunit T50004::t4",
+                                         "nearestTier": "local", "nearestHops": 4}],
+                              "tests": one_root})),
+        };
+        let v: Value = serde_json::from_str(&render(&roots, &[part], opts).text).unwrap();
+        let ids: Vec<&str> = v["runFirst"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["stableId"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["t1", "t4"], "r2's nearest test: {v:#}");
     }
 }
