@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (round-2 output validation, W2: impact records the relation)
+
+Milestone W2 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§2.1 engine
+part). Replaces W1's interim "relation not recorded" population.
+
+- **impact's reverse walk classifies every path** (G1, c12, c20, n09): impact's visitor sets
+  three bits on each walk state from the sites it crosses (`NAV`: a page's lifecycle into a
+  trigger a user starts, or an action's `RunObject`; `RULE`: a `TestPage` declaration;
+  `CONFIGURED`: a configured-dispatch site). A background start, a test runner or handler,
+  an event dispatch and a dispatching builtin on a receiver typed as one object stay code.
+  Each node takes its best state in one total order (established code, established UI
+  navigation, candidates over configuration, over a rule edge, over a hub; then the better
+  tier, then fewer hops), and its witness is that state's. The tier is R0's (`via-hub`,
+  then `via-configuration`, `via-dependency`, `local`).
+- **impact prints populations, code first**: `reached by code: …` (with `none — no code
+  path reaches it` when empty), `reached by UI navigation: …`, `candidates over
+  configuration (depends on configuration data not read): …`, `candidates (relation not
+  established): over a rule edge <r>, over a hub <b>`. Each established population names
+  its tiers, its nearest witness as `[<tier>, <relation>]`, its entries by kind and its
+  share of the program's entries; from 90% it says `program-wide: <p>% …` and folds the
+  counts; when only the populations together pass 90%, one line says so. `external:` is
+  back, for the code population only. A limited walk claims no share and no absence.
+  Measured on CDO: c12 reaches no code and 14,527 ancestors by UI navigation (25% of the
+  program's 43,793 entries, so not program-wide); c20's subscriber is reached by code from
+  Report "Copy Company" and Page Companies' action, and by navigation from the role
+  centers; its second routine has 1 code ancestor and no entry. n09's subscriber exits when
+  `RunTrigger` is false, and no code deletes a Customer with `RunTrigger` true: its code
+  population is the publisher alone, and the deletes come from pages (UI navigation).
+- **Cost** (§2.1 targets, the up walk alone, release-fast, CDO): states 1.96× on c12,
+  2.60× on c20, 2.61× on n09 (target 2×); walk time 2.6×, 3.3×, 3.5× (target 1.5×; 52 →
+  134 ms on c12); scratch and visitor memory about 2.4× (a few MB); process peak memory
+  roughly stable. The review (§R2.4, option A) accepted the cost and replaced the relative
+  targets with an absolute bar: the whole up part (`walkMs`) at most 250 ms per changed
+  routine on c12. Pruning is a later register item.
+- **Review landing changes (§R2.4):** a background target codeunit and the `OnRun` it runs
+  are one entry (a target with no `OnRun` is counted apart and noted); a page whose
+  `RunObject` actions are not named is one entry per page, and the totals say so (JSON
+  `entryNotes`, human `entry totals include …`); the scope line says test code is not in
+  these callers, the `roots.config` overlay is not applied, and (when there is one) that
+  `local` includes dependencies loaded from source folders; `direct code callers: none
+  found (test code is not counted; see tests:)`; the ancestor-publishers block leaves the
+  human text (JSON keeps `eventPublishers`); JSON `programEntries` is the canonical
+  program total (the legacy mask count is gone); a changed routine that is an entry says
+  `the changed routine is a page action (an entry itself)`; the `population` label sits
+  on the legacy `ancestors` object only; `reached by code: none — no established
+  code-path witness in the analyzed graph`.
+- **Canonical entries** (§2.1 steps 3-4): one identity per entry for numerator and
+  denominator (a routine's `#if` arms as one; a page action as `(object, action)`, whether
+  it runs through `OnAction` or `RunObject`; static background targets and action-run
+  actions included; one kind per entry by a fixed priority). The program's inventory is
+  built once per sited graph. This replaces W1's root-kind mask share.
+- **JSON** (`al-sem.impact-up`, additive): `relationRecorded: true`, `byRelation`
+  (ancestors and entries), `entriesByKind`, `entriesByContext`, `programEntriesByKind`,
+  `programShare`, `nearest`, `firstByKind`, `externalCode`; W1's `declaredEntries` goes
+  (it never shipped). The legacy `ancestors` tiers and entry buckets stay. The envelope
+  summary's routine rows carry `relationRecorded: true`. The impact base cache moves to
+  `cache/impact-base/v2`.
+- **R0's visited set is a dense `u64` per node** (Cost (a)): states with consumer bits
+  0-7 stay out of the hash set (48 of 64 bits); bits 8 and above keep the hash fallback.
+  The r0 goldens do not move.
+
 ### Changed (round-2 output validation, W1: what misled)
 
 Milestone W1 of `docs/superpowers/specs/2026-11-07-output-validation-r2.md` (§2.1 interim,

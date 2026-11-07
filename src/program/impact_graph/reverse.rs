@@ -276,6 +276,9 @@ pub trait ConeVisitor {
     }
     /// The consumer bits of the state reached backwards over `site` from
     /// `from`, or `None` to not follow that site. The default keeps the bits.
+    /// A walk calls it for `from`'s reversed sites right after its
+    /// [`Self::reach`] of `from`, so a visitor may read `from`'s hop count
+    /// from that call.
     fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx) -> Option<u8> {
         let _ = (g, site);
         Some(from.ext)
@@ -312,6 +315,10 @@ impl Default for WalkOptions<'_> {
     }
 }
 
+/// The consumer-bit values ([`WalkState::ext`]) the dense visited set holds:
+/// `ext` 0–7 (three bits) × 3 tiers × `crossedEvent` = 48 bits of a `u64`.
+pub const DENSE_EXT: u8 = 8;
+
 /// [`WalkOptions::state_budget`]'s default.
 pub const DEFAULT_STATE_BUDGET: usize = 2_000_000;
 const CANCEL_EVERY: usize = 4096;
@@ -330,12 +337,21 @@ pub struct WalkStats {
 /// a walk's meaning (it is cleared at the next walk's start).
 #[derive(Default)]
 pub struct WalkScratch {
-    /// Per node, the visited ext-0 states: bit `tier * 2 + crossedEvent`.
-    seen: Vec<u8>,
-    /// Visited states with consumer bits.
+    /// Per node, the visited states with `ext` below [`DENSE_EXT`] and no
+    /// guard: bit `(ext * 3 + tier) * 2 + crossedEvent` (48 of 64 bits;
+    /// round-2 r2 §2.1 Cost (a): impact's three bits and `dep_callers`' two
+    /// stay here instead of the hash set).
+    seen: Vec<u64>,
+    /// Visited states with consumer bits of [`DENSE_EXT`] and above, or a
+    /// table-event guard: the explicit hash fallback (callers' context sets
+    /// its own bits there).
     seen_ext: HashSet<WalkState>,
-    /// The nodes whose `seen` byte is set (reset list).
+    /// The nodes whose `seen` word is set (reset list).
     touched: Vec<NodeIx>,
+    /// Tests only: every state goes to the hash fallback, so a test can
+    /// compare the dense storage against it.
+    #[cfg(test)]
+    hash_only: bool,
     /// The nodes whose action-run entry was reported, per state.
     action_entries: HashSet<WalkState>,
     /// The nodes whose hidden channel was reported.
@@ -352,7 +368,7 @@ impl WalkScratch {
         use std::mem::size_of;
         let state = size_of::<WalkState>();
         let q = size_of::<(u32, WalkState, Option<WalkState>, Via)>();
-        self.seen.capacity()
+        self.seen.capacity() * size_of::<u64>()
             + (self.seen_ext.capacity() + self.action_entries.capacity()) * (state + 8)
             + self.hidden_done.capacity() * (size_of::<NodeIx>() + 8)
             + self.touched.capacity() * size_of::<NodeIx>()
@@ -375,12 +391,25 @@ impl WalkScratch {
         self.next.clear();
     }
 
+    /// A scratch that keeps every state in the hash fallback (tests only).
+    #[cfg(test)]
+    pub(crate) fn hash_only() -> WalkScratch {
+        WalkScratch {
+            hash_only: true,
+            ..WalkScratch::default()
+        }
+    }
+
     /// Marks `s` visited; `false` when it already was.
     fn insert(&mut self, s: WalkState) -> bool {
-        if s.ext != 0 || s.guard != 0 {
+        #[cfg(test)]
+        if self.hash_only {
             return self.seen_ext.insert(s);
         }
-        let bit = 1u8 << (s.tier as u8 * 2 + u8::from(s.crossed_event));
+        if s.ext >= DENSE_EXT || s.guard != 0 {
+            return self.seen_ext.insert(s);
+        }
+        let bit = 1u64 << ((u32::from(s.ext) * 3 + s.tier as u32) * 2 + u32::from(s.crossed_event));
         let slot = &mut self.seen[s.node as usize];
         if *slot & bit != 0 {
             return false;
@@ -405,6 +434,15 @@ fn tier_at(g: &SitedGraph, node: NodeIx, tier: Tier, open: bool) -> Tier {
         Tier::Local
     };
     tier.max(here)
+}
+
+/// The tier of the state a walk reaches backwards over `site` from a state
+/// of tier `tier`: the walk's own rule, for a visitor that needs the tier of
+/// a state in [`ConeVisitor::step`] (before the walk builds it).
+#[must_use]
+pub fn tier_over(g: &SitedGraph, site: SiteIx, tier: Tier) -> Tier {
+    let st = &g.sites()[site as usize];
+    tier_at(g, st.from, tier, st.conf == super::project::Conf::Open)
 }
 
 /// One root's streaming walk: the visitor keeps what it needs; `scratch` is

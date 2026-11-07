@@ -875,11 +875,20 @@ impl<'a> Builder<'a> {
         }
         let mut opens: Vec<Key> = Vec::new();
         let mut action_runs: HashSet<Key> = HashSet::new();
+        // Per run target: the actions that run it, each as `(the object
+        // declaring it, its name)` (round-2 r2 §2.1 step 3).
+        let mut action_names: HashMap<Key, Vec<(ObjectNodeId, Box<str>)>> = HashMap::new();
         let mut tables: Vec<ObjectNodeId> = Vec::new();
         for m in &members {
             if let Some(f) = self.inp.facts.objects.get(*m) {
                 opens.extend(f.opens.iter().map(|t| self.run_target_key(t)));
                 action_runs.extend(f.action_runs.iter().map(|t| self.run_target_key(t)));
+                for (t, name) in &f.action_run_names {
+                    action_names
+                        .entry(self.run_target_key(t))
+                        .or_default()
+                        .push(((*m).clone(), Box::from(name.as_str())));
+                }
                 tables.extend(f.tables.iter().cloned());
             }
             if let Some(mo) = self.obj_by_id.get(*m) {
@@ -916,6 +925,11 @@ impl<'a> Builder<'a> {
         }
         for to in opens {
             let action = action_runs.contains(&to);
+            let names = if action {
+                action_names.get(&to).cloned().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let before = self.sited.sites.len();
             self.simple(
                 from.clone(),
@@ -928,6 +942,12 @@ impl<'a> Builder<'a> {
                 // A user starts this run from one of the page's actions
                 // (`RunObject`): the reverse walk's page-action entry.
                 self.sited.action_run_sites.push(before as u32);
+                if !names.is_empty() {
+                    let mut names = names;
+                    names.sort();
+                    names.dedup();
+                    self.sited.action_run_actions.push((before as u32, names));
+                }
             }
         }
         for table in tables {

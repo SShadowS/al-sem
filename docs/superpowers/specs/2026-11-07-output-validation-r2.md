@@ -104,6 +104,100 @@ today" names what was checked).
 - **`opFamily` values `lock`, `validate`, `filter`:** cut. Only `write` ships (§3.2).
 - **Owner decisions (2026-11-07):** recorded in §5 (c08, c25, c02, c20, new words).
 
+### R2.4 W2 as built: cost result and departures (for review before landing)
+
+**Cost, measured** (release-fast, the up walk alone on CDO, median of 3; before is the commit
+that only adds the cost fields, after is the W2 binary):
+
+| Call | States | Walk time | Scratch | Visitor | Peak RSS |
+|---|---|---|---|---|---|
+| c12 | 70,466 → 137,937 (1.96×) | 52.0 → 134.4 ms (2.59×) | 1.13 → 2.12 MB | 1.33 → 3.17 MB | 2.48 → 2.48 GB |
+| c20 | 38,772 → 100,992 (2.60×) | 33.2 → 108.7 ms (3.27×) | 0.87 → 2.07 MB | 1.33 → 3.17 MB | 2.44 → 2.48 GB |
+| n09 | 38,757 → 100,977 (2.61×) | 30.8 → 107.9 ms (3.51×) | 0.87 → 2.07 MB | 1.33 → 3.17 MB | 2.46 → 2.46 GB |
+
+The states target (≤ 2×) holds on c12 only; the time target (≤ 1.5×) is missed on all three.
+Two per-step costs were already removed (an allocation per step and a name scan). By §2.1, W2
+stops here.
+
+**Proposal (to decide):**
+- **(A, recommended) Accept the measured cost; pruning stays a later item.** The up walk is
+  under 0.14 s on calls of about 10 s (≈1.3%); peak RSS does not move; scratch plus visitor
+  stay under 6 MB. The relative targets were a guard against state explosion. The states grow
+  2–2.6×, which is bounded by the 8 `ext` values and is far from explosion. The pruning design,
+  with its dominance proof, becomes a register item. It is built only if a later measurement
+  shows the walk matters (for example, a multi-routine impact over a hub).
+- **(B) Write and review the pruning design now**, and land W2 only with it.
+
+**Departures from §2.1 / §2.2 as written:**
+1. **Hubs in the `LOCAL` test.** A callbacks hub (`h:callbacks:<app>`) does own an app, so the test
+   skips every `HUB` node, not only nodes with no app. When a dependency is loaded as a source
+   folder, R0 treats it as local, so `LOCAL == !is_dependency_node` holds for the package form
+   only. The test pins that form and checks that the source-folder form differs.
+2. **Page-action identity.** The facts now record each `RunObject` action's name, and the sited
+   graph keeps the names per action-run site. That is what lets "a page action with both a
+   trigger and a `RunObject` counts once" hold. An action-run site whose actions are not named
+   counts as one entry for its page.
+3. **No `roots.config` overlay on either side.** Impact walks without extra entries today, so
+   overlay entries are in neither the numerator nor the denominator.
+4. **"(every candidate decided)"** prints only when there are no candidates. Otherwise the line
+   says "(the candidates below are not decided)". The UI-navigation line is left out when its
+   population is empty.
+5. **n09's "raised by … Customer deletes at <k> sites" clause is not built.** The existing
+   `raised by:` line stays, now tagged `[tier, code]`. The §2.2 expectation was wrong on the
+   source: the subscriber exits when `RunTrigger` is false. Within 2 hops of the publisher there
+   is no routine, only the Customer pages, which delete by navigation. Code: 1 ancestor (the
+   publisher). UI navigation: 14,528 (25%).
+6. **c12 is not program-wide.** UI navigation reaches 25% of the program's entries (11,231 of
+   43,793). That is below the 50% threshold, so neither `program-wide` nor `broad reach` fires
+   on these calls. The thresholds stay as written.
+
+A check on real output: in every walk the population totals add up to the old ancestor total
+(c12: 0 + 14,527 + 2,016 + 5,654 = 22,197).
+
+#### R2.4 review result (2026-11-07): both reviewers "accept with changes", option A
+
+**Cost: A.** Pruning is not a landing condition. Corrections to the reasoning above:
+- The walks alone take 108–134 ms. The whole up part, with summaries and captions (`walkMs`),
+  rises from 49–70 ms to 199–210 ms. Both numbers stay visible.
+- Time grows faster than states (c20 3.27× against 2.60×; n09 3.51× against 2.61×): the work per
+  state rose 25–35% (`site_bits`, `Population::of`, `canon.add`). Noted; no fix.
+- Peak RSS is roughly stable, not unchanged (c20 +40 MiB).
+- **The relative targets are replaced by an absolute bar:** the up part (`walkMs`) at most
+  250 ms per changed routine on CDO c12, release-fast.
+- **Register item, pruning (with its dominance proof):** triggered by a measured impact on many
+  changed routines (or over a hub) whose up part exceeds 5% of the call. A multi-root
+  performance check is part of that item. The state budget and partial-result guards stay.
+
+**Departure 5, reworded reason:** the RunTrigger guard is real (`CDODataDeleteHandler.Codeunit.al:137`),
+but it is not why there are no delete sites. Fable scanned the Base Application (8,073 files)
+and Business Foundation: no typed `Customer` `Delete`/`DeleteAll` site and no `Rec.Delete` in a
+Customer-sourced object. In the analyzed production program the only Customer deletes are page
+deletions (UI navigation). The CDO test app does delete Customers (`Delete(true)`), which is
+landing change 3.
+
+**Landing changes (both reviewers' required items):**
+1. **A background start counts once.** A background-target object and the `OnRun` it starts
+   are one entry, not two. Merge the identities when the target routine is known; otherwise
+   show an unresolved target separately. Update the inventory and share tests.
+2. **The unnamed page-action fallback is explicit.** Count the CDO action-run sites that fall
+   back to "one entry per page". When an answer's totals include such groups, the JSON carries
+   their count and the human line says so. They are not silently folded into canonical totals.
+3. **The scope line says what is not counted.** In human and JSON scope, once per answer:
+   test code is not in these callers (it is reported under `tests:`); the `roots.config` entry
+   overlay is not applied; `local` includes dependencies loaded from source folders when there
+   are any. `direct code callers: none found` carries the test-code qualifier.
+4. **The "event publishers among its ancestors" human block** is either rendered from
+   classified states (with `[tier, relation]`) or dropped. The direct `raised by:` line stays.
+5. **One program total in JSON.** `programEntries` becomes the canonical count (the same one as
+   `programShare.program`); the legacy mask count is renamed or dropped. Consumers are ours.
+6. **c12 prints `the changed routine is a page action (an entry itself)`** as §2.1's final form
+   says (today only the JSON `rootEntryKinds` carries it).
+7. **The stale `population` label** (W1's interim "all ancestors (…)") is dropped or kept only on
+   the legacy `ancestors` object, with that meaning stated.
+8. **Wording:** `reached by code: none — no established code-path witness in the analyzed graph`.
+9. **Later (W4/W5, not W2):** n09 states its publisher three times; the publisher line uses
+   `(through a dependency, 1 hop)` where other lines use `[via-dependency, code]`.
+
 ---
 
 ## 0. Summary

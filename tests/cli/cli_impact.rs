@@ -427,8 +427,11 @@ fn raised_by_names_the_routines_own_events_apart_from_ancestor_publishers() {
     let (text, err, code) = impact(&ws, &["--routine", "TU Core::Audited", "--no-tests"], None);
     assert_eq!(code, 0, "{text}{err}");
     assert!(!text.contains("raised by:"), "{text}");
+    // Round-2 §R2.4 landing change 4: the ancestor publishers are a legacy
+    // list of every relation, so the human text no longer prints them (JSON
+    // `eventPublishers.count` keeps them, asserted above).
     assert!(
-        text.contains("event publishers among its ancestors: "),
+        !text.contains("event publishers among its ancestors"),
         "{text}"
     );
 }
@@ -623,7 +626,13 @@ pub(crate) fn cdo_impact_ratchets() {
     // block grew, so five fewer fit the budget. +682 since round-2 W1
     // (the first entry per kind behind `detail`, no `external:` line, the
     // hubs line once per answer): each block is shorter, so six more fit.
-    assert!(human.contains("  … +682 routines"), "{human}");
+    // +686 since round-2 W2 (the reach split into populations, each
+    // established one with its nearest witness, entries by kind and share,
+    // and `external:` for the code population): each block is longer, so
+    // four fewer fit; the ranking is unchanged. +685 with the review's
+    // landing changes (§R2.4: the ancestor-publishers line leaves the human
+    // text, the entry and test-code qualifiers join): one more fits.
+    assert!(human.contains("  … +685 routines"), "{human}");
 
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
     let r = &v["roots"][0];
