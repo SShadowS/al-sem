@@ -50,6 +50,10 @@
       "universe": "cross-app"
     },
     "selection": {
+      "byRelation": {
+        "UI navigation": 0,
+        "code": 1
+      },
       "capAsked": null,
       "complete": true,
       "fallback": [],

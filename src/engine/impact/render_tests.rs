@@ -147,10 +147,18 @@ fn a_kind_first_witness_is_the_nearest_over_its_buckets() {
         {"kind": "onrun-codeunit", "count": 429, "onlyOpen": 120, "userOrJob": false, "first": [
             {"display": "Codeunit 6175300", "stableId": "w:1", "hops": 3, "tier": "throughDependency"},
             {"display": "Codeunit 9081", "stableId": "d:9081", "hops": 21, "tier": "throughDependency"}]}]);
-    let text = human(&main, &up, delta, RenderOpts::default());
-    assert!(text.contains("codeunit OnRun 447 (via-hub 132)"), "{text}");
+    // Round-2 r2 §2.1 (W1): the first entries print with `detail` only,
+    // tagged, with no bracketed tier.
+    let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
     assert!(
-        text.contains("first codeunit OnRun: [via-dependency] Codeunit 6175300 (3 hops)\n"),
+        text.contains("codeunit OnRun 447 (over a hub 132)"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "first codeunit OnRun: [relation not recorded] Codeunit 6175300 (through a \
+             dependency, 3 hops)\n"
+        ),
         "{text}"
     );
 }
@@ -163,8 +171,12 @@ fn a_kind_first_witness_is_the_nearest_over_its_buckets() {
 /// Output validation V2 (§3.2, §8.1): every witness starts with its tier in
 /// the word table's words, and the entry count says how many are via-hub.
 ///
-/// Break: drop the tier from `node_short` → the `[via-hub]` witness assert
-/// fails (2026-11-06, recorded in the V2 commit).
+/// Round-2 r2 §2.1 (W1 interim): the walk records no relation, so its
+/// witnesses say where their path goes in plain words (`within the
+/// workspace`, `through a dependency`, `over a hub`), never a bracketed tier.
+///
+/// Break: drop the tier from `node_plain` → the `over a hub` witness assert
+/// fails (2026-11-06, recorded in the V2 commit; the words moved in W1).
 #[test]
 fn an_open_site_witness_is_labelled_with_its_tier() {
     let (main, mut up, delta) = parts(1, 0);
@@ -172,20 +184,27 @@ fn an_open_site_witness_is_labelled_with_its_tier() {
         "userOrJob": true, "first": [
             {"display": "Report 357::company::onpostdataitem", "hops": 2, "tier": "local"},
             {"display": "Report 202::header::onaftergetrecord", "hops": 3, "tier": "throughDependency"},
-            {"display": "Report 50100::onprereport", "hops": 5, "tier": "onlyOpen"}]}]);
+            {"display": "Report 50100::onprereport", "hops": 5, "tier": "onlyOpen"}]},
+        {"kind": "onrun-codeunit", "count": 1, "onlyOpen": 1, "userOrJob": false, "first": [
+            {"display": "Codeunit 50200", "hops": 6, "tier": "onlyOpen"}]}]);
     let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
-    assert!(text.contains("report triggers 3 (via-hub 1)"), "{text}");
-    // §7.6: with `detail`, the nearest entry of each tier on its own line.
+    assert!(text.contains("report triggers 3 (over a hub 1)"), "{text}");
+    // With `detail`, the nearest entry of each kind, tagged.
     assert!(
-        text.contains("[local] Report 357::company::onpostdataitem (2 hops): report trigger\n"),
+        text.contains(
+            "first report trigger: [relation not recorded] Report 357::company::onpostdataitem \
+             (within the workspace, 2 hops)\n"
+        ),
         "{text}"
     );
     assert!(
-        text.contains("[via-dependency] Report 202::header::onaftergetrecord (3 hops)"),
+        text.contains(
+            "first codeunit OnRun: [relation not recorded] Codeunit 50200 (over a hub, 6 hops)\n"
+        ),
         "{text}"
     );
     assert!(
-        text.contains("[via-hub] Report 50100::onprereport (5 hops)"),
+        !text.contains("[local]") && !text.contains("[via-hub]"),
         "{text}"
     );
 }

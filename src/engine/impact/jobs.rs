@@ -301,6 +301,12 @@ impl Job for MainJob<'_> {
                 for (k, x) in routine_names.identity_json(id) {
                     v[k] = x;
                 }
+                // Round-2 r2 §3.9 (G15, additive): the direct callees, as
+                // explain's `calls:` line prints them.
+                if let Some(c) = crate::engine::l5::explain::calls_line(model, &routine_names, id)
+                {
+                    v["callsLine"] = json!(c);
+                }
                 v
             })
             .collect();
