@@ -689,6 +689,7 @@ pub fn write_model(x: &CrossAppProgram, w: &mut dyn std::fmt::Write) -> std::fmt
         m.calls.diagnostics, m.calls.external_targets
     )?;
     writeln!(w, "{:#?}", m.events)?;
+    writeln!(w, "{:?}", m.page_ui_blocked)?;
     writeln!(
         w,
         "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",

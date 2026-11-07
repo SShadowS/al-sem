@@ -106,8 +106,22 @@
       },
       "index": "operations-one-routine-deep",
       "note": "workspace-global: every workspace routine whose transitive cone touches this table, by the per-operation index (one routine into dependency code). A routine whose only touch is deeper in dependency code, or on a table not resolved, is not listed. Scope it with --from <routine> --direction up.",
-      "routineCount": 9,
+      "routineCount": 12,
       "routines": [
+        {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/QTTouches.al",
+            "line": 142,
+            "role": "definition"
+          },
+          "display": "RunTop2OnEvent",
+          "objectDisplay": "Codeunit \"QT Touches\"",
+          "qualifiedDisplay": "Codeunit \"QT Touches\"::RunTop2OnEvent",
+          "selector": "Codeunit \"QT Touches\"::RunTop2OnEvent",
+          "signature": "()",
+          "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#092eeb086152af563b227571448cefdaf5d660c2480b9aac81b5fa2d14fd88d0"
+        },
         {
           "anchor": {
             "column": 4,
@@ -196,6 +210,20 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
+            "line": 130,
+            "role": "definition"
+          },
+          "display": "Publisher",
+          "objectDisplay": "Codeunit \"QT Touches\"",
+          "qualifiedDisplay": "Codeunit \"QT Touches\"::Publisher",
+          "selector": "Codeunit \"QT Touches\"::Publisher",
+          "signature": "()",
+          "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#989ece52aa2427548206c6ee46613758f58892c34435f6338ccfd63fa79234d7"
+        },
+        {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/QTTouches.al",
             "line": 55,
             "role": "definition"
           },
@@ -205,6 +233,20 @@
           "selector": "Codeunit \"QT Touches\"::CallWithReal",
           "signature": "()",
           "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#a50805f8cc43f25c0d72e4f8befa92ad133e41a9ef3e701c5b09484c27d96dee"
+        },
+        {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/QTTouches.al",
+            "line": 137,
+            "role": "definition"
+          },
+          "display": "OnTop2",
+          "objectDisplay": "Codeunit \"QT Touches\"",
+          "qualifiedDisplay": "Codeunit \"QT Touches\"::OnTop2",
+          "selector": "Codeunit \"QT Touches\"::OnTop2",
+          "signature": "()",
+          "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#ddcd6ebf0149743338191785e52ca10cb60120959f18621072d71e916fd632b6"
         },
         {
           "anchor": {

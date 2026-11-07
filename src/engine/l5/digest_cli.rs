@@ -3064,7 +3064,9 @@ pub fn project_digest_document(
         "workspaceFingerprint".into(),
         workspace_fp.to_string().into(),
     );
-    if let (Some(table), Some(v)) = (routines_table, &v3) {
+    // Round-3 n08/m01: with no root resolved there is no routine table or
+    // path cap to describe.
+    if let (Some(table), Some(v), false) = (routines_table, &v3, entries.is_empty()) {
         payload.insert("routines".into(), table);
         payload.insert("pathCap".into(), v.opts.path_cap.into());
         if v.opts.detail {
@@ -4499,7 +4501,7 @@ fn digest_view(
     }
     human_text.insert_str(0, &header.human());
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
-    let human_text = dependencies.readable_locations(human_text);
+    let mut human_text = dependencies.readable_locations(human_text);
     drop(rollup_cx);
     cx.release(Cell::L4);
     cx.release(Cell::Effects);
@@ -4507,6 +4509,31 @@ fn digest_view(
     // §6.3 (round-2 n08): a no-answer's outcome from its changed-roots
     // diagnostics' kinds (`selector-ambiguous` → `ambiguous`).
     let mut summary = summary;
+    // Round-3 n08/m01: a lookup failure carries no effect-analysis totals,
+    // and an ambiguity the complete call over its candidates (explain's c26
+    // form), in the human text and as `summary.next`.
+    if exit_code == 2 {
+        let next = ambiguity_next(
+            &changed_roots.diagnostics,
+            crate::engine::follow_up::Cx::new(render.surface, req.single_app),
+        );
+        let mut slim = serde_json::Map::new();
+        for k in [
+            "kind",
+            "rootsRequested",
+            "rootsResolved",
+            "changedRootsDiagnostics",
+        ] {
+            if let Some(v) = summary.get(k) {
+                slim.insert(k.into(), v.clone());
+            }
+        }
+        if let Some(n) = &next {
+            slim.insert("next".into(), n.json());
+            human_text.push_str(&format!("  complete call: {}\n", n.text(render.surface)));
+        }
+        summary = serde_json::Value::Object(slim);
+    }
     if exit_code == 2
         && let Some(o) = crate::engine::result_header::outcome_of_kinds(
             changed_roots
@@ -4525,6 +4552,32 @@ fn digest_view(
         exit_code,
         summary,
     }
+}
+
+/// Round-3 n08/m01: the complete digest call over every candidate of the
+/// ambiguous selectors among `changed`, or `None` when none lists its
+/// candidates' selectors.
+fn ambiguity_next(
+    changed: &[ChangedRootsDiagnostic],
+    fcx: crate::engine::follow_up::Cx,
+) -> Option<crate::engine::follow_up::FollowUp> {
+    let selectors: Vec<String> = changed
+        .iter()
+        .filter_map(|d| match d {
+            ChangedRootsDiagnostic::SelectorAmbiguous { listed, .. } => Some(listed),
+            _ => None,
+        })
+        .flatten()
+        .map(|c| c.selector.clone())
+        .collect();
+    (!selectors.is_empty()).then(|| {
+        crate::engine::follow_up::FollowUp::new(
+            crate::engine::follow_up::Tool::Digest,
+            fcx,
+            "every candidate",
+        )
+        .arg("routines", selectors)
+    })
 }
 
 /// A2.10's use test, shared by digest, prove and events: `pipeline` runs over

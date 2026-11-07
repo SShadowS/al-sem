@@ -697,6 +697,19 @@ fn ingest_abi_objects(
             lookup_pages: Vec::new(),
             // Symbol-only objects' `ObsoleteState` is not read (yet).
             obsolete_gone: false,
+            // A page's UI permissions as the symbol reference carries them;
+            // a symbol-only object's code is not read, so no setter.
+            page_ui: if obj_id.kind == ObjectKind::Page {
+                let p = &abi_obj.page_props;
+                crate::program::page_ui::PageUiDecl::from_symbols(
+                    p.editable,
+                    p.insert_allowed,
+                    p.modify_allowed,
+                    p.delete_allowed,
+                )
+            } else {
+                Default::default()
+            },
         });
 
         for routine in &abi_obj.routines {

@@ -746,23 +746,24 @@ fn touches_counts_in_the_callers_frame() {
     );
 }
 
-/// The informative case: Leaf does not touch QT Item; Top1, Top2 and Entry do
-/// through other branches, Top3 does not (and is named). One `callers[]` row
-/// per touching caller; `--all` adds every witness.
+/// The informative case: Leaf does not touch QT Item; Top1, Top2, Entry and
+/// the round-3 Publisher, OnTop2 and RunTop2OnEvent do through other
+/// branches, Top3 does not (and is named). One `callers[]` row per touching
+/// caller; `--all` adds every witness.
 #[test]
 fn touches_informative_up_aggregates_per_caller() {
     let v = json_of(case("qt.leaf.qt-item.up"));
     let up = &v["payload"]["up"];
     assert_up_partition(up);
     assert_eq!(up["informative"], serde_json::json!(true));
-    assert_eq!(num(&up["callersTouching"]), 3);
+    assert_eq!(num(&up["callersTouching"]), 6);
     assert_eq!(num(&up["callersNotTouching"]), 1);
     assert_eq!(
         up["notTouching"][0]["routine"]["display"],
         serde_json::json!("Top3")
     );
     let callers = up["callers"].as_array().unwrap();
-    assert_eq!(callers.len(), 3);
+    assert_eq!(callers.len(), 6);
     assert!(up.get("witnesses").is_none());
     let all = json_of(case("qt.leaf.qt-item.up.all"));
     let w = all["payload"]["up"]["witnesses"].as_array().unwrap();
@@ -814,8 +815,8 @@ fn touches_default_never_builds_the_caller_witness_product() {
     assert_eq!(built("WriteItem", Direction::Both, false), 0);
     assert_eq!(built("WriteItem", Direction::Up, false), 0);
     assert_eq!(built("WriteItem", Direction::Both, true), 14);
-    assert_eq!(built("Leaf", Direction::Up, false), 3);
-    assert!(built("Leaf", Direction::Up, true) > 3);
+    assert_eq!(built("Leaf", Direction::Up, false), 6);
+    assert!(built("Leaf", Direction::Up, true) > 6);
     // Step 1b: `--callers` names every caller of the trivial case (each
     // with its outcome) and still builds no caller witness.
     let named = render("WriteItem", Direction::Up, false, true);

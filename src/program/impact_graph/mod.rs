@@ -562,6 +562,7 @@ pub(crate) fn key_id_with(key: &Key, app: &dyn Fn(AppRef) -> (String, String)) -
             Hub::Name { name_lc, arity } => format!("h:name:{name_lc}/{arity}"),
             Hub::Run(k) => format!("h:run:{}", kind_lc(*k)),
             Hub::Record(op) => format!("h:record:{op}"),
+            Hub::RecordEvents(op) => format!("h:record-events:{op}"),
             Hub::Callbacks(a) => {
                 let (guid, name) = app(*a);
                 format!("h:callbacks:{}", if guid.is_empty() { name } else { guid })
@@ -721,6 +722,7 @@ pub(crate) fn render_node(
                 Hub::Name { name_lc, arity } => ("name", Some(format!("{name_lc}/{arity}"))),
                 Hub::Run(k) => ("run", Some(kind_lc(*k))),
                 Hub::Record(op) => ("record", Some((*op).to_string())),
+                Hub::RecordEvents(op) => ("record-events", Some((*op).to_string())),
                 Hub::Callbacks(app) => ("callbacks", Some(app_identity(graph, *app).0)),
             };
             Node {

@@ -18,7 +18,7 @@ table 50700 "QT Item"
         field(1; "No."; Code[20]) { }
         field(2; Qty; Integer) { }
     }
-    keys { key(PK; "No.") { } }
+    keys { key(PK; "No.") { } key(Modified; SystemModifiedAt) { } }
 }
 
 table 50701 "QT Other"
@@ -120,5 +120,27 @@ codeunit 50700 "QT Touches"
         Item: Record "QT Item";
     begin
         Item.Validate(Qty, 1);
+    end;
+
+    // Round-3 additions, at the end so the lines above keep their numbers:
+    // - QT Item's second key is on a system field, which no table declares as
+    //   a field (n03: the keys line dropped such a key from its count);
+    // - Publisher calls Leaf, and OnTop2 reaches Top2's touches only through
+    //   its subscriber: the shared first touch, reached another way (c17).
+    procedure Publisher()
+    begin
+        Leaf();
+        OnTop2();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnTop2()
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"QT Touches", 'OnTop2', '', false, false)]
+    local procedure RunTop2OnEvent()
+    begin
+        Top2();
     end;
 }

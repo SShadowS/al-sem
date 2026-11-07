@@ -442,6 +442,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         escapes: &escapes,
     };
     walk_tables(tree, &[], false, &cx, &mut by_site);
+    crate::engine::l4::param_guard::alias_error_ops(r, &mut by_site);
     let mut usable: Vec<u32> = bound.values().copied().collect();
     usable.sort_unstable();
     usable.dedup();

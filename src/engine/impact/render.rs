@@ -1012,8 +1012,25 @@ fn root_tests(t: &TestsOutcome, id: &str) -> Value {
     let nearest = per
         .iter()
         .filter(|r| r.get("nearest").is_some())
-        .min_by_key(|r| (s(r, "nearestTier") != "local", u(r, "nearestHops")))
-        .map(|r| json!({"test": r["nearest"], "tier": r["nearestTier"], "hops": r["nearestHops"]}));
+        // Round-3 c21: a code test before a UI-navigation one, then tier,
+        // hops; the relation is said.
+        .min_by_key(|r| {
+            (
+                r.get("nearestRelation")
+                    .and_then(Value::as_str)
+                    .is_some_and(|x| x != crate::engine::vocab::RELATION_CODE),
+                s(r, "nearestTier") != "local",
+                u(r, "nearestHops"),
+            )
+        })
+        .map(|r| {
+            let mut n =
+                json!({"test": r["nearest"], "tier": r["nearestTier"], "hops": r["nearestHops"]});
+            if let Some(rel) = r.get("nearestRelation") {
+                n["relation"] = rel.clone();
+            }
+            n
+        });
     json!({
         "status": status,
         "local": sum("local"),
@@ -1037,13 +1054,17 @@ fn tests_clause(rt: &Value) -> String {
         "reached" => {
             let n = &rt["nearest"];
             format!(
-                "tests: tests with a modeled path: {} ({} by a local path); nearest {} ({}, {})",
+                "tests: tests with a modeled path: {} ({} by a local path); nearest {} ({}{}, {})",
                 thousands(total),
                 thousands(u(rt, "local")),
                 s(n, "test"),
                 match s(n, "tier") {
                     "" => "local",
                     t => crate::engine::vocab::tier_key(t),
+                },
+                match s(n, "relation") {
+                    "" => String::new(),
+                    r => format!(", {r}"),
                 },
                 plural(u(n, "hops"), "hop", "hops")
             )
@@ -1993,6 +2014,10 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
         // Round-2 r2 §3.9 (G15): the routine's direct callees, explain's
         // `calls:` line.
         if let Some(c) = r["callsLine"].as_str() {
+            out.push(format!("      {c}"));
+        }
+        // Round-3 m10: the objects it runs, explain's `runs:` line.
+        if let Some(c) = r["runsLine"].as_str() {
             out.push(format!("      {c}"));
         }
         let up = &r["up"];

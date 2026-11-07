@@ -393,6 +393,7 @@ pub fn empty_resolved() -> Model {
         dependency_diagnostics: vec![],
         calls: Default::default(),
         events: Default::default(),
+        page_ui_blocked: Default::default(),
     }
 }
 

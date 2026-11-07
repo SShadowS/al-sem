@@ -20,13 +20,15 @@
 //! argument for the whole body: a by-value `Boolean`, never an assignment
 //! target, and never passed to a `var` parameter (or to a callee whose
 //! parameters are not known). Guards come from `if` nodes whose
-//! `condition_guard` names a usable parameter (`P`, `not P`, `P = false`), and
-//! from the early exit `if <guard> then exit;`, which guards the statements
-//! that follow it in the same block.
+//! `condition_guard` names a usable parameter (`P`, `not P`, `P = false`), from
+//! the simple guards among the operands of an `and` chain (they guard the THEN
+//! branch) or an `or` chain (their negations guard the ELSE branch,
+//! `PCFNNode::junction_guards`), and from the early exit `if <guard> then
+//! exit;`, which guards the statements that follow it in the same block.
 
 use std::collections::HashMap;
 
-use crate::program::body::features::{PCFNNode, PCallSite};
+use crate::program::body::features::{JunctionGuards, PCFNNode, PCallSite, PConditionGuard};
 use crate::program::model::workspace::ModelRoutine;
 
 /// `(parameter index, required value)` in one routine's frame.
@@ -104,13 +106,37 @@ pub(crate) fn frame_guards(
     if let Some(tree) = &r.statement_tree {
         walk(tree, &[], &usable, &mut by_site);
     }
+    alias_error_ops(r, &mut by_site);
     Some(FrameGuards {
         usable: usable.iter().map(|(_, i)| *i).collect(),
         by_site,
     })
 }
 
-/// [`frame_guards`] over a call graph: `callees_at(callsite_id)` lists the
+/// Round-3 m04: an `Error(..)` statement's statement-tree leaf carries its
+/// CALL SITE id, while its `error-throw` fact names its `error-call`
+/// OPERATION id (`ui_events_error::extract_error`), so a guard recorded for
+/// the leaf never reached the fact: `if ShowError then Error(..)` stayed an
+/// error under `ShowError = false`. Give each `error-call` operation the
+/// requirements of the call site at the same source start, the pairing
+/// `control_context`'s error-call post-pass uses.
+pub(crate) fn alias_error_ops<T: Clone>(r: &ModelRoutine, by_site: &mut HashMap<String, T>) {
+    for op in r.operation_sites.iter().filter(|o| o.kind == "error-call") {
+        if by_site.contains_key(&op.id) {
+            continue;
+        }
+        let a = &op.source_anchor;
+        let paired = r.call_sites.iter().find(|cs| {
+            cs.source_anchor.start_line == a.start_line
+                && cs.source_anchor.start_column == a.start_column
+        });
+        if let Some(v) = paired.and_then(|cs| by_site.get(&cs.id)).cloned() {
+            by_site.insert(op.id.clone(), v);
+        }
+    }
+}
+
+/// [`frame_guards`] over a call graph:`callees_at(callsite_id)` lists the
 /// routines a call site reaches. A parameter passed to a call stays usable when
 /// every reached callee takes it by value, or when the call reaches nothing (a
 /// platform method) other than `Evaluate` and `Clear`, which write their
@@ -147,11 +173,53 @@ pub(crate) fn frame_guards_over<'a>(
     frame_guards(r, passes_by_value)
 }
 
-/// The requirement an `if` node's simple guard states for its THEN branch.
-fn then_req(node: &PCFNNode, usable: &[(String, u32)]) -> Option<Req> {
-    let g = node.condition_guard.as_ref()?;
+/// The requirement one simple guard states when it holds.
+fn guard_req(g: &PConditionGuard, usable: &[(String, u32)]) -> Option<Req> {
     let (_, i) = usable.iter().find(|(n, _)| *n == g.identifier)?;
     Some((*i, g.polarity == "positive"))
+}
+
+/// The requirements an `if` node's guard states for its THEN branch
+/// (`then`) and for its ELSE branch, which is also what follows an `if …
+/// then exit;` (`otherwise`). A simple guard `P` states one each; `A and B`
+/// (round-3 m04: `if ShowError and not IsValid then Error(..)`) states every
+/// usable conjunct for THEN and nothing for ELSE; `A or B` states the
+/// negation of every usable disjunct for ELSE and nothing for THEN. An empty
+/// list states nothing.
+struct BranchReqs {
+    then: Vec<Req>,
+    otherwise: Vec<Req>,
+}
+
+fn branch_reqs(node: &PCFNNode, usable: &[(String, u32)]) -> BranchReqs {
+    let mut out = BranchReqs {
+        then: Vec::new(),
+        otherwise: Vec::new(),
+    };
+    if node.kind != "if" {
+        return out;
+    }
+    if let Some(g) = &node.condition_guard {
+        if let Some((i, v)) = guard_req(g, usable) {
+            out.then.push((i, v));
+            out.otherwise.push((i, !v));
+        }
+        return out;
+    }
+    match &node.junction_guards {
+        Some(JunctionGuards::All(gs)) => {
+            out.then = gs.iter().filter_map(|g| guard_req(g, usable)).collect();
+        }
+        Some(JunctionGuards::Any(gs)) => {
+            out.otherwise = gs
+                .iter()
+                .filter_map(|g| guard_req(g, usable))
+                .map(|(i, v)| (i, !v))
+                .collect();
+        }
+        None => {}
+    }
+    out
 }
 
 /// Whether a branch is exactly one `exit` (through any `block` wrappers: a
@@ -190,14 +258,13 @@ fn walk_list(
         walk(n, &reqs, usable, by_site);
         // `if <guard> then exit;` (no else): what follows runs only when the
         // guard is false.
-        if n.kind == "if"
-            && n.else_children.is_none()
-            && is_exit_only(n.children.as_ref())
-            && let Some((i, v)) = then_req(n, usable)
-        {
-            match conjoin(&reqs, &[(i, !v)]) {
-                Some(r) => reqs = r,
-                None => return, // the rest of the block cannot run
+        if n.kind == "if" && n.else_children.is_none() && is_exit_only(n.children.as_ref()) {
+            let otherwise = branch_reqs(n, usable).otherwise;
+            if !otherwise.is_empty() {
+                match conjoin(&reqs, &otherwise) {
+                    Some(r) => reqs = r,
+                    None => return, // the rest of the block cannot run
+                }
             }
         }
     }
@@ -216,24 +283,14 @@ fn walk(
             walk(l, reqs, usable, by_site);
         }
     }
-    let req = if node.kind == "if" {
-        then_req(node, usable)
-    } else {
-        None
-    };
-    let branch = |extra: Option<Req>| -> Option<Vec<Req>> {
-        match extra {
-            Some(r) => conjoin(reqs, &[r]),
-            None => Some(reqs.to_vec()),
-        }
-    };
+    let br = branch_reqs(node, usable);
     if let Some(children) = &node.children
-        && let Some(r) = branch(req)
+        && let Some(r) = conjoin(reqs, &br.then)
     {
         walk_list(children, &r, usable, by_site);
     }
     if let Some(children) = &node.else_children
-        && let Some(r) = branch(req.map(|(i, v)| (i, !v)))
+        && let Some(r) = conjoin(reqs, &br.otherwise)
     {
         walk_list(children, &r, usable, by_site);
     }

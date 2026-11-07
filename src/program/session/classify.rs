@@ -387,6 +387,7 @@ impl Classify for ObjectNode {
             enum_impls,
             lookup_pages,
             obsolete_gone,
+            page_ui,
         } = self;
         h.tag(b'O');
         id.classify(h);
@@ -409,6 +410,39 @@ impl Classify for ObjectNode {
         enum_impls.classify(h);
         lookup_pages.classify(h);
         obsolete_gone.classify(h);
+        page_ui.classify(h);
+    }
+}
+
+impl Classify for crate::program::page_ui::PageUiDecl {
+    fn classify(&self, h: &mut ProjectionHasher) {
+        let crate::program::page_ui::PageUiDecl {
+            editable_false,
+            insert_false,
+            modify_false,
+            delete_false,
+            editable_setters,
+        } = self;
+        editable_false.classify(h);
+        insert_false.classify(h);
+        modify_false.classify(h);
+        delete_false.classify(h);
+        h.u64(editable_setters.len() as u64);
+        for s in editable_setters {
+            use crate::program::page_ui::EditableSetter;
+            match s {
+                EditableSetter::CurrPage => h.tag(0),
+                EditableSetter::Page(r) => {
+                    h.tag(1);
+                    r.classify(h);
+                }
+                EditableSetter::Part(name) => {
+                    h.tag(2);
+                    name.classify(h);
+                }
+                EditableSetter::Unknown => h.tag(3),
+            }
+        }
     }
 }
 

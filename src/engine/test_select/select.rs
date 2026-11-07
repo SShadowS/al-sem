@@ -42,10 +42,21 @@
 //! back into local code, e.g. a Base Application page). When every such
 //! node's own cone, what it may execute (forward, resolved sites only),
 //! covers more than half of the graph's nodes, those tests reach nearly
-//! everything: `sameness` is set and the answer says they are effectively the
-//! suite's posting tests, not specific to this change. With more than
+//! everything: `sameness` is set and the answer calls the set broad, saying
+//! why (round-3 c07: the rule measures cones, not what the tests are, so it
+//! never calls them "not specific to this change"). With more than
 //! [`SAMENESS_ENTRIES`] such nodes the check is not made (`viaMeasured:
 //! false`).
+//!
+//! # Every changed routine a test reaches (round-3 c21)
+//!
+//! A test's `reaches` (the multi-source walk's label) is the root of its
+//! shortest path only. With few roots ([`PER_ROOT_WALKS`]) each root has a
+//! walk of its own, so `reachesAll` lists every root a test reaches, each with
+//! its tier, hops and relation (`reachesComplete: true`); with more, only the
+//! label (`reachesComplete: false`). A root's `nearest` test is
+//! relation-aware: the first code test in (tier, hops) order, else the first
+//! UI-navigation one (`nearestRelation`).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -251,6 +262,26 @@ fn tier_name(t: Tier) -> &'static str {
     }
 }
 
+/// The relation of a path (test first, then toward the root), by the
+/// renderer's own rule ([`super::render::is_navigation_hop`]); a node's
+/// answer is cached in `nav`.
+fn path_relation(g: &SitedGraph, path: &[NodeIx], nav: &mut HashMap<NodeIx, bool>) -> &'static str {
+    let opens = path.iter().skip(1).any(|&n| {
+        *nav.entry(n)
+            .or_insert_with(|| super::render::is_navigation_hop(&path_name(g, n)))
+    });
+    if opens {
+        crate::engine::vocab::RELATION_NAVIGATION
+    } else {
+        crate::engine::vocab::RELATION_CODE
+    }
+}
+
+/// Code before UI navigation (round-2 r2 §3.5, round-3 c21).
+fn relation_rank(r: &str) -> u8 {
+    u8::from(r != crate::engine::vocab::RELATION_CODE)
+}
+
 fn class_of(s: &WalkState) -> &'static str {
     if s.tier == Tier::OnlyOpen {
         "dynamic"
@@ -445,25 +476,35 @@ impl Forward {
 /// Select over `g` (see the module doc): the select part's JSON.
 #[must_use]
 pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
+    // Each root's nodes.
+    let mapped: Vec<Vec<NodeIx>> = args
+        .roots
+        .iter()
+        .map(|id| {
+            g.nodes_with_stable_id(id)
+                .into_iter()
+                .filter(|&n| g.flags(n) & flag::SYMBOL_ONLY == 0)
+                .collect()
+        })
+        .collect();
+    select_mapped(g, args, &mapped)
+}
+
+/// [`select`] once each root's nodes are known (`mapped[i]` for
+/// `args.roots[i]`; a hand-built graph's tests state them directly).
+fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) -> Value {
     let primary = g.primary_app();
     let tests_loaded = (0..g.node_count() as u32)
         .filter(|&n| g.flags(n) & flag::TEST != 0 && g.node_app(n) == Some(primary))
         .count();
-    // Each root's nodes, and the walk's roots (node -> root index).
-    let mut mapped: Vec<Vec<NodeIx>> = Vec::with_capacity(args.roots.len());
+    // The walk's roots (node -> root index).
     let mut walk_roots: Vec<NodeIx> = Vec::new();
     let mut label_root: Vec<usize> = Vec::new();
-    for (i, id) in args.roots.iter().enumerate() {
-        let nodes: Vec<NodeIx> = g
-            .nodes_with_stable_id(id)
-            .into_iter()
-            .filter(|&n| g.flags(n) & flag::SYMBOL_ONLY == 0)
-            .collect();
-        for &n in &nodes {
+    for (i, nodes) in mapped.iter().enumerate() {
+        for &n in nodes {
             walk_roots.push(n);
             label_root.push(i);
         }
-        mapped.push(nodes);
     }
     let opts = WalkOptions {
         assume_no_dependents: true,
@@ -507,6 +548,12 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
     // Roots.
     let mut roots_out = Vec::with_capacity(args.roots.len());
     let mut forward: Option<Forward> = None;
+    let few = args.roots.len() <= PER_ROOT_WALKS;
+    let mut nav: HashMap<NodeIx, bool> = HashMap::new();
+    // Per test: every root it reaches, (root index, tier, hops, relation),
+    // from the per-root walks (exact) or the labels (the root of its shortest
+    // path only).
+    let mut reach_all: HashMap<NodeIx, Vec<(usize, Tier, u32, &'static str)>> = HashMap::new();
     for (i, id) in args.roots.iter().enumerate() {
         let any_node = !g.nodes_with_stable_id(id).is_empty();
         let mut r = json!({"stableId": id});
@@ -525,7 +572,6 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
         // (the multi-source walk labels a state with its NEAREST root, so a
         // root's tests nearer another root would be counted there), else
         // from the labels.
-        let few = args.roots.len() <= PER_ROOT_WALKS;
         let mut own_walk: Option<Sel> = None;
         let mine: Vec<(NodeIx, Tier, u32, WalkState)> = if few {
             let mut own = Sel::new(g, false);
@@ -545,6 +591,15 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
                 .map(|&j| (tests[j].0, tests[j].1, tests[j].2, tests[j].3))
                 .collect()
         };
+        // Each of the root's tests' relation, from its path to this root.
+        let paths_of = own_walk.as_ref().unwrap_or(&sel);
+        let rel: Vec<&'static str> = mine
+            .iter()
+            .map(|x| path_relation(g, &paths_of.path(x.3), &mut nav))
+            .collect();
+        for (x, r) in mine.iter().zip(&rel) {
+            reach_all.entry(x.0).or_default().push((i, x.1, x.2, r));
+        }
         let count = |t: Tier| mine.iter().filter(|x| x.1 == t).count();
         let status = if !mine.is_empty() {
             "reached"
@@ -579,10 +634,17 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
         r["tests"] = json!({"local": count(Tier::Local),
                             "throughDependency": count(Tier::ThroughDependency),
                             "onlyOpen": count(Tier::OnlyOpen)});
-        if let Some(n) = mine.first() {
+        // Round-3 c21: the nearest test is the first code test (tier, hops,
+        // codeunit, name), else the first UI-navigation one.
+        if let Some((n, r_)) = mine
+            .iter()
+            .zip(&rel)
+            .min_by_key(|(x, r_)| (relation_rank(r_), x.1, x.2, key(x.0)))
+        {
             r["nearest"] = json!(display(g, n.0));
             r["nearestTier"] = json!(tier_name(n.1));
             r["nearestHops"] = json!(n.2);
+            r["nearestRelation"] = json!(r_);
         }
         // Dependency-tier sameness (§4.5).
         let thr: Vec<&(NodeIx, Tier, u32, WalkState)> = mine
@@ -667,6 +729,20 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
         .map(|&(n, t, h, s, root)| {
             let path = sel.path(s);
             let l = g.local_name(n);
+            // Every root the test reaches, in the roots' order; the label
+            // root is always one of them (a capped per-root walk may miss it).
+            let mut all = reach_all.get(&n).cloned().unwrap_or_default();
+            if !all.iter().any(|x| x.0 == root) {
+                all.push((root, t, h, path_relation(g, &path, &mut nav)));
+            }
+            all.sort_by_key(|x| x.0);
+            let reaches_all: Vec<Value> = all
+                .iter()
+                .map(|&(r, rt, rh, rel)| {
+                    json!({"stableId": args.roots[r], "tier": tier_name(rt), "hops": rh,
+                           "relation": rel})
+                })
+                .collect();
             json!({
                 "stableId": g.stable_id(n),
                 "display": display(g, n),
@@ -678,6 +754,7 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
                 "class": class_of(&s),
                 "hops": h,
                 "reaches": args.roots[root],
+                "reachesAll": reaches_all,
                 "path": path.iter().map(|&p| path_name(g, p)).collect::<Vec<_>>(),
             })
         })
@@ -692,6 +769,7 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
         "testsLoaded": tests_loaded,
         "roots": roots_out,
         "tests": tests_out,
+        "reachesComplete": few,
         "byTier": {"local": by_tier(Tier::Local), "throughDependency": by_tier(Tier::ThroughDependency),
                    "onlyOpen": by_tier(Tier::OnlyOpen)},
         "universalHub": sel.universal,
@@ -787,5 +865,115 @@ mod tests {
             tests_from(ix(&get_body)).is_empty(),
             "no test reaches GetBody"
         );
+    }
+
+    /// Round-3 c21: a test lists EVERY changed routine it reaches, not only
+    /// the root of its shortest path; and a changed routine's nearest test
+    /// is a code test when one reaches it, even when a UI-navigation test is
+    /// fewer hops away. Hand-stated program: `Both` calls `R1`, which calls
+    /// `R2` (so `Both`'s shortest path ends at R1, and it reaches R2 too);
+    /// `Nav` opens page `Ed` (a `TestPage`), whose action calls `Send`
+    /// (3 hops, UI navigation); `Code` calls `H1 → H2 → H3 → Send` (4 hops,
+    /// code).
+    ///
+    /// DISCRIMINATION (2026-11-07): (1) `reachesAll` built from the label
+    /// only (the per-root `reach_all.entry(..).push(..)` loop removed) fails
+    /// "Both reaches R2"; (2) the nearest taken as the first in (tier, hops)
+    /// order, `relation_rank` dropped from its key, fails "Send's nearest is
+    /// the code test" (it names `Nav`). Each restored, the test passes.
+    #[test]
+    fn a_test_lists_every_changed_routine_and_nearest_prefers_code() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let mgt = w.obj(a, ObjectKind::Codeunit, 1, "Mgt", TrustTier::Workspace);
+        let page = w.obj(a, ObjectKind::Page, 2, "Ed", TrustTier::Workspace);
+        let tests = w.obj(a, ObjectKind::Codeunit, 3, "Tests", TrustTier::Workspace);
+        let r1 = w.rtn(&mgt, "R1");
+        let r2 = w.rtn(&mgt, "R2");
+        let send = w.rtn(&mgt, "Send");
+        let h1 = w.rtn(&mgt, "H1");
+        let h2 = w.rtn(&mgt, "H2");
+        let h3 = w.rtn(&mgt, "H3");
+        let action = w.rtn_with(&page, "OnAction", |r| {
+            r.is_trigger = true;
+            r.id.enclosing_member_lc = Some("go".into());
+        });
+        w.call(&r1, &r2, 1);
+        w.call(&action, &send, 2);
+        w.call(&h1, &h2, 3);
+        w.call(&h2, &h3, 4);
+        w.call(&h3, &send, 5);
+        let both = w.rtn(&tests, "Both");
+        let nav = w.rtn(&tests, "Nav");
+        let code = w.rtn(&tests, "Code");
+        w.call(&both, &r1, 6);
+        w.call(&code, &h1, 7);
+        for (t, pages) in [
+            (&both, vec![]),
+            (&nav, vec![RunTarget::Object(page.clone())]),
+            (&code, vec![]),
+        ] {
+            w.facts.routines.insert(
+                t.clone(),
+                RoutineFacts {
+                    test: true,
+                    test_pages: pages,
+                    ..Default::default()
+                },
+            );
+        }
+        let g = sited_of(&w, a, &[]);
+        let ix = |r: &crate::program::node::RoutineNodeId| g.routine_node(r).expect("a node");
+        // The roots' nodes, stated by hand (a hand-built graph has no
+        // stable ids); their ids are labels only.
+        let roots: Vec<String> = ["r1", "r2", "send"].map(String::from).to_vec();
+        let mapped = vec![vec![ix(&r1)], vec![ix(&r2)], vec![ix(&send)]];
+        let v = select_mapped(
+            &g,
+            &SelectArgs {
+                roots: &roots,
+                universe_key: "u",
+                test_app_id: "t",
+                production_app_id: "A-guid",
+                production_stamp: None,
+                declared: &[],
+                probes: &[],
+            },
+            &mapped,
+        );
+        assert_eq!(v["reachesComplete"], true, "{v:#}");
+        let row = |r: &crate::program::node::RoutineNodeId| {
+            v["tests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["display"] == display(&g, ix(r)))
+                .cloned()
+                .unwrap_or_else(|| panic!("a row: {v:#}"))
+        };
+        // Precondition: the walk's label is R1 only (its shortest path).
+        let b = row(&both);
+        assert_eq!(b["reaches"], json!(roots[0]), "{b:#}");
+        let reached: Vec<&str> = b["reachesAll"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["stableId"].as_str().unwrap())
+            .collect();
+        assert_eq!(reached, [&roots[0], &roots[1]], "Both reaches R2: {b:#}");
+        assert_eq!(b["reachesAll"][1]["hops"], 2, "{b:#}");
+        // Precondition: the navigation test is nearer Send than the code one.
+        let hops_to_send = |t: &Value| t["reachesAll"][0]["hops"].as_u64().unwrap();
+        let (n, c) = (row(&nav), row(&code));
+        assert!(hops_to_send(&n) < hops_to_send(&c), "{n:#} {c:#}");
+        assert_eq!(n["reachesAll"][0]["relation"], "UI navigation", "{n:#}");
+        assert_eq!(c["reachesAll"][0]["relation"], "code", "{c:#}");
+        let send_root = &v["roots"][2];
+        assert_eq!(
+            send_root["nearest"],
+            json!(display(&g, ix(&code))),
+            "Send's nearest is the code test: {send_root:#}"
+        );
+        assert_eq!(send_root["nearestRelation"], "code", "{send_root:#}");
     }
 }

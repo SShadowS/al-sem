@@ -906,6 +906,9 @@ fn dedup_objects(objects: &mut Vec<ObjectNode>) {
         } else {
             kept.enum_impls.clear();
         }
+        // A page blocks a user's operation only when every copy declares it;
+        // every copy's `Editable(…)` setters count.
+        kept.page_ui.merge(&dup.page_ui);
         true
     });
 }

@@ -1682,6 +1682,7 @@ fn cfn_node(kind: &str) -> PCFNNode {
         table_case: None,
         field_exit_guard: None,
         table_exit_guard: None,
+        junction_guards: None,
     }
 }
 
@@ -2069,6 +2070,56 @@ impl<'a> IrCfn<'a> {
         }
     }
 
+    /// Round-3 m04: a condition that is an `and` or an `or` chain (through
+    /// parentheses), with the simple guards ([`Self::simple_guard`]) among its
+    /// operands: `if ShowError and not IsValid then Error(..)` runs its Error
+    /// only when `ShowError` holds. A nested operand of the same operator is
+    /// flattened (`(A and B) and C`); one of the other operator, or any other
+    /// expression, is an unknown operand and adds nothing. `None` when no
+    /// operand is a simple guard.
+    fn junction_guards(&self, cond: ExprId) -> Option<super::features::JunctionGuards> {
+        use ExprKind::*;
+        let strip = |mut e: ExprId| {
+            while let Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let root = strip(cond);
+        let op = match &self.ir().expr(root).kind {
+            Binary {
+                op: op @ (BinaryOp::And | BinaryOp::Or),
+                ..
+            } => *op,
+            _ => return None,
+        };
+        let mut guards: Vec<PConditionGuard> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(e) = stack.pop() {
+            let e = strip(e);
+            match &self.ir().expr(e).kind {
+                Binary { op: o, lhs, rhs } if *o == op => {
+                    stack.push(*rhs);
+                    stack.push(*lhs);
+                }
+                _ => {
+                    if let Some(g) = self.simple_guard(e)
+                        && !guards.contains(&g)
+                    {
+                        guards.push(g);
+                    }
+                }
+            }
+        }
+        if guards.is_empty() {
+            return None;
+        }
+        Some(match op {
+            BinaryOp::And => super::features::JunctionGuards::All(guards),
+            _ => super::features::JunctionGuards::Any(guards),
+        })
+    }
+
     /// #343: a condition that is wholly `C(..)` / `not C(..)` (through
     /// parentheses), as [`PathHint::CondCall`]. Only when `C` is the last
     /// top-level leaf of `leaves` (the condition's harvested leaves), where the
@@ -2124,6 +2175,9 @@ impl<'a> IrCfn<'a> {
                 n.path_hint = self.cond_call(*cond, &leaves);
                 n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond);
+                if n.condition_guard.is_none() {
+                    n.junction_guards = self.junction_guards(*cond);
+                }
                 if else_block.is_none() {
                     n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
                     n.table_exit_guard = self.table_exit_guard(*cond, *then_block);

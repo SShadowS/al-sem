@@ -53,9 +53,15 @@ pub struct Projection {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Hub {
     Any,
-    Name { name_lc: String, arity: usize },
+    Name {
+        name_lc: String,
+        arity: usize,
+    },
     Run(Option<ObjectKind>),
     Record(&'static str),
+    /// Round-3 c02: the platform table events of a record operation that runs
+    /// no trigger (`OpenBound::RecordEvents`), `h:record-events:<op>`.
+    RecordEvents(&'static str),
     Callbacks(AppRef),
 }
 
@@ -221,6 +227,10 @@ struct Builder<'a> {
     /// The [`Site::guard`] bits of the sites being added (set around one
     /// engine route in [`Self::engine_edges`]; 0 otherwise).
     site_guard: u8,
+    /// What each page blocks a user from doing to its source table's records
+    /// through it ([`crate::program::page_ui`]); pages blocking nothing are
+    /// absent.
+    page_ui: HashMap<ObjectNodeId, crate::program::page_ui::PageUiBlocks>,
 }
 
 /// How many sites a sited-graph build adds between cancellation checks
@@ -229,7 +239,7 @@ pub(crate) const CANCEL_EVERY: u64 = 4096;
 
 /// The trigger boundary of a record trigger or platform table event named
 /// `name_lc`: the operation that fires it.
-fn trigger_op(name_lc: &str) -> Option<u8> {
+pub(crate) fn trigger_op(name_lc: &str) -> Option<u8> {
     super::sited::RECORD_OPS
         .iter()
         .position(|op| {
@@ -279,6 +289,7 @@ impl<'a> Builder<'a> {
             cancelled: false,
             added: 0,
             site_guard: 0,
+            page_ui: crate::program::page_ui::page_ui_blocks(g),
         }
     }
 
@@ -317,7 +328,7 @@ impl<'a> Builder<'a> {
             self.objects.insert(o.clone());
         }
         let boundary = match (via, kind, &to) {
-            (_, _, Key::Hub(Hub::Record(op))) => Boundary::TriggerOf {
+            (_, _, Key::Hub(Hub::Record(op) | Hub::RecordEvents(op))) => Boundary::TriggerOf {
                 op: super::sited::RECORD_OPS
                     .iter()
                     .position(|o| o == op)
@@ -544,6 +555,7 @@ impl<'a> Builder<'a> {
                     ),
                     OpenBound::Run { kind } => (Hub::Run(*kind), Kind::Run),
                     OpenBound::Record { op } => (Hub::Record(op), Kind::Trigger),
+                    OpenBound::RecordEvents { op } => (Hub::RecordEvents(op), Kind::Trigger),
                     OpenBound::Any => (Hub::Any, Kind::Direct),
                 };
                 self.add(
@@ -905,6 +917,8 @@ impl<'a> Builder<'a> {
         // records of its source table: the table events its record operations
         // raise come with the record temporary (`Site::guard`).
         let mut temporary_source: Option<ObjectNodeId> = None;
+        // The page's source table: what its UI permissions apply to.
+        let mut page_source: Option<ObjectNodeId> = None;
         if oid.kind == ObjectKind::Page
             && let Some(st) = &obj.source_table
             && let Some(RunTarget::Object(table)) = self.resolve_ref(oid, ObjectKind::Table, st)
@@ -921,6 +935,7 @@ impl<'a> Builder<'a> {
             {
                 temporary_source = Some(table.clone());
             }
+            page_source = Some(table.clone());
             tables.push(table);
         }
         for to in opens {
@@ -969,7 +984,21 @@ impl<'a> Builder<'a> {
                     .filter(|r| r.publisher_kind == Some(PublisherKind::Platform))
                     .map(|r| (r.id.clone(), event_guard)),
             );
+            // What the page lets a user do to these records through it
+            // (`page_ui`): a blocked operation's triggers and table events
+            // get no site, a candidate's get a site marked so.
+            let blocks = if page_source.as_ref() == Some(&table) {
+                self.page_ui.get(oid).copied().unwrap_or_default()
+            } else {
+                crate::program::page_ui::PageUiBlocks::default()
+            };
             for (t, guard) in targets {
+                let op =
+                    trigger_op(t.name_lc.as_str()).map_or(0, crate::program::page_ui::op::of_index);
+                if blocks.certain & op != 0 {
+                    continue;
+                }
+                let before = self.sited.sites.len();
                 self.site_guard = guard;
                 self.simple(
                     from.clone(),
@@ -979,6 +1008,9 @@ impl<'a> Builder<'a> {
                     "lifecycle",
                 );
                 self.site_guard = 0;
+                if blocks.candidate & op != 0 && self.sited.sites.len() > before {
+                    self.sited.ui_candidate_sites.push(before as u32);
+                }
             }
         }
         if obj.tier == TrustTier::SymbolOnly {
@@ -1167,8 +1199,14 @@ impl<'a> Builder<'a> {
                         );
                     }
                 }
-                Hub::Record(op) => {
+                Hub::Record(op) | Hub::RecordEvents(op) => {
                     let (triggers, events) = record_trigger_names(op);
+                    // A RunTrigger-false operation reaches no trigger (c02).
+                    let triggers: &[&str] = if matches!(hub, Hub::RecordEvents(_)) {
+                        &[]
+                    } else {
+                        triggers
+                    };
                     let targets: Vec<RoutineNodeId> = g
                         .routines
                         .iter()
@@ -1610,6 +1648,7 @@ pub(crate) mod tests {
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
                 obsolete_gone: false,
+                page_ui: Default::default(),
             });
             oid
         }
@@ -2310,6 +2349,70 @@ pub(crate) mod tests {
         assert!(
             o.find("h:any").is_empty(),
             "every open site here is bounded"
+        );
+    }
+
+    /// Round-3 c02: a record operation on a table not resolved whose
+    /// RunTrigger is left out or `false` (`RecordRef.Modify();`) runs no
+    /// trigger of any table, only the platform table events. Its hub,
+    /// `h:record-events:modify`, expands to `Tab.OnAfterModifyEvent` and
+    /// never to `Tab.OnModify`; a RunTrigger-true site keeps the trigger hub.
+    /// The precondition is stated by hand: the site facts carry the bound.
+    /// Discrimination (2026-11-07): expanding `RecordEvents` to the triggers
+    /// too fails "a RunTrigger-false operation reaches no trigger"; the
+    /// resolver side is `full::tests::open_call_sites_record_their_bounds`.
+    #[test]
+    fn a_run_trigger_false_hub_reaches_table_events_only() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let table = w.obj(a, ObjectKind::Table, 3, "Tab", TrustTier::Workspace);
+        let no_trigger = w.rtn(&cu, "NoTrigger");
+        let with_trigger = w.rtn(&cu, "WithTrigger");
+        let on_modify = w.trigger(&table, "OnModify");
+        let event = w.rtn_with(&table, "OnAfterModifyEvent", |r| {
+            r.publisher_kind = Some(PublisherKind::Platform)
+        });
+        let sink = w.rtn(&cu, "Sink");
+        w.call(&on_modify, &sink, 1);
+        let sub = w.rtn(&cu, "Sub");
+        w.event(&event, &[&sub]);
+        for (caller, bound) in [
+            (&no_trigger, OpenBound::RecordEvents { op: "modify" }),
+            (&with_trigger, OpenBound::Record { op: "modify" }),
+        ] {
+            let s = w.edge(
+                caller,
+                EdgeKind::Call,
+                DispatchShape::Exact,
+                vec![unknown()],
+                1,
+            );
+            w.site_facts.insert(
+                s,
+                SiteFacts {
+                    open: vec![bound],
+                    ..Default::default()
+                },
+            );
+        }
+        let o = w.project(a);
+        assert_eq!(
+            o.edge("Cu.NoTrigger", "h:record-events:modify").0,
+            "Trigger"
+        );
+        assert_eq!(
+            o.edge("h:record-events:modify", "Tab.OnAfterModifyEvent"),
+            ("Trigger", "Open", "hubExpansion")
+        );
+        assert!(
+            o.edges("h:record-events:modify", "Tab.OnModify").is_empty(),
+            "a RunTrigger-false operation reaches no trigger"
+        );
+        assert_eq!(
+            o.edge("h:record:modify", "Tab.OnModify"),
+            ("Trigger", "Open", "hubExpansion"),
+            "a RunTrigger-true one still does"
         );
     }
 

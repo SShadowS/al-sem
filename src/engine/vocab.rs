@@ -154,6 +154,9 @@ pub fn hub_kind(id: &str) -> Option<String> {
             k => format!("{k} Run of a variable"),
         },
         "record" => format!("record trigger ({})", capitalize(arg)),
+        // Round-3 c02: a RunTrigger-false operation on a table not resolved:
+        // the platform's table events only, never a trigger.
+        "record-events" => format!("table events ({}, no trigger)", capitalize(arg)),
         "any" => "call not resolved (any routine)".to_string(),
         "name" => {
             let name = arg.split('/').next().unwrap_or(arg);
@@ -294,6 +297,7 @@ pub const REPLACED: &[&str] = &[
     // hub kinds
     "h:run:",
     "h:record:",
+    "h:record-events:",
     "h:any",
     "h:name:",
     "h:callbacks:",
@@ -370,7 +374,13 @@ mod tests {
         ] {
             new.push(blocker(k));
         }
-        for id in ["h:run:codeunit", "h:record:modify", "h:any", "h:name:x/1"] {
+        for id in [
+            "h:run:codeunit",
+            "h:record:modify",
+            "h:record-events:modify",
+            "h:any",
+            "h:name:x/1",
+        ] {
             new.push(hub_kind(id).unwrap());
         }
         for w in &new {
