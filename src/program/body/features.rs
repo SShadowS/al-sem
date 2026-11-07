@@ -45,6 +45,7 @@
 //!   - `PCFNNode.table_case`
 //!   - `PCFNNode.field_exit_guard`
 //!   - `PCFNNode.table_exit_guard`
+//!   - `PCFNNode.junction_guards`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -714,6 +715,26 @@ pub struct PCFNNode {
     /// table `T`. EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub table_exit_guard: Option<(String, Vec<String>)>,
+    /// In-memory ONLY (round-3 m04): on an `if` whose condition is not one
+    /// simple guard (`condition_guard` is `None`) but an `and` or an `or`
+    /// chain (through parentheses) with simple guards among its operands
+    /// ([`JunctionGuards`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub junction_guards: Option<JunctionGuards>,
+}
+
+/// What an `and` / `or` condition says about the simple guards among its
+/// operands (each in [`PConditionGuard`]'s form: `P`, `not P`, `P = false`).
+/// The other operands are unknown, so they decide nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JunctionGuards {
+    /// `A and B and …`: the THEN branch runs only when every listed guard
+    /// holds. The ELSE branch is not constrained.
+    All(Vec<PConditionGuard>),
+    /// `A or B or …`: the ELSE branch (and what follows an `if … then exit;`)
+    /// runs only when no listed guard holds. The THEN branch is not
+    /// constrained.
+    Any(Vec<PConditionGuard>),
 }
 
 /// G33: what a `case R.Number of Database::"T": …` says about the tables.
@@ -925,7 +946,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 18, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 19, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

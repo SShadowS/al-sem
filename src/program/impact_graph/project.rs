@@ -53,9 +53,15 @@ pub struct Projection {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Hub {
     Any,
-    Name { name_lc: String, arity: usize },
+    Name {
+        name_lc: String,
+        arity: usize,
+    },
     Run(Option<ObjectKind>),
     Record(&'static str),
+    /// Round-3 c02: the platform table events of a record operation that runs
+    /// no trigger (`OpenBound::RecordEvents`), `h:record-events:<op>`.
+    RecordEvents(&'static str),
     Callbacks(AppRef),
 }
 
@@ -317,7 +323,7 @@ impl<'a> Builder<'a> {
             self.objects.insert(o.clone());
         }
         let boundary = match (via, kind, &to) {
-            (_, _, Key::Hub(Hub::Record(op))) => Boundary::TriggerOf {
+            (_, _, Key::Hub(Hub::Record(op) | Hub::RecordEvents(op))) => Boundary::TriggerOf {
                 op: super::sited::RECORD_OPS
                     .iter()
                     .position(|o| o == op)
@@ -544,6 +550,7 @@ impl<'a> Builder<'a> {
                     ),
                     OpenBound::Run { kind } => (Hub::Run(*kind), Kind::Run),
                     OpenBound::Record { op } => (Hub::Record(op), Kind::Trigger),
+                    OpenBound::RecordEvents { op } => (Hub::RecordEvents(op), Kind::Trigger),
                     OpenBound::Any => (Hub::Any, Kind::Direct),
                 };
                 self.add(
@@ -1167,8 +1174,14 @@ impl<'a> Builder<'a> {
                         );
                     }
                 }
-                Hub::Record(op) => {
+                Hub::Record(op) | Hub::RecordEvents(op) => {
                     let (triggers, events) = record_trigger_names(op);
+                    // A RunTrigger-false operation reaches no trigger (c02).
+                    let triggers: &[&str] = if matches!(hub, Hub::RecordEvents(_)) {
+                        &[]
+                    } else {
+                        triggers
+                    };
                     let targets: Vec<RoutineNodeId> = g
                         .routines
                         .iter()
@@ -2310,6 +2323,70 @@ pub(crate) mod tests {
         assert!(
             o.find("h:any").is_empty(),
             "every open site here is bounded"
+        );
+    }
+
+    /// Round-3 c02: a record operation on a table not resolved whose
+    /// RunTrigger is left out or `false` (`RecordRef.Modify();`) runs no
+    /// trigger of any table, only the platform table events. Its hub,
+    /// `h:record-events:modify`, expands to `Tab.OnAfterModifyEvent` and
+    /// never to `Tab.OnModify`; a RunTrigger-true site keeps the trigger hub.
+    /// The precondition is stated by hand: the site facts carry the bound.
+    /// Discrimination (2026-11-07): expanding `RecordEvents` to the triggers
+    /// too fails "a RunTrigger-false operation reaches no trigger"; the
+    /// resolver side is `full::tests::open_call_sites_record_their_bounds`.
+    #[test]
+    fn a_run_trigger_false_hub_reaches_table_events_only() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let table = w.obj(a, ObjectKind::Table, 3, "Tab", TrustTier::Workspace);
+        let no_trigger = w.rtn(&cu, "NoTrigger");
+        let with_trigger = w.rtn(&cu, "WithTrigger");
+        let on_modify = w.trigger(&table, "OnModify");
+        let event = w.rtn_with(&table, "OnAfterModifyEvent", |r| {
+            r.publisher_kind = Some(PublisherKind::Platform)
+        });
+        let sink = w.rtn(&cu, "Sink");
+        w.call(&on_modify, &sink, 1);
+        let sub = w.rtn(&cu, "Sub");
+        w.event(&event, &[&sub]);
+        for (caller, bound) in [
+            (&no_trigger, OpenBound::RecordEvents { op: "modify" }),
+            (&with_trigger, OpenBound::Record { op: "modify" }),
+        ] {
+            let s = w.edge(
+                caller,
+                EdgeKind::Call,
+                DispatchShape::Exact,
+                vec![unknown()],
+                1,
+            );
+            w.site_facts.insert(
+                s,
+                SiteFacts {
+                    open: vec![bound],
+                    ..Default::default()
+                },
+            );
+        }
+        let o = w.project(a);
+        assert_eq!(
+            o.edge("Cu.NoTrigger", "h:record-events:modify").0,
+            "Trigger"
+        );
+        assert_eq!(
+            o.edge("h:record-events:modify", "Tab.OnAfterModifyEvent"),
+            ("Trigger", "Open", "hubExpansion")
+        );
+        assert!(
+            o.edges("h:record-events:modify", "Tab.OnModify").is_empty(),
+            "a RunTrigger-false operation reaches no trigger"
+        );
+        assert_eq!(
+            o.edge("h:record:modify", "Tab.OnModify"),
+            ("Trigger", "Open", "hubExpansion"),
+            "a RunTrigger-true one still does"
         );
     }
 
