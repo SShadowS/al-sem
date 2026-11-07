@@ -11,97 +11,14 @@
   "routines": [
     {
       "analysis": "partial",
-      "answer": "writes: may write 147 tables (11 owned by this app, 136 by dependencies) and 2 writes on a table not resolved; 83 of them beyond Codeunit \"Reminder-Issue\" (393)::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19)",
-      "effects": 806,
-      "effectsByType": {
-        "BACKGROUND_TASK": 5,
-        "COMMIT": 18,
-        "DB_DELETE": 29,
-        "DB_INSERT": 51,
-        "DB_MODIFY": 30,
-        "ERROR_IMPLICIT": 232,
-        "ERROR_THROW": 118,
-        "EVENT_PUBLISH": 95,
-        "FILE": 3,
-        "HTTP": 24,
-        "ISOLATED_STORAGE": 18,
-        "TELEMETRY": 27,
-        "UI_CONFIRM": 8,
-        "UI_ERROR": 118,
-        "UI_FILE_DIALOG": 5,
-        "UI_HYPERLINK": 3,
-        "UI_MESSAGE": 9,
-        "UI_PROGRESS": 3,
-        "UI_WINDOW_OPEN": 10
-      },
-      "guaranteeLabels": {
-        "descriptiveOnly": 401,
-        "refutable": 0
-      },
-      "routine": "Codeunit \"CDO Issue Document\"::IssueReminder",
+      "answer": "may write 147 tables (11 owned by this app, 136 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 20; file 1; background tasks 3; isolated storage 16; telemetry 23; errors 301; analysis partial (interface-open-world; object-run-unresolved; 267 interface calls open world, 21 dynamic calls not resolved)",
+      "index": 1,
       "selector": "Codeunit \"CDO Issue Document\"::IssueReminder",
-      "signature": "(Record \"Reminder Header\")",
-      "stableId": "f4b69b55-c90d-4937-8f53-2742898fa948:Codeunit:6175305#5799e983e89ddc35d5f6895cd20d55709f6235280bd6404471f743da3a55914c",
-      "summary": {
-        "callerDependentTables": 0,
-        "commits": {
-          "answer": "may",
-          "entryPoints": 7,
-          "literalDead": {
-            "entryPoints": 3,
-            "sites": 3
-          },
-          "ownSites": 5
-        },
-        "entryPoints": {
-          "atLeast": true,
-          "count": 43,
-          "routines": 46,
-          "sites": 54,
-          "withWrites": 12,
-          "withWritesRoutines": 12,
-          "withWritesSites": 15
-        },
-        "events": {
-          "distinct": 535,
-          "inWorkspaceCode": 75
-        },
-        "gaps": {
-          "dependency": 265,
-          "notPlaced": 7,
-          "workspace": 16
-        },
-        "kinds": {
-          "backgroundTasks": 3,
-          "errors": 301,
-          "file": 1,
-          "http": 20,
-          "isolatedStorage": 16,
-          "telemetry": 23,
-          "ui": 17
-        },
-        "literalDeadTables": 333,
-        "mayWriteTables": {
-          "byDependencies": 136,
-          "count": 147,
-          "mostBeyond": {
-            "enteredAt": "ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19",
-            "entryPoint": "Codeunit \"Reminder-Issue\" (393)::OnRun",
-            "tables": 83
-          },
-          "ownedByApp": 11
-        },
-        "noPathKept": {
-          "operations": 0,
-          "tables": 0
-        },
-        "temporaryOnlyTables": 54,
-        "unresolvedTableWrites": 2
-      },
       "testStatus": "not requested"
     }
   ],
   "routinesListed": 1,
+  "rowDetail": "compact: each row names its result-index row (`index`), which holds its signature, stable id, full answer and totals",
   "shared": {},
   "totalEffects": 806,
   "totalUnresolved": 288

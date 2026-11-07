@@ -532,7 +532,7 @@ pub(crate) fn cdo_selection_ratchets() {
     assert_eq!(code, 0, "{human}");
     assert!(
         human.lines().any(|l| l
-            == "[via-dependency] 376 tests — effectively the suite's posting tests, not specific to this change"),
+            == "[via-dependency] 376 tests — effectively the suite's posting tests, not specific to this change; --tier dependency gives the 376 tests' codeunit filter"),
         "{human}"
     );
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);

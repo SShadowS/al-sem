@@ -1,5 +1,5 @@
 prove Codeunit "CDO Issue Document"::IssueReminder writes-table:Issued Reminder Header (table 297, Base Application)   [cross-app]
-answer: yes
+answer: yes — DB_INSERT beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19 (condition not resolved), and 1 more
 analysis partial (21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 2 effects

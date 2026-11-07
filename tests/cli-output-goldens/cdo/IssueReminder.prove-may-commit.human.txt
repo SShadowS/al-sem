@@ -1,10 +1,11 @@
 prove Codeunit "CDO Issue Document"::IssueReminder may-commit   [cross-app]
-answer: yes
+answer: yes — COMMIT at ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123 (guarded-by-IsHandled), and 11 more
 analysis partial (21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 12 effects
-    [COMMIT] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
-      path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun (COMMIT at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:87)
-    also [COMMIT]: at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253; beyond Codeunit CTS-CDN Network Doc. Mgt.::SendNetworkDocument, entered at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:223; … +8 rows; 12 rows of this type in all (detail: true lists every row with its path)
+    [COMMIT] at ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123
+      condition: guarded-by-IsHandled
+      path: IssueReminder → Codeunit "CDO E-Mail Handler"::DocHandle → RunReport → RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text]) → Codeunit "CDO Mail Management"::OpenDOMail
+    also [COMMIT]: at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253; at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241; … +8 rows; 12 rows of this type in all (detail: true lists every row with its path)
   top callees not resolved: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps

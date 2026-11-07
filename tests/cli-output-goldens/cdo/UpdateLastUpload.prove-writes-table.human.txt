@@ -1,5 +1,5 @@
 prove Codeunit "CDO Telemetry"::UpdateLastUpload writes-table:CDO Setup (table 6175281, this app)   [cross-app]
-answer: yes
+answer: yes — DB_MODIFY at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 (unconditional on success)
 analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 1 effect

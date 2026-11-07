@@ -11,64 +11,14 @@
   "routines": [
     {
       "analysis": "complete",
-      "answer": "writes: may modify persistent CDO Setup records (Modify at :48) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)",
-      "effects": 2,
-      "effectsByType": {
-        "DB_MODIFY": 1,
-        "ERROR_IMPLICIT": 1
-      },
-      "guaranteeLabels": {
-        "descriptiveOnly": 0,
-        "refutable": 0
-      },
-      "routine": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
+      "answer": "caller-dependent writes on 1 table (only when the caller's record is not temporary); commits: none; errors 1",
+      "index": 1,
       "selector": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
-      "signature": "(var Record \"CDO Setup\")",
-      "stableId": "f4b69b55-c90d-4937-8f53-2742898fa948:Codeunit:6175362#aa151ceac50f6b7d2472459a0f2c1b730a0c8c57fee67447eeadf8ab99d9a253",
-      "summary": {
-        "callerDependentTables": 1,
-        "commits": {
-          "answer": "none",
-          "entryPoints": 0,
-          "ownSites": 0
-        },
-        "entryPoints": {
-          "count": 0,
-          "routines": 0,
-          "sites": 0,
-          "withWrites": 0,
-          "withWritesRoutines": 0,
-          "withWritesSites": 0
-        },
-        "events": {
-          "distinct": 0,
-          "inWorkspaceCode": 0
-        },
-        "gaps": {
-          "dependency": 0,
-          "notPlaced": 0,
-          "workspace": 0
-        },
-        "kinds": {
-          "errors": 1
-        },
-        "literalDeadTables": 0,
-        "mayWriteTables": {
-          "byDependencies": 0,
-          "count": 0,
-          "ownedByApp": 0
-        },
-        "noPathKept": {
-          "operations": 0,
-          "tables": 0
-        },
-        "temporaryOnlyTables": 0,
-        "unresolvedTableWrites": 0
-      },
       "testStatus": "not requested"
     }
   ],
   "routinesListed": 1,
+  "rowDetail": "compact: each row names its result-index row (`index`), which holds its signature, stable id, full answer and totals",
   "shared": {},
   "totalEffects": 2,
   "totalUnresolved": 0
