@@ -5,12 +5,12 @@ more: detail: true lists every list complete; format: "json" for every row
 Codeunit "CDO E-Mail Handler"::RunReportID  defined at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:283
   transaction, UI and errors: commits: may (6 sites, 8 dependency routines entered that commit, 2 sites more under literal arguments that cannot run); UI at 17 places; errors at 304 places
   other effects: events: 7,465 (72 raised in workspace code); HTTP at 21 places; file at 2 places; background tasks at 5 places; isolated storage at 17 places; telemetry at 23 places
-  callers and tests: callers: 2, reached from 647 page actions; tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
+  callers and tests: callers: 2 direct (2 routines); 647 page actions reach it in all; tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
   uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   calls: Codeunit "CDO E-Mail Template Management": FindTemplateLineWithReportID (:333), FindTemplateLineWithReportSelection (:335), FindTemplateLineWithCode (:340); +13 more
   UI route: UI_CONFIRM via RunReportID → … → HandleDelivery → CreateSalesSourceDocs
   target company: not established by this analysis (ChangeCompany at ws:src/Platform/Setup/CDOAzureBlobFolderMgt.Codeunit.al:403)
-  callers: 2 — Codeunit "CDO E-Mail Handler"::RunReport, Codeunit "CDO E-Mail Handler"::RunReportSelection; reached from 647 page actions
+  callers: 2 direct — 2 routines: Codeunit "CDO E-Mail Handler"::RunReport, Codeunit "CDO E-Mail Handler"::RunReportSelection; 647 page actions reach it in all (directly or through callers)
     caller rule (checked by 1 caller: Codeunit "CDO E-Mail Handler"::RunReport; no equivalent check recognized in 1 analyzed caller: Codeunit "CDO E-Mail Handler"::RunReportSelection): rejects when not VariantRec.IsRecord: "You can not call this function with this variable type."  [Error ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:238]
     by caption (34 captions): Open Email 114, Print PDF 109, Save PDF 109, Queue Email 93, Send/Print 86, Print/Email 20, Send eDocument 20, Post and send/print 18, … +26 captions
     most actions (121 page objects): Page CDO Sales Invoice Actions 11, Page CDO Sales Order Actions 11, PageExtension CDOSalesInvoiceExt 10, PageExtension CDOSalesInvoiceListExt 10, PageExtension CDOSalesOrderExt 10, PageExtension CDOSalesOrderListExt 10, … +115 page objects (detail: true lists every action)

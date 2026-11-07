@@ -5,10 +5,10 @@ more: detail: true lists every list complete; format: "json" for every row
 Codeunit "CDO Telemetry"::UpdateLastUpload  defined at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:45
   transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: 1; tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
+  callers and tests: callers: 1 direct (1 routine); tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
-  callers: 1 — Codeunit "CDO Telemetry"::QueueUpload
+  callers: 1 direct — 1 routine: Codeunit "CDO Telemetry"::QueueUpload
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     CDO Setup: Modify — depends on the caller's record argument at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48
   errors at 1 place: ERROR_IMPLICIT at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 (unconditional on success)

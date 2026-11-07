@@ -1068,8 +1068,10 @@ fn cdo_page_actions_take_three_lines() {
         actions
     );
     assert!(
+        // Round-2 r2 §2.3 (G3): the callers line counts the direct set,
+        // then every action that reaches it.
         card.contains(&format!(
-            "reached from {} page actions",
+            "{} page actions reach it in all",
             al_sem::engine::l5::routine_rollup::thousands(actions as usize)
         )),
         "the count on the callers line"

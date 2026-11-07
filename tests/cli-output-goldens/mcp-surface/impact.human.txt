@@ -1,17 +1,16 @@
 impact routines → 1 changed routine   [cross-app]
 answer: 1 changed routine resolved; ranked first: Codeunit "Out Issue Document"::IssueDoc
 analysis partial (effects: interface-open-world; object-run-unresolved; 1 interface call open world, 2 dynamic calls not resolved) · assumptions: current effects only: no base was built, so there is no before/after and no routine is called added or deleted; callers and entries are static may-paths over the sited graph (R0's reverse walk); tests are static reachability, not coverage · limits: none · scope: callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments
-more: detail: true lists each routine's direct callers and nearest entry per tier; format: "json" for every routine with its callers, effects and tests
+more: detail: true lists each routine's direct callers and its first entry of each kind; format: "json" for every routine with its callers, effects and tests
 impact of the named routines; one-shot run (no resident revision)
 input: 1 changed routine resolved
 current effects of the 1 changed routine; ranked: reached from a user or a job first, then by ancestors; all shown:
   Codeunit "Out Issue Document"::IssueDoc (ws:src/OutIssueDocument.Codeunit.al:3) — changed
       effects: may write 16 tables (1 owned by this app, 15 by dependencies); 1 table whose temporary state the caller decides; commits: may (0 own commit sites); errors 5; HTTP 1; background tasks 1; 2 events; analysis partial (interface-open-world; object-run-unresolved; 1 interface call open world, 2 dynamic calls not resolved)
-      reached by code callers: no — no code caller found in the analyzed graph (every candidate decided)
-      reached beyond it: 2 ancestors — by tier: local 2, via-dependency 0, via-hub 0
+      calls: Codeunit "Base Poster" (70100): OnRun (:15); Codeunit "Base Calc" (70101): OnRun (:16); Codeunit "Out Log Mgt": WriteLog (:17); +5 more
+      direct code callers: none found
+      reached beyond it: 2 ancestors by code calls, UI navigation, configuration or a hub (relation not recorded by this walk): within the workspace 2, through a dependency 0, over a hub 0
+        these ancestors hold 16% of the program's declared entries (1 of 6; pages run by an action's RunObject, background targets and roots.config entries are counted on neither side)
         entries among them, by kind (counted per legacy bucket: an entry in two buckets counts in both): page actions 1, page triggers 1
-          first page action: [local] Page "Out Doc Card".action(Issue)::OnAction (1 hop)
-          first page trigger: [local] Page "Out Doc Card".action(Issue)::OnAction (1 hop)
-      external: apps outside the program may call routines of its cone (by reason, routines): public 1
       tests: no modeled path (its cone is complete)
 tests: run first: no test with a modeled path; selection complete; workspace 1 [Test]; 0 test apps (none found)

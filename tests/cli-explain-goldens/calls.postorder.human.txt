@@ -5,7 +5,7 @@ more: --detail lists every list complete; --format json for every row
 Codeunit "Calls Post"::PostOrder  defined at ws:src/post.al:3
   transaction, UI and errors: commits: no (every candidate decided); errors at 10 places
   other effects: events: 1 (1 raised in workspace code)
-  callers and tests: callers: 1, reached from 1 page action; tests: none (no test code loaded)
+  callers and tests: callers: 1 direct (1 trigger); 1 page action reaches it in all; tests: none (no test code loaded)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: Codeunit "Calls Checks": CheckOrder (:7), CheckCollectible (:8), CheckBig (:10); +2 more
   rules: none of its own
@@ -15,7 +15,7 @@ Codeunit "Calls Post"::PostOrder  defined at ws:src/post.al:3
   inherits via CheckCollectible: rejects when Order.Amount < 0: "A negative amount is collected." (may not stop: the message is an ErrorInfo: when the error is collectible, execution goes on)  [Error ws:src/checks.al:32]
   inherits from table trigger OnValidate (Amount) (run by Validate at ws:src/post.al:13): rejects when Status <> Status::Open: (platform message)  [TestField ws:src/order.al:16]
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:14): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]
-  callers: 1 — Codeunit "Calls Post Run"::OnRun; reached from 1 page action
+  callers: 1 direct — 1 trigger: Codeunit "Calls Post Run"::OnRun; 1 page action reaches it in all (directly or through callers)
     reached from page action Page "Calls Order Card".action(PostIt "Post") (RunObject = codeunit "Calls Post Run") at ws:src/order.al:38
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:14

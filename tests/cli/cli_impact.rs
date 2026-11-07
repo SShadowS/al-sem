@@ -620,8 +620,10 @@ pub(crate) fn cdo_impact_ratchets() {
     // AL quotes, overloads' parameter types): the text before the cut grew.
     // +688 since output validation V2 (the reach split by tier, kind and
     // context, the code-callers line, the run line first): each routine's
-    // block grew, so five fewer fit the budget.
-    assert!(human.contains("  … +688 routines"), "{human}");
+    // block grew, so five fewer fit the budget. +682 since round-2 W1
+    // (the first entry per kind behind `detail`, no `external:` line, the
+    // hubs line once per answer): each block is shorter, so six more fit.
+    assert!(human.contains("  … +682 routines"), "{human}");
 
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
     let r = &v["roots"][0];

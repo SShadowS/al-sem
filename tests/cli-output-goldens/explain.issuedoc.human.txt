@@ -5,12 +5,12 @@ more: --detail lists every list complete; --format json for every row
 Codeunit "Out Issue Document"::IssueDoc  defined at ws:src/OutIssueDocument.Codeunit.al:3
   transaction, UI and errors: commits: may (1 dependency routine entered that commits); errors at 5 places
   other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
-  callers and tests: callers: none, reached from 1 page action; tests: none of 1 loaded
+  callers and tests: callers: 1 direct (1 page action); 1 page action reaches it in all; tests: none of 1 loaded
   uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
   calls: Codeunit "Base Poster" (70100): OnRun (:15); Codeunit "Base Calc" (70101): OnRun (:16); Codeunit "Out Log Mgt": WriteLog (:17); +5 more
   rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
   inherited rules: none
-  callers: none; reached from 1 page action
+  callers: 1 direct — 1 page action in 1 object (--detail lists them); 1 page action reaches it in all (directly or through callers)
     reached from page action Page "Out Doc Card".action(Issue "Issue") at ws:src/Pages.al:18
   commits: may — none in workspace code; 1 dependency routine entered that commits:
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15

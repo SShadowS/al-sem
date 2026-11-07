@@ -75,6 +75,64 @@ fn relation(t: &Value) -> &'static str {
     }
 }
 
+/// The changed routine's own object part and trigger name, when the answer
+/// has exactly one (`Table "T"."F"`, `OnValidate`).
+fn one_target(changed: &[Value]) -> Option<(&str, &str)> {
+    match changed {
+        [one] => s(one, "display").rsplit_once("::"),
+        _ => None,
+    }
+}
+
+/// What the navigation-only tests reach, for the headline (round-2 r2
+/// §2.2): `this trigger`, `this routine`, or `the change`.
+fn navigation_target(changed: &[Value]) -> &'static str {
+    match one_target(changed) {
+        Some((_, name)) if name.starts_with("On") => "this trigger",
+        Some(_) => "this routine",
+        None => "the change",
+    }
+}
+
+/// The user step a navigation-only path still needs, once, in the headline
+/// (round-2 r2 §2.2), from the target's routine kind: a table field's
+/// trigger is reached through a page on the field's table (never "a page
+/// that shows the field": page columns are not indexed); a page field's or
+/// action's through its page.
+fn navigation_caveat(changed: &[Value]) -> String {
+    let Some((object, name)) = one_target(changed) else {
+        return "each path opens a page; whether a user takes the step each one needs is not \
+                established"
+            .to_string();
+    };
+    let field_step = match name.to_ascii_lowercase().as_str() {
+        "onvalidate" => Some("edits"),
+        "onlookup" => Some("looks up"),
+        "onassistedit" => Some("assist-edits"),
+        _ => None,
+    };
+    let table = object.starts_with("Table ") || object.starts_with("TableExtension ");
+    let page = object.starts_with("Page ") || object.starts_with("PageExtension ");
+    match (table, page, field_step) {
+        (true, _, Some("edits")) => "each opens a page on the field's table; whether the page \
+                                     shows or edits the field is not established"
+            .to_string(),
+        (true, _, Some(step)) => format!(
+            "each opens a page on the field's table; whether the user {step} the field there is \
+             not established"
+        ),
+        (_, true, _) if object.contains(".action(") => {
+            "each opens the action's page; whether the user invokes the action is not established"
+                .to_string()
+        }
+        (_, true, Some(step)) => {
+            format!("each opens the page; whether the user {step} the field is not established")
+        }
+        _ => "each path opens a page; whether a user takes the step it needs is not established"
+            .to_string(),
+    }
+}
+
 /// The `al-sem.tests/2` document of a version 1 one (output validation
 /// V5, §7.4, F44; §8.3 for the words):
 /// - `hidden` is `{"<class>": {"reason", "channel", "selectionRelevant",
@@ -632,17 +690,60 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         .filter(|p| p.result.is_ok())
         .map(|p| s(&p.app, "name").to_string())
         .collect();
+    // Round-2 r2 §2.2 (G2): the selected tests by relation. A test whose
+    // every witness needs UI navigation is not run first as if code called
+    // the change: the headline says so whenever any selected test is
+    // navigation-only.
+    let by_relation = |rel: &str| -> Vec<&Value> {
+        picked
+            .iter()
+            .copied()
+            .filter(|t| relation(t) == rel)
+            .collect()
+    };
+    let code_tests = by_relation(crate::engine::vocab::RELATION_CODE);
+    let nav_tests = by_relation(crate::engine::vocab::RELATION_NAVIGATION);
+    let codeunits_of = |v: &[&Value]| -> String {
+        let mut ids: Vec<String> = Vec::new();
+        for t in v {
+            if let Some(n) = t["codeunitId"].as_i64().map(|n| n.to_string())
+                && !ids.contains(&n)
+            {
+                ids.push(n);
+            }
+        }
+        ids.join("|")
+    };
+    let app_words = if test_apps.is_empty() {
+        "the workspace app".to_string()
+    } else {
+        format!("app \"{}\"", test_apps.join("\", \""))
+    };
     // §9.5 (F63): what to run, first, in the test app's terms.
     let run_line = if picked.is_empty() {
         format!("run first: no test with a modeled {}", opts.tier.words())
+    } else if !nav_tests.is_empty() && code_tests.is_empty() {
+        format!(
+            "no modeled code-call witness in the selected scope; {} {} by UI navigation only \
+             ({}) — candidates: codeunits {} (a superset: whole codeunits)",
+            n_of(nav_tests.len(), "test reaches", "tests reach"),
+            navigation_target(&changed_out),
+            navigation_caveat(&changed_out),
+            codeunit_ids.join("|"),
+        )
+    } else if !nav_tests.is_empty() {
+        format!(
+            "run first ({app_words}): {} by code calls (codeunits {}; a superset: whole \
+             codeunits); {} more by UI navigation only (codeunits {}; {})",
+            n_of(code_tests.len(), "test", "tests"),
+            codeunits_of(&code_tests),
+            thousands(nav_tests.len()),
+            codeunits_of(&nav_tests),
+            navigation_caveat(&changed_out),
+        )
     } else {
         format!(
-            "run first ({}): codeunits {} — a superset: whole codeunits, for the {} on a {}",
-            if test_apps.is_empty() {
-                "the workspace app".to_string()
-            } else {
-                format!("app \"{}\"", test_apps.join("\", \""))
-            },
+            "run first ({app_words}): codeunits {} — a superset: whole codeunits, for the {} on a {}",
             codeunit_ids.join("|"),
             n_of(
                 picked.len(),
@@ -742,6 +843,11 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         "returned": shown.len(),
         "total": picked.len(),
         "fallback": fallback.iter().map(|f| f["reason"].clone()).collect::<Vec<_>>(),
+        // Round-2 r2 §2.2 (G2, additive): the selection by relation.
+        "byRelation": serde_json::Map::from_iter([
+            (crate::engine::vocab::RELATION_CODE.to_string(), json!(code_tests.len())),
+            (crate::engine::vocab::RELATION_NAVIGATION.to_string(), json!(nav_tests.len())),
+        ]),
     });
     let test_row = |t: &Value| {
         json!({"row": "test", "test": t["display"], "stableId": t["stableId"],
@@ -913,10 +1019,13 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         out.push(format!("tests on a {}: none{nearest}", opts.tier.words()));
     } else {
         out.push(format!(
-            "tests on a {}: {} in {} (code paths first, then UI navigation; then by tier and hops):",
+            "tests on a {}: {} in {} — by relation: code {}, UI navigation {} (code paths first, \
+             then by tier and hops):",
             opts.tier.words(),
             n_of(picked.len(), "test", "tests"),
-            n_of(groups.len(), "codeunit", "codeunits")
+            n_of(groups.len(), "codeunit", "codeunits"),
+            thousands(code_tests.len()),
+            thousands(nav_tests.len())
         ));
         for (k, v) in groups.iter().take(5) {
             let first = v[0];
@@ -943,15 +1052,13 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             } else {
                 String::new()
             };
-            let nav = if relation(first) == crate::engine::vocab::RELATION_NAVIGATION {
-                "; this witness requires UI navigation; invocation of the action is not established"
-            } else {
-                ""
-            };
+            // Round-2 r2 §2.2 (§5): tests mix relations, so each item
+            // prints both axes; the navigation caveat is the headline's.
             out.push(format!(
-                "  {k}: {}{dist}; first [{}] {} (first: {}; via {}){nav}",
+                "  {k}: {}{dist}; first [{}, {}] {} (first: {}; via {})",
                 n_of(v.len(), "test", "tests"),
                 crate::engine::vocab::tier_key(s(first, "tier")),
+                relation(first),
                 n_of(u(first, "hops"), "hop", "hops"),
                 first["procedure"].as_str().unwrap_or(s(first, "display")),
                 path.join(" → ")
@@ -1115,5 +1222,81 @@ mod tests {
         assert_eq!(first["stableId"], "t2", "{v:#}");
         assert_eq!(first["relation"], "code", "{v:#}");
         assert_eq!(v["runFirst"][1]["relation"], "UI navigation", "{v:#}");
+    }
+
+    /// Round-2 r2 §2.2 (G2): a field trigger reached only through a page on
+    /// its table does not get a `run first` headline as if code called it:
+    /// the headline says there is no code-call witness in the selected
+    /// scope, how many tests reach it by UI navigation only and the user
+    /// step that still needs; each item prints both axes. With a code path
+    /// too, the code tests come first and the navigation ones are counted
+    /// apart. Hand-stated parts (one local navigation path through a bare
+    /// page object; then a code path added).
+    ///
+    /// DISCRIMINATION (2026-11-07): building the headline as before
+    /// (`run first (…): codeunits …` whatever the relations, the two
+    /// relation arms removed) fails the first assert.
+    #[test]
+    fn a_navigation_only_selection_says_so_in_the_headline() {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Table \"Ledger\".\"No.\"::OnValidate"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 1,
+        });
+        let nav = json!({"stableId": "t1", "codeunitId": 50001, "codeunit": "Nav Tests",
+            "procedure": "EditsNo", "tier": "local", "hops": 3, "reaches": "r1",
+            "display": "Codeunit Nav Tests::EditsNo",
+            "path": ["Codeunit Nav Tests::EditsNo", "Page \"Ledger Card\"", "Table \"Ledger\"", "Table \"Ledger\".\"No.\"::OnValidate"]});
+        let code = json!({"stableId": "t2", "codeunitId": 50002, "codeunit": "Code Tests",
+            "procedure": "ValidatesNo", "tier": "local", "hops": 1, "reaches": "r1",
+            "display": "Codeunit Code Tests::ValidatesNo",
+            "path": ["Codeunit Code Tests::ValidatesNo", "Table \"Ledger\".\"No.\"::OnValidate"]});
+        let opts = |json: bool| RenderOpts {
+            tier: TierPick::Local,
+            max_tests: None,
+            json,
+            surface: Default::default(),
+            single_app: false,
+            schema: 2,
+        };
+        let part = |tests: Vec<Value>| Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({"roots": [{"stableId": "r1", "status": "reached"}],
+                              "tests": tests})),
+        };
+        let human = render(&roots, &[part(vec![nav.clone()])], opts(false)).text;
+        assert!(
+            human.contains(
+                "answer: no modeled code-call witness in the selected scope; 1 test reaches this \
+                 trigger by UI navigation only (each opens a page on the field's table; whether \
+                 the page shows or edits the field is not established) — candidates: codeunits \
+                 50001 (a superset: whole codeunits)"
+            ),
+            "{human}"
+        );
+        assert!(
+            human.contains("by relation: code 0, UI navigation 1"),
+            "{human}"
+        );
+        assert!(
+            human.contains("first [local, UI navigation] 3 hops"),
+            "{human}"
+        );
+        let v: Value =
+            serde_json::from_str(&render(&roots, &[part(vec![nav.clone()])], opts(true)).text)
+                .unwrap();
+        assert_eq!(
+            v["result"]["selection"]["byRelation"],
+            json!({"code": 0, "UI navigation": 1}),
+            "{v:#}"
+        );
+        let mixed = render(&roots, &[part(vec![nav, code])], opts(false)).text;
+        assert!(
+            mixed.contains(
+                "answer: run first (app \"T\"): 1 test by code calls (codeunits 50002; a \
+                 superset: whole codeunits); 1 more by UI navigation only (codeunits 50001;"
+            ),
+            "{mixed}"
+        );
     }
 }

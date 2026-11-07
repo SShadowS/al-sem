@@ -260,5 +260,5 @@ fn a_base_not_admitted_keeps_the_current_side_and_says_why() {
         r.text
     );
     assert!(r.text.contains("Codeunit A::R"), "{}", r.text);
-    assert!(r.text.contains("callers: 1 routine"), "{}", r.text);
+    assert!(r.text.contains("direct code callers: 1 ("), "{}", r.text);
 }

@@ -381,6 +381,10 @@
       "universe": "cross-app"
     },
     "selection": {
+      "byRelation": {
+        "UI navigation": 0,
+        "code": 2
+      },
       "capAsked": null,
       "complete": true,
       "fallback": [],
@@ -395,6 +399,7 @@
         "file": "ws:src/Core.al",
         "line": 23
       },
+      "callsLine": "calls: none (no call to a routine; builtins aside)",
       "changedLines": {
         "body": 2,
         "signature": 0
@@ -479,6 +484,12 @@
           ],
           "local": 1
         },
+        "declaredEntries": {
+          "percent": 0,
+          "program": 2,
+          "reached": 0,
+          "rule": "nodes whose root kinds hold an entry kind; the changed routines excluded on both sides; pages run by an action's RunObject, background targets and roots.config entries counted on neither side"
+        },
         "display": "Codeunit \"TU Core\"::Calc",
         "entries": [],
         "entryBuckets": 0,
@@ -531,7 +542,11 @@
           }
         ],
         "nodes": 1,
+        "population": "all ancestors (code, UI navigation, configuration, hub)",
         "programEntries": 2,
+        "relationRecorded": false,
+        "rootEntryKinds": [],
+        "rootUserOrJob": false,
         "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
         "states": 2,
         "status": "walked",
@@ -599,6 +614,10 @@
         "universe": "cross-app"
       },
       "selection": {
+        "byRelation": {
+          "UI navigation": 0,
+          "code": 2
+        },
         "capAsked": null,
         "complete": true,
         "fallback": [],
@@ -680,6 +699,12 @@
       "throughDependency": 0,
       "total": 1
     },
+    "declaredEntries": {
+      "percent": 0,
+      "program": 2,
+      "reached": 0,
+      "rule": "nodes whose root kinds hold an entry kind; the changed routines excluded on both sides; pages run by an action's RunObject, background targets and roots.config entries counted on neither side"
+    },
     "entries": [],
     "entryBuckets": 0,
     "eventPublishers": {
@@ -723,7 +748,11 @@
     "hubs": [],
     "limited": null,
     "maxHops": 1,
+    "population": "all ancestors (code, UI navigation, configuration, hub)",
     "programEntries": 2,
+    "relationRecorded": false,
+    "rootEntryKinds": [],
+    "rootUserOrJob": false,
     "states": 2,
     "userOrJobEntries": 0
   },
