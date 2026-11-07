@@ -126,8 +126,9 @@ without `CDOEMailTemplateManagement.Codeunit.al:259` `EMailTemplateHeader.Get(â€
   declines it; a `Rec` return in an object with an implicit `Rec` keeps the implicit row
   (#299).
 - Population (static count over the CDO baseline `bc3ccb18` and its dependency source):
-  4 workspace routines with a record-typed named return hold 4 operations on it (Get 3,
-  Insert 1); in dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
+  4 workspace routines have a record-typed named return; 3 of them hold 4 operations on it
+  (Get 3, Insert 1), and the fourth (`GetSendCode`) only passes it as a `var` receiver; in
+  dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
   System Application 6 / 5, Base Application 2 / 5). `aldump --program-call-graph-stats`
   on CDO: edges unchanged (whole program 46,426, primary 21,014), `unknown` 0 â†’ 0.
 - The CDO L4 frozen digests moved (re-frozen on `integrate/r2-fixes`, see
