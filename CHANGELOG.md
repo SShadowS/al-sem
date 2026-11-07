@@ -178,10 +178,18 @@ without `CDOEMailTemplateManagement.Codeunit.al:259` `EMailTemplateHeader.Get(�
   declines it; a `Rec` return in an object with an implicit `Rec` keeps the implicit row
   (#299).
 - Population (static count over the CDO baseline `bc3ccb18` and its dependency source):
-  4 workspace routines with a record-typed named return hold 4 operations on it (Get 3,
-  Insert 1); in dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
+  4 workspace routines have a record-typed named return; 3 of them hold 4 operations on it
+  (Get 3, Insert 1), and the fourth (`GetSendCode`) only passes it as a `var` receiver; in
+  dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
   System Application 6 / 5, Base Application 2 / 5). `aldump --program-call-graph-stats`
   on CDO: edges unchanged (whole program 46,426, primary 21,014), `unknown` 0 → 0.
+- The CDO L4 frozen digests moved (re-frozen on `integrate/r2-fixes`, see
+  `tests/l4-summary-baseline/README.md`). This fix's part: 136 routines gain the new
+  operations through their cones (`GetEmailTemplateFromRecord`'s Get in 117,
+  `CreateDefaulteDocsSendCode`'s Get and Insert in 18, `GetOrCreateDefaulteDocsSendCode`'s
+  Get in 6), and `CDO Send Code::GetSendCode`'s two `Get`s go from temp state unknown to
+  not temporary in 6, where a named return is passed as the `var` receiver. The Temp Blob
+  fix moves no DB effect, and the round-2 count fixes move neither digest.
 - Tests: `tests/cli/cli_named_return_record.rs` through the binary (query touches counts,
   explain's write and its table-event subscriber write, digest's persistent and temporary
   writes, the scalar return named like a field, the RecordRef return);
@@ -230,7 +238,17 @@ n09, n10; `target/tmp/output-validation/round2/factcheck/`).
   events, and writing T, instead of the open record hub that reached every table's
   `OnModify` (c02: `UpgradeBaseApp.Codeunit.al:2100` was printed as a hub into `Table "CAL
   Test Line"::OnModify`). CDO: 3 more resolved dependency obligations (table events of
-  RecordRef operations now typed), `unknown` stays 0.
+  RecordRef operations now typed), `unknown` stays 0. `derived_only_matches_raw_fold_on_cdo`'s
+  pinned recursive-member count 1,027 → 972 (the raw-fold oracle agrees; subscriber self-loops
+  65 → 31, recursive SCCs 106 → 71): a guarded subscriber no longer re-raises its own table's
+  event for a temporary record.
+- **The CDO L4 frozen digests moved** with this fix and the named-return fix above
+  (whole program `b696264e…` → `46c002a2…`, reverse index `9576f2c0…` → `ce2b1abf…`;
+  attributed per branch in `tests/l4-summary-baseline/README.md`). This fix's part: 1,068
+  routines; `CDO File::GetNextEntryNo`'s `RecRef.FindLast()` is typed to CDO File instead
+  of `unknown` in the 1,058 routines that reach it, and the 10 routines under `Page "CDO
+  E-Mail/Print Statement"`'s `CustomerTemp.DeleteAll()` lose the 10 effects of the two
+  guarded Customer `OnAfterDeleteEvent` subscribers.
 
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 
