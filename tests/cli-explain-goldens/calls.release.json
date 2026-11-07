@@ -1,6 +1,12 @@
 {
   "cards": [
     {
+      "callers": {
+        "direct": 6,
+        "directPageActions": 0,
+        "directRoutines": 6,
+        "pageActionsInAll": 0
+      },
       "coverage": {
         "assumptions": [
           "loaded-program"
@@ -558,6 +564,7 @@
         "knownCallers": 6,
         "own": []
       },
+      "runBy": null,
       "summary": {
         "callerDependentTables": 1,
         "callers": 6,

@@ -1436,7 +1436,8 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
 /// The routine's direct callees in source order, at most [`CALLS_SHOWN`]
 /// named (output validation V2, §9.1, F55): `calls: X (:181), Y (:190); +2
 /// more`. Builtins and unresolved calls are not routines and are left out.
-fn calls_line(
+/// Impact prints the same line per changed routine (round-2 r2 §3.9, G15).
+pub(crate) fn calls_line(
     model: &crate::program::model::workspace::Model,
     names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
     root: &str,
@@ -2432,6 +2433,11 @@ struct Card {
     /// Every known caller row, page-action triggers included (the caller
     /// rules' `knownCallers`).
     known_caller_rows: usize,
+    /// The direct callers as one set (round-2 r2 §2.3, G3).
+    direct: DirectCallers,
+    /// What runs a trigger (round-2 r2 §2.4, G4's W1 rows); `None` for a
+    /// routine that is not a trigger or subscriber.
+    run_by: Option<RunBy>,
     writes: Vec<Value>,
     commits: &'static str,
     commit_sites: Vec<Value>,
@@ -2675,6 +2681,460 @@ fn ties_folded(ranked: &[(String, usize)], cap: usize) -> String {
         ));
     }
     parts.join(", ")
+}
+
+/// "N page actions reach it in all" with its verb agreeing.
+fn actions_reach(n: usize) -> String {
+    if n == 1 {
+        "1 page action reaches it in all".to_string()
+    } else {
+        format!(
+            "{} page actions reach it in all",
+            crate::engine::l5::routine_rollup::thousands(n)
+        )
+    }
+}
+
+/// The direct callers of a routine as one set (round-2 r2 §2.3, G3): the
+/// set the caller rules count. Its routines and triggers by name, its page
+/// actions (whose trigger calls it) counted apart; `reached`: every page
+/// action that reaches it, directly or through callers (`reached_from`).
+struct DirectCallers {
+    total: usize,
+    routines: Vec<String>,
+    /// How the routines and triggers are called (`routines and page
+    /// triggers`), singular and plural.
+    routine_label: (&'static str, &'static str),
+    actions: Vec<String>,
+    action_objects: usize,
+    reached: usize,
+}
+
+impl DirectCallers {
+    /// The parts of the direct set: `13 routines and page triggers, 30 page
+    /// actions`.
+    fn parts(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if !self.routines.is_empty() {
+            parts.push(rf_plural(
+                self.routines.len(),
+                self.routine_label.0,
+                self.routine_label.1,
+            ));
+        }
+        if !self.actions.is_empty() {
+            parts.push(rf_plural(self.actions.len(), "page action", "page actions"));
+        }
+        parts
+    }
+
+    /// The summary clause: `callers: 43 direct (13 routines and page
+    /// triggers, 30 page actions); 118 page actions reach it in all`.
+    fn summary(&self) -> String {
+        let reach = if self.reached > 0 {
+            format!("; {}", actions_reach(self.reached))
+        } else {
+            String::new()
+        };
+        if self.total == 0 {
+            return format!(
+                "callers: none{}",
+                if reach.is_empty() { "" } else { " direct" }
+            ) + &reach;
+        }
+        format!(
+            "callers: {} direct ({}){reach}",
+            self.total,
+            self.parts().join(", ")
+        )
+    }
+
+    /// The card's line after `callers: ` (`detail` lists every name).
+    fn human(&self, detail: bool, detail_input: &str) -> String {
+        let reach = if self.reached > 0 {
+            format!(
+                "; {} (directly or through callers)",
+                actions_reach(self.reached)
+            )
+        } else {
+            String::new()
+        };
+        if self.total == 0 {
+            return format!("none direct{reach}");
+        }
+        let mut parts = Vec::new();
+        if !self.routines.is_empty() {
+            parts.push(format!(
+                "{}: {}",
+                rf_plural(
+                    self.routines.len(),
+                    self.routine_label.0,
+                    self.routine_label.1
+                ),
+                fold(self.routines.clone(), caps::TABLES, "callers", detail).joined()
+            ));
+        }
+        if !self.actions.is_empty() {
+            let n = rf_plural(self.actions.len(), "page action", "page actions");
+            let objects = rf_plural(self.action_objects, "object", "objects");
+            parts.push(if detail {
+                format!("{n} in {objects}: {}", self.actions.join(", "))
+            } else {
+                format!("{n} in {objects} ({detail_input} lists them)")
+            });
+        }
+        format!("{} direct — {}{reach}", self.total, parts.join("; "))
+    }
+
+    fn json(&self) -> Value {
+        json!({
+            "direct": self.total,
+            "directRoutines": self.routines.len(),
+            "directPageActions": self.actions.len(),
+            "pageActionsInAll": self.reached,
+        })
+    }
+}
+
+/// How a card names its direct callers that are not page actions, from
+/// their kinds: `routines`, `routines and page triggers`, `page triggers`, …
+fn routine_label(ix: &Indexes<'_>, rows: &[usize]) -> (&'static str, &'static str) {
+    let triggers: Vec<usize> = rows
+        .iter()
+        .copied()
+        .filter(|&i| ix.row(i).kind == "trigger")
+        .collect();
+    let procedures = rows.len() > triggers.len();
+    let pages = triggers
+        .iter()
+        .all(|&i| matches!(ix.row(i).object_type.as_str(), "Page" | "PageExtension"));
+    match (procedures, triggers.is_empty(), pages) {
+        (_, true, _) => ("routine", "routines"),
+        (true, false, true) => ("routine or page trigger", "routines and page triggers"),
+        (true, false, false) => ("routine or trigger", "routines and triggers"),
+        (false, false, true) => ("page trigger", "page triggers"),
+        (false, false, false) => ("trigger", "triggers"),
+    }
+}
+
+/// What runs a trigger (round-2 r2 §2.4, the W1 rows): a field's
+/// `OnValidate` (its `Validate` calls and the pages on its table), `OnLookup`
+/// and `OnAssistEdit` (a user step only), a page action (an entry point), an
+/// event subscriber (its publishers and any direct code caller); every other
+/// trigger with no direct caller says what runs it is not listed yet (W3).
+/// The card's `run by:` line, its summary clause and its JSON.
+struct RunBy {
+    human: String,
+    summary: String,
+    json: Value,
+    /// A page action's own card: its `reached from` list is the action
+    /// itself, which `entry point: this action` already says (G26).
+    action: bool,
+}
+
+/// How many `Validate` sites a `run by:` line names by default.
+const RUN_BY_SITES: usize = 3;
+
+impl RunBy {
+    fn of(
+        ix: &Indexes<'_>,
+        rows: &[usize],
+        rid: &str,
+        direct: &DirectCallers,
+        opts: RenderOpts,
+    ) -> Option<RunBy> {
+        let &first = rows.first()?;
+        let r = ix.row(first);
+        if r.kind == "event-subscriber"
+            || crate::program::attributes::find_attribute(&r.attributes_parsed, "EventSubscriber")
+                .is_some()
+        {
+            return Some(Self::subscriber(ix, rid, direct, opts));
+        }
+        if r.kind != "trigger" {
+            return None;
+        }
+        if ix.is_action_trigger(first) {
+            let human = "run by: entry point: this action (no code caller)".to_string();
+            return Some(RunBy {
+                summary: human.clone(),
+                human,
+                json: json!({"kind": "page-action", "directCodeCallers": direct.total}),
+                action: true,
+            });
+        }
+        let name = r.name.to_ascii_lowercase();
+        let field_trigger = matches!(r.object_type.as_str(), "Table" | "TableExtension")
+            && r.enclosing_member.is_some()
+            && matches!(name.as_str(), "onvalidate" | "onlookup" | "onassistedit");
+        if field_trigger && let Some(rb) = Self::field(ix, r, &name, opts) {
+            return Some(rb);
+        }
+        // Table and page triggers (W3 lists what runs them).
+        (direct.total == 0).then(|| {
+            let human = "direct code callers: none found (what runs a trigger is not listed for \
+                         this kind yet)"
+                .to_string();
+            RunBy {
+                summary: human.clone(),
+                human,
+                json: json!({"kind": "not-listed", "directCodeCallers": 0}),
+                action: false,
+            }
+        })
+    }
+
+    /// An event subscriber: the events that raise it (the model's bound
+    /// subscriptions), then its direct code callers.
+    fn subscriber(ix: &Indexes<'_>, rid: &str, direct: &DirectCallers, opts: RenderOpts) -> RunBy {
+        let model = ix.model;
+        let objects: HashMap<&str, &ModelObject> = model
+            .workspace
+            .objects
+            .iter()
+            .map(|o| (o.id.as_str(), o))
+            .collect();
+        let events: HashMap<&str, &crate::program::model::events::EventSymbol> = model
+            .events
+            .graph
+            .events
+            .iter()
+            .map(|e| (e.id.as_str(), e))
+            .collect();
+        let mut publishers: BTreeSet<String> = BTreeSet::new();
+        for e in model
+            .events
+            .graph
+            .edges
+            .iter()
+            .filter(|e| e.subscriber_stable_routine_id == rid)
+        {
+            let name = match events.get(e.event_id.as_str()) {
+                Some(s) => {
+                    let object = objects.get(s.publisher_object_id.as_str()).map_or_else(
+                        || s.publisher_object_id.clone(),
+                        |o| {
+                            crate::engine::l5::routine_rollup::format_object(
+                                &o.object_type,
+                                &o.name,
+                                None,
+                            )
+                        },
+                    );
+                    format!("{object}::{}", s.event_name)
+                }
+                None => e.event_id.clone(),
+            };
+            publishers.insert(name);
+        }
+        let publishers: Vec<String> = publishers.into_iter().collect();
+        let raised = if publishers.is_empty() {
+            "the publisher: no bound subscription found in the loaded program".to_string()
+        } else {
+            format!("the publisher: {}", publishers.join(", "))
+        };
+        let (callers_human, callers_summary) = if direct.total == 0 {
+            ("none found".to_string(), "none found".to_string())
+        } else {
+            (
+                direct.human(opts.detail, opts.detail_input()),
+                format!("{} direct", direct.total),
+            )
+        };
+        RunBy {
+            human: format!("run by: {raised}; direct code callers: {callers_human}"),
+            summary: format!(
+                "run by: the publisher ({}); direct code callers: {callers_summary}",
+                rf_plural(publishers.len(), "event", "events")
+            ),
+            json: json!({"kind": "event-subscriber", "publishers": publishers,
+                         "directCodeCallers": direct.total}),
+            action: false,
+        }
+    }
+
+    /// A table field's `OnValidate` (its `Validate` calls), `OnLookup` or
+    /// `OnAssistEdit` (no code call runs them), with the pages on the
+    /// field's table as potential UI surfaces. `None` when the field is not
+    /// found in the model's tables.
+    fn field(ix: &Indexes<'_>, r: &ModelRoutine, name: &str, opts: RenderOpts) -> Option<RunBy> {
+        use crate::engine::l4::field_touches::{field_key, field_touches};
+        use crate::program::body::record_op::FieldUse;
+        let model = ix.model;
+        let tables = table_by_id_preferring_real(&model.workspace.tables);
+        let table: &ModelTable = match r.object_type.as_str() {
+            // The table's id is `<app>/table/<number>`, not the object id.
+            "Table" => model.workspace.tables.iter().find(|t| {
+                !t.is_extension_stub
+                    && t.app_guid == r.app_guid
+                    && t.table_number == r.object_number
+            })?,
+            _ => {
+                let base = ix
+                    .data
+                    .declaring
+                    .of(&model.workspace.objects, r)?
+                    .extends_target_name
+                    .as_deref()?;
+                match resolve_table_selector(model, base) {
+                    Resolution::Resolved(t) => tables.get(t.id.as_str()).copied()?,
+                    _ => return None,
+                }
+            }
+        };
+        let member = field_key(r.enclosing_member.as_deref()?);
+        let field = table.fields.iter().find(|f| field_key(&f.name) == member)?;
+        // Potential UI surfaces: the pages whose source table is the field's
+        // table (the sited graph's rule for a lifecycle site from a page into
+        // its source table's triggers, `impact_graph::project`). Page columns
+        // are not indexed, so whether a page shows the field is not known.
+        let table_key = field_key(&table.name);
+        let mut pages: Vec<String> = model
+            .workspace
+            .objects
+            .iter()
+            .filter(|o| {
+                o.object_type == "Page"
+                    && o.source_table_name
+                        .as_deref()
+                        .is_some_and(|t| field_key(t) == table_key)
+            })
+            .map(|o| crate::engine::l5::routine_rollup::format_object("Page", &o.name, None))
+            .collect();
+        pages.sort();
+        pages.dedup();
+        let table_display = format!("\"{}\"", table.name.replace('"', "\"\""));
+        let what_page = if name == "onvalidate" {
+            "shows or edits"
+        } else {
+            "shows"
+        };
+        let surfaces = if pages.is_empty() {
+            format!("potential UI surfaces: no page on table {table_display} in the loaded program")
+        } else {
+            format!(
+                "potential UI surfaces: {} on table {table_display} ({}; whether a page \
+                 {what_page} this field is not established)",
+                rf_plural(pages.len(), "page", "pages"),
+                pages.join(", ")
+            )
+        };
+        let surfaces_short = format!(
+            "potential UI surfaces: {}",
+            rf_plural(pages.len(), "page", "pages")
+        );
+        if name != "onvalidate" {
+            let step = if name == "onlookup" {
+                "lookup"
+            } else {
+                "assist-edit"
+            };
+            return Some(RunBy {
+                human: format!(
+                    "run by: no code call (AL code cannot run a field's {}; a user's {step} \
+                     does); {surfaces}",
+                    r.name
+                ),
+                summary: format!("run by: no code call (a user step); {surfaces_short}"),
+                json: json!({"kind": if name == "onlookup" { "field-lookup" } else { "field-assist-edit" },
+                             "table": table.name, "field": field.name,
+                             "potentialUiSurfaces": pages}),
+                action: false,
+            });
+        }
+        let touches = field_touches(model, table, field, &|_| true);
+        let validates: Vec<_> = touches
+            .sites
+            .iter()
+            .filter(|s| s.uses.contains(&FieldUse::Validate))
+            .collect();
+        let matched: Vec<_> = validates.iter().filter(|s| s.candidate.is_none()).collect();
+        let candidates = validates.len() - matched.len();
+        let cov = &touches.coverage;
+        let (searched, _) =
+            crate::engine::l4::field_touches::search_words(cov, cov.dependency_bodies > 0);
+        let mut not = vec!["Validate through a FieldRef (dynamic field numbers)".to_string()];
+        if cov.dependency_bodies > 0 {
+            not.push("dependency code the workspace does not call (not loaded)".to_string());
+        }
+        if cov.dependency_without_body > 0 {
+            not.push(format!(
+                "{} known by symbols only",
+                rf_plural(
+                    cov.dependency_without_body,
+                    "dependency routine",
+                    "dependency routines"
+                )
+            ));
+        }
+        let candidate_clause = if candidates > 0 {
+            format!(
+                "; {} on a record whose table is not resolved",
+                rf_plural(candidates, "candidate", "candidates")
+            )
+        } else {
+            String::new()
+        };
+        let sites: Vec<Value> = matched
+            .iter()
+            .map(|s| {
+                json!({"routine": ix.qualified(s.routine_ix),
+                       "file": s.anchor.source_unit_id,
+                       "line": s.anchor.start_line + 1})
+            })
+            .collect();
+        let calls = if matched.is_empty() {
+            format!(
+                "{}{candidate_clause}",
+                crate::engine::vocab::none_observed(&searched, &not.join("; "))
+            )
+        } else {
+            let cap = if opts.detail {
+                usize::MAX
+            } else {
+                RUN_BY_SITES
+            };
+            let shown: Vec<String> = matched
+                .iter()
+                .take(cap)
+                .map(|s| {
+                    format!(
+                        "{} at {}:{}",
+                        ix.qualified(s.routine_ix),
+                        s.anchor.source_unit_id,
+                        s.anchor.start_line + 1
+                    )
+                })
+                .collect();
+            format!(
+                "{} ({}{}){candidate_clause}",
+                rf_plural(matched.len(), "site", "sites"),
+                shown.join("; "),
+                if matched.len() > shown.len() {
+                    format!("; … +{}", matched.len() - shown.len())
+                } else {
+                    String::new()
+                }
+            )
+        };
+        let calls_short = if matched.is_empty() {
+            "none observed".to_string()
+        } else {
+            rf_plural(matched.len(), "site", "sites")
+        };
+        Some(RunBy {
+            human: format!(
+                "run by: Validate calls on the field: {calls}; {surfaces}; an assignment to the \
+                 field does not run it"
+            ),
+            summary: format!("run by: Validate calls: {calls_short}; {surfaces_short}"),
+            json: json!({"kind": "field-validate", "table": table.name, "field": field.name,
+                         "validateSites": sites, "validateCandidates": candidates,
+                         "searched": searched, "notSearched": not,
+                         "potentialUiSurfaces": pages}),
+            action: false,
+        })
+    }
 }
 
 impl Card {
@@ -3458,17 +3918,42 @@ impl Card {
 
         // W2-2: the rollup's totals, with explain's callers and tests (F16k).
         let mut totals = rollup.totals.clone();
-        // F16j: a page action's trigger is counted under page actions, not as
-        // a routine caller. Every other direct caller is a routine caller: a
-        // page's `OnOpenPage`, `OnAfterGetCurrRecord` or a field's
-        // `OnAssistEdit` is code that calls the routine, and no page action
-        // stands for it.
-        let routine_callers: Vec<String> = known_callers
+        // Round-2 r2 §2.3 (G3): "callers" is one set on every line of a card,
+        // the direct callers (the caller rules' set): the routines and
+        // triggers that call it, and the page actions whose trigger calls it
+        // directly. A direct page action is also one of the actions that
+        // reach it in all (`reached_from`).
+        let routine_rows: Vec<usize> = known_callers
             .iter()
-            .filter(|&&c| !ix.is_action_trigger(c))
+            .copied()
+            .filter(|&c| !ix.is_action_trigger(c))
+            .collect();
+        let routine_callers: Vec<String> = routine_rows.iter().map(|&c| ix.qualified(c)).collect();
+        let action_callers: Vec<String> = known_callers
+            .iter()
+            .filter(|&&c| ix.is_action_trigger(c))
             .map(|&c| ix.qualified(c))
             .collect();
+        let action_objects = known_callers
+            .iter()
+            .filter(|&&c| ix.is_action_trigger(c))
+            .map(|&c| ix.object_of(c))
+            .collect::<BTreeSet<_>>()
+            .len();
+        let direct = DirectCallers {
+            total: known_callers.len(),
+            routines: routine_callers.clone(),
+            routine_label: routine_label(ix, &routine_rows),
+            actions: action_callers,
+            action_objects,
+            reached: reached_from.len(),
+        };
+        let run_by = RunBy::of(ix, &rows, rid, &direct, opts);
         totals.callers = Some(routine_callers.len());
+        totals.callers_clause = Some(match &run_by {
+            Some(rb) => rb.summary.clone(),
+            None => direct.summary(),
+        });
         totals.page_actions = Some(reached_from.len());
         totals.tests = Some(tests.len());
         totals.tests_loaded = tests_reaching.map(|(_, n)| n);
@@ -3599,6 +4084,8 @@ impl Card {
             callers,
             known_callers: routine_callers,
             known_caller_rows: known_callers.len(),
+            direct,
+            run_by,
             writes,
             commits,
             commit_sites,
@@ -3663,6 +4150,10 @@ impl Card {
             "effects": effects,
             "reachedFrom": reached_from,
             "reachedFromSummary": self.reached_from_summary(),
+            // Round-2 r2 §2.3-2.4 (additive): the direct callers as one set;
+            // what runs a trigger.
+            "callers": self.direct.json(),
+            "runBy": self.run_by.as_ref().map(|rb| rb.json.clone()),
             "extensionPoints": self.extension_points.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
             "tests": self.tests.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
             "testScope": self.test_scope.as_ref().map(|s| json!({
@@ -3788,34 +4279,32 @@ impl Card {
                 line(h);
             }
         }
-        // 8: callers with their caller rules, then the page actions.
-        let names = fold(self.known_callers.clone(), caps::TABLES, "callers", detail);
+        // 8: callers with their caller rules, then the page actions. Round-2
+        // r2 §2.3-2.4: the direct callers as one set; a trigger says what
+        // runs it (`run by:`) instead of `callers: none`.
         let actions = self.reached_from.len();
-        let reached = if actions == 0 {
-            String::new()
-        } else {
-            format!(
-                "; reached from {}",
-                rf_plural(actions, "page action", "page actions")
-            )
-        };
-        if self.known_callers.is_empty() {
-            // §5.3: `callers: none` with no page action is the summary's
-            // own clause.
-            if actions > 0 || !self.callers.is_empty() {
-                line(&format!("callers: none{reached}"));
-            }
-        } else {
-            line(&format!(
-                "callers: {} — {}{reached}",
-                self.known_callers.len(),
-                names.joined()
-            ));
+        match &self.run_by {
+            Some(rb) => line(&rb.human),
+            // §5.3: `callers: none` with no page action is the summary's own
+            // clause.
+            None if self.direct.total == 0 && actions == 0 && self.callers.is_empty() => {}
+            None => line(&format!(
+                "callers: {}",
+                self.direct.human(detail, self.opts.detail_input())
+            )),
         }
         for (_, h) in &self.callers {
             line(&format!("  {h}"));
         }
-        if actions <= 3 || detail {
+        // A page action's own card: its only `reached from` is the action
+        // itself, which `entry point: this action` says (G26).
+        let actions = if self.run_by.as_ref().is_some_and(|rb| rb.action) {
+            0
+        } else {
+            actions
+        };
+        if actions == 0 {
+        } else if actions <= 3 || detail {
             for (_, h) in &self.reached_from {
                 line(&format!("  {h}"));
             }

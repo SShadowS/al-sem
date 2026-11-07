@@ -1,0 +1,13 @@
+{
+  "id": "5c2a9e41-7b3d-4f60-8e1a-2d9b6c4f0a17",
+  "name": "Explain Run By Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 51200,
+      "to": 51299
+    }
+  ]
+}

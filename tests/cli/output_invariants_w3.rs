@@ -1067,7 +1067,10 @@ fn page_actions_fold_to_three_lines() {
     };
     let grouped = human(false);
     let listed = human(true);
-    assert!(grouped.contains("reached from 7 page actions"), "{grouped}");
+    assert!(
+        grouped.contains("7 page actions reach it in all"),
+        "{grouped}"
+    );
     let g = action_lines(&grouped);
     // The count rides on the `callers:` line; the rest is at most 2 lines.
     assert!(g.len() < 3, "page-action lines: {g:?}");

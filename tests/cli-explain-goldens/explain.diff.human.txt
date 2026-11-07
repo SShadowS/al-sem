@@ -6,14 +6,14 @@ Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
   summary — writes: may modify persistent Explain Order records (Modify at :18) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
   transaction, UI and errors: commits: no (every candidate decided); UI at 1 place; errors at 3 places
   other effects: events: 1 (1 raised in workspace code)
-  callers and tests: callers: 1, reached from 1 page action; tests: 1
+  callers and tests: callers: 2 direct (1 routine, 1 page action); 1 page action reaches it in all; tests: 1
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: this object: OnBeforePostOrder (:13)
   doc: Posts a released order. / It marks the order posted.
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:12]
   inherited rules: none
-  callers: 1 — Codeunit "Explain Tests"::PostUnreleasedFails; reached from 1 page action
+  callers: 2 direct — 1 routine: Codeunit "Explain Tests"::PostUnreleasedFails; 1 page action in 1 object (--detail lists them); 1 page action reaches it in all (directly or through callers)
     reached from page action Page "Explain Order Card".action(Post "P&ost") at ws:src/card.al:19
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18

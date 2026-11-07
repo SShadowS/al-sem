@@ -1241,6 +1241,12 @@ fn explain_counts_every_caller_and_page_runs() {
     ] {
         assert!(line.contains(name), "{name} in {line}");
     }
-    assert!(line.starts_with("  callers: 8 — "), "{line}");
-    assert!(line.contains("reached from 4 page actions"), "{line}");
+    // Round-2 r2 §2.3 (G3): the callers line counts the direct set (the
+    // eight routine and trigger callers and the action trigger).
+    assert!(
+        line.starts_with("  callers: 9 direct — 8 routines and triggers: "),
+        "{line}"
+    );
+    assert!(line.contains("; 1 page action in 1 object"), "{line}");
+    assert!(line.contains("4 page actions reach it in all"), "{line}");
 }

@@ -5,11 +5,11 @@ more: --detail lists every list complete; --format json for every row
 Codeunit "Calls Post"::Release  defined at ws:src/post.al:52
   transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
   other effects: events: 0 (0 raised in workspace code)
-  callers and tests: callers: 6; tests: none (no test code loaded)
+  callers and tests: callers: 6 direct (6 routines); tests: none (no test code loaded)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: table-trigger-rules-skipped 1
   calls: none (no call to a routine; builtins aside)
-  callers: 6 — Codeunit "Calls Post"::ReleaseChecked, Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded, Codeunit "Calls Post"::ReleaseElse
+  callers: 6 direct — 6 routines: Codeunit "Calls Post"::ReleaseChecked, Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded, Codeunit "Calls Post"::ReleaseElse
     caller rule (checked by 1 caller: Codeunit "Calls Post"::ReleaseChecked; no equivalent check recognized in 5 analyzed callers: 5 codeunits — --detail lists them): rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
     caller rule (checked by 1 caller: Codeunit "Calls Post"::ReleaseChecked; no equivalent check recognized in 5 analyzed callers: 5 codeunits — --detail lists them): rejects when not (Order."No." = '') and Order.Amount is empty: (platform message)  [TestField ws:src/checks.al:8]
     caller rule (checked by 1 caller: Codeunit "Calls Post"::ReleaseChecked; no equivalent check recognized in 5 analyzed callers: 5 codeunits — --detail lists them): rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:15]

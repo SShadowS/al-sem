@@ -1321,6 +1321,11 @@ pub struct RollupTotals {
     pub writing_routines: usize,
     /// Explain only: known routine callers, page actions, tests.
     pub callers: Option<usize>,
+    /// Explain only (round-2 r2 §2.3-2.4): the summary's callers clause as
+    /// the card states it (the direct callers as one set, or what runs a
+    /// trigger); when set it replaces the clause built from `callers` and
+    /// `page_actions`.
+    pub callers_clause: Option<String>,
     pub page_actions: Option<usize>,
     pub tests: Option<usize>,
     /// Explain only (step 1b): the `[Test]` procedures the search started
@@ -1544,7 +1549,9 @@ impl RollupTotals {
                 .filter_map(|(k, l)| family(k, l)),
         );
         block.push(format!("other effects: {}", other.join("; ")));
-        if let Some(c) = self.callers {
+        if let Some(c) = &self.callers_clause {
+            parts.push(c.clone());
+        } else if let Some(c) = self.callers {
             let actions = self.page_actions.unwrap_or(0);
             parts.push(match (c, actions) {
                 (0, 0) => "callers: none".to_string(),
@@ -2276,6 +2283,7 @@ impl RoutineRollup {
             writing_sites: points.writing.sites,
             writing_routines: points.writing.routines,
             callers: None,
+            callers_clause: None,
             page_actions: None,
             tests: None,
             tests_loaded: None,
