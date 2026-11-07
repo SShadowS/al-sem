@@ -2302,8 +2302,14 @@ fn tests_line(d: &Value) -> String {
     let rest_clause = if rest == 0 {
         String::new()
     } else {
+        // Round-3 recheck (astra): these tests are outside the PICK, not
+        // outside the filter. The filter runs whole codeunits, so a left-out
+        // test that shares a codeunit with a picked one runs too (c20: both
+        // nearest tests are in "CDO ABS Setup Tests"). The block counts the
+        // left-out tests by tier but does not list their codeunits, so the
+        // overlap is stated, not counted.
         format!(
-            "{} {} a modeled path only {} and {} not in this filter",
+            "{} {} a modeled path only {}, outside this pick",
             thousands(rest),
             if rest == 1 { "test has" } else { "tests have" },
             left_out
@@ -2312,7 +2318,6 @@ fn tests_line(d: &Value) -> String {
                 .map(|(w, n)| format!("{w} ({})", thousands(*n)))
                 .collect::<Vec<_>>()
                 .join(" or "),
-            if rest == 1 { "is" } else { "are" },
         )
     };
     let run = if codeunits.is_empty() {
@@ -2335,7 +2340,10 @@ fn tests_line(d: &Value) -> String {
             if rest_clause.is_empty() {
                 String::new()
             } else {
-                format!("; {rest_clause}")
+                format!(
+                    "; {rest_clause} (the whole-codeunit filter may still run {})",
+                    if rest == 1 { "it" } else { "some of them" }
+                )
             }
         )
     };

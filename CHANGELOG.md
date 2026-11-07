@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-3 recheck: impact's tests line)
+
+- **The tests left out of the pick are not "not in this filter".** Impact's `tests:`
+  line said the tests with a modeled path only via dependency code or a hub "are not
+  in this filter", but the filter runs whole codeunits, so a left-out test in the
+  same codeunit as a picked one runs too (c20: both nearest tests are in "CDO ABS
+  Setup Tests"). It now says they are `outside this pick` and, when there is a
+  codeunit filter, `the whole-codeunit filter may still run some of them`. The
+  block lists the left-out tests by count only, so the overlap is stated, not
+  counted. Reviewer astra's last round-3 item.
+
 ### Changed (gates: no second task gate on a tree that already passed)
 
 - **`scripts/merge-and-push` skips its task gate when the merged tree already
