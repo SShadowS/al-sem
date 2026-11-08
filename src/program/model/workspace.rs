@@ -196,6 +196,15 @@ pub struct ModelKey {
     /// ([`SYSTEM_FIELDS`]). A key field not found in this object is silently
     /// skipped (mirrors al-sem's `fieldsByName` resolution).
     pub fields: Vec<String>,
+    /// The key's member names as declared (unquoted, lowercased by the
+    /// lowerer), so a table extension's key can be resolved again against
+    /// the table it extends ([`super::extension_fields::merge_extension_fields`]).
+    pub members: Vec<String>,
+    /// The table extension that declares this key, by name, when it is
+    /// attached to the table it extends (output validation r3 L1); `None`
+    /// for the table's own keys. An extension adds secondary keys only: the
+    /// table's primary key is always its own first key.
+    pub declared_by: Option<String>,
 }
 
 /// A workspace table (the L3-relevant subset of al-sem's `Table`). Both `Table`
@@ -951,6 +960,8 @@ fn index_table_ir(
                     })
                 })
                 .collect(),
+            members: members.clone(),
+            declared_by: None,
         })
         .collect();
     let is_temporary = o
@@ -3528,13 +3539,15 @@ pub struct Model {
     /// The detector event graph built from the program engine's subscription
     /// inventory (engine-switch S4.2), by the same function.
     pub events: std::sync::Arc<super::events::ProgramEvents>,
-    /// Per page (model object id) that blocks a user's record operation for
-    /// certain: those operations, as [`crate::program::page_ui::op`] bits.
-    /// From the program graph by the function the sited graph reads
+    /// Per page (model object id) that blocks a user's record operation:
+    /// the operations it blocks for certain and those it blocks only while
+    /// no runtime `Editable(…)` setter makes it editable (candidates), as
+    /// [`crate::program::page_ui::op`] bits. From the program graph by the
+    /// function the sited graph reads
     /// ([`crate::program::page_ui::page_ui_blocks`]), so `explain`'s potential
     /// UI surfaces and the sited graph's page lifecycle agree. Empty for a
     /// model built without a program build.
-    pub page_ui_blocked: std::collections::BTreeMap<String, u8>,
+    pub page_ui_blocked: std::collections::BTreeMap<String, crate::program::page_ui::PageUiBlocks>,
 }
 
 impl Model {
@@ -3542,7 +3555,18 @@ impl Model {
     /// operation `op` (a [`crate::program::page_ui::op`] bit) for certain.
     #[must_use]
     pub fn page_blocks(&self, page: &str, op: u8) -> bool {
-        self.page_ui_blocked.get(page).is_some_and(|b| b & op != 0)
+        self.page_ui_blocked.get(page).is_some_and(|b| b.blocks(op))
+    }
+
+    /// Whether the page with model object id `page` blocks operation `op`
+    /// only as a candidate: it declares `Editable = false` and code may make
+    /// it editable at runtime (output validation r3 L3: `explain` marks it
+    /// `(may be read-only at runtime)`).
+    #[must_use]
+    pub fn page_may_be_read_only(&self, page: &str, op: u8) -> bool {
+        self.page_ui_blocked
+            .get(page)
+            .is_some_and(|b| b.candidate & op != 0)
     }
 }
 

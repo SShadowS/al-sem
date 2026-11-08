@@ -75,6 +75,18 @@ fn relation(t: &Value) -> &'static str {
     }
 }
 
+/// A test's relation as the human text prints it: `UI navigation
+/// (candidate)` when its path's only UI step may be blocked at runtime
+/// (output validation r3 L3: the select part's `pathCandidate`).
+fn relation_words(t: &Value) -> String {
+    let r = relation(t);
+    if r == crate::engine::vocab::RELATION_NAVIGATION && t.get("pathCandidate").is_some() {
+        format!("{r} (candidate)")
+    } else {
+        r.to_string()
+    }
+}
+
 /// Whether a path hop's printed name is a page the path opens: a bare page
 /// object (no `::`), the page's lifecycle edge. The one rule for a path's
 /// relation, here and in the select part's per-root relations.
@@ -309,6 +321,228 @@ pub fn hidden_v1(grouped: &Value) -> Vec<Value> {
     out
 }
 
+/// One changed routine a returned test reaches, for schema 3's `reaches`.
+struct Reach {
+    stable_id: String,
+    hops: Value,
+    relation: String,
+    candidate: Option<String>,
+}
+
+/// What schema 3 adds that the version 2 document does not hold (output
+/// validation r3 T1, L3, L4, §5.2).
+struct V3Extra {
+    /// Per `changed[]` entry: its selector when its display is not one, and
+    /// its nearest test's candidate step.
+    changed: Vec<(Option<String>, Option<String>)>,
+    /// Per `runFirst` row: every changed routine it reaches (in `changed[]`
+    /// order) and the test's selector.
+    rows: Vec<(Vec<Reach>, String)>,
+    reach_limit: Option<u64>,
+    not_expanded: Vec<String>,
+}
+
+/// The `al-sem.tests` version of schema 3.
+pub const V3_VERSION: u64 = 3;
+
+/// The schema 3 document of a version 2 one (output validation r3 T1):
+/// - `changed[]` entries carry `key` (`c:1`, `c:2`, … in `changed[]` order;
+///   unique within the document, not stable across calls); an entry whose
+///   `display` is not a selector also carries `selector` (§5.2: `display` is
+///   the selector otherwise); `nearest.candidate` when the nearest test's
+///   only path is a candidate page path (L3);
+/// - a `runFirst` row's `reaches` is one object per reached changed routine,
+///   in `changed[]` order: `{"changed": "<key>", "hops", "relation"}`, plus
+///   `candidate` (L3); `reachesHops` and `reachesByNavigationOnly` leave;
+///   each row carries `selector` (the test's own display);
+/// - `result.selection` carries `reachLimit` and, when some changed routine
+///   was past it, `notExpanded` (their keys; L4).
+fn v3_of(mut doc: Value, extra: &V3Extra) -> Value {
+    doc["version"] = json!(V3_VERSION);
+    let mut key_of: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(Value::Array(changed)) = doc.get_mut("changed") {
+        for (i, c) in changed.iter_mut().enumerate() {
+            let key = format!("c:{}", i + 1);
+            key_of.insert(s(c, "stableId").to_string(), key.clone());
+            c["key"] = json!(key);
+            let (selector, candidate) = extra.changed.get(i).cloned().unwrap_or_default();
+            if let Some(sel) = selector {
+                c["selector"] = json!(sel);
+            }
+            if let Some(cand) = candidate
+                && c.get("nearest").is_some_and(Value::is_object)
+            {
+                c["nearest"]["candidate"] = json!(cand);
+            }
+        }
+    }
+    let key = |id: &str| key_of.get(id).cloned().unwrap_or_else(|| id.to_string());
+    if let Some(Value::Array(rows)) = doc.get_mut("runFirst") {
+        for (row, (reaches, selector)) in rows.iter_mut().zip(&extra.rows) {
+            let Value::Object(m) = row else { continue };
+            m.remove("reachesHops");
+            m.remove("reachesByNavigationOnly");
+            let objs: Vec<Value> = reaches
+                .iter()
+                .map(|r| {
+                    let mut o = json!({"changed": key(&r.stable_id), "hops": r.hops,
+                                       "relation": r.relation});
+                    if let Some(c) = &r.candidate {
+                        o["candidate"] = json!(c);
+                    }
+                    o
+                })
+                .collect();
+            m.insert("reaches".into(), Value::Array(objs));
+            m.insert("selector".into(), json!(selector));
+        }
+    }
+    if let Some(sel) = doc.pointer_mut("/result/selection") {
+        if let Some(n) = extra.reach_limit {
+            sel["reachLimit"] = json!(n);
+        }
+        if !extra.not_expanded.is_empty() {
+            sel["notExpanded"] = json!(
+                extra
+                    .not_expanded
+                    .iter()
+                    .map(|id| key(id))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    doc
+}
+
+/// The exact 3 → 2 rebuild (output validation r3 T1): each `reaches` key
+/// back to its routine's stable id, `reachesHops` in the same order,
+/// `reachesByNavigationOnly` as the ids whose relation is `UI navigation`
+/// (absent when none), every field schema 3 adds dropped (`key`,
+/// `selector`, `candidate`, `reachLimit`, `notExpanded`), and the version 2
+/// metadata. Orders and the absent-versus-empty distinction are the
+/// document's own.
+#[must_use]
+pub fn v2_of_v3(mut doc: Value) -> Value {
+    doc["version"] = json!(2);
+    let mut id_of: BTreeMap<String, Value> = BTreeMap::new();
+    if let Some(Value::Array(changed)) = doc.get_mut("changed") {
+        for c in changed {
+            let Value::Object(m) = c else { continue };
+            if let Some(Value::String(k)) = m.remove("key") {
+                id_of.insert(k, m.get("stableId").cloned().unwrap_or(Value::Null));
+            }
+            m.remove("selector");
+            if let Some(Value::Object(n)) = m.get_mut("nearest") {
+                n.remove("candidate");
+            }
+        }
+    }
+    if let Some(Value::Array(rows)) = doc.get_mut("runFirst") {
+        for row in rows {
+            let Value::Object(m) = row else { continue };
+            m.remove("selector");
+            let reaches = m
+                .remove("reaches")
+                .and_then(|r| r.as_array().cloned())
+                .unwrap_or_default();
+            let id = |r: &Value| {
+                let k = s(r, "changed");
+                id_of.get(k).cloned().unwrap_or_else(|| json!(k))
+            };
+            let nav: Vec<Value> = reaches
+                .iter()
+                .filter(|r| s(r, "relation") == crate::engine::vocab::RELATION_NAVIGATION)
+                .map(id)
+                .collect();
+            m.insert(
+                "reaches".into(),
+                Value::Array(reaches.iter().map(id).collect()),
+            );
+            m.insert(
+                "reachesHops".into(),
+                Value::Array(reaches.iter().map(|r| r["hops"].clone()).collect()),
+            );
+            if !nav.is_empty() {
+                m.insert("reachesByNavigationOnly".into(), Value::Array(nav));
+            }
+        }
+    }
+    if let Some(Value::Object(sel)) = doc.pointer_mut("/result/selection") {
+        sel.remove("reachLimit");
+        sel.remove("notExpanded");
+    }
+    doc
+}
+
+/// Schema 3's pretty JSON: `serde_json`'s pretty form (two-space indent),
+/// except that each `runFirst[].reaches` object is printed on one line
+/// (output validation r3 T1: one key per line made c21 too large to answer
+/// inline).
+fn pretty_v3(doc: &Value) -> String {
+    fn compact(v: &Value) -> String {
+        match v {
+            Value::Object(m) => format!(
+                "{{{}}}",
+                m.iter()
+                    .map(|(k, x)| format!(
+                        "{}: {}",
+                        serde_json::to_string(k).expect("a key serializes"),
+                        compact(x)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Value::Array(a) => {
+                format!("[{}]", a.iter().map(compact).collect::<Vec<_>>().join(", "))
+            }
+            x => serde_json::to_string(x).expect("a scalar serializes"),
+        }
+    }
+    fn walk(v: &Value, indent: usize, one_line_items: bool, out: &mut String) {
+        let pad = |n: usize| "  ".repeat(n);
+        match v {
+            Value::Object(m) if !m.is_empty() => {
+                out.push_str("{\n");
+                for (i, (k, x)) in m.iter().enumerate() {
+                    out.push_str(&pad(indent + 1));
+                    out.push_str(&serde_json::to_string(k).expect("a key serializes"));
+                    out.push_str(": ");
+                    // `runFirst[].reaches`: the array whose objects print on
+                    // one line each.
+                    walk(x, indent + 1, k == "reaches", out);
+                    if i + 1 < m.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad(indent));
+                out.push('}');
+            }
+            Value::Array(a) if !a.is_empty() => {
+                out.push_str("[\n");
+                for (i, x) in a.iter().enumerate() {
+                    out.push_str(&pad(indent + 1));
+                    if one_line_items && x.is_object() {
+                        out.push_str(&compact(x));
+                    } else {
+                        walk(x, indent + 1, false, out);
+                    }
+                    if i + 1 < a.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad(indent));
+                out.push(']');
+            }
+            x => out.push_str(&serde_json::to_string(x).expect("a value serializes")),
+        }
+    }
+    let mut out = String::new();
+    walk(doc, 0, false, &mut out);
+    out
+}
+
 /// How to render.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RenderOpts {
@@ -319,9 +553,10 @@ pub struct RenderOpts {
     pub surface: crate::engine::follow_up::Surface,
     /// `--single-app` (the header's universe).
     pub single_app: bool,
-    /// The JSON document's version (`--schema`): 2 (output validation V5,
-    /// §7.4) or 1, kept for one release and for impact, which embeds the
-    /// tests block in `al-sem.impact/1` until impact's next major.
+    /// The JSON document's version (`--schema`): 3 (output validation r3
+    /// T1, the default), 2 (V5, §7.4; kept for one release, [`v2_of_v3`]
+    /// rebuilds it) or 1, kept for impact, which embeds the tests block in
+    /// `al-sem.impact/1` until impact's next major.
     pub schema: u32,
 }
 
@@ -543,7 +778,27 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         .iter()
         .filter_map(|p| p.result.as_ref().ok())
         .collect();
+    // Output validation r3 L4: the per-root walk's limit and the changed
+    // routines past it, over the parts.
+    let reach_limit = ok_parts.iter().find_map(|p| p["reachLimit"].as_u64());
+    let not_expanded: Vec<String> = {
+        let mut ids: Vec<String> = Vec::new();
+        for p in &ok_parts {
+            for id in p["notExpanded"].as_array().into_iter().flatten() {
+                if let Some(id) = id.as_str()
+                    && !ids.iter().any(|x| x == id)
+                {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+        ids
+    };
     let mut changed_out = Vec::new();
+    // Schema 3 only (output validation r3 T1, L3, §5.2): per changed routine
+    // its selector when its display is not one, and its nearest test's
+    // candidate step.
+    let mut changed_v3: Vec<(Option<String>, Option<String>)> = Vec::new();
     for c in &changed {
         let id = s(c, "stableId");
         let per: Vec<&Value> = ok_parts
@@ -579,11 +834,17 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 u(r, "nearestHops"),
             )
         };
+        let selector = c["selector"]
+            .as_str()
+            .filter(|sel| Some(*sel) != c["display"].as_str())
+            .map(str::to_string);
+        let mut nearest_candidate = None;
         if let Some(r) = per
             .iter()
             .filter(|r| r.get("nearest").is_some())
             .min_by_key(near_key)
         {
+            nearest_candidate = r["nearestCandidate"].as_str().map(str::to_string);
             out["nearest"] =
                 json!({"test": r["nearest"], "tier": r["nearestTier"], "hops": r["nearestHops"]});
             // Round-3 c21 (additive): the nearest test's relation (a code
@@ -593,6 +854,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             }
         }
         changed_out.push(out);
+        changed_v3.push((selector, nearest_candidate));
     }
     for st in ["not-in-projection", "not-loaded", "analysis-incomplete"] {
         let n = changed_out.iter().filter(|c| s(c, "status") == st).count();
@@ -900,9 +1162,17 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             },
         )
     } else if !line_nav.is_empty() {
+        // Output validation r3 (F top-9, c28): the UI-navigation tests by
+        // their codeunit count, not every codeunit number (the JSON lists
+        // them: `groups`, `runFirst`).
+        let nav_codeunits = line_nav
+            .iter()
+            .map(|t| (t["codeunitId"].as_i64(), s(t, "codeunit")))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
         format!(
             "run first ({app_words}): {} by code calls (codeunits {}; a superset: whole \
-             codeunits); {} more by UI navigation only (codeunits {}; {}){in_all}",
+             codeunits); {} more by UI navigation only in {} ({}){in_all}",
             n_of(
                 line_code.len(),
                 if capped { "returned test" } else { "test" },
@@ -910,7 +1180,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             ),
             codeunits_of(&line_code),
             thousands(line_nav.len()),
-            codeunits_of(&line_nav),
+            n_of(nav_codeunits, "codeunit", "codeunits"),
             navigation_caveat(&changed_out, &line_nav),
         )
     } else if capped {
@@ -1008,6 +1278,16 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         if limited {
             h.limits = vec!["a walk stopped at its state budget".to_string()];
         }
+        // Output validation r3 L4: past the per-root walk's limit a changed
+        // routine's reach is incomplete, never "no modeled path".
+        if !not_expanded.is_empty() {
+            h.limits.push(format!(
+                "every test's reach per changed routine is computed for the first {} changed \
+                 routines only ({} not expanded)",
+                reach_limit.map_or_else(|| "?".to_string(), |n| thousands(n as usize)),
+                thousands(not_expanded.len())
+            ));
+        }
         h.scope = format!("tests on a {}", opts.tier.words());
         let sf = opts.surface;
         if opts.tier == TierPick::Local && !changed.is_empty() {
@@ -1040,18 +1320,33 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         // routine), or only the one of its shortest path (many routines).
         "reachesComplete": ok_parts.iter().all(|p| p["reachesComplete"] == json!(true)),
     });
+    // Schema 3 (output validation r3 §5.2): summary and index rows carry a
+    // selector — a test's own display, a changed routine's selector (its
+    // display unless that is not one).
+    let v3 = opts.schema >= 3;
     let test_row = |t: &Value| {
-        json!({"row": "test", "test": t["display"], "stableId": t["stableId"],
+        let mut row = json!({"row": "test", "test": t["display"], "stableId": t["stableId"],
                "codeunitId": t["codeunitId"], "codeunit": t["codeunit"],
                "procedure": t["procedure"],
                "tier": crate::engine::vocab::tier_key(s(t, "tier")), "hops": t["hops"],
-               "relation": relation(t)})
+               "relation": relation(t)});
+        if v3 {
+            row["selector"] = t["display"].clone();
+        }
+        row
     };
     let mut index_rows: Vec<Value> = changed_out
         .iter()
-        .map(|c| {
-            json!({"row": "routine", "routine": c["display"], "stableId": c["stableId"],
-                   "testStatus": c["testStatus"], "nearest": c.get("nearest").cloned()})
+        .zip(&changed_v3)
+        .map(|(c, (selector, _))| {
+            let mut row = json!({"row": "routine", "routine": c["display"], "stableId": c["stableId"],
+                   "testStatus": c["testStatus"], "nearest": c.get("nearest").cloned()});
+            if v3 {
+                row["selector"] = selector
+                    .as_deref()
+                    .map_or_else(|| c["display"].clone(), |sel| json!(sel));
+            }
+            row
         })
         .collect();
     index_rows.extend(shown.iter().map(|t| test_row(t)));
@@ -1109,7 +1404,16 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                             .map(|r| r["stableId"].clone())
                             .collect::<Vec<_>>(),
                     ),
-                    None => (vec![t["reaches"].clone()], vec![t["hops"].clone()], Vec::new()),
+                    // The label only: its one path's relation.
+                    None => (
+                        vec![t["reaches"].clone()],
+                        vec![t["hops"].clone()],
+                        if relation(t) == crate::engine::vocab::RELATION_NAVIGATION {
+                            vec![t["reaches"].clone()]
+                        } else {
+                            Vec::new()
+                        },
+                    ),
                 };
                 let mut row = json!({"stableId": t["stableId"], "codeunitId": t["codeunitId"], "codeunit": t["codeunit"],
                        "procedure": t["procedure"], "file": t["file"], "tier": t["tier"],
@@ -1169,9 +1473,43 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 "selection": selection,
             },
         });
-        let doc = if opts.schema >= 2 { v2_of(doc) } else { doc };
+        let text = match opts.schema {
+            1 => serde_json::to_string_pretty(&doc).expect("serializes") + "\n",
+            2 => serde_json::to_string_pretty(&v2_of(doc)).expect("serializes") + "\n",
+            _ => {
+                let extra = V3Extra {
+                    changed: changed_v3.clone(),
+                    rows: shown
+                        .iter()
+                        .map(|t| {
+                            let reaches = match t["reachesAll"].as_array() {
+                                Some(all) => all
+                                    .iter()
+                                    .map(|r| Reach {
+                                        stable_id: s(r, "stableId").to_string(),
+                                        hops: r["hops"].clone(),
+                                        relation: s(r, "relation").to_string(),
+                                        candidate: r["candidate"].as_str().map(str::to_string),
+                                    })
+                                    .collect(),
+                                None => vec![Reach {
+                                    stable_id: s(t, "reaches").to_string(),
+                                    hops: t["hops"].clone(),
+                                    relation: relation(t).to_string(),
+                                    candidate: None,
+                                }],
+                            };
+                            (reaches, s(t, "display").to_string())
+                        })
+                        .collect(),
+                    reach_limit,
+                    not_expanded: not_expanded.clone(),
+                };
+                pretty_v3(&v3_of(v2_of(doc), &extra)) + "\n"
+            }
+        };
         return Rendered {
-            text: serde_json::to_string_pretty(&doc).expect("serializes") + "\n",
+            text,
             exit,
             summary,
         };
@@ -1252,13 +1590,42 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             String::new()
         }
     ));
+    // Output validation r3 L4: the routines past the per-root walk's limit,
+    // named; their tests are the ones nearest to them, so a reach set there
+    // is incomplete (a status says whether a test reaches them at all).
+    if !not_expanded.is_empty() {
+        let display_of = |id: &str| {
+            changed_out
+                .iter()
+                .find(|c| s(c, "stableId") == id)
+                .map_or_else(|| id.to_string(), |c| s(c, "display").to_string())
+        };
+        let named: Vec<String> = not_expanded
+            .iter()
+            .take(3)
+            .map(|id| display_of(id))
+            .collect();
+        out.push(format!(
+            "reach per changed routine: limit {} routines; not expanded: {}{} — each test's \
+             reach to them is counted only where it is the test's nearest changed routine \
+             (incomplete, not \"no modeled path\")",
+            reach_limit.map_or_else(|| "?".to_string(), |n| thousands(n as usize)),
+            named.join("; "),
+            if not_expanded.len() > 3 {
+                format!("; … +{}", not_expanded.len() - 3)
+            } else {
+                String::new()
+            }
+        ));
+    }
     if picked.is_empty() {
         // §3.3: the nearest test is labelled with its tier, its relation
         // (round-3 c21) and as not a focused test.
         let nearest = changed_out
             .iter()
-            .find_map(|c| c.get("nearest").cloned())
-            .map(|n| {
+            .zip(&changed_v3)
+            .find_map(|(c, (_, cand))| c.get("nearest").cloned().map(|n| (n, cand.is_some())))
+            .map(|(n, candidate)| {
                 format!(
                     "; nearest [{}{}]: {} ({} hops) (not a focused test)",
                     match s(&n, "tier") {
@@ -1267,6 +1634,8 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                     },
                     match s(&n, "relation") {
                         "" => String::new(),
+                        // L3: a path whose only UI step is a candidate.
+                        r if candidate => format!(", {r} (candidate)"),
                         r => format!(", {r}"),
                     },
                     s(&n, "test"),
@@ -1328,7 +1697,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 "  {k}: {}{dist}; first [{}, {}] {} (first: {})",
                 n_of(v.len(), "test", "tests"),
                 crate::engine::vocab::tier_key(s(first, "tier")),
-                relation(first),
+                relation_words(first),
                 n_of(u(first, "hops"), "hop", "hops"),
                 first["procedure"].as_str().unwrap_or(s(first, "display")),
             ));
@@ -1392,7 +1761,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                     Some(t) if !picked.is_empty() => format!(
                         "; nearest: {} [{}] ({})",
                         s(t, "display"),
-                        relation(t),
+                        relation_words(t),
                         n_of(u(t, "hops"), "hop", "hops")
                     ),
                     _ => String::new(),
@@ -1585,7 +1954,8 @@ mod tests {
         assert!(
             mixed.contains(
                 "answer: run first (app \"T\"): 1 test by code calls (codeunits 50002; a \
-                 superset: whole codeunits); 1 more by UI navigation only (codeunits 50001;"
+                 superset: whole codeunits); 1 more by UI navigation only in 1 codeunit (the \
+                 first page each path opens:"
             ),
             "{mixed}"
         );
@@ -1826,5 +2196,212 @@ mod tests {
             r.summary
         );
         assert_eq!(r.summary["selectionRunTarget"]["tests"], 4);
+    }
+
+    /// The parts of the schema 3 tests: three changed routines (r2 with a
+    /// selector that is not its display), a code test reaching r1 and r2
+    /// (r2 by UI navigation), a navigation test reaching r1 as a candidate,
+    /// a test with no `reachesAll` (its label only); `r3` past the reach
+    /// limit (`notExpanded`, `reachesComplete: false`) when `partial`.
+    fn v3_parts(partial: bool, with_tests: bool) -> (Value, Vec<Part>) {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Codeunit X::A", "selector": "Codeunit X::A"},
+                      {"stableId": "r2", "display": "Codeunit X::B(Integer)",
+                       "selector": "11111111-0000-0000-0000-000000000000:Codeunit:1#b"},
+                      {"stableId": "r3", "display": "Codeunit X::C", "selector": "Codeunit X::C"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 3,
+        });
+        let reach = |id: &str, hops: u64, rel: &str| json!({"stableId": id, "tier": "local", "hops": hops, "relation": rel});
+        let mut cand = reach("r1", 3, "UI navigation");
+        cand["candidate"] = json!("runtime-editable");
+        let code = json!({"stableId": "t1", "codeunitId": 50001, "codeunit": "T1",
+            "procedure": "Code", "tier": "local", "hops": 1, "reaches": "r1",
+            "reachesAll": [reach("r1", 1, "code"), reach("r2", 4, "UI navigation")],
+            "display": "Codeunit T1::Code", "path": ["Codeunit T1::Code", "Codeunit X::A"]});
+        let nav = json!({"stableId": "t2", "codeunitId": 50002, "codeunit": "T2",
+            "procedure": "Nav", "tier": "local", "hops": 3, "reaches": "r1",
+            "reachesAll": [cand], "pathCandidate": "runtime-editable",
+            "display": "Codeunit T2::Nav",
+            "path": ["Codeunit T2::Nav", "Page Card", "Table Rec", "Codeunit X::A"]});
+        let label = json!({"stableId": "t3", "codeunitId": 50003, "codeunit": "T3",
+            "procedure": "Label", "tier": "local", "hops": 2, "reaches": "r3",
+            "display": "Codeunit T3::Label",
+            "path": ["Codeunit T3::Label", "Codeunit X::H", "Codeunit X::C"]});
+        let tests = if with_tests {
+            vec![code, nav, label]
+        } else {
+            Vec::new()
+        };
+        let part = Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({
+                "roots": [{"stableId": "r1", "status": if with_tests { "reached" } else { "no-known-path" },
+                           "nearest": "Codeunit T2::Nav", "nearestTier": "local",
+                           "nearestHops": 3, "nearestRelation": "UI navigation",
+                           "nearestCandidate": "runtime-editable"},
+                          {"stableId": "r2", "status": "reached"},
+                          {"stableId": "r3", "status": "reached"}],
+                "tests": tests,
+                "reachesComplete": !partial,
+                "reachLimit": 2,
+                "notExpanded": if partial { json!(["r3"]) } else { json!([]) },
+            })),
+        };
+        (roots, vec![part])
+    }
+
+    fn render_v(roots: &Value, parts: &[Part], schema: u32, json: bool) -> Rendered {
+        render(
+            roots,
+            parts,
+            RenderOpts {
+                tier: TierPick::Local,
+                max_tests: None,
+                json,
+                surface: Default::default(),
+                single_app: false,
+                schema,
+            },
+        )
+    }
+
+    /// Output validation r3 T1: the schema 3 shape — keyed `changed[]`, one
+    /// `reaches` object per reached changed routine (code when any path is
+    /// code; the candidate step kept), a selector on every run-first row and
+    /// on a changed routine whose display is not one, `nearest.candidate`,
+    /// the reach limit and the routines past it; each `reaches` object on
+    /// one line. Schema 2's fields `reachesHops` and
+    /// `reachesByNavigationOnly` are gone.
+    #[test]
+    fn schema_3_keys_changed_routines_and_prints_one_reach_per_line() {
+        let (roots, parts) = v3_parts(true, true);
+        let r = render_v(&roots, &parts, 3, true);
+        let v: Value = serde_json::from_str(&r.text).unwrap();
+        assert_eq!(v["version"], 3);
+        let keys: Vec<&str> = v["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, ["c:1", "c:2", "c:3"]);
+        assert!(v["changed"][0].get("selector").is_none(), "{v:#}");
+        assert_eq!(
+            v["changed"][1]["selector"],
+            "11111111-0000-0000-0000-000000000000:Codeunit:1#b"
+        );
+        assert_eq!(v["changed"][0]["nearest"]["candidate"], "runtime-editable");
+        let row = |p: &str| {
+            v["runFirst"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["procedure"] == p)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(
+            row("Code")["reaches"],
+            json!([{"changed": "c:1", "hops": 1, "relation": "code"},
+                   {"changed": "c:2", "hops": 4, "relation": "UI navigation"}])
+        );
+        assert_eq!(
+            row("Nav")["reaches"],
+            json!([{"changed": "c:1", "hops": 3, "relation": "UI navigation",
+                    "candidate": "runtime-editable"}])
+        );
+        assert_eq!(row("Code")["selector"], "Codeunit T1::Code");
+        for t in v["runFirst"].as_array().unwrap() {
+            assert!(t.get("reachesHops").is_none() && t.get("reachesByNavigationOnly").is_none());
+        }
+        assert_eq!(v["result"]["selection"]["reachesComplete"], false);
+        assert_eq!(v["result"]["selection"]["notExpanded"], json!(["c:3"]));
+        assert_eq!(v["result"]["selection"]["reachLimit"], 2);
+        assert!(
+            r.text
+                .contains("        {\"changed\": \"c:1\", \"hops\": 1, \"relation\": \"code\"},\n"),
+            "{}",
+            r.text
+        );
+        // Every other part is serde_json's pretty form.
+        let mut no_reach = v.clone();
+        for t in no_reach["runFirst"].as_array_mut().unwrap() {
+            t.as_object_mut().unwrap().remove("reaches");
+        }
+        assert_eq!(
+            pretty_v3(&no_reach),
+            serde_json::to_string_pretty(&no_reach).unwrap()
+        );
+        // The summary rows' selectors (schema 3 only).
+        assert_eq!(
+            r.summary["selectedTests"][0]["selector"],
+            "Codeunit T1::Code"
+        );
+        let r2 = render_v(&roots, &parts, 2, true);
+        assert!(r2.summary["selectedTests"][0].get("selector").is_none());
+    }
+
+    /// Output validation r3 T1, the exact 3 → 2 rebuild: [`v2_of_v3`] of the
+    /// schema 3 document equals the version 2 document of the same input —
+    /// mixed code / navigation / candidate reaches, a row with its label
+    /// only, a partial inventory (`reachesComplete: false`, `notExpanded`),
+    /// a non-trivial changed set (three routines, one with a selector), and
+    /// an empty result.
+    ///
+    /// DISCRIMINATION (2026-11-08): the rebuild keeping each `reaches` key
+    /// (`id` returning the key instead of the stable id) fails at the first
+    /// case; writing `reachesByNavigationOnly` even when empty fails there
+    /// too (the `Label` row has no navigation reach).
+    #[test]
+    fn schema_2_is_rebuilt_exactly_from_schema_3() {
+        for (partial, with_tests) in [(true, true), (false, true), (false, false)] {
+            let (roots, parts) = v3_parts(partial, with_tests);
+            let v3: Value = serde_json::from_str(&render_v(&roots, &parts, 3, true).text).unwrap();
+            let v2: Value = serde_json::from_str(&render_v(&roots, &parts, 2, true).text).unwrap();
+            assert_eq!(v2_of_v3(v3), v2, "partial {partial}, tests {with_tests}");
+        }
+        // Precondition: a version 2 row without navigation reaches has no
+        // `reachesByNavigationOnly` (absent, not empty).
+        let (roots, parts) = v3_parts(false, true);
+        let v2: Value = serde_json::from_str(&render_v(&roots, &parts, 2, true).text).unwrap();
+        let label = v2["runFirst"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["procedure"] == "Label")
+            .cloned()
+            .unwrap();
+        assert!(label.get("reachesByNavigationOnly").is_none(), "{label:#}");
+    }
+
+    /// Output validation r3 L3, L4 in the human text: a candidate path is
+    /// `UI navigation (candidate)`; the routines past the reach limit are
+    /// named with the limit, and the header's limits say the reach is
+    /// incomplete.
+    #[test]
+    fn human_text_names_candidates_and_routines_not_expanded() {
+        let (roots, parts) = v3_parts(true, true);
+        let text = render_v(&roots, &parts, 3, false).text;
+        assert!(
+            text.contains("first [local, UI navigation (candidate)] 3 hops"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "reach per changed routine: limit 2 routines; not expanded: Codeunit X::C"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("computed for the first 2 changed routines only (1 not expanded)"),
+            "{text}"
+        );
+        let (roots, parts) = v3_parts(false, false);
+        let text = render_v(&roots, &parts, 3, false).text;
+        assert!(
+            text.contains("nearest [local, UI navigation (candidate)]: Codeunit T2::Nav"),
+            "{text}"
+        );
     }
 }

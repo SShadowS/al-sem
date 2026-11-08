@@ -10,6 +10,7 @@
   "changed": [
     {
       "display": "Codeunit \"TU Core\"::Post",
+      "key": "c:1",
       "nearest": {
         "hops": 1,
         "relation": "code",
@@ -58,6 +59,7 @@
       "capAsked": null,
       "complete": true,
       "fallback": [],
+      "reachLimit": 128,
       "reachesComplete": true,
       "returned": 1,
       "total": 1
@@ -77,12 +79,10 @@
       "pathTier": "local",
       "procedure": "PostUpdatesQty",
       "reaches": [
-        "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
-      ],
-      "reachesHops": [
-        1
+        {"changed": "c:1", "hops": 1, "relation": "code"}
       ],
       "relation": "code",
+      "selector": "Codeunit \"TU Core Tests\"::PostUpdatesQty",
       "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#cef2f0b2d01083453c0df5a65fe6974bc777040d9c41e9975027b27e906251c7"
     }
   ],
@@ -118,5 +118,5 @@
   },
   "selectionComplete": true,
   "tier": "local",
-  "version": 2
+  "version": 3
 }

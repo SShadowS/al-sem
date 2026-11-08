@@ -8,7 +8,7 @@ current effects of the 1 changed routine; ranked: reached from a user or a job f
   Codeunit "Out Issue Document"::IssueDoc (ws:src/OutIssueDocument.Codeunit.al:3) — changed
       effects: may write 16 tables (1 owned by this app, 15 by dependencies); 1 table whose temporary state the caller decides; commits: may (0 own commit sites); errors 5; HTTP 1; background tasks 1; 2 events; analysis partial (interface-open-world; object-run-unresolved; 1 interface call open world, 2 dynamic calls not resolved)
       calls: Codeunit "Out Log Mgt"::WriteLog (called at :17); Codeunit "Out Sender"::Notify (called at :18); this object: GetHandler (called at :22); +3 more
-      runs: Codeunit "Base Poster" (70100) (Run at :15); Codeunit "Base Calc" (70101) (Run at :16)
+      runs: Codeunit "Base Poster" (70100), Run at :15; Codeunit "Base Calc" (70101), Run at :16
       direct code callers: none found (test code is not counted; see tests:)
       reached by code: 1 ancestor — local 1, via-dependency 0; 16% of the program's entries (1 of 6)
         nearest entry: [local, code] Page "Out Doc Card".action(Issue)::OnAction (page action, 1 hop)

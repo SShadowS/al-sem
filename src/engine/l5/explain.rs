@@ -1632,7 +1632,9 @@ pub(crate) fn calls_line(
 }
 
 /// The objects the routine runs in source order, at most [`CALLS_SHOWN`]
-/// named (round-3 m10): `runs: Page "X" (RunModal at :105)`. A page, report
+/// named (round-3 m10): `runs: Page "X" (RunModal at :105)`; a dependency
+/// object with its number, `Codeunit "Base Poster" (70100), Run at :15`
+/// (r3 L2). A page, report
 /// or codeunit run is not a call of one trigger (the model gives a page run
 /// one edge per trigger), so it is not on the `calls:` line. `None` when the
 /// routine runs no object.
@@ -1647,9 +1649,18 @@ pub(crate) fn runs_line(
     }
     let more = runs.len().saturating_sub(CALLS_SHOWN);
     runs.truncate(CALLS_SHOWN);
+    // Output validation r3 L2: one set of parentheses. A dependency
+    // object's display already ends with its number (`Codeunit "Base
+    // Poster" (70100)`), so the run follows it after a comma.
     let shown: Vec<String> = runs
         .iter()
-        .map(|(object, method, line)| format!("{object} ({method} at :{line})"))
+        .map(|(object, method, line)| {
+            if object.ends_with(')') {
+                format!("{object}, {method} at :{line}")
+            } else {
+                format!("{object} ({method} at :{line})")
+            }
+        })
         .collect();
     Some(format!(
         "runs: {}{}",
@@ -3375,6 +3386,47 @@ fn routine_label(ix: &Indexes<'_>, rows: &[usize]) -> (&'static str, &'static st
 /// event subscriber (its publishers and any direct code caller); every other
 /// trigger with no direct caller says what runs it is not listed yet (W3).
 /// The card's `run by:` line, its summary clause and its JSON.
+/// A table's potential UI surfaces ([`RunBy::pages_on_table`]): each page
+/// by its display, and whether it blocks the step only as a candidate (it
+/// may be read-only at runtime, output validation r3 L3).
+struct UiSurfaces(Vec<(String, bool)>);
+
+impl UiSurfaces {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The human list: a candidate page marked `(may be read-only at
+    /// runtime)`.
+    fn join(&self, sep: &str) -> String {
+        self.0
+            .iter()
+            .map(|(p, c)| {
+                if *c {
+                    format!("{p} (may be read-only at runtime)")
+                } else {
+                    p.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(sep)
+    }
+
+    /// The JSON fields: `potentialUiSurfaces` (every page) and, when some
+    /// page is a candidate, `mayBeReadOnlyAtRuntime` (those pages).
+    fn json_into(&self, v: &mut Value) {
+        v["potentialUiSurfaces"] = json!(self.0.iter().map(|(p, _)| p).collect::<Vec<_>>());
+        let cand: Vec<&String> = self.0.iter().filter(|(_, c)| *c).map(|(p, _)| p).collect();
+        if !cand.is_empty() {
+            v["mayBeReadOnlyAtRuntime"] = json!(cand);
+        }
+    }
+}
+
 struct RunBy {
     human: String,
     summary: String,
@@ -3562,11 +3614,14 @@ impl RunBy {
     /// is, less those that block `op` for certain (`InsertAllowed = false`,
     /// …; the sited graph's rule for a lifecycle site from a page into its
     /// source table's triggers, `impact_graph::project`, reads the same
-    /// [`Model::page_blocks`] answer), sorted.
-    fn pages_on_table(model: &Model, table: &ModelTable, op: u8) -> Vec<String> {
+    /// [`Model::page_blocks`] answer), sorted. A page that blocks `op` only
+    /// while no runtime `Editable(…)` setter makes it editable (a candidate,
+    /// [`Model::page_may_be_read_only`]) is listed marked `(may be read-only
+    /// at runtime)` (output validation r3 L3).
+    fn pages_on_table(model: &Model, table: &ModelTable, op: u8) -> UiSurfaces {
         use crate::engine::l4::field_touches::field_key;
         let table_key = field_key(&table.name);
-        let mut pages: Vec<String> = model
+        let mut pages: Vec<(String, bool)> = model
             .workspace
             .objects
             .iter()
@@ -3577,11 +3632,16 @@ impl RunBy {
                         .is_some_and(|t| field_key(t) == table_key)
                     && !model.page_blocks(&o.id, op)
             })
-            .map(|o| crate::engine::l5::routine_rollup::format_object("Page", &o.name, None))
+            .map(|o| {
+                (
+                    crate::engine::l5::routine_rollup::format_object("Page", &o.name, None),
+                    op != 0 && model.page_may_be_read_only(&o.id, op),
+                )
+            })
             .collect();
         pages.sort();
         pages.dedup();
-        pages
+        UiSurfaces(pages)
     }
 
     /// A table's record trigger (`OnInsert`, `OnModify`, `OnDelete`,
@@ -3680,8 +3740,12 @@ impl RunBy {
                 "run by: record operations: {ops_short}; potential UI surfaces: {}",
                 rf_plural(pages.len(), "page", "pages")
             ),
-            json: json!({"kind": "table-trigger", "table": table.name,
-                         "recordOperations": json_sites, "potentialUiSurfaces": pages}),
+            json: {
+                let mut v = json!({"kind": "table-trigger", "table": table.name,
+                                   "recordOperations": json_sites});
+                pages.json_into(&mut v);
+                v
+            },
             action: false,
             keep_callers: true,
         })
@@ -3862,9 +3926,12 @@ impl RunBy {
                     r.name
                 ),
                 summary: format!("run by: no code call (a user step); {surfaces_short}"),
-                json: json!({"kind": if name == "onlookup" { "field-lookup" } else { "field-assist-edit" },
-                             "table": table.name, "field": field.name,
-                             "potentialUiSurfaces": pages}),
+                json: {
+                    let mut v = json!({"kind": if name == "onlookup" { "field-lookup" } else { "field-assist-edit" },
+                                       "table": table.name, "field": field.name});
+                    pages.json_into(&mut v);
+                    v
+                },
                 action: false,
                 keep_callers: false,
             });
@@ -3955,10 +4022,13 @@ impl RunBy {
                  field does not run it"
             ),
             summary: format!("run by: Validate calls: {calls_short}; {surfaces_short}"),
-            json: json!({"kind": "field-validate", "table": table.name, "field": field.name,
-                         "validateSites": sites, "validateCandidates": candidates,
-                         "searched": searched, "notSearched": not,
-                         "potentialUiSurfaces": pages}),
+            json: {
+                let mut v = json!({"kind": "field-validate", "table": table.name, "field": field.name,
+                                   "validateSites": sites, "validateCandidates": candidates,
+                                   "searched": searched, "notSearched": not});
+                pages.json_into(&mut v);
+                v
+            },
             action: false,
             keep_callers: false,
         })

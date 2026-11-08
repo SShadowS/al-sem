@@ -8,7 +8,7 @@ Codeunit "Out Issue Document"::IssueDoc  defined at ws:src/OutIssueDocument.Code
   uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
   starts by (a start, not a summary): `Doc.TestField(Status, Doc.Status::Open)` (:12); `Doc.Status := Doc.Status::Issued` (:13); +12 more
   calls: Codeunit "Out Log Mgt"::WriteLog (called at :17); Codeunit "Out Sender"::Notify (called at :18); this object: GetHandler (called at :22); +3 more
-  runs: Codeunit "Base Poster" (70100) (Run at :15); Codeunit "Base Calc" (70101) (Run at :16)
+  runs: Codeunit "Base Poster" (70100), Run at :15; Codeunit "Base Calc" (70101), Run at :16
   rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
   inherited rules: none
   callers: 1 direct — 1 page action in 1 object (detail: true lists them); 1 page action reaches it in all (directly or through callers)

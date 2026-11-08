@@ -278,6 +278,10 @@ impl Job for SelectJob<'_> {
             }
         };
         let key = self.universe.key();
+        // Output validation r3 L4: `ALSEM_SELECT_TIMING=1` prints the select
+        // phase's own time (the walks, not the universe build) to stderr, so
+        // the per-root walk limit is measured on the phase it bounds.
+        let started = std::time::Instant::now();
         let v = super::select::select(
             g,
             &super::select::SelectArgs {
@@ -290,6 +294,13 @@ impl Job for SelectJob<'_> {
                 probes: &self.probes,
             },
         );
+        if std::env::var_os("ALSEM_SELECT_TIMING").is_some() {
+            eprintln!(
+                "tests-select: {} roots, select phase {} ms",
+                self.roots.len(),
+                started.elapsed().as_millis()
+            );
+        }
         Ok(SideDoc::new(Ok::<Value, String>(v)))
     }
 
