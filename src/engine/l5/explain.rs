@@ -4208,8 +4208,12 @@ impl Card {
                 mark_dead(&mut ev, e);
                 events.push(ev);
                 // An extension point: an event the routine raises itself (a
-                // call straight into the publisher).
-                if via.len() <= 1 {
+                // call straight into the publisher). A row whose every listed
+                // path was dropped (it cannot run under the literal
+                // arguments, r3 E1) and none kept says nothing of where the
+                // event is raised: its empty `via` is no zero-hop path.
+                let paths_dropped = e.via_paths_truncated && e.via_paths.iter().all(Vec::is_empty);
+                if via.len() <= 1 && !paths_dropped {
                     let subscribers = model
                         .events
                         .graph

@@ -12,7 +12,7 @@
 use super::features::{
     PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PConditionGuard,
     PConditionReference, PExpressionInfo, PFieldAccess, PLoop, POperationSite, PRecordOperation,
-    PTempState, PUnreachableStatement, PVarAssignment, PathHint,
+    PTempState, PUnreachableStatement, PVarAssignment, PathHint, ValueFact, ValueLabel,
 };
 use super::node_util::Utf16Cols;
 use super::record_op::{FIELD_ARGS_OPS, record_op_type};
@@ -114,6 +114,11 @@ pub struct IrSpine {
     /// Per call-site, the argument ExprIds (parallel to `call_sites`) — the binding
     /// post-pass needs them to anchor + classify each argument.
     pub cs_arg_exprs: Vec<Vec<ExprId>>,
+    /// r3 E1: the value label ([`ValueLabel::of_info`], the same reading as a
+    /// call argument's) of every `case` pattern and every operand of an `if`
+    /// comparison (`=`, `<>`, `in`) that is a literal or a label. The CFN
+    /// builder reads it for [`super::features::ValueFact`].
+    pub value_labels: HashMap<ExprId, ValueLabel>,
 }
 
 /// An implicit-receiver frame (table-method base `Rec` seed / `with` body). Carries
@@ -481,6 +486,8 @@ struct SpineCtx<'a> {
     /// is used (#14). Only a field access ON that exact expression is a write;
     /// one nested inside it (an index) is still a read.
     assign_target: Option<(ExprId, crate::program::body::features::FieldAccessKind)>,
+    /// [`IrSpine::value_labels`].
+    value_labels: HashMap<ExprId, ValueLabel>,
 }
 
 impl<'a> SpineCtx<'a> {
@@ -745,6 +752,41 @@ impl<'a> SpineCtx<'a> {
             value,
             qualifier,
             member,
+        }
+    }
+
+    /// r3 E1: record `e`'s value label ([`IrSpine::value_labels`]) when it is
+    /// a literal or a label, read exactly as a call argument is.
+    fn note_value_label(&mut self, e: ExprId) {
+        if let Some(l) = ValueLabel::of_info(&self.ir_expression_info(e)) {
+            self.value_labels.insert(e, l);
+        }
+    }
+
+    /// r3 E1: the labels of an `if` condition that is wholly (through
+    /// parentheses) `A = B`, `A <> B` or `A in [..]`.
+    fn note_comparison_labels(&mut self, cond: ExprId) {
+        let mut e = cond;
+        while let ExprKind::Parenthesized(x) = &self.file.ir.expr(e).kind {
+            e = *x;
+        }
+        let ExprKind::Binary { op, lhs, rhs } = &self.file.ir.expr(e).kind else {
+            return;
+        };
+        let (lhs, rhs) = (*lhs, *rhs);
+        match op {
+            BinaryOp::Eq | BinaryOp::Ne => {
+                self.note_value_label(lhs);
+                self.note_value_label(rhs);
+            }
+            BinaryOp::In => {
+                if let ExprKind::List(items) = &self.file.ir.expr(rhs).kind {
+                    for &i in &items.clone() {
+                        self.note_value_label(i);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1087,6 +1129,7 @@ impl<'a> SpineCtx<'a> {
                 self.has_branching = true;
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*cond, "if", &sa);
+                self.note_comparison_labels(*cond);
                 self.walk_expr(*cond);
                 self.walk_block(*then_block);
                 if let Some(b) = else_block {
@@ -1104,6 +1147,7 @@ impl<'a> SpineCtx<'a> {
                 self.walk_expr(*scrutinee);
                 for br in branches {
                     for p in &br.patterns {
+                        self.note_value_label(*p);
                         self.walk_expr(*p);
                     }
                     self.walk_block(br.body);
@@ -1614,6 +1658,7 @@ pub fn walk_spine(
         cs_arg_exprs: Vec::new(),
         bare_assigns: Vec::new(),
         assign_target: None,
+        value_labels: HashMap::new(),
     };
     if let Some(b) = routine.body {
         ctx.walk_block(b);
@@ -1662,6 +1707,7 @@ pub fn walk_spine(
         call_sites: ctx.call_sites,
         site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
+        value_labels: ctx.value_labels,
     }
 }
 
@@ -1683,6 +1729,7 @@ fn cfn_node(kind: &str) -> PCFNNode {
         field_exit_guard: None,
         table_exit_guard: None,
         junction_guards: None,
+        value_fact: None,
     }
 }
 
@@ -2018,6 +2065,69 @@ impl<'a> IrCfn<'a> {
         Some(logical.to_lowercase())
     }
 
+    /// r3 E1: the name of a bare identifier (quoted or not, through
+    /// parentheses), unquoted and folded.
+    fn bare_name(&self, mut e: ExprId) -> Option<String> {
+        use ExprKind::*;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        let x = self.ir().expr(e);
+        match &x.kind {
+            Identifier(n) if x.origin.kind_text == "identifier" => Some(n.to_lowercase()),
+            QuotedIdentifier(n) => {
+                let t = n.trim();
+                let inner = t
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(t);
+                Some(inner.replace("\"\"", "\"").to_lowercase())
+            }
+            _ => None,
+        }
+    }
+
+    /// r3 E1: [`ValueFact::Test`] for a condition that is wholly (through
+    /// parentheses) `N = L` / `L = N`, `N <> L` / `L <> N` or `N in [L, …]`,
+    /// `N` a bare identifier and the other side not one.
+    fn value_test(&self, cond: ExprId) -> Option<ValueFact> {
+        use ExprKind::*;
+        let mut e = cond;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        let Binary { op, lhs, rhs } = &self.ir().expr(e).kind else {
+            return None;
+        };
+        let label = |x: ExprId| self.spine.value_labels.get(&x).cloned();
+        match op {
+            BinaryOp::Eq | BinaryOp::Ne => {
+                let (name, other) = match (self.bare_name(*lhs), self.bare_name(*rhs)) {
+                    (Some(n), None) => (n, *rhs),
+                    (None, Some(n)) => (n, *lhs),
+                    _ => return None,
+                };
+                Some(ValueFact::Test {
+                    name,
+                    equal: *op == BinaryOp::Eq,
+                    labels: vec![label(other)],
+                })
+            }
+            BinaryOp::In => {
+                let name = self.bare_name(*lhs)?;
+                let List(items) = &self.ir().expr(*rhs).kind else {
+                    return None;
+                };
+                Some(ValueFact::Test {
+                    name,
+                    equal: true,
+                    labels: items.iter().map(|&i| label(i)).collect(),
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn simple_guard(&self, cond: ExprId) -> Option<PConditionGuard> {
         use ExprKind::*;
         let e = self.ir().expr(cond);
@@ -2182,6 +2292,7 @@ impl<'a> IrCfn<'a> {
                     n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
                     n.table_exit_guard = self.table_exit_guard(*cond, *then_block);
                 }
+                n.value_fact = self.value_test(*cond);
                 n
             }
             Case {
@@ -2203,6 +2314,12 @@ impl<'a> IrCfn<'a> {
                             .collect::<Option<Vec<_>>>()
                             .map(super::features::TableCase::Tables);
                     }
+                    b.value_fact = Some(ValueFact::Arm(
+                        br.patterns
+                            .iter()
+                            .map(|p| self.spine.value_labels.get(p).cloned())
+                            .collect(),
+                    ));
                     branch_cfns.push(b);
                 }
                 if let Some(eb) = else_block {
@@ -2216,6 +2333,7 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(branch_cfns);
                 n.condition_leaves = some_if(self.harvest_vec(*scrutinee));
                 n.table_case = on_number.map(super::features::TableCase::On);
+                n.value_fact = self.bare_name(*scrutinee).map(ValueFact::CaseOn);
                 n
             }
             While { cond, body } => {
@@ -2224,18 +2342,30 @@ impl<'a> IrCfn<'a> {
                 n.condition_leaves = some_if(self.harvest_vec(*cond));
                 n
             }
-            For { from, to, body, .. } => {
+            For {
+                var,
+                from,
+                to,
+                body,
+                ..
+            } => {
                 let mut n = cfn_node("for");
                 n.children = Some(vec![self.build_block(*body)]);
                 let mut leaves = self.harvest_vec(*from);
                 leaves.extend(self.harvest_vec(*to));
                 n.condition_leaves = some_if(leaves);
+                n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
                 n
             }
-            Foreach { iterable, body, .. } => {
+            Foreach {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut n = cfn_node("foreach");
                 n.children = Some(vec![self.build_block(*body)]);
                 n.condition_leaves = some_if(self.harvest_vec(*iterable));
+                n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
                 n
             }
             Repeat { body, until } => {

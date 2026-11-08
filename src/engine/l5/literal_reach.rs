@@ -38,6 +38,11 @@
 //! Database::"T" then exit;` makes every later site of its routine require
 //! `R` to have held `T`.
 //!
+//! r3 E1 adds Integer, Option and Enum values ([`values`]): a usable value
+//! parameter is bound from an integer literal, an option or enum label, or
+//! the caller's own bound parameter, and prunes the `case` arms (and `else`)
+//! and `if =` / `<>` / `in` branches it cannot take.
+//!
 //! An operation is UNREACHABLE when its routine is reached with guards ignored
 //! but no reached state of that routine satisfies the operation's own
 //! requirements. An effect is unreachable only when every one of its origin
@@ -62,6 +67,11 @@ use std::sync::Arc;
 
 #[path = "literal_routes.rs"]
 pub mod routes;
+
+#[path = "literal_values.rs"]
+mod values;
+
+use values::{VSet, ValueFrame, ValueReq};
 
 /// The most (routine, bindings) states one root's search visits.
 pub(crate) const STATE_CAP: usize = 400_000;
@@ -276,11 +286,14 @@ type AtomReq = (Atoms, Arc<[String]>);
 /// Known parameter values, each list sorted by parameter index: Booleans, and
 /// the folded names of the tables a record argument may hold (`""`: none).
 /// G34: and the tables the routine's own instance's globals may hold.
+/// r3 E1: and the Integer, Option and Enum values a parameter may hold
+/// ([`values`]); a parameter absent here holds an unknown value.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct Bindings {
     bools: Vec<(u32, bool)>,
     tables: Vec<(u32, TSet)>,
     globals: Vec<(Arc<str>, TSet)>,
+    values: Vec<(u32, VSet)>,
 }
 
 fn contradicts(reqs: &[Req], b: &Bindings) -> bool {
@@ -538,6 +551,46 @@ fn walk_tables(
     }
 }
 
+/// r3 E1: whether call site `cs_id` of `r` passes argument `arg` by value: every
+/// routine it reaches takes that parameter by value, or, reaching none, the
+/// resolver classified it as a platform method other than `Evaluate` and
+/// `Clear` (which write their argument). A call the resolver did not resolve
+/// may write it.
+fn value_passes_by_value(
+    r: &ModelRoutine,
+    cs_id: &str,
+    arg: u32,
+    callees: &HashMap<&str, Vec<&str>>,
+    builtin_sites: &HashSet<&str>,
+    by_id: &HashMap<&str, &ModelRoutine>,
+) -> bool {
+    use crate::program::body::features::PCallee;
+    match callees.get(cs_id) {
+        Some(targets) if !targets.is_empty() => targets.iter().all(|to| {
+            by_id
+                .get(to)
+                .and_then(|callee| callee.parameters.iter().find(|p| p.index == arg))
+                .is_some_and(|p| !p.is_var)
+        }),
+        _ => {
+            if !builtin_sites.contains(cs_id) {
+                return false;
+            }
+            let name = r
+                .call_sites
+                .iter()
+                .find(|c| c.id == cs_id)
+                .map(|c| match &c.callee {
+                    PCallee::Bare { name } => name.to_ascii_lowercase(),
+                    PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            !matches!(name.as_str(), "evaluate" | "clear")
+        }
+    }
+}
+
 /// The edge's (from, to, site, binds-arguments) view.
 fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<EdgeSite<'_>>, bool)> {
     fn cs(s: &str) -> Option<EdgeSite<'_>> {
@@ -709,6 +762,11 @@ pub(crate) struct LiteralReach<'a> {
     by_stable: HashMap<&'a str, &'a ModelRoutine>,
     frames: HashMap<&'a str, FrameGuards>,
     tables: HashMap<&'a str, TableFrame>,
+    /// r3 E1: per routine (stable id) its value frame ([`values`]).
+    value_frames: HashMap<&'a str, ValueFrame>,
+    /// Model table id -> the table (a real one over an extension stub), for
+    /// the labels of a record field ([`values::resolve_label`]).
+    tables_by_id: HashMap<&'a str, &'a crate::program::model::workspace::ModelTable>,
     /// Model table id -> its logical name, folded.
     table_names: HashMap<&'a str, Arc<str>>,
     /// Operation id → the stable id of the routine it sits in.
@@ -740,13 +798,21 @@ impl<'a> LiteralReach<'a> {
         let by_id: HashMap<&str, &ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
         let mut callees: HashMap<&str, Vec<&str>> = HashMap::new();
+        // r3 E1: the call sites the resolver classified as platform methods.
+        let mut builtin_sites: HashSet<&str> = HashSet::new();
         for e in &model.calls.edges {
             if let Some(to) = e.to.as_deref() {
                 callees.entry(e.callsite_id.as_str()).or_default().push(to);
             }
+            if e.resolution == crate::program::model::taxonomy::Resolution::Builtin {
+                builtin_sites.insert(e.callsite_id.as_str());
+            }
         }
+        let tables_by_id =
+            crate::program::model::workspace::table_by_id_preferring_real(&model.workspace.tables);
         let mut frames = HashMap::new();
         let mut tables = HashMap::new();
+        let mut value_frames = HashMap::new();
         let mut by_stable = HashMap::new();
         let mut op_owner = HashMap::new();
         for r in routines {
@@ -758,6 +824,15 @@ impl<'a> LiteralReach<'a> {
             }
             if let Some(t) = table_frame(r) {
                 tables.insert(r.stable_routine_id.as_str(), t);
+            }
+            let passes_by_value = |cs_id: &str, arg: u32| {
+                value_passes_by_value(r, cs_id, arg, &callees, &builtin_sites, &by_id)
+            };
+            let resolve = |l: &crate::program::body::features::ValueLabel| {
+                values::resolve_label(r, &tables_by_id, l)
+            };
+            if let Some(v) = values::value_frame(r, passes_by_value, &resolve) {
+                value_frames.insert(r.stable_routine_id.as_str(), v);
             }
             for op in &r.record_operations {
                 op_owner.insert(op.id.as_str(), r.stable_routine_id.as_str());
@@ -820,6 +895,8 @@ impl<'a> LiteralReach<'a> {
             by_stable,
             frames,
             tables,
+            value_frames,
+            tables_by_id,
             table_names,
             op_owner,
             flow,
@@ -867,10 +944,18 @@ impl<'a> LiteralReach<'a> {
             .map_or(&[], Vec::as_slice)
     }
 
+    fn value_reqs_at(&self, routine: &str, site: &str) -> &[ValueReq] {
+        self.value_frames
+            .get(routine)
+            .and_then(|f| f.by_site.get(site))
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// Whether `site` of `routine` cannot run under `b`.
     fn dead_at(&self, routine: &str, site: &str, b: &Bindings) -> bool {
         contradicts(self.reqs_at(routine, site), b)
             || contradicts_tables(self.table_reqs_at(routine, site), b)
+            || values::contradicts(self.value_reqs_at(routine, site), b)
             || self
                 .guards
                 .get(routine)
@@ -881,13 +966,19 @@ impl<'a> LiteralReach<'a> {
     /// The callee's bindings across a call at `site` of `caller` with `b`.
     fn bind(&self, caller: &str, site: &str, callee: &str, b: &Bindings) -> Bindings {
         let (f, t) = (self.frames.get(callee), self.tables.get(callee));
+        let vf = self.value_frames.get(callee);
         let ci = self.flow.index_of(callee);
         let rel_params = ci.and_then(|c| self.rel_params.get(&c));
         let rel_globals = ci.and_then(|c| {
             self.rel_globals
                 .get(self.flow.routine(c).object_id.as_str())
         });
-        if f.is_none() && t.is_none() && rel_params.is_none() && rel_globals.is_none() {
+        if f.is_none()
+            && t.is_none()
+            && vf.is_none()
+            && rel_params.is_none()
+            && rel_globals.is_none()
+        {
             return Bindings::default();
         }
         let Some((r, cs)) = self.by_stable.get(caller).and_then(|r| {
@@ -947,6 +1038,32 @@ impl<'a> LiteralReach<'a> {
                 out.tables.push((j, table));
             }
         }
+        // r3 E1: an integer literal or a label (read in the CALLER's scope),
+        // else the caller's own known value parameter it forwards; each in
+        // the callee parameter's domain, else unknown.
+        for (j, d) in vf.map_or(&[][..], |v| v.usable.as_slice()) {
+            let literal = cs
+                .argument_infos
+                .get(*j as usize)
+                .and_then(crate::program::body::features::ValueLabel::of_info)
+                .and_then(|l| values::resolve_label(r, &self.tables_by_id, &l))
+                .and_then(|v| values::in_domain(&v, d))
+                .map(|v| VSet::from([v]));
+            let set = literal.or_else(|| {
+                let i = forwarded(*j)?;
+                let (_, held) = b.values.iter().find(|(k, _)| *k == i)?;
+                let mut vs = held
+                    .iter()
+                    .map(|v| values::in_domain(v, d))
+                    .collect::<Option<Vec<_>>>()?;
+                vs.sort();
+                vs.dedup();
+                Some(VSet::from(vs))
+            });
+            if let Some(set) = set {
+                out.values.push((*j, set));
+            }
+        }
         // G34: what the value flow knows of the callee's relevant parameters
         // (G33's included, where it knows more), and of its instance's globals.
         if let (Some(c), Some(fi)) = (ci, self.flow.index_of(caller)) {
@@ -982,6 +1099,7 @@ impl<'a> LiteralReach<'a> {
         out.bools.sort_unstable();
         out.tables.sort();
         out.globals.sort();
+        out.values.sort();
         out
     }
 
@@ -1518,7 +1636,11 @@ impl<'a> LiteralReach<'a> {
         let mut out = HashSet::new();
         let mut dead_resources: HashMap<usize, Vec<String>> = HashMap::new();
         // A root with no usable guard anywhere has nothing to prune.
-        if self.frames.is_empty() && self.tables.is_empty() && self.guards.is_empty() {
+        if self.frames.is_empty()
+            && self.tables.is_empty()
+            && self.value_frames.is_empty()
+            && self.guards.is_empty()
+        {
             return (out, dead_resources);
         }
         let Some(reached) = self.search(root) else {

@@ -801,6 +801,7 @@ fn walk_cfg(
                 field_exit_guard: None,
                 table_exit_guard: None,
                 junction_guards: None,
+                value_fact: None,
             };
             loop_stack.push(LoopFrame::default());
             let mut body_pre = pre;
@@ -1937,6 +1938,7 @@ mod tests {
             field_exit_guard: None,
             table_exit_guard: None,
             junction_guards: None,
+            value_fact: None,
         }
     }
 

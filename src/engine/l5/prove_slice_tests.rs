@@ -760,9 +760,11 @@ const ROUTES: &str = r#"codeunit 50102 "Rt Code"
         Error('recursion sink');
     end;
 
-    procedure Loop()
+    // `Depth` is unknown, so `Looper` is entered with nothing known (r3 E1
+    // would bind a literal `3`, a state `N - 1` then leaves).
+    procedure Loop(Depth: Integer)
     begin
-        Looper(3);
+        Looper(Depth);
     end;
 
     local procedure Looper(N: Integer)

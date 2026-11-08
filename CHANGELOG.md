@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-4 E1: Integer, Option and Enum literal values)
+
+- **A literal Integer, Option or Enum argument now prunes the branches it cannot take**
+  (spec `2026-11-08-output-validation-r3.md` §1 E1, n10). The literal reach
+  (`engine::l5::literal_reach`, new submodule `literal_values.rs`) followed only
+  Boolean parameters and record tables. On DO, `DocSave` passes
+  `OutputAction::SaveAsPDF` (a member of a global `Option` variable) into `RunReport`'s
+  Integer parameter, and `RunReportID` reads it in `case OutputActionInt of
+  OutputAction::Print: … OutputAction::SaveAsPDF: …`, so `DocSave` was charged with the
+  tables and commits that only the Print, e-mail and electronic-document arms reach.
+  Now:
+  - A parameter is usable when it is by value, of type Integer, BigInteger, Option or
+    Enum, never assigned (compound assignment included), never a `for`/`foreach`
+    variable, and passed only by value to known routines or to platform methods other
+    than `Evaluate` and `Clear`. A call the resolver did not resolve makes it unusable.
+  - A call binds it from an integer literal, an option or enum label (`Enum::"X"::Y`,
+    `V::Y` on an Option- or Enum-typed parameter, local or global, `Rec.Field::Y` on an
+    Enum field), or the caller's own bound parameter. Option labels are ordinals that
+    count blank members (`Print,EMailOpen,,,SaveAsPDF`: SaveAsPDF is 4).
+  - Each route keeps its own binding; an effect is ruled out only when no route can
+    run it.
+  - `case P of` arms, the `else`, `if P = L`, `if P <> L`, `if P in [..]` and an `if …
+    then exit;` of those prune. An arm is dead only when every label in it resolved and
+    none matches. One unresolved label (a range, an expression, another enum's label)
+    keeps its arm and the `else` live. A `case` with no `else` guards nothing after it.
+  - Enum values compare by (enum name, value name): the syntax tree carries no enum
+    value numbers. So an Enum label against an Integer or Option parameter is a
+    conversion this does not model, and the label stays unresolved.
+  The statement tree carries the new in-memory fact `PCFNNode::value_fact` (never
+  serialized). No output schema changes.
+- **Explain no longer lists an event as an extension point when its listed paths were
+  dropped.** An event row whose every listed path cannot run under the literal
+  arguments keeps no path, and explain read that empty path as "raised by the routine
+  itself". With E1 this added 60 false `extension point … 0 subscriber(s)` lines to the
+  CDO `IssueReminder` explain. A row whose paths were all dropped is no longer one.
+
 ### Fixed (round-3 recheck: impact's tests line)
 
 - **The tests left out of the pick are not "not in this filter".** Impact's `tests:`
