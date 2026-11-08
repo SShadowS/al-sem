@@ -14,6 +14,6 @@ more: --all lists every witness, no fold; --format json for every row
   locks: none observed
   keys: primary key "No."; other keys: ("SystemModifiedAt")
   key-relevant (not exhaustive): Get 1 (primary key), SetCurrentKey 1, SetRange/SetFilter on key fields 1; not searched: key and ordering uses in declarations (page SourceTableView, report DataItemTableView)
-  reads: 2 sites — FindFirst 2
+  other reads: 2 sites — FindFirst 2
   other operations: 1 site — SetFilter 1
   the 12 routines that touch it transitively: --all lists them

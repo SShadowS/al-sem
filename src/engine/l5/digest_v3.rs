@@ -503,6 +503,18 @@ fn effect_v3(
         }
         .into(),
     );
+    // r3 E2 (additive): a literal-dead row's loaded-subscriber assumption.
+    if e.literal_unreachable {
+        let assumes: Vec<String> = e
+            .flow_notes
+            .iter()
+            .flat_map(|n| &n.assumed)
+            .map(|k| k.short())
+            .collect();
+        if !assumes.is_empty() {
+            m.insert("assumes".into(), assumes.into());
+        }
+    }
     let write = matches!(ty, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE");
     if write {
         let (class, reason) = class_json(classify_detail(&e.detail));

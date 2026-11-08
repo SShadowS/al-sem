@@ -18,7 +18,7 @@ more: --all lists every witness, no fold; --format json for every row
     [Get] at ws:src/QTTouches.al:66 in Codeunit "QT Touches"::Mixed
     [SetCurrentKey] at ws:src/QTTouches.al:102 in Codeunit "QT Touches"::Keyed
     [SetRange] at ws:src/QTTouches.al:103 in Codeunit "QT Touches"::Keyed
-  reads: 2 sites — FindFirst 2
+  other reads: 2 sites — FindFirst 2
     [FindFirst] at ws:src/QTTouches.al:45 in Codeunit "QT Touches"::TempOnly
     [FindFirst] at ws:src/QTTouches.al:105 in Codeunit "QT Touches"::Keyed
   other operations: 1 site — SetFilter 1

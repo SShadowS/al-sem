@@ -7,6 +7,242 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
+
+- **A value computed inside a routine now prunes the branches it cannot take**
+  (spec `2026-11-08-output-validation-r3.md` §1 E2, n01). On DO, `CreateAndSendMail`
+  takes `UseSMTP` by value, may set it (`if UseHandleDoc then UseSMTP := true`), passes
+  it `var` to the publisher `OnBeforeCreateAndSendMailV2` and derives `IsEmailPreview :=
+  not UseSMTP`; the COMMIT in `OpenDOMail` runs only under `if IsEmailPreview`. E1 binds
+  only parameters that never change, so `prove … may-commit` on the Print/Email All
+  action led with that COMMIT, a route the action's arguments (`UseSMTP = true`) cannot
+  run. The literal reach has a new flow pass (`engine::l5::literal_flow`):
+  - Tracked: locals (starting at their type's default: `false`, `0`, the first Option
+    member; an Enum local starts unknown), by-value parameters (from their bound entry
+    value), and `var` parameters from their first assignment. Two `var` formals can name
+    one actual and a `var` formal can name a global, so a tracked `var` formal becomes
+    unknown at a write to another `var` formal, to a global of a compatible type (or a
+    name that may be one, or a member), and at any call or database operation. Globals
+    are never tracked. A routine with a `with` statement is not tracked.
+  - Each statement is evaluated with its incoming state, then its writes apply; a
+    condition or assigned value is read after the calls inside it. Values: literals,
+    labels (as E1 reads them), other tracked variables, `not`/`and`/`or`, `=`/`<>`/`in`.
+    A variable passed to a `var` parameter, to `Evaluate`, `Clear` (and `Get`, `Read`,
+    `StartSession`, `SelectToken` and kin), or to a call not resolved is written.
+    Feasible branches join; a variable written anywhere in a loop (its counter included)
+    is unknown at every read in the loop and after it.
+  - A `var` pass to an event publisher keeps the value only when every loaded subscriber
+    of the event in this universe is proven unable to change the matching parameter (it
+    does not assign it, pass it on `var`, to a call not resolved, or to
+    `Evaluate`/`Clear`). A subscriber whose body is not available, a subscription not
+    bound to a publisher object, or a model subscriber the event graph could not read
+    prevents keeping it.
+  - E1's last binding rule is wired: a caller's tracked local (or a parameter it
+    changed) binds a callee's Integer, Option, Enum or Boolean parameter.
+  On CDO the n01 answer now leads with `CDOLegacyeDocDispatcher.Codeunit.al:229`, a
+  COMMIT the action can reach, and says which assumption ruled the `:123` route out.
+  The statement tree carries the new in-memory fact `PCFNNode::flow` (never serialized).
+- **Answers state the loaded-subscriber assumption where it decides a route.** A row
+  ruled out only because a publisher's loaded subscribers keep a value counts in
+  prove's strict world, so a `no` that rests on it is labelled `loaded-subscribers`;
+  a `yes` whose evidence it changed says so in the `assumptions:` header (`a route is
+  ruled out because Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded
+  subscriber, so UseSMTP keeps its value`). Explain's commits line adds `assuming …` to
+  its literal-dead count.
+- **A witness's condition lists the guards on its route.** Prove's `condition:` line
+  names each `if`, `case` arm and earlier `if … then exit;` on the printed route, with
+  the value the route needs, `evaluated` when the flow knows the guard's value on that
+  route and `not evaluated` otherwise (never a class label presented as a guard); the
+  headline says how many guards there are and how many were evaluated. A long route
+  names its evaluated guards and the innermost others (4 at most) with the full count;
+  a route with no guard keeps the effect's class (`in a loop`). A COMMIT row whose
+  listed paths all cannot run now gets a searched witness, as a write row did (a COMMIT
+  in the root itself now prints `path: <root> (in the routine itself)`).
+
+**Consumer notice (additive JSON, no schema bump):** prove evidence rows gain
+`routeGuards` (`routine`, `line`, `condition`, `kind` `if`/`case-arm`/`case-else`,
+`mustBe` or `arm`, `evaluated`); prove's `payload.result` gains
+`subscriberAssumptions` (`publisher`, `parameter`, `subscribers`, `statement`); explain
+rows gain `literalAssumes`, explain's `commits.literalDead` gains `assumes`, and digest
+3.x effect rows gain `assumes` on a literal-dead row.
+
+### Fixed (round-4 E1: Integer, Option and Enum literal values)
+
+- **A literal Integer, Option or Enum argument now prunes the branches it cannot take**
+  (spec `2026-11-08-output-validation-r3.md` §1 E1, n10). The literal reach
+  (`engine::l5::literal_reach`, new submodule `literal_values.rs`) followed only
+  Boolean parameters and record tables. On DO, `DocSave` passes
+  `OutputAction::SaveAsPDF` (a member of a global `Option` variable) into `RunReport`'s
+  Integer parameter, and `RunReportID` reads it in `case OutputActionInt of
+  OutputAction::Print: … OutputAction::SaveAsPDF: …`, so `DocSave` was charged with the
+  tables and commits that only the Print, e-mail and electronic-document arms reach.
+  Now:
+  - A parameter is usable when it is by value, of type Integer, BigInteger, Option or
+    Enum, never assigned (compound assignment included), never a `for`/`foreach`
+    variable, and passed only by value to known routines or to platform methods other
+    than `Evaluate` and `Clear`. A call the resolver did not resolve makes it unusable.
+  - A call binds it from an integer literal, an option or enum label (`Enum::"X"::Y`,
+    `V::Y` on an Option- or Enum-typed parameter, local or global, `Rec.Field::Y` on an
+    Enum field), or the caller's own bound parameter. Option labels are ordinals that
+    count blank members (`Print,EMailOpen,,,SaveAsPDF`: SaveAsPDF is 4).
+  - Each route keeps its own binding; an effect is ruled out only when no route can
+    run it.
+  - `case P of` arms, the `else`, `if P = L`, `if P <> L`, `if P in [..]` and an `if …
+    then exit;` of those prune. An arm is dead only when every label in it resolved and
+    none matches. One unresolved label (a range, an expression, another enum's label)
+    keeps its arm and the `else` live. A `case` with no `else` guards nothing after it.
+  - Enum values compare by (enum name, value name): the syntax tree carries no enum
+    value numbers. So an Enum label against an Integer or Option parameter is a
+    conversion this does not model, and the label stays unresolved.
+  The statement tree carries the new in-memory fact `PCFNNode::value_fact` (never
+  serialized). No output schema changes.
+- **Explain no longer lists an event as an extension point when its listed paths were
+  dropped.** An event row whose every listed path cannot run under the literal
+  arguments keeps no path, and explain read that empty path as "raised by the routine
+  itself". With E1 this added 60 false `extension point … 0 subscriber(s)` lines to the
+  CDO `IssueReminder` explain. A row whose paths were all dropped is no longer one.
+
+### Changed (output validation r3, milestone X3: answers lead with what decides them)
+
+Spec `docs/superpowers/specs/2026-11-08-output-validation-r3.md` §3 (H1-H7) and the §5.1 and
+§5.2 items that are not about the tests tool.
+
+- **Impact folds the UI-navigation census (H1).** `entries by kind` and `by context` under
+  `reached by UI navigation` print only with `detail: true`, for one routine and for each
+  routine of several alike (diff mode with `detail: true` used to print none); the population
+  line keeps its count, share and nearest entry. The code census is unchanged.
+- **Prove's `yes` leads with what decides it (H2).** No `top callees not resolved` / `top
+  interface dispatch` lists on a `yes` (the header keeps `analysis partial` and its counts).
+  Witnesses rank workspace first, then the least restrictive condition (unconditional before
+  conditional, a condition not resolved last), then the shortest path; a witness the literal
+  analysis rules out is never one. A group row names its terminal operation and site before
+  the boundary (`Insert (implicit error) at dep:…:514, beyond …, entered at …`, `[COMMIT] at
+  dep:…, beyond …`), folded rows included. The IsHandled class prints `condition: not
+  evaluated (IsHandled pattern)` (in parentheses `IsHandled pattern, not evaluated`), never `guarded-by-IsHandled` (now a replaced word).
+- **One negative form for effect questions (H3).** An existing-effects `no` reads `no — no
+  <effect> site in the analyzed cone (every candidate decided; static candidates, not an
+  observed trace)` (`COMMIT site`, `UI site`, `error site`, `write site on T`, `site raising
+  E`; a filtered question names its filter, c27). The must question and the callers' context
+  questions keep their own subject; an answer with blockers stays `unknown`.
+- **Same-object callees read `this object: Name` (H4)** in explain and impact (was `::Name`).
+  A pending-write witness inside a call names the write's own site (found in the callee's
+  cone), the call it is inside with that call's location, and the call to the routine with
+  its own (c06: `Modify on … at …CDORecipientMgt.Codeunit.al:86, inside the call
+  DocOutput.GetRecipientsDescription at …:264, before the call at …:276`).
+- **A small digest lookup failure comes back inline (H5).** In the MCP server, a digest whose
+  outcome is `ambiguous` or `not-found` and whose whole stdout fits the inline cap is answered
+  inline (the CLI's bytes, in the requested format); an `out` still writes a file. The human
+  header says `answer: ambiguous — names 2 routines` / `answer: not found` and drops `more:
+  … for every effect row`.
+- **Lock-edit answers lead with the limit (H7).** With `callersContext`, the `answer:` line
+  ends `caller-held locks and their order: not analyzed`, and the callers' block's first line
+  is `locks held by callers: not analyzed (no lock facts)`. Above that block the header names
+  what `analysis complete` qualifies: `analysis complete (the routine's own cone)` (§5.2, c06).
+- **Shorter callers' context cards (A P5).** Above a callers' context block the card's
+  `callers:` line and caller rules keep their counts and the rule; names fold behind
+  `detail: true`; `through dependency code` names one witness (the JSON keeps three).
+- **`starts by:` (A P6, m07).** An explain card of a workspace routine names its first two
+  top-level statements, read from its statement tree and its own file, labelled `a start, not
+  a summary` (not with `showSource`, whose excerpt shows the first statement).
+- **Touches offer the complete write-only call (A P3)** when the record writes are folded:
+  `every record-write site (16): alsem_query_touches {"table": "…", "opFamily": "write"}`.
+- **Vocabulary (§5.2).** A field's write is a `field assignment` in touches field mode; the
+  table-mode read family is `other reads` (`Get` counts under key-relevant); a digest summary
+  row's commits say `none observed` / `no (every candidate decided)` (never `no observed`).
+- **Typo recovery (§5.2, n06, m08).** An explain or prove `not found` ends with `corrected
+  call (the nearest name): …`, the complete call for the first nearest name.
+- **query effects envelope summary (A P1).** The MCP summary and its index row carry
+  `analysis`, `reasons` and `scopes` (`operations`: one dependency routine deep; `deepWrites`:
+  the whole cone), and `beyondWrites.dependencyCalls` (was `entryPoints`).
+- **digest index (A P10, §5.2, F top-9).** The tests hand-off is once per index (the index
+  file's `testsNext`, `testsNextFor`), not on every row; an index row's `answer` is its
+  overall effect (every family) with the writes-only line as `writesAnswer`; `effectsByType`
+  leaves the index rows (`effectCounts` is the same map); the envelope summary states the
+  test status most rows share once (`testStatus`) and a listed row only where it differs;
+  index rows' `summary` names `dependencyCalls`.
+
+**Consumer notice (query 5.0.0 and digest 5.0.0, both unreleased; bc-dev-mcp, ConTinAI):**
+- `dependencyClosure` is renamed `dependencyFingerprint` (H6). Its value is unchanged:
+  `apps-v1:` and the first 16 hex digits of the blake3 hash of the dependency apps'
+  `appId@version` (appId lower case), sorted and joined with `\n`. It identifies an app set;
+  it is not a retrievable manifest and not proof of unchanged package contents.
+- query 5.0.0: `summary.scope` reads `operations-one-routine-deep;
+  writes-beyond-dependency-calls-full-cone`; an answer with no operation keeps `summary` as
+  `{operations: 0, scope}` (its `result.scope` with families, blockers and `covers` whole).
+- digest 5.0.0: an effect's `detail.tempState` uses the §8.1 words (`temporary`, `not
+  temporary`, `caller-dependent (parameter N)`, `caller-dependent (Rec)`, `not resolved`);
+  `entries[].tableAnswers` lists two entries or more carry alike are kept once in
+  `sharedTableAnswers` (`ta:<n>`) and those entries name the key.
+- `--schema 4` and the 5→4 adapters rebuild 4.0.0 exactly (rebuild tests cover each change).
+
+### Changed (output validation r3, X4: tests schema 3 and the round-3 leftovers)
+
+Spec `docs/superpowers/specs/2026-11-08-output-validation-r3.md` §2 (T1), §4 (L1–L4),
+§5.1 (F top-9's c28 headline) and §5.2 (selectors in tests).
+
+- **Consumer notice — `al-sem.tests` version 3 is the default JSON** (bc-dev-mcp reads
+  it). `--schema 2` / MCP `schema: 2` keeps the version 2 document for one release
+  (`schema: 1` the version 1 one); `render::v2_of_v3` is the exact rebuild. What
+  moves:
+  - `changed[]` entries carry `key` (`"c:1"`, `"c:2"`, … in `changed[]` order; unique
+    within one document, not stable across calls). `changed[].display` is the routine's
+    selector; an entry whose display is not one (a display another routine shares, a
+    dependency routine) also carries `selector`. `changed[].nearest.candidate` is new
+    (below).
+  - A `runFirst` row's `reaches` is one object per reached changed routine, in
+    `changed[]` order: `{"changed": "c:3", "hops": 8, "relation": "code"}`, plus
+    `"candidate": "runtime-editable"` when the only path is a candidate page path. Each
+    object prints on one line. `reachesHops` and `reachesByNavigationOnly` are gone
+    (version 2 rebuilds them: the ids in the same order, the hops beside them, the ids
+    whose relation is `UI navigation`, absent when none). Each row carries `selector`
+    (the test's own display); the envelope summary's test and routine rows do too.
+  - `result.selection` carries `reachLimit` and, when some changed routine was past
+    it, `notExpanded` (their keys).
+  - The relation of a reach changed meaning in every version: `code` when **any** path
+    from the test to that changed routine is code (its hops are that path's), `UI
+    navigation` only when every path opens a page. Before, it was the shortest path's
+    relation, so a test with a short UI path and a longer code path counted as
+    navigation-only (schema 2's `reachesByNavigationOnly` now means what its name says).
+- **The reach walk is complete for up to 128 changed routines, and says so past it**
+  (L4). Each of the first 128 changed routines gets a walk of its own (was 32); the
+  rest are named as not expanded (`notExpanded`, a human line `reach per changed
+  routine: limit 128 routines; not expanded: …`, and the header's `limits:`), their
+  tests counted only where they are the nearest changed routine, and their status still
+  comes from a walk of their own, so "not expanded" never reads as "no modeled path".
+  Measured on CDO (warm, `release-fast`, the select phase alone, median of 3): before,
+  32 roots took 2,116 ms, 64 4,466 ms and 128 7,275 ms (about 65 ms per root walk, and
+  each dependency entry's forward cone measured again for every root); now the per-root
+  walks run on up to 8 threads and each cone is measured once per call: 32 roots 830
+  ms, 64 568 ms, 128 1,083 ms (a shared, loaded machine; noisy). `ALSEM_SELECT_TIMING=1`
+  prints the select phase's own time to stderr.
+- **c21 on schema 3: 40,297 bytes** (was 52,390), selectors included (the spec's 38.8 KB
+  target was measured without them; selectors win). It is under the 40 KiB inline cap,
+  so it comes back inline.
+- **Candidate page paths are marked** (L3). A test whose every UI path to a changed
+  routine takes a page lifecycle into a record trigger the page declares
+  non-editable while code may make it editable at runtime keeps relation `UI
+  navigation` and carries `candidate: "runtime-editable"` (on the reach and on
+  `changed[].nearest`); an established route wins when one exists, and a nearest test
+  prefers it. Human text: `UI navigation (candidate)`. `explain`'s potential UI
+  surfaces mark such pages `(may be read-only at runtime)` and list them in JSON
+  (`mayBeReadOnlyAtRuntime`, additive). Impact already never promoted the edge (it is
+  `overRule`).
+- **c28's headline counts the UI-navigation codeunits** (F top-9): `337 more by UI
+  navigation only in 36 codeunits (…)` instead of 36 codeunit numbers; `groups` and
+  `runFirst` in the JSON still list them.
+
+### Fixed (output validation r3, X4: table-extension keys and `runs:`)
+
+- **A table extension's keys attach to the table it extends** (L1). The model kept them
+  on the extension's own stub only, so `query touches` table mode left them out of the
+  `keys:` line and a field's `declared keys` missed a key an extension adds. They now
+  follow the table's own keys, named by the extension (`("No.", "Ext Code"; from
+  tableextension "Cust Ext")`, JSON `declaredBy`), resolved against the base table's
+  fields (a key over a base field and an extension field keeps both); the base's first
+  key stays the primary key.
+- **`runs:` prints one set of parentheses** (L2): `Codeunit "Base Poster" (70100), Run
+  at :15`, not `(70100) (Run at :15)`.
+
 ### Fixed (round-3 recheck: impact's tests line)
 
 - **The tests left out of the pick are not "not in this filter".** Impact's `tests:`

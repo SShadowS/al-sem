@@ -38,6 +38,11 @@
 //! Database::"T" then exit;` makes every later site of its routine require
 //! `R` to have held `T`.
 //!
+//! r3 E1 adds Integer, Option and Enum values ([`values`]): a usable value
+//! parameter is bound from an integer literal, an option or enum label, or
+//! the caller's own bound parameter, and prunes the `case` arms (and `else`)
+//! and `if =` / `<>` / `in` branches it cannot take.
+//!
 //! An operation is UNREACHABLE when its routine is reached with guards ignored
 //! but no reached state of that routine satisfies the operation's own
 //! requirements. An effect is unreachable only when every one of its origin
@@ -62,6 +67,88 @@ use std::sync::Arc;
 
 #[path = "literal_routes.rs"]
 pub mod routes;
+
+#[path = "literal_values.rs"]
+mod values;
+
+#[path = "literal_flow.rs"]
+mod lflow;
+
+#[cfg(test)]
+#[path = "literal_flow_tests.rs"]
+mod lflow_tests;
+
+pub(crate) use lflow::{GuardKind, RouteGuard};
+use values::{VSet, ValueFrame, ValueReq};
+
+/// r3 E2: the most cached flow evaluations kept at once; past it the cache
+/// starts over (an evaluation depends only on its key, so a rebuilt one is
+/// the same).
+const FLOW_CACHE_MAX: usize = 200_000;
+
+/// r3 E2: a publisher parameter whose loaded subscribers are proven unable to
+/// change it ([`lflow`]'s keep verdict): what an answer that relies on it
+/// states.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeepInfo {
+    /// The publisher, `Codeunit "X"::OnSomething`.
+    pub publisher: String,
+    /// The parameter's name as declared.
+    pub parameter: String,
+    /// The loaded subscribers considered (`Codeunit "Y"::Handler`), sorted;
+    /// empty when none is loaded.
+    pub subscribers: Vec<String>,
+}
+
+impl KeepInfo {
+    /// The compact form a digest row carries: `<publisher> keeps <param>
+    /// (no loaded subscriber)` or `(subscribers: …)`.
+    pub(crate) fn short(&self) -> String {
+        if self.subscribers.is_empty() {
+            format!(
+                "{} keeps {} (no loaded subscriber)",
+                self.publisher, self.parameter
+            )
+        } else {
+            format!(
+                "{} keeps {} (subscribers: {})",
+                self.publisher,
+                self.parameter,
+                self.subscribers.join(", ")
+            )
+        }
+    }
+
+    /// The plain-English statement of the assumption.
+    pub(crate) fn statement(&self) -> String {
+        if self.subscribers.is_empty() {
+            format!(
+                "{} has no loaded subscriber, so {} keeps its value",
+                self.publisher, self.parameter
+            )
+        } else {
+            format!(
+                "the loaded subscribers of {} ({}) do not change {}",
+                self.publisher,
+                self.subscribers.join(", "),
+                self.parameter
+            )
+        }
+    }
+}
+
+/// r3 E2: what the literal reach adds to one effect row for a reader: the
+/// loaded-subscriber assumptions its removal rests on, and its witness
+/// route's guards.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct FlowNotes {
+    /// The row is unreachable only because these publishers' loaded
+    /// subscribers keep a value (empty: not by an assumption).
+    pub assumed: Vec<KeepInfo>,
+    /// The guards on the row's listed witness route, outermost first
+    /// (`None`: no route was replayed).
+    pub guards: Option<Vec<RouteGuard>>,
+}
 
 /// The most (routine, bindings) states one root's search visits.
 pub(crate) const STATE_CAP: usize = 400_000;
@@ -276,12 +363,48 @@ type AtomReq = (Atoms, Arc<[String]>);
 /// Known parameter values, each list sorted by parameter index: Booleans, and
 /// the folded names of the tables a record argument may hold (`""`: none).
 /// G34: and the tables the routine's own instance's globals may hold.
+/// r3 E1: and the Integer, Option and Enum values a parameter may hold
+/// ([`values`]); a parameter absent here holds an unknown value.
+/// r3 E2: and the entry values of the parameters the routine's flow program
+/// reads that neither list above binds ([`lflow`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct Bindings {
     bools: Vec<(u32, bool)>,
     tables: Vec<(u32, TSet)>,
     globals: Vec<(Arc<str>, TSet)>,
+    values: Vec<(u32, VSet)>,
+    flow: Vec<(u32, VSet)>,
 }
+
+impl Bindings {
+    /// r3 E2: parameter `i`'s known entry value, from whichever list binds it.
+    fn entry_value(&self, i: u32) -> Option<VSet> {
+        if let Some((_, v)) = self.flow.iter().find(|(k, _)| *k == i) {
+            return Some(Arc::clone(v));
+        }
+        if let Some(&(_, b)) = self.bools.iter().find(|(k, _)| *k == i) {
+            return Some(Arc::from([values::Val::Bool(b)]));
+        }
+        self.values
+            .iter()
+            .find(|(k, _)| *k == i)
+            .map(|(_, v)| Arc::clone(v))
+    }
+}
+
+/// r3 E2: the flow evaluation cache key: (the program, by address: the
+/// programs never move once built; entry values; whether publisher keeps are
+/// followed). No borrowed id, so the reach stays covariant in its lifetime.
+type FlowKey = (usize, Vec<(u32, VSet)>, bool);
+
+/// [`LiteralReach::unreachable_effects_noted`]'s result: the dead effects,
+/// per group its dead resources, and per effect dead only by an assumption
+/// the keep verdicts it rests on.
+pub(crate) type NotedUnreachable = (
+    HashSet<usize>,
+    HashMap<usize, Vec<String>>,
+    HashMap<usize, Vec<KeepInfo>>,
+);
 
 fn contradicts(reqs: &[Req], b: &Bindings) -> bool {
     reqs.iter()
@@ -538,6 +661,318 @@ fn walk_tables(
     }
 }
 
+/// r3 E1: whether call site `cs_id` of `r` passes argument `arg` by value: every
+/// routine it reaches takes that parameter by value, or, reaching none, the
+/// resolver classified it as a platform method other than `Evaluate` and
+/// `Clear` (which write their argument). A call the resolver did not resolve
+/// may write it.
+fn value_passes_by_value(
+    r: &ModelRoutine,
+    cs_id: &str,
+    arg: u32,
+    callees: &HashMap<&str, Vec<&str>>,
+    builtin_sites: &HashSet<&str>,
+    by_id: &HashMap<&str, &ModelRoutine>,
+) -> bool {
+    use crate::program::body::features::PCallee;
+    match callees.get(cs_id) {
+        Some(targets) if !targets.is_empty() => targets.iter().all(|to| {
+            by_id
+                .get(to)
+                .and_then(|callee| callee.parameters.iter().find(|p| p.index == arg))
+                .is_some_and(|p| !p.is_var)
+        }),
+        _ => {
+            if !builtin_sites.contains(cs_id) {
+                return false;
+            }
+            let name = r
+                .call_sites
+                .iter()
+                .find(|c| c.id == cs_id)
+                .map(|c| match &c.callee {
+                    PCallee::Bare { name } => name.to_ascii_lowercase(),
+                    PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            !matches!(name.as_str(), "evaluate" | "clear")
+        }
+    }
+}
+
+/// r3 E2: the flow programs ([`lflow`]) of the model's routines, the
+/// parameters each binds through [`Bindings::flow`] (with their domains), and
+/// the publisher keep verdicts the programs use.
+#[allow(clippy::type_complexity)]
+fn build_flow<'a>(
+    model: &'a Model,
+    by_id: &HashMap<&str, &'a ModelRoutine>,
+    by_stable: &HashMap<&'a str, &'a ModelRoutine>,
+    callees: &HashMap<&str, Vec<&str>>,
+    builtin_sites: &HashSet<&str>,
+    frames: &HashMap<&'a str, FrameGuards>,
+    value_frames: &HashMap<&'a str, ValueFrame>,
+) -> (
+    HashMap<&'a str, lflow::FlowProgram>,
+    HashMap<&'a str, Vec<(u32, lflow::FDom)>>,
+    Vec<KeepInfo>,
+) {
+    use crate::program::body::features::PCallee;
+    use lflow::ArgWrite;
+    let objects: HashMap<&str, &crate::program::model::workspace::ModelObject> = model
+        .workspace
+        .objects
+        .iter()
+        .map(|o| (o.id.as_str(), o))
+        .collect();
+    let display = |r: &ModelRoutine| -> String {
+        match objects.get(r.object_id.as_str()) {
+            Some(o) if o.name.chars().all(|c| c.is_alphanumeric() || c == '_') => {
+                format!("{} {}::{}", o.object_type, o.name, r.name)
+            }
+            Some(o) => format!("{} \"{}\"::{}", o.object_type, o.name, r.name),
+            None => r.name.clone(),
+        }
+    };
+    // The universe's subscriptions, by event id; the names of events some
+    // subscription could not bind to a publisher object; and whether any model
+    // subscriber's subscriptions are missing from the graph.
+    let census = &model.events.census;
+    let census_uncertain =
+        census.unmapped_subscribers > 0 || census.subscribers_without_subscription > 0;
+    let mut subs: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut unbound: HashSet<String> = HashSet::new();
+    for e in &model.events.graph.edges {
+        if e.event_id.starts_with("unknown/")
+            && let Some((_, n)) = e.event_id.rsplit_once("/event/")
+        {
+            unbound.insert(n.to_string());
+        }
+        subs.entry(e.event_id.as_str())
+            .or_default()
+            .push(e.subscriber_routine_id.as_str());
+    }
+    let mut keep_info: Vec<KeepInfo> = Vec::new();
+    let mut verdicts: HashMap<(&str, u32), Option<u32>> = HashMap::new();
+    let mut progs: HashMap<&'a str, lflow::FlowProgram> = HashMap::new();
+    for r in &model.workspace.routines {
+        let stable = r.stable_routine_id.as_str();
+        if !by_stable.get(stable).is_some_and(|x| std::ptr::eq(*x, r)) {
+            continue;
+        }
+        let mut writes_of = |cs: &str, j: u32| -> Option<ArgWrite> {
+            let targets = callees.get(cs).map_or(&[][..], Vec::as_slice);
+            if targets.is_empty() {
+                if !builtin_sites.contains(cs) {
+                    return Some(ArgWrite::Havoc);
+                }
+                let name = r
+                    .call_sites
+                    .iter()
+                    .find(|c| c.id == cs)
+                    .map(|c| match &c.callee {
+                        PCallee::Bare { name } => name.to_ascii_lowercase(),
+                        PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                        _ => String::new(),
+                    })
+                    .unwrap_or_default();
+                return lflow::WRITING_BUILTINS
+                    .contains(&name.as_str())
+                    .then_some(ArgWrite::Havoc);
+            }
+            let mut keep: Option<u32> = None;
+            let mut all_keep = true;
+            let mut any_var = false;
+            for to in targets {
+                let Some(c) = by_id.get(to).copied() else {
+                    return Some(ArgWrite::Havoc);
+                };
+                let Some(p) = c.parameters.iter().find(|p| p.index == j) else {
+                    return Some(ArgWrite::Havoc);
+                };
+                if !p.is_var {
+                    all_keep = false;
+                    continue;
+                }
+                any_var = true;
+                let v = *verdicts.entry((c.id.as_str(), j)).or_insert_with(|| {
+                    keep_verdict(
+                        c,
+                        j,
+                        census_uncertain,
+                        &subs,
+                        &unbound,
+                        by_id,
+                        callees,
+                        builtin_sites,
+                    )
+                    .map(|mut k| {
+                        k.publisher = display(c);
+                        k.subscribers = subs
+                            .get(
+                                crate::program::model::events::encode_event_id(
+                                    &c.object_id,
+                                    &c.name,
+                                )
+                                .as_str(),
+                            )
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|s| by_id.get(s).map(|s| display(s)))
+                            .collect();
+                        k.subscribers.sort();
+                        k.subscribers.dedup();
+                        keep_info.push(k);
+                        (keep_info.len() - 1) as u32
+                    })
+                });
+                match (v, keep) {
+                    (Some(k), None) => keep = Some(k),
+                    (Some(k), Some(was)) if k == was => {}
+                    _ => all_keep = false,
+                }
+            }
+            if !any_var {
+                return None;
+            }
+            match (all_keep, keep) {
+                (true, Some(k)) => Some(ArgWrite::Keep(k)),
+                _ => Some(ArgWrite::Havoc),
+            }
+        };
+        if let Some(p) = lflow::FlowProgram::build(r, &mut writes_of) {
+            progs.insert(stable, p);
+        }
+    }
+    // Relevance: the parameters whose entry value can decide a condition of
+    // the routine, or is passed to a parameter a callee needs.
+    let mask_of = |usable: &mut dyn Iterator<Item = u32>| {
+        usable.filter(|&i| i < 64).fold(0u64, |m, i| m | (1 << i))
+    };
+    let fixed = |c: &str| -> u64 {
+        mask_of(
+            &mut frames
+                .get(c)
+                .into_iter()
+                .flat_map(|f| f.usable.iter().copied()),
+        ) | mask_of(
+            &mut value_frames
+                .get(c)
+                .into_iter()
+                .flat_map(|f| f.usable.iter().map(|(i, _)| *i)),
+        )
+    };
+    let stable_of = |to: &str| by_id.get(to).map(|c| c.stable_routine_id.as_str());
+    let mut key: HashMap<&str, u64> = progs.iter().map(|(k, p)| (*k, p.guard_mask)).collect();
+    loop {
+        let mut changed = false;
+        for (k, p) in &progs {
+            let mut m = key[k];
+            for (cs, j, am) in &p.arg_masks {
+                if *j >= 64 || m & am == *am {
+                    continue;
+                }
+                let needed = callees
+                    .get(cs.as_str())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|to| stable_of(to))
+                    .any(|c| (key.get(c).copied().unwrap_or(0) | fixed(c)) & (1 << j) != 0);
+                if needed {
+                    m |= am;
+                }
+            }
+            if m != key[k] {
+                key.insert(k, m);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let needs = |c: &str| key.get(c).copied().unwrap_or(0) | fixed(c);
+    // A program is kept when a condition reads a tracked variable, or a call
+    // passes a value the flow may know to a parameter its callee needs.
+    let useful: HashSet<&str> = progs
+        .iter()
+        .filter(|(_, p)| {
+            p.has_guard
+                || p.known_args.iter().any(|(cs, j)| {
+                    *j < 64
+                        && callees
+                            .get(cs.as_str())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|to| stable_of(to))
+                            .any(|c| needs(c) & (1 << j) != 0)
+                })
+        })
+        .map(|(k, _)| *k)
+        .collect();
+    progs.retain(|k, _| useful.contains(k));
+    let mut bind = HashMap::new();
+    for (k, p) in progs.iter_mut() {
+        let m = key.get(k).copied().unwrap_or(0);
+        p.key_params = (0..64u32)
+            .filter(|&i| m & (1 << i) != 0 && p.tracks_param(i))
+            .collect();
+        let f = fixed(k);
+        let list: Vec<(u32, lflow::FDom)> = p
+            .key_params
+            .iter()
+            .filter(|&&i| f & (1 << i) == 0)
+            .filter_map(|&i| p.param_dom(i).map(|d| (i, d)))
+            .collect();
+        if !list.is_empty() {
+            bind.insert(*k, list);
+        }
+    }
+    (progs, bind, keep_info)
+}
+
+/// r3 E2: whether every loaded subscriber of publisher `c` is proven unable to
+/// change its parameter `j` ([`lflow`] module doc); the verdict's statement
+/// (publisher and subscribers are filled in by the caller).
+#[allow(clippy::too_many_arguments)]
+fn keep_verdict(
+    c: &ModelRoutine,
+    j: u32,
+    census_uncertain: bool,
+    subs: &HashMap<&str, Vec<&str>>,
+    unbound: &HashSet<String>,
+    by_id: &HashMap<&str, &ModelRoutine>,
+    callees: &HashMap<&str, Vec<&str>>,
+    builtin_sites: &HashSet<&str>,
+) -> Option<KeepInfo> {
+    if c.kind != "event-publisher" || census_uncertain {
+        return None;
+    }
+    let p = c.parameters.iter().find(|p| p.index == j)?;
+    let name = values::fold(&p.name);
+    if unbound.contains(&c.name.to_lowercase()) {
+        return None;
+    }
+    let id = crate::program::model::events::encode_event_id(&c.object_id, &c.name);
+    for sid in subs.get(id.as_str()).into_iter().flatten() {
+        let s = by_id.get(sid)?;
+        if !s.body_available || s.statement_tree.is_none() {
+            return None;
+        }
+        let passes =
+            |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
+        if lflow::subscriber_changes(s, &name, &passes) {
+            return None;
+        }
+    }
+    Some(KeepInfo {
+        publisher: String::new(),
+        parameter: p.name.trim().trim_matches('"').to_string(),
+        subscribers: Vec::new(),
+    })
+}
+
 /// The edge's (from, to, site, binds-arguments) view.
 fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<EdgeSite<'_>>, bool)> {
     fn cs(s: &str) -> Option<EdgeSite<'_>> {
@@ -709,6 +1144,18 @@ pub(crate) struct LiteralReach<'a> {
     by_stable: HashMap<&'a str, &'a ModelRoutine>,
     frames: HashMap<&'a str, FrameGuards>,
     tables: HashMap<&'a str, TableFrame>,
+    /// r3 E1: per routine (stable id) its value frame ([`values`]).
+    value_frames: HashMap<&'a str, ValueFrame>,
+    /// r3 E2: per routine (stable id) its flow program ([`lflow`]), the
+    /// parameters a call binds through [`Bindings::flow`], the keep verdicts
+    /// the programs name, and the evaluations made so far.
+    flow_progs: HashMap<&'a str, lflow::FlowProgram>,
+    flow_bind: HashMap<&'a str, Vec<(u32, lflow::FDom)>>,
+    keep_info: Vec<KeepInfo>,
+    flow_cache: std::sync::Mutex<HashMap<FlowKey, Arc<lflow::FlowEval>>>,
+    /// Model table id -> the table (a real one over an extension stub), for
+    /// the labels of a record field ([`values::resolve_label`]).
+    tables_by_id: HashMap<&'a str, &'a crate::program::model::workspace::ModelTable>,
     /// Model table id -> its logical name, folded.
     table_names: HashMap<&'a str, Arc<str>>,
     /// Operation id → the stable id of the routine it sits in.
@@ -740,13 +1187,21 @@ impl<'a> LiteralReach<'a> {
         let by_id: HashMap<&str, &ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
         let mut callees: HashMap<&str, Vec<&str>> = HashMap::new();
+        // r3 E1: the call sites the resolver classified as platform methods.
+        let mut builtin_sites: HashSet<&str> = HashSet::new();
         for e in &model.calls.edges {
             if let Some(to) = e.to.as_deref() {
                 callees.entry(e.callsite_id.as_str()).or_default().push(to);
             }
+            if e.resolution == crate::program::model::taxonomy::Resolution::Builtin {
+                builtin_sites.insert(e.callsite_id.as_str());
+            }
         }
+        let tables_by_id =
+            crate::program::model::workspace::table_by_id_preferring_real(&model.workspace.tables);
         let mut frames = HashMap::new();
         let mut tables = HashMap::new();
+        let mut value_frames = HashMap::new();
         let mut by_stable = HashMap::new();
         let mut op_owner = HashMap::new();
         for r in routines {
@@ -758,6 +1213,15 @@ impl<'a> LiteralReach<'a> {
             }
             if let Some(t) = table_frame(r) {
                 tables.insert(r.stable_routine_id.as_str(), t);
+            }
+            let passes_by_value = |cs_id: &str, arg: u32| {
+                value_passes_by_value(r, cs_id, arg, &callees, &builtin_sites, &by_id)
+            };
+            let resolve = |l: &crate::program::body::features::ValueLabel| {
+                values::resolve_label(r, &tables_by_id, l)
+            };
+            if let Some(v) = values::value_frame(r, passes_by_value, &resolve) {
+                value_frames.insert(r.stable_routine_id.as_str(), v);
             }
             for op in &r.record_operations {
                 op_owner.insert(op.id.as_str(), r.stable_routine_id.as_str());
@@ -771,6 +1235,15 @@ impl<'a> LiteralReach<'a> {
                 op_owner.insert(cs.id.as_str(), r.stable_routine_id.as_str());
             }
         }
+        let (flow_progs, flow_bind, keep_info) = build_flow(
+            model,
+            &by_id,
+            &by_stable,
+            &callees,
+            &builtin_sites,
+            &frames,
+            &value_frames,
+        );
         let table_names = model
             .workspace
             .tables
@@ -820,6 +1293,12 @@ impl<'a> LiteralReach<'a> {
             by_stable,
             frames,
             tables,
+            value_frames,
+            flow_progs,
+            flow_bind,
+            keep_info,
+            flow_cache: std::sync::Mutex::new(HashMap::new()),
+            tables_by_id,
             table_names,
             op_owner,
             flow,
@@ -867,27 +1346,90 @@ impl<'a> LiteralReach<'a> {
             .map_or(&[], Vec::as_slice)
     }
 
+    fn value_reqs_at(&self, routine: &str, site: &str) -> &[ValueReq] {
+        self.value_frames
+            .get(routine)
+            .and_then(|f| f.by_site.get(site))
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// Whether `site` of `routine` cannot run under `b`.
     fn dead_at(&self, routine: &str, site: &str, b: &Bindings) -> bool {
+        self.dead_at_m(routine, site, b, true)
+    }
+
+    /// [`Self::dead_at`]; `keep` says whether the flow follows publisher keeps
+    /// (r3 E2, [`lflow`]).
+    fn dead_at_m(&self, routine: &str, site: &str, b: &Bindings, keep: bool) -> bool {
         contradicts(self.reqs_at(routine, site), b)
             || contradicts_tables(self.table_reqs_at(routine, site), b)
+            || values::contradicts(self.value_reqs_at(routine, site), b)
             || self
                 .guards
                 .get(routine)
                 .and_then(|g| g.get(site))
                 .is_some_and(|reqs| contradicts_atoms(reqs, b))
+            || self.flow_progs.get(routine).is_some_and(|p| {
+                self.flow_eval(routine, b, keep)
+                    .is_some_and(|ev| p.dead(&ev, site))
+            })
+    }
+
+    /// r3 E2: the evaluation of `routine`'s flow program under `b`'s entry
+    /// values, cached by its key. `None` when the routine has no program.
+    fn flow_eval(&self, routine: &str, b: &Bindings, keep: bool) -> Option<Arc<lflow::FlowEval>> {
+        let p = self.flow_progs.get(routine)?;
+        let entry: Vec<(u32, VSet)> = p
+            .key_params
+            .iter()
+            .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
+            .collect();
+        let key: FlowKey = (p as *const lflow::FlowProgram as usize, entry, keep);
+        if let Some(ev) = self.flow_cache.lock().expect("flow cache").get(&key) {
+            return Some(Arc::clone(ev));
+        }
+        let r = self.by_stable.get(routine)?;
+        let resolve = |l: &crate::program::body::features::ValueLabel| {
+            values::resolve_label(r, &self.tables_by_id, l)
+        };
+        let ev = Arc::new(p.eval(&key.1, &resolve, &|_| keep, None));
+        let mut cache = self.flow_cache.lock().expect("flow cache");
+        if cache.len() >= FLOW_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(key, Arc::clone(&ev));
+        Some(ev)
+    }
+
+    /// r3 E2: the keep verdicts the flow used at `routine` under `b`.
+    fn keeps_at(&self, routine: &str, b: &Bindings) -> Vec<u32> {
+        self.flow_eval(routine, b, true)
+            .map_or_else(Vec::new, |ev| ev.keeps.clone())
     }
 
     /// The callee's bindings across a call at `site` of `caller` with `b`.
     fn bind(&self, caller: &str, site: &str, callee: &str, b: &Bindings) -> Bindings {
+        self.bind_m(caller, site, callee, b, true)
+    }
+
+    /// [`Self::bind`]; `keep` as in [`Self::dead_at_m`].
+    fn bind_m(&self, caller: &str, site: &str, callee: &str, b: &Bindings, keep: bool) -> Bindings {
         let (f, t) = (self.frames.get(callee), self.tables.get(callee));
+        let vf = self.value_frames.get(callee);
+        let fb = self.flow_bind.get(callee);
         let ci = self.flow.index_of(callee);
         let rel_params = ci.and_then(|c| self.rel_params.get(&c));
         let rel_globals = ci.and_then(|c| {
             self.rel_globals
                 .get(self.flow.routine(c).object_id.as_str())
         });
-        if f.is_none() && t.is_none() && rel_params.is_none() && rel_globals.is_none() {
+        if f.is_none()
+            && t.is_none()
+            && vf.is_none()
+            && fb.is_none()
+            && rel_params.is_none()
+            && rel_globals.is_none()
+        {
             return Bindings::default();
         }
         let Some((r, cs)) = self.by_stable.get(caller).and_then(|r| {
@@ -904,6 +1446,19 @@ impl<'a> LiteralReach<'a> {
                 .find(|x| x.parameter_index == j && x.source_kind == "parameter")
                 .and_then(|x| x.source_parameter_index)
         };
+        // r3 E2: what the caller's flow knows of each argument at this call
+        // (its locals, a parameter it changed, a derived value).
+        let caller_flow = self
+            .flow_progs
+            .get(caller)
+            .zip(self.flow_eval(caller, b, keep));
+        let flow_arg = |j: u32| -> Option<VSet> {
+            let (p, ev) = caller_flow.as_ref()?;
+            p.args_at(ev, site)
+                .iter()
+                .find(|(k, _)| *k == j)
+                .map(|(_, v)| Arc::clone(v))
+        };
         let mut out = Bindings::default();
         for &j in f.map_or(&[][..], |f| f.usable.as_slice()) {
             let text = cs
@@ -914,7 +1469,11 @@ impl<'a> LiteralReach<'a> {
                 Some("true") => Some(true),
                 Some("false") => Some(false),
                 _ => forwarded(j)
-                    .and_then(|i| b.bools.iter().find(|&&(k, _)| k == i).map(|&(_, w)| w)),
+                    .and_then(|i| b.bools.iter().find(|&&(k, _)| k == i).map(|&(_, w)| w))
+                    .or_else(|| match flow_arg(j).as_deref() {
+                        Some([values::Val::Bool(v)]) => Some(*v),
+                        _ => None,
+                    }),
             };
             if let Some(v) = v {
                 out.bools.push((j, v));
@@ -945,6 +1504,65 @@ impl<'a> LiteralReach<'a> {
             });
             if let Some(table) = table {
                 out.tables.push((j, table));
+            }
+        }
+        // r3 E1: an integer literal or a label (read in the CALLER's scope),
+        // else the caller's own known value parameter it forwards; each in
+        // the callee parameter's domain, else unknown.
+        for (j, d) in vf.map_or(&[][..], |v| v.usable.as_slice()) {
+            let literal = cs
+                .argument_infos
+                .get(*j as usize)
+                .and_then(crate::program::body::features::ValueLabel::of_info)
+                .and_then(|l| values::resolve_label(r, &self.tables_by_id, &l))
+                .and_then(|v| values::in_domain(&v, d))
+                .map(|v| VSet::from([v]));
+            let in_d = |held: &[values::Val]| -> Option<VSet> {
+                let mut vs = held
+                    .iter()
+                    .map(|v| values::in_domain(v, d))
+                    .collect::<Option<Vec<_>>>()?;
+                vs.sort();
+                vs.dedup();
+                Some(VSet::from(vs))
+            };
+            let set = literal
+                .or_else(|| {
+                    let i = forwarded(*j)?;
+                    let (_, held) = b.values.iter().find(|(k, _)| *k == i)?;
+                    in_d(held)
+                })
+                // r3 E1's last rule, wired by E2: a caller's tracked local.
+                .or_else(|| flow_arg(*j).and_then(|v| in_d(&v)));
+            if let Some(set) = set {
+                out.values.push((*j, set));
+            }
+        }
+        // r3 E2: the parameters the callee's flow reads that the lists above
+        // do not bind: what the caller's flow knows of the argument, else a
+        // literal, else the caller's own known parameter it forwards.
+        for (j, d) in fb.map_or(&[][..], Vec::as_slice) {
+            let raw = flow_arg(*j)
+                .or_else(|| {
+                    let text = cs
+                        .argument_texts
+                        .get(*j as usize)?
+                        .trim()
+                        .to_ascii_lowercase();
+                    match text.as_str() {
+                        "true" => Some(Arc::from([values::Val::Bool(true)])),
+                        "false" => Some(Arc::from([values::Val::Bool(false)])),
+                        _ => cs
+                            .argument_infos
+                            .get(*j as usize)
+                            .and_then(crate::program::body::features::ValueLabel::of_info)
+                            .and_then(|l| values::resolve_label(r, &self.tables_by_id, &l))
+                            .map(|v| Arc::from([v])),
+                    }
+                })
+                .or_else(|| forwarded(*j).and_then(|i| b.entry_value(i)));
+            if let Some(set) = raw.and_then(|v| lflow::conv_set(&v, d)) {
+                out.flow.push((*j, set));
             }
         }
         // G34: what the value flow knows of the callee's relevant parameters
@@ -982,12 +1600,14 @@ impl<'a> LiteralReach<'a> {
         out.bools.sort_unstable();
         out.tables.sort();
         out.globals.sort();
+        out.values.sort();
+        out.flow.sort();
         out
     }
 
     /// Every routine reached from `root` with guards ignored, and the binding
     /// states reached with them; `None` when the guarded search hit the cap.
-    fn search(&self, root: &'a str) -> Option<Reached<'a>> {
+    fn search(&self, root: &'a str, keep: bool) -> Option<Reached<'a>> {
         let mut plain: HashSet<&str> = HashSet::from([root]);
         let mut q = VecDeque::from([root]);
         while let Some(f) = q.pop_front() {
@@ -1005,12 +1625,12 @@ impl<'a> LiteralReach<'a> {
             for &(to, site, binds, _) in self.out.get(f).into_iter().flatten() {
                 let site = site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
-                    && self.dead_at(f, s, &b)
+                    && self.dead_at_m(f, s, &b, keep)
                 {
                     continue;
                 }
                 let nb = match (binds, site) {
-                    (true, Some(s)) => self.bind(f, s, to, &b),
+                    (true, Some(s)) => self.bind_m(f, s, to, &b, keep),
                     _ => Bindings::default(),
                 };
                 if seen.insert((to, nb.clone())) {
@@ -1069,7 +1689,19 @@ impl<'a> LiteralReach<'a> {
         start: State<'a>,
         cap: usize,
         cancel: &dyn Fn() -> bool,
+        rec: Option<&mut routes::Recorder<'a>>,
+    ) -> Result<LiveTree<'a>, Stop> {
+        self.tree_recording_m(start, cap, cancel, rec, true)
+    }
+
+    /// [`Self::tree_recording`]; `keep` as in [`Self::dead_at_m`].
+    fn tree_recording_m(
+        &self,
+        start: State<'a>,
+        cap: usize,
+        cancel: &dyn Fn() -> bool,
         mut rec: Option<&mut routes::Recorder<'a>>,
+        keep: bool,
     ) -> Result<LiveTree<'a>, Stop> {
         let mut parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>> =
             HashMap::from([(start.clone(), None)]);
@@ -1091,7 +1723,7 @@ impl<'a> LiteralReach<'a> {
             {
                 let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
-                    && self.dead_at(f, s, &b)
+                    && self.dead_at_m(f, s, &b, keep)
                 {
                     if let Some(r) = rec.as_deref_mut() {
                         r.dead(j);
@@ -1099,7 +1731,7 @@ impl<'a> LiteralReach<'a> {
                     continue;
                 }
                 let nb = match (binds, site) {
-                    (true, Some(s)) => self.bind(f, s, to, &b),
+                    (true, Some(s)) => self.bind_m(f, s, to, &b, keep),
                     _ => Bindings::default(),
                 };
                 let key = (to, nb);
@@ -1485,8 +2117,119 @@ impl<'a> LiteralReach<'a> {
         true
     }
 
+    /// r3 E2: the guards on a listed witness route, outermost first: per hop
+    /// those its call site sits under in its routine, then those of the
+    /// first of `terminal_ops` the last routine owns. Each is `evaluated`
+    /// when the routine's flow, under the route's bindings (replayed as
+    /// [`Self::path_live`] does), decides it in the route's favour.
+    pub(crate) fn route_guards(
+        &self,
+        root: &str,
+        path: &[crate::engine::l5::digest::ProjectedHop],
+        terminal_ops: &[String],
+    ) -> Vec<RouteGuard> {
+        let mut out = Vec::new();
+        let mut b = Bindings::default();
+        let mut cur: String = root.to_string();
+        for hop in path {
+            let h = &hop.inner;
+            let from = h.from_routine_id.as_str();
+            if let Some(s) = h.callsite_id.as_deref().or(h.operation_id.as_deref()) {
+                out.extend(self.guards_at(from, s, &b));
+            }
+            let Some(to) = h.to_routine_id.as_deref() else {
+                return out;
+            };
+            b = match (h.edge_kind.as_deref(), h.callsite_id.as_deref()) {
+                (Some("direct-call" | "variable-typed-call" | "interface-dispatch"), Some(cs)) => {
+                    self.bind(from, cs, to, &b)
+                }
+                _ => Bindings::default(),
+            };
+            cur = to.to_string();
+        }
+        if let Some(op) = terminal_ops
+            .iter()
+            .find(|o| self.op_owner.get(o.as_str()).is_some_and(|w| *w == cur))
+        {
+            out.extend(self.guards_at(&cur, op, &b));
+        }
+        out
+    }
+
+    /// r3 E2: [`Self::route_guards`] of a searched witness (`steps` from the
+    /// root, ending at operation `op`; no step: `op` is the root's own).
+    pub(crate) fn route_guards_steps(
+        &self,
+        root: &str,
+        steps: &[Step<'_>],
+        op: &str,
+    ) -> Vec<RouteGuard> {
+        let mut out = Vec::new();
+        let mut b = Bindings::default();
+        let mut cur: &str = root;
+        for s in steps {
+            let site = s.site.and_then(EdgeSite::guarded);
+            if let Some(site) = site {
+                out.extend(self.guards_at(s.from, site, &b));
+            }
+            b = match (s.kind, site) {
+                ("direct-call" | "variable-typed-call" | "interface-dispatch", Some(cs)) => {
+                    self.bind(s.from, cs, s.to, &b)
+                }
+                _ => Bindings::default(),
+            };
+            cur = s.to;
+        }
+        out.extend(self.guards_at(cur, op, &b));
+        out
+    }
+
+    /// The guards `site` sits under in `routine` (r3 E2), evaluated under `b`.
+    fn guards_at(&self, routine: &str, site: &str, b: &Bindings) -> Vec<RouteGuard> {
+        let Some(r) = self.by_stable.get(routine) else {
+            return Vec::new();
+        };
+        let prog = self.flow_progs.get(routine);
+        let tree: &PCFNNode = match (prog, &r.statement_tree) {
+            (Some(p), _) => p.tree(),
+            (None, Some(t)) => t,
+            (None, None) => return Vec::new(),
+        };
+        let Some(guards) = lflow::guards_of(tree, site) else {
+            return Vec::new();
+        };
+        let resolve = |l: &crate::program::body::features::ValueLabel| {
+            values::resolve_label(r, &self.tables_by_id, l)
+        };
+        let mut conds = HashMap::new();
+        if let Some(p) = prog {
+            let entry: Vec<(u32, VSet)> = p
+                .key_params
+                .iter()
+                .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
+                .collect();
+            p.eval(&entry, &resolve, &|_| true, Some(&mut conds));
+        }
+        guards
+            .into_iter()
+            .map(|(node, kind)| RouteGuard {
+                routine: r.name.clone(),
+                line: node.source_range.map(|s| s.0 + 1),
+                text: match node.flow.as_deref() {
+                    Some(crate::program::body::features::FlowFact::Cond { text, .. }) => {
+                        text.to_string()
+                    }
+                    _ => String::new(),
+                },
+                evaluated: prog.is_some_and(|p| p.guard_evaluated(node, &kind, &conds, &resolve)),
+                kind,
+            })
+            .collect()
+    }
+
     /// Under the root's search: whether operation `op` cannot run (module doc).
-    fn op_dead(&self, reached: &Reached<'a>, op: &str) -> bool {
+    fn op_dead(&self, reached: &Reached<'a>, op: &str, keep: bool) -> bool {
         let (plain, states) = reached;
         let Some(&owner) = self.op_owner.get(op) else {
             return false;
@@ -1496,7 +2239,7 @@ impl<'a> LiteralReach<'a> {
         }
         !states
             .get(owner)
-            .is_some_and(|bs| bs.iter().any(|b| !self.dead_at(owner, op, b)))
+            .is_some_and(|bs| bs.iter().any(|b| !self.dead_at_m(owner, op, b, keep)))
     }
 
     /// The indices of `effects` (one root's) unreachable from `root` under
@@ -1509,21 +2252,198 @@ impl<'a> LiteralReach<'a> {
     /// stopped at its depth bound): such a row is judged by its own operation
     /// ([`Self::op_dead`]), not by its kind, because no other site hides
     /// behind it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn unreachable_effects(
         &self,
         root: &'a str,
         effects: &[DigestEffectResult],
         per_site: &[&str],
     ) -> (HashSet<usize>, HashMap<usize, Vec<String>>) {
+        let (dead, resources, _) = self.unreachable_effects_noted(root, effects, per_site);
+        (dead, resources)
+    }
+
+    /// [`Self::unreachable_effects`], and (r3 E2) per effect it drops ONLY
+    /// because a publisher's loaded subscribers keep a value ([`lflow`]), the
+    /// keep verdicts the root's search used: a reader states that assumption,
+    /// and a world that does not make it counts the effect. A group resource
+    /// is dropped only when it is dead without the assumption too.
+    pub(crate) fn unreachable_effects_noted(
+        &self,
+        root: &'a str,
+        effects: &[DigestEffectResult],
+        per_site: &[&str],
+    ) -> NotedUnreachable {
+        // A root with no usable guard anywhere has nothing to prune.
+        if self.frames.is_empty()
+            && self.tables.is_empty()
+            && self.value_frames.is_empty()
+            && self.guards.is_empty()
+            && self.flow_progs.is_empty()
+        {
+            return Default::default();
+        }
+        let Some(reached) = self.search(root, true) else {
+            return Default::default();
+        };
+        let (dead, mut resources) = self.judge(&reached, effects, per_site, true);
+        let mut keeps: Vec<u32> = reached
+            .1
+            .iter()
+            .filter(|(r, _)| self.flow_progs.contains_key(*r))
+            .flat_map(|(r, bs)| bs.iter().flat_map(|b| self.keeps_at(r, b)))
+            .collect();
+        keeps.sort_unstable();
+        keeps.dedup();
+        if keeps.is_empty() {
+            return (dead, resources, HashMap::new());
+        }
+        // Without the publisher keeps: what is dead only through them.
+        let strict = self
+            .search(root, false)
+            .map(|r| self.judge(&r, effects, per_site, false));
+        let infos_of = |ks: &[u32]| -> Vec<KeepInfo> {
+            ks.iter()
+                .filter_map(|&k| self.keep_info.get(k as usize).cloned())
+                .collect()
+        };
+        let infos = infos_of(&keeps);
+        let mut assumed = HashMap::new();
+        match &strict {
+            Some((d2, r2)) => {
+                // Per effect, the verdicts that cut its strict route.
+                let tree = self
+                    .tree_recording_m(
+                        (root, Bindings::default()),
+                        STATE_CAP,
+                        &|| false,
+                        None,
+                        false,
+                    )
+                    .ok();
+                for &i in dead.difference(d2) {
+                    let e = &effects[i];
+                    let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
+                    ops.extend(e.origin_operation_ids.iter().cloned());
+                    if ops.is_empty() {
+                        let resource = e
+                            .detail
+                            .iter()
+                            .find(|(k, _)| k == "resourceId")
+                            .map(|(_, v)| v.as_str());
+                        ops = self
+                            .terminals
+                            .of_kind((e.effect_type.as_str(), resource))
+                            .map(|r| r.terminal.id().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    let deciding = tree
+                        .as_ref()
+                        .map(|t| self.deciding_keeps(t, &ops))
+                        .filter(|k| !k.is_empty());
+                    assumed.insert(i, deciding.map_or_else(|| infos.clone(), |k| infos_of(&k)));
+                }
+                for (i, list) in resources.iter_mut() {
+                    list.retain(|res| r2.get(i).is_some_and(|l| l.contains(res)));
+                }
+            }
+            None => {
+                for &i in &dead {
+                    assumed.insert(i, infos.clone());
+                }
+                resources.clear();
+            }
+        }
+        resources.retain(|_, l| !l.is_empty());
+        (dead, resources, assumed)
+    }
+
+    /// r3 E2: the keep verdicts that cut the route to one of `ops`: along the
+    /// strict search's (`strict`, made without keeps) path to the first live
+    /// owner, the first site the kept values make dead; of the verdicts its
+    /// routine's flow used there, those without which the site is live again
+    /// (all it used when no single one decides). Empty when no site on the
+    /// path is cut that way (the cut came through a binding upstream).
+    fn deciding_keeps(&self, strict: &LiveTree<'a>, ops: &[String]) -> Vec<u32> {
+        let mut found: Option<(&State<'a>, &str)> = None;
+        'outer: for o in ops {
+            let Some(owner) = self.op_owner.get(o.as_str()) else {
+                continue;
+            };
+            for &i in strict.states_of(owner) {
+                let st = &strict.order[i as usize];
+                if !self.dead_at_m(st.0, o, &st.1, false) {
+                    found = Some((st, o.as_str()));
+                    break 'outer;
+                }
+            }
+        }
+        let Some((state, op)) = found else {
+            return Vec::new();
+        };
+        // The states from the root to `state`, each with the site it leaves by.
+        let mut chain: Vec<(State<'a>, &str)> = vec![(state.clone(), op)];
+        let mut cur = state.clone();
+        while let Some(Some((p, (site, _)))) = strict.parent.get(&cur) {
+            if let Some(s) = site.and_then(EdgeSite::guarded) {
+                chain.push((p.clone(), s));
+            }
+            cur = p.clone();
+        }
+        chain.reverse();
+        let mut used_all: Vec<u32> = Vec::new();
+        for ((f, b), s) in &chain {
+            let Some(p) = self.flow_progs.get(f) else {
+                continue;
+            };
+            let Some(r) = self.by_stable.get(f) else {
+                continue;
+            };
+            let resolve = |l: &crate::program::body::features::ValueLabel| {
+                values::resolve_label(r, &self.tables_by_id, l)
+            };
+            let entry: Vec<(u32, VSet)> = p
+                .key_params
+                .iter()
+                .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
+                .collect();
+            let full = p.eval(&entry, &resolve, &|_| true, None);
+            used_all.extend(full.keeps.iter().copied());
+            if !p.dead(&full, s) {
+                continue;
+            }
+            let deciding: Vec<u32> = full
+                .keeps
+                .iter()
+                .copied()
+                .filter(|&k| {
+                    let ev = p.eval(&entry, &resolve, &|x| x != k, None);
+                    !p.dead(&ev, s)
+                })
+                .collect();
+            return if deciding.is_empty() {
+                full.keeps.clone()
+            } else {
+                deciding
+            };
+        }
+        used_all.sort_unstable();
+        used_all.dedup();
+        used_all
+    }
+
+    /// The effects the search `reached` (made with `keep`) rules out, and per
+    /// group its dead resources ([`Self::unreachable_effects`]).
+    fn judge(
+        &self,
+        reached: &Reached<'a>,
+        effects: &[DigestEffectResult],
+        per_site: &[&str],
+        keep: bool,
+    ) -> (HashSet<usize>, HashMap<usize, Vec<String>>) {
         let mut out = HashSet::new();
         let mut dead_resources: HashMap<usize, Vec<String>> = HashMap::new();
-        // A root with no usable guard anywhere has nothing to prune.
-        if self.frames.is_empty() && self.tables.is_empty() && self.guards.is_empty() {
-            return (out, dead_resources);
-        }
-        let Some(reached) = self.search(root) else {
-            return (out, dead_resources);
-        };
         for (i, e) in effects.iter().enumerate() {
             // G48: a group is one crossing into a dependency (its boundary
             // identity is that call site or operation). It cannot run when the
@@ -1542,7 +2462,7 @@ impl<'a> LiteralReach<'a> {
                         .as_deref()
                         .or(e.evidence_operation_id.as_deref()),
                 };
-                let crossing_dead = site.is_some_and(|site| self.op_dead(&reached, site));
+                let crossing_dead = site.is_some_and(|site| self.op_dead(reached, site, keep));
                 if crossing_dead {
                     out.insert(i);
                     continue;
@@ -1557,7 +2477,7 @@ impl<'a> LiteralReach<'a> {
                 let dead: Vec<String> = e
                     .group_resources
                     .iter()
-                    .filter(|(r, _)| self.kind_dead(&reached, (kind, Some(r.as_str()))))
+                    .filter(|(r, _)| self.kind_dead(reached, (kind, Some(r.as_str())), keep))
                     .map(|(r, _)| r.clone())
                     .collect();
                 if !dead.is_empty() {
@@ -1568,7 +2488,7 @@ impl<'a> LiteralReach<'a> {
             if per_site.contains(&kind)
                 && let Some(op) = e.evidence_operation_id.as_deref()
             {
-                if self.op_dead(&reached, op) {
+                if self.op_dead(reached, op, keep) {
                     out.insert(i);
                 }
                 continue;
@@ -1578,7 +2498,7 @@ impl<'a> LiteralReach<'a> {
                 .iter()
                 .find(|(k, _)| k == "resourceId")
                 .map(|(_, v)| v.as_str());
-            if self.kind_dead(&reached, (kind, resource)) {
+            if self.kind_dead(reached, (kind, resource), keep) {
                 out.insert(i);
             }
         }
@@ -1591,7 +2511,7 @@ impl<'a> LiteralReach<'a> {
     /// is concluded), and none sits in a reached state of its routine where its
     /// site can run. A routine reached only through code that cannot run has
     /// no state, so its facts count as dead.
-    fn kind_dead(&self, reached: &Reached<'a>, kind: (&str, Option<&str>)) -> bool {
+    fn kind_dead(&self, reached: &Reached<'a>, kind: (&str, Option<&str>), keep: bool) -> bool {
         let mut any_reached = false;
         for r in self.terminals.of_kind(kind) {
             let (subject, site) = (r.owner, r.terminal.id());
@@ -1606,7 +2526,7 @@ impl<'a> LiteralReach<'a> {
             let live = reached
                 .1
                 .get(subject)
-                .is_some_and(|bs| bs.iter().any(|b| !self.dead_at(subject, site, b)));
+                .is_some_and(|bs| bs.iter().any(|b| !self.dead_at_m(subject, site, b, keep)));
             if live {
                 return false;
             }

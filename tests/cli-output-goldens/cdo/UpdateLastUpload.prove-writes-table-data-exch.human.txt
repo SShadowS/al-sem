@@ -1,4 +1,4 @@
 prove Codeunit "CDO Telemetry"::UpdateLastUpload writes-table:Data Exch. (table 1220, Base Application)   [cross-app]
-answer: no
+answer: no — no write site on Data Exch. in the analyzed cone (every candidate decided; static candidates, not an observed trace)
 analysis complete · assumptions: loaded-subscribers · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops

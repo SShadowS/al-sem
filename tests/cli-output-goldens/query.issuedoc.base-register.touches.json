@@ -7,8 +7,8 @@
     "dependencies": {
       "mode": "crossApp"
     },
-    "dependencyClosure": "apps-v1:8e0182909e090c4c",
     "dependencyCount": 1,
+    "dependencyFingerprint": "apps-v1:8e0182909e090c4c",
     "direction": "both",
     "down": {
       "absence": {

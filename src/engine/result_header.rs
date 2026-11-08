@@ -161,6 +161,10 @@ pub struct Header {
     /// The one-line result.
     pub answer: String,
     pub analysis: Analysis,
+    /// The component the analysis words qualify, when the answer has
+    /// several (r3 §5.2, c06: `analysis complete (the routine's own cone)`
+    /// above a callers' context block); `None`: the whole answer.
+    pub analysis_subject: Option<&'static str>,
     /// The full assumption labels.
     pub assumptions: Vec<String>,
     /// The caps that cut this answer, each with its count; empty: `none`.
@@ -183,6 +187,7 @@ impl Header {
             single_app,
             answer: String::new(),
             analysis: Analysis::Complete,
+            analysis_subject: None,
             assumptions: vec![LOADED_PROGRAM.to_string()],
             limits: Vec::new(),
             scope: String::new(),
@@ -208,9 +213,15 @@ impl Header {
         } else {
             self.limits.join("; ")
         };
+        let analysis = match (self.analysis_subject, &self.analysis) {
+            (None, a) => a.human(),
+            (Some(s), Analysis::Complete) => format!("analysis complete ({s})"),
+            (Some(s), Analysis::Partial(r)) if r.is_empty() => format!("analysis partial ({s})"),
+            (Some(s), Analysis::Partial(r)) => format!("analysis partial ({s}: {})", r.join("; ")),
+            (Some(_), a) => a.human(),
+        };
         let mut third = format!(
-            "{} · assumptions: {} · limits: {limits}",
-            self.analysis.human(),
+            "{analysis} · assumptions: {} · limits: {limits}",
             if self.assumptions.is_empty() {
                 "none".to_string()
             } else {

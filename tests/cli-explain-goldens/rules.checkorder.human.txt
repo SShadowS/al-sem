@@ -7,6 +7,7 @@ Codeunit "Rules Checks"::CheckOrder  defined at ws:src/checks.al:8
   other effects: events: 0 (0 raised in workspace code)
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  starts by (a start, not a summary): `if Order.Status <> Order.Status::Released then …` (:14); `if Order.Amount <= 0 then …` (:16); +4 more
   calls: none (no call to a routine; builtins aside)
   doc: Checks an order before it is posted.
   rejects when Order.Status <> Order.Status::Released: "You cannot post %1 %2 because it is not released."  [Error ws:src/checks.al:15]

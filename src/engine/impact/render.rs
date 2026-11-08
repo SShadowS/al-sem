@@ -793,6 +793,7 @@ fn reach_lines(
     direct_both: bool,
     level: Reach,
 ) -> Vec<String> {
+    let asked_detail = detail;
     let detail = detail && level == Reach::Full;
     let detail_in = crate::engine::follow_up::Input::Detail.on(surface);
     let mut out = Vec::new();
@@ -854,7 +855,17 @@ fn reach_lines(
             thousands(u(&a[key], "viaDependency")),
         ));
         nearest(&mut out, key);
-        if !folded && level == Reach::Full {
+        // r3 H1: the UI-navigation census (entries by kind, by context) is
+        // the same closure for anything a page reaches, so it prints only
+        // with `detail`, in a routine's block whatever the mode (one routine
+        // or several, routines or diff); the population line keeps its
+        // count, share and nearest entry. The code census keeps its rule.
+        let census = if key == "uiNavigation" {
+            asked_detail && level != Reach::Counts
+        } else {
+            !folded && level == Reach::Full
+        };
+        if census {
             out.extend(kind_lines(up, key, indent));
         }
         if detail {
@@ -1926,7 +1937,8 @@ fn impact_header(
     );
     if !opts.detail && !roots.is_empty() {
         h.more.push(format!(
-            "{} lists each routine's direct callers and its first entry of each kind",
+            "{} lists each routine's direct callers, its first entry of each kind and its UI \
+             navigation entries by kind",
             opts.input(Input::Detail)
         ));
     }

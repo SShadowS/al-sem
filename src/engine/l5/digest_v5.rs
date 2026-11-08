@@ -16,6 +16,20 @@
 //!   three 4.x string lists (`candidates`, `candidateRoutines`,
 //!   `candidateSelectors`) and the 4.x `candidateRows` they are rebuilt
 //!   from.
+//! - **Dependency apps** (G38, r3 H6): `dependencies.apps` leaves;
+//!   `dependencyCount` and `dependencyFingerprint` take its place, as in
+//!   query 5.0.0 ([`crate::engine::l4::query_v5::dependency_fingerprint`]
+//!   states its inputs and canonical form; it identifies an app set, not a
+//!   retrievable manifest, not proof of unchanged package contents).
+//! - **Shared table answers** (F top-9, c15): an `entries[].tableAnswers`
+//!   list two entries or more carry alike (every verdict, blocker and table)
+//!   is kept once in `sharedTableAnswers` (`ta:<n>`), and those entries name
+//!   its key in place of the list; a list one entry alone has stays inline.
+//! - **Temporary state** (r3 §5.2): an effect's `detail.tempState` in the
+//!   §8.1 words, as query 4.0.0 names them (`known(false)` → `not
+//!   temporary`, `known(true)` → `temporary`, `parameter-dependent(i)` →
+//!   `caller-dependent (parameter i+1)`, `parameter-dependent(rec)` →
+//!   `caller-dependent (Rec)`, `unknown` → `not resolved`).
 //!
 //! [`to_v4`] is [`from_v4`]'s inverse; `--schema 4` writes the 4.0.0
 //! document itself for one release (r1 §8.3).
@@ -128,13 +142,106 @@ fn map_hops(v: &mut Value, f: fn(&Value) -> Value) {
     }
 }
 
+/// r3 §5.2: an effect's `detail.tempState` in the §8.1 words (`forward`:
+/// `known(false)` → `not temporary`, as query 4.0.0 does), else the 4.x
+/// value back. A value with no word is left as it is.
+fn temp_states(v: &mut Value, forward: bool) {
+    match v {
+        Value::Object(m) => {
+            if let Some(Value::Object(d)) = m.get_mut("detail")
+                && let Some(Value::String(t)) = d.get_mut("tempState")
+            {
+                let mapped = if forward {
+                    crate::engine::l4::query_v4::temp_word(t)
+                } else {
+                    crate::engine::l4::query_v4::temp_legacy(t)
+                };
+                if let Some(w) = mapped {
+                    *t = w;
+                }
+            }
+            for x in m.values_mut() {
+                temp_states(x, forward);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| temp_states(x, forward)),
+        _ => {}
+    }
+}
+
+/// The payload key of the table answers two entries or more give alike
+/// (F top-9, c15).
+const SHARED_ANSWERS: &str = "sharedTableAnswers";
+
+/// F top-9 (c15): `forward`, an `entries[].tableAnswers` list that two
+/// entries or more carry alike (every verdict, blocker and table, compared
+/// whole) is kept once under [`SHARED_ANSWERS`] (`ta:<n>`, in entry order)
+/// and each entry names its key in its place; a list one entry alone has
+/// stays inline. Else every key is replaced by its list again. Exact both
+/// ways: an entry's own answers are never merged with another's.
+fn shared_table_answers(payload: &mut Value, forward: bool) {
+    let Some(m) = payload.as_object_mut() else {
+        return;
+    };
+    if forward {
+        let lists: Vec<Value> = m
+            .get("entries")
+            .and_then(Value::as_array)
+            .map(|es| {
+                es.iter()
+                    .filter_map(|e| e.get("tableAnswers"))
+                    .filter(|a| a.as_array().is_some_and(|a| !a.is_empty()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut keys: Vec<(Value, String)> = Vec::new();
+        for l in &lists {
+            let n = lists.iter().filter(|x| *x == l).count();
+            if n > 1 && !keys.iter().any(|(v, _)| v == l) {
+                keys.push((l.clone(), format!("ta:{}", keys.len() + 1)));
+            }
+        }
+        if keys.is_empty() {
+            return;
+        }
+        if let Some(Value::Array(es)) = m.get_mut("entries") {
+            for e in es {
+                if let Some(a) = e.get_mut("tableAnswers")
+                    && let Some((_, k)) = keys.iter().find(|(v, _)| v == a)
+                {
+                    *a = Value::from(k.as_str());
+                }
+            }
+        }
+        let shared: serde_json::Map<String, Value> =
+            keys.into_iter().map(|(v, k)| (k, v)).collect();
+        m.insert(SHARED_ANSWERS.into(), Value::Object(shared));
+    } else {
+        let Some(Value::Object(shared)) = m.remove(SHARED_ANSWERS) else {
+            return;
+        };
+        if let Some(Value::Array(es)) = m.get_mut("entries") {
+            for e in es {
+                if let Some(a) = e.get_mut("tableAnswers")
+                    && let Some(list) = a.as_str().and_then(|k| shared.get(k))
+                {
+                    *a = list.clone();
+                }
+            }
+        }
+    }
+}
+
 /// The 5.0.0 payload of a 4.0.0 one (module doc).
 #[must_use]
 pub fn from_v4(mut payload: Value) -> Value {
     rename_keys(&mut payload, RENAMES);
+    temp_states(&mut payload, true);
     map_hops(&mut payload, hop_to_array);
     crate::engine::l4::query_v5::fold_dependencies(&mut payload);
     table_answers(&mut payload, "table", "asked");
+    shared_table_answers(&mut payload, true);
     for d in diagnostics(&mut payload) {
         if let Some(rows) = d.remove(ROWS) {
             d.remove("candidateRoutines");
@@ -180,9 +287,11 @@ pub fn to_v4(mut payload: Value) -> Value {
         );
         d.insert(ROWS.into(), Value::Array(rows));
     }
+    shared_table_answers(&mut payload, false);
     table_answers(&mut payload, "asked", "table");
     crate::engine::l4::query_v5::unfold_dependencies(&mut payload);
     map_hops(&mut payload, hop_from_array);
+    temp_states(&mut payload, false);
     rename_keys(&mut payload, &inverse(RENAMES));
     payload
 }
@@ -242,7 +351,13 @@ mod tests {
             "entries": [{
                 "summary": {"entryPoints": {"count": 1}, "commits": {"entryPoints": 0}},
                 "effects": [{"paths": [{"throughEntryPoint": "Codeunit Y (2)::Z",
-                    "hops": [{"edge": "direct-call", "line": 9, "to": "r:d"}, {"tail": "t:1"}]}]}],
+                    "hops": [{"edge": "direct-call", "line": 9, "to": "r:d"}, {"tail": "t:1"}]}]},
+                    {"detail": {"tempState": "known(false)"}},
+                    {"detail": {"tempState": "known(true)", "resourceCount": "2"}},
+                    {"detail": {"tempState": "parameter-dependent(2)"}},
+                    {"detail": {"tempState": "parameter-dependent(rec)"}},
+                    {"detail": {"tempState": "unknown"}},
+                    {"detail": {"tempState": "something new"}}],
                 "tableAnswers": [{"table": "CDO File", "answer": "yes",
                                   "tableRef": {"id": "g/table/1", "name": "CDO File", "number": 1, "app": "A", "appId": "g"}}]
             }]
@@ -282,9 +397,55 @@ mod tests {
             ])
         );
         assert!(v5["pathTails"]["t:2"][0].is_object());
+        // r3 §5.2: the temp states in the §8.1 words; a value with no word
+        // is left as it is.
+        let temp = |i: usize| v5["entries"][0]["effects"][i]["detail"]["tempState"].clone();
+        assert_eq!(temp(1), "not temporary");
+        assert_eq!(temp(2), "temporary");
+        assert_eq!(temp(3), "caller-dependent (parameter 3)");
+        assert_eq!(temp(4), "caller-dependent (Rec)");
+        assert_eq!(temp(5), "not resolved");
+        assert_eq!(temp(6), "something new");
         // G38: the app list leaves; its count and digest stay.
         assert_eq!(v5["dependencyCount"], 1);
         assert!(v5.get("dependencies").is_none());
+    }
+
+    /// F top-9 (c15): table answers two entries give alike are kept once,
+    /// each entry naming them; an entry whose answers differ (one blocker
+    /// more) keeps its own inline; 4.0.0 is rebuilt exactly. Hand-stated:
+    /// three entries, the first and third alike.
+    ///
+    /// DISCRIMINATION (2026-11-08): sharing by the table asked alone (the
+    /// lists compared by `[0]["asked"]` instead of whole) fails at "its own
+    /// answers": the second entry, whose blockers differ, is folded into
+    /// `ta:1`; restored, passes.
+    #[test]
+    fn alike_table_answers_are_kept_once_and_rebuilt() {
+        let answers = |blockers: usize| {
+            json!([{"table": "CDO File", "answer": "unknown",
+                    "blockedBy": (0..blockers).map(|i| json!({"kind": "open-world-dispatch", "detail": format!("d{i}")})).collect::<Vec<_>>(),
+                    "tableRef": {"id": "g/table/1", "name": "CDO File"}}])
+        };
+        let p = json!({"entries": [
+            {"routine": {"stableId": "a"}, "tableAnswers": answers(2)},
+            {"routine": {"stableId": "b"}, "tableAnswers": answers(3)},
+            {"routine": {"stableId": "c"}, "tableAnswers": answers(2)},
+        ]});
+        let v5 = from_v4(p.clone());
+        let e = &v5["entries"];
+        assert_eq!(e[0]["tableAnswers"], "ta:1", "{v5:#}");
+        assert_eq!(e[2]["tableAnswers"], "ta:1", "{v5:#}");
+        assert!(e[1]["tableAnswers"].is_array(), "its own answers: {v5:#}");
+        assert_eq!(
+            e[1]["tableAnswers"][0]["blockedBy"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(v5[SHARED_ANSWERS]["ta:1"][0]["asked"], "CDO File");
+        assert_eq!(to_v4(v5), p);
     }
 
     /// The previous schema's reconstruction rule: every 4.x candidate

@@ -46,6 +46,8 @@
 //!   - `PCFNNode.field_exit_guard`
 //!   - `PCFNNode.table_exit_guard`
 //!   - `PCFNNode.junction_guards`
+//!   - `PCFNNode.value_fact`
+//!   - `PCFNNode.flow`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -721,6 +723,166 @@ pub struct PCFNNode {
     /// ([`JunctionGuards`]). EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub junction_guards: Option<JunctionGuards>,
+    /// In-memory ONLY (r3 E1): what the node says about an Integer, Option or
+    /// Enum value ([`ValueFact`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub value_fact: Option<ValueFact>,
+    /// In-memory ONLY (r3 E2): what the within-routine value flow reads from
+    /// the node ([`FlowFact`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub flow: Option<Box<FlowFact>>,
+}
+
+/// r3 E2: an expression as the within-routine value flow
+/// (`literal_reach`'s flow pass) reads it. Everything the pass does not model
+/// is [`FlowExpr::Unknown`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowExpr {
+    /// `true` / `false`.
+    Bool(bool),
+    /// An integer literal or a qualified label (resolved by the reader).
+    Label(ValueLabel),
+    /// A bare identifier (quoted or not), unquoted and folded. A call written
+    /// without parentheses is never one.
+    Var(String),
+    Not(Box<FlowExpr>),
+    And(Box<FlowExpr>, Box<FlowExpr>),
+    Or(Box<FlowExpr>, Box<FlowExpr>),
+    /// `A = B` (`equal`) or `A <> B`.
+    Cmp {
+        equal: bool,
+        lhs: Box<FlowExpr>,
+        rhs: Box<FlowExpr>,
+    },
+    /// `A in [B, …]`.
+    In(Box<FlowExpr>, Vec<FlowExpr>),
+    /// Any other expression: a call, a member, arithmetic, a range.
+    Unknown,
+}
+
+/// r3 E2: what one statement-tree node says to the within-routine value flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowFact {
+    /// On an assignment (an `other` node): the target's bare name, folded
+    /// (`None` for a member or an indexed target), the value, and whether
+    /// the assignment is compound (`+=`).
+    Assign {
+        target: Option<String>,
+        value: FlowExpr,
+        compound: bool,
+    },
+    /// On an `if`, a `while`, a `repeat` (its `until`) and a `case` (its
+    /// scrutinee): the condition, and its source text (whitespace folded,
+    /// at most [`FLOW_TEXT_MAX`] characters) for a witness to name it.
+    Cond { expr: FlowExpr, text: Box<str> },
+    /// On a call leaf: its arguments, by position.
+    Args(Vec<FlowExpr>),
+    /// A `with` statement: inside it a bare name may be a field.
+    With,
+    /// A statement the lowerer did not recognise: it may write anything.
+    Opaque,
+}
+
+/// The longest condition text a [`FlowFact::Cond`] keeps.
+pub const FLOW_TEXT_MAX: usize = 80;
+
+/// r3 E1: a literal value as written: an integer literal or a qualified
+/// label `Q::M`. Where a label points (an Option variable's member, an enum
+/// value) depends on the routine's scope, so it is resolved by its reader
+/// (`literal_reach`), not here.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ValueLabel {
+    /// An integer literal, its sign included (`-1`).
+    Int(i64),
+    /// `Q::M`: the qualifier's segments, each unquoted and folded
+    /// (`Enum::"Sales Document Type"` → `["enum", "sales document type"]`,
+    /// `Rec."Document Type"` → `["rec", "document type"]`, `V` → `["v"]`),
+    /// and the member, unquoted and folded.
+    Qualified { path: Vec<String>, member: String },
+}
+
+impl ValueLabel {
+    /// The label an expression's [`PExpressionInfo`] states: an integer
+    /// literal (signed too) or a qualified enum/option value. `None` for any
+    /// other expression (a variable, a call, a range, `FromInteger`).
+    pub fn of_info(info: &PExpressionInfo) -> Option<ValueLabel> {
+        match info.kind.as_str() {
+            "integer" | "unary_expression" => {
+                let v: String = info.value.as_deref()?.split_whitespace().collect();
+                v.parse::<i64>().ok().map(ValueLabel::Int)
+            }
+            "qualified_enum_value" => {
+                let path = split_label_path(info.qualifier.as_deref()?)?;
+                let member = fold_label_segment(info.member.as_deref()?)?;
+                Some(ValueLabel::Qualified { path, member })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One identifier of a label, unquoted (a doubled `""` inside quotes is one
+/// `"`), trimmed and folded; `None` when empty.
+fn fold_label_segment(s: &str) -> Option<String> {
+    let t = s.trim();
+    let inner = t
+        .strip_prefix('"')
+        .and_then(|x| x.strip_suffix('"'))
+        .map(|x| x.replace("\"\"", "\""))
+        .unwrap_or_else(|| t.to_string());
+    let inner = inner.trim();
+    (!inner.is_empty()).then(|| inner.to_lowercase())
+}
+
+/// A label qualifier's segments, split at `::` and `.` outside quotes
+/// (`Enum::"A.B"` is two segments, `enum` and `a.b`). `None` when a segment
+/// is empty.
+fn split_label_path(text: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                cur.push(c);
+            }
+            '.' if !in_quotes => out.push(fold_label_segment(&std::mem::take(&mut cur))?),
+            ':' if !in_quotes && chars.peek() == Some(&':') => {
+                chars.next();
+                out.push(fold_label_segment(&std::mem::take(&mut cur))?);
+            }
+            _ => cur.push(c),
+        }
+    }
+    out.push(fold_label_segment(&cur)?);
+    Some(out)
+}
+
+/// r3 E1: what one statement-tree node says about a value (see
+/// `literal_reach`'s value frame, which decides whether the name is a usable
+/// parameter and what each label means).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueFact {
+    /// On a `case` whose scrutinee is a bare identifier (through
+    /// parentheses): its name, unquoted and folded.
+    CaseOn(String),
+    /// On a non-`else` `case-branch`: one entry per pattern, `None` for a
+    /// pattern that is not a literal or a label (a range, an expression).
+    Arm(Vec<Option<ValueLabel>>),
+    /// On an `if` whose whole condition (through parentheses) is `N = L`,
+    /// `N <> L` (either side) or `N in [L, …]`, `N` a bare identifier:
+    /// its name, whether the test is `=` / `in` (`true`) or `<>`, and the
+    /// labels (`None` for one that is not a literal or a label).
+    Test {
+        name: String,
+        equal: bool,
+        labels: Vec<Option<ValueLabel>>,
+    },
+    /// On a `for` / `foreach` whose loop variable is a bare identifier: its
+    /// name, unquoted and folded (the loop writes it).
+    LoopVar(String),
 }
 
 /// What an `and` / `or` condition says about the simple guards among its
@@ -923,6 +1085,51 @@ mod tests {
         assert_eq!(ts("known", None, None).known_value(), Some(false));
         assert_eq!(ts("unknown", Some(true), None).known_value(), None);
     }
+    /// r3 E1: a label's qualifier splits at `::` and `.` outside quotes only,
+    /// each segment unquoted and folded; a signed integer literal reads.
+    #[test]
+    fn value_label_shapes() {
+        use super::{PExpressionInfo, ValueLabel};
+        let info =
+            |kind: &str, value: Option<&str>, q: Option<&str>, m: Option<&str>| PExpressionInfo {
+                kind: kind.into(),
+                text: String::new(),
+                value: value.map(Into::into),
+                qualifier: q.map(Into::into),
+                member: m.map(Into::into),
+            };
+        let q = |path: &[&str], member: &str| ValueLabel::Qualified {
+            path: path.iter().map(|s| s.to_string()).collect(),
+            member: member.into(),
+        };
+        assert_eq!(
+            ValueLabel::of_info(&info(
+                "qualified_enum_value",
+                None,
+                Some("Enum::\"Sales.Doc Type\""),
+                Some("\"Blanket Order\"")
+            )),
+            Some(q(&["enum", "sales.doc type"], "blanket order"))
+        );
+        assert_eq!(
+            ValueLabel::of_info(&info(
+                "qualified_enum_value",
+                None,
+                Some("SalesHeader.\"Document Type\""),
+                Some("Order")
+            )),
+            Some(q(&["salesheader", "document type"], "order"))
+        );
+        assert_eq!(
+            ValueLabel::of_info(&info("unary_expression", Some("- 1"), None, None)),
+            Some(ValueLabel::Int(-1))
+        );
+        assert_eq!(
+            ValueLabel::of_info(&info("identifier", Some("X"), None, None)),
+            None
+        );
+    }
+
     /// The module doc's INTERNAL-ONLY list must name exactly the fields this file
     /// marks `#[serde(skip)]` / `#[serde(skip, ...)]` (#15), so it cannot drift.
     #[test]
@@ -946,7 +1153,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 19, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 21, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

@@ -8,6 +8,7 @@ Codeunit "Calls Post"::QuickPost  defined at ws:src/post.al:18
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: error-collector 1, table-trigger-rules-skipped 2
+  starts by (a start, not a summary): `Checks.CheckOrder(Order, false)` (:22); `Checks.LogIfBlocked(Order)` (:23); +2 more
   calls: Codeunit "Calls Checks"::CheckOrder (called at :22); Codeunit "Calls Checks"::LogIfBlocked (called at :23)
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]

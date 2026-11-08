@@ -6,6 +6,7 @@ Codeunit "Out Log Mgt"::WriteLog  defined at ws:src/OutIssueDocument.Codeunit.al
   transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  starts by (a start, not a summary): `TempLog.DeleteAll()` (:58); `Log."Entry No." := 0` (:59); +2 more
   calls: none (no call to a routine; builtins aside)
   callers: 3 direct — 3 routines: Codeunit "Out Issue Document"::IssueDoc, Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts; 1 page action reaches it in all (directly or through callers)
     caller rule (checked by 1 caller: Codeunit "Out Issue Document"::IssueDoc; no equivalent check recognized in 2 analyzed callers: Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]

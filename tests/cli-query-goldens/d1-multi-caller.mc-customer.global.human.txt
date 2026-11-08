@@ -10,7 +10,7 @@ more: --all lists every witness, no fold; --format json for every row
   locks: none observed
   keys: primary key "No."
   key-relevant (not exhaustive): Get 0 (primary key), SetCurrentKey 0, SetRange/SetFilter on key fields 0; not searched: key and ordering uses in declarations (page SourceTableView, report DataItemTableView)
-  reads: 3 sites — FindSet 3
+  other reads: 3 sites — FindSet 3
     [FindSet] at ws:src/D1MultiCaller.al:25 in Codeunit "D1 Multi Caller"::CallerA
     [FindSet] at ws:src/D1MultiCaller.al:33 in Codeunit "D1 Multi Caller"::CallerB
     [FindSet] at ws:src/D1MultiCaller.al:41 in Codeunit "D1 Multi Caller"::CallerC

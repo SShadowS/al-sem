@@ -1153,6 +1153,8 @@ pub struct DigestEffectFull {
     /// followed ([`crate::engine::l5::literal_reach`]); a MAY question does not
     /// count it. Not serialized.
     pub literal_unreachable: bool,
+    /// r3 E2: `DigestEffectResult`'s field of the same name. Not serialized.
+    pub(crate) flow_notes: Option<Box<crate::engine::l5::literal_reach::FlowNotes>>,
     /// W2-2: a boundary group's crossing (design §3.3); `None` off a group.
     /// The rollup groups rows by it; the 3.x digest serializes it once per
     /// entry (`entries[].crossings`).
@@ -2012,10 +2014,18 @@ fn literal_reach_entries<'t>(
             .copied()
             .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
             .collect();
-        let (dead, dead_resources) =
-            reach.unreachable_effects(&entry.routine_id, &entry.effects, &per_site);
+        let (dead, dead_resources, assumed) =
+            reach.unreachable_effects_noted(&entry.routine_id, &entry.effects, &per_site);
         for i in dead {
             entry.effects[i].literal_unreachable = true;
+        }
+        // r3 E2: the rows dropped only under the loaded-subscribers
+        // assumption name it.
+        for (i, keeps) in assumed {
+            entry.effects[i]
+                .flow_notes
+                .get_or_insert_with(Default::default)
+                .assumed = keeps;
         }
         // G33: a group's resources reached only through code that cannot run.
         for (i, resources) in dead_resources {
@@ -2040,6 +2050,25 @@ fn literal_reach_entries<'t>(
             if e.via_paths.len() < before && e.via_paths.is_empty() {
                 e.via_paths_truncated = true;
             }
+            // r3 E2: the guards on the route a reader prints (the shortest
+            // listed one), each evaluated or not under the route's values.
+            if !e.boundary_group
+                && let Some(p) = e
+                    .via_paths
+                    .iter()
+                    .filter(|p| !p.is_empty())
+                    .min_by_key(|p| p.len())
+                    .or_else(|| e.via_paths.first())
+            {
+                let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
+                for op in &e.origin_operation_ids {
+                    if !ops.contains(op) {
+                        ops.push(op.clone());
+                    }
+                }
+                let guards = reach.route_guards(&entry.routine_id, p, &ops);
+                e.flow_notes.get_or_insert_with(Default::default).guards = Some(guards);
+            }
         }
         // Final CDO output review, item 2 (design §3.4.2): an own write row
         // left with no listed path still has a live route (it is not
@@ -2052,13 +2081,15 @@ fn literal_reach_entries<'t>(
         // Rows with no source position (`unavailable`) are the no-path
         // section's (§4.1 section 13), and known-temporary rows print no
         // path; neither is searched.
+        // r3 E2: a COMMIT row too (n01: the first-ranked commit's listed
+        // paths could not run, so its witness and its guards came from none).
         for e in entry.effects.iter_mut() {
             if e.boundary_group
                 || e.literal_unreachable
                 || e.via_paths.iter().any(|p| !p.is_empty())
                 || !matches!(
                     e.effect_type.as_str(),
-                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" | "COMMIT"
                 )
                 || e.evidence.source_kind == "unavailable"
                 || is_known_temp_state(e.temp_state.as_ref())
@@ -2083,6 +2114,20 @@ fn literal_reach_entries<'t>(
                         .as_ref(),
                 ),
             };
+            // r3 E2: the searched witness's guards, as a listed route's.
+            let guards = match tree {
+                None => ops
+                    .iter()
+                    .find(|op| reach.live_in_root(&entry.routine_id, op))
+                    .map(|op| reach.route_guards_steps(&entry.routine_id, &[], op)),
+                Some(Some(t)) => reach
+                    .tree_witness(t, &ops)
+                    .map(|(steps, op)| reach.route_guards_steps(&entry.routine_id, &steps, op)),
+                Some(None) => None,
+            };
+            if let Some(g) = guards {
+                e.flow_notes.get_or_insert_with(Default::default).guards = Some(g);
+            }
             e.own_path = Some(match tree {
                 None => group_paths.own_path_in_root(reach, &entry.routine_id, &ops),
                 Some(t) => group_paths.own_path(reach, t, &ops),
@@ -2417,6 +2462,7 @@ pub fn run_digest_query_full_from_entries(
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
+                    flow_notes: eff.flow_notes.take(),
                     crossing: eff.crossing.clone(),
                 });
             }
@@ -3337,6 +3383,7 @@ fn digest_header(
     render: crate::engine::l5::digest_v3::DigestRender,
     single_app: bool,
     deps: usize,
+    changed: &[ChangedRootsDiagnostic],
 ) -> crate::engine::result_header::Header {
     use crate::engine::follow_up::Input;
     use crate::engine::l5::routine_rollup as rr;
@@ -3369,7 +3416,21 @@ fn digest_header(
         .zip(rollups)
         .map(|(e, r)| rr::header_facts(r, e, &[]))
         .collect();
+    // r3 H5: a lookup failure says what it is: an ambiguous selector names
+    // how many routines it names, an unmatched one is `not found`.
+    let ambiguous = changed.iter().find_map(|d| match d {
+        ChangedRootsDiagnostic::SelectorAmbiguous { candidates, .. } => Some(candidates.len()),
+        _ => None,
+    });
+    let unmatched = changed
+        .iter()
+        .any(|d| matches!(d, ChangedRootsDiagnostic::SelectorUnmatched { .. }));
     h.answer = match &facts[..] {
+        [] if let Some(n) = ambiguous => format!(
+            "ambiguous — names {}",
+            crate::engine::l5::routine_rollup::plural(n, "routine", "routines")
+        ),
+        [] if unmatched => "not found".to_string(),
         [] => "no answer — no changed root resolved".to_string(),
         [one] => one.answer().to_string(),
         many => format!(
@@ -3410,8 +3471,11 @@ fn digest_header(
         h.more
             .push(format!("{} lists every list in full", Input::Detail.on(s)));
     }
-    h.more
-        .push(format!("{} for every effect row", Input::FormatJson.on(s)));
+    // r3 H5: with no root resolved there is no effect row to ask for.
+    if !facts.is_empty() {
+        h.more
+            .push(format!("{} for every effect row", Input::FormatJson.on(s)));
+    }
     h
 }
 
@@ -3565,6 +3629,11 @@ fn digest_entry_summary(
     // its summary line (`answer`), the counts a reader decides on, its test
     // status in the §8.1 words.
     let facts = crate::engine::l5::routine_rollup::header_facts(r, e, &[]);
+    // W2-2 (T-W2-13): the one RollupTotals serialization; r3 §5.2: in the
+    // envelope summary and the index, its dependency boundary in 5.0.0's
+    // words (`dependencyCalls`, never `entryPoints`).
+    let mut totals = r.totals.to_json();
+    crate::engine::l4::query_v5::rename_keys(&mut totals, crate::engine::l4::query_v5::RENAMES);
     let mut v = json!({
         "routine": entry_display(cx, e),
         "stableId": e.routine_id,
@@ -3578,8 +3647,7 @@ fn digest_entry_summary(
         // Round-2 G42: the effect counts by type under the name that is
         // always a map (`effectsByType` leaves in the next digest major).
         "effectCounts": by_type,
-        // W2-2 (T-W2-13): the one RollupTotals serialization.
-        "summary": r.totals.to_json(),
+        "summary": totals,
         "testStatus": test_status,
         // §9.8 (F73): guarantee labels over the effect rows; `refutable`
         // counts the labels the rows list in `refutableGuarantees`, and
@@ -3796,7 +3864,8 @@ const INDEX_ROW_KEYS: &[&str] = &[
     "tableAnswers",
     "testStatus",
     "effects",
-    "effectsByType",
+    // r3 §5.1 (A P10): `effectsByType` is `effectCounts` by construction
+    // (one map under two names); the index keeps the one that stays.
     "effectCounts",
     "summary",
     "guaranteeLabels",
@@ -3832,12 +3901,38 @@ fn compact_digest_summary(
                     x[*k] = v.clone();
                 }
             }
-            if let (Some(n), Some("not loaded")) = (&next, r["testStatus"].as_str()) {
-                x["testsNext"] = n.clone();
+            // r3 §5.2: a row's sentence is its overall effect (every
+            // family, as the envelope's row says it); the writes-only
+            // summary line stays beside it.
+            if let Some(a) = r.get("shortAnswer") {
+                x["writesAnswer"] = r["answer"].clone();
+                x["answer"] = a.clone();
             }
             x
         })
         .collect();
+    // r3 §5.2: the tests hand-off once per index (every row whose test
+    // status is `not loaded` would repeat it).
+    let not_loaded = rows
+        .iter()
+        .filter(|r| r["testStatus"].as_str() == Some("not loaded"))
+        .count();
+    let index_shared = next.filter(|_| not_loaded > 0).map(
+        |n| json!({"testsNext": n, "testsNextFor": "every row whose testStatus is not loaded"}),
+    );
+    // F top-9 (c25): the test status most rows share, once at the summary's
+    // top level; a listed row names its own only where it differs (the
+    // index keeps every row's).
+    let mut status_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in &rows {
+        if let Some(s) = r["testStatus"].as_str() {
+            *status_counts.entry(s).or_default() += 1;
+        }
+    }
+    let default_status: Option<String> = status_counts
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+        .map(|(s, _)| (*s).to_string());
     // The short answers two rows or more share, once.
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for r in &rows {
@@ -3870,6 +3965,9 @@ fn compact_digest_summary(
                 "observedWrites",
             ] {
                 if let Some(v) = r.get(k) {
+                    if k == "testStatus" && v.as_str() == default_status.as_deref() {
+                        continue;
+                    }
                     x[k] = v.clone();
                 }
             }
@@ -3888,12 +3986,18 @@ fn compact_digest_summary(
          stable id, full answer and totals"
     );
     head["shared"] = serde_json::Value::Object(shared);
+    if let Some(s) = &default_status {
+        head["testStatus"] = json!(s);
+    }
     head["routines"] = serde_json::Value::Array(listed);
     if let Some(s) = test_scope {
         head["testScope"] = s;
     }
     let mut v = crate::engine::result_index::with_index(head, "routines", "index", index_rows);
     v["routinesListed"] = json!(v["routines"].as_array().map_or(0, Vec::len));
+    if let Some(s) = index_shared {
+        v[crate::engine::result_index::SHARED_KEY] = s;
+    }
     v
 }
 
@@ -3942,7 +4046,16 @@ fn short_answer(
     } else {
         writes.join(", ")
     });
-    parts.push(format!("commits: {}", t.commits));
+    // r3 §5.2: the word table's absence words, never the legacy key
+    // (`no observed`).
+    parts.push(format!(
+        "commits: {}",
+        match t.commits {
+            "no observed" => "none observed",
+            "none" => "no (every candidate decided)",
+            c => c,
+        }
+    ));
     for (key, label) in FAMILIES {
         if let Some(n) = t.kinds.get(*key).filter(|n| **n > 0) {
             let least = if t.kinds_partial.contains(*key) {
@@ -4419,6 +4532,7 @@ fn digest_view(
         render,
         req.single_app,
         dependencies.apps.len(),
+        &changed_roots.diagnostics,
     );
 
     // JSON
@@ -4749,7 +4863,24 @@ mod tests {
         assert_eq!(index.len(), 20);
         assert_eq!(index[1]["summary"]["callerDependentTables"], 1);
         assert_eq!(index[1]["testStatus"], "not loaded");
-        assert_eq!(index[1]["testsNext"]["tool"], "alsem_tests");
+        // r3 §5.2: the tests hand-off once per index, not on each row; a
+        // row's sentence is its overall effect; one map per row.
+        assert!(index[1].get("testsNext").is_none(), "{:#}", index[1]);
+        let shared = &s[crate::engine::result_index::SHARED_KEY];
+        assert_eq!(shared["testsNext"]["tool"], "alsem_tests", "{s:#}");
+        assert_eq!(index[1]["answer"], rows[1]["shortAnswer"]);
+        assert_eq!(index[1]["writesAnswer"], rows[1]["answer"]);
+        assert!(index[1].get("effectsByType").is_none());
+        // F top-9 (c25): the shared test status once; no listed row repeats it.
+        assert_eq!(s["testStatus"], "not loaded", "{s:#}");
+        assert!(
+            s["routines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.get("testStatus").is_none()),
+            "{s:#}"
+        );
         // A wider selection: the summary truncates, the index holds all.
         let wide: Vec<serde_json::Value> = (0..80)
             .map(|i| c25_row(i, C25_SELECTORS[1], &format!("{long} #{i}")))
@@ -4759,6 +4890,39 @@ mod tests {
         assert_eq!(t["rowsTotal"], 80, "{s:#}");
         assert!(t["rowsListed"].as_u64().unwrap() < 80);
         assert_eq!(s[ROWS_KEY].as_array().unwrap().len(), 80);
+    }
+
+    /// F top-9 (c25): the test status most rows share is the summary's
+    /// `testStatus`; a listed row whose status differs names its own, and
+    /// the index keeps every row's. Hand-stated: three rows `not loaded`,
+    /// one `tests with a modeled path`.
+    ///
+    /// DISCRIMINATION (2026-11-08): leaving out every row's `testStatus`
+    /// (`continue` for `testStatus` whatever its value) fails at "the row
+    /// that differs"; restored, passes.
+    #[test]
+    fn a_shared_test_status_is_said_once_and_a_differing_row_keeps_its_own() {
+        let mut rows: Vec<serde_json::Value> = (0..4)
+            .map(|i| c25_row(i, C25_SELECTORS[i], "writes: none observed"))
+            .collect();
+        rows[2]["testStatus"] = "tests with a modeled path".into();
+        let s = compact_digest_summary(serde_json::json!({"kind": "digest"}), rows, None);
+        assert_eq!(s["testStatus"], "not loaded", "{s:#}");
+        let listed = s["routines"].as_array().unwrap();
+        assert_eq!(
+            listed[2]["testStatus"], "tests with a modeled path",
+            "the row that differs: {s:#}"
+        );
+        for i in [0, 1, 3] {
+            assert!(listed[i].get("testStatus").is_none(), "{s:#}");
+        }
+        let index = s[crate::engine::result_index::ROWS_KEY].as_array().unwrap();
+        assert_eq!(index[0]["testStatus"], "not loaded");
+        assert_eq!(index[2]["testStatus"], "tests with a modeled path");
+        assert!(
+            s.get(crate::engine::result_index::SHARED_KEY).is_none(),
+            "no hand-off without a test scope"
+        );
     }
 
     /// Round 2 G13: a table answer's `firstBlocker` is the first blocker
@@ -5051,6 +5215,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         }
     }
@@ -5112,7 +5277,7 @@ mod tests {
         // Round 2 G10: the totals are in the row's result-index row.
         let row = &s[crate::engine::result_index::ROWS_KEY][0];
         assert_eq!(s["routines"][0]["index"], 1, "{s}");
-        assert_eq!(row["effectsByType"]["COMMIT"], 3, "{s}");
+        assert_eq!(row["effectCounts"]["COMMIT"], 3, "{s}");
         let c = &row["summary"]["commits"];
         assert_eq!(c["ownSites"], 1, "{s}");
         assert_eq!(c["literalDead"]["sites"], 2, "literalDead: {s}");
@@ -5361,7 +5526,9 @@ mod tests {
         );
         let r = &s["indexRows"][0];
         assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
-        assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
+        // r3 §5.1 (A P10): one map, `effectCounts`.
+        assert_eq!(r["effectCounts"]["DB_INSERT"], 2, "{s}");
+        assert!(r.get("effectsByType").is_none(), "{s}");
         // W2-2: the one RollupTotals serialization.
         let t = &r["summary"];
         assert_eq!(t["commits"]["answer"], "may", "{s}");
@@ -5379,12 +5546,15 @@ mod tests {
             "{s}"
         );
         assert_eq!(r["testStatus"], "not requested", "{s}");
+        // r3 §5.2: the index row's sentence is the overall effect; the
+        // writes-only summary line is `writesAnswer`.
         assert!(
-            r["answer"]
+            r["writesAnswer"]
                 .as_str()
                 .is_some_and(|a| a.starts_with("writes: ")),
             "{s}"
         );
+        assert_eq!(r["answer"], listed["answer"], "{s}");
         assert!(s.get("countsOnly").is_none(), "{s}");
         assert_eq!(s["indexRows"].as_array().map(Vec::len), Some(1), "{s}");
     }

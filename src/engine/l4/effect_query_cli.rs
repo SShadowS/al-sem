@@ -1772,6 +1772,26 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
     h.scope_json(extra)
 }
 
+/// r3 §5.1 (A P1): a query effects answer's status for its envelope summary
+/// and index row, from its `result.scope` (`scope`): `analysis`, `reasons`
+/// and `scopes`, the operations' family (`writes`: one dependency routine
+/// deep) and the deep writes' (`beyondDependencyCalls`: the whole cone)
+/// apart, each with its depth and inventory.
+fn effects_status(scope: &Value) -> Value {
+    let family = |k: &str| {
+        let f = &scope["families"][k];
+        json!({"depth": f["depth"], "inventory": f["inventory"]})
+    };
+    json!({
+        "analysis": scope["analysis"],
+        "reasons": scope["reasons"],
+        "scopes": {
+            "operations": family("writes"),
+            "deepWrites": family("beyondDependencyCalls"),
+        },
+    })
+}
+
 /// Render an unresolved/ambiguous selector as its own (exit-2) document, so a
 /// bad selector produces a well-formed answer instead of a silent empty result.
 fn selector_failure_doc<T>(
@@ -2738,8 +2758,10 @@ fn render_query_touches_body(
                         )
                     }
                     SiteFamily::Read | SiteFamily::Other if of.is_empty() => String::new(),
+                    // r3 §5.2 (P7): `Get` is counted under key-relevant
+                    // uses, so this family is the other reads.
                     SiteFamily::Read => format!(
-                        "  reads: {} — {by_text}\n",
+                        "  other reads: {} — {by_text}\n",
                         plural(of.len(), "site", "sites")
                     ),
                     SiteFamily::Other => format!(
@@ -2762,6 +2784,23 @@ fn render_query_touches_body(
                     human.push_str(&format!(
                         "    [{}] at {}:{} in {}{temp}{table_note}\n",
                         s.op, s.file, s.line, s.who
+                    ));
+                }
+                // r3 §5.1 (A P3): when the record writes are folded, the
+                // complete write-only call for this table, ready to send.
+                let shown = samples.iter().filter(|s| s.family() == f).count();
+                if f == SiteFamily::Write && !writes_only && shown < of.len() {
+                    let call = crate::engine::follow_up::FollowUp::new(
+                        crate::engine::follow_up::Tool::QueryTouches,
+                        crate::engine::follow_up::Cx::new(surface, single_app),
+                        "every record-write site",
+                    )
+                    .arg("table", table_selector)
+                    .arg("opFamily", "write");
+                    human.push_str(&format!(
+                        "    every record-write site ({}): {}\n",
+                        thousands(of.len()),
+                        call.text(surface)
                     ));
                 }
             }
@@ -2968,9 +3007,10 @@ struct TableSite {
 ///
 /// Every declared key counts (round-3 n03: a key on a system field,
 /// Customer's `SystemModifiedAt`, was dropped, so "+13" hid one of 18). The
-/// keys are the real table's own: a `tableextension` stub sharing the id is
-/// another object (G-5), and the model does not attach an extension's keys
-/// to the table it extends.
+/// keys are the real table's own (a `tableextension` stub sharing the id is
+/// another object, G-5) and, after them, the keys its extensions add, each
+/// named by its extension (output validation r3 L1): an extension's key is
+/// never the primary key.
 fn table_keys_line(model: &Model, table_id: &str) -> String {
     let quoted = |n: &str| format!("\"{}\"", n.replace('"', "\"\""));
     // With no base table loaded, no primary key is named.
@@ -2982,27 +3022,55 @@ fn table_keys_line(model: &Model, table_id: &str) -> String {
     else {
         return String::new();
     };
-    let keys: Vec<String> = t
+    let key_text = |k: &crate::program::model::workspace::ModelKey| {
+        let names: Vec<String> = k
+            .fields
+            .iter()
+            .filter_map(|f| t.field_name(f).map(quoted))
+            .collect();
+        let text = if names.is_empty() {
+            "fields not resolved".to_string()
+        } else {
+            names.join(", ")
+        };
+        match &k.declared_by {
+            Some(ext) => format!("{text}; from tableextension {}", quoted(ext)),
+            None => text,
+        }
+    };
+    // The table's own keys first (its first is the primary key), then the
+    // extensions'.
+    let own: Vec<String> = t
         .keys
         .iter()
-        .map(|k| {
-            let names: Vec<String> = k
-                .fields
-                .iter()
-                .filter_map(|f| t.field_name(f).map(quoted))
-                .collect();
-            if names.is_empty() {
-                "fields not resolved".to_string()
-            } else {
-                names.join(", ")
-            }
-        })
+        .filter(|k| k.declared_by.is_none())
+        .map(key_text)
         .collect();
-    let Some((pk, rest)) = keys.split_first() else {
-        return String::new();
+    let added = t
+        .keys
+        .iter()
+        .filter(|k| k.declared_by.is_some())
+        .map(key_text);
+    let (head, rest): (String, Vec<String>) = match own.split_first() {
+        Some((pk, own_rest)) => (
+            format!("primary key {pk}"),
+            own_rest.iter().cloned().chain(added).collect(),
+        ),
+        // No own key in the loaded program: the extensions' keys alone,
+        // never one of them as the primary key.
+        None => {
+            let rest: Vec<String> = added.collect();
+            if rest.is_empty() {
+                return String::new();
+            }
+            (
+                "primary key not declared in the loaded program".to_string(),
+                rest,
+            )
+        }
     };
     const SHOWN: usize = 4;
-    let mut line = format!("  keys: primary key {pk}");
+    let mut line = format!("  keys: {head}");
     if !rest.is_empty() {
         let shown: Vec<String> = rest.iter().take(SHOWN).map(|k| format!("({k})")).collect();
         line.push_str(&format!("; other keys: {}", shown.join(", ")));
@@ -5610,13 +5678,30 @@ fn render_query_effects_body(
     }
 
     let mut summary = effects_summary(&rr.qualified(), &effects, &tables);
-    // Wave 3a: the MCP summary states the cone's writes beyond entry points.
+    // r3 §5.1 (A P1): the envelope's summary and its index row carry the
+    // analysis status, its reasons and the two scopes apart: the operations
+    // (one dependency routine deep) and the deep writes (the whole cone).
+    let status = effects_status(&query_scope_json("query.effects", &payload, deps));
+    if let (Value::Object(m), Value::Object(s)) = (&mut summary, &status) {
+        for (k, v) in s {
+            m.insert(k.clone(), v.clone());
+        }
+        if let Some(Value::Array(rows)) = m.get_mut(crate::engine::result_index::ROWS_KEY) {
+            for r in rows.iter_mut().filter_map(Value::as_object_mut) {
+                for (k, v) in s {
+                    r.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    // Wave 3a: the MCP summary states the cone's writes beyond dependency
+    // calls (r3 §5.2: `dependencyCalls`, as the 5.0.0 payload names them).
     if beyond.is_some()
         && let Value::Object(m) = &mut summary
     {
         m.insert(
             "beyondWrites".into(),
-            json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
+            json!({"tables": beyond_tables.len(), "dependencyCalls": beyond_writes.len()}),
         );
         // Output validation §8.2 (F53): the two populations with their
         // units, so the operation tables and the whole-cone write tables
@@ -5880,10 +5965,7 @@ fn field_scope(
 
 /// A use list as text: `read+write`.
 fn uses_text(uses: &[crate::program::body::record_op::FieldUse]) -> String {
-    uses.iter()
-        .map(|u| u.as_str())
-        .collect::<Vec<_>>()
-        .join("+")
+    uses.iter().map(|u| u.human()).collect::<Vec<_>>().join("+")
 }
 
 /// What `--from` walks: the solve, and the sited graph when the demand
@@ -6230,7 +6312,12 @@ fn render_field_touches(
         .iter()
         .map(|&i| {
             let k = &table.keys[i];
-            json!({"id": k.id, "fields": k.fields.iter().map(|f| field_name_of(f)).collect::<Vec<_>>()})
+            let mut v = json!({"id": k.id, "fields": k.fields.iter().map(|f| field_name_of(f)).collect::<Vec<_>>()});
+            // r3 L1 (additive): the table extension that adds the key.
+            if let Some(ext) = &k.declared_by {
+                v["declaredBy"] = json!(ext);
+            }
+            v
         })
         .collect();
     let uses_json: Map<String, Value> = use_counts
@@ -6393,9 +6480,9 @@ fn render_field_touches(
             .iter()
             .map(|(u, n)| {
                 if *u == FieldUse::Write && read_write_sites > 0 {
-                    format!("{} {n} ({read_write_sites} also read)", u.as_str())
+                    format!("{} {n} ({read_write_sites} also read)", u.human())
                 } else {
-                    format!("{} {n}", u.as_str())
+                    format!("{} {n}", u.human())
                 }
             })
             .collect();
@@ -6460,7 +6547,16 @@ fn render_field_touches(
             .map(|&i| {
                 let k = &table.keys[i];
                 let names: Vec<String> = k.fields.iter().map(|f| field_name_of(f)).collect();
-                format!("key {} ({})", i + 1, names.join(", "))
+                // r3 L1: a key a table extension adds is named by it.
+                match &k.declared_by {
+                    Some(ext) => format!(
+                        "key {} ({}; from tableextension \"{}\")",
+                        i + 1,
+                        names.join(", "),
+                        ext.replace('"', "\"\"")
+                    ),
+                    None => format!("key {} ({})", i + 1, names.join(", ")),
+                }
             })
             .collect();
         format!("  declared keys: {}\n", keys.join("; "))
@@ -6530,7 +6626,7 @@ fn render_field_touches(
         let obj_sites: Vec<ft::FieldSite<'_>> = ixs.iter().map(|&i| sites[i].0.clone()).collect();
         let obj_uses: Vec<String> = ft::use_counts(&obj_sites)
             .iter()
-            .map(|(u, n)| format!("{} {n}", u.as_str()))
+            .map(|(u, n)| format!("{} {n}", u.human()))
             .collect();
         let obj_routines: BTreeSet<usize> = obj_sites.iter().map(|s| s.routine_ix).collect();
         human.push_str(&format!(
@@ -6650,6 +6746,74 @@ mod tests {
             "  keys: primary key \"No.\"; other keys: (\"Name\"), (\"City\"), \
              (\"SystemModifiedAt\"), (\"Name\", \"City\"), … +2\n"
         );
+    }
+
+    /// Output validation r3 L1, hand-stated: a table extension's keys attach
+    /// to the table it extends, named by the extension, after the table's own
+    /// keys; a key over a base field and an extension field keeps both; the
+    /// base's first key stays the primary key even though the extension's
+    /// first key comes first in the extension.
+    ///
+    /// DISCRIMINATION (2026-11-08): (1) the key merge removed from
+    /// `merge_extension_fields` (no extension key on the base) fails the
+    /// keys line; (2) resolving the extension's key members against the
+    /// extension's own fields only (`by_name` over the stub's fields) drops
+    /// `"No."` from `("No.", "Ext Code")` and fails the same assert.
+    #[test]
+    fn a_table_extensions_keys_attach_to_the_table_it_extends() {
+        let src = "table 50100 Cust
+{
+    fields
+    {
+        field(1; \"No.\"; Code[20]) { }
+        field(2; Name; Text[100]) { }
+    }
+    keys
+    {
+        key(PK; \"No.\") { Clustered = true; }
+        key(ByName; Name) { }
+    }
+}
+tableextension 50101 \"Cust Ext\" extends Cust
+{
+    fields
+    {
+        field(50100; \"Ext Code\"; Code[10]) { }
+    }
+    keys
+    {
+        key(ExtKey; \"No.\", \"Ext Code\") { }
+        key(ExtKey2; SystemModifiedAt) { }
+    }
+}
+";
+        let model =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("src/Tab.al".to_string(), src.to_string())],
+                "11111111-0000-0000-0000-0000000a0004",
+            );
+        let table = model
+            .workspace
+            .tables
+            .iter()
+            .find(|t| t.name == "Cust" && !t.is_extension_stub)
+            .expect("table");
+        assert_eq!(
+            table_keys_line(&model, &table.id),
+            "  keys: primary key \"No.\"; other keys: (\"Name\"), (\"No.\", \"Ext Code\"; from \
+             tableextension \"Cust Ext\"), (\"SystemModifiedAt\"; from tableextension \"Cust \
+             Ext\")\n"
+        );
+        let ext: Vec<_> = table
+            .keys
+            .iter()
+            .filter(|k| k.declared_by.is_some())
+            .collect();
+        assert_eq!(ext.len(), 2);
+        assert_eq!(ext[0].declared_by.as_deref(), Some("Cust Ext"));
+        // Distinct from the base keys: its own id.
+        assert!(table.keys.iter().filter(|k| k.id == ext[0].id).count() == 1);
+        assert_ne!(ext[0].id, table.keys[0].id);
     }
 
     /// Round 2 G14: the header's `limits:` agrees with the body. A query

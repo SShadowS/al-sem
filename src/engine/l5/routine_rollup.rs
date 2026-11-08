@@ -1373,6 +1373,9 @@ pub struct RollupTotals {
     /// validation §8.2, F53): own sites and dependency routines entered.
     pub commit_dead_sites: usize,
     pub commit_dead_entry_points: usize,
+    /// r3 E2: what ruling those rows out assumes (a publisher's loaded
+    /// subscribers keep a value), one statement each.
+    pub commit_dead_assumes: Vec<String>,
     /// The COMMIT site search stopped at its depth bound
     /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
     /// above are lower bounds, printed "at least".
@@ -1508,6 +1511,10 @@ impl RollupTotals {
                 "sites": self.commit_dead_sites,
                 "entryPoints": self.commit_dead_entry_points,
             });
+            // r3 E2 (additive): what ruling them out assumes.
+            if !self.commit_dead_assumes.is_empty() {
+                v["commits"]["literalDead"]["assumes"] = json!(self.commit_dead_assumes);
+            }
         }
         if let Some(d) = &self.dominant_entry_point {
             v["mayWriteTables"]["mostBeyond"] = json!({
@@ -1601,8 +1608,14 @@ impl RollupTotals {
                     ));
                 }
                 if !dead.is_empty() {
+                    // r3 E2: and what ruling them out assumes.
+                    let assuming = if self.commit_dead_assumes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", assuming {}", self.commit_dead_assumes.join("; "))
+                    };
                     where_.push(format!(
-                        "{} more under literal arguments that cannot run",
+                        "{} more under literal arguments that cannot run{assuming}",
                         dead.join(" and ")
                     ));
                 }
@@ -1911,6 +1924,9 @@ pub struct RoutineRollup {
     /// entered), counted apart from the live ones.
     pub commit_dead_sites: usize,
     pub commit_dead_crossings: usize,
+    /// r3 E2: what those rows' removal assumes (the loaded subscribers of a
+    /// publisher keep a value), one statement each, sorted and distinct.
+    pub commit_dead_assumes: Vec<String>,
     pub commit_unconditional: bool,
     /// Own EVENT_PUBLISH rows' event ids (live), with the row.
     pub events_ws: BTreeMap<String, usize>,
@@ -1948,6 +1964,16 @@ fn anchor_key(e: &DigestEffectFull) -> (String, u32) {
 }
 
 impl RoutineRollup {
+    /// r3 E2: records what a literal-dead COMMIT row's removal assumes.
+    fn note_dead_assumes(&mut self, e: &DigestEffectFull) {
+        for k in e.flow_notes.iter().flat_map(|n| &n.assumed) {
+            let s = k.statement();
+            if let Err(at) = self.commit_dead_assumes.binary_search(&s) {
+                self.commit_dead_assumes.insert(at, s);
+            }
+        }
+    }
+
     /// The may-persist tables' names, owned by this app and by dependencies,
     /// each sorted.
     #[must_use]
@@ -2073,6 +2099,7 @@ impl RoutineRollup {
                     }
                     if ty == "COMMIT" {
                         r.commit_dead_crossings += 1;
+                        r.note_dead_assumes(e);
                     }
                     r.literal_dead_rows.push(i);
                     continue;
@@ -2122,6 +2149,7 @@ impl RoutineRollup {
                 }
                 if ty == "COMMIT" {
                     r.commit_dead_sites += 1;
+                    r.note_dead_assumes(e);
                 }
                 r.literal_dead_rows.push(i);
                 continue;
@@ -2358,6 +2386,7 @@ impl RoutineRollup {
             commit_sites: self.commit_sites.len(),
             commit_dead_sites: self.commit_dead_sites,
             commit_dead_entry_points: self.commit_dead_crossings,
+            commit_dead_assumes: self.commit_dead_assumes.clone(),
             commit_entry_points,
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),

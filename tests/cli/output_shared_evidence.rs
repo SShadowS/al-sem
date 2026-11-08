@@ -64,7 +64,7 @@ fn pair(args: &[&str], new: Option<&str>, old: &str, code: i32) -> (Value, Value
 /// and the touches documents.
 ///
 /// Round-2 W5: every field is rebuilt but `dependencies.apps`, which 5.0.0
-/// replaces by `dependencyCount` and `dependencyClosure` (G38; §4.6 names no
+/// replaces by `dependencyCount` and `dependencyFingerprint` (G38; §4.6 names no
 /// reconstruction for it); the 4.0.0 side is compared without it.
 #[test]
 fn every_v4_document_is_rebuilt_from_v5() {
@@ -83,7 +83,13 @@ fn every_v4_document_is_rebuilt_from_v5() {
     ];
     let (v5, v4) = pair(&digest, None, "4", 0);
     assert_eq!(v5["schemaVersion"], digest_v5::VERSION);
-    let answers = v5["payload"]["entries"][0]["tableAnswers"].to_string();
+    // F top-9 (c15): alike answers are kept once (`sharedTableAnswers`), the
+    // entry naming their key; the rebuild below restores each entry's own.
+    let entry_answers = &v5["payload"]["entries"][0]["tableAnswers"];
+    let answers = match entry_answers.as_str() {
+        Some(k) => v5["payload"]["sharedTableAnswers"][k].to_string(),
+        None => entry_answers.to_string(),
+    };
     assert!(
         answers.contains("\"tableRef\"") && answers.contains("\"asked\""),
         "precondition: a table answer in 5.0.0's shape: {answers}"
@@ -141,6 +147,27 @@ fn every_v4_document_is_rebuilt_from_v5() {
             "{args:?}"
         );
     }
+    // r3 §5.1 (A P10): a routine with no record operation keeps a compact
+    // summary in 5.0.0 (its `result.scope` whole), and 4.0.0 is rebuilt.
+    let zero = [
+        "query",
+        "effects",
+        ws.as_str(),
+        "--routine",
+        "Out Sender.Notify",
+    ];
+    let (v5, v4) = pair(&zero, None, "4", 0);
+    assert_eq!(v5["payload"]["effectCount"], 0, "precondition: {v5:#}");
+    assert_eq!(v5["payload"]["summary"]["operations"], 0, "compact: {v5:#}");
+    assert!(
+        v5["payload"]["result"]["scope"]["families"].is_object(),
+        "{v5:#}"
+    );
+    assert_eq!(
+        query_v5::document_to_v4(v5)["payload"],
+        without_apps(&v4["payload"]),
+        "query effects, no operation"
+    );
 }
 
 /// A 4.0.0 payload without `dependencies.apps` (and without `dependencies`

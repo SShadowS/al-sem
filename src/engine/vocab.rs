@@ -263,7 +263,29 @@ pub fn condition(key: &str) -> &str {
         "loop-body" | "in-loop" => "in a loop",
         "conditional" => "conditional",
         "unknown" => "condition not resolved",
+        // r3 H2(d): the IsHandled class is a pattern the route passes, not a
+        // guard that was evaluated; it is never printed as the guard.
+        "guarded-by-IsHandled" => "IsHandled pattern, not evaluated",
         k => k,
+    }
+}
+
+/// A routine of the answer's own object, named without its object (r3 H4):
+/// `this object: Name`, in explain and impact alike (the header names the
+/// object).
+#[must_use]
+pub fn this_object(name: &str) -> String {
+    format!("this object: {name}")
+}
+
+/// The value of a `condition:` line (r3 H2(d)): [`condition`]'s words, with
+/// the guard that was not evaluated said as `not evaluated (IsHandled
+/// pattern)`.
+#[must_use]
+pub fn condition_line(key: &str) -> &str {
+    match key {
+        "guarded-by-IsHandled" => "not evaluated (IsHandled pattern)",
+        k => condition(k),
     }
 }
 
@@ -340,6 +362,7 @@ pub const REPLACED: &[&str] = &[
     "temp state unknown",
     // condition
     "(unknown)",
+    "guarded-by-IsHandled",
     // completeness and test status
     "coverage: complete",
     "no-known-path",

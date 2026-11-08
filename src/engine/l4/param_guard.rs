@@ -224,7 +224,7 @@ fn branch_reqs(node: &PCFNNode, usable: &[(String, u32)]) -> BranchReqs {
 
 /// Whether a branch is exactly one `exit` (through any `block` wrappers: a
 /// branch is built as one block node).
-fn is_exit_only(children: Option<&Vec<PCFNNode>>) -> bool {
+pub(crate) fn is_exit_only(children: Option<&Vec<PCFNNode>>) -> bool {
     match children.map(Vec::as_slice) {
         Some([n]) if n.kind == "exit" => true,
         Some([n]) if n.kind == "block" && n.condition_leaves.is_none() => {

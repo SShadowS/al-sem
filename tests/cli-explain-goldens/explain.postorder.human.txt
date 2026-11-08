@@ -6,7 +6,8 @@ Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
   transaction, UI and errors: commits: no (every candidate decided); UI at 1 place; errors at 3 places
   other effects: events: 1 (1 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  calls: ::OnBeforePostOrder (called at :13)
+  starts by (a start, not a summary): `if Order.Status <> Order.Status::Released then …` (:10); `Order.TestField(Amount)` (:12); +6 more
+  calls: this object: OnBeforePostOrder (called at :13)
   doc: Posts a released order. / It marks the order posted.
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:12]
@@ -17,8 +18,8 @@ Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
   events raised (1 in workspace code, its own and downstream): Codeunit "Explain Post": OnBeforePostOrder; 0 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
-  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
+  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (IsHandled pattern, not evaluated)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (IsHandled pattern, not evaluated); ERROR_THROW at ws:src/post.al:11 (error-path)
   test Codeunit "Explain Tests"::PostUnreleasedFails (3 own assert(s))
   next: alsem explain --callers-context --routine 'Codeunit "Explain Post"::PostOrder' — its callers' pending writes, intercepted errors and non-interactive entries
 

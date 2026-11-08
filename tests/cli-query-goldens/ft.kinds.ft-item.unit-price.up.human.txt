@@ -1,5 +1,5 @@
 query touches field 3 "Unit Price" of Table "FT Item" (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
-answer: consumers: 1 site, 0 candidates (1 site in 1 routine of 1 object) — uses (a site can have two): write 1; sites by record: persistent 1
+answer: consumers: 1 site, 0 candidates (1 site in 1 routine of 1 object) — uses (a site can have two): field assignment 1; sites by record: persistent 1
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
   field: Decimal, Normal
@@ -10,5 +10,5 @@ more: --all lists every witness, no fold; --format json for every row
   declared keys: key 2 (Amount, Unit Price)
   not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed above
   legend: access: a field named on a record (Rec.Field); persistent: the record is not temporary
-  Codeunit "FT Callers": 1 site in 1 routine (write 1)
-    CallsKinds ws:src/FTFields.al:135 write [persistent, access, up, local]
+  Codeunit "FT Callers": 1 site in 1 routine (field assignment 1)
+    CallsKinds ws:src/FTFields.al:135 field assignment [persistent, access, up, local]

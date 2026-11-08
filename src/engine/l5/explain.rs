@@ -535,6 +535,18 @@ impl Job for ExplainJob<'_> {
         let apps = view.target().dependencies().apps;
         let sources = (self.show_source && self.human)
             .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
+        // r3 §5.1 (A P6): each workspace card's first statements.
+        // `--show-source` already shows the first statement under the
+        // card's location.
+        let starts: HashMap<String, String> = if self.human && !self.show_source {
+            resolved
+                .roots
+                .iter()
+                .filter_map(|r| starts_by(model, &workspace, r).map(|s| (r.clone(), s)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         // The test scope (agent-tasks C-7): the same discovery `alsem tests`
         // runs, files only. explain never starts a test universe: it says
         // what was found and that `alsem tests` selects from it.
@@ -556,6 +568,7 @@ impl Job for ExplainJob<'_> {
             &test_scope,
             &callers,
             &through,
+            &starts,
             self.req.single_app,
         );
         drop(full);
@@ -589,6 +602,75 @@ impl Job for ExplainJob<'_> {
             ),
         }
     }
+}
+
+/// How many top-level statements [`starts_by`] names.
+const STARTS_SHOWN: usize = 2;
+
+/// The longest statement text [`starts_by`] prints, in characters.
+const STARTS_CHARS: usize = 80;
+
+/// r3 §5.1 (A P6, m07): how a workspace routine starts, `starts by:` its
+/// first [`STARTS_SHOWN`] top-level statements, read from its statement tree
+/// (each node's source range) and its own source file, labelled a start,
+/// not a summary. A statement over several lines shows its first line; a
+/// long one is cut at [`STARTS_CHARS`]. `None` for a dependency routine, a
+/// routine with no statement tree or no statement, or a file not readable.
+fn starts_by(model: &Model, workspace: &std::path::Path, root: &str) -> Option<String> {
+    let r = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.stable_routine_id == root)?;
+    let rel = r.source_anchor.source_unit_id.strip_prefix("ws:")?;
+    let tree = r.statement_tree.as_ref()?;
+    let top: Vec<&crate::program::body::features::PCFNNode> = if tree.kind == "block" {
+        tree.children.iter().flatten().collect()
+    } else {
+        vec![tree.as_ref()]
+    };
+    let text = crate::source_text::read_al_source(&workspace.join(rel)).ok()?;
+    let lines: Vec<&str> = text.lines().collect();
+    let total = top.len();
+    let shown: Vec<String> = top
+        .iter()
+        .filter_map(|n| {
+            let (line, col, end_line, end_col) = n.source_range?;
+            let first = lines.get(line as usize)?;
+            let start = first
+                .char_indices()
+                .nth(col as usize)
+                .map_or(first.len(), |(i, _)| i);
+            let mut s = if end_line == line {
+                let end = first
+                    .char_indices()
+                    .nth(end_col as usize)
+                    .map_or(first.len(), |(i, _)| i);
+                first.get(start..end.max(start)).unwrap_or("").to_string()
+            } else {
+                format!("{} …", first.get(start..).unwrap_or("").trim_end())
+            };
+            if s.chars().count() > STARTS_CHARS {
+                s = format!("{} …", s.chars().take(STARTS_CHARS).collect::<String>());
+            }
+            let s = s.trim().to_string();
+            (!s.is_empty()).then(|| format!("`{s}` (:{})", line + 1))
+        })
+        .take(STARTS_SHOWN)
+        .collect();
+    if shown.is_empty() {
+        return None;
+    }
+    let more = total.saturating_sub(shown.len());
+    Some(format!(
+        "starts by (a start, not a summary): {}{}",
+        shown.join("; "),
+        if more > 0 {
+            format!("; +{more} more")
+        } else {
+            String::new()
+        }
+    ))
 }
 
 /// A page action as the one display names it (V3 §2.1):
@@ -1550,7 +1632,9 @@ pub(crate) fn calls_line(
 }
 
 /// The objects the routine runs in source order, at most [`CALLS_SHOWN`]
-/// named (round-3 m10): `runs: Page "X" (RunModal at :105)`. A page, report
+/// named (round-3 m10): `runs: Page "X" (RunModal at :105)`; a dependency
+/// object with its number, `Codeunit "Base Poster" (70100), Run at :15`
+/// (r3 L2). A page, report
 /// or codeunit run is not a call of one trigger (the model gives a page run
 /// one edge per trigger), so it is not on the `calls:` line. `None` when the
 /// routine runs no object.
@@ -1565,9 +1649,18 @@ pub(crate) fn runs_line(
     }
     let more = runs.len().saturating_sub(CALLS_SHOWN);
     runs.truncate(CALLS_SHOWN);
+    // Output validation r3 L2: one set of parentheses. A dependency
+    // object's display already ends with its number (`Codeunit "Base
+    // Poster" (70100)`), so the run follows it after a comma.
     let shown: Vec<String> = runs
         .iter()
-        .map(|(object, method, line)| format!("{object} ({method} at :{line})"))
+        .map(|(object, method, line)| {
+            if object.ends_with(')') {
+                format!("{object}, {method} at :{line}")
+            } else {
+                format!("{object} ({method} at :{line})")
+            }
+        })
         .collect();
     Some(format!(
         "runs: {}{}",
@@ -1595,8 +1688,9 @@ fn direct_callees(
         .iter()
         .map(|x| (x.id.as_str(), x.stable_routine_id.as_str()))
         .collect();
-    // A callee in the routine's own object prints as `::Name` (the header
-    // names the object); one elsewhere by its whole display.
+    // A callee in the routine's own object prints as `this object: Name`
+    // (r3 H4; the header names the object); one elsewhere by its whole
+    // display.
     let own: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = routines
         .iter()
         .filter(|x| x.object_id == r.object_id)
@@ -1655,7 +1749,9 @@ fn direct_callees(
             continue;
         }
         let shown = match (own.get(stable), display.split_once("::")) {
-            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => format!("::{rest}"),
+            (Some(x), Some((_, rest))) if x.enclosing_member.is_none() => {
+                crate::engine::vocab::this_object(rest)
+            }
             _ => display.clone(),
         };
         if !seen.insert(shown.clone()) {
@@ -1954,8 +2050,11 @@ fn through_dependency_card(
     let mut line = if code.is_empty() {
         "through dependency code: none by code calls".to_string()
     } else {
+        // r3 §5.1 (A P5): one witness on the card (the JSON keeps the
+        // nearest three).
         let shown: Vec<String> = nearest
             .iter()
+            .take(1)
             .map(|c| {
                 let via = c
                     .hops
@@ -1975,7 +2074,7 @@ fn through_dependency_card(
              checked): {} more — nearest: {}{}",
             code.len(),
             shown.join("; "),
-            if code.len() > nearest.len() {
+            if code.len() > shown.len() {
                 match surface {
                     crate::engine::follow_up::Surface::Cli => {
                         " — alsem query touches --callers lists them"
@@ -2022,6 +2121,7 @@ fn render(
     test_scope: &crate::engine::test_select::scope::Scope,
     callers: &HashMap<String, crate::engine::l5::callers_context::CallersSection>,
     through: &HashMap<String, (Value, String)>,
+    starts: &HashMap<String, String>,
     single_app: bool,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
@@ -2094,6 +2194,11 @@ fn render(
             // changes, the target company of its writes, and the callers'
             // context section lead the card, right after its head.
             let mut lead: Vec<String> = Vec::new();
+            // r3 §5.1 (A P6): how the routine starts, from its statement
+            // tree, before its callees.
+            if let Some(s) = starts.get(rid) {
+                lead.push(s.clone());
+            }
             // §9.1 (F55): the direct callees first, and the short route to
             // the UI effect the card names (a callee list alone does not say
             // how the routine reaches it).
@@ -2304,7 +2409,7 @@ fn render(
             )
         });
     let lookup_miss = no_answer.is_some();
-    let header = explain_header(
+    let mut header = explain_header(
         mode,
         &cards,
         resolved,
@@ -2313,6 +2418,15 @@ fn render(
         single_app,
         no_answer,
     );
+    // r3 §5.2 (c06): above a callers' context block, whose answers carry
+    // their own `unknown`s, the analysis words name what they qualify.
+    if !callers.is_empty() && !lookup_miss {
+        header.analysis_subject = Some(if cards.len() == 1 {
+            "the routine's own cone"
+        } else {
+            "the routines' own cones"
+        });
+    }
     doc.insert(
         "result".into(),
         json!({"scope": header.scope_json(Map::new())}),
@@ -2370,6 +2484,20 @@ fn render(
                 human.push_str(&l);
                 human.push('\n');
             }
+        }
+        // r3 §5.2 (n06, m08): a typo's recovery, ready to send.
+        if d.json["kind"] == "routine-not-found"
+            && let Some((sel, overloads)) =
+                crate::engine::l5::selector_index::first_nearest(&d.json)
+        {
+            human.push_str(&crate::engine::l5::selector_index::corrected_call_line(
+                crate::engine::follow_up::Tool::Explain,
+                fcx,
+                sel,
+                overloads,
+                &[],
+            ));
+            human.push('\n');
         }
     }
     let mut summary = explain_summary(&cards, resolved.diagnostics.len(), &header);
@@ -2815,6 +2943,9 @@ struct Card {
     own: Vec<PRule>,
     inherited: Vec<(Value, String)>,
     callers: Vec<(Value, String)>,
+    /// `callers`' human lines with counts in place of names (r3 §5.1, A P5:
+    /// printed above a callers' context block).
+    callers_compact: Vec<String>,
     /// The known routine callers, qualified (page-action triggers apart).
     known_callers: Vec<String>,
     /// Every known caller row, page-action triggers included (the caller
@@ -2978,6 +3109,16 @@ fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
         && let Some(o) = v.as_object_mut()
     {
         o.insert("literalUnreachable".into(), true.into());
+        // r3 E2 (additive): what ruling it out assumes.
+        let assumes: Vec<String> = e
+            .flow_notes
+            .iter()
+            .flat_map(|n| &n.assumed)
+            .map(|k| k.statement())
+            .collect();
+        if !assumes.is_empty() {
+            o.insert("literalAssumes".into(), assumes.into());
+        }
     }
 }
 
@@ -3136,6 +3277,41 @@ impl DirectCallers {
         )
     }
 
+    /// r3 §5.1 (A P5): the card's callers line above a callers' context
+    /// block, counts only: `callers: 43 direct (13 routines and page
+    /// triggers, 30 page actions in 6 objects); 118 page actions reach it in
+    /// all — detail: true lists them`.
+    fn compact_human(&self, detail_input: &str) -> String {
+        let mut parts = Vec::new();
+        if !self.routines.is_empty() {
+            parts.push(rf_plural(
+                self.routines.len(),
+                self.routine_label.0,
+                self.routine_label.1,
+            ));
+        }
+        if !self.actions.is_empty() {
+            parts.push(format!(
+                "{} in {}",
+                rf_plural(self.actions.len(), "page action", "page actions"),
+                rf_plural(self.action_objects, "object", "objects")
+            ));
+        }
+        let reach = if self.reached > 0 {
+            format!("; {}", actions_reach(self.reached))
+        } else {
+            String::new()
+        };
+        if self.total == 0 {
+            return format!("callers: none direct{reach}");
+        }
+        format!(
+            "callers: {} direct ({}){reach} — {detail_input} lists them",
+            self.total,
+            parts.join(", ")
+        )
+    }
+
     /// The card's line after `callers: ` (`detail` lists every name).
     fn human(&self, detail: bool, detail_input: &str) -> String {
         let reach = if self.reached > 0 {
@@ -3210,6 +3386,47 @@ fn routine_label(ix: &Indexes<'_>, rows: &[usize]) -> (&'static str, &'static st
 /// event subscriber (its publishers and any direct code caller); every other
 /// trigger with no direct caller says what runs it is not listed yet (W3).
 /// The card's `run by:` line, its summary clause and its JSON.
+/// A table's potential UI surfaces ([`RunBy::pages_on_table`]): each page
+/// by its display, and whether it blocks the step only as a candidate (it
+/// may be read-only at runtime, output validation r3 L3).
+struct UiSurfaces(Vec<(String, bool)>);
+
+impl UiSurfaces {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The human list: a candidate page marked `(may be read-only at
+    /// runtime)`.
+    fn join(&self, sep: &str) -> String {
+        self.0
+            .iter()
+            .map(|(p, c)| {
+                if *c {
+                    format!("{p} (may be read-only at runtime)")
+                } else {
+                    p.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(sep)
+    }
+
+    /// The JSON fields: `potentialUiSurfaces` (every page) and, when some
+    /// page is a candidate, `mayBeReadOnlyAtRuntime` (those pages).
+    fn json_into(&self, v: &mut Value) {
+        v["potentialUiSurfaces"] = json!(self.0.iter().map(|(p, _)| p).collect::<Vec<_>>());
+        let cand: Vec<&String> = self.0.iter().filter(|(_, c)| *c).map(|(p, _)| p).collect();
+        if !cand.is_empty() {
+            v["mayBeReadOnlyAtRuntime"] = json!(cand);
+        }
+    }
+}
+
 struct RunBy {
     human: String,
     summary: String,
@@ -3397,11 +3614,14 @@ impl RunBy {
     /// is, less those that block `op` for certain (`InsertAllowed = false`,
     /// …; the sited graph's rule for a lifecycle site from a page into its
     /// source table's triggers, `impact_graph::project`, reads the same
-    /// [`Model::page_blocks`] answer), sorted.
-    fn pages_on_table(model: &Model, table: &ModelTable, op: u8) -> Vec<String> {
+    /// [`Model::page_blocks`] answer), sorted. A page that blocks `op` only
+    /// while no runtime `Editable(…)` setter makes it editable (a candidate,
+    /// [`Model::page_may_be_read_only`]) is listed marked `(may be read-only
+    /// at runtime)` (output validation r3 L3).
+    fn pages_on_table(model: &Model, table: &ModelTable, op: u8) -> UiSurfaces {
         use crate::engine::l4::field_touches::field_key;
         let table_key = field_key(&table.name);
-        let mut pages: Vec<String> = model
+        let mut pages: Vec<(String, bool)> = model
             .workspace
             .objects
             .iter()
@@ -3412,11 +3632,16 @@ impl RunBy {
                         .is_some_and(|t| field_key(t) == table_key)
                     && !model.page_blocks(&o.id, op)
             })
-            .map(|o| crate::engine::l5::routine_rollup::format_object("Page", &o.name, None))
+            .map(|o| {
+                (
+                    crate::engine::l5::routine_rollup::format_object("Page", &o.name, None),
+                    op != 0 && model.page_may_be_read_only(&o.id, op),
+                )
+            })
             .collect();
         pages.sort();
         pages.dedup();
-        pages
+        UiSurfaces(pages)
     }
 
     /// A table's record trigger (`OnInsert`, `OnModify`, `OnDelete`,
@@ -3515,8 +3740,12 @@ impl RunBy {
                 "run by: record operations: {ops_short}; potential UI surfaces: {}",
                 rf_plural(pages.len(), "page", "pages")
             ),
-            json: json!({"kind": "table-trigger", "table": table.name,
-                         "recordOperations": json_sites, "potentialUiSurfaces": pages}),
+            json: {
+                let mut v = json!({"kind": "table-trigger", "table": table.name,
+                                   "recordOperations": json_sites});
+                pages.json_into(&mut v);
+                v
+            },
             action: false,
             keep_callers: true,
         })
@@ -3697,9 +3926,12 @@ impl RunBy {
                     r.name
                 ),
                 summary: format!("run by: no code call (a user step); {surfaces_short}"),
-                json: json!({"kind": if name == "onlookup" { "field-lookup" } else { "field-assist-edit" },
-                             "table": table.name, "field": field.name,
-                             "potentialUiSurfaces": pages}),
+                json: {
+                    let mut v = json!({"kind": if name == "onlookup" { "field-lookup" } else { "field-assist-edit" },
+                                       "table": table.name, "field": field.name});
+                    pages.json_into(&mut v);
+                    v
+                },
                 action: false,
                 keep_callers: false,
             });
@@ -3790,10 +4022,13 @@ impl RunBy {
                  field does not run it"
             ),
             summary: format!("run by: Validate calls: {calls_short}; {surfaces_short}"),
-            json: json!({"kind": "field-validate", "table": table.name, "field": field.name,
-                         "validateSites": sites, "validateCandidates": candidates,
-                         "searched": searched, "notSearched": not,
-                         "potentialUiSurfaces": pages}),
+            json: {
+                let mut v = json!({"kind": "field-validate", "table": table.name, "field": field.name,
+                                   "validateSites": sites, "validateCandidates": candidates,
+                                   "searched": searched, "notSearched": not});
+                pages.json_into(&mut v);
+                v
+            },
             action: false,
             keep_callers: false,
         })
@@ -3942,6 +4177,38 @@ impl Card {
                         "caller rule ({applied}{skipped}): {}",
                         rule_human(&c.inh.rule)
                     ),
+                )
+            })
+            .collect();
+        // r3 §5.1 (A P5): above a callers' context block the caller rules
+        // keep their counts and the rule; the names fold behind `detail`.
+        let callers_compact: Vec<String> = cross
+            .caller_rules(&rows)
+            .iter()
+            .map(|c: &CallerRule| {
+                let applied = if c.applied_by.is_empty() {
+                    format!(
+                        "checked by no caller; present in {}, but its check may not stop the call",
+                        rf_plural(c.present_in.len(), "caller", "callers")
+                    )
+                } else {
+                    format!(
+                        "checked by {}",
+                        rf_plural(c.applied_by.len(), "caller", "callers")
+                    )
+                };
+                let skipped = if c.skipped_by.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; no equivalent check recognized in {}",
+                        rf_plural(c.skipped_by.len(), "analyzed caller", "analyzed callers"),
+                    )
+                };
+                format!(
+                    "caller rule ({applied}{skipped} — {} lists them): {}",
+                    opts.detail_input(),
+                    rule_human(&c.inh.rule)
                 )
             })
             .collect();
@@ -4208,8 +4475,12 @@ impl Card {
                 mark_dead(&mut ev, e);
                 events.push(ev);
                 // An extension point: an event the routine raises itself (a
-                // call straight into the publisher).
-                if via.len() <= 1 {
+                // call straight into the publisher). A row whose every listed
+                // path was dropped (it cannot run under the literal
+                // arguments, r3 E1) and none kept says nothing of where the
+                // event is raised: its empty `via` is no zero-hop path.
+                let paths_dropped = e.via_paths_truncated && e.via_paths.iter().all(Vec::is_empty);
+                if via.len() <= 1 && !paths_dropped {
                     let subscribers = model
                         .events
                         .graph
@@ -4745,6 +5016,7 @@ impl Card {
             own,
             inherited,
             callers,
+            callers_compact,
             known_callers: routine_callers,
             known_caller_rows: known_callers.len(),
             direct,
@@ -4989,13 +5261,22 @@ impl Card {
             // §5.3: `callers: none` with no page action is the summary's own
             // clause.
             None if self.direct.total == 0 && actions == 0 && self.callers.is_empty() => {}
+            // r3 §5.1 (A P5): above a callers' context block, the direct
+            // callers' counts; their names fold behind `detail`.
+            None if compact => line(&self.direct.compact_human(self.opts.detail_input())),
             None => line(&format!(
                 "callers: {}",
                 self.direct.human(detail, self.opts.detail_input())
             )),
         }
-        for (_, h) in &self.callers {
-            line(&format!("  {h}"));
+        if compact {
+            for h in &self.callers_compact {
+                line(&format!("  {h}"));
+            }
+        } else {
+            for (_, h) in &self.callers {
+                line(&format!("  {h}"));
+            }
         }
         // A page action's own card: its only `reached from` is the action
         // itself, which `entry point: this action` says (G26).
@@ -5464,7 +5745,7 @@ codeunit 50100 Handler
         let names = crate::engine::l5::routine_rollup::RoutineNames::new(&model, &[]);
         assert_eq!(
             calls_line(&model, &names, root).as_deref(),
-            Some("calls: ::Helper (called at :18)")
+            Some("calls: this object: Helper (called at :18)")
         );
         assert_eq!(
             runs_line(&model, &names, root).as_deref(),

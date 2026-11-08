@@ -581,6 +581,8 @@ mod tests {
             field_exit_guard: None,
             table_exit_guard: None,
             junction_guards: None,
+            value_fact: None,
+            flow: None,
         }
     }
 
@@ -600,6 +602,8 @@ mod tests {
             field_exit_guard: None,
             table_exit_guard: None,
             junction_guards: None,
+            value_fact: None,
+            flow: None,
         }
     }
 
@@ -623,6 +627,8 @@ mod tests {
             field_exit_guard: None,
             table_exit_guard: None,
             junction_guards: None,
+            value_fact: None,
+            flow: None,
         }
     }
 

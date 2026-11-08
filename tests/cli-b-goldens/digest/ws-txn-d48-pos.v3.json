@@ -21,8 +21,8 @@
     "dependencies": {
       "mode": "crossApp"
     },
-    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
     "dependencyCount": 0,
+    "dependencyFingerprint": "apps-v1:af1349b9f5f9a1a6",
     "effects": {
       "e:1": {
         "confidence": "static",

@@ -1,12 +1,10 @@
 prove Codeunit "CDO E-Mail Handler"::RunReportID may-commit   [cross-app]
-answer: yes — COMMIT at ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123 (guarded-by-IsHandled), and 13 more
+answer: yes — COMMIT at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241 (14 guards on the route, 2 evaluated), and 13 more
 analysis partial (21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 14 effects
-    [COMMIT] at ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123
-      condition: guarded-by-IsHandled
-      path: RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text]) → Codeunit "CDO Mail Management"::OpenDOMail
-    also [COMMIT]: at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253; at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241 (guarded-by-IsHandled); … +10 rows; 14 rows of this type in all (detail: true lists every row with its path)
-  top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
-  top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
+    [COMMIT] at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241
+      condition: IsHandled: false, evaluated (CreateAndSendMail line 963); (UseHandleDoc and SendCode.Print) or Is…: must be true, not evaluated (CreateAndSendMail line 1025); PrintHandled: false, evaluated (PrintDocuments line 1172); case DocumentTemplateLine."Print uses": this arm, not evaluated (PrintDocuments line 1236); … +10 guards (14 guards in all)
+      path: RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text]) → PrintDocuments(Record "CDO E-Mail Template Header", Record "CDO Document Template Line", Integer, RecordRef, Variant, Boolean, Text[250], Integer, var Record "CDO File" temporary, Boolean)
+    also [COMMIT]: at ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123 (IsHandled pattern, not evaluated); at ws:src/Foundation/CDOFile.Table.al:128; at ws:src/Platform/Licensing/CDOUsageManagement.Codeunit.al:35; … +10 rows; 14 rows of this type in all (detail: true lists every row with its path)
   next: alsem_explain {"routines": ["Codeunit \"CDO E-Mail Handler\"::RunReportID"]} — lists the workspace ones under gaps

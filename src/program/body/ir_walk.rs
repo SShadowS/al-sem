@@ -10,9 +10,10 @@
 //! subsequent increments, which thread the full `Ctx` scope inputs.
 
 use super::features::{
-    PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PConditionGuard,
-    PConditionReference, PExpressionInfo, PFieldAccess, PLoop, POperationSite, PRecordOperation,
-    PTempState, PUnreachableStatement, PVarAssignment, PathHint,
+    FLOW_TEXT_MAX, FlowExpr, FlowFact, PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee,
+    PConditionGuard, PConditionReference, PExpressionInfo, PFieldAccess, PLoop, POperationSite,
+    PRecordOperation, PTempState, PUnreachableStatement, PVarAssignment, PathHint, ValueFact,
+    ValueLabel,
 };
 use super::node_util::Utf16Cols;
 use super::record_op::{FIELD_ARGS_OPS, record_op_type};
@@ -114,6 +115,11 @@ pub struct IrSpine {
     /// Per call-site, the argument ExprIds (parallel to `call_sites`) — the binding
     /// post-pass needs them to anchor + classify each argument.
     pub cs_arg_exprs: Vec<Vec<ExprId>>,
+    /// r3 E1: the value label ([`ValueLabel::of_info`], the same reading as a
+    /// call argument's) of every `case` pattern and every operand of an `if`
+    /// comparison (`=`, `<>`, `in`) that is a literal or a label. The CFN
+    /// builder reads it for [`super::features::ValueFact`].
+    pub value_labels: HashMap<ExprId, ValueLabel>,
 }
 
 /// An implicit-receiver frame (table-method base `Rec` seed / `with` body). Carries
@@ -481,6 +487,8 @@ struct SpineCtx<'a> {
     /// is used (#14). Only a field access ON that exact expression is a write;
     /// one nested inside it (an index) is still a read.
     assign_target: Option<(ExprId, crate::program::body::features::FieldAccessKind)>,
+    /// [`IrSpine::value_labels`].
+    value_labels: HashMap<ExprId, ValueLabel>,
 }
 
 impl<'a> SpineCtx<'a> {
@@ -672,79 +680,41 @@ impl<'a> SpineCtx<'a> {
 
     /// Structured expression classification (legacy `expression_info_from_node`).
     fn ir_expression_info(&self, eid: ExprId) -> PExpressionInfo {
-        use ExprKind::*;
-        let e = self.file.ir.expr(eid);
-        let text = self.raw(&e.origin).to_string();
-        let strip_q = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
-        let mut value = None;
-        let mut qualifier = None;
-        let mut member = None;
-        let kind = match &e.kind {
-            Literal(al_syntax::ir::Literal::Text(_)) => {
-                value = Some(strip_q(&text));
-                "string_literal"
-            }
-            QuotedIdentifier(_) => {
-                value = Some(strip_q(&text));
-                "quoted_identifier"
-            }
-            Literal(al_syntax::ir::Literal::Int(_)) => {
-                value = Some(text.clone());
-                "integer"
-            }
-            Literal(al_syntax::ir::Literal::Decimal(_)) => {
-                value = Some(text.clone());
-                "decimal"
-            }
-            Literal(al_syntax::ir::Literal::Bool(_)) => {
-                value = Some(text.clone());
-                "boolean"
-            }
-            Identifier(_) if e.origin.kind_text == "identifier" => {
-                value = Some(text.clone());
-                "identifier"
-            }
-            QualifiedEnum {
-                enum_type,
-                value: v,
-            } => {
-                qualifier = Some(self.raw(&self.file.ir.expr(*enum_type).origin).to_string());
-                let m = strip_q(v);
-                member = Some(m.clone());
-                value = Some(m);
-                "qualified_enum_value"
-            }
-            DatabaseReference(t) => {
-                if let Some((kw, tn)) = t.split_once("::") {
-                    qualifier = Some(kw.trim().to_string());
-                    let m = strip_q(tn.trim());
-                    member = Some(m.clone());
-                    value = Some(m);
-                }
-                "database_reference"
-            }
-            Unary { operand, .. } => {
-                // signed numeric literal → the signed text, else None.
-                if matches!(
-                    &self.file.ir.expr(*operand).kind,
-                    Literal(al_syntax::ir::Literal::Int(_))
-                        | Literal(al_syntax::ir::Literal::Decimal(_))
-                ) {
-                    value = Some(text.clone());
-                }
-                "unary_expression"
-            }
-            Member { .. } => "member_expression",
-            Call { .. } => "call_expression",
-            Parenthesized(_) => "parenthesized_expression",
-            _ => "other",
+        expression_info(self.file, self.source, eid)
+    }
+
+    /// r3 E1: record `e`'s value label ([`IrSpine::value_labels`]) when it is
+    /// a literal or a label, read exactly as a call argument is.
+    fn note_value_label(&mut self, e: ExprId) {
+        if let Some(l) = ValueLabel::of_info(&self.ir_expression_info(e)) {
+            self.value_labels.insert(e, l);
+        }
+    }
+
+    /// r3 E1: the labels of an `if` condition that is wholly (through
+    /// parentheses) `A = B`, `A <> B` or `A in [..]`.
+    fn note_comparison_labels(&mut self, cond: ExprId) {
+        let mut e = cond;
+        while let ExprKind::Parenthesized(x) = &self.file.ir.expr(e).kind {
+            e = *x;
+        }
+        let ExprKind::Binary { op, lhs, rhs } = &self.file.ir.expr(e).kind else {
+            return;
         };
-        PExpressionInfo {
-            kind: kind.to_string(),
-            text,
-            value,
-            qualifier,
-            member,
+        let (lhs, rhs) = (*lhs, *rhs);
+        match op {
+            BinaryOp::Eq | BinaryOp::Ne => {
+                self.note_value_label(lhs);
+                self.note_value_label(rhs);
+            }
+            BinaryOp::In => {
+                if let ExprKind::List(items) = &self.file.ir.expr(rhs).kind {
+                    for &i in &items.clone() {
+                        self.note_value_label(i);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1087,6 +1057,7 @@ impl<'a> SpineCtx<'a> {
                 self.has_branching = true;
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*cond, "if", &sa);
+                self.note_comparison_labels(*cond);
                 self.walk_expr(*cond);
                 self.walk_block(*then_block);
                 if let Some(b) = else_block {
@@ -1104,6 +1075,7 @@ impl<'a> SpineCtx<'a> {
                 self.walk_expr(*scrutinee);
                 for br in branches {
                     for p in &br.patterns {
+                        self.note_value_label(*p);
                         self.walk_expr(*p);
                     }
                     self.walk_block(br.body);
@@ -1614,6 +1586,7 @@ pub fn walk_spine(
         cs_arg_exprs: Vec::new(),
         bare_assigns: Vec::new(),
         assign_target: None,
+        value_labels: HashMap::new(),
     };
     if let Some(b) = routine.body {
         ctx.walk_block(b);
@@ -1662,6 +1635,87 @@ pub fn walk_spine(
         call_sites: ctx.call_sites,
         site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
+        value_labels: ctx.value_labels,
+    }
+}
+
+/// [`IrWalk::ir_expression_info`] over a file and its source (r3 E2: the
+/// statement tree reads labels the same way).
+fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo {
+    use ExprKind::*;
+    let raw = |o: &Origin| &source[o.byte.clone()];
+    let e = file.ir.expr(eid);
+    let text = raw(&e.origin).to_string();
+    let strip_q = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
+    let mut value = None;
+    let mut qualifier = None;
+    let mut member = None;
+    let kind = match &e.kind {
+        Literal(al_syntax::ir::Literal::Text(_)) => {
+            value = Some(strip_q(&text));
+            "string_literal"
+        }
+        QuotedIdentifier(_) => {
+            value = Some(strip_q(&text));
+            "quoted_identifier"
+        }
+        Literal(al_syntax::ir::Literal::Int(_)) => {
+            value = Some(text.clone());
+            "integer"
+        }
+        Literal(al_syntax::ir::Literal::Decimal(_)) => {
+            value = Some(text.clone());
+            "decimal"
+        }
+        Literal(al_syntax::ir::Literal::Bool(_)) => {
+            value = Some(text.clone());
+            "boolean"
+        }
+        Identifier(_) if e.origin.kind_text == "identifier" => {
+            value = Some(text.clone());
+            "identifier"
+        }
+        QualifiedEnum {
+            enum_type,
+            value: v,
+        } => {
+            qualifier = Some(raw(&file.ir.expr(*enum_type).origin).to_string());
+            let m = strip_q(v);
+            member = Some(m.clone());
+            value = Some(m);
+            "qualified_enum_value"
+        }
+        DatabaseReference(t) => {
+            if let Some((kw, tn)) = t.split_once("::") {
+                qualifier = Some(kw.trim().to_string());
+                let m = strip_q(tn.trim());
+                member = Some(m.clone());
+                value = Some(m);
+            }
+            "database_reference"
+        }
+        Unary { operand, .. } => {
+            // signed numeric literal → the signed text, else None.
+            if matches!(
+                &file.ir.expr(*operand).kind,
+                Literal(al_syntax::ir::Literal::Int(_))
+                    | Literal(al_syntax::ir::Literal::Decimal(_))
+            ) {
+                value = Some(text.clone());
+            }
+            "unary_expression"
+        }
+        Member { .. } => "member_expression",
+        Call { .. } => "call_expression",
+        Parenthesized(_) => "parenthesized_expression",
+        _ => "other",
+    };
+    PExpressionInfo {
+        kind: kind.to_string(),
+        text,
+        value,
+        qualifier,
+        member,
     }
 }
 
@@ -1683,6 +1737,8 @@ fn cfn_node(kind: &str) -> PCFNNode {
         field_exit_guard: None,
         table_exit_guard: None,
         junction_guards: None,
+        value_fact: None,
+        flow: None,
     }
 }
 
@@ -1691,11 +1747,81 @@ pub struct IrCfn<'a> {
     pub file: &'a AlFile,
     pub spine: &'a IrSpine,
     pub cols: &'a Utf16Cols<'a>,
+    /// The file's source: r3 E2's condition texts and labels.
+    pub source: &'a str,
 }
 
 impl<'a> IrCfn<'a> {
     fn ir(&self) -> &al_syntax::ir::Ir {
         &self.file.ir
+    }
+
+    /// r3 E2: `e` as the within-routine value flow reads it
+    /// ([`FlowExpr`]). A call written without parentheses is never a
+    /// variable (the walk gave it a call-site id).
+    fn flow_expr(&self, mut e: ExprId) -> FlowExpr {
+        use ExprKind::*;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        if self.spine.cs_id_by_expr.contains_key(&e) {
+            return FlowExpr::Unknown;
+        }
+        let bx = |x: FlowExpr| Box::new(x);
+        match &self.ir().expr(e).kind {
+            Literal(al_syntax::ir::Literal::Bool(b)) => FlowExpr::Bool(*b),
+            Literal(al_syntax::ir::Literal::Int(_)) | QualifiedEnum { .. } | Unary { .. }
+                if !matches!(
+                    &self.ir().expr(e).kind,
+                    Unary {
+                        op: UnaryOp::Not,
+                        ..
+                    }
+                ) =>
+            {
+                ValueLabel::of_info(&expression_info(self.file, self.source, e))
+                    .map_or(FlowExpr::Unknown, FlowExpr::Label)
+            }
+            Identifier(_) | QuotedIdentifier(_) => {
+                self.bare_name(e).map_or(FlowExpr::Unknown, FlowExpr::Var)
+            }
+            Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => FlowExpr::Not(bx(self.flow_expr(*operand))),
+            Binary { op, lhs, rhs } => match op {
+                BinaryOp::And => FlowExpr::And(bx(self.flow_expr(*lhs)), bx(self.flow_expr(*rhs))),
+                BinaryOp::Or => FlowExpr::Or(bx(self.flow_expr(*lhs)), bx(self.flow_expr(*rhs))),
+                BinaryOp::Eq | BinaryOp::Ne => FlowExpr::Cmp {
+                    equal: *op == BinaryOp::Eq,
+                    lhs: bx(self.flow_expr(*lhs)),
+                    rhs: bx(self.flow_expr(*rhs)),
+                },
+                BinaryOp::In => match &self.ir().expr(*rhs).kind {
+                    List(items) => FlowExpr::In(
+                        bx(self.flow_expr(*lhs)),
+                        items.iter().map(|&i| self.flow_expr(i)).collect(),
+                    ),
+                    _ => FlowExpr::Unknown,
+                },
+                _ => FlowExpr::Unknown,
+            },
+            _ => FlowExpr::Unknown,
+        }
+    }
+
+    /// r3 E2: a condition's [`FlowFact::Cond`]: its value and its source text,
+    /// whitespace folded and cut at [`FLOW_TEXT_MAX`] characters.
+    fn flow_cond(&self, e: ExprId) -> Option<Box<FlowFact>> {
+        let raw = &self.source[self.ir().expr(e).origin.byte.clone()];
+        let mut text: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.chars().count() > FLOW_TEXT_MAX {
+            text = text.chars().take(FLOW_TEXT_MAX - 1).collect::<String>() + "…";
+        }
+        Some(Box::new(FlowFact::Cond {
+            expr: self.flow_expr(e),
+            text: text.into(),
+        }))
     }
 
     /// The node's TRUE source range `(startLine, startColumn, endLine, endColumn)` in
@@ -1796,6 +1922,7 @@ impl<'a> IrCfn<'a> {
                         "call"
                     });
                     leaf.callsite_id = Some(cs.clone());
+                    leaf.flow = self.flow_args(args);
                     if !inner.is_empty() {
                         leaf.condition_leaves = Some(inner);
                     }
@@ -1868,14 +1995,26 @@ impl<'a> IrCfn<'a> {
                 "call"
             });
             l.callsite_id = Some(cs.clone());
+            l.flow = self.flow_args(args);
             l
         } else {
-            cfn_node("other")
+            let mut l = cfn_node("other");
+            l.flow = Some(Box::new(FlowFact::Opaque));
+            l
         };
         if !pre.is_empty() {
             leaf.condition_leaves = Some(pre);
         }
         leaf
+    }
+
+    /// r3 E2: a call's [`FlowFact::Args`]; `None` when no argument is one the
+    /// value flow reads (the common case keeps no allocation).
+    fn flow_args(&self, args: &[ExprId]) -> Option<Box<FlowFact>> {
+        let flow: Vec<FlowExpr> = args.iter().map(|&a| self.flow_expr(a)).collect();
+        flow.iter()
+            .any(|f| *f != FlowExpr::Unknown)
+            .then(|| Box::new(FlowFact::Args(flow)))
     }
 
     /// G36: `(R folded, N)` when `cond` is `not R.FieldExist(N)` (through
@@ -2016,6 +2155,69 @@ impl<'a> IrCfn<'a> {
         }
         let logical = super::scope::unescape_al_identifier(&strip_quote_chars(name));
         Some(logical.to_lowercase())
+    }
+
+    /// r3 E1: the name of a bare identifier (quoted or not, through
+    /// parentheses), unquoted and folded.
+    fn bare_name(&self, mut e: ExprId) -> Option<String> {
+        use ExprKind::*;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        let x = self.ir().expr(e);
+        match &x.kind {
+            Identifier(n) if x.origin.kind_text == "identifier" => Some(n.to_lowercase()),
+            QuotedIdentifier(n) => {
+                let t = n.trim();
+                let inner = t
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(t);
+                Some(inner.replace("\"\"", "\"").to_lowercase())
+            }
+            _ => None,
+        }
+    }
+
+    /// r3 E1: [`ValueFact::Test`] for a condition that is wholly (through
+    /// parentheses) `N = L` / `L = N`, `N <> L` / `L <> N` or `N in [L, …]`,
+    /// `N` a bare identifier and the other side not one.
+    fn value_test(&self, cond: ExprId) -> Option<ValueFact> {
+        use ExprKind::*;
+        let mut e = cond;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        let Binary { op, lhs, rhs } = &self.ir().expr(e).kind else {
+            return None;
+        };
+        let label = |x: ExprId| self.spine.value_labels.get(&x).cloned();
+        match op {
+            BinaryOp::Eq | BinaryOp::Ne => {
+                let (name, other) = match (self.bare_name(*lhs), self.bare_name(*rhs)) {
+                    (Some(n), None) => (n, *rhs),
+                    (None, Some(n)) => (n, *lhs),
+                    _ => return None,
+                };
+                Some(ValueFact::Test {
+                    name,
+                    equal: *op == BinaryOp::Eq,
+                    labels: vec![label(other)],
+                })
+            }
+            BinaryOp::In => {
+                let name = self.bare_name(*lhs)?;
+                let List(items) = &self.ir().expr(*rhs).kind else {
+                    return None;
+                };
+                Some(ValueFact::Test {
+                    name,
+                    equal: true,
+                    labels: items.iter().map(|&i| label(i)).collect(),
+                })
+            }
+            _ => None,
+        }
     }
 
     fn simple_guard(&self, cond: ExprId) -> Option<PConditionGuard> {
@@ -2182,6 +2384,8 @@ impl<'a> IrCfn<'a> {
                     n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
                     n.table_exit_guard = self.table_exit_guard(*cond, *then_block);
                 }
+                n.value_fact = self.value_test(*cond);
+                n.flow = self.flow_cond(*cond);
                 n
             }
             Case {
@@ -2203,6 +2407,12 @@ impl<'a> IrCfn<'a> {
                             .collect::<Option<Vec<_>>>()
                             .map(super::features::TableCase::Tables);
                     }
+                    b.value_fact = Some(ValueFact::Arm(
+                        br.patterns
+                            .iter()
+                            .map(|p| self.spine.value_labels.get(p).cloned())
+                            .collect(),
+                    ));
                     branch_cfns.push(b);
                 }
                 if let Some(eb) = else_block {
@@ -2216,26 +2426,41 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(branch_cfns);
                 n.condition_leaves = some_if(self.harvest_vec(*scrutinee));
                 n.table_case = on_number.map(super::features::TableCase::On);
+                n.value_fact = self.bare_name(*scrutinee).map(ValueFact::CaseOn);
+                n.flow = self.flow_cond(*scrutinee);
                 n
             }
             While { cond, body } => {
                 let mut n = cfn_node("while");
                 n.children = Some(vec![self.build_block(*body)]);
                 n.condition_leaves = some_if(self.harvest_vec(*cond));
+                n.flow = self.flow_cond(*cond);
                 n
             }
-            For { from, to, body, .. } => {
+            For {
+                var,
+                from,
+                to,
+                body,
+                ..
+            } => {
                 let mut n = cfn_node("for");
                 n.children = Some(vec![self.build_block(*body)]);
                 let mut leaves = self.harvest_vec(*from);
                 leaves.extend(self.harvest_vec(*to));
                 n.condition_leaves = some_if(leaves);
+                n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
                 n
             }
-            Foreach { iterable, body, .. } => {
+            Foreach {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut n = cfn_node("foreach");
                 n.children = Some(vec![self.build_block(*body)]);
                 n.condition_leaves = some_if(self.harvest_vec(*iterable));
+                n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
                 n
             }
             Repeat { body, until } => {
@@ -2261,6 +2486,7 @@ impl<'a> IrCfn<'a> {
             With { body, .. } => {
                 let mut n = cfn_node("other");
                 n.children = Some(vec![self.build_block(*body)]);
+                n.flow = Some(Box::new(FlowFact::With));
                 n
             }
             AssertError(body) => {
@@ -2269,11 +2495,25 @@ impl<'a> IrCfn<'a> {
                 n.path_hint = Some(PathHint::AssertError);
                 n
             }
-            Assignment { target, value, .. } => {
+            Assignment {
+                target,
+                value,
+                compound,
+            } => {
                 let mut leaves = self.harvest_vec(*target);
                 leaves.extend(self.harvest_vec(*value));
                 let mut n = cfn_node("other");
                 n.condition_leaves = some_if(leaves);
+                n.flow = Some(Box::new(FlowFact::Assign {
+                    target: match &self.ir().expr(*target).kind {
+                        ExprKind::Identifier(_) | ExprKind::QuotedIdentifier(_) => {
+                            self.bare_name(*target)
+                        }
+                        _ => None,
+                    },
+                    value: self.flow_expr(*value),
+                    compound: *compound,
+                }));
                 n
             }
             Block(b) => self.build_block(*b),
@@ -2288,7 +2528,11 @@ impl<'a> IrCfn<'a> {
             // behavior-preserving for them.
             Break => cfn_node("break"),
             Continue => cfn_node("continue"),
-            Unknown => cfn_node("other"),
+            Unknown => {
+                let mut n = cfn_node("other");
+                n.flow = Some(Box::new(FlowFact::Opaque));
+                n
+            }
         };
         // The L4 walker reads `source_range` (serde-skip) to attribute field accesses
         // to the right block level. Set it to the statement's range for any node that
@@ -2353,6 +2597,7 @@ pub fn routine_features_partial(
             file,
             spine: &spine,
             cols: &cols,
+            source,
         };
         cfn.build_block(b)
     });

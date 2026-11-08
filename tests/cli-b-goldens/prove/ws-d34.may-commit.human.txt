@@ -5,3 +5,4 @@ more: --format json for every evidence row and its hops
   evidence: 1 effect
     [COMMIT] at ws:src/Codeunit.al:10
       condition: in a loop
+      path: DirectCommitInLoop (in the routine itself)

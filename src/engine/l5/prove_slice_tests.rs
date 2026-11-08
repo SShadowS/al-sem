@@ -501,7 +501,9 @@ fn a_filtered_no_names_its_filter_and_the_other_sites() {
         "the Insert outside the filter is listed: {r:#}"
     );
     assert!(
-        human.contains("\nanswer: no — no Delete site is reachable (every candidate decided"),
+        human.contains(
+            "\nanswer: no — no Delete site in the analyzed cone (every candidate decided"
+        ),
         "{human}"
     );
     assert!(
@@ -760,9 +762,11 @@ const ROUTES: &str = r#"codeunit 50102 "Rt Code"
         Error('recursion sink');
     end;
 
-    procedure Loop()
+    // `Depth` is unknown, so `Looper` is entered with nothing known (r3 E1
+    // would bind a literal `3`, a state `N - 1` then leaves).
+    procedure Loop(Depth: Integer)
     begin
-        Looper(3);
+        Looper(Depth);
     end;
 
     local procedure Looper(N: Integer)

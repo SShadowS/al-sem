@@ -344,6 +344,8 @@ fn walk_loop_node(node: &PCFNNode, ambient: ControlContext, result: &mut WalkRes
             field_exit_guard: None,
             table_exit_guard: None,
             junction_guards: None,
+            value_fact: None,
+            flow: None,
         };
         walk_block(&synthetic, body_ctx, result);
         return;

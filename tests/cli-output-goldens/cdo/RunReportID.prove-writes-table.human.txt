@@ -1,16 +1,15 @@
 prove Codeunit "CDO E-Mail Handler"::RunReportID writes-table:CDO E-Mail Log (table 6175273, this app)   [cross-app]
-answer: yes — DB_INSERT at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:392 (guarded-by-IsHandled), and 2 more
+answer: yes — DB_INSERT at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:392 (12 guards on the route, 1 evaluated), and 2 more
 analysis partial (21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 3 effects
     [DB_INSERT] at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:392
-      condition: guarded-by-IsHandled
+      condition: IsHandled: false, evaluated (CreateAndSendMail line 963); EMailTemplateHeader."E-Mail is Mandator…: must be false, not evaluated (CreateAndSendMail line 985); SendCode.SkipEmail() and (not SendCode.…: must be true, not evaluated (CreateAndSendMail line 989); FilterRecord.FindSet(): must be true, not evaluated (CreateLogEntries line 351); … +8 guards (12 guards in all)
       path: [segment S1: 6 hops] → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text, Dictionary of [Code[10], Text], Boolean)
     [DB_MODIFY] at ws:src/Features/Logging/CDOEMailLog.Table.al:1087
+      condition: IsHandled: false, evaluated (CreateAndSendMail line 963); case "Stored At": this arm, not evaluated (OnInsert line 336); "Entry No." = 0: must be false, not evaluated (UpdateStoredAtBasedOnFilePath line 1064); ("Stored At" <> "Stored At"::"Not Set"): must be false, not evaluated (UpdateStoredAtBasedOnFilePath line 1067); … +11 guards (15 guards in all)
       path: [S1] → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text, Dictionary of [Code[10], Text], Boolean) → [trigger] Table "CDO E-Mail Log"::OnInsert → MoveEMailToFile → UpdateStoredAtBasedOnFilePath
     also [DB_MODIFY]: beyond Codeunit "Import Attachment - Inc. Doc."::CreateNewAttachment, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179 (detail: true lists every row with its path)
     path segments (each [Sn] in a path above stands for these hops):
       S1: RunReportID → Table "CDO Document Template Line"::SendElectronicDocument → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text]) → Codeunit "CDO Log Management"::CreateSkipLogEntries(Record "CDO Document Template Line", RecordRef) → CreateLogEntries(Record "CDO Document Template Line", RecordRef, Variant, Integer, Integer, Text, Text, Text, Text, Text, Text, Boolean, Boolean, var Record "CDO File", Text)
-  top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
-  top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO E-Mail Handler\"::RunReportID"]} — lists the workspace ones under gaps

@@ -7,6 +7,7 @@ Codeunit "Calls Post"::ForwardPost  defined at ws:src/post.al:28
   other effects: events: 0 (0 raised in workspace code)
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  starts by (a start, not a summary): `Checks.CheckOrder(Order, StrictMode)` (:32); `Order.Modify(true)` (:33)
   calls: Codeunit "Calls Checks"::CheckOrder (called at :32)
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
