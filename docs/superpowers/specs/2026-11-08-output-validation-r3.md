@@ -1,6 +1,7 @@
 # Output validation, round 3 revision (r3): what round 4 builds
 
-Status: **revision 3**. Revision 2 folded in both reviews of the draft; revision 3 adds the
+Status: **revision 3, accepted by both reviewers on 2026-11-08** (astra: "accept for the spec";
+Fable: "accept"). Revision 2 folded in both reviews of the draft; revision 3 adds the
 second-pass changes (astra: `var`-formal aliasing, the case no-match edge, the rebuild dropping
 selectors, measuring with selectors; Fable: selectors without duplicating `display`, and
 selectors win over the inline target).
