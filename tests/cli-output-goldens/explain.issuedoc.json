@@ -646,8 +646,10 @@
         "callers": 0,
         "commits": {
           "answer": "may",
+          "callSites": 1,
           "entryPoints": 1,
-          "ownSites": 0
+          "ownSites": 0,
+          "routines": 1
         },
         "entryPoints": {
           "count": 2,

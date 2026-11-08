@@ -282,20 +282,6 @@
       "writeSites": [
         {
           "file": "ws:src/QTTouches.al",
-          "line": 37,
-          "op": "Insert",
-          "routine": "Codeunit \"QT Touches\"::WriteItem",
-          "tempState": "parameter-dependent(0)"
-        },
-        {
-          "file": "ws:src/QTTouches.al",
-          "line": 44,
-          "op": "Insert",
-          "routine": "Codeunit \"QT Touches\"::TempOnly",
-          "tempState": "known(true)"
-        },
-        {
-          "file": "ws:src/QTTouches.al",
           "line": 89,
           "op": "Modify",
           "routine": "Codeunit \"QT Touches\"::Top2",
@@ -307,8 +293,28 @@
           "op": "Delete",
           "routine": "Codeunit \"QT Touches\"::Top2",
           "tempState": "known(false)"
+        },
+        {
+          "file": "ws:src/QTTouches.al",
+          "line": 37,
+          "op": "Insert",
+          "routine": "Codeunit \"QT Touches\"::WriteItem",
+          "tempState": "parameter-dependent(0)"
+        },
+        {
+          "file": "ws:src/QTTouches.al",
+          "line": 44,
+          "op": "Insert",
+          "routine": "Codeunit \"QT Touches\"::TempOnly",
+          "tempState": "known(true)"
         }
-      ]
+      ],
+      "writeSitesByTempState": {
+        "callerDependent": 1,
+        "notResolved": 0,
+        "persistent": 2,
+        "temporary": 1
+      }
     }
   },
   "schemaVersion": "5.0.0"

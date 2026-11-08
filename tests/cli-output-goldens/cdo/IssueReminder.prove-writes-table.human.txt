@@ -1,10 +1,13 @@
 prove Codeunit "CDO Issue Document"::IssueReminder writes-table:Issued Reminder Header (table 297, Base Application)   [cross-app]
-answer: yes — DB_INSERT beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19 (condition not resolved), and 1 more
-analysis partial (21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+answer: yes — DB_INSERT at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:474, beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19 (1 guard on the route, 0 evaluated), and 1 more
+analysis partial (21 calls not resolved (6 in this workspace), 262 interface calls open world (9 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 2 effects
-    [DB_INSERT] beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+    [DB_INSERT] at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:474, beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+      condition: IsHandled: must be false, not evaluated (OnRun line 40)
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → InsertIssuedReminderHeader (Insert at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:474)
-    [DB_MODIFY] beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+    [DB_MODIFY] at dep:Base Application:src/Sales/Reminder/Automation/Actions/IssueReminders/IssueReminderEventHandler.Codeunit.al:61, beyond Codeunit "Reminder-Issue"::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+      condition: the same guards as the row above (2 rows with them)
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun → OnAfterIssueReminder → [event] Codeunit "Issue Reminder Event Handler" (6756)::UpdateStatusWhenReminderIsIssued (Modify at dep:Base Application:src/Sales/Reminder/Automation/Actions/IssueReminders/IssueReminderEventHandler.Codeunit.al:61)
+  ruled out by literal arguments: 5 call sites not resolved that no route from here can reach (not counted as blockers)
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps

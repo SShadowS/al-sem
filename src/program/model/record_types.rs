@@ -675,6 +675,7 @@ mod tests {
             source_anchor: None,
             declaration_only_routines: Vec::new(),
             run_actions: None,
+            enum_impls: None,
         };
         let symbols = SymbolTable::build(std::slice::from_ref(&page), &[]);
         let op = |name: &str| ModelRecordOperation {

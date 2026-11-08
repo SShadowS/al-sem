@@ -4205,6 +4205,19 @@ mod engine {
                         "thpDisabled".into(),
                         al_sem::release_alloc::thp_disabled().into(),
                     );
+                    // The published revision's artifacts by kind: entries
+                    // and measured bytes (which kind the evictable part of
+                    // the RSS is in).
+                    if let Some(Built::Revision(r)) = o.session.published() {
+                        let stored: serde_json::Map<String, serde_json::Value> = r
+                            .stored_by_kind()
+                            .into_iter()
+                            .map(|(k, (n, b))| {
+                                (k.to_string(), serde_json::json!({"entries": n, "bytes": b}))
+                            })
+                            .collect();
+                        m.insert("stored".into(), stored.into());
+                    }
                 }
                 let stats = o.session.stats();
                 status.workspace = Some(o.workspace.clone());

@@ -634,17 +634,28 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                 // again (or widens it, a det), then joins one of this
                 // request's claims; each waits on the other forever.
                 if !claims.keys.is_empty() {
-                    let s = self.load();
                     let mut values: Vec<(K, u64, V, u64)> = Vec::new();
                     for (k, generation) in claims.keys.clone() {
                         let (k, generation) = (&k, &generation);
                         // Each fill holds its reservation while it computes (a
                         // fill worker), released once its value is in hand.
+                        // The reservation is made holding NO snapshot: a
+                        // reclaim it runs evicts by owner count
+                        // (`evict_unheld`), and its first eviction publishes
+                        // a new snapshot, so a snapshot held here would be a
+                        // second owner of every other value: no later kind
+                        // could go, and the floor read the whole RSS (an
+                        // explain refused as impossible on CDO with 2.5 GB of
+                        // other requests' trees resident, round 4 p09).
                         let guard = match (ctl.reserve)(k.kind(), units(k)) {
                             Ok(g) => g,
                             // `claims` drops: released, waiters woken.
                             Err(why) => return Err(PrepareError::Budget(why)),
                         };
+                        // The snapshot this fill reads: loaded after its
+                        // reservation (its prerequisites, of earlier phases,
+                        // are pinned, so every snapshot since holds them).
+                        let s = self.load();
                         let req = &missing
                             .iter()
                             .find(|(m, _)| m == k)
@@ -676,7 +687,6 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                             return Err(stop.into());
                         }
                     }
-                    drop(s);
                     self.count(|st| st.fills += values.len() as u64);
                     // Publish as one transaction.
                     let churned = self.publish(values, worker, &mut discards);

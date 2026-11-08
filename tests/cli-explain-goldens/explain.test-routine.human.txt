@@ -7,7 +7,7 @@ Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
   other effects: events: 1 (1 raised in workspace code)
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 2 not placed
-  starts by (a start, not a summary): `asserterror Posting.PostOrder(Order)` (:14); `Assert.ExpectedError('Order')` (:15); +1 more
+  starts by (a start, not a summary): `asserterror Posting.PostOrder(Order)` (:14); `Assert.ExpectedError('Order')` (:15); `Assert.IsTrue(true, 'reached')` (:16)
   calls: Codeunit "Explain Post"::PostOrder (called at :14)
   UI route: UI_MESSAGE via PostUnreleasedFails → PostOrder
   commits: none observed (searched: the cone through every resolved call; not searched: external-target)
@@ -18,7 +18,7 @@ Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
       fields PostOrder assigns on this table (not operation-specific): Posted, Status
   events raised (1 in workspace code, downstream): Codeunit "Explain Post": OnBeforePostOrder; 0 more only beyond dependency calls; publishes: none of its own
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (IsHandled pattern, not evaluated)
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (IsHandled pattern, not evaluated); ERROR_THROW at ws:src/post.al:11 (error-path)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (1 guard on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/post.al:18 (2 guards on the route, 1 evaluated); ERROR_THROW at ws:src/post.al:11 (error-path)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
   gaps in workspace code (2 gaps):
     gap: symbol-only-dependency (callee Assert.ExpectedError, status external) at ws:src/tests.al:15

@@ -1114,6 +1114,9 @@ pub struct DigestEntryFull {
     pub coverage_reasons: Vec<String>,
     pub effects: Vec<DigestEffectFull>,
     pub unresolved: Vec<UnresolvedConeItem>,
+    /// Round-4 literal routes: the unresolved sites of the cone left out
+    /// because no route from the root to them can run.
+    pub unresolved_literal_dead: usize,
     pub unresolved_traversal: UnresolvedTraversal,
     pub entry_diagnostics: Vec<EntryDiagnostic>,
     /// An Interface / ControlAddIn procedure declaration (#71): no body, no effects.
@@ -1159,6 +1162,33 @@ pub struct DigestEffectFull {
     /// The rollup groups rows by it; the 3.x digest serializes it once per
     /// entry (`entries[].crossings`).
     pub crossing: Option<Arc<crate::engine::l5::digest::Crossing>>,
+}
+
+impl DigestEffectFull {
+    /// The row's site, `file:line` (1-based), or its file alone.
+    pub(crate) fn site_text(&self) -> Option<String> {
+        let f = self.evidence.file.as_ref()?;
+        Some(match self.evidence.line {
+            Some(l) => format!("{f}:{}", crate::engine::line_base::shown(l)),
+            None => f.clone(),
+        })
+    }
+}
+
+/// r3 §7 R1: the loaded-subscriber assumptions of `rows` of `effects`, one
+/// record per assumption with the rows' sites it rules out.
+pub(crate) fn assumption_records(
+    effects: &[DigestEffectFull],
+    rows: impl IntoIterator<Item = usize>,
+) -> Vec<crate::engine::l5::literal_reach::AssumptionRecord> {
+    crate::engine::l5::literal_reach::AssumptionRecord::collect(rows.into_iter().flat_map(|i| {
+        let e = &effects[i];
+        let site = e.site_text();
+        e.flow_notes
+            .iter()
+            .flat_map(|n| &n.assumed)
+            .map(move |k| (k, site.clone()))
+    }))
 }
 
 pub struct FullAnchor {
@@ -1382,6 +1412,9 @@ pub struct DigestEffects {
 /// obligations read.
 pub struct UnresolvedCone {
     pub items: Vec<UnresolvedConeItem>,
+    /// Round-4 literal routes: how many of the cone's unresolved sites the
+    /// literal arguments rule out (left out of `items`).
+    pub literal_dead: usize,
     pub traversal: UnresolvedTraversal,
     /// The tree's analysis gaps whose subject the cone visits
     /// ([`count_gaps_in_cone`]), counted before the tree is dropped (#160
@@ -1717,10 +1750,22 @@ impl<'t> FinishCx<'t> {
                 let unresolved = roots
                     .iter()
                     .map(|r| {
-                        let c = unresolved_cone(tree, r);
+                        let mut c = unresolved_cone(tree, r);
+                        // Round-4 literal routes: the sites the literal
+                        // pass ruled out from this root leave the cone (as
+                        // a gap and as a blocker); their count stays.
+                        let dead = entries
+                            .iter()
+                            .find(|e| e.routine_id == *r)
+                            .map_or(&[][..], |e| e.literal_dead_sites.as_slice());
+                        let before = c.items.len();
+                        c.items
+                            .retain(|i| dead.binary_search(&i.callsite_id).is_err());
+                        let literal_dead = before - c.items.len();
                         (
                             r.clone(),
                             UnresolvedCone {
+                                literal_dead,
                                 gaps_in_cone: gaps_in_cone.then(|| {
                                     count_gaps_in_cone(
                                         &self.gap_subjects,
@@ -1872,6 +1917,9 @@ pub(crate) struct LiteralPass<'t> {
     reach: crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: crate::engine::l5::group_path::GroupPaths<'t>,
     suffixes: crate::engine::l5::literal_reach::SuffixCache<'t>,
+    /// Round-4 literal routes: the tree's unresolved call sites (the ledger
+    /// rows an unresolved cone lists), sorted and distinct.
+    unresolved_sites: Vec<&'t str>,
 }
 
 impl<'t> LiteralPass<'t> {
@@ -1889,12 +1937,21 @@ impl<'t> LiteralPass<'t> {
             let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
             crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
         };
+        let mut unresolved_sites: Vec<&str> = tree
+            .callsite_resolutions
+            .iter()
+            .filter(|r| crate::engine::l5::unresolved_cone::is_listed(r))
+            .map(|r| r.callsite_id.as_str())
+            .collect();
+        unresolved_sites.sort_unstable();
+        unresolved_sites.dedup();
         LiteralPass {
             reach,
             group_paths,
             // W2-0b (design §3.4.3): the suffix trees, shared by every root,
             // crossing and resource of this read.
             suffixes: crate::engine::l5::literal_reach::SuffixCache::default(),
+            unresolved_sites,
         }
     }
 
@@ -1904,8 +1961,9 @@ impl<'t> LiteralPass<'t> {
             reach,
             group_paths,
             suffixes,
+            unresolved_sites,
         } = self;
-        literal_reach_entries(reach, group_paths, suffixes, entries);
+        literal_reach_entries(reach, group_paths, suffixes, unresolved_sites, entries);
     }
 }
 
@@ -1913,6 +1971,7 @@ fn literal_reach_entries<'t>(
     reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: &crate::engine::l5::group_path::GroupPaths<'t>,
     suffixes: &mut crate::engine::l5::literal_reach::SuffixCache<'t>,
+    unresolved_sites: &[&str],
     entries: &mut [DigestEntryResult],
 ) {
     let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
@@ -1990,6 +2049,19 @@ fn literal_reach_entries<'t>(
                         .pop()
                         .map(|(_, o)| o);
                 }
+                // r3 §7 R5: the guards of the row's own terminal witness,
+                // through the dependency entry to the operation. A resource's
+                // witness keeps its own (`GroupPath::guards`): prove prints
+                // them with the resource's path.
+                let witness = e
+                    .group_terminal_path
+                    .as_ref()
+                    .and_then(|w| w.as_ref().ok()?.guards.clone());
+                if let Some(set) = witness {
+                    let notes = e.flow_notes.get_or_insert_with(Default::default);
+                    notes.beyond_unanalyzed = set.unanalyzed > 0;
+                    notes.guards = Some(set.guards);
+                }
                 // Each resource judged from THIS crossing's entry states.
                 e.group_resource_status = candidates
                     .iter()
@@ -2014,8 +2086,15 @@ fn literal_reach_entries<'t>(
             .copied()
             .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
             .collect();
-        let (dead, dead_resources, assumed) =
-            reach.unreachable_effects_noted(&entry.routine_id, &entry.effects, &per_site);
+        let (dead, dead_resources, assumed, dead_sites) = reach.unreachable_effects_noted(
+            &entry.routine_id,
+            &entry.effects,
+            &per_site,
+            unresolved_sites,
+        );
+        // Round-4 literal routes: an unresolved site no route from the root
+        // can reach is no gap and no blocker of this root.
+        entry.literal_dead_sites = dead_sites;
         for i in dead {
             entry.effects[i].literal_unreachable = true;
         }
@@ -2052,6 +2131,28 @@ fn literal_reach_entries<'t>(
             }
             // r3 E2: the guards on the route a reader prints (the shortest
             // listed one), each evaluated or not under the route's values.
+            // r3 §7 R5: a group with no witness through its entry (neither
+            // its own nor a resource's): the guards up to the entry, the
+            // rest not analyzed.
+            let witnessed = e
+                .group_terminal_path
+                .iter()
+                .chain(e.group_resource_paths.iter().map(|(_, w)| w))
+                .any(|w| w.as_ref().is_ok_and(|w| w.guards.is_some()));
+            if e.boundary_group
+                && !witnessed
+                && e.flow_notes.as_ref().is_none_or(|n| n.guards.is_none())
+                && let Some(p) = e
+                    .via_paths
+                    .iter()
+                    .filter(|p| !p.is_empty())
+                    .min_by_key(|p| p.len())
+            {
+                let guards = reach.route_guards(&entry.routine_id, p, &[]);
+                let notes = e.flow_notes.get_or_insert_with(Default::default);
+                notes.guards = Some(guards);
+                notes.beyond_unanalyzed = true;
+            }
             if !e.boundary_group
                 && let Some(p) = e
                     .via_paths
@@ -2230,6 +2331,7 @@ pub fn run_digest_query_full_from_entries(
                 coverage_reasons: vec!["declaration-only".to_string()],
                 effects: Vec::new(),
                 unresolved: Vec::new(),
+                unresolved_literal_dead: 0,
                 unresolved_traversal: UnresolvedTraversal {
                     truncated: false,
                     max_depth: DEFAULT_MAX_DEPTH,
@@ -2490,6 +2592,7 @@ pub fn run_digest_query_full_from_entries(
             coverage_reasons: cov_reasons,
             effects: full_effects,
             unresolved: cone.items,
+            unresolved_literal_dead: cone.literal_dead,
             unresolved_traversal: cone.traversal,
             entry_diagnostics,
             declaration_only: false,
@@ -2717,6 +2820,15 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
         .map(unresolved_item_to_value)
         .collect();
     m.insert("unresolved".into(), serde_json::Value::Array(ur));
+    // Round-4 literal routes: the unresolved sites left out because no route
+    // from the root to them can run under its literal arguments. Present
+    // only then.
+    if entry.unresolved_literal_dead > 0 {
+        m.insert(
+            "unresolvedLiteralDead".into(),
+            (entry.unresolved_literal_dead as u64).into(),
+        );
+    }
 
     // unresolvedTraversal
     let mut trav = serde_json::Map::new();
@@ -3037,6 +3149,7 @@ pub fn project_digest_document(
     deterministic: bool,
     test_coverage: Option<serde_json::Value>,
     include_reads: bool,
+    lookup_next: Option<serde_json::Value>,
     v3: Option<V3Inputs<'_>>,
 ) -> String {
     // payload.summary
@@ -3052,6 +3165,13 @@ pub fn project_digest_document(
     summary.insert("rootsResolved".into(), (roots_resolved as u64).into());
     summary.insert("totalEffects".into(), (total_effects as u64).into());
     summary.insert("totalUnresolved".into(), (total_unresolved as u64).into());
+    // r3 §7 R2 (additive, 5.0.0 only; the 4.0.0 adapter drops it): a lookup
+    // failure's ready call.
+    if let Some(next) = lookup_next
+        && v3.as_ref().is_some_and(|v| v.v5)
+    {
+        summary.insert("next".into(), next);
+    }
 
     // changed
     let mut changed = serde_json::Map::new();
@@ -3261,6 +3381,10 @@ pub fn project_digest_document(
     // release.
     if v3.as_ref().is_some_and(|v| v.v4 && v.v5) {
         doc = sort_keys_keep_nulls(crate::engine::l5::digest_v5::document_from_v4(doc));
+    } else if let Some(p) = doc.get_mut("payload") {
+        // r3 §7 R1: `assumptionRecords` is 5.x's; `--schema 4` and 3 keep
+        // their documents as they were.
+        crate::engine::l5::digest_v5::strip_assumption_records(p);
     }
     if compact {
         let mut s = serde_json::to_string(&doc).expect("serde_json serialization");
@@ -4535,6 +4659,18 @@ fn digest_view(
         &changed_roots.diagnostics,
     );
 
+    // r3 §7 R2: a lookup failure's ready call, in the JSON document's
+    // `payload.summary.next` (5.0.0), the envelope's summary and the human
+    // text alike.
+    let lookup = if exit_code == 2 {
+        lookup_next(
+            &changed_roots.diagnostics,
+            crate::engine::follow_up::Cx::new(render.surface, req.single_app),
+        )
+    } else {
+        LookupNext::default()
+    };
+
     // JSON
     let json_text = project_digest_document(
         &workspace_fp,
@@ -4548,6 +4684,7 @@ fn digest_view(
         deterministic,
         test_coverage.as_ref().map(|t| t.to_json_value()),
         *include_reads,
+        lookup.call.as_ref().map(|c| c.json()),
         (!render.schema2).then_some(V3Inputs {
             rollups: &rollups,
             cx: &rollup_cx,
@@ -4624,13 +4761,9 @@ fn digest_view(
     // diagnostics' kinds (`selector-ambiguous` → `ambiguous`).
     let mut summary = summary;
     // Round-3 n08/m01: a lookup failure carries no effect-analysis totals,
-    // and an ambiguity the complete call over its candidates (explain's c26
-    // form), in the human text and as `summary.next`.
+    // and its ready call (r3 §7 R2: an ambiguity's complete call, a typo's
+    // corrected one) in the human text and as `summary.next`.
     if exit_code == 2 {
-        let next = ambiguity_next(
-            &changed_roots.diagnostics,
-            crate::engine::follow_up::Cx::new(render.surface, req.single_app),
-        );
         let mut slim = serde_json::Map::new();
         for k in [
             "kind",
@@ -4642,9 +4775,12 @@ fn digest_view(
                 slim.insert(k.into(), v.clone());
             }
         }
-        if let Some(n) = &next {
+        if let Some(n) = &lookup.call {
             slim.insert("next".into(), n.json());
-            human_text.push_str(&format!("  complete call: {}\n", n.text(render.surface)));
+        }
+        for l in &lookup.human {
+            human_text.push_str(l);
+            human_text.push('\n');
         }
         summary = serde_json::Value::Object(slim);
     }
@@ -4668,30 +4804,130 @@ fn digest_view(
     }
 }
 
-/// Round-3 n08/m01: the complete digest call over every candidate of the
-/// ambiguous selectors among `changed`, or `None` when none lists its
-/// candidates' selectors.
-fn ambiguity_next(
+/// What a digest lookup failure (no root resolved) offers (round-3 n08/m01;
+/// output validation r3 §7 R2): the ready call (`summary.next`, in the JSON
+/// document's `payload.summary` and the envelope's summary) and the human
+/// lines that end the answer.
+#[derive(Debug, Default)]
+pub(crate) struct LookupNext {
+    pub(crate) call: Option<crate::engine::follow_up::FollowUp>,
+    pub(crate) human: Vec<String>,
+}
+
+/// r3 §7 R2: a lookup failure's ready call, one rule for the two failures.
+///
+/// **Ambiguous** (any selector names several routines): the complete digest
+/// call over every resolved candidate of the ambiguous selectors (each with
+/// a non-empty selector), and the human lines `complete call: …` and
+/// `differs in: …` (explain's c26 form; one `differs in` per ambiguous
+/// selector, named when there are several).
+///
+/// **Not found** (no selector is ambiguous): per unmatched selector its
+/// nearest name, labelled `did you mean: …`; the corrected call names those
+/// nearest names, and only when every unmatched selector has one (a call
+/// that drops a selector is not a correction). A selector with no near name
+/// gets no correction. Never a call with an empty target, and the nearest
+/// names are never put in one call as if they were overloads of one name.
+pub(crate) fn lookup_next(
     changed: &[ChangedRootsDiagnostic],
     fcx: crate::engine::follow_up::Cx,
-) -> Option<crate::engine::follow_up::FollowUp> {
-    let selectors: Vec<String> = changed
+) -> LookupNext {
+    use crate::engine::follow_up::{FollowUp, Tool};
+    let ambiguous: Vec<(
+        &str,
+        &[crate::engine::l5::selector_index::AmbiguousCandidate],
+    )> = changed
         .iter()
         .filter_map(|d| match d {
-            ChangedRootsDiagnostic::SelectorAmbiguous { listed, .. } => Some(listed),
+            ChangedRootsDiagnostic::SelectorAmbiguous {
+                selector, listed, ..
+            } => Some((selector.as_str(), listed.as_slice())),
             _ => None,
         })
-        .flatten()
-        .map(|c| c.selector.clone())
         .collect();
-    (!selectors.is_empty()).then(|| {
-        crate::engine::follow_up::FollowUp::new(
-            crate::engine::follow_up::Tool::Digest,
-            fcx,
-            "every candidate",
-        )
-        .arg("routines", selectors)
-    })
+    let mut out = LookupNext::default();
+    if !ambiguous.is_empty() {
+        let selectors: Vec<String> = ambiguous
+            .iter()
+            .flat_map(|(_, l)| l.iter())
+            .map(|c| c.selector.clone())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if selectors.is_empty() {
+            return out;
+        }
+        let call = FollowUp::new(Tool::Digest, fcx, "every candidate").arg("routines", selectors);
+        out.human
+            .push(format!("  complete call: {}", call.text(fcx.surface)));
+        for (sel, listed) in &ambiguous {
+            if let Some(d) = crate::engine::l5::selector_index::differs_in(listed) {
+                out.human.push(if ambiguous.len() > 1 {
+                    format!("  differs in ('{}'): {d}", escape_controls(sel))
+                } else {
+                    format!("  differs in: {d}")
+                });
+            }
+        }
+        out.call = Some(call);
+        return out;
+    }
+    let unmatched: Vec<Option<&crate::engine::l5::selector_index::NearName>> = changed
+        .iter()
+        .filter_map(|d| match d {
+            ChangedRootsDiagnostic::SelectorUnmatched { hints, .. } => Some(
+                hints
+                    .nearest
+                    .first()
+                    .filter(|n| !n.selector.trim().is_empty()),
+            ),
+            _ => None,
+        })
+        .collect();
+    // One selector: explain's and prove's one line (`did you mean: … —
+    // corrected call: …`).
+    if let [Some(n)] = unmatched[..] {
+        out.human
+            .push(crate::engine::l5::selector_index::corrected_call_line(
+                Tool::Digest,
+                fcx,
+                &n.selector,
+                n.overloads,
+                &[],
+            ));
+        out.call = Some(
+            FollowUp::new(Tool::Digest, fcx, "the nearest name")
+                .arg("routines", vec![n.selector.clone()]),
+        );
+        return out;
+    }
+    for n in unmatched.iter().flatten() {
+        out.human.push(format!(
+            "  did you mean: {}{}",
+            n.selector,
+            if n.overloads > 1 {
+                format!(
+                    " (names {} overloads; the corrected call's answer lists each one's call)",
+                    n.overloads
+                )
+            } else {
+                String::new()
+            }
+        ));
+    }
+    if !unmatched.is_empty() && unmatched.iter().all(Option::is_some) {
+        let call = FollowUp::new(Tool::Digest, fcx, "the nearest name").arg(
+            "routines",
+            unmatched
+                .iter()
+                .flatten()
+                .map(|n| n.selector.clone())
+                .collect::<Vec<_>>(),
+        );
+        out.human
+            .push(format!("  corrected call: {}", call.text(fcx.surface)));
+        out.call = Some(call);
+    }
+    out
 }
 
 /// A2.10's use test, shared by digest, prove and events: `pipeline` runs over
@@ -5170,6 +5406,7 @@ mod tests {
             coverage_reasons: Vec::new(),
             effects: Vec::new(),
             unresolved: Vec::new(),
+            unresolved_literal_dead: 0,
             unresolved_traversal: UnresolvedTraversal {
                 truncated: false,
                 max_depth: 64,
@@ -5218,6 +5455,58 @@ mod tests {
             flow_notes: None,
             crossing: None,
         }
+    }
+
+    /// Round-4 literal routes (c15-7): a crossing's prefix path is taken
+    /// only from a row that can run. Hand-stated rows of one crossing: a
+    /// dead row with the shorter path and a live row with a longer one; and
+    /// the dead row alone, which leaves no prefix.
+    ///
+    /// DISCRIMINATION (2026-11-08): the `!e.literal_unreachable` condition
+    /// in `RoutineRollup::build` removed fails at "the live row's path";
+    /// restored, passes.
+    #[test]
+    fn a_crossing_prefix_comes_from_a_live_row() {
+        use crate::engine::l5::digest::{ProjectedHop, QueryWitnessHop};
+        let hop = |from: &str, to: &str| ProjectedHop {
+            inner: QueryWitnessHop {
+                kind: "call",
+                from_routine_id: from.to_string(),
+                from_display: from.to_string(),
+                to_routine_id: Some(to.to_string()),
+                to_display: Some(to.to_string()),
+                callee_display: None,
+                callsite_id: None,
+                event_id: None,
+                target_app_guid: None,
+                edge_kind: Some("direct-call".to_string()),
+                anchor: None,
+                receiver_type: None,
+                interface_name: None,
+                candidate_count: None,
+                operation_id: None,
+            },
+        };
+        let boundary = [("boundary", "Codeunit Dep::Entry")];
+        let dead = || {
+            let mut d = effect("UI_CONFIRM", &boundary, &[]);
+            d.via_paths = vec![vec![hop("r", "x")]];
+            d.literal_unreachable = true;
+            d
+        };
+        let mut live = effect("UI_MESSAGE", &boundary, &[]);
+        live.via_paths = vec![vec![hop("r", "a"), hop("a", "b")]];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let mut e = entry_with(vec![]);
+        e.effects = vec![dead(), live];
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.crossings.len(), 1, "precondition: one crossing");
+        assert_eq!(r.crossings[0].prefix_row, Some(1), "the live row's path");
+        let mut e = entry_with(vec![]);
+        e.effects = vec![dead()];
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.crossings[0].prefix_row, None, "a dead row gives none");
     }
 
     /// Output validation §8.2 (F53, c15) and §9.8 (F73): the summary row
@@ -5639,6 +5928,171 @@ mod tests {
         assert_eq!(t.caller_dependent_tables, 1, "{t:?}");
         assert_eq!(r.caller_dependent.len(), 1);
         assert!(!r.may_write.contains_key("ws/table/5"), "{t:?}");
+    }
+
+    /// A boundary group row of `ty` through a crossing `id` into `targets`,
+    /// entered at `site` (`file`, 0-based `line`).
+    fn crossing_row(ty: &str, id: &str, targets: &[&str], site: (&str, u32)) -> DigestEffectFull {
+        let mut e = effect(ty, &[("boundary", id)], &[]);
+        e.crossing = Some(std::sync::Arc::new(crate::engine::l5::digest::Crossing {
+            id: id.to_string(),
+            site: crate::engine::l5::digest::CrossingSite::Callsite(id.to_string()),
+            edges: vec![],
+            targets: targets.iter().map(|t| (*t).to_string()).collect(),
+            sites: vec![crate::engine::l5::digest::SiteAnchor {
+                file: Some(site.0.to_string()),
+                line: Some(site.1),
+                column: None,
+            }],
+        }));
+        e
+    }
+
+    /// Round-4 n10: "dependency routines entered that commit" counts distinct
+    /// ROUTINES, never crossings (CDO DocSave printed 3 for `Sales-Calc.
+    /// Discount`::OnRun once and `CSC Core`::IsAppActiveOrAskToActivate twice,
+    /// which are 2 routines at 3 call sites), and the ruled-out commits count
+    /// the same way (they counted COMMIT ROWS: two dead rows of one crossing
+    /// were 2). Hand-stated crossings: live COMMIT rows through `cs:a` (into
+    /// `dep:Calc`), `cs:b` and `cs:c` (both into `dep:Core`), and `cs:g` (into
+    /// `dep:Y`, which has a dead COMMIT row as well, so it is a live entry
+    /// only); dead COMMIT rows through `cs:d` (two rows) and `cs:e`, both into
+    /// `dep:X`. Expected by hand: live 3 routines at 4 call sites (3 entry
+    /// points), ruled out 1 routine at 2 call sites (1 entry point).
+    ///
+    /// DISCRIMINATION (2026-11-08): counting the routines as crossings
+    /// (`crossing_counts` keying every crossing's routine by its own id, not
+    /// its targets) fails at "live entries" (routines 4, not 3); counting a
+    /// crossing with a live COMMIT row as ruled out too (`&& !c.commit`
+    /// removed in `totals_of`) fails at "ruled-out entries" (2 entry points,
+    /// not 1); each restored, passes.
+    #[test]
+    fn commit_entries_count_distinct_routines_not_crossings() {
+        use crate::engine::l5::routine_rollup::EntryCount;
+        let dead = |id: &str, t: &str, site: (&str, u32)| {
+            let mut e = crossing_row("COMMIT", id, &[t], site);
+            e.literal_unreachable = true;
+            e
+        };
+        let mut e = entry_with(vec![]);
+        e.effects = vec![
+            crossing_row("COMMIT", "cs:a", &["dep:Calc"], ("ws:src/F.al", 124)),
+            crossing_row("COMMIT", "cs:b", &["dep:Core"], ("ws:src/H.al", 239)),
+            crossing_row("COMMIT", "cs:c", &["dep:Core"], ("ws:src/M.al", 479)),
+            crossing_row("COMMIT", "cs:g", &["dep:Y"], ("ws:src/G.al", 9)),
+            dead("cs:g", "dep:Y", ("ws:src/G.al", 9)),
+            dead("cs:d", "dep:X", ("ws:src/D.al", 1)),
+            dead("cs:d", "dep:X", ("ws:src/D.al", 1)),
+            dead("cs:e", "dep:X", ("ws:src/E.al", 2)),
+        ];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let t = &r.totals;
+        assert_eq!(
+            t.commit_entries,
+            EntryCount {
+                points: 3,
+                routines: 3,
+                sites: 4
+            },
+            "live entries: {t:?}"
+        );
+        assert_eq!(
+            t.commit_dead_entries,
+            EntryCount {
+                points: 1,
+                routines: 1,
+                sites: 2
+            },
+            "ruled-out entries: {t:?}"
+        );
+        // The use: the summary's clause, the commits section's header and
+        // the JSON state the routines, with the call sites beside them.
+        let human = t.human("none");
+        assert!(
+            human.contains(
+                "commits: may (3 dependency routines that commit, entered at 4 call sites; \
+                 1 dependency routine entered at 2 call sites more under literal arguments that \
+                 cannot run)"
+            ),
+            "{human}"
+        );
+        let lines = crate::engine::l5::routine_rollup::commit_lines(
+            &r,
+            &e,
+            &cx,
+            crate::engine::l5::routine_rollup::RenderOpts::new(false, None),
+        );
+        assert_eq!(
+            lines[0],
+            "commits: may — none in workspace code; 3 dependency routines that commit, entered \
+             at 4 call sites:",
+            "{lines:?}"
+        );
+        let v = t.to_json();
+        let c = &v["commits"];
+        let n = |x: &serde_json::Value, k: &str| x[k].as_u64();
+        assert_eq!(
+            (n(c, "entryPoints"), n(c, "routines"), n(c, "callSites")),
+            (Some(3), Some(3), Some(4)),
+            "{c}"
+        );
+        let d = &c["literalDead"];
+        assert_eq!(
+            (n(d, "entryPoints"), n(d, "routines"), n(d, "callSites")),
+            (Some(1), Some(1), Some(2)),
+            "{c}"
+        );
+    }
+
+    /// Round-4 n10 (bug 1 as reported): "owned by this app" is the table's
+    /// DECLARING app, never where the write runs. Hand-stated: workspace code
+    /// inserts the dependency tables `dep/table/133` and `dep/table/130` (as
+    /// CDO's `CDOElectronicDocumentMgt` inserts Base App `Incoming Document
+    /// Attachment`), and a dependency routine entered at a crossing modifies
+    /// the workspace table `ws/table/7` (as CDO's `CDO Output Profile
+    /// Conflict` is written only beyond `Sales-Calc. Discount`::OnRun).
+    /// Expected by hand: 1 owned (`ws/table/7`), 2 by dependencies.
+    ///
+    /// DISCRIMINATION (2026-11-08): deciding ownership by where the write
+    /// runs (`owned` in `totals_of` counted as the workspace-code records,
+    /// `self.workspace_code.len()`) fails at "owned by the declaring app";
+    /// restored, passes.
+    #[test]
+    fn owned_tables_are_the_ones_the_workspace_declares() {
+        let own_insert = |id: &str, name: &str, line: u32| {
+            let mut own = effect(
+                "DB_INSERT",
+                &[
+                    ("resourceId", id),
+                    ("resourceDisplay", name),
+                    ("tempState", "known(false)"),
+                ],
+                &[],
+            );
+            own.evidence.source_kind = "source";
+            own.evidence.file = Some("ws:src/A.al".to_string());
+            own.evidence.line = Some(line);
+            own
+        };
+        let own = own_insert("dep/table/133", "Incoming Document Attachment", 181);
+        let own2 = own_insert("dep/table/130", "Incoming Document", 190);
+        let mut beyond = crossing_row("DB_MODIFY", "cs:p", &["dep:Calc"], ("ws:src/F.al", 124));
+        beyond.group_resources = vec![("ws/table/7".to_string(), "Conflict".to_string())];
+        let mut e = entry_with(vec![]);
+        e.effects = vec![own, own2, beyond];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.workspace_code.len(), 2, "two workspace-code records");
+        let t = &r.totals;
+        assert_eq!(t.may_write_tables, 3, "{t:?}");
+        assert_eq!(
+            (t.owned_by_app, t.by_dependencies),
+            (1, 2),
+            "owned by the declaring app: {t:?}"
+        );
     }
 
     /// W2-5 (2e): an effect type no kind family names is never dropped; it is

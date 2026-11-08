@@ -14,7 +14,7 @@ computed: current effects of the 2 routines these files touches, in the working 
     My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/NormalCU.al:34
       path: DoSetup (in the routine itself)
-  errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (conditional)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (1 guard on the route, 0 evaluated)
 
 --- Codeunit "Normal Handler"::RunSetup ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): My Setup (Insert at :34)
@@ -28,4 +28,4 @@ computed: current effects of the 2 routines these files touches, in the working 
     My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/NormalCU.al:34
       path: RunSetup → DoSetup
-  errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (conditional)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (1 guard on the route, 0 evaluated)

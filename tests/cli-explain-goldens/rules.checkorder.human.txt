@@ -7,7 +7,7 @@ Codeunit "Rules Checks"::CheckOrder  defined at ws:src/checks.al:8
   other effects: events: 0 (0 raised in workspace code)
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  starts by (a start, not a summary): `if Order.Status <> Order.Status::Released then …` (:14); `if Order.Amount <= 0 then …` (:16); +4 more
+  starts by (a start, not a summary): `if Order.Status <> Order.Status::Released then Error(NotReleasedErr, Order."Document Type", Order."No.")` (:14); `if Order.Amount <= 0 then Error(AmountTxt)` (:16); `Order.TestField("Customer No.")` (:20); +3 more
   calls: none (no call to a routine; builtins aside)
   doc: Checks an order before it is posted.
   rejects when Order.Status <> Order.Status::Released: "You cannot post %1 %2 because it is not released."  [Error ws:src/checks.al:15]
@@ -16,6 +16,6 @@ Codeunit "Rules Checks"::CheckOrder  defined at ws:src/checks.al:8
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false: (platform message)  [TestField ws:src/checks.al:21]
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order."Posting Date" = 0D: "Order %1 has no posting date."  [Error ws:src/checks.al:25]
   inherited rules: none
-  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (unconditional on success); ERROR_IMPLICIT at ws:src/checks.al:21 (unconditional on success); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:17 (error-path); ERROR_THROW at ws:src/checks.al:25 (error-path)
+  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (2 guards on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/checks.al:21 (2 guards on the route, 0 evaluated); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:17 (error-path); ERROR_THROW at ws:src/checks.al:25 (error-path)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
 

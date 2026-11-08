@@ -2681,10 +2681,15 @@ fn render_query_touches_body(
                 v.sort_by_key(|s| s.family());
                 v
             } else if writes_only {
-                ws_sites
+                // r3 §7 R6: the write-only listing leads with the writes the
+                // task asks about: persistent first, Insert before Modify
+                // before Delete.
+                let mut v: Vec<&TableSite> = ws_sites
                     .iter()
                     .filter(|s| s.family() == SiteFamily::Write)
-                    .collect()
+                    .collect();
+                v.sort_by(|a, b| a.write_order().cmp(&b.write_order()));
+                v
             } else {
                 family_samples(&ws_sites)
             };
@@ -2714,6 +2719,25 @@ fn render_query_touches_body(
                     SiteFamily::Write if of.is_empty() => {
                         "  record writes: none observed\n".to_string()
                     }
+                    // r3 §7 R6: the write-only listing's heading states the
+                    // temp-state split its order follows.
+                    SiteFamily::Write if writes_only => format!(
+                        "  record writes: {} in {} — {}; by op: {}\n",
+                        plural(of.len(), "site", "sites"),
+                        plural(routines_of.len(), "routine", "routines"),
+                        WriteClass::ALL
+                            .iter()
+                            .map(|c| format!(
+                                "{} {}",
+                                c.words(),
+                                thousands(
+                                    of.iter().filter(|s| WriteClass::of(&s.temp) == *c).count()
+                                )
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        by_text,
+                    ),
                     SiteFamily::Write => format!(
                         "  record writes: {} in {} — {} (temporary records: {})\n",
                         plural(of.len(), "site", "sites"),
@@ -2810,9 +2834,21 @@ fn render_query_touches_body(
                     // Round 2 G8: `opFamily: "write"`, every record-write
                     // site with its own temp state.
                     up["opFamily"] = "write".into();
-                    up["writeSites"] = ws_sites
+                    // r3 §7 R6 (additive): the sites by temp-state class,
+                    // and `writeSites` in the human listing's order.
+                    let mut by_class = Map::new();
+                    for c in WriteClass::ALL {
+                        let n = ws_sites
+                            .iter()
+                            .filter(|s| {
+                                s.family() == SiteFamily::Write && WriteClass::of(&s.temp) == c
+                            })
+                            .count();
+                        by_class.insert(c.key().into(), n.into());
+                    }
+                    up["writeSitesByTempState"] = Value::Object(by_class);
+                    up["writeSites"] = samples
                         .iter()
-                        .filter(|s| s.family() == SiteFamily::Write)
                         .map(|s| {
                             json!({
                                 "op": s.op,
@@ -3119,6 +3155,74 @@ impl TableSite {
     /// Whether the site is on a record known to be temporary.
     fn is_temporary(&self) -> bool {
         self.temp == TempStateKind::Known(true)
+    }
+
+    /// Output validation r3 §7 R6: the record-write listing's order key
+    /// under `opFamily: "write"` — the temp-state class (persistent,
+    /// caller-dependent, temp state not resolved, temporary), then the
+    /// operation (Insert before Modify before Delete), then file and line.
+    fn write_order(&self) -> (WriteClass, u8, &str, u32) {
+        let op = match self.op.as_str() {
+            "Insert" => 0,
+            "Modify" => 1,
+            "ModifyAll" => 2,
+            "Rename" => 3,
+            "Delete" => 4,
+            "DeleteAll" => 5,
+            _ => 6,
+        };
+        (WriteClass::of(&self.temp), op, &self.file, self.line)
+    }
+}
+
+/// Output validation r3 §7 R6: a record write's temp-state class, in the
+/// order a write listing prints them: the persistent writes first (the ones
+/// a new mandatory field or a changed rule breaks), then the ones the caller
+/// decides, then the ones whose temp state is not resolved (never folded
+/// into either side), then the temporary ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum WriteClass {
+    Persistent,
+    CallerDependent,
+    NotResolved,
+    Temporary,
+}
+
+impl WriteClass {
+    const ALL: [WriteClass; 4] = [
+        WriteClass::Persistent,
+        WriteClass::CallerDependent,
+        WriteClass::NotResolved,
+        WriteClass::Temporary,
+    ];
+
+    fn of(t: &TempStateKind) -> WriteClass {
+        match t {
+            TempStateKind::Known(false) => WriteClass::Persistent,
+            TempStateKind::ParameterDependent(_) => WriteClass::CallerDependent,
+            TempStateKind::Unknown => WriteClass::NotResolved,
+            TempStateKind::Known(true) => WriteClass::Temporary,
+        }
+    }
+
+    /// The heading's word for the class.
+    fn words(self) -> &'static str {
+        match self {
+            WriteClass::Persistent => "persistent",
+            WriteClass::CallerDependent => "caller-dependent",
+            WriteClass::NotResolved => "not resolved",
+            WriteClass::Temporary => "temporary",
+        }
+    }
+
+    /// The JSON key of the class's count.
+    fn key(self) -> &'static str {
+        match self {
+            WriteClass::Persistent => "persistent",
+            WriteClass::CallerDependent => "callerDependent",
+            WriteClass::NotResolved => "notResolved",
+            WriteClass::Temporary => "temporary",
+        }
     }
 }
 
@@ -5963,9 +6067,65 @@ fn field_scope(
     }
 }
 
-/// A use list as text: `read+write`.
-fn uses_text(uses: &[crate::program::body::record_op::FieldUse]) -> String {
-    uses.iter().map(|u| u.human()).collect::<Vec<_>>().join("+")
+/// A site's use list as text: `read+field assignment`. Output validation r3
+/// §7 R6: a `ModifyAll` that names the field writes it to the database, so
+/// its write is a `record write (ModifyAll)`, never a `field assignment` (an
+/// assignment changes the record in memory only).
+fn uses_text(uses: &[crate::program::body::record_op::FieldUse], source: &str) -> String {
+    uses.iter()
+        .map(|u| field_use_word(*u, source))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// One field use in human words at a site whose source is `source` (r3 §7
+/// R6): [`FieldUse::human`](crate::program::body::record_op::FieldUse::human),
+/// except a `ModifyAll`'s write, which is record persistence.
+fn field_use_word(u: crate::program::body::record_op::FieldUse, source: &str) -> &'static str {
+    use crate::program::body::record_op::FieldUse;
+    if u == FieldUse::Write && source == "ModifyAll" {
+        FIELD_RECORD_WRITE
+    } else {
+        u.human()
+    }
+}
+
+/// The human word of a field written to the database by `ModifyAll` (r3 §7
+/// R6).
+const FIELD_RECORD_WRITE: &str = "record write (ModifyAll)";
+
+/// A field's use counts in human words (r3 §7 R6): the uses in their order,
+/// with the `ModifyAll` writes counted apart from the in-memory assignments
+/// (`field assignment 4, record write (ModifyAll) 1`). `also_read`: the
+/// assignment sites that also read the field, noted on the assignment count.
+fn field_use_counts_words(
+    sites: &[super::field_touches::FieldSite<'_>],
+    also_read: usize,
+) -> Vec<String> {
+    use crate::program::body::record_op::FieldUse;
+    let mut out = Vec::new();
+    for (u, n) in super::field_touches::use_counts(sites) {
+        if u != FieldUse::Write {
+            out.push(format!("{} {n}", u.human()));
+            continue;
+        }
+        let persisted = sites
+            .iter()
+            .filter(|s| s.uses.contains(&FieldUse::Write) && s.source == "ModifyAll")
+            .count();
+        let assigned = n - persisted;
+        if assigned > 0 {
+            out.push(if also_read > 0 {
+                format!("{} {assigned} ({also_read} also read)", u.human())
+            } else {
+                format!("{} {assigned}", u.human())
+            });
+        }
+        if persisted > 0 {
+            out.push(format!("{FIELD_RECORD_WRITE} {persisted}"));
+        }
+    }
+    out
 }
 
 /// What `--from` walks: the solve, and the sited graph when the demand
@@ -6476,16 +6636,9 @@ fn render_field_touches(
             human.push_str(&format!("    {text}\n"));
         }
     } else {
-        let uses_h: Vec<String> = use_counts
-            .iter()
-            .map(|(u, n)| {
-                if *u == FieldUse::Write && read_write_sites > 0 {
-                    format!("{} {n} ({read_write_sites} also read)", u.human())
-                } else {
-                    format!("{} {n}", u.human())
-                }
-            })
-            .collect();
+        // r3 §7 R6: the ModifyAll writes apart from the in-memory
+        // assignments.
+        let uses_h: Vec<String> = field_use_counts_words(&site_list, read_write_sites);
         let temp_h: Vec<String> = temp_counts
             .iter()
             .map(|(t, n)| format!("{} {n}", t.as_str()))
@@ -6624,10 +6777,7 @@ fn render_field_touches(
     let shown_objects = fold_len(by_object.len(), FIELD_OBJECTS_CAP, ask.all);
     for (object, ixs) in &by_object[..shown_objects] {
         let obj_sites: Vec<ft::FieldSite<'_>> = ixs.iter().map(|&i| sites[i].0.clone()).collect();
-        let obj_uses: Vec<String> = ft::use_counts(&obj_sites)
-            .iter()
-            .map(|(u, n)| format!("{} {n}", u.human()))
-            .collect();
+        let obj_uses: Vec<String> = field_use_counts_words(&obj_sites, 0);
         let obj_routines: BTreeSet<usize> = obj_sites.iter().map(|s| s.routine_ix).collect();
         human.push_str(&format!(
             "  {object}: {} in {} ({})\n",
@@ -6655,7 +6805,7 @@ fn render_field_touches(
                 rr.in_object,
                 s.anchor.source_unit_id,
                 shown(s.anchor.start_line),
-                uses_text(&s.uses),
+                uses_text(&s.uses, &s.source),
                 extra.join(", ")
             ));
         }
@@ -6944,6 +7094,7 @@ tableextension 50101 \"Cust Ext\" extends Cust
                 })
                 .collect(),
             run_actions: None,
+            enum_impls: None,
         }
     }
 

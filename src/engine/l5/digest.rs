@@ -4180,6 +4180,10 @@ pub struct DigestEntryResult {
     /// depth bound with a carrier possibly beyond it: their rows are not known
     /// to be every site, so a count of them is a lower bound. Sorted.
     pub partial_site_types: Vec<String>,
+    /// Round-4 literal routes: the cone's unresolved call sites the literal
+    /// pass rules out from this root (no route to them can run), sorted;
+    /// empty before the pass. The unresolved cone leaves them out.
+    pub literal_dead_sites: Vec<String>,
 }
 
 /// The callsiteId of a NON-terminal witness hop (the `callsiteId?` field TS reads on
@@ -5501,6 +5505,7 @@ fn digest_one_root<'i>(
             routine_id: rid.to_string(),
             effects,
             partial_site_types: partial_site_types.into_iter().map(str::to_string).collect(),
+            literal_dead_sites: Vec::new(),
         })
     }
 }

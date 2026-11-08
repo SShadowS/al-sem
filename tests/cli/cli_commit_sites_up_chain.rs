@@ -203,7 +203,7 @@ fn explain_counts_every_commit_site_and_entry_point() {
     assert_eq!(code, Some(0), "{stdout}");
     // `yes`: `Near` commits unconditionally.
     assert!(
-        stdout.contains("commits: yes (2 sites, 1 dependency routine entered that commits)"),
+        stdout.contains("commits: yes (2 sites; 1 dependency routine entered that commits)"),
         "{stdout}"
     );
     assert!(
@@ -212,8 +212,10 @@ fn explain_counts_every_commit_site_and_entry_point() {
         ),
         "{stdout}"
     );
+    // r3 §7 R5: a replayed route's guards, as prove prints them.
     assert!(
-        stdout.contains("COMMIT at ws:src/ChainDoc.Table.al:21 (conditional)"),
+        stdout
+            .contains("COMMIT at ws:src/ChainDoc.Table.al:21 (1 guard on the route, 0 evaluated)"),
         "{stdout}"
     );
     assert!(

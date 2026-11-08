@@ -1305,6 +1305,11 @@ pub struct CrossingView {
     /// Non-DB effect types the crossing carries.
     pub kinds: BTreeSet<String>,
     pub commit: bool,
+    /// A COMMIT group row of this crossing is literal-dead (round-4 n10: the
+    /// ruled-out commit entries are counted per crossing, then per routine,
+    /// never per row). A crossing with a live COMMIT row as well is a live
+    /// commit entry ([`Self::commit`]) and not a ruled-out one.
+    pub dead_commit: bool,
     /// Literal-dead group rows.
     pub dead_rows: usize,
     /// The row whose shortest path is the crossing's prefix.
@@ -1342,6 +1347,9 @@ pub struct GapCounts {
     pub not_placed: Vec<usize>,
     /// Dependency gaps' callees, most frequent first.
     pub top_callees: Vec<(String, usize)>,
+    /// Round-4 literal routes: the cone's unresolved sites left out because
+    /// no route from the root to them can run.
+    pub literal_dead: usize,
 }
 
 /// The entry point behind most of a routine's may-persist tables.
@@ -1368,14 +1376,23 @@ pub struct RollupTotals {
     /// `yes`, `may`, `none` (complete coverage, no limit) or `no observed`.
     pub commits: &'static str,
     pub commit_sites: usize,
-    pub commit_entry_points: usize,
+    /// The crossings with a live COMMIT row, as entry points, distinct
+    /// dependency routines entered and distinct call sites (round-4 n10: a
+    /// line that says "dependency routines entered" states `routines`, never
+    /// the crossings; one routine entered at two sites is one routine).
+    pub commit_entries: EntryCount,
     /// COMMIT rows under literal arguments that cannot run (output
-    /// validation §8.2, F53): own sites and dependency routines entered.
+    /// validation §8.2, F53): own sites, and the crossings whose COMMIT rows
+    /// are all ruled out, counted as [`Self::commit_entries`] is.
     pub commit_dead_sites: usize,
-    pub commit_dead_entry_points: usize,
+    pub commit_dead_entries: EntryCount,
     /// r3 E2: what ruling those rows out assumes (a publisher's loaded
     /// subscribers keep a value), one statement each.
     pub commit_dead_assumes: Vec<String>,
+    /// r3 §7 R1: the same assumptions as the one sentence each
+    /// (`AssumptionRecord::sentence`) and as `assumptionRecords` entries.
+    pub commit_dead_sentences: Vec<String>,
+    pub commit_dead_records: Vec<Value>,
     /// The COMMIT site search stopped at its depth bound
     /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
     /// above are lower bounds, printed "at least".
@@ -1394,6 +1411,9 @@ pub struct RollupTotals {
     pub gaps_workspace: usize,
     pub gaps_dependency: usize,
     pub gaps_not_placed: usize,
+    /// Round-4 literal routes: unresolved sites ruled out by the literal
+    /// arguments (not counted as gaps above).
+    pub gaps_literal_dead: usize,
     pub temporary_only_tables: usize,
     pub literal_dead_tables: usize,
     pub no_path_operations: usize,
@@ -1479,7 +1499,12 @@ impl RollupTotals {
             "commits": {
                 "answer": self.commits,
                 "ownSites": self.commit_sites,
-                "entryPoints": self.commit_entry_points,
+                // Round-4 n10: entry points (crossings grouped by target, as
+                // `entryPoints.count`), the distinct routines entered and
+                // the distinct dependency call sites, never the crossings.
+                "entryPoints": self.commit_entries.points,
+                "routines": self.commit_entries.routines,
+                "callSites": self.commit_entries.sites,
             },
             "events": {"distinct": self.events, "inWorkspaceCode": self.events_in_workspace},
             "kinds": self.kinds,
@@ -1504,16 +1529,28 @@ impl RollupTotals {
         if self.commit_sites_partial {
             v["commits"]["atLeast"] = json!(true);
         }
+        // Round-4 literal routes (additive): the unresolved sites the literal
+        // arguments rule out, not counted as gaps.
+        if self.gaps_literal_dead > 0 {
+            v["gaps"]["literalDead"] = json!(self.gaps_literal_dead);
+        }
         // §8.2 (F53, additive): the COMMIT rows literal arguments rule out,
         // counted apart, so `effectsByType.COMMIT` reconciles.
-        if self.commit_dead_sites + self.commit_dead_entry_points > 0 {
+        if self.commit_dead_sites + self.commit_dead_entries.points > 0 {
             v["commits"]["literalDead"] = json!({
                 "sites": self.commit_dead_sites,
-                "entryPoints": self.commit_dead_entry_points,
+                "entryPoints": self.commit_dead_entries.points,
+                "routines": self.commit_dead_entries.routines,
+                "callSites": self.commit_dead_entries.sites,
             });
             // r3 E2 (additive): what ruling them out assumes.
             if !self.commit_dead_assumes.is_empty() {
                 v["commits"]["literalDead"]["assumes"] = json!(self.commit_dead_assumes);
+            }
+            // r3 §7 R1 (additive): each with its universe and the sites it
+            // rules out.
+            if !self.commit_dead_records.is_empty() {
+                v["commits"]["literalDead"]["assumptionRecords"] = json!(self.commit_dead_records);
             }
         }
         if let Some(d) = &self.dominant_entry_point {
@@ -1560,7 +1597,43 @@ impl RollupTotals {
     pub fn human(&self, writes: &str) -> String {
         let mut block = vec![format!("writes: {writes}")];
         let mut parts: Vec<String> = Vec::new();
+        // §8.2 (F53, c15): the rows literal arguments rule out; r3 E2 and
+        // r3 §7 R1: with what ruling them out assumes, in the one sentence.
+        let dead_words = |more: &str| -> Option<String> {
+            let mut dead = Vec::new();
+            if self.commit_dead_sites > 0 {
+                dead.push(plural(self.commit_dead_sites, "site", "sites"));
+            }
+            if self.commit_dead_entries.points > 0 {
+                dead.push(commit_entries_words(self.commit_dead_entries, false));
+            }
+            if dead.is_empty() {
+                return None;
+            }
+            let assuming = if self.commit_dead_sentences.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", self.commit_dead_sentences.join("; also "))
+            };
+            Some(format!(
+                "{}{more} under literal arguments that cannot run{assuming}",
+                dead.join(" and ")
+            ))
+        };
         let commits = match self.commits {
+            // r3 §7 R1: a `no` an assumption decided says so.
+            "no observed" | "none" if !self.commit_dead_sentences.is_empty() => format!(
+                "commits: {}; {}",
+                if self.commits == "none" {
+                    crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED.to_string()
+                } else {
+                    crate::engine::vocab::none_observed(
+                        "the cone through every resolved call",
+                        "calls not resolved",
+                    )
+                },
+                dead_words("").unwrap_or_default()
+            ),
             "no observed" => format!(
                 "commits: {}",
                 crate::engine::vocab::none_observed(
@@ -1585,41 +1658,17 @@ impl RollupTotals {
                         plural(self.commit_sites, "site", "sites")
                     ));
                 }
-                if self.commit_entry_points > 0 {
+                if self.commit_entries.points > 0 {
                     where_.push(format!(
                         "{at_least}{}",
-                        plural(
-                            self.commit_entry_points,
-                            "dependency routine entered that commits",
-                            "dependency routines entered that commit",
-                        )
+                        commit_entries_words(self.commit_entries, true)
                     ));
                 }
-                // §8.2 (F53, c15): the rows literal arguments rule out.
-                let mut dead = Vec::new();
-                if self.commit_dead_sites > 0 {
-                    dead.push(plural(self.commit_dead_sites, "site", "sites"));
+                if let Some(d) = dead_words(" more") {
+                    where_.push(d);
                 }
-                if self.commit_dead_entry_points > 0 {
-                    dead.push(plural(
-                        self.commit_dead_entry_points,
-                        "dependency routine entered",
-                        "dependency routines entered",
-                    ));
-                }
-                if !dead.is_empty() {
-                    // r3 E2: and what ruling them out assumes.
-                    let assuming = if self.commit_dead_assumes.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", assuming {}", self.commit_dead_assumes.join("; "))
-                    };
-                    where_.push(format!(
-                        "{} more under literal arguments that cannot run{assuming}",
-                        dead.join(" and ")
-                    ));
-                }
-                format!("commits: {answer} ({})", where_.join(", "))
+                // `; `: a part may hold a comma of its own (round-4 n10).
+                format!("commits: {answer} ({})", where_.join("; "))
             }
         };
         let family = |key: &str, label: &str| -> Option<String> {
@@ -1695,8 +1744,23 @@ impl RollupTotals {
             block.push(format!("callers and tests: {}", parts.join("; ")));
         }
         block.push(format!(
-            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed",
-            self.gaps_workspace, self.gaps_dependency, self.gaps_not_placed
+            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed{}",
+            self.gaps_workspace,
+            self.gaps_dependency,
+            self.gaps_not_placed,
+            if self.gaps_literal_dead > 0 {
+                format!(
+                    "; {} ruled out by literal arguments (no route reaches {})",
+                    self.gaps_literal_dead,
+                    if self.gaps_literal_dead == 1 {
+                        "it"
+                    } else {
+                        "them"
+                    }
+                )
+            } else {
+                String::new()
+            }
         ));
         format!("summary — {}", block.join("\n    "))
     }
@@ -1921,12 +1985,15 @@ pub struct RoutineRollup {
     pub commit_sites: Vec<usize>,
     /// COMMIT rows the root's literal arguments rule out (output validation
     /// §8.2, F53): own ones (sites) and crossing ones (dependency routines
-    /// entered), counted apart from the live ones.
+    /// entered, from each crossing's [`CrossingView::dead_commit`]), counted
+    /// apart from the live ones.
     pub commit_dead_sites: usize,
-    pub commit_dead_crossings: usize,
     /// r3 E2: what those rows' removal assumes (the loaded subscribers of a
     /// publisher keep a value), one statement each, sorted and distinct.
     pub commit_dead_assumes: Vec<String>,
+    /// r3 §7 R1: the literal-dead COMMIT rows whose removal assumes one, in
+    /// row order (the totals' records are built from them).
+    pub commit_dead_assume_rows: Vec<usize>,
     pub commit_unconditional: bool,
     /// Own EVENT_PUBLISH rows' event ids (live), with the row.
     pub events_ws: BTreeMap<String, usize>,
@@ -1965,7 +2032,10 @@ fn anchor_key(e: &DigestEffectFull) -> (String, u32) {
 
 impl RoutineRollup {
     /// r3 E2: records what a literal-dead COMMIT row's removal assumes.
-    fn note_dead_assumes(&mut self, e: &DigestEffectFull) {
+    fn note_dead_assumes(&mut self, i: usize, e: &DigestEffectFull) {
+        if e.flow_notes.iter().any(|n| !n.assumed.is_empty()) {
+            self.commit_dead_assume_rows.push(i);
+        }
         for k in e.flow_notes.iter().flat_map(|n| &n.assumed) {
             let s = k.statement();
             if let Err(at) = self.commit_dead_assumes.binary_search(&s) {
@@ -2085,8 +2155,13 @@ impl RoutineRollup {
                 });
                 let c = &mut crossings[ci];
                 c.rows.push(i);
-                if c.prefix_row
-                    .is_none_or(|p| shortest(e) < shortest(&entry.effects[p]))
+                // Round-4 literal routes: only a live row's path (a dead
+                // row's kept witness passes code the literals rule out, as
+                // c15's `HasAccessToModule` prefix did); a crossing with only
+                // dead rows has none.
+                if !e.literal_unreachable
+                    && c.prefix_row
+                        .is_none_or(|p| shortest(e) < shortest(&entry.effects[p]))
                 {
                     c.prefix_row = (!e.via_paths.is_empty()).then_some(i).or(c.prefix_row);
                 }
@@ -2098,8 +2173,8 @@ impl RoutineRollup {
                         }
                     }
                     if ty == "COMMIT" {
-                        r.commit_dead_crossings += 1;
-                        r.note_dead_assumes(e);
+                        c.dead_commit = true;
+                        r.note_dead_assumes(i, e);
                     }
                     r.literal_dead_rows.push(i);
                     continue;
@@ -2149,7 +2224,7 @@ impl RoutineRollup {
                 }
                 if ty == "COMMIT" {
                     r.commit_dead_sites += 1;
-                    r.note_dead_assumes(e);
+                    r.note_dead_assumes(i, e);
                 }
                 r.literal_dead_rows.push(i);
                 continue;
@@ -2300,6 +2375,13 @@ impl RoutineRollup {
             complete,
             crate::engine::l5::digest_cli::sites_partial(entry, "COMMIT"),
         );
+        // r3 §7 R1: the one sentence and record per assumption.
+        let records = crate::engine::l5::digest_cli::assumption_records(
+            &entry.effects,
+            r.commit_dead_assume_rows.iter().copied(),
+        );
+        r.totals.commit_dead_sentences = records.iter().map(|x| x.sentence()).collect();
+        r.totals.commit_dead_records = records.iter().map(|x| x.to_json()).collect();
         r.totals.kinds_partial = FAMILIES
             .iter()
             .map(|(key, _)| *key)
@@ -2326,11 +2408,14 @@ impl RoutineRollup {
     ) -> RollupTotals {
         let live = &self.may_write;
         let owned = live.keys().filter(|id| cx.table_is_own(id)).count();
-        let commit_entry_points = self.crossings.iter().filter(|c| c.commit).count();
+        let commit_entries = crossing_counts(self.crossings.iter().filter(|c| c.commit));
+        // A crossing with a live COMMIT row is a live entry, not a ruled-out one.
+        let commit_dead_entries =
+            crossing_counts(self.crossings.iter().filter(|c| c.dead_commit && !c.commit));
         // §3.7: "none" only when coverage is complete and nothing limits it.
         let commits = if self.commit_unconditional {
             "yes"
-        } else if self.commit_sites.is_empty() && commit_entry_points == 0 {
+        } else if self.commit_sites.is_empty() && commit_entries.points == 0 {
             if complete { "none" } else { "no observed" }
         } else {
             "may"
@@ -2385,9 +2470,12 @@ impl RoutineRollup {
             commits,
             commit_sites: self.commit_sites.len(),
             commit_dead_sites: self.commit_dead_sites,
-            commit_dead_entry_points: self.commit_dead_crossings,
+            commit_dead_entries,
             commit_dead_assumes: self.commit_dead_assumes.clone(),
-            commit_entry_points,
+            // Filled by the caller, which holds the rows.
+            commit_dead_sentences: Vec::new(),
+            commit_dead_records: Vec::new(),
+            commit_entries,
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
             entry_points_partial: false,
@@ -2397,6 +2485,7 @@ impl RoutineRollup {
             gaps_workspace: self.gaps.workspace.len(),
             gaps_dependency: self.gaps.dependency,
             gaps_not_placed: self.gaps.not_placed.len(),
+            gaps_literal_dead: self.gaps.literal_dead,
             temporary_only_tables: self.temporary_only.len(),
             literal_dead_tables: self.literal_dead.len(),
             no_path_operations: self.no_path.len(),
@@ -2487,6 +2576,7 @@ fn gaps_of(entry: &DigestEntryFull) -> GapCounts {
         .collect();
     top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     g.top_callees = top;
+    g.literal_dead = entry.unresolved_literal_dead;
     g
 }
 
@@ -2627,6 +2717,77 @@ pub fn own_witness_lines(
 /// A crossing's display: its boundary name, else its id.
 fn crossing_name(c: &CrossingView) -> &str {
     if c.name.is_empty() { &c.id } else { &c.name }
+}
+
+/// Round-4 n10: the counts of a set of crossings, by the identities
+/// [`entry_points`] groups them on: entry points (a single-target crossing by
+/// its target, a multi-target one by its own id), the distinct dependency
+/// routines entered (a crossing with no known target by its id) and the
+/// distinct call sites (a crossing with no site by its id). One routine
+/// entered at two sites is one routine and two call sites; the crossings are
+/// never the routine count (CDO DocSave: `CSC Core`::IsAppActiveOrAskToActivate
+/// entered twice printed as 2 of "3 dependency routines entered that commit").
+#[must_use]
+pub fn crossing_counts<'c>(crossings: impl IntoIterator<Item = &'c CrossingView>) -> EntryCount {
+    let mut points: BTreeSet<&str> = BTreeSet::new();
+    let mut routines: BTreeSet<&str> = BTreeSet::new();
+    let mut sites: BTreeSet<&str> = BTreeSet::new();
+    for c in crossings {
+        points.insert(match c.target_ids.as_slice() {
+            [one] => one.as_str(),
+            _ => c.id.as_str(),
+        });
+        if c.target_ids.is_empty() {
+            routines.insert(c.id.as_str());
+        } else {
+            routines.extend(c.target_ids.iter().map(String::as_str));
+        }
+        if c.sites.is_empty() {
+            sites.insert(c.id.as_str());
+        } else {
+            sites.extend(c.sites.iter().map(String::as_str));
+        }
+    }
+    EntryCount {
+        points: points.len(),
+        routines: routines.len(),
+        sites: sites.len(),
+    }
+}
+
+/// The words of a commit-bearing [`EntryCount`] (round-4 n10): its distinct
+/// routines, and the call sites when they are more than the routines
+/// (`2 dependency routines that commit, entered at 3 call sites`). `live`:
+/// the live entries ("that commit"); else the ruled-out ones, which the
+/// caller follows with "more under literal arguments that cannot run".
+fn commit_entries_words(n: EntryCount, live: bool) -> String {
+    let same = n.sites <= n.routines;
+    match (live, same) {
+        (true, true) => plural(
+            n.routines,
+            "dependency routine entered that commits",
+            "dependency routines entered that commit",
+        ),
+        (true, false) => format!(
+            "{}, entered at {}",
+            plural(
+                n.routines,
+                "dependency routine that commits",
+                "dependency routines that commit"
+            ),
+            plural(n.sites, "call site", "call sites")
+        ),
+        (false, true) => plural(
+            n.routines,
+            "dependency routine entered",
+            "dependency routines entered",
+        ),
+        (false, false) => format!(
+            "{} entered at {}",
+            plural(n.routines, "dependency routine", "dependency routines"),
+            plural(n.sites, "call site", "call sites")
+        ),
+    }
 }
 
 /// One card's header facts (output validation §5.2): its summary block, and
@@ -2923,11 +3084,9 @@ pub fn commit_lines(
                 plural(r.commit_sites.len(), "site", "sites")
             )
         },
-        plural(
-            bearing.len(),
-            "dependency routine entered that commits",
-            "dependency routines entered that commit"
-        )
+        // Round-4 n10: the distinct routines (and call sites when more),
+        // never the crossings the rows below list one by one.
+        commit_entries_words(crossing_counts(bearing.iter().copied()), true)
     )];
     // MCP output step 2: the first `caps::PATHED_ROWS` sites and crossings
     // print their paths; the others their place only (`--detail`: all).
@@ -2936,10 +3095,11 @@ pub fn commit_lines(
     let mut rest: Vec<String> = Vec::new();
     for (k, &i) in r.commit_sites.iter().enumerate() {
         let e = &entry.effects[i];
+        // r3 §7 R5: the route's guards when one was replayed, as prove.
         let row = format!(
             "COMMIT at {} ({})",
             row_anchor(e),
-            crate::engine::vocab::condition(e.conditionality)
+            crate::engine::l5::prove::condition_words(e)
         );
         if !pathed(k) {
             rest.push(row);
@@ -3948,11 +4108,13 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
                     .iter()
                     .find(|(k, _)| k == "starts")
                     .map_or(String::new(), |(_, s)| format!(", starts {s}"));
+                // r3 §7 R5: the route's guards when one was replayed, as
+                // prove; the class label otherwise.
                 format!(
                     "{} at {} ({}){starts}",
                     e.effect_type,
                     row_anchor(e),
-                    crate::engine::vocab::condition(e.conditionality)
+                    crate::engine::l5::prove::condition_words(e)
                 )
             })
             .collect();

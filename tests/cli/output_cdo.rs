@@ -743,8 +743,13 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // `calls:` line in the one display with `called at`, path hops with
         // their location's role: IssueReminder 142 lines / 34,031 B,
         // RunReportID 155 / 38,844 B (2026-11-07).
+        // r3 §7 R1, R4, R5 (2026-11-08): the publisher assumption in one
+        // sentence (its universe and the site it rules out, +~180 B), the
+        // replayed routes' guard counts in place of class labels on the
+        // `COMMIT at` and kind-family places, and `starts by:` printing whole
+        // statements: RunReportID 152 lines / 39,049 B (was 38,706).
         ("IssueReminder", "explain human") => (145, 34_500),
-        ("RunReportID", "explain human") => (160, 39_000),
+        ("RunReportID", "explain human") => (160, 39_500),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
         ("RunReportID", "query effects human") => (80, 27_000),
@@ -780,8 +785,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // IssueReminder's `yes` ran through `Reminder-Issue`'s
         // `TempGenJnlLine` insert into a subscriber that exits on
         // `Rec.IsTemporary()`; without it the answer is `unknown` with its
-        // 287 blockers folded by kind (25 lines, 3,199 B).
-        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_400),
+        // 287 blockers folded by kind (25 lines, 3,199 B). Round-4 literal
+        // routes (2026-11-08): 284 blockers and one line for the 5 call
+        // sites the literal arguments rule out (26 lines, 3,429 B).
+        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_550),
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
         ("RunReportID", "digest human") => (135, 46_300),

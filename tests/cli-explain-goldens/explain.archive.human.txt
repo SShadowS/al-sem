@@ -7,7 +7,7 @@ Codeunit "Explain Post"::Archive  defined at ws:src/post.al:23
   other effects: events: 0 (0 raised in workspace code)
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  starts by (a start, not a summary): `Order.Status := Order.Status::Archived` (:25); `Order.Modify()` (:26); +1 more
+  starts by (a start, not a summary): `Order.Status := Order.Status::Archived` (:25); `Order.Modify()` (:26); `Commit()` (:27)
   calls: none (no call to a routine; builtins aside)
   doc: Archives without any check.
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:

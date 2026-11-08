@@ -69,7 +69,7 @@ use std::sync::Arc;
 pub mod routes;
 
 #[path = "literal_values.rs"]
-mod values;
+pub(crate) mod values;
 
 #[path = "literal_flow.rs"]
 mod lflow;
@@ -98,6 +98,118 @@ pub(crate) struct KeepInfo {
     /// The loaded subscribers considered (`Codeunit "Y"::Handler`), sorted;
     /// empty when none is loaded.
     pub subscribers: Vec<String>,
+    /// r3 §7 R1: the universe whose subscribers were considered, in words
+    /// ([`universe_words`]).
+    pub universe: String,
+}
+
+/// r3 §7 R1: the universe a model's subscriber inventory covers, in words:
+/// the primary app, with its loaded dependencies when the model holds
+/// dependency code (a test universe's primary app is the test app).
+pub(crate) fn universe_words(model: &Model) -> String {
+    let app = model
+        .primary_app
+        .as_ref()
+        .map_or("the workspace app", |a| a.name.as_str());
+    let deps = model
+        .workspace
+        .routines
+        .iter()
+        .any(|r| r.source_anchor.source_unit_id.starts_with("dep:"));
+    if deps {
+        format!("{app} with its loaded dependencies")
+    } else {
+        format!("{app} alone")
+    }
+}
+
+/// r3 §7 R1: one publisher assumption with the sites it rules out, the one
+/// template prove, explain and digest print and the `assumptionRecords`
+/// entry they carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AssumptionRecord {
+    pub keep: KeepInfo,
+    /// The sites (`file:line`, 1-based) the assumption rules out, in file
+    /// then line order, each once.
+    pub rules_out: Vec<String>,
+}
+
+impl AssumptionRecord {
+    /// The records of `(assumption, site)` pairs: one per assumption, in
+    /// first-seen order, its sites sorted by file then line and distinct.
+    pub(crate) fn collect<'k>(
+        pairs: impl IntoIterator<Item = (&'k KeepInfo, Option<String>)>,
+    ) -> Vec<AssumptionRecord> {
+        let mut out: Vec<AssumptionRecord> = Vec::new();
+        for (k, site) in pairs {
+            let at = match out.iter().position(|r| &r.keep == k) {
+                Some(at) => at,
+                None => {
+                    out.push(AssumptionRecord {
+                        keep: k.clone(),
+                        rules_out: Vec::new(),
+                    });
+                    out.len() - 1
+                }
+            };
+            if let Some(s) = site
+                && !out[at].rules_out.contains(&s)
+            {
+                out[at].rules_out.push(s);
+            }
+        }
+        let key = |s: &String| -> (String, u32) {
+            match s.rsplit_once(':') {
+                Some((f, l)) if l.parse::<u32>().is_ok() => (f.to_string(), l.parse().unwrap_or(0)),
+                _ => (s.clone(), 0),
+            }
+        };
+        for r in &mut out {
+            r.rules_out.sort_by_key(key);
+        }
+        out
+    }
+
+    /// The sentence (r3 §7 R1): the closure assumption, then what it rules
+    /// out.
+    pub(crate) fn sentence(&self) -> String {
+        let k = &self.keep;
+        let mut s = if k.subscribers.is_empty() {
+            format!(
+                "assumes {} has no loaded subscriber, so {} keeps its value ({}; no additional \
+                 subscribers assumed)",
+                k.publisher, k.parameter, k.universe
+            )
+        } else {
+            format!(
+                "assumes no subscribers beyond those considered in {} ({}), none of which \
+                 changes {}",
+                k.universe,
+                k.subscribers.join(", "),
+                k.parameter
+            )
+        };
+        match self.rules_out.as_slice() {
+            [] => {}
+            [one] => s.push_str(&format!("; rules out {one}")),
+            [first, ..] => s.push_str(&format!(
+                "; rules out {} sites (first: {first})",
+                self.rules_out.len()
+            )),
+        }
+        s
+    }
+
+    /// The `assumptionRecords` entry (additive).
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "publisher": self.keep.publisher,
+            "parameter": self.keep.parameter,
+            "universe": self.keep.universe,
+            "subscribersConsidered": self.keep.subscribers,
+            "rulesOut": self.rules_out,
+        })
+    }
 }
 
 impl KeepInfo {
@@ -137,6 +249,15 @@ impl KeepInfo {
     }
 }
 
+/// r3 §7 R5: the guards of a route that crosses into dependency code, and
+/// how many routines on it had no statement tree (their guards not
+/// analyzed).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RouteGuardSet {
+    pub guards: Vec<RouteGuard>,
+    pub unanalyzed: usize,
+}
+
 /// r3 E2: what the literal reach adds to one effect row for a reader: the
 /// loaded-subscriber assumptions its removal rests on, and its witness
 /// route's guards.
@@ -148,6 +269,40 @@ pub(crate) struct FlowNotes {
     /// The guards on the row's listed witness route, outermost first
     /// (`None`: no route was replayed).
     pub guards: Option<Vec<RouteGuard>>,
+    /// r3 §7 R5: a boundary group's route was replayed only up to the
+    /// dependency entry (the routines beyond it, or one of them, had no
+    /// statement tree, or no witness through the entry was kept): its
+    /// guards beyond the entry were not analyzed, and `guards` counts the
+    /// analyzed part only.
+    pub beyond_unanalyzed: bool,
+}
+
+/// r3 §7 R5: the condition words of a row whose route was replayed
+/// (`N guards on the route, k evaluated`, or `on the analyzed route` with
+/// the boundary when the guards beyond the dependency entry were not
+/// analyzed); `None` when no route was replayed, or a fully analyzed route
+/// has no guard (the row's class label then says it). prove, explain and
+/// digest print this form alike.
+pub(crate) fn route_condition_words(notes: Option<&FlowNotes>) -> Option<String> {
+    let n = notes?;
+    let g = n.guards.as_ref()?;
+    if g.is_empty() && !n.beyond_unanalyzed {
+        return None;
+    }
+    let evaluated = g.iter().filter(|x| x.evaluated).count();
+    let count = if g.len() == 1 {
+        "1 guard".to_string()
+    } else {
+        format!("{} guards", g.len())
+    };
+    Some(if n.beyond_unanalyzed {
+        format!(
+            "{count} on the analyzed route, {evaluated} evaluated; guards beyond the dependency \
+             entry: not analyzed"
+        )
+    } else {
+        format!("{count} on the route, {evaluated} evaluated")
+    })
 }
 
 /// The most (routine, bindings) states one root's search visits.
@@ -400,10 +555,13 @@ type FlowKey = (usize, Vec<(u32, VSet)>, bool);
 /// [`LiteralReach::unreachable_effects_noted`]'s result: the dead effects,
 /// per group its dead resources, and per effect dead only by an assumption
 /// the keep verdicts it rests on.
+/// Round-4 literal routes: and of the call sites asked about, those that
+/// cannot run from the root (without relying on a publisher keep).
 pub(crate) type NotedUnreachable = (
     HashSet<usize>,
     HashMap<usize, Vec<String>>,
     HashMap<usize, Vec<KeepInfo>>,
+    Vec<String>,
 );
 
 fn contradicts(reqs: &[Req], b: &Bindings) -> bool {
@@ -754,6 +912,7 @@ fn build_flow<'a>(
             .push(e.subscriber_routine_id.as_str());
     }
     let mut keep_info: Vec<KeepInfo> = Vec::new();
+    let universe = universe_words(model);
     let mut verdicts: HashMap<(&str, u32), Option<u32>> = HashMap::new();
     let mut progs: HashMap<&'a str, lflow::FlowProgram> = HashMap::new();
     for r in &model.workspace.routines {
@@ -809,6 +968,7 @@ fn build_flow<'a>(
                     )
                     .map(|mut k| {
                         k.publisher = display(c);
+                        k.universe = universe.clone();
                         k.subscribers = subs
                             .get(
                                 crate::program::model::events::encode_event_id(
@@ -970,6 +1130,7 @@ fn keep_verdict(
         publisher: String::new(),
         parameter: p.name.trim().trim_matches('"').to_string(),
         subscribers: Vec::new(),
+        universe: String::new(),
     })
 }
 
@@ -1172,6 +1333,142 @@ pub(crate) struct LiteralReach<'a> {
     /// W2-0a: [`TerminalFacts`]); [`Self::kind_dead`] reads them by kind,
     /// (effect type, resource id).
     terminals: TerminalFacts<'a>,
+    /// Round-4 literal routes: the implementations interface calls on a
+    /// known enum value may reach ([`EnumImpls`]).
+    enum_impls: EnumImpls<'a>,
+}
+
+/// Round-4 literal routes: which codeunit an enum value's implementation of
+/// an interface is, read from the model's enums ([`ModelObject::enum_impls`]),
+/// and the model's codeunits to match it against an interface call's target.
+///
+/// [`ModelObject::enum_impls`]: crate::program::model::workspace::ModelObject::enum_impls
+#[derive(Default)]
+struct EnumImpls<'a> {
+    /// Enum name (folded) → the objects declaring its values: the enum and
+    /// its extensions.
+    declaring: HashMap<String, Vec<&'a crate::program::model::workspace::ModelObject>>,
+    /// Codeunit object id → (number, name folded).
+    codeunits: HashMap<&'a str, (i64, String)>,
+    /// Model routine stable id → its object id.
+    owner: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> EnumImpls<'a> {
+    fn new(model: &'a Model) -> Self {
+        use crate::program::model::workspace::ModelObject;
+        let mut declaring: HashMap<String, Vec<&'a ModelObject>> = HashMap::new();
+        let mut codeunits = HashMap::new();
+        for o in &model.workspace.objects {
+            match o.object_type.as_str() {
+                "Enum" => declaring.entry(values::fold(&o.name)).or_default().push(o),
+                "EnumExtension" => {
+                    if let Some(t) = &o.extends_target_name {
+                        declaring.entry(values::fold(t)).or_default().push(o);
+                    }
+                }
+                "Codeunit" => {
+                    codeunits.insert(o.id.as_str(), (o.object_number, values::fold(&o.name)));
+                }
+                _ => {}
+            }
+        }
+        let owner = model
+            .workspace
+            .routines
+            .iter()
+            .map(|r| (r.stable_routine_id.as_str(), r.object_id.as_str()))
+            .collect();
+        EnumImpls {
+            declaring,
+            codeunits,
+            owner,
+        }
+    }
+
+    /// The codeunit references implementing interface `iface` for the enum
+    /// values `vals`, each resolved to at least one loaded codeunit; `None`
+    /// when one value is not an enum value, is not found, or its
+    /// implementation cannot be read or resolved (then every implementation
+    /// stays possible).
+    fn implementers(
+        &self,
+        iface: &str,
+        vals: &[values::Val],
+    ) -> Option<Vec<&'a crate::program::node_extract::ObjectRef>> {
+        use crate::program::node_extract::ObjectRef;
+        let mut out: Vec<&'a ObjectRef> = Vec::new();
+        for v in vals {
+            let values::Val::Enum(e, m) = v else {
+                return None;
+            };
+            let objs = self.declaring.get(&**e)?;
+            // The base enum's default covers an extension value that names
+            // none of its own.
+            let base_default = objs
+                .iter()
+                .find(|o| o.object_type == "Enum")
+                .and_then(|o| o.enum_impls.as_ref())
+                .map(|x| x.default.as_ref());
+            let mut found = false;
+            for o in objs {
+                let Some(ei) = &o.enum_impls else {
+                    // A declaring object whose values were not read (a
+                    // symbol-only enum or extension) may hold the value.
+                    return None;
+                };
+                let Some((_, pairs)) = ei.values.iter().find(|(n, _)| n.as_str() == &**m) else {
+                    continue;
+                };
+                found = true;
+                let pick = |ps: &'a Option<Vec<crate::program::model::workspace::EnumImplPair>>| {
+                    ps.as_ref()
+                        .map(|ps| ps.iter().find(|(i, _)| i.as_str() == iface).map(|(_, c)| c))
+                };
+                let c = match pick(pairs)? {
+                    Some(c) => c,
+                    None => match pick(&ei.default)? {
+                        Some(c) => c,
+                        None => match base_default {
+                            Some(Some(d)) => d
+                                .iter()
+                                .find(|(i, _)| i.as_str() == iface)
+                                .map(|(_, c)| c)?,
+                            _ => return None,
+                        },
+                    },
+                };
+                let resolves = self.codeunits.values().any(|(n, name)| match c {
+                    ObjectRef::Id(id) => id == n,
+                    ObjectRef::Name { normalized_lc, .. } => normalized_lc == name,
+                });
+                if !resolves {
+                    return None;
+                }
+                if !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+            if !found {
+                return None;
+            }
+        }
+        Some(out)
+    }
+
+    /// Whether routine `to` (stable id) belongs to one of the codeunits
+    /// `refs` names.
+    fn is_one_of(&self, to: &str, refs: &[&crate::program::node_extract::ObjectRef]) -> bool {
+        use crate::program::node_extract::ObjectRef;
+        let Some((n, name)) = self.owner.get(to).and_then(|o| self.codeunits.get(o)) else {
+            // A target that is no loaded codeunit routine: not ruled out.
+            return true;
+        };
+        refs.iter().any(|c| match c {
+            ObjectRef::Id(id) => id == n,
+            ObjectRef::Name { normalized_lc, .. } => normalized_lc == name,
+        })
+    }
 }
 
 impl<'a> LiteralReach<'a> {
@@ -1306,6 +1603,46 @@ impl<'a> LiteralReach<'a> {
             rel_params,
             rel_globals,
             terminals,
+            enum_impls: EnumImpls::new(model),
+        }
+    }
+
+    /// Whether the out-edge of `f` to `to` (of edge kind `kind`) leaving at
+    /// guarded site `site` cannot be taken under `b`: the site cannot run
+    /// ([`Self::dead_at_m`]), or (round-4 literal routes) it is an interface
+    /// dispatch whose receiver holds known enum values none of which selects
+    /// `to`'s codeunit.
+    fn edge_dead(
+        &self,
+        f: &str,
+        site: &str,
+        to: &str,
+        kind: &str,
+        b: &Bindings,
+        keep: bool,
+    ) -> bool {
+        self.dead_at_m(f, site, b, keep)
+            || (kind == "interface-dispatch" && self.dispatch_excluded(f, site, to, b, keep))
+    }
+
+    /// Round-4 literal routes: whether interface call `site` of `f` cannot
+    /// reach implementer routine `to` under `b`: the receiver is a local
+    /// assigned from enum values the flow knows ([`lflow`]), each value's
+    /// implementation of the interface resolves to a loaded codeunit, and
+    /// `to` is in none of them. Anything unknown keeps the edge.
+    fn dispatch_excluded(&self, f: &str, site: &str, to: &str, b: &Bindings, keep: bool) -> bool {
+        let Some(p) = self.flow_progs.get(f) else {
+            return false;
+        };
+        let Some(ev) = self.flow_eval(f, b, keep) else {
+            return false;
+        };
+        let Some((iface, vals)) = p.receiver_at(&ev, site) else {
+            return false;
+        };
+        match self.enum_impls.implementers(iface, vals) {
+            Some(refs) => !self.enum_impls.is_one_of(to, &refs),
+            None => false,
         }
     }
 
@@ -1560,7 +1897,29 @@ impl<'a> LiteralReach<'a> {
                             .map(|v| Arc::from([v])),
                     }
                 })
-                .or_else(|| forwarded(*j).and_then(|i| b.entry_value(i)));
+                .or_else(|| forwarded(*j).and_then(|i| b.entry_value(i)))
+                // Round-4 literal routes: a Variant parameter holds the
+                // static type of the caller's variable passed to it (the
+                // implicit `Rec` included).
+                .or_else(|| {
+                    if *d != lflow::FDom::Variant {
+                        return None;
+                    }
+                    let info = cs.argument_infos.get(*j as usize)?;
+                    if !matches!(info.kind.as_str(), "identifier" | "quoted_identifier") {
+                        return None;
+                    }
+                    let name = values::fold(&info.text);
+                    let ty = match r.variables.iter().find(|v| values::fold(&v.name) == name) {
+                        Some(v) => values::variant_type_of(&v.declared_type)?,
+                        None => r
+                            .record_variables
+                            .iter()
+                            .any(|v| v.is_implicit_rec && values::fold(&v.name) == name)
+                            .then(|| values::Val::Type(Arc::from("record")))?,
+                    };
+                    Some(VSet::from([ty]))
+                });
             if let Some(set) = raw.and_then(|v| lflow::conv_set(&v, d)) {
                 out.flow.push((*j, set));
             }
@@ -1622,10 +1981,10 @@ impl<'a> LiteralReach<'a> {
             HashMap::from([(root, vec![Bindings::default()])]);
         let mut q = VecDeque::from([(root, Bindings::default())]);
         while let Some((f, b)) = q.pop_front() {
-            for &(to, site, binds, _) in self.out.get(f).into_iter().flatten() {
+            for &(to, site, binds, kind) in self.out.get(f).into_iter().flatten() {
                 let site = site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
-                    && self.dead_at_m(f, s, &b, keep)
+                    && self.edge_dead(f, s, to, kind, &b, keep)
                 {
                     continue;
                 }
@@ -1723,7 +2082,7 @@ impl<'a> LiteralReach<'a> {
             {
                 let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
-                    && self.dead_at_m(f, s, &b, keep)
+                    && self.edge_dead(f, s, to, kind, &b, keep)
                 {
                     if let Some(r) = rec.as_deref_mut() {
                         r.dead(j);
@@ -1955,7 +2314,7 @@ impl<'a> LiteralReach<'a> {
                 }
                 let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
-                    && self.dead_at(f, s, b)
+                    && self.edge_dead(f, s, to, kind, b, true)
                 {
                     continue;
                 }
@@ -2107,6 +2466,12 @@ impl<'a> LiteralReach<'a> {
             let Some(to) = h.to_routine_id.as_deref() else {
                 break;
             };
+            if let (Some("interface-dispatch"), Some(cs)) =
+                (h.edge_kind.as_deref(), h.callsite_id.as_deref())
+                && self.dispatch_excluded(from, cs, to, &b, true)
+            {
+                return false;
+            }
             b = match (h.edge_kind.as_deref(), h.callsite_id.as_deref()) {
                 (Some("direct-call" | "variable-typed-call" | "interface-dispatch"), Some(cs)) => {
                     self.bind(from, cs, to, &b)
@@ -2185,6 +2550,38 @@ impl<'a> LiteralReach<'a> {
         out
     }
 
+    /// r3 §7 R5: [`Self::route_guards_steps`] of a group witness (its route
+    /// through the dependency entry to its terminal operation `op`), with
+    /// how many routines on the route had no statement tree to read guards
+    /// from (their guards were not analyzed).
+    pub(crate) fn route_guards_checked(
+        &self,
+        root: &str,
+        steps: &[Step<'_>],
+        op: &str,
+    ) -> RouteGuardSet {
+        let unread = |r: &str| {
+            self.by_stable
+                .get(r)
+                .is_none_or(|m| m.statement_tree.is_none() && !self.flow_progs.contains_key(r))
+        };
+        let mut unanalyzed = 0usize;
+        let mut cur = root;
+        for s in steps {
+            if unread(s.from) {
+                unanalyzed += 1;
+            }
+            cur = s.to;
+        }
+        if unread(cur) {
+            unanalyzed += 1;
+        }
+        RouteGuardSet {
+            guards: self.route_guards_steps(root, steps, op),
+            unanalyzed,
+        }
+    }
+
     /// The guards `site` sits under in `routine` (r3 E2), evaluated under `b`.
     fn guards_at(&self, routine: &str, site: &str, b: &Bindings) -> Vec<RouteGuard> {
         let Some(r) = self.by_stable.get(routine) else {
@@ -2259,8 +2656,24 @@ impl<'a> LiteralReach<'a> {
         effects: &[DigestEffectResult],
         per_site: &[&str],
     ) -> (HashSet<usize>, HashMap<usize, Vec<String>>) {
-        let (dead, resources, _) = self.unreachable_effects_noted(root, effects, per_site);
+        let (dead, resources, _, _) = self.unreachable_effects_noted(root, effects, per_site, &[]);
         (dead, resources)
+    }
+
+    /// Round-4 literal routes: the call sites of `sites` the search
+    /// `reached` (made with `keep`) rules out: each one's routine is reached
+    /// with guards ignored, and no reached state of it lets the site run.
+    fn dead_sites(&self, reached: &Reached<'a>, sites: &[&str], keep: bool) -> Vec<String> {
+        sites
+            .iter()
+            .filter(|s| {
+                self.op_owner
+                    .get(**s)
+                    .is_some_and(|o| reached.0.contains(o))
+                    && self.op_dead(reached, s, keep)
+            })
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// [`Self::unreachable_effects`], and (r3 E2) per effect it drops ONLY
@@ -2268,11 +2681,16 @@ impl<'a> LiteralReach<'a> {
     /// keep verdicts the root's search used: a reader states that assumption,
     /// and a world that does not make it counts the effect. A group resource
     /// is dropped only when it is dead without the assumption too.
+    ///
+    /// Round-4 literal routes: and the call sites of `sites` (a cone's
+    /// unresolved sites) that cannot run from the root, without the
+    /// assumption too: an unresolved site no route can reach blocks nothing.
     pub(crate) fn unreachable_effects_noted(
         &self,
         root: &'a str,
         effects: &[DigestEffectResult],
         per_site: &[&str],
+        sites: &[&str],
     ) -> NotedUnreachable {
         // A root with no usable guard anywhere has nothing to prune.
         if self.frames.is_empty()
@@ -2296,12 +2714,15 @@ impl<'a> LiteralReach<'a> {
         keeps.sort_unstable();
         keeps.dedup();
         if keeps.is_empty() {
-            return (dead, resources, HashMap::new());
+            let dead_sites = self.dead_sites(&reached, sites, true);
+            return (dead, resources, HashMap::new(), dead_sites);
         }
         // Without the publisher keeps: what is dead only through them.
-        let strict = self
-            .search(root, false)
-            .map(|r| self.judge(&r, effects, per_site, false));
+        let strict_reached = self.search(root, false);
+        let dead_sites = strict_reached
+            .as_ref()
+            .map_or_else(Vec::new, |r| self.dead_sites(r, sites, false));
+        let strict = strict_reached.map(|r| self.judge(&r, effects, per_site, false));
         let infos_of = |ks: &[u32]| -> Vec<KeepInfo> {
             ks.iter()
                 .filter_map(|&k| self.keep_info.get(k as usize).cloned())
@@ -2356,7 +2777,7 @@ impl<'a> LiteralReach<'a> {
             }
         }
         resources.retain(|_, l| !l.is_empty());
-        (dead, resources, assumed)
+        (dead, resources, assumed, dead_sites)
     }
 
     /// r3 E2: the keep verdicts that cut the route to one of `ops`: along the
@@ -2532,5 +2953,96 @@ impl<'a> LiteralReach<'a> {
             }
         }
         any_reached
+    }
+}
+
+#[cfg(test)]
+mod r7_tests {
+    use super::*;
+
+    fn guard(evaluated: bool) -> RouteGuard {
+        RouteGuard {
+            routine: "R".into(),
+            line: Some(1),
+            text: "X".into(),
+            kind: GuardKind::Must(true),
+            evaluated,
+        }
+    }
+
+    /// r3 §7 R5: a route whose guards beyond the dependency entry were not
+    /// analyzed counts the analyzed part only and says so; a fully analyzed
+    /// one counts the route; no replayed route (or a fully analyzed route
+    /// without a guard) leaves the class label.
+    ///
+    /// DISCRIMINATION (2026-11-08): `route_condition_words` ignoring
+    /// `beyond_unanalyzed` (always the `on the route` form) fails the first
+    /// assert; restored, passes.
+    #[test]
+    fn the_condition_words_state_the_analyzed_boundary() {
+        let notes = |guards: Option<Vec<RouteGuard>>, beyond: bool| FlowNotes {
+            assumed: Vec::new(),
+            guards,
+            beyond_unanalyzed: beyond,
+        };
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(vec![guard(true), guard(false)]), true)))
+                .as_deref(),
+            Some(
+                "2 guards on the analyzed route, 1 evaluated; guards beyond the dependency \
+                 entry: not analyzed"
+            )
+        );
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(vec![guard(false)]), false))).as_deref(),
+            Some("1 guard on the route, 0 evaluated")
+        );
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(Vec::new()), true))).as_deref(),
+            Some(
+                "0 guards on the analyzed route, 0 evaluated; guards beyond the dependency \
+                 entry: not analyzed"
+            )
+        );
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(Vec::new()), false))),
+            None
+        );
+        assert_eq!(route_condition_words(Some(&notes(None, false))), None);
+        assert_eq!(route_condition_words(None), None);
+    }
+
+    /// r3 §7 R1: the two forms of the sentence and the two `rules out`
+    /// forms; the records group by assumption with their sites in file then
+    /// line order (`:9` before `:10`).
+    #[test]
+    fn an_assumption_record_reads_as_one_sentence() {
+        let keep = |subs: &[&str]| KeepInfo {
+            publisher: "Codeunit \"E\"::OnX".into(),
+            parameter: "P".into(),
+            subscribers: subs.iter().map(|s| s.to_string()).collect(),
+            universe: "App alone".into(),
+        };
+        let none = keep(&[]);
+        let recs = AssumptionRecord::collect([
+            (&none, Some("ws:a.al:10".to_string())),
+            (&none, Some("ws:a.al:9".to_string())),
+            (&none, Some("ws:a.al:10".to_string())),
+        ]);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].rules_out, vec!["ws:a.al:9", "ws:a.al:10"]);
+        assert_eq!(
+            recs[0].sentence(),
+            "assumes Codeunit \"E\"::OnX has no loaded subscriber, so P keeps its value (App \
+             alone; no additional subscribers assumed); rules out 2 sites (first: ws:a.al:9)"
+        );
+        let two = keep(&["Codeunit \"S\"::A", "Codeunit \"S\"::B"]);
+        let recs = AssumptionRecord::collect([(&two, Some("ws:a.al:3".to_string()))]);
+        assert_eq!(
+            recs[0].sentence(),
+            "assumes no subscribers beyond those considered in App alone (Codeunit \"S\"::A, \
+             Codeunit \"S\"::B), none of which changes P; rules out ws:a.al:3"
+        );
+        assert!(!recs[0].sentence().contains("loaded-subscribers"));
     }
 }

@@ -57,10 +57,57 @@ impl TierPick {
     }
 }
 
-/// The relation of a test's path (§8.1): `UI navigation` when any hop is a
-/// page the path opens (a bare page object between routines: the page's
-/// lifecycle edge), else `code`.
+/// A test's relation (output validation r3 T1, round-4 c28): `code` when
+/// ANY of its reaches (`reachesAll`, one per changed routine it reaches) is
+/// code, `UI navigation` only when every one is; a test with no
+/// `reachesAll` (a hand-built part) takes its printed path's relation. The
+/// one rule for a row's `relation`, the ranking, `byRelation` and the
+/// headline, so a test is never counted as navigation-only while its own
+/// reaches say code.
 fn relation(t: &Value) -> &'static str {
+    match t["reachesAll"].as_array() {
+        Some(all) if !all.is_empty() => {
+            if all
+                .iter()
+                .any(|r| s(r, "relation") == crate::engine::vocab::RELATION_CODE)
+            {
+                crate::engine::vocab::RELATION_CODE
+            } else {
+                crate::engine::vocab::RELATION_NAVIGATION
+            }
+        }
+        _ => path_relation(t),
+    }
+}
+
+/// The render's internal mark on a test whose part's reach inventory is
+/// incomplete (r3 §7 B1, L4): such a test's UI-navigation relation holds for
+/// the changed routines its walks reached, not for the ones past the limit,
+/// so the answer never calls it "navigation only".
+const REACH_PARTIAL: &str = "_reachPartial";
+
+/// The words after a count of UI-navigation tests (r3 §7 B1): ` by UI
+/// navigation only` when every one's reach inventory is complete; otherwise
+/// the reach is named as incomplete (`not_expanded` changed routines past the
+/// limit), never "only".
+fn navigation_words(nav_tests: &[&Value], not_expanded: usize) -> String {
+    if nav_tests.iter().any(|t| t[REACH_PARTIAL] == json!(true)) {
+        format!(
+            " by UI navigation on the reaches computed (reach incomplete: {} not expanded, \
+             which a code path may reach)",
+            n_of(not_expanded, "changed routine", "changed routines")
+        )
+    } else {
+        " by UI navigation only".to_string()
+    }
+}
+
+/// The relation of a test's printed path (§8.1): `UI navigation` when any
+/// hop is a page the path opens (a bare page object between routines: the
+/// page's lifecycle edge), else `code`. The printed path is the test's
+/// shortest, so it can open a page while the test counts as code
+/// ([`relation`]).
+fn path_relation(t: &Value) -> &'static str {
     let nav = t["path"]
         .as_array()
         .into_iter()
@@ -84,6 +131,85 @@ fn relation_words(t: &Value) -> String {
         format!("{r} (candidate)")
     } else {
         r.to_string()
+    }
+}
+
+/// A test's reaches as the answer's tier pick sees them (round-4 c28, n02):
+/// a code reach whose best code path lies outside the pick (a via-hub path
+/// under `--tier local`) becomes the root's best UI-navigation reach when
+/// that one is inside it (the select part's `navigation` beside the code
+/// reach), so a test is not counted as reached "by code calls" on a local
+/// path through a hub only. The `navigation` alternatives leave, and a
+/// `codePath` outside the pick is dropped. Without a pick-side alternative
+/// a reach stays as it is.
+fn on_tier(t: &mut Value, pick: TierPick) {
+    if let Some(Value::Array(all)) = t.get_mut("reachesAll") {
+        for r in all.iter_mut() {
+            let Value::Object(m) = r else { continue };
+            let Some(nav) = m.remove("navigation") else {
+                continue;
+            };
+            let code_out = m.get("relation").and_then(Value::as_str)
+                == Some(crate::engine::vocab::RELATION_CODE)
+                && !pick.takes(m.get("tier").and_then(Value::as_str).unwrap_or(""));
+            if code_out && pick.takes(s(&nav, "tier")) {
+                m.insert("tier".into(), nav["tier"].clone());
+                m.insert("hops".into(), nav["hops"].clone());
+                m.insert(
+                    "relation".into(),
+                    json!(crate::engine::vocab::RELATION_NAVIGATION),
+                );
+                if let Some(c) = nav.get("candidate") {
+                    m.insert("candidate".into(), c.clone());
+                }
+            }
+        }
+    }
+    if t["codePath"].is_array()
+        && !pick.takes(s(t, "codePathTier"))
+        && let Value::Object(m) = t
+    {
+        for k in ["codePath", "codePathTier", "codePathHops"] {
+            m.remove(k);
+        }
+    }
+}
+
+/// The path the human text prints for a test, with its tier and hops
+/// (round-4 c28): its printed (shortest) path, unless that path opens a
+/// page while the test counts as code; then the code path the select part
+/// found (`codePath`), so the line never shows a UI path under `code`. The
+/// last value is the label of the path line (`path: `, or, r3 §7 B1, the
+/// tagged `path [UI navigation; the test's code path is not kept]: ` when a
+/// code test has no code path to show: its relation stays code, the path
+/// carries its own).
+fn shown_path(t: &Value) -> (&str, usize, Vec<String>, &'static str) {
+    let hops = |k: &str| {
+        t[k].as_array()
+            .into_iter()
+            .flatten()
+            .skip(1)
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+    };
+    let mismatch = relation(t) == crate::engine::vocab::RELATION_CODE
+        && path_relation(t) != crate::engine::vocab::RELATION_CODE;
+    if mismatch && t["codePath"].is_array() {
+        (
+            s(t, "codePathTier"),
+            u(t, "codePathHops"),
+            hops("codePath"),
+            "path: ",
+        )
+    } else if mismatch {
+        (
+            s(t, "tier"),
+            u(t, "hops"),
+            hops("path"),
+            "path [UI navigation; the test's code path is not kept]: ",
+        )
+    } else {
+        (s(t, "tier"), u(t, "hops"), hops("path"), "path: ")
     }
 }
 
@@ -871,34 +997,62 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         }
     }
     // Every reached test over the parts, ranked; then the run-first subset.
+    // r3 §7 B1: a test from a part whose reach inventory is incomplete (L4,
+    // `reachesComplete: false`) may reach a routine past the limit by code
+    // calls, so it is never called "navigation only" ([`REACH_PARTIAL`]; an
+    // internal mark no output row copies).
     let mut tests: Vec<Value> = ok_parts
         .iter()
-        .flat_map(|p| p["tests"].as_array().cloned().unwrap_or_default())
+        .flat_map(|p| {
+            let partial = p["reachesComplete"] == json!(false);
+            p["tests"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |mut t| {
+                    if partial && let Value::Object(m) = &mut t {
+                        m.insert(REACH_PARTIAL.into(), json!(true));
+                    }
+                    t
+                })
+        })
         .collect();
+    // A test outside the pick (a via-dependency test counted apart under
+    // `--tier local`) is described on its own tier.
+    for t in &mut tests {
+        let pick = match s(t, "tier") {
+            tier if opts.tier.takes(tier) => opts.tier,
+            "throughDependency" => TierPick::Dependency,
+            _ => TierPick::All,
+        };
+        on_tier(t, pick);
+    }
     let tier_rank = |t: &str| match t {
         "local" => 0,
         "throughDependency" => 1,
         _ => 2,
     };
     // Output validation V2 (§3.3, F13): code paths before UI-navigation ones,
-    // then tier, hops, codeunit, name.
+    // then tier, hops, codeunit, name. Round-4 c28: by the test's relation
+    // (code when any reach is code) and the tier and hops of the path the
+    // answer shows for it (a code test's code path).
     let rel_rank = |t: &Value| usize::from(relation(t) != crate::engine::vocab::RELATION_CODE);
-    tests.sort_by(|a, b| {
+    // r3 §7 B1: among code tests, one whose code path is shown before one
+    // whose code path was not kept (its shown path is a tagged UI one), so a
+    // codeunit's first path is its shortest code path when one exists.
+    let rank_key = |t: &Value| {
+        let (tier, hops, _, label) = shown_path(t);
         (
-            rel_rank(a),
-            tier_rank(s(a, "tier")),
-            u(a, "hops"),
-            a["codeunitId"].as_i64().unwrap_or(i64::MAX),
-            s(a, "display"),
+            rel_rank(t),
+            usize::from(label != "path: "),
+            tier_rank(tier),
+            hops,
+            t["codeunitId"].as_i64().unwrap_or(i64::MAX),
+            s(t, "display").to_string(),
         )
-            .cmp(&(
-                rel_rank(b),
-                tier_rank(s(b, "tier")),
-                u(b, "hops"),
-                b["codeunitId"].as_i64().unwrap_or(i64::MAX),
-                s(b, "display"),
-            ))
-    });
+    };
+    tests.sort_by_cached_key(|t| rank_key(t));
     let count = |t: &str| tests.iter().filter(|x| s(x, "tier") == t).count();
     let by_tier = json!({"local": count("local"), "throughDependency": count("throughDependency"),
                          "onlyOpen": count("onlyOpen")});
@@ -1138,7 +1292,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         format!("run first: no test with a modeled {}", opts.tier.words())
     } else if !line_nav.is_empty() && line_code.is_empty() {
         format!(
-            "no modeled code-call witness in the selected scope; {} {} by UI navigation only \
+            "no modeled code-call witness in the selected scope; {} {}{} \
              ({}){in_all} — candidates: codeunits {} (a superset: whole codeunits)",
             n_of(
                 line_nav.len(),
@@ -1154,6 +1308,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 }
             ),
             navigation_target(&changed_out),
+            navigation_words(&line_nav, not_expanded.len()),
             navigation_caveat(&changed_out, &line_nav),
             if capped {
                 codeunits_of(&shown)
@@ -1172,7 +1327,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             .len();
         format!(
             "run first ({app_words}): {} by code calls (codeunits {}; a superset: whole \
-             codeunits); {} more by UI navigation only in {} ({}){in_all}",
+             codeunits); {} more{} in {} ({}){in_all}",
             n_of(
                 line_code.len(),
                 if capped { "returned test" } else { "test" },
@@ -1180,6 +1335,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             ),
             codeunits_of(&line_code),
             thousands(line_nav.len()),
+            navigation_words(&line_nav, not_expanded.len()),
             n_of(nav_codeunits, "codeunit", "codeunits"),
             navigation_caveat(&changed_out, &line_nav),
         )
@@ -1426,6 +1582,18 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 if !nav_only.is_empty() {
                     row["reachesByNavigationOnly"] = json!(nav_only);
                 }
+                // Round-4 c28 (additive): `path` is the test's shortest; when
+                // it opens a page while the test counts as code, its own
+                // relation is stated, and the code path beside it.
+                if path_relation(t) != relation(t) {
+                    row["pathRelation"] = json!(path_relation(t));
+                    if t["codePath"].is_array() {
+                        row["codePath"] = t["codePath"].clone();
+                        row["codePathHops"] = t["codePathHops"].clone();
+                        row["codePathTier"] =
+                            json!(crate::engine::vocab::tier_key(s(t, "codePathTier")));
+                    }
+                }
                 row
             })
             .collect();
@@ -1668,13 +1836,8 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         let groups_start = out.len();
         for (k, v) in groups.iter().take(5) {
             let first = v[0];
-            let path: Vec<String> = first["path"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .skip(1)
-                .filter_map(|p| p.as_str().map(str::to_string))
-                .collect();
+            // Round-4 c28: a code test's line shows a code path.
+            let (path_tier, path_hops, path, path_label) = shown_path(first);
             // §3.3 (F13): the group's tier distribution when its tests
             // differ in tier, its representative path's tier and relation.
             let tiers: Vec<(&str, usize)> = tiers_of(v);
@@ -1696,14 +1859,14 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             out.push(format!(
                 "  {k}: {}{dist}; first [{}, {}] {} (first: {})",
                 n_of(v.len(), "test", "tests"),
-                crate::engine::vocab::tier_key(s(first, "tier")),
+                crate::engine::vocab::tier_key(path_tier),
                 relation_words(first),
-                n_of(u(first, "hops"), "hop", "hops"),
+                n_of(path_hops, "hop", "hops"),
                 first["procedure"].as_str().unwrap_or(s(first, "display")),
             ));
             if !path.is_empty() {
                 out.push(format!(
-                    "    path: {}",
+                    "    {path_label}{}",
                     path.join(crate::engine::path_segments::SEP)
                 ));
             }
@@ -1762,7 +1925,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                         "; nearest: {} [{}] ({})",
                         s(t, "display"),
                         relation_words(t),
-                        n_of(u(t, "hops"), "hop", "hops")
+                        n_of(shown_path(t).1, "hop", "hops")
                     ),
                     _ => String::new(),
                 };
@@ -2402,6 +2565,303 @@ mod tests {
         assert!(
             text.contains("nearest [local, UI navigation (candidate)]: Codeunit T2::Nav"),
             "{text}"
+        );
+    }
+
+    /// The parts of the r3 §7 B1 count tests: one changed routine `r1` and
+    /// five tests in four codeunits, every precondition stated:
+    /// - `Code` (50001): a code reach, a code path;
+    /// - `Both` (50002): a code reach (5 hops) and a SHORTER printed path
+    ///   (3 hops) that opens a page, with the code path kept (`codePath`);
+    /// - `NoKept` (50002): a code reach whose code path was not kept (no
+    ///   `codePath`), its printed path opening a page;
+    /// - `Nav` (50003), `Nav2` (50004): UI-navigation reaches only.
+    ///
+    /// `partial`: the part's reach inventory is incomplete (`reachesComplete:
+    /// false`, `r9` not expanded).
+    fn b1_parts(partial: bool) -> (Value, Vec<Part>) {
+        let roots = json!({
+            "roots": [{"stableId": "r1", "display": "Codeunit X::A"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 5,
+        });
+        let reach = |hops: u64, rel: &str| json!([{"stableId": "r1", "tier": "local", "hops": hops, "relation": rel}]);
+        let test = |id: &str, cu: i64, hops: u64, reaches: Value, path: Vec<&str>| {
+            json!({"stableId": id, "codeunitId": cu, "codeunit": format!("T{cu}"),
+                "procedure": id, "tier": "local", "hops": hops, "reaches": "r1",
+                "reachesAll": reaches, "display": format!("Codeunit T{cu}::{id}"),
+                "path": path})
+        };
+        let code = test(
+            "Code",
+            50001,
+            2,
+            reach(2, "code"),
+            vec!["Codeunit T50001::Code", "Codeunit X::H", "Codeunit X::A"],
+        );
+        let mut both = test(
+            "Both",
+            50002,
+            3,
+            reach(5, "code"),
+            vec![
+                "Codeunit T50002::Both",
+                "Page Card",
+                "Codeunit X::G",
+                "Codeunit X::A",
+            ],
+        );
+        both["codePath"] = json!([
+            "Codeunit T50002::Both",
+            "Codeunit X::H1",
+            "Codeunit X::H2",
+            "Codeunit X::H3",
+            "Codeunit X::H4",
+            "Codeunit X::A"
+        ]);
+        both["codePathTier"] = json!("local");
+        both["codePathHops"] = json!(5);
+        let no_kept = test(
+            "NoKept",
+            50002,
+            3,
+            reach(4, "code"),
+            vec![
+                "Codeunit T50002::NoKept",
+                "Page Card",
+                "Codeunit X::G",
+                "Codeunit X::A",
+            ],
+        );
+        let nav = test(
+            "Nav",
+            50003,
+            3,
+            reach(3, "UI navigation"),
+            vec![
+                "Codeunit T50003::Nav",
+                "Page Card",
+                "Codeunit X::G",
+                "Codeunit X::A",
+            ],
+        );
+        let nav2 = test(
+            "Nav2",
+            50004,
+            3,
+            reach(3, "UI navigation"),
+            vec![
+                "Codeunit T50004::Nav2",
+                "Page List",
+                "Codeunit X::G",
+                "Codeunit X::A",
+            ],
+        );
+        let part = Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(json!({
+                "roots": [{"stableId": "r1", "status": "reached"}],
+                "tests": [nav, no_kept, code, nav2, both],
+                "reachesComplete": !partial,
+                "reachLimit": 1,
+                "notExpanded": if partial { json!(["r9"]) } else { json!([]) },
+            })),
+        };
+        (roots, vec![part])
+    }
+
+    /// Output validation r3 §7 B1 (Fable's review condition): every count
+    /// built from a test's relation equals the sum over the rows' own
+    /// `relation` — the headline numbers, `by relation:`, `byRelation`, the
+    /// summary rows and the per-codeunit tags (a codeunit's tag is `code`
+    /// exactly when one of its rows is) — never a second computation over
+    /// shortest paths. Fixtures (`b1_parts`): a shorter navigation path with a
+    /// longer code path (`Both`), and a code test whose code path was not kept
+    /// (`NoKept`): its relation stays `code`, its printed path carries its own
+    /// tag in the human text and in JSON (`pathRelation`).
+    ///
+    /// DISCRIMINATION (2026-11-08): (1) the headline's and `byRelation`'s
+    /// split taken from the printed path (`by_relation` filtering on
+    /// `path_relation(t)`) fails "byRelation is the rows' sum (schema 1)";
+    /// (2) the not-kept path's tag removed (`shown_path`'s second arm
+    /// labelled `path: `) fails "the path carries its own tag"; (3) the rank
+    /// key's code-path-shown element made constant fails "a code path first"
+    /// (NoKept's tagged UI path heads codeunit 50002). Each restored, it
+    /// passes.
+    #[test]
+    fn every_relation_count_is_the_sum_over_the_rows() {
+        let (roots, parts) = b1_parts(false);
+        for schema in [1, 2, 3] {
+            let r = render_v(&roots, &parts, schema, true);
+            let v: Value = serde_json::from_str(&r.text).unwrap();
+            let rows = v["runFirst"].as_array().unwrap();
+            assert_eq!(rows.len(), 5, "{v:#}");
+            let count = |rel: &str| rows.iter().filter(|t| t["relation"] == rel).count();
+            // Preconditions, hand-stated: Both and NoKept print a path that
+            // opens a page and count as code.
+            let row = |p: &str| rows.iter().find(|t| t["procedure"] == p).unwrap();
+            for p in ["Both", "NoKept"] {
+                assert_eq!(row(p)["relation"], "code", "{p} (schema {schema}): {v:#}");
+                assert_eq!(
+                    row(p)["pathRelation"],
+                    "UI navigation",
+                    "the path carries its own tag in JSON ({p}, schema {schema}): {v:#}"
+                );
+            }
+            assert!(row("NoKept").get("codePath").is_none(), "{v:#}");
+            assert_eq!(row("Both")["codePathHops"], 5, "{v:#}");
+            assert_eq!((count("code"), count("UI navigation")), (3, 2), "{v:#}");
+            assert_eq!(
+                v["result"]["selection"]["byRelation"],
+                json!({"code": count("code"), "UI navigation": count("UI navigation")}),
+                "byRelation is the rows' sum (schema {schema}): {v:#}"
+            );
+            let summary_rel: Vec<&Value> = r.summary["selectedTests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| &t["relation"])
+                .collect();
+            let row_rel: Vec<&Value> = rows.iter().map(|t| &t["relation"]).collect();
+            assert_eq!(summary_rel, row_rel, "the summary rows (schema {schema})");
+        }
+        let v: Value = serde_json::from_str(&render_v(&roots, &parts, 3, true).text).unwrap();
+        let rows = v["runFirst"].as_array().unwrap();
+        let human = render_v(&roots, &parts, 3, false).text;
+        let codes = rows.iter().filter(|t| t["relation"] == "code").count();
+        let navs = rows.len() - codes;
+        let nav_codeunits: std::collections::BTreeSet<i64> = rows
+            .iter()
+            .filter(|t| t["relation"] != "code")
+            .filter_map(|t| t["codeunitId"].as_i64())
+            .collect();
+        assert!(
+            human.contains(&format!(
+                "{codes} tests by code calls (codeunits 50001|50002;"
+            )) && human.contains(&format!(
+                "; {navs} more by UI navigation only in {} codeunits (",
+                nav_codeunits.len()
+            )),
+            "the headline numbers are the rows' sum: {human}"
+        );
+        assert!(
+            human.contains(&format!("by relation: code {codes}, UI navigation {navs}")),
+            "{human}"
+        );
+        // Per codeunit: the tag is `code` exactly when one of its rows is.
+        let mut groups = 0;
+        for l in human.lines().filter(|l| l.contains("; first [")) {
+            let id: i64 = l
+                .trim_start()
+                .strip_prefix("Codeunit ")
+                .and_then(|r| r.split(' ').next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("a group line: {l}"));
+            let any_code = rows
+                .iter()
+                .any(|t| t["codeunitId"] == id && t["relation"] == "code");
+            let tag = if any_code { "code" } else { "UI navigation" };
+            assert!(
+                l.contains(&format!("first [local, {tag}]")),
+                "codeunit {id}'s tag: {l}\n{human}"
+            );
+            groups += 1;
+        }
+        assert_eq!(groups, 4, "{human}");
+        // NoKept's path, shown alone, carries its own tag.
+        let (roots1, parts1) = {
+            let (r, mut p) = b1_parts(false);
+            if let Ok(Value::Object(m)) = &mut p[0].result {
+                let tests = m["tests"].as_array().unwrap().clone();
+                m.insert(
+                    "tests".into(),
+                    json!(
+                        tests
+                            .into_iter()
+                            .filter(|t| t["procedure"] == "NoKept")
+                            .collect::<Vec<_>>()
+                    ),
+                );
+            }
+            (r, p)
+        };
+        let alone = render_v(&roots1, &parts1, 3, false).text;
+        assert!(
+            alone.contains("first [local, code] 3 hops (first: NoKept)")
+                && alone.contains(
+                    "path [UI navigation; the test's code path is not kept]: Page Card → \
+                     Codeunit X::G → Codeunit X::A"
+                ),
+            "the path carries its own tag: {alone}"
+        );
+        // A codeunit's first path is its shortest code path when one exists:
+        // Both's kept code path, before NoKept's tagged UI path.
+        assert!(
+            human.contains("first [local, code] 5 hops (first: Both)"),
+            "a code path first: {human}"
+        );
+    }
+
+    /// Output validation r3 §7 B1, L4: an incomplete reach inventory
+    /// (`reachesComplete: false`) is never reported as "navigation only" —
+    /// a UI-navigation test may reach a changed routine past the limit by
+    /// code calls. The counts stay the rows' own; the words name the reach
+    /// as incomplete. With a complete inventory the same tests are
+    /// "navigation only".
+    ///
+    /// DISCRIMINATION (2026-11-08): `navigation_words` ignoring the mark
+    /// (always ` by UI navigation only`) fails "never navigation only";
+    /// restored, passes.
+    #[test]
+    fn an_incomplete_reach_inventory_is_never_navigation_only() {
+        let (roots, parts) = b1_parts(true);
+        let human = render_v(&roots, &parts, 3, false).text;
+        assert!(
+            !human.contains("navigation only"),
+            "never navigation only: {human}"
+        );
+        assert!(
+            human.contains(
+                "; 2 more by UI navigation on the reaches computed (reach incomplete: 1 \
+                 changed routine not expanded, which a code path may reach) in 2 codeunits"
+            ),
+            "{human}"
+        );
+        let v: Value = serde_json::from_str(&render_v(&roots, &parts, 3, true).text).unwrap();
+        assert_eq!(
+            v["result"]["selection"]["byRelation"],
+            json!({"code": 3, "UI navigation": 2}),
+            "{v:#}"
+        );
+        assert_eq!(v["result"]["selection"]["reachesComplete"], false);
+        for t in v["runFirst"].as_array().unwrap() {
+            assert!(t.get(REACH_PARTIAL).is_none(), "an internal mark: {t:#}");
+        }
+        // Only navigation tests, incomplete: the no-witness line says so too.
+        let (roots, mut parts) = b1_parts(true);
+        if let Ok(Value::Object(m)) = &mut parts[0].result {
+            let tests = m["tests"].as_array().unwrap().clone();
+            m.insert(
+                "tests".into(),
+                json!(
+                    tests
+                        .into_iter()
+                        .filter(|t| t["procedure"].as_str().unwrap().starts_with("Nav"))
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        let human = render_v(&roots, &parts, 3, false).text;
+        assert!(
+            !human.contains("navigation only")
+                && human.contains("2 tests reach this routine by UI navigation on the reaches"),
+            "{human}"
+        );
+        let (roots, parts) = b1_parts(false);
+        let human = render_v(&roots, &parts, 3, false).text;
+        assert!(
+            human.contains("2 more by UI navigation only in 2 codeunits"),
+            "{human}"
         );
     }
 }

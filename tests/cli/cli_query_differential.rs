@@ -608,6 +608,152 @@ fn query_touches_table_mode_families() {
     assert_ne!(code, 0, "only `write` ships");
 }
 
+/// Output validation r3 §7 R6: `--op-family write` leads with the writes the
+/// task asks about. The fixture (`tests/fixtures/write-order`) states the
+/// write sites in the reverse of the wanted order: two temporary writes, a
+/// RecordRef Insert (temp state not resolved), a caller-dependent Modify,
+/// then a persistent Delete, Modify and Insert. The listing (human and
+/// `writeSites`) is persistent → caller-dependent → not resolved →
+/// temporary, Insert before Modify before Delete within a class, and the
+/// heading states the split. Without the mode the heading keeps its neutral
+/// form.
+///
+/// DISCRIMINATION (2026-11-08): the write-only listing left in file order
+/// (the `v.sort_by(… write_order …)` line removed) fails the `writeSites`
+/// order assert; the class rank of not-resolved and caller-dependent swapped
+/// in `WriteClass` fails it too. Each restored, it passes.
+#[test]
+fn query_touches_write_listing_leads_with_persistent_writes() {
+    let ws = repo_root().join("tests/fixtures/write-order/ws");
+    let ws = ws.to_string_lossy().to_string();
+    let args = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "WO Item",
+        "--op-family",
+        "write",
+    ];
+    let (json, code) = run_alsem(&args, "json");
+    assert_eq!(code, 0, "{json}");
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+    let up = &doc["payload"]["up"];
+    let sites: Vec<(String, String, String)> = up["writeSites"]
+        .as_array()
+        .unwrap_or_else(|| panic!("writeSites: {doc:#}"))
+        .iter()
+        .map(|s| {
+            (
+                s["routine"].as_str().unwrap().to_string(),
+                s["op"].as_str().unwrap().to_string(),
+                s["tempState"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    // Precondition: every class is present, and the file order is the
+    // reverse of the wanted one (the first site in the file is temporary).
+    let first_in_file = up["writeSites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .min_by_key(|s| s["line"].as_u64())
+        .unwrap();
+    assert_eq!(first_in_file["tempState"], "known(true)", "{doc:#}");
+    let rows: Vec<(&str, &str)> = sites
+        .iter()
+        .map(|(r, o, _)| (r.rsplit("::").next().unwrap_or(r.as_str()), o.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Real", "Insert"),
+            ("Real", "Modify"),
+            ("Real", "Delete"),
+            ("ByCaller", "Modify"),
+            ("ViaRecRef", "Insert"),
+            ("TempFirst", "Insert"),
+            ("TempFirst", "Delete"),
+        ],
+        "persistent, caller-dependent, not resolved, temporary; Insert, Modify, Delete: \
+         {sites:#?}"
+    );
+    assert_eq!(
+        up["writeSitesByTempState"],
+        serde_json::json!({"persistent": 3, "callerDependent": 1, "notResolved": 1,
+                           "temporary": 2}),
+        "{doc:#}"
+    );
+    let (human, code) = run_alsem(&args, "human");
+    assert_eq!(code, 0, "{human}");
+    assert!(
+        human.contains(
+            "record writes: 7 sites in 4 routines — persistent 3, caller-dependent 1, \
+             not resolved 1, temporary 2; by op: "
+        ),
+        "{human}"
+    );
+    let listed: Vec<&str> = family_block(&human, "record writes:")
+        .into_iter()
+        .filter(|l| l.trim_start().starts_with('['))
+        .collect();
+    assert_eq!(listed.len(), 7, "{human}");
+    assert!(
+        listed[0].contains("[Insert]") && listed[0].contains("Real"),
+        "{human}"
+    );
+    assert!(
+        listed[6].contains("[Delete]") && listed[6].contains("(temporary record)"),
+        "{human}"
+    );
+    // Without the mode: the neutral heading.
+    let (human, _) = run_alsem(&["query", "touches", &ws, "--table", "WO Item"], "human");
+    assert!(
+        human.contains("record writes: 7 sites in 4 routines — ")
+            && !human.contains("persistent 3"),
+        "{human}"
+    );
+}
+
+/// Output validation r3 §7 R6, field mode: in-memory assignments and
+/// validations stay apart from record persistence. The fixture's
+/// `Item.ModifyAll(Amount, 0)` (FTFields.al:79) writes the field to the
+/// database; its row and every count call it `record write (ModifyAll)`,
+/// never `field assignment`, while the four assignments (`Tmp.Amount := 1`
+/// and the others) keep that word and the `Validate` stays `validate`.
+///
+/// DISCRIMINATION (2026-11-08): `field_use_word` returning `u.human()`
+/// for every site fails "the ModifyAll row is a record write"; restored,
+/// passes.
+#[test]
+fn query_touches_field_mode_keeps_record_persistence_apart() {
+    let ws = repo_root().join("tests/fixtures/field-touches/ws");
+    let ws = ws.to_string_lossy().to_string();
+    let (human, code) = run_alsem(
+        &[
+            "query", "touches", &ws, "--table", "FT Item", "--field", "Amount", "--all",
+        ],
+        "human",
+    );
+    assert_eq!(code, 0, "{human}");
+    let row = human
+        .lines()
+        .find(|l| l.contains("ws:src/FTFields.al:79 "))
+        .unwrap_or_else(|| panic!("the ModifyAll row: {human}"));
+    assert!(
+        row.contains(":79 record write (ModifyAll) [") && row.contains("ModifyAll]"),
+        "the ModifyAll row is a record write: {row}"
+    );
+    assert!(
+        human.contains("field assignment 4 (1 also read), record write (ModifyAll) 1, validate 1"),
+        "the counts keep them apart: {human}"
+    );
+    assert!(
+        !human.contains("record writes:"),
+        "field mode takes no record-write heading: {human}"
+    );
+}
+
 /// Agent-tasks milestone D: every `tests/fixtures/field-touches` golden
 /// (`query touches --field`).
 #[test]

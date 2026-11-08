@@ -259,3 +259,46 @@ any count look better.
 
 Round 4 then re-runs the 50 calls with the same arguments plus 10 new ones (new seed, excluding
 every earlier target), fact-checks every claim, and sends the bundle to both reviewers.
+
+---
+
+## 7. Addendum after round 4 (revision 2, accepted by both reviewers on 2026-11-08)
+
+Round 4's reviews: astra **accept** (everything left is polish); Fable **not yet**, one blocker
+(B1 below). The round-4 fact check found 7 wrong claims (691 checked); their fixes are on
+`fix/r4-tests-relation`, `fix/r4-literal-routes`, `fix/r4-n10-counts`, plus the resident
+memory regression on `fix/r4-resident-memory`. This addendum adds the blocker's exact rule and
+the six polish items **both** reviewers raised (their own numbers in brackets), so no design
+point both agree on stays open. Items only one reviewer raised are written up for the owner.
+
+**B1 (Fable blocker; astra top-2): a test's relation is a property of its path set.** A test's
+`relation`, every count built from it (`by relation:`, `byRelation`, the headline "N by code
+calls; M more by UI navigation only") and its rank follow T1's rule: `code` when any of its
+reach records is `code`. The printed first path is the **shortest code path** when one exists,
+else the shortest navigation path. When no code path was kept for a test whose relation is
+`code`, the row's `relation` stays `code` and the printed path carries its own tag, in the human
+text and in JSON (`pathRelation`); the test is never downgraded. An incomplete reach inventory
+(L4, `reachesComplete: false`) is never reported as "navigation only". Schema 3
+`runFirst[].relation` = the test's relation. Proof: fixtures for (a) a shorter navigation path
+and a longer code path, (b) a code test whose code path was not kept; the test asserts that the
+headline numbers, `by relation:`, `byRelation` and the per-codeunit tags each equal the sum over
+the rows' `relation`. (On `fix/r4-tests-relation`; this states the review condition.)
+
+| id | From | Change | Shows on |
+|---|---|---|---|
+| R1 | F2, A1 | **Publisher assumptions in words.** Wherever E2's loaded-subscribers assumption decides a route, print one sentence stating the closure assumption: with no subscriber, `assumes <publisher> has no loaded subscriber, so <parameter> keeps its value (<universe>; no additional subscribers assumed)`; with subscribers, `assumes no subscribers beyond those considered in <universe> (<names>), none of which changes <parameter>`; then `rules out <site>` or `rules out <n> sites (first: <site>)`. One template for prove's assumptions line, explain's commits line and digest. Structured: the existing `assumes` strings stay as they are, and a separate `assumptionRecords` list carries `{publisher, parameter, universe, subscribersConsidered: [names], rulesOut: [sites]}` (additive; the 4.0.0 adapter drops it). Never the bare token `loaded-subscribers`. | p05, n01, p09, c25 |
+| R2 | F3, A5 | **Lookup failures give the ready call again.** **Ambiguous:** the inline digest (H5) keeps `summary.next` with the complete `alsem_digest` call over every resolved candidate, and the human text ends with `complete call: …` and `differs in: …` (as explain's c26). **Not found:** a labelled nearest-name suggestion (`did you mean: …` with the corrected call), or no correction when none is near; never a call with an empty target and never every approximate match treated as an overload. A regression test pins both on the inline path. | n08, m01, p02, p07 |
+| R3 | F8, A3 | **Dependency witnesses name the terminal operation's own site.** A callers'-context or prove witness that ends in dependency code prints the operation and its own location (`Modify on "T" at dep:…:N`) before the entry (`entered at …`); callers'-context witnesses keep the enclosing-call and later-call locations c06 shows. | p09, m04, c06 |
+| R4 | F7, A10 | **`starts by:` keeps what matters.** It ends at a statement boundary and keeps literal arguments (`RunReportID(…, OutputAction::SaveAsPDF)`); above about 200 characters it is cut at an argument boundary with `… (+k arguments)`, never inside an argument. It is omitted only when the retained lines already carry the same information, literal arguments included (a bare `calls: RunReport` does not). It stays labelled a start, not a summary. | n10, p09, c06, m07 |
+| R5 | F4, A4 | **Error answers state their boundary.** A `yes` to throws-error whose witness ends beyond a dependency entry says `guards beyond the dependency entry: not analyzed` only when they were not analyzed; guards that were analyzed but not decided keep their expressions and polarity as `not evaluated` / `unresolved`, and `N guards` counts the analyzed part of the route only (`N guards on the analyzed route`). An error question about a subscriber adds `whether it escapes <publisher>: not established` (the caller-interception follow-up stays). Explain's `(conditional)` / `(error-path)` tags stay as class labels only where no route was replayed; otherwise explain uses the shared guard form, as prove and digest do. | m04, n04, p08 |
+| R6 | F5, A9 | **Touches lead with the operations the task asks about.** With `opFamily: "write"` (and in the write follow-up the answers offer), write sites are ordered persistent → caller-dependent → temporary state not resolved → temporary, Insert before Modify before Delete, and the heading states the split (`record writes: 38 sites — persistent 32, caller-dependent 1, not resolved 0, temporary 5`). Without a mode, the neutral family sampler stays; c30's key mode keeps its key-relevant order. In field mode, in-memory assignments and validations stay apart from record persistence and do not take the record-write heading. | p03, n03, m09, c30 |
+
+**Items only one reviewer raised** (each in the owner write-up, not built now): astra 6
+(compact zero-operation results), 7 (label count populations and analysis components), 8
+(caller-card repetition); Fable 6 (`hubs on these paths` behind detail), 8 (`blockedBy:` →
+`blocked by:`, H7 heading "or a lock"), 9 (c25 `assumes` table, c15 `observedWritesOwn`,
+effects `scope:` clause), 10 (a failed MCP call names an MCP-side remedy and a `next`).
+
+Gates as in §6. These are output changes plus additive structured fields (R1
+`assumptionRecords`, B1 `pathRelation`). After they land with the round-4 fixes, the affected
+calls are re-recorded and both reviewers recheck them.

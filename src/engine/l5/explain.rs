@@ -604,18 +604,182 @@ impl Job for ExplainJob<'_> {
     }
 }
 
-/// How many top-level statements [`starts_by`] names.
-const STARTS_SHOWN: usize = 2;
+/// The most top-level statements [`starts_by`] names.
+const STARTS_SHOWN: usize = 4;
 
-/// The longest statement text [`starts_by`] prints, in characters.
-const STARTS_CHARS: usize = 80;
+/// r3 §7 R4: about how many characters of statement text [`starts_by`]
+/// prints: one statement longer than this is cut at an argument boundary,
+/// and statements after the first are named while their total stays within
+/// it.
+const STARTS_CHARS: usize = 200;
 
-/// r3 §5.1 (A P6, m07): how a workspace routine starts, `starts by:` its
-/// first [`STARTS_SHOWN`] top-level statements, read from its statement tree
-/// (each node's source range) and its own source file, labelled a start,
-/// not a summary. A statement over several lines shows its first line; a
-/// long one is cut at [`STARTS_CHARS`]. `None` for a dependency routine, a
-/// routine with no statement tree or no statement, or a file not readable.
+/// The byte offset of utf-16 column `col` in `line` (its end when past it).
+fn utf16_byte(line: &str, col: u32) -> usize {
+    let mut units = 0u32;
+    for (i, c) in line.char_indices() {
+        if units >= col {
+            return i;
+        }
+        units += c.len_utf16() as u32;
+    }
+    line.len()
+}
+
+/// The source text from (`line`, `col`) to (`end_line`, `end_col`) (0-based
+/// lines, utf-16 columns), each run of whitespace one space.
+fn range_text(lines: &[&str], (line, col, end_line, end_col): (u32, u32, u32, u32)) -> String {
+    let mut out = String::new();
+    for l in line..=end_line {
+        let Some(t) = lines.get(l as usize) else {
+            break;
+        };
+        let start = if l == line { utf16_byte(t, col) } else { 0 };
+        let end = if l == end_line {
+            utf16_byte(t, end_col)
+        } else {
+            t.len()
+        };
+        out.push(' ');
+        out.push_str(t.get(start..end.max(start)).unwrap_or(""));
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The top-level arguments of the first call in `s` (a `(` outside quotes):
+/// the text up to and including that `(`, the arguments (trimmed), and the
+/// text from its `)` on. `None` when `s` has no balanced call. Quoted
+/// strings (`'…'`) and identifiers (`"…"`) are never split.
+fn call_arguments(s: &str) -> Option<(&str, Vec<&str>, &str)> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut open = None;
+    let mut args = Vec::new();
+    let mut arg_start = 0;
+    for (i, c) in s.char_indices() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '(' | '[' => {
+                if depth == 0 && c == '(' && open.is_none() {
+                    open = Some(i);
+                    arg_start = i + 1;
+                }
+                depth += 1;
+            }
+            ')' | ']' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0
+                    && let Some(o) = open
+                {
+                    let last = s[arg_start..i].trim();
+                    if !last.is_empty() || !args.is_empty() {
+                        args.push(last);
+                    }
+                    return Some((&s[..=o], args, &s[i..]));
+                }
+            }
+            ',' if depth == 1 && open.is_some() => {
+                args.push(s[arg_start..i].trim());
+                arg_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// r3 §7 R4: `s` cut to about `max` characters at an argument boundary of
+/// its first call, `… (+k arguments)` naming what is left out; never inside
+/// an argument. A statement with no call is cut at a word boundary.
+fn cut_at_argument(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    match call_arguments(s) {
+        Some((head, args, tail)) => {
+            let mut kept: Vec<&str> = Vec::new();
+            let mut len = head.chars().count();
+            for a in &args {
+                let add = a.chars().count() + if kept.is_empty() { 0 } else { 2 };
+                if len + add > max {
+                    break;
+                }
+                kept.push(a);
+                len += add;
+            }
+            let left = args.len() - kept.len();
+            if left == 0 {
+                return format!("{head}{}{tail}", kept.join(", "));
+            }
+            let sep = if kept.is_empty() { "" } else { ", " };
+            format!(
+                "{head}{}{sep}… (+{left} {}))",
+                kept.join(", "),
+                if left == 1 { "argument" } else { "arguments" }
+            )
+        }
+        None => {
+            let mut out = String::new();
+            for w in s.split(' ') {
+                if out.chars().count() + w.chars().count() + 1 > max && !out.is_empty() {
+                    break;
+                }
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(w);
+            }
+            format!("{out} …")
+        }
+    }
+}
+
+/// r3 §7 R4: one top-level statement as `starts by:` prints it: whole when
+/// it fits [`STARTS_CHARS`], literal arguments and all; a longer compound
+/// statement (`if`, `case`, a loop) as its head up to the statement inside
+/// it; a longer simple one cut at an argument boundary.
+fn statement_start(n: &crate::program::body::features::PCFNNode, lines: &[&str]) -> Option<String> {
+    let range = n.source_range?;
+    let full = range_text(lines, range);
+    let full = full.trim_end_matches(';').trim_end().to_string();
+    if full.is_empty() {
+        return None;
+    }
+    if full.chars().count() <= STARTS_CHARS {
+        return Some(full);
+    }
+    let inner = n
+        .children
+        .iter()
+        .flatten()
+        .chain(n.else_children.iter().flatten())
+        .filter_map(|c| c.source_range)
+        .map(|(l, c, _, _)| (l, c))
+        .min();
+    match inner {
+        Some((l, c)) if (l, c) > (range.0, range.1) => {
+            let head = range_text(lines, (range.0, range.1, l, c));
+            Some(format!("{} …", cut_at_argument(&head, STARTS_CHARS)))
+        }
+        _ => Some(cut_at_argument(&full, STARTS_CHARS)),
+    }
+}
+
+/// r3 §5.1 (A P6, m07), r3 §7 R4: how a workspace routine starts, `starts
+/// by:` its first top-level statements, read from its statement tree (each
+/// node's source range) and its own source file, labelled a start, not a
+/// summary. Each statement ends at a statement boundary and keeps its
+/// literal arguments ([`statement_start`]); after the first, statements are
+/// named while their text stays within [`STARTS_CHARS`] (at most
+/// [`STARTS_SHOWN`]), the rest counted. Never omitted: no other line of the
+/// card carries a statement's literal arguments. `None` for a dependency
+/// routine, a routine with no statement tree or no statement, or a file not
+/// readable.
 fn starts_by(model: &Model, workspace: &std::path::Path, root: &str) -> Option<String> {
     let r = model
         .workspace
@@ -632,32 +796,23 @@ fn starts_by(model: &Model, workspace: &std::path::Path, root: &str) -> Option<S
     let text = crate::source_text::read_al_source(&workspace.join(rel)).ok()?;
     let lines: Vec<&str> = text.lines().collect();
     let total = top.len();
-    let shown: Vec<String> = top
-        .iter()
-        .filter_map(|n| {
-            let (line, col, end_line, end_col) = n.source_range?;
-            let first = lines.get(line as usize)?;
-            let start = first
-                .char_indices()
-                .nth(col as usize)
-                .map_or(first.len(), |(i, _)| i);
-            let mut s = if end_line == line {
-                let end = first
-                    .char_indices()
-                    .nth(end_col as usize)
-                    .map_or(first.len(), |(i, _)| i);
-                first.get(start..end.max(start)).unwrap_or("").to_string()
-            } else {
-                format!("{} …", first.get(start..).unwrap_or("").trim_end())
-            };
-            if s.chars().count() > STARTS_CHARS {
-                s = format!("{} …", s.chars().take(STARTS_CHARS).collect::<String>());
-            }
-            let s = s.trim().to_string();
-            (!s.is_empty()).then(|| format!("`{s}` (:{})", line + 1))
-        })
-        .take(STARTS_SHOWN)
-        .collect();
+    let mut shown: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for n in &top {
+        if shown.len() >= STARTS_SHOWN {
+            break;
+        }
+        let Some(s) = statement_start(n, &lines) else {
+            continue;
+        };
+        let len = s.chars().count();
+        if !shown.is_empty() && used + len > STARTS_CHARS {
+            break;
+        }
+        used += len;
+        let line = n.source_range.map_or(0, |r| r.0);
+        shown.push(format!("`{s}` (:{})", line + 1));
+    }
     if shown.is_empty() {
         return None;
     }
@@ -3039,6 +3194,7 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
         coverage_reasons: Vec::new(),
         effects: Vec::new(),
         unresolved: Vec::new(),
+        unresolved_literal_dead: 0,
         unresolved_traversal: crate::engine::l5::unresolved_cone::UnresolvedTraversal {
             truncated: false,
             max_depth: 0,
@@ -3109,6 +3265,10 @@ fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
         && let Some(o) = v.as_object_mut()
     {
         o.insert("literalUnreachable".into(), true.into());
+        // Round-4 p09: no route to a dead row can run, so the witness kept
+        // for it (which passes a branch the literals rule out) is not shown,
+        // as the human text shows none.
+        o.remove("via");
         // r3 E2 (additive): what ruling it out assumes.
         let assumes: Vec<String> = e
             .flow_notes
@@ -5518,7 +5678,7 @@ impl Card {
             ));
         }
         let commits_unwitnessed = t.commits == "no observed"
-            || (t.commits != "none" && t.commit_sites == 0 && t.commit_entry_points > 0);
+            || (t.commits != "none" && t.commit_sites == 0 && t.commit_entries.points > 0);
         if commits_unwitnessed {
             out.push(FollowUp::prove(
                 cx,
@@ -5582,6 +5742,13 @@ fn atom_json(a: &ConditionAtom) -> Value {
         ConditionAtom::ParamBool { index, value } => {
             json!({ "kind": "ParamBool", "index": index, "value": value })
         }
+        ConditionAtom::ParamVariantTest {
+            index,
+            method,
+            negated,
+        } => json!({
+            "kind": "ParamVariantTest", "index": index, "method": method, "negated": negated,
+        }),
         ConditionAtom::CallResult {
             callee_text,
             negated,
@@ -5750,6 +5917,26 @@ codeunit 50100 Handler
         assert_eq!(
             runs_line(&model, &names, root).as_deref(),
             Some("runs: Page Recipients (RunModal at :19)")
+        );
+    }
+
+    /// r3 §7 R4: a long call is cut at an argument boundary, never inside an
+    /// argument (a quoted string with a comma stays whole), and says how
+    /// many arguments are left out; a short one stays whole.
+    #[test]
+    fn starts_by_cuts_at_an_argument_boundary() {
+        let short = "RunReport(false, VariantRec, OutputAction::SaveAsPDF, false)";
+        assert_eq!(cut_at_argument(short, 200), short);
+        let long = "Run('a, b', Second, Third, Fourth)";
+        assert_eq!(
+            cut_at_argument(long, 22),
+            "Run('a, b', Second, … (+2 arguments))"
+        );
+        assert_eq!(cut_at_argument(long, 5), "Run(… (+4 arguments))");
+        let nested = "X := CopyStr(DelChr(Name, '=', ' ') + 'Box', 1, MaxStrLen(Y))";
+        assert_eq!(
+            cut_at_argument(nested, 50),
+            "X := CopyStr(DelChr(Name, '=', ' ') + 'Box', 1, … (+1 argument))"
         );
     }
 }

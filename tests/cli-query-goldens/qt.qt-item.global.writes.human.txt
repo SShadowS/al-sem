@@ -5,11 +5,11 @@ more: --all lists every witness, no fold; --format json for every row
   dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
   by object: Codeunit "QT Touches" 11 sites
   transitive: 12 workspace routines reach one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
-  record writes: 4 sites in 3 routines — Insert 2, Delete 1, Modify 1 (temporary records: 1)
-    [Insert] at ws:src/QTTouches.al:37 in Codeunit "QT Touches"::WriteItem (caller-dependent: parameter 1)
-    [Insert] at ws:src/QTTouches.al:44 in Codeunit "QT Touches"::TempOnly (temporary record)
+  record writes: 4 sites in 3 routines — persistent 2, caller-dependent 1, not resolved 0, temporary 1; by op: Insert 2, Delete 1, Modify 1
     [Modify] at ws:src/QTTouches.al:89 in Codeunit "QT Touches"::Top2
     [Delete] at ws:src/QTTouches.al:90 in Codeunit "QT Touches"::Top2
+    [Insert] at ws:src/QTTouches.al:37 in Codeunit "QT Touches"::WriteItem (caller-dependent: parameter 1)
+    [Insert] at ws:src/QTTouches.al:44 in Codeunit "QT Touches"::TempOnly (temporary record)
   validations: 1 site (a validation may lead to a write; it is not one)
   locks: none observed
   keys: primary key "No."; other keys: ("SystemModifiedAt")

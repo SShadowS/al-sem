@@ -1764,6 +1764,9 @@ impl<'a> IrCfn<'a> {
         while let Parenthesized(x) = &self.ir().expr(e).kind {
             e = *x;
         }
+        if let Some(t) = self.type_test(e) {
+            return t;
+        }
         if self.spine.cs_id_by_expr.contains_key(&e) {
             return FlowExpr::Unknown;
         }
@@ -1808,6 +1811,29 @@ impl<'a> IrCfn<'a> {
             },
             _ => FlowExpr::Unknown,
         }
+    }
+
+    /// Round-4 literal routes: `V.IsX` or `V.IsX()` (no argument), `V` a bare
+    /// identifier and the member one of AL's `Variant` type tests, as
+    /// [`FlowExpr::TypeTest`]. The reader decides whether `V` is a tracked
+    /// `Variant` (a record's `IsTemporary` is no type test, and stays
+    /// unknown).
+    fn type_test(&self, e: ExprId) -> Option<FlowExpr> {
+        use ExprKind::*;
+        let member_expr = match &self.ir().expr(e).kind {
+            Call { function, args } if args.is_empty() => *function,
+            Member { .. } => e,
+            _ => return None,
+        };
+        let Member { object, member, .. } = &self.ir().expr(member_expr).kind else {
+            return None;
+        };
+        let method = member.trim().trim_matches('"').to_lowercase();
+        if !crate::engine::l5::literal_reach::values::VARIANT_TESTS.contains(&method.as_str()) {
+            return None;
+        }
+        let var = self.bare_name(*object)?;
+        Some(FlowExpr::TypeTest { var, method })
     }
 
     /// r3 E2: a condition's [`FlowFact::Cond`]: its value and its source text,

@@ -58,9 +58,9 @@ pub struct ObjectDecl {
     /// one entry per `#if` arm, document order: `Page "Customer Card"`,
     /// `Codeunit 50100`, … A user or a `TestPage` action opens that object.
     pub run_objects: Vec<String>,
-    /// The `value(<n>; <Name>)` declarations of an Enum object, document order,
-    /// values inside `#if` wrappers included (every arm). Enum only (empty
-    /// otherwise, including EnumExtension).
+    /// The `value(<n>; <Name>)` declarations of an Enum or EnumExtension
+    /// object, document order, values inside `#if` wrappers included (every
+    /// arm). Empty for every other object kind.
     pub enum_values: Vec<EnumValueDecl>,
     /// Every page action declared anywhere in the object outside code, document
     /// order: `action`, `systemaction`, `fileuploadaction` and `customaction`

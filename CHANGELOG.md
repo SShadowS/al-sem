@@ -7,6 +7,254 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (output validation r3 §7: B1 completed, R2 lookup failures, R6 write order)
+
+- **Tests: a test's relation is a property of its path set, in every count and line
+  (§7 B1).** The round-4 fix made a test `code` when any of its reaches is code. Now also:
+  - A code test whose code path was not kept (its code path lies outside the tier pick)
+    stays `code`; its printed path carries its own tag, `path [UI navigation; the test's
+    code path is not kept]: …` in the human text and `pathRelation: "UI navigation"` in
+    JSON (as before). Among code tests, one whose code path is shown ranks before one
+    whose path is such a tagged UI path, so a codeunit's first path is its shortest code
+    path when it has one.
+  - An incomplete reach inventory (`reachesComplete: false`, changed routines past the
+    reach limit) is never reported as "navigation only": the headline says `N more by UI
+    navigation on the reaches computed (reach incomplete: k changed routines not
+    expanded, which a code path may reach)`. The counts stay the rows' own.
+  - A test pins that the headline numbers, `by relation:`, `byRelation`, the summary rows
+    and the per-codeunit tags each equal the sum over the rows' `relation`.
+- **Lookup failures give the ready call again (§7 R2).** A digest answered inline because
+  its selector is ambiguous or not found (r3 H5) dropped the envelope's summary, so
+  `summary.next` was gone (round-4 n08, m01, p02).
+  - The inline lookup failure keeps the envelope's summary (`outcome`, `next`).
+  - Ambiguous: the digest JSON document carries the complete call in
+    `payload.summary.next` too (5.0.0, additive; the 4.0.0 adapter drops it), and the
+    human text ends with `complete call: …` and `differs in: …`.
+  - Not found: a near name is labelled `did you mean: <name> — corrected call: …` in
+    explain, prove and digest (was `corrected call (the nearest name): …`); digest also
+    puts the corrected call in `summary.next`. No correction when nothing is near; with
+    several selectors, a call only when every one has a near name (a call that drops a
+    selector is no correction); never a call with an empty target.
+- **Touches lead with the writes the task asks about (§7 R6).** With `opFamily: "write"`
+  (`--op-family write`, the write follow-up the answers offer) the record-write sites are
+  ordered persistent → caller-dependent → temp state not resolved → temporary, Insert
+  before Modify before Delete, and the heading states the split (`record writes: 7 sites
+  in 4 routines — persistent 3, caller-dependent 1, not resolved 1, temporary 2; by op:
+  …`). `writeSites` follows the same order. Without the mode the neutral sampler and
+  heading stay; the key-relevant order is unchanged.
+  - Field mode (`--field`): a `ModifyAll` that names the field writes it to the database,
+    so its row and the counts say `record write (ModifyAll)`, apart from the in-memory
+    `field assignment`s and `validate`s (it was counted as a field assignment). JSON keeps
+    `uses: ["write"]` with `source: "ModifyAll"`.
+- **Consumer notice (additive fields):** digest 5.0.0 `payload.summary.next` on a lookup
+  failure (the same `{tool, arguments, why, kind}` object as the envelope's
+  `summary.next`); query touches `payload.up.writeSitesByTempState` (`persistent`,
+  `callerDependent`, `notResolved`, `temporary`) under `opFamily: "write"`, and
+  `writeSites` in the new order. No consumer reads either today.
+
+### Changed (r3 §7 R1, R4, R5: assumptions in words, `starts by:`, error boundaries)
+
+- **R1: a publisher assumption is one sentence, never the bare `loaded-subscribers` token**
+  (spec `2026-11-08-output-validation-r3.md` §7; round-4 p05, n01, p09, c25). Wherever the
+  literal flow's publisher keep decides a route, prove's assumptions line, explain's and
+  digest's `commits:` line and the `--writes-table` answer line print the same template:
+  `assumes <publisher> has no loaded subscriber, so <parameter> keeps its value (<universe>;
+  no additional subscribers assumed)`, or with subscribers `assumes no subscribers beyond
+  those considered in <universe> (<names>), none of which changes <parameter>`, then
+  `rules out <site>` or `rules out <n> sites (first: <site>)`. The universe is the
+  primary app with its loaded dependencies (`Continia Document Output with its loaded
+  dependencies` on CDO), or the app alone. A `no` that rests on the loaded subscribers of
+  the events its cone raises (p05, which printed only `assumptions: loaded-subscribers`)
+  says which events (`the table events of its record operations, 1 event publication`);
+  a `commits: no` that an assumption decided now says so too. The JSON labels
+  (`assumptions: ["loaded-subscribers"]`), `subscriberAssumptions`, `literalAssumes`,
+  `commits.literalDead.assumes` and the digest rows' `assumes` strings are unchanged;
+  prove's `scope.assumptions` mirrors the human line, as before.
+- **R4: `starts by:` ends at a statement boundary and keeps literal arguments** (n10, p09,
+  c06, m07). A statement prints whole up to about 200 characters
+  (`RunReport(false, VariantRec, LanguageCodeFieldNo, TableView, OutputAction::SaveAsPDF,
+  false)`, where it was cut at 80 characters inside `OutputAction::SaveA`); a longer one is
+  cut at an argument boundary of its first call with `… (+k arguments)`, never inside an
+  argument (a quoted string's comma included), and a long `if`/`case`/loop prints its head
+  up to the statement inside it. Up to four statements are named while their text stays
+  within about 200 characters (m07 now shows three of four). It is never omitted: no
+  other line of the card carries a statement's literal arguments.
+- **R5: error answers state their boundary** (m04, n04, p08, n01). A witness that ends in
+  dependency code counts the guards of the route the analysis replayed through the
+  dependency entry to the operation, with their expressions and polarity (m04: `4 guards
+  on the route, 0 evaluated`, with `InsertDefaultCustomerSetup`'s two guards; it printed
+  `condition not resolved`). When the guards beyond the entry were not analyzed (a routine
+  on the route without a statement tree, or no witness through the entry), it says `N
+  guards on the analyzed route, k evaluated; guards beyond the dependency entry: not
+  analyzed`. A `throws-error` answer about an event subscriber adds `whether it escapes
+  <publisher>: not established` before the caller-interception follow-up. prove, explain
+  and digest print a row's condition alike: the replayed route's guard count when a route
+  was replayed (prove's folded `also` rows and explain's and digest's `COMMIT at` and
+  kind-family places included), the class label (`conditional`, `in a loop`, …) only
+  where none was; a replayed route with no guard whose class was `condition not resolved`
+  says `no guard on the route`. Two evidence rows whose routes share their guards print
+  the guards once (`condition: the same guards as the row above (2 rows with them)`).
+
+### Fixed (r3 §7 R3: a pending write in dependency code names its own site)
+
+- **A callers'-context pending-write witness names the write's own site when the write is
+  reached through an event, a trigger or an object run** (round-4 p09). The site search
+  followed resolved calls only, so p09's `Insert on "My Notifications" (1518)` printed no
+  location; it now also searches the sited graph's may-execute edges, entering only
+  routines whose cone performs the write (unguided, the search passed 20,000 nodes on
+  CDO): `Insert on "My Notifications" (1518) at dep:Base Application:src/Modules/System/
+  Notifications/MyNotifications.Table.al:160, inside the call CreateInventoryPick at …:70,
+  before the call at …:76`. c06's witness is unchanged. A prove witness ending in
+  dependency code named its terminal operation and site before `entered at` only for a
+  group's own witness (m04); a `writes-table` answer printed `DB_MODIFY beyond …,
+  entered at …` with no site. It now names the asked table's witness's site (`DB_MODIFY
+  at dep:Out Base:src/BasePoster.Codeunit.al:68, beyond …`), and its condition is that
+  route's guards, never another resource's.
+
+### Added (r3 §7 R1: `assumptionRecords`, additive)
+
+- **Consumer notice: a new structured field, `assumptionRecords`**, a list of
+  `{publisher, parameter, universe, subscribersConsidered: [names], rulesOut: [sites]}`
+  (sites `file:line`, 1-based, in file then line order). It appears in prove's
+  `payload.result` (beside `subscriberAssumptions`), in digest 5.x's
+  `entries[].assumptionRecords` (every literal-dead row's assumption) and in the routine
+  summary's `commits.literalDead.assumptionRecords` (explain JSON, digest 5.x, impact's
+  routine totals). Digest
+  `--schema 4` and `--schema 3` documents do not carry it, and `digest_v5::to_v4` drops it
+  (`strip_assumption_records`), so a 4.0.0 rebuild of a 5.x document stays exact.
+  Consumers reading the existing strings need no change.
+
+### Fixed (context server: a reclaim could free only one artifact kind)
+
+- **An ask is no longer refused as "impossible" while other asks' trees fill the memory
+  budget.** Round 4 of output validation ran 60 calls through one `alsem mcp` on CDO;
+  call 59 (an `explain` with `callersContext`) failed with `the witness fill needs about
+  89 MiB; budget 8192 MiB, resident 8220 MiB, ... retained floor 8220 MiB`. It was not a
+  regression of the r3 work: a binary built from `275bdb2d` fails at the same call
+  (round 3 ran only the first 50). Each ask keeps the tree of its own roots (one per
+  distinct root set, about 40 MiB, up to 290 MiB for a large one); after 58 calls the
+  cross-app child held 33 trees, 2.5 GB of measured, evictable bytes. A request held
+  its whole store snapshot while it reserved memory for a fill (and its ready snapshot
+  while it reserved for its trees). The reclaim that reservation ran evicts by owner
+  count, and its first eviction (the witnesses) published a new snapshot, so the held
+  one became a second owner of every other value: no tree could go, the retained floor
+  read the whole RSS, and the reservation was refused as impossible. The store now
+  reserves before it loads the snapshot a fill reads, and a request lets its ready
+  snapshot go before its trees' reservation (its needs stay pinned and it loads the
+  snapshot again). Measured (release-fast, the 60 calls on one server): before, the
+  cross-app child rose to 8.24 GB and call 59 was refused; after, every call answers,
+  call 59's reclaim evicts 50 entries (2.3 GB measured) and the RSS falls from 8.30 GB
+  to 5.89 GB; the peak after a call is 8.02 GB, the end 5.89 GB. Answers are
+  byte-identical to before (every call, `generatedAt` aside). The child's
+  `status.memory` now also reports `stored`: the published revision's artifacts by
+  kind, with their entries and measured bytes.
+
+### Fixed (round-4 fact check: a test's relation follows its own reaches)
+
+- **A test is a code test when any of its paths reaches the change by code calls**
+  (round-4 c28, c21; spec `2026-11-08-output-validation-r3.md` §2 T1). T1 made each
+  `reaches` entry `code` when any code path reaches that routine, but a `runFirst` row's
+  own `relation`, the ranking ("code paths first"), `result.selection.byRelation`, the
+  summary rows and the human headline ("N tests by code calls; M more by UI navigation
+  only") still took the relation of the test's shortest path. A test whose shortest path
+  opens a page was counted as UI-navigation-only even when its own `reaches` said code.
+  On CDO, c28 (the WaitForMailLimit diff, `--tier dependency`) said 107 by code and 337
+  by UI navigation only; it now says 365 and 79. c21 (`--tier local`) said 85 and 59, now
+  88 and 56. The fact check counted 388/56 and 94/50 from the old `reaches`, which also
+  called a test `code` when its only code path went through a hub (`Codeunit.Run` of a
+  variable, a record trigger behind `Validate`), a path outside the tier the answer picks.
+  - One rule now classifies a test everywhere: `code` when any of its reaches is code,
+    `UI navigation` only when every one is (a part with no `reachesAll` keeps its printed
+    path's relation). Schemas 1 and 2 take the same rule (their `reachesByNavigationOnly`
+    already did).
+  - A reach is judged on the answer's tier pick: when a routine's best code path lies
+    outside it (via-hub under `--tier local` or `dependency`, via-dependency under
+    `--tier local`) and a UI-navigation path inside it reaches the routine, the reach (and
+    schema 3's `reaches` entry) is that UI-navigation one. The select part carries the
+    best UI-navigation reach beside each code reach (`navigation`) for this. A test outside
+    the pick (a via-dependency test counted apart) is judged on its own tier. Without
+    this, n02 (a field trigger reached from tests only by opening pages on a local path)
+    turned into "6 tests by code calls" whose code paths all ran through hubs.
+  - `path` stays the test's shortest. When it opens a page while the test counts as code,
+    the row says so (`pathRelation: "UI navigation"`) and carries the code path the
+    per-root walk found (`codePath`, `codePathHops`, `codePathTier`; additive, all
+    schemas). The human group line prints that code path with its own tier and hops, so
+    `first [local, code] …` is never followed by a path that opens a page.
+  - Code tests rank by the tier and hops of that code path, the path the answer shows.
+
+### Fixed (round-4 fact check: literal arguments through interfaces, Variants and unresolved sites)
+
+- **An interface variable assigned from a known enum value now reaches only
+  that value's implementation** (c15). `ModuleLicense := ModuleType` with
+  `ModuleType` bound to `"CDO Module Type"::Essential` dispatched to every
+  implementation, so a digest listed a witness through `"CDO Security Module
+  License"` that cannot run. The literal reach now tracks interface locals in
+  the within-routine flow; at an interface call it keeps only the
+  implementation each known enum value names (its `Implementation`, else the
+  enum's `DefaultImplementation`; an enum extension value its own). An
+  unknown value, or an implementation that names no loaded codeunit, keeps
+  every implementation, as before. Enum extensions' values are now lowered
+  (`ObjectDecl::enum_values`), and a label written `"Enum Name"::Value`
+  (without `Enum::`) binds like `Enum::"Enum Name"::Value` when no variable
+  or field has that name.
+- **An unresolved call site no route can reach is no longer a gap or a
+  blocker** (c15). The interface call at `CDOModuleManager.Codeunit.al:55`,
+  reached only under `if ShowError` with every caller passing `false`, was a
+  table-answer blocker while the same routine's `Error` was marked
+  literal-dead. The unresolved cone now leaves out the sites the literal
+  reach rules out from the root, and says once how many: `prove` adds
+  `obligations.literalDeadSites` and a `ruled out by literal arguments` line;
+  digest and explain add `gaps.literalDead` and the count on the
+  `uncertainty:` line. Coverage partial only through such sites counts as
+  complete for that root.
+- **A `Variant` type test is decided by the argument's static type** (p01).
+  `RecordIsTemporary(Rec)` behind `if not VariantRecord.IsRecord then
+  Error(…)` was listed as an inherited rule, a caller rule and an
+  `ERROR_THROW`. A `Variant` parameter now holds the static type of the
+  caller's variable (`Record`, `RecordRef`, `Codeunit`, …; the implicit `Rec`
+  included), and `IsRecord`, `IsCodeunit` and the other type tests evaluate
+  on it, in the literal reach and in the rules across calls
+  (`ConditionAtom::ParamVariantTest`). Text, Code and number types stay
+  unknown.
+- **A dead row no longer shows a route** (p09). `explain`'s JSON kept a
+  `via` for `literalUnreachable` rows that went through a branch the literal
+  arguments rule out; it is now left out, as the human text shows none, and a
+  crossing's `prefix` is taken only from a row that can run.
+
+### Fixed (round-4 n10: commit entries counted per routine)
+
+- **"dependency routines entered that commit" now counts routines, not crossings**
+  (round-4 fact check n10). On CDO, `explain` of `Codeunit "CDO E-Mail Handler"::DocSave`
+  said "3 dependency routines entered that commit" for `Sales-Calc. Discount`::OnRun
+  (entered once) and `CSC Core`::IsAppActiveOrAskToActivate (entered twice): 2 routines
+  at 3 call sites. The ruled-out part ("… dependency routines entered more under literal
+  arguments that cannot run") was worse: it counted COMMIT rows, so one crossing with two
+  ruled-out COMMIT rows counted twice. Both now count distinct routines and add the call
+  sites when there are more of them than routines: `commits: may (1 site; 2 dependency
+  routines that commit, entered at 3 call sites; …)`. The parts of that clause are now
+  separated by `; `, because a part can hold a comma. A crossing with a live COMMIT row is
+  a live entry only, never also a ruled-out one. A count can also go UP: one crossing
+  into two routines (CDO `RunReportID`'s insert into `Incoming Document Attachment`
+  enters both `Graph Mgt - Inc Doc Attachment`::HandleOnAfterInsert and the table's
+  OnInsert) is two routines, so `RunReportID` now says 9 where it said 8 (8 crossings).
+  `IssueReminder` now says 6 routines at 7 call sites where it said 7, and 4 ruled-out
+  routines where it counted 3 rows. The `commits:` section header of
+  `explain` and `digest` uses the same words. JSON: `commits.entryPoints` (shown as
+  `commits.dependencyCalls` in schema 5) now counts entry points grouped by target, as
+  `entryPoints.count` already did, and `commits.routines` and `commits.callSites` are new;
+  `commits.literalDead` gets the same three fields. Every other line that says
+  "dependency routines entered" (impact, query effects, the writes-beyond sections, the
+  scope line) already counted distinct routines; checked, unchanged.
+- **Checked, no change: "owned by this app" already means the table's declaring app.**
+  The same fact check read "250 tables (6 owned by this app, …)" as counting Base App
+  `Incoming Document Attachment` as owned. It does not: the 6 are the workspace's own
+  tables (`CDO E-Mail Log`, `CDO E-Mail Template Header`, `CDO File`, `CDO Queue Entry`,
+  `CDO Template Recipient Setup` and `CDO Output Profile Conflict`, the last written only
+  beyond `Sales-Calc. Discount`::OnRun). `Incoming Document Attachment` is listed under
+  "writes in workspace code" because workspace code inserts it
+  (`CDOElectronicDocumentMgt.Codeunit.al:182`), and counts under dependencies. A new
+  test pins that ownership follows the table's app id, not where the write runs.
+
 ### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
 
 - **A value computed inside a routine now prunes the branches it cannot take**

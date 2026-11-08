@@ -1,5 +1,5 @@
 query touches field 2 "Amount" of Table "FT Item" (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
-answer: consumers: 20 sites, 3 candidates (23 sites in 5 routines of 3 objects) — uses (a site can have two): read 4, field assignment 5 (1 also read), validate 1, filter 3, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 2; sites by record: temporary 1, persistent 3, caller-dependent 17, unknown 2; candidates by reason: table-not-resolved 2, recordref-table-unknown 1
+answer: consumers: 20 sites, 3 candidates (23 sites in 5 routines of 3 objects) — uses (a site can have two): read 4, field assignment 4 (1 also read), record write (ModifyAll) 1, validate 1, filter 3, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 2; sites by record: temporary 1, persistent 3, caller-dependent 17, unknown 2; candidates by reason: table-not-resolved 2, recordref-table-unknown 1
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
 more: --format json for every row
   field: Decimal, Normal
@@ -10,7 +10,7 @@ more: --format json for every row
   declared keys: key 2 (Amount, Unit Price)
   not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed above
   legend: access: a field named on a record (Rec.Field); caller-dependent: the record is a parameter: temporary or not as its caller passes it; candidate: recordref-table-unknown: a RecordRef whose table is not resolved, so the number may name another table's field; candidate: table-not-resolved: the record's table is not resolved, so the site may not name this field; implicit-access: a bare field name inside the table's own code; persistent: the record is not temporary; temporary: a temporary record; unknown: the record's temp state is not resolved; a method name (Field, SetRange, …): the record method that names the field
-  Codeunit "FT Consumers": 19 sites in 3 routines (read 2, field assignment 4, validate 1, filter 3, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 2)
+  Codeunit "FT Consumers": 19 sites in 3 routines (read 2, field assignment 3, record write (ModifyAll) 1, validate 1, filter 3, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 2)
     ByNumberUnknown ws:src/FTFields.al:97 by-number [unknown, Field, candidate: recordref-table-unknown]
     Kinds ws:src/FTFields.al:68 read+field assignment [caller-dependent, access]
     Kinds ws:src/FTFields.al:69 read [caller-dependent, access]
@@ -23,7 +23,7 @@ more: --format json for every row
     Kinds ws:src/FTFields.al:76 rule [caller-dependent, TestField]
     Kinds ws:src/FTFields.al:77 rule [caller-dependent, FieldError]
     Kinds ws:src/FTFields.al:78 metadata [caller-dependent, FieldCaption]
-    Kinds ws:src/FTFields.al:79 field assignment [caller-dependent, ModifyAll]
+    Kinds ws:src/FTFields.al:79 record write (ModifyAll) [caller-dependent, ModifyAll]
     Kinds ws:src/FTFields.al:82 field assignment [temporary, access]
     Kinds ws:src/FTFields.al:83 copy-candidate [caller-dependent, TransferFields]
     Kinds ws:src/FTFields.al:84 copy-candidate [caller-dependent, TransferFields]

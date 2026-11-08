@@ -147,6 +147,15 @@ pub enum ConditionAtom {
     },
     /// A by-value `Boolean` parameter holds `value`.
     ParamBool { index: u32, value: bool },
+    /// Round-4 literal routes: a type test of a by-value `Variant` parameter
+    /// (`V.IsRecord`, `V.IsCodeunit()`, …; `method` folded) is `true`
+    /// (`negated`: `false`). Across a call, the argument's static type may
+    /// decide it.
+    ParamVariantTest {
+        index: u32,
+        method: String,
+        negated: bool,
+    },
     /// A call's result is `true` (`negated`: `false`), e.g. `if not CheckX() then`.
     CallResult { callee_text: String, negated: bool },
     /// A record lookup (`Get`, `Find*`, `IsEmpty`) returned `true`
@@ -602,6 +611,33 @@ impl Walker<'_, '_> {
         (!p.by_ref && is_type(p.ty.as_deref(), "Boolean")).then_some(i as u32)
     }
 
+    /// Round-4 literal routes: `V.IsX` / `V.IsX()` (no argument), `V` a
+    /// by-value `Variant` parameter: (its index, the method folded).
+    fn variant_test(&self, e: ExprId) -> Option<(u32, String)> {
+        let e = self.unparen(e);
+        let member_expr = match &self.ir().expr(e).kind {
+            ExprKind::Call { function, args } if args.is_empty() => *function,
+            ExprKind::Member { .. } => e,
+            _ => return None,
+        };
+        let ExprKind::Member { object, member, .. } = &self.ir().expr(member_expr).kind else {
+            return None;
+        };
+        let method = unquote(member).to_lowercase();
+        if !method.starts_with("is") {
+            return None;
+        }
+        let n = self.name_of(*object)?;
+        let (i, p) = self
+            .cx
+            .routine
+            .params
+            .iter()
+            .enumerate()
+            .find(|(_, p)| unquote(&p.name).eq_fold_identifier(&n))?;
+        (!p.by_ref && is_type(p.ty.as_deref(), "Variant")).then_some((i as u32, method))
+    }
+
     fn is_empty_literal(&self, e: ExprId) -> bool {
         match &self.ir().expr(self.unparen(e)).kind {
             ExprKind::Literal(Literal::Text(raw)) => raw == "''",
@@ -767,7 +803,13 @@ impl Walker<'_, '_> {
                 .bool_param(e)
                 .map(|index| ConditionAtom::ParamBool { index, value: !neg }),
             ExprKind::Call { .. } | ExprKind::Member { .. } => {
-                if let Some((record_var, op)) = self.record_found(e) {
+                if let Some((index, method)) = self.variant_test(e) {
+                    Some(ConditionAtom::ParamVariantTest {
+                        index,
+                        method,
+                        negated: neg,
+                    })
+                } else if let Some((record_var, op)) = self.record_found(e) {
                     Some(ConditionAtom::RecordFound {
                         record_var,
                         op,
