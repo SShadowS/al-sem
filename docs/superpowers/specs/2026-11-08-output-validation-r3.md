@@ -262,7 +262,7 @@ every earlier target), fact-checks every claim, and sends the bundle to both rev
 
 ---
 
-## 7. Addendum after round 4 (revision 2: both reviews of the draft folded in)
+## 7. Addendum after round 4 (revision 2, accepted by both reviewers on 2026-11-08)
 
 Round 4's reviews: astra **accept** (everything left is polish); Fable **not yet**, one blocker
 (B1 below). The round-4 fact check found 7 wrong claims (691 checked); their fixes are on
