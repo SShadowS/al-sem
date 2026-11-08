@@ -990,6 +990,53 @@ fn a_requests_witness_batch_reserves_once() {
     assert_eq!(n("trees"), 1, "{kinds:?}");
 }
 
+/// A request's trees' reservation can reclaim kind after kind: the request
+/// lets its ready snapshot go before it reserves, so the reclaim's first
+/// eviction (an earlier request's witness) leaves the earlier request's
+/// tree with one owner, and the tree goes too. Found on CDO (output
+/// validation round 4, p09): 33 earlier trees (2.5 GB) stayed resident
+/// through every reclaim, the floor read the whole RSS and an explain was
+/// refused as impossible. The answer is still its cold run's.
+///
+/// DISCRIMINATION (2026-11-08): keeping the ready snapshot through the
+/// trees' reservation (no `drop(snap)` before it) fails "the earlier tree
+/// goes too" (0 evicted); restored, passes.
+#[test]
+fn a_requests_trees_reclaim_evicts_an_earlier_requests_tree() {
+    use std::sync::Mutex;
+    let f = witness_ws("ReadThenQueue");
+    let rev = revision(&f);
+    let first = explain_many(&f, &["DocBoth"]);
+    rev.answer(&*first, &Control::unreserved()).unwrap();
+    let held = |kind: &str| rev.keys_where(|k| k.kind() == kind).len();
+    assert_eq!(held("tree"), 1, "precondition: the first request's tree");
+    assert!(held("witness") >= 1, "precondition: its witness");
+    let evicted: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+    // The second request's trees' reservation reclaims, in the design's
+    // order: the witnesses, then the trees.
+    let reserve = |kind: &'static str,
+                   _: usize|
+     -> Result<crate::engine::resident::store::Guard<'_>, String> {
+        if kind == "trees" {
+            let w = rev.reclaim_kind("witness");
+            let t = rev.reclaim_kind("tree");
+            evicted.lock().unwrap().push((w, t));
+        }
+        Ok(Box::new(()))
+    };
+    let ctl = Control {
+        stop: &|| None,
+        reserve: &reserve,
+    };
+    let second = explain_many(&f, &["QueueTwice"]);
+    let warm = rev.answer(&*second, &ctl).unwrap();
+    assert_eq!(warm, crate::engine::batch::standalone_output(&*second));
+    let evicted = evicted.into_inner().unwrap();
+    assert_eq!(evicted.len(), 1, "one trees' reservation: {evicted:?}");
+    assert!(evicted[0].0 >= 1, "the earlier witness goes: {evicted:?}");
+    assert_eq!(evicted[0].1, 1, "the earlier tree goes too: {evicted:?}");
+}
+
 /// An impact main part over many roots streams its effects off the
 /// revision's published tree (`TreeDemand::stream`; here one root per batch,
 /// `root_batch: Some(1)`): its trees' reservation is ONE batch's (1 root, not

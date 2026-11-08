@@ -660,6 +660,21 @@ impl Revision {
             .sum()
     }
 
+    /// Per artifact kind in the current snapshot: `(entries, measured
+    /// bytes)` (`status.memory.stored`: which kind the measured, evictable
+    /// part of the RSS is in).
+    #[must_use]
+    pub fn stored_by_kind(&self) -> BTreeMap<&'static str, (u64, u64)> {
+        let s = self.store.load();
+        let mut out: BTreeMap<&'static str, (u64, u64)> = BTreeMap::new();
+        for k in s.keys() {
+            let e = out.entry(k.kind()).or_default();
+            e.0 += 1;
+            e.1 += s.bytes(k);
+        }
+        out
+    }
+
     /// The measured bytes of the evictable artifacts a reclaim could evict
     /// NOW: [`Self::evictable_bytes`] less what a request holds (pinned for
     /// its compute, or read through its snapshot). A request's own needs are
@@ -1496,6 +1511,11 @@ impl Revision {
         PrepareError,
     > {
         let needs = self.needs_of(plan);
+        // The needs stay pinned through the trees (not only through
+        // `ensure_prepared`): the ready snapshot is let go before the trees'
+        // reservation and loaded again after it, and must still hold them.
+        let need_keys: Vec<ArtifactKey> = needs.iter().map(|(k, _)| k.clone()).collect();
+        let _pins = self.store.hold(&need_keys);
         let start = std::time::Instant::now();
         // The request's witness batch: dropped with the request (the store
         // holds what it published).
@@ -1540,6 +1560,11 @@ impl Revision {
         *prepare_ms = start.elapsed().as_millis() as u64;
         let snap = snap?;
         self.release_used_seed(&snap);
+        // Let the ready snapshot go before the trees' reservation, whose
+        // reclaim evicts by owner count: held here, it would be a second
+        // owner of every value once the reclaim's first eviction published a
+        // new snapshot (see `Store::ensure_prepared`'s reservation).
+        drop(snap);
         {
             // A needed witness this request computed is a miss; one it found
             // published (by an earlier or a concurrent request) is a hit.
@@ -1586,6 +1611,13 @@ impl Revision {
                 .unwrap_or(0);
             Some((ctl.reserve)("trees", whole.len() + batch).map_err(PrepareError::Budget)?)
         };
+        // The needs are pinned (`_pins`), so the current snapshot holds them.
+        let snap = self.store.load();
+        if let Some((k, _)) = needs.iter().find(|(k, r)| !snap.satisfies(k, r)) {
+            return Err(PrepareError::Engine(format!(
+                "{k:?} left the store while pinned"
+            )));
+        }
         let trees = self.trees(plan, &snap, ctl);
         let held = match guard {
             Some(g) if streamed && trees.is_ok() => Some(g),

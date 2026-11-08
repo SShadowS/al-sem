@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (context server: a reclaim could free only one artifact kind)
+
+- **An ask is no longer refused as "impossible" while other asks' trees fill the memory
+  budget.** Round 4 of output validation ran 60 calls through one `alsem mcp` on CDO;
+  call 59 (an `explain` with `callersContext`) failed with `the witness fill needs about
+  89 MiB; budget 8192 MiB, resident 8220 MiB, ... retained floor 8220 MiB`. It was not a
+  regression of the r3 work: a binary built from `275bdb2d` fails at the same call
+  (round 3 ran only the first 50). Each ask keeps the tree of its own roots (one per
+  distinct root set, about 40 MiB, up to 290 MiB for a large one); after 58 calls the
+  cross-app child held 33 trees, 2.5 GB of measured, evictable bytes. A request held
+  its whole store snapshot while it reserved memory for a fill (and its ready snapshot
+  while it reserved for its trees). The reclaim that reservation ran evicts by owner
+  count, and its first eviction (the witnesses) published a new snapshot, so the held
+  one became a second owner of every other value: no tree could go, the retained floor
+  read the whole RSS, and the reservation was refused as impossible. The store now
+  reserves before it loads the snapshot a fill reads, and a request lets its ready
+  snapshot go before its trees' reservation (its needs stay pinned and it loads the
+  snapshot again). Measured (release-fast, the 60 calls on one server): before, the
+  cross-app child rose to 8.24 GB and call 59 was refused; after, every call answers,
+  call 59's reclaim evicts 50 entries (2.3 GB measured) and the RSS falls from 8.30 GB
+  to 5.89 GB; the peak after a call is 8.02 GB, the end 5.89 GB. Answers are
+  byte-identical to before (every call, `generatedAt` aside). The child's
+  `status.memory` now also reports `stored`: the published revision's artifacts by
+  kind, with their entries and measured bytes.
+
 ### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
 
 - **A value computed inside a routine now prunes the branches it cannot take**
