@@ -116,6 +116,131 @@ fn a_small_digest_lookup_failure_comes_back_inline() {
     assert!(s.finish().success());
 }
 
+/// Output validation r3 §7 R2: a digest lookup failure answered inline (H5)
+/// still gives the ready call. Hand-stated in `ws-explain`: `CheckAmount`
+/// names two routines in two objects (ambiguous); `Archiv` is one letter
+/// from the one routine `Archive` (not found, a near name); `NoSuchRoutine`
+/// is near nothing.
+/// - Ambiguous: the envelope's `summary.next` and the JSON document's
+///   `payload.summary.next` are the complete `alsem_digest` call over both
+///   candidates; the human text ends with `complete call:` and `differs in:`.
+/// - Not found with a near name: `next` is the corrected call naming that
+///   one name, labelled `did you mean:` in the human text.
+/// - Not found with no near name: no `next`, no correction, and never a call
+///   with an empty target; with two selectors of which one is near nothing,
+///   the near one is suggested but no call is offered.
+///
+/// DISCRIMINATION (2026-11-08): (1) the pool's inline lookup-failure arm
+/// removed (`(Stdout::Text(_), Some(s)) if inline`) fails "the envelope
+/// keeps the ready call"; (2) the JSON document's `summary.next` not written
+/// fails "the JSON document carries the same call"; (3) `lookup_next`
+/// offering the call when ANY unmatched selector has a near name (`all` →
+/// `any`) fails "no partial correction". Each restored, it passes.
+#[test]
+fn a_digest_lookup_failure_inline_keeps_its_ready_call() {
+    let ws = ws_explain();
+    let mut s = Server::ready(&ws, None);
+    let call = |s: &mut Server, id: i64, selector: &str, format: &str| -> Value {
+        envelope(&s.call(
+            id,
+            "alsem_digest",
+            json!({"routines": [selector], "format": format, "maxInlineBytes": 1_000_000}),
+        ))
+    };
+    // Ambiguous.
+    let env = call(&mut s, 1, "CheckAmount", "json");
+    assert_eq!(env["outcome"], "ambiguous", "{env}");
+    let text = env["stdoutText"]
+        .as_str()
+        .unwrap_or_else(|| panic!("precondition: inline: {env}"));
+    let doc: Value = serde_json::from_str(text).unwrap();
+    let next = &env["summary"]["next"];
+    assert_eq!(
+        next["tool"], "alsem_digest",
+        "the envelope keeps the ready call: {env}"
+    );
+    let routines = next["arguments"]["routines"].as_array().expect("routines");
+    assert_eq!(routines.len(), 2, "every candidate: {env}");
+    assert!(
+        routines
+            .iter()
+            .all(|r| r.as_str().is_some_and(|s| s.contains("::CheckAmount"))),
+        "{env}"
+    );
+    assert_eq!(
+        doc["payload"]["summary"]["next"], *next,
+        "the JSON document carries the same call: {doc}"
+    );
+    let env = call(&mut s, 2, "CheckAmount", "human");
+    let human = env["stdoutText"].as_str().unwrap();
+    let tail: Vec<&str> = human.lines().rev().take(2).collect();
+    assert!(
+        tail[1].starts_with("  complete call: alsem_digest {\"routines\": [")
+            && tail[0] == "  differs in: the object",
+        "the human text ends with the call and what differs: {human}"
+    );
+    // Not found, with a near name.
+    let env = call(&mut s, 3, "Archiv", "json");
+    assert_eq!(env["outcome"], "not-found", "{env}");
+    let doc: Value = serde_json::from_str(env["stdoutText"].as_str().unwrap()).unwrap();
+    let next = &env["summary"]["next"];
+    let routines = next["arguments"]["routines"].as_array().expect("routines");
+    assert_eq!(routines.len(), 1, "the one nearest name: {env}");
+    assert!(
+        routines[0]
+            .as_str()
+            .is_some_and(|s| s.ends_with("::Archive")),
+        "{env}"
+    );
+    assert_eq!(doc["payload"]["summary"]["next"], *next, "{doc}");
+    let env = call(&mut s, 4, "Archiv", "human");
+    let human = env["stdoutText"].as_str().unwrap();
+    assert!(
+        human.contains(
+            "  did you mean: Codeunit \"Explain Post\"::Archive — corrected call: alsem_digest \
+             {\"routines\": [\"Codeunit \\\"Explain Post\\\"::Archive\"]}"
+        ),
+        "{human}"
+    );
+    // Two not-found selectors, one near nothing: the near one is suggested,
+    // but no call is offered (a call that drops a selector is no correction).
+    let env = envelope(&s.call(
+        7,
+        "alsem_digest",
+        json!({"routines": ["Archiv", "NoSuchRoutine"], "format": "human",
+               "maxInlineBytes": 1_000_000}),
+    ));
+    let human = env["stdoutText"].as_str().unwrap();
+    assert!(
+        human.contains("  did you mean: Codeunit \"Explain Post\"::Archive\n")
+            && !human.contains("corrected call")
+            && env["summary"].get("next").is_none(),
+        "no partial correction: {env}"
+    );
+    // Not found, near nothing.
+    for (id, format) in [(5, "json"), (6, "human")] {
+        let env = call(&mut s, id, "NoSuchRoutine", format);
+        assert_eq!(env["outcome"], "not-found", "{env}");
+        assert!(
+            env["summary"].get("next").is_none(),
+            "no correction when none is near: {env}"
+        );
+        let text = env["stdoutText"].as_str().unwrap();
+        assert!(
+            !text.contains("did you mean")
+                && !text.contains("corrected call")
+                && !text.contains("\"routines\":[]")
+                && !text.contains("\"routines\": []"),
+            "no correction and no empty call: {text}"
+        );
+        if format == "json" {
+            let doc: Value = serde_json::from_str(text).unwrap();
+            assert!(doc["payload"]["summary"].get("next").is_none(), "{doc}");
+        }
+    }
+    assert!(s.finish().success());
+}
+
 /// §12.1: the outcome mapping, every value an answer can give, with
 /// `no-routine-changed` only for an impact whose accounting is complete.
 #[test]

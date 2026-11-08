@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (output validation r3 §7: B1 completed, R2 lookup failures, R6 write order)
+
+- **Tests: a test's relation is a property of its path set, in every count and line
+  (§7 B1).** The round-4 fix made a test `code` when any of its reaches is code. Now also:
+  - A code test whose code path was not kept (its code path lies outside the tier pick)
+    stays `code`; its printed path carries its own tag, `path [UI navigation; the test's
+    code path is not kept]: …` in the human text and `pathRelation: "UI navigation"` in
+    JSON (as before). Among code tests, one whose code path is shown ranks before one
+    whose path is such a tagged UI path, so a codeunit's first path is its shortest code
+    path when it has one.
+  - An incomplete reach inventory (`reachesComplete: false`, changed routines past the
+    reach limit) is never reported as "navigation only": the headline says `N more by UI
+    navigation on the reaches computed (reach incomplete: k changed routines not
+    expanded, which a code path may reach)`. The counts stay the rows' own.
+  - A test pins that the headline numbers, `by relation:`, `byRelation`, the summary rows
+    and the per-codeunit tags each equal the sum over the rows' `relation`.
+- **Lookup failures give the ready call again (§7 R2).** A digest answered inline because
+  its selector is ambiguous or not found (r3 H5) dropped the envelope's summary, so
+  `summary.next` was gone (round-4 n08, m01, p02).
+  - The inline lookup failure keeps the envelope's summary (`outcome`, `next`).
+  - Ambiguous: the digest JSON document carries the complete call in
+    `payload.summary.next` too (5.0.0, additive; the 4.0.0 adapter drops it), and the
+    human text ends with `complete call: …` and `differs in: …`.
+  - Not found: a near name is labelled `did you mean: <name> — corrected call: …` in
+    explain, prove and digest (was `corrected call (the nearest name): …`); digest also
+    puts the corrected call in `summary.next`. No correction when nothing is near; with
+    several selectors, a call only when every one has a near name (a call that drops a
+    selector is no correction); never a call with an empty target.
+- **Touches lead with the writes the task asks about (§7 R6).** With `opFamily: "write"`
+  (`--op-family write`, the write follow-up the answers offer) the record-write sites are
+  ordered persistent → caller-dependent → temp state not resolved → temporary, Insert
+  before Modify before Delete, and the heading states the split (`record writes: 7 sites
+  in 4 routines — persistent 3, caller-dependent 1, not resolved 1, temporary 2; by op:
+  …`). `writeSites` follows the same order. Without the mode the neutral sampler and
+  heading stay; the key-relevant order is unchanged.
+  - Field mode (`--field`): a `ModifyAll` that names the field writes it to the database,
+    so its row and the counts say `record write (ModifyAll)`, apart from the in-memory
+    `field assignment`s and `validate`s (it was counted as a field assignment). JSON keeps
+    `uses: ["write"]` with `source: "ModifyAll"`.
+- **Consumer notice (additive fields):** digest 5.0.0 `payload.summary.next` on a lookup
+  failure (the same `{tool, arguments, why, kind}` object as the envelope's
+  `summary.next`); query touches `payload.up.writeSitesByTempState` (`persistent`,
+  `callerDependent`, `notResolved`, `temporary`) under `opFamily: "write"`, and
+  `writeSites` in the new order. No consumer reads either today.
+
 ### Fixed (context server: a reclaim could free only one artifact kind)
 
 - **An ask is no longer refused as "impossible" while other asks' trees fill the memory

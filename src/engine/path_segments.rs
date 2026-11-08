@@ -31,7 +31,7 @@ const MIN_HOPS: usize = 3;
 pub const LISTING: &str = "path segments (each [Sn] in a path above stands for these hops):";
 
 /// A path line: its indentation, its label (`path: `, `prefix path: `,
-/// `representative path (…): `) and its hops.
+/// `representative path (…): `, a tagged `path […]: `) and its hops.
 fn path_line(l: &str) -> Option<(usize, &str, Vec<&str>)> {
     let indent = l.len() - l.trim_start().len();
     let t = l.trim_start();
@@ -39,7 +39,8 @@ fn path_line(l: &str) -> Option<(usize, &str, Vec<&str>)> {
     let label = &t[..end];
     let is_path = label == "path: "
         || label == "prefix path: "
-        || (label.starts_with("representative path (") && !label.contains(SEP));
+        || (label.starts_with("representative path (") && !label.contains(SEP))
+        || (label.starts_with("path [") && label.ends_with("]: ") && !label.contains(SEP));
     is_path.then(|| (indent, label, t[end..].split(SEP).collect()))
 }
 

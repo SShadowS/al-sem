@@ -3087,6 +3087,7 @@ pub fn project_digest_document(
     deterministic: bool,
     test_coverage: Option<serde_json::Value>,
     include_reads: bool,
+    lookup_next: Option<serde_json::Value>,
     v3: Option<V3Inputs<'_>>,
 ) -> String {
     // payload.summary
@@ -3102,6 +3103,13 @@ pub fn project_digest_document(
     summary.insert("rootsResolved".into(), (roots_resolved as u64).into());
     summary.insert("totalEffects".into(), (total_effects as u64).into());
     summary.insert("totalUnresolved".into(), (total_unresolved as u64).into());
+    // r3 §7 R2 (additive, 5.0.0 only; the 4.0.0 adapter drops it): a lookup
+    // failure's ready call.
+    if let Some(next) = lookup_next
+        && v3.as_ref().is_some_and(|v| v.v5)
+    {
+        summary.insert("next".into(), next);
+    }
 
     // changed
     let mut changed = serde_json::Map::new();
@@ -4585,6 +4593,18 @@ fn digest_view(
         &changed_roots.diagnostics,
     );
 
+    // r3 §7 R2: a lookup failure's ready call, in the JSON document's
+    // `payload.summary.next` (5.0.0), the envelope's summary and the human
+    // text alike.
+    let lookup = if exit_code == 2 {
+        lookup_next(
+            &changed_roots.diagnostics,
+            crate::engine::follow_up::Cx::new(render.surface, req.single_app),
+        )
+    } else {
+        LookupNext::default()
+    };
+
     // JSON
     let json_text = project_digest_document(
         &workspace_fp,
@@ -4598,6 +4618,7 @@ fn digest_view(
         deterministic,
         test_coverage.as_ref().map(|t| t.to_json_value()),
         *include_reads,
+        lookup.call.as_ref().map(|c| c.json()),
         (!render.schema2).then_some(V3Inputs {
             rollups: &rollups,
             cx: &rollup_cx,
@@ -4674,13 +4695,9 @@ fn digest_view(
     // diagnostics' kinds (`selector-ambiguous` → `ambiguous`).
     let mut summary = summary;
     // Round-3 n08/m01: a lookup failure carries no effect-analysis totals,
-    // and an ambiguity the complete call over its candidates (explain's c26
-    // form), in the human text and as `summary.next`.
+    // and its ready call (r3 §7 R2: an ambiguity's complete call, a typo's
+    // corrected one) in the human text and as `summary.next`.
     if exit_code == 2 {
-        let next = ambiguity_next(
-            &changed_roots.diagnostics,
-            crate::engine::follow_up::Cx::new(render.surface, req.single_app),
-        );
         let mut slim = serde_json::Map::new();
         for k in [
             "kind",
@@ -4692,9 +4709,12 @@ fn digest_view(
                 slim.insert(k.into(), v.clone());
             }
         }
-        if let Some(n) = &next {
+        if let Some(n) = &lookup.call {
             slim.insert("next".into(), n.json());
-            human_text.push_str(&format!("  complete call: {}\n", n.text(render.surface)));
+        }
+        for l in &lookup.human {
+            human_text.push_str(l);
+            human_text.push('\n');
         }
         summary = serde_json::Value::Object(slim);
     }
@@ -4718,30 +4738,130 @@ fn digest_view(
     }
 }
 
-/// Round-3 n08/m01: the complete digest call over every candidate of the
-/// ambiguous selectors among `changed`, or `None` when none lists its
-/// candidates' selectors.
-fn ambiguity_next(
+/// What a digest lookup failure (no root resolved) offers (round-3 n08/m01;
+/// output validation r3 §7 R2): the ready call (`summary.next`, in the JSON
+/// document's `payload.summary` and the envelope's summary) and the human
+/// lines that end the answer.
+#[derive(Debug, Default)]
+pub(crate) struct LookupNext {
+    pub(crate) call: Option<crate::engine::follow_up::FollowUp>,
+    pub(crate) human: Vec<String>,
+}
+
+/// r3 §7 R2: a lookup failure's ready call, one rule for the two failures.
+///
+/// **Ambiguous** (any selector names several routines): the complete digest
+/// call over every resolved candidate of the ambiguous selectors (each with
+/// a non-empty selector), and the human lines `complete call: …` and
+/// `differs in: …` (explain's c26 form; one `differs in` per ambiguous
+/// selector, named when there are several).
+///
+/// **Not found** (no selector is ambiguous): per unmatched selector its
+/// nearest name, labelled `did you mean: …`; the corrected call names those
+/// nearest names, and only when every unmatched selector has one (a call
+/// that drops a selector is not a correction). A selector with no near name
+/// gets no correction. Never a call with an empty target, and the nearest
+/// names are never put in one call as if they were overloads of one name.
+pub(crate) fn lookup_next(
     changed: &[ChangedRootsDiagnostic],
     fcx: crate::engine::follow_up::Cx,
-) -> Option<crate::engine::follow_up::FollowUp> {
-    let selectors: Vec<String> = changed
+) -> LookupNext {
+    use crate::engine::follow_up::{FollowUp, Tool};
+    let ambiguous: Vec<(
+        &str,
+        &[crate::engine::l5::selector_index::AmbiguousCandidate],
+    )> = changed
         .iter()
         .filter_map(|d| match d {
-            ChangedRootsDiagnostic::SelectorAmbiguous { listed, .. } => Some(listed),
+            ChangedRootsDiagnostic::SelectorAmbiguous {
+                selector, listed, ..
+            } => Some((selector.as_str(), listed.as_slice())),
             _ => None,
         })
-        .flatten()
-        .map(|c| c.selector.clone())
         .collect();
-    (!selectors.is_empty()).then(|| {
-        crate::engine::follow_up::FollowUp::new(
-            crate::engine::follow_up::Tool::Digest,
-            fcx,
-            "every candidate",
-        )
-        .arg("routines", selectors)
-    })
+    let mut out = LookupNext::default();
+    if !ambiguous.is_empty() {
+        let selectors: Vec<String> = ambiguous
+            .iter()
+            .flat_map(|(_, l)| l.iter())
+            .map(|c| c.selector.clone())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if selectors.is_empty() {
+            return out;
+        }
+        let call = FollowUp::new(Tool::Digest, fcx, "every candidate").arg("routines", selectors);
+        out.human
+            .push(format!("  complete call: {}", call.text(fcx.surface)));
+        for (sel, listed) in &ambiguous {
+            if let Some(d) = crate::engine::l5::selector_index::differs_in(listed) {
+                out.human.push(if ambiguous.len() > 1 {
+                    format!("  differs in ('{}'): {d}", escape_controls(sel))
+                } else {
+                    format!("  differs in: {d}")
+                });
+            }
+        }
+        out.call = Some(call);
+        return out;
+    }
+    let unmatched: Vec<Option<&crate::engine::l5::selector_index::NearName>> = changed
+        .iter()
+        .filter_map(|d| match d {
+            ChangedRootsDiagnostic::SelectorUnmatched { hints, .. } => Some(
+                hints
+                    .nearest
+                    .first()
+                    .filter(|n| !n.selector.trim().is_empty()),
+            ),
+            _ => None,
+        })
+        .collect();
+    // One selector: explain's and prove's one line (`did you mean: … —
+    // corrected call: …`).
+    if let [Some(n)] = unmatched[..] {
+        out.human
+            .push(crate::engine::l5::selector_index::corrected_call_line(
+                Tool::Digest,
+                fcx,
+                &n.selector,
+                n.overloads,
+                &[],
+            ));
+        out.call = Some(
+            FollowUp::new(Tool::Digest, fcx, "the nearest name")
+                .arg("routines", vec![n.selector.clone()]),
+        );
+        return out;
+    }
+    for n in unmatched.iter().flatten() {
+        out.human.push(format!(
+            "  did you mean: {}{}",
+            n.selector,
+            if n.overloads > 1 {
+                format!(
+                    " (names {} overloads; the corrected call's answer lists each one's call)",
+                    n.overloads
+                )
+            } else {
+                String::new()
+            }
+        ));
+    }
+    if !unmatched.is_empty() && unmatched.iter().all(Option::is_some) {
+        let call = FollowUp::new(Tool::Digest, fcx, "the nearest name").arg(
+            "routines",
+            unmatched
+                .iter()
+                .flatten()
+                .map(|n| n.selector.clone())
+                .collect::<Vec<_>>(),
+        );
+        out.human
+            .push(format!("  corrected call: {}", call.text(fcx.surface)));
+        out.call = Some(call);
+    }
+    out
 }
 
 /// A2.10's use test, shared by digest, prove and events: `pipeline` runs over

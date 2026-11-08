@@ -1,5 +1,5 @@
 query touches field 2 "Amount" of Table "FT Item" (08080808-0000-4000-8000-000000000081/table/50800)   [cross-app]
-answer: consumers: 19 sites, 0 candidates (19 sites in 2 routines of 2 objects) — uses (a site can have two): read 3, field assignment 4 (1 also read), validate 1, filter 2, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 1; sites by record: temporary 1, caller-dependent 17, unknown 1
+answer: consumers: 19 sites, 0 candidates (19 sites in 2 routines of 2 objects) — uses (a site can have two): read 3, field assignment 3 (1 also read), record write (ModifyAll) 1, validate 1, filter 2, key-use 1, load 1, calc 1, rule 3, metadata 1, copy-candidate 2, by-number 1; sites by record: temporary 1, caller-dependent 17, unknown 1
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
   field: Decimal, Normal
@@ -10,7 +10,7 @@ more: --all lists every witness, no fold; --format json for every row
   declared keys: key 2 (Amount, Unit Price)
   not a complete rename inventory: page and report columns, CalcFormula and TableRelation are not searched (the compiler finds them); keys holding the field are listed above
   legend: access: a field named on a record (Rec.Field); caller-dependent: the record is a parameter: temporary or not as its caller passes it; implicit-access: a bare field name inside the table's own code; temporary: a temporary record; unknown: the record's temp state is not resolved; a method name (Field, SetRange, …): the record method that names the field
-  Codeunit "FT Consumers": 16 sites in 1 routine (read 2, field assignment 3, validate 1, filter 2, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 1)
+  Codeunit "FT Consumers": 16 sites in 1 routine (read 2, field assignment 2, record write (ModifyAll) 1, validate 1, filter 2, key-use 1, load 1, calc 1, rule 2, metadata 1, copy-candidate 2, by-number 1)
     Kinds ws:src/FTFields.al:68 read+field assignment [caller-dependent, access, down]
     Kinds ws:src/FTFields.al:69 read [caller-dependent, access, down]
     Kinds ws:src/FTFields.al:70 validate [caller-dependent, Validate, down]

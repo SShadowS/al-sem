@@ -974,8 +974,10 @@ pub fn corrected_call_line(
     for (k, v) in args {
         f = f.arg(k, v.clone());
     }
+    // r3 §7 R2: the suggestion is labelled as one (`did you mean:`), the
+    // call beside it.
     format!(
-        "  corrected call (the nearest name): {}{}",
+        "  did you mean: {selector} — corrected call: {}{}",
         f.text(cx.surface),
         if overloads > 1 {
             format!(" — names {overloads} overloads; the answer lists each one's call")

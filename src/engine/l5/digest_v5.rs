@@ -287,6 +287,10 @@ pub fn to_v4(mut payload: Value) -> Value {
         );
         d.insert(ROWS.into(), Value::Array(rows));
     }
+    // r3 §7 R2: a lookup failure's ready call is 5.0.0's (additive there).
+    if let Some(Value::Object(s)) = payload.get_mut("summary") {
+        s.remove("next");
+    }
     shared_table_answers(&mut payload, false);
     table_answers(&mut payload, "asked", "table");
     crate::engine::l4::query_v5::unfold_dependencies(&mut payload);

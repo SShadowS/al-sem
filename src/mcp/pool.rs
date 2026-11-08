@@ -2255,6 +2255,10 @@ fn run_command(
                         (Stdout::Text(t), Some(s)) if json_format && inline_needs_summary(t) => {
                             Some(inline_summary(s))
                         }
+                        // r3 §7 R2: a lookup failure a filed tool answers
+                        // inline (H5) keeps the summary a filed answer would
+                        // carry: its outcome and ready call (`next`).
+                        (Stdout::Text(_), Some(s)) if inline => Some(inline_summary(s)),
                         _ => None,
                     };
                     Outcome::Cli {
