@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-4 fact check: a test's relation follows its own reaches)
+
+- **A test is a code test when any of its paths reaches the change by code calls**
+  (round-4 c28, c21; spec `2026-11-08-output-validation-r3.md` §2 T1). T1 made each
+  `reaches` entry `code` when any code path reaches that routine, but a `runFirst` row's
+  own `relation`, the ranking ("code paths first"), `result.selection.byRelation`, the
+  summary rows and the human headline ("N tests by code calls; M more by UI navigation
+  only") still took the relation of the test's shortest path. A test whose shortest path
+  opens a page was counted as UI-navigation-only even when its own `reaches` said code.
+  On CDO, c28 (the WaitForMailLimit diff, `--tier dependency`) said 107 by code and 337
+  by UI navigation only; it now says 365 and 79. c21 (`--tier local`) said 85 and 59, now
+  88 and 56. The fact check counted 388/56 and 94/50 from the old `reaches`, which also
+  called a test `code` when its only code path went through a hub (`Codeunit.Run` of a
+  variable, a record trigger behind `Validate`), a path outside the tier the answer picks.
+  - One rule now classifies a test everywhere: `code` when any of its reaches is code,
+    `UI navigation` only when every one is (a part with no `reachesAll` keeps its printed
+    path's relation). Schemas 1 and 2 take the same rule (their `reachesByNavigationOnly`
+    already did).
+  - A reach is judged on the answer's tier pick: when a routine's best code path lies
+    outside it (via-hub under `--tier local` or `dependency`, via-dependency under
+    `--tier local`) and a UI-navigation path inside it reaches the routine, the reach (and
+    schema 3's `reaches` entry) is that UI-navigation one. The select part carries the
+    best UI-navigation reach beside each code reach (`navigation`) for this. A test outside
+    the pick (a via-dependency test counted apart) is judged on its own tier. Without
+    this, n02 (a field trigger reached from tests only by opening pages on a local path)
+    turned into "6 tests by code calls" whose code paths all ran through hubs.
+  - `path` stays the test's shortest. When it opens a page while the test counts as code,
+    the row says so (`pathRelation: "UI navigation"`) and carries the code path the
+    per-root walk found (`codePath`, `codePathHops`, `codePathTier`; additive, all
+    schemas). The human group line prints that code path with its own tier and hops, so
+    `first [local, code] …` is never followed by a path that opens a page.
+  - Code tests rank by the tier and hops of that code path, the path the answer shows.
+
 ### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
 
 - **A value computed inside a routine now prunes the branches it cannot take**

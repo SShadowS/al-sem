@@ -57,10 +57,35 @@ impl TierPick {
     }
 }
 
-/// The relation of a test's path (§8.1): `UI navigation` when any hop is a
-/// page the path opens (a bare page object between routines: the page's
-/// lifecycle edge), else `code`.
+/// A test's relation (output validation r3 T1, round-4 c28): `code` when
+/// ANY of its reaches (`reachesAll`, one per changed routine it reaches) is
+/// code, `UI navigation` only when every one is; a test with no
+/// `reachesAll` (a hand-built part) takes its printed path's relation. The
+/// one rule for a row's `relation`, the ranking, `byRelation` and the
+/// headline, so a test is never counted as navigation-only while its own
+/// reaches say code.
 fn relation(t: &Value) -> &'static str {
+    match t["reachesAll"].as_array() {
+        Some(all) if !all.is_empty() => {
+            if all
+                .iter()
+                .any(|r| s(r, "relation") == crate::engine::vocab::RELATION_CODE)
+            {
+                crate::engine::vocab::RELATION_CODE
+            } else {
+                crate::engine::vocab::RELATION_NAVIGATION
+            }
+        }
+        _ => path_relation(t),
+    }
+}
+
+/// The relation of a test's printed path (§8.1): `UI navigation` when any
+/// hop is a page the path opens (a bare page object between routines: the
+/// page's lifecycle edge), else `code`. The printed path is the test's
+/// shortest, so it can open a page while the test counts as code
+/// ([`relation`]).
+fn path_relation(t: &Value) -> &'static str {
     let nav = t["path"]
         .as_array()
         .into_iter()
@@ -84,6 +109,84 @@ fn relation_words(t: &Value) -> String {
         format!("{r} (candidate)")
     } else {
         r.to_string()
+    }
+}
+
+/// A test's reaches as the answer's tier pick sees them (round-4 c28, n02):
+/// a code reach whose best code path lies outside the pick (a via-hub path
+/// under `--tier local`) becomes the root's best UI-navigation reach when
+/// that one is inside it (the select part's `navigation` beside the code
+/// reach), so a test is not counted as reached "by code calls" on a local
+/// path through a hub only. The `navigation` alternatives leave, and a
+/// `codePath` outside the pick is dropped. Without a pick-side alternative
+/// a reach stays as it is.
+fn on_tier(t: &mut Value, pick: TierPick) {
+    if let Some(Value::Array(all)) = t.get_mut("reachesAll") {
+        for r in all.iter_mut() {
+            let Value::Object(m) = r else { continue };
+            let Some(nav) = m.remove("navigation") else {
+                continue;
+            };
+            let code_out = m.get("relation").and_then(Value::as_str)
+                == Some(crate::engine::vocab::RELATION_CODE)
+                && !pick.takes(m.get("tier").and_then(Value::as_str).unwrap_or(""));
+            if code_out && pick.takes(s(&nav, "tier")) {
+                m.insert("tier".into(), nav["tier"].clone());
+                m.insert("hops".into(), nav["hops"].clone());
+                m.insert(
+                    "relation".into(),
+                    json!(crate::engine::vocab::RELATION_NAVIGATION),
+                );
+                if let Some(c) = nav.get("candidate") {
+                    m.insert("candidate".into(), c.clone());
+                }
+            }
+        }
+    }
+    if t["codePath"].is_array()
+        && !pick.takes(s(t, "codePathTier"))
+        && let Value::Object(m) = t
+    {
+        for k in ["codePath", "codePathTier", "codePathHops"] {
+            m.remove(k);
+        }
+    }
+}
+
+/// The path the human text prints for a test, with its tier and hops
+/// (round-4 c28): its printed (shortest) path, unless that path opens a
+/// page while the test counts as code; then the code path the select part
+/// found (`codePath`), so the line never shows a UI path under `code`. The
+/// last value is the label of the path line (`path: `, or
+/// `representative path (UI navigation): ` when a code test has no code
+/// path to show).
+fn shown_path(t: &Value) -> (&str, usize, Vec<String>, &'static str) {
+    let hops = |k: &str| {
+        t[k].as_array()
+            .into_iter()
+            .flatten()
+            .skip(1)
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+    };
+    let mismatch = relation(t) == crate::engine::vocab::RELATION_CODE
+        && path_relation(t) != crate::engine::vocab::RELATION_CODE;
+    if mismatch && t["codePath"].is_array() {
+        (
+            s(t, "codePathTier"),
+            u(t, "codePathHops"),
+            hops("codePath"),
+            "path: ",
+        )
+    } else if mismatch {
+        (
+            s(t, "tier"),
+            u(t, "hops"),
+            hops("path"),
+            "representative path (UI navigation): ",
+        )
+    } else {
+        (s(t, "tier"), u(t, "hops"), hops("path"), "path: ")
     }
 }
 
@@ -875,30 +978,37 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         .iter()
         .flat_map(|p| p["tests"].as_array().cloned().unwrap_or_default())
         .collect();
+    // A test outside the pick (a via-dependency test counted apart under
+    // `--tier local`) is described on its own tier.
+    for t in &mut tests {
+        let pick = match s(t, "tier") {
+            tier if opts.tier.takes(tier) => opts.tier,
+            "throughDependency" => TierPick::Dependency,
+            _ => TierPick::All,
+        };
+        on_tier(t, pick);
+    }
     let tier_rank = |t: &str| match t {
         "local" => 0,
         "throughDependency" => 1,
         _ => 2,
     };
     // Output validation V2 (§3.3, F13): code paths before UI-navigation ones,
-    // then tier, hops, codeunit, name.
+    // then tier, hops, codeunit, name. Round-4 c28: by the test's relation
+    // (code when any reach is code) and the tier and hops of the path the
+    // answer shows for it (a code test's code path).
     let rel_rank = |t: &Value| usize::from(relation(t) != crate::engine::vocab::RELATION_CODE);
-    tests.sort_by(|a, b| {
+    let rank_key = |t: &Value| {
+        let (tier, hops, _, _) = shown_path(t);
         (
-            rel_rank(a),
-            tier_rank(s(a, "tier")),
-            u(a, "hops"),
-            a["codeunitId"].as_i64().unwrap_or(i64::MAX),
-            s(a, "display"),
+            rel_rank(t),
+            tier_rank(tier),
+            hops,
+            t["codeunitId"].as_i64().unwrap_or(i64::MAX),
+            s(t, "display").to_string(),
         )
-            .cmp(&(
-                rel_rank(b),
-                tier_rank(s(b, "tier")),
-                u(b, "hops"),
-                b["codeunitId"].as_i64().unwrap_or(i64::MAX),
-                s(b, "display"),
-            ))
-    });
+    };
+    tests.sort_by_cached_key(|t| rank_key(t));
     let count = |t: &str| tests.iter().filter(|x| s(x, "tier") == t).count();
     let by_tier = json!({"local": count("local"), "throughDependency": count("throughDependency"),
                          "onlyOpen": count("onlyOpen")});
@@ -1426,6 +1536,18 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 if !nav_only.is_empty() {
                     row["reachesByNavigationOnly"] = json!(nav_only);
                 }
+                // Round-4 c28 (additive): `path` is the test's shortest; when
+                // it opens a page while the test counts as code, its own
+                // relation is stated, and the code path beside it.
+                if path_relation(t) != relation(t) {
+                    row["pathRelation"] = json!(path_relation(t));
+                    if t["codePath"].is_array() {
+                        row["codePath"] = t["codePath"].clone();
+                        row["codePathHops"] = t["codePathHops"].clone();
+                        row["codePathTier"] =
+                            json!(crate::engine::vocab::tier_key(s(t, "codePathTier")));
+                    }
+                }
                 row
             })
             .collect();
@@ -1668,13 +1790,8 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         let groups_start = out.len();
         for (k, v) in groups.iter().take(5) {
             let first = v[0];
-            let path: Vec<String> = first["path"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .skip(1)
-                .filter_map(|p| p.as_str().map(str::to_string))
-                .collect();
+            // Round-4 c28: a code test's line shows a code path.
+            let (path_tier, path_hops, path, path_label) = shown_path(first);
             // §3.3 (F13): the group's tier distribution when its tests
             // differ in tier, its representative path's tier and relation.
             let tiers: Vec<(&str, usize)> = tiers_of(v);
@@ -1696,14 +1813,14 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             out.push(format!(
                 "  {k}: {}{dist}; first [{}, {}] {} (first: {})",
                 n_of(v.len(), "test", "tests"),
-                crate::engine::vocab::tier_key(s(first, "tier")),
+                crate::engine::vocab::tier_key(path_tier),
                 relation_words(first),
-                n_of(u(first, "hops"), "hop", "hops"),
+                n_of(path_hops, "hop", "hops"),
                 first["procedure"].as_str().unwrap_or(s(first, "display")),
             ));
             if !path.is_empty() {
                 out.push(format!(
-                    "    path: {}",
+                    "    {path_label}{}",
                     path.join(crate::engine::path_segments::SEP)
                 ));
             }
@@ -1762,7 +1879,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                         "; nearest: {} [{}] ({})",
                         s(t, "display"),
                         relation_words(t),
-                        n_of(u(t, "hops"), "hop", "hops")
+                        n_of(shown_path(t).1, "hop", "hops")
                     ),
                     _ => String::new(),
                 };
