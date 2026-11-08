@@ -136,8 +136,10 @@
         "callers": 0,
         "commits": {
           "answer": "yes",
+          "callSites": 0,
           "entryPoints": 0,
-          "ownSites": 1
+          "ownSites": 1,
+          "routines": 0
         },
         "entryPoints": {
           "count": 0,

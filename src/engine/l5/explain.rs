@@ -5523,7 +5523,7 @@ impl Card {
             ));
         }
         let commits_unwitnessed = t.commits == "no observed"
-            || (t.commits != "none" && t.commit_sites == 0 && t.commit_entry_points > 0);
+            || (t.commits != "none" && t.commit_sites == 0 && t.commit_entries.points > 0);
         if commits_unwitnessed {
             out.push(FollowUp::prove(
                 cx,

@@ -203,7 +203,7 @@ fn explain_counts_every_commit_site_and_entry_point() {
     assert_eq!(code, Some(0), "{stdout}");
     // `yes`: `Near` commits unconditionally.
     assert!(
-        stdout.contains("commits: yes (2 sites, 1 dependency routine entered that commits)"),
+        stdout.contains("commits: yes (2 sites; 1 dependency routine entered that commits)"),
         "{stdout}"
     );
     assert!(

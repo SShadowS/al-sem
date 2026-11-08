@@ -570,8 +570,10 @@
         "callers": 6,
         "commits": {
           "answer": "none",
+          "callSites": 0,
           "entryPoints": 0,
-          "ownSites": 0
+          "ownSites": 0,
+          "routines": 0
         },
         "entryPoints": {
           "count": 0,

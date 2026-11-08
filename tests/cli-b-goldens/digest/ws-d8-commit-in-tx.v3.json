@@ -359,8 +359,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "may",
+            "callSites": 0,
             "dependencyCalls": 0,
-            "ownSites": 1
+            "ownSites": 1,
+            "routines": 0
           },
           "dependencyCalls": {
             "count": 0,
@@ -541,8 +543,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "may",
+            "callSites": 0,
             "dependencyCalls": 0,
-            "ownSites": 1
+            "ownSites": 1,
+            "routines": 0
           },
           "dependencyCalls": {
             "count": 0,
@@ -710,8 +714,10 @@
           "callerDependentTables": 0,
           "commits": {
             "answer": "yes",
+            "callSites": 0,
             "dependencyCalls": 0,
-            "ownSites": 1
+            "ownSites": 1,
+            "routines": 0
           },
           "dependencyCalls": {
             "count": 0,

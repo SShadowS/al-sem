@@ -233,8 +233,10 @@
         "callers": 0,
         "commits": {
           "answer": "no observed",
+          "callSites": 0,
           "entryPoints": 0,
-          "ownSites": 0
+          "ownSites": 0,
+          "routines": 0
         },
         "entryPoints": {
           "count": 0,
