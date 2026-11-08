@@ -7,6 +7,7 @@ Codeunit "Calls Post"::PreviewPost  defined at ws:src/post.al:36
   other effects: events: 0 (0 raised in workspace code)
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  starts by (a start, not a summary): `Checks.CheckPreview(Order, false)` (:40); `Order.Modify(true)` (:41)
   calls: Codeunit "Calls Checks"::CheckPreview (called at :40)
   rules: none of its own
   inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:23]

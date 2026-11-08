@@ -1,4 +1,4 @@
 prove Codeunit D14EntryPoints::OnRun may-commit   [cross-app]
-answer: no
+answer: no — no COMMIT site in the analyzed cone (every candidate decided; static candidates, not an observed trace)
 analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops

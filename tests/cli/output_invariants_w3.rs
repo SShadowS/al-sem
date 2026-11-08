@@ -1642,7 +1642,11 @@ pub(crate) fn cdo_round2_size_ratchets() {
             "c20",
             "alsem_impact",
             json!({"diff": C20_DIFF, "detail": true}),
-            6_150,
+            // 6_150 -> 6_500 on 2026-11-08 (r3 X3, measured 6,411 B): H1's
+            // one folding rule prints the UI-navigation entries by kind and
+            // by context with `detail: true` in diff mode too (c20 asks for
+            // detail; it used to print none there).
+            6_500,
         ),
         (
             "c25",

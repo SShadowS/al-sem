@@ -21,8 +21,8 @@
     "dependencies": {
       "mode": "crossApp"
     },
-    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
     "dependencyCount": 0,
+    "dependencyFingerprint": "apps-v1:af1349b9f5f9a1a6",
     "effects": {
       "e:1": {
         "class": "physical",
@@ -88,7 +88,7 @@
         "effects": [
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:1",
             "factId": "1432fced4ff049e2",
@@ -227,7 +227,7 @@
         "effects": [
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:1",
             "factId": "5a4a7bd7d3e83981",
@@ -366,7 +366,7 @@
         "effects": [
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:1",
             "factId": "9dc07ba4a609e78a",
@@ -506,7 +506,7 @@
           {
             "conditionality": "unconditional-on-success",
             "detail": {
-              "tempState": "parameter-dependent(0)"
+              "tempState": "caller-dependent (parameter 1)"
             },
             "effect": "e:3",
             "factId": "b162c24ab8fb6723",

@@ -501,7 +501,9 @@ fn a_filtered_no_names_its_filter_and_the_other_sites() {
         "the Insert outside the filter is listed: {r:#}"
     );
     assert!(
-        human.contains("\nanswer: no — no Delete site is reachable (every candidate decided"),
+        human.contains(
+            "\nanswer: no — no Delete site in the analyzed cone (every candidate decided"
+        ),
         "{human}"
     );
     assert!(

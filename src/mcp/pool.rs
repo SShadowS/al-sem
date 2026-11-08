@@ -747,7 +747,7 @@ impl Pool {
                 } else {
                     Stdout::Text(r.text)
                 };
-                match place_stdout(shared, &call.command, stdout) {
+                match place_stdout(shared, &call.command, stdout, false) {
                     Ok((stdout, _)) => {
                         let mut e = json!({
                             "kind": "cli", "exitCode": r.exit, "stderr": [],
@@ -985,7 +985,7 @@ impl Pool {
                 } else {
                     Stdout::Text(r.text)
                 };
-                match place_stdout(shared, &call.command, stdout) {
+                match place_stdout(shared, &call.command, stdout, false) {
                     Ok((stdout, _)) => {
                         // §6.3 (F36): the renderer's outcome.
                         let mut e = json!({
@@ -1944,6 +1944,7 @@ fn inline_needs_summary(text: &str) -> bool {
 fn inline_summary(mut summary: Value) -> Value {
     if let Some(m) = summary.as_object_mut() {
         m.remove(crate::engine::result_index::ROWS_KEY);
+        m.remove(crate::engine::result_index::SHARED_KEY);
     }
     bounded_summary(summary)
 }
@@ -1967,12 +1968,13 @@ fn bounded_summary(summary: Value) -> Value {
 /// {path, rows, sha256}`). A summary with no rows is left as it is; a file
 /// that cannot be written leaves `index: {notWritten: <why>}`.
 fn place_index(shared: &Shared, tool: &str, answer: &SpillFile, summary: &mut Value) {
-    use crate::engine::result_index::{ROWS_KEY, file_bytes};
+    use crate::engine::result_index::{ROWS_KEY, SHARED_KEY, file_bytes};
+    let shared_fields = summary.as_object_mut().and_then(|m| m.remove(SHARED_KEY));
     let Some(rows) = summary.as_object_mut().and_then(|m| m.remove(ROWS_KEY)) else {
         return;
     };
     let rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
-    let bytes = file_bytes(tool, &answer.path, &rows);
+    let bytes = file_bytes(tool, &answer.path, &rows, shared_fields.as_ref());
     let answer_path = Path::new(&answer.path);
     let rel = answer_path
         .strip_prefix(shared.sink.instance())
@@ -2014,6 +2016,38 @@ fn extension(argv: &[String]) -> &'static str {
 /// An infrastructure outcome answered instead of the CLI's.
 type Refusal = (FailedOutcome, String);
 
+/// r3 H5: a small lookup failure comes back inline. A tool whose stdout
+/// always goes to a file (digest) answers inline when its outcome is
+/// `ambiguous` or `not-found`, the engine returned the stdout inline, and
+/// the complete stdout fits the call's inline cap; byte for byte the CLI
+/// answer, in the requested format. An explicit `out` still writes a file.
+fn lookup_failure_inline(
+    call: &CommandCall,
+    exit_code: u8,
+    stdout: &Stdout,
+    summary: Option<&Value>,
+    stderr: &Stderr,
+) -> bool {
+    let Stdout::Text(text) = stdout else {
+        return false;
+    };
+    if !call.always_file || call.out.is_some() {
+        return false;
+    }
+    let stderr_lines = match stderr {
+        Stderr::Lines(l) => l.lines(),
+        Stderr::File(_) => Vec::new(),
+    };
+    let outcome = crate::engine::result_header::outcome_of_answer(
+        exit_code,
+        summary,
+        Some(text),
+        &stderr_lines,
+    );
+    matches!(outcome, "ambiguous" | "not-found")
+        && text.len() <= crate::wire::clamp_inline(call.max_inline_bytes)
+}
+
 /// Move a stdout the call must deliver as a file (an `out`, a digest, or a
 /// stdout the engine spilled) into the output folder; the bytes come back
 /// when they were materialized. `Err`: the outcome to answer instead
@@ -2022,8 +2056,9 @@ fn place_stdout(
     shared: &Shared,
     call: &CommandCall,
     stdout: Stdout,
+    lookup_failure_inline: bool,
 ) -> Result<(Stdout, Option<Vec<u8>>), Refusal> {
-    let wants_file = call.out.is_some() || call.always_file;
+    let wants_file = call.out.is_some() || (call.always_file && !lookup_failure_inline);
     let was_file = matches!(stdout, Stdout::File(_));
     if !wants_file && !was_file {
         return Ok((stdout, None));
@@ -2135,7 +2170,8 @@ fn run_command(
             changed_paths_truncated,
             summary,
         } => {
-            let placed = place_stdout(shared, call, stdout).and_then(|(stdout, bytes)| {
+            let inline = lookup_failure_inline(call, exit_code, &stdout, summary.as_ref(), &stderr);
+            let placed = place_stdout(shared, call, stdout, inline).and_then(|(stdout, bytes)| {
                 let stderr = match stderr {
                     Stderr::File(f) => Stderr::File(
                         place_spill(shared, f, "stderr")

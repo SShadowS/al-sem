@@ -10,8 +10,8 @@
     "dependencies": {
       "mode": "crossApp"
     },
-    "dependencyClosure": "apps-v1:8e0182909e090c4c",
     "dependencyCount": 1,
+    "dependencyFingerprint": "apps-v1:8e0182909e090c4c",
     "effectCount": 6,
     "effects": [
       {
@@ -407,7 +407,7 @@
         "operations": 0,
         "tables": 0
       },
-      "scope": "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+      "scope": "operations-one-routine-deep; writes-beyond-dependency-calls-full-cone",
       "tableNotResolved": {
         "operations": 2,
         "recordRef": {

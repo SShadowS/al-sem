@@ -236,6 +236,64 @@ fn program_wide_needs_the_programs_entries_and_an_unlimited_walk() {
     );
 }
 
+/// r3 H1: the UI-navigation census (entries by kind, by context) prints only
+/// with `detail`, for one routine and for each routine of several alike; the
+/// population line keeps its count, share and nearest entry, and the code
+/// census keeps printing by default. Hand-stated: a 10% navigation share
+/// (below every share fold) with a context count.
+#[test]
+fn the_ui_navigation_census_prints_only_with_detail_in_every_mode() {
+    let census = |n: usize, detail: bool| {
+        let (main, mut up, delta) = parts(n, 0);
+        for i in 0..n {
+            let base = up["roots"][i].clone();
+            let mut r = base.clone();
+            r.as_object_mut()
+                .unwrap()
+                .extend(classified(3, 40, (2, 10), 100).as_object().unwrap().clone());
+            r["entriesByContext"] = json!({"uiNavigation": {"install": 1}});
+            up["roots"][i] = r;
+        }
+        human(&main, &up, delta, RenderOpts::new(false, None, detail))
+    };
+    for n in [1, 2] {
+        let text = census(n, false);
+        assert!(
+            text.contains(
+                "reached by UI navigation: 40 ancestors — local 40, via-dependency 0; 10% of the \
+                 program's entries (10 of 100)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("nearest entry: [via-dependency, UI navigation]"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("page actions 10"),
+            "folded by default ({n}): {text}"
+        );
+        assert!(
+            !text.contains("by context"),
+            "folded by default ({n}): {text}"
+        );
+        let text = census(n, true);
+        assert!(
+            text.contains("entries by kind: page actions 10\n"),
+            "detail ({n}): {text}"
+        );
+        assert!(
+            text.contains("by context (contexts may overlap; not summed): install 1"),
+            "detail ({n}): {text}"
+        );
+    }
+    let text = census(1, false);
+    assert!(
+        text.contains("entries by kind: page actions 2\n"),
+        "code census: {text}"
+    );
+}
+
 /// Round-2 c20: the run-first codeunits cover the tests the block picked
 /// (its tier, local by default), not every test with a modeled path. The
 /// line states what the codeunits cover and counts the others apart, by

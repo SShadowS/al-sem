@@ -6,6 +6,7 @@ Codeunit "CDO Telemetry"::UpdateLastUpload  defined at ws:src/Platform/Telemetry
   transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  starts by (a start, not a summary): `DOSetup."Last Telemetry Upload" := Today()` (:47); `DOSetup.Modify()` (:48)
   calls: none (no call to a routine; builtins aside)
   callers: 1 direct — 1 routine: Codeunit "CDO Telemetry"::QueueUpload
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary

@@ -27,8 +27,8 @@
     "dependencies": {
       "mode": "crossApp"
     },
-    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
     "dependencyCount": 0,
+    "dependencyFingerprint": "apps-v1:af1349b9f5f9a1a6",
     "effects": {
       "e:1": {
         "confidence": "static",
@@ -199,7 +199,7 @@
           },
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:2",
             "factId": "e634e7000e71edc3",
@@ -227,7 +227,7 @@
           {
             "conditionality": "unconditional-on-success",
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:3",
             "factId": "bb00b9ed9f7fee27",
@@ -251,7 +251,7 @@
           {
             "conditionality": "unconditional-on-success",
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:4",
             "factId": "69ff114840bfe64f",
@@ -275,7 +275,7 @@
           {
             "conditionality": "unconditional-on-success",
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:5",
             "factId": "52d1eb55968c00d4",
@@ -450,7 +450,7 @@
           },
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:2",
             "factId": "f0faba22a0c21816",
@@ -643,7 +643,7 @@
           {
             "conditionality": "unconditional-on-success",
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:2",
             "factId": "c41fe1845dd96a16",

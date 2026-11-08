@@ -24,6 +24,11 @@ pub const SCHEMA: &str = "al-sem.result-index/1";
 /// them to the file (never sent to the client).
 pub const ROWS_KEY: &str = "indexRows";
 
+/// The key a summary carries fields for the index file's top level under
+/// (r3 §5.2: what every row would repeat, said once per index, such as the
+/// tests hand-off), moved to the file with the rows (never sent).
+pub const SHARED_KEY: &str = "indexShared";
+
 /// What the summary keeps free for the `index` object the front end adds.
 pub const INDEX_RESERVE_BYTES: usize = 512;
 
@@ -63,15 +68,26 @@ pub fn with_index(mut summary: Value, list_key: &str, id_key: &str, rows: Vec<Va
     summary
 }
 
-/// The index file's bytes for `rows` of `tool`'s answer at `answer_path`.
+/// The index file's bytes for `rows` of `tool`'s answer at `answer_path`,
+/// with `shared` ([`SHARED_KEY`]'s object) at the top level.
 #[must_use]
-pub fn file_bytes(tool: &str, answer_path: &str, rows: &[Value]) -> Vec<u8> {
-    let doc = json!({
+pub fn file_bytes(
+    tool: &str,
+    answer_path: &str,
+    rows: &[Value],
+    shared: Option<&Value>,
+) -> Vec<u8> {
+    let mut doc = json!({
         "schema": SCHEMA,
         "tool": tool,
         "answer": answer_path,
         "rows": rows,
     });
+    if let (Some(Value::Object(s)), Value::Object(d)) = (shared, &mut doc) {
+        for (k, v) in s {
+            d.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
     let mut b = serde_json::to_vec_pretty(&doc).expect("the index serializes");
     b.push(b'\n');
     b

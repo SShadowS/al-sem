@@ -290,6 +290,58 @@ fn a_callee_before_the_call_that_writes_counts_one_after_does_not() {
     assert_eq!(answer(&v), "no", "{v:#}");
 }
 
+/// r3 H4 (c06): a pending write two calls deep names its own site (in the
+/// callee's callee), the call it is inside with that call's location, and
+/// the call to R with its own. Hand-stated: `C1.P` calls `Writer.W` (line
+/// 11) then `R` (line 12); `W` only calls `Deep.D`, whose `Rec.Modify()` is
+/// on line 8 of `D.al`.
+///
+/// DISCRIMINATION (2026-11-08): searching the callee alone (`deep_write_site`
+/// not following the resolved calls: no `queue.push_back(to)`) fails the
+/// first assert: the words name no write site; restored, passes.
+#[test]
+fn a_pending_write_inside_a_call_names_its_site_and_both_calls() {
+    let d = cu(
+        50112,
+        "Pw Deep",
+        "    procedure D()\n    var\n        Rec: Record \"Pw Rec\";\n    begin\n        Rec.Modify();\n    end;\n",
+    );
+    let w = cu(
+        50111,
+        "Pw Writer",
+        "    procedure W()\n    var\n        Deep: Codeunit \"Pw Deep\";\n    begin\n        Deep.D();\n    end;\n",
+    );
+    let c = caller(50110, "C1", "", "        Writer.W();\n        Target.R();").replace(
+        "Target: Codeunit \"Pw Target\";",
+        "Target: Codeunit \"Pw Target\";\n        Writer: Codeunit \"Pw Writer\";",
+    );
+    let (v, human) = prove_both(
+        ws(&[
+            ("Rec.al", TABLE),
+            ("Target.al", TARGET),
+            ("D.al", &d),
+            ("W.al", &w),
+            ("C.al", &c),
+        ])
+        .path(),
+        "Pw Target::R",
+        "callers-have-pending-writes",
+        true,
+    );
+    assert_eq!(answer(&v), "yes", "{v:#}");
+    let line = human
+        .lines()
+        .find(|l| l.contains("pending-write:"))
+        .unwrap_or_else(|| panic!("a pending-write line: {human}"));
+    assert!(line.contains("Modify on \"Pw Rec\" at "), "{line}");
+    assert!(
+        line.contains("D.al:8, inside the call Writer.W at "),
+        "{line}"
+    );
+    assert!(line.contains("C.al:11, before the call at "), "{line}");
+    assert!(line.contains("C.al:12"), "{line}");
+}
+
 /// A table whose `OnModify` calls R.
 const TRIGGER_TABLE: &str = r#"table 50100 "Pw Rec"
 {

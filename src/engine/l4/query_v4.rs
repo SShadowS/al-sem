@@ -113,7 +113,7 @@ pub fn document_to_v3(mut doc: Value) -> Value {
 // Words (§8.3)
 // ---------------------------------------------------------------------------
 
-fn temp_word(legacy: &str) -> Option<String> {
+pub(crate) fn temp_word(legacy: &str) -> Option<String> {
     Some(match legacy {
         "known(true)" => "temporary".into(),
         "known(false)" => "not temporary".into(),
@@ -130,7 +130,7 @@ fn temp_word(legacy: &str) -> Option<String> {
     })
 }
 
-fn temp_legacy(word: &str) -> Option<String> {
+pub(crate) fn temp_legacy(word: &str) -> Option<String> {
     Some(match word {
         "temporary" => "known(true)".into(),
         "not temporary" => "known(false)".into(),
