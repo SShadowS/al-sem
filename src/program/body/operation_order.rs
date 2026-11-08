@@ -534,6 +534,7 @@ fn walk_loop_node(
             table_exit_guard: None,
             junction_guards: None,
             value_fact: None,
+            flow: None,
         };
         walk_block(&synthetic, loop_frame_id, on_success_path, false, result);
         return;

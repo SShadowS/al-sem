@@ -179,6 +179,11 @@ pub struct ProveObligations {
     /// only if no subscriber beyond the loaded ones exists. The
     /// `loaded-subscribers` label, when no stronger world's label applies.
     pub relies_on_loaded_subscribers: bool,
+    /// r3 E2: the evidence (or the answer) differs from the strict world's
+    /// because rows were ruled out only by these publishers' loaded
+    /// subscribers keeping a value (`literal_reach`'s flow): the answer
+    /// states them. Empty otherwise.
+    pub(crate) flow_assumed: Vec<crate::engine::l5::literal_reach::KeepInfo>,
 }
 
 impl ProveObligations {
@@ -355,6 +360,7 @@ fn compute_obligations(
                 .all(|r| r == INTERFACE_OPEN_WORLD),
         answer_relies_on_world: false,
         relies_on_loaded_subscribers: false,
+        flow_assumed: Vec::new(),
     }
 }
 
@@ -721,11 +727,29 @@ fn caller_dependent_detail(eff: &DigestEffectFull) -> String {
 /// known (`unresolvedResources`) is one: its resource list is not all it
 /// writes.
 pub(crate) fn writes_unknown_table(eff: &DigestEffectFull) -> bool {
+    writes_unknown_table_in(eff, World::LoadedSubscribers)
+}
+
+/// [`writes_unknown_table`] in `world` ([`ruled_out`]).
+fn writes_unknown_table_in(eff: &DigestEffectFull, world: World) -> bool {
     let has = |key: &str| eff.detail.iter().any(|(k, _)| k == key);
     DB_WRITE_TYPES.contains(&eff.effect_type.as_str())
-        && !eff.literal_unreachable
+        && !ruled_out(eff, world)
         && (!(has("resourceId") || has("boundary")) || has("unresolvedResources"))
         && !writes_only_temporary(eff)
+}
+
+/// G23: whether the root cannot reach `eff` under literal arguments, in
+/// `world`. r3 E2: a row ruled out only because a publisher's loaded
+/// subscribers keep a value counts in the strict world, which does not
+/// assume them.
+fn ruled_out(eff: &DigestEffectFull, world: World) -> bool {
+    eff.literal_unreachable
+        && !(world == World::Strict
+            && eff
+                .flow_notes
+                .as_ref()
+                .is_some_and(|n| !n.assumed.is_empty()))
 }
 
 /// `writes-table`'s table and write kind, temp state aside.
@@ -783,7 +807,7 @@ fn evaluate_may_question(
             (effect_matches(e, question)
                 || via_callers.contains_key(i)
                 || field_guarded.get(i) == Some(&true))
-                && !e.literal_unreachable
+                && !ruled_out(e, oblg.world)
         })
         .map(|(i, _)| i)
         .collect();
@@ -827,7 +851,9 @@ fn evaluate_may_question(
             .effects
             .iter()
             .enumerate()
-            .filter(|(i, e)| writes_unknown_table(e) && field_guarded.get(i) != Some(&false))
+            .filter(|(i, e)| {
+                writes_unknown_table_in(e, oblg.world) && field_guarded.get(i) != Some(&false)
+            })
             .map(|(_, e)| e)
             .map(|e| ProveBlocker {
                 kind: "unknown-table-write",
@@ -882,7 +908,7 @@ fn evaluate_must_question(
         .effects
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.effect_type == "COMMIT" && !e.literal_unreachable)
+        .filter(|(_, e)| e.effect_type == "COMMIT" && !ruled_out(e, oblg.world))
         .map(|(i, _)| i)
         .collect();
 
@@ -1120,6 +1146,22 @@ pub fn prove_with_callers(
         )
     };
     let strict = run(World::Strict);
+    // r3 E2: the publisher keeps the strict world's evidence holds and an
+    // assumed world's does not: the rows only they rule out.
+    let flow_assumed = |assumed: &ProveResult| -> Vec<crate::engine::l5::literal_reach::KeepInfo> {
+        let mut out = Vec::new();
+        for &i in strict.evidence.iter().flatten() {
+            if assumed.evidence.as_ref().is_some_and(|e| e.contains(&i)) {
+                continue;
+            }
+            for k in entry.effects[i].flow_notes.iter().flat_map(|n| &n.assumed) {
+                if !out.contains(k) {
+                    out.push(k.clone());
+                }
+            }
+        }
+        out
+    };
     let mut last = None;
     for w in [World::LoadedSubscribers, World::Closed] {
         if w > world {
@@ -1128,12 +1170,24 @@ pub fn prove_with_callers(
         let mut assumed = run(w);
         if assumed.answer != strict.answer {
             assumed.obligations.answer_relies_on_world = true;
+            assumed.obligations.flow_assumed = flow_assumed(&assumed);
             return assumed;
         }
         last = Some(assumed);
     }
     match last {
         Some(assumed) if assumed.answer == ProveAnswer::Unknown => assumed,
+        // The same answer on other evidence: the strict world counted rows
+        // the loaded subscribers rule out. The assumed world's evidence leads,
+        // and the answer states the assumption it rests on.
+        Some(mut assumed) if assumed.evidence != strict.evidence => {
+            assumed.obligations.flow_assumed = flow_assumed(&assumed);
+            if assumed.obligations.flow_assumed.is_empty() {
+                strict
+            } else {
+                assumed
+            }
+        }
         _ => strict,
     }
 }
@@ -1405,6 +1459,119 @@ pub(crate) fn blocker_to_value(b: &ProveBlocker) -> serde_json::Value {
     m.insert("detail".into(), b.detail.clone().into());
     m.insert("kind".into(), b.kind.into());
     serde_json::Value::Object(m)
+}
+
+/// The most route guards a `condition:` line names.
+const ROUTE_GUARDS_SHOWN: usize = 4;
+
+/// The longest condition text a `condition:` line prints per guard.
+const ROUTE_GUARD_TEXT: usize = 40;
+
+/// r3 E2: one route guard in plain words: its condition, the value the route
+/// needs, whether the flow evaluated it, and where it is.
+fn route_guard_text(g: &crate::engine::l5::literal_reach::RouteGuard) -> String {
+    use crate::engine::l5::literal_reach::GuardKind;
+    let at = match g.line {
+        Some(l) => format!("{} line {l}", g.routine),
+        None => g.routine.clone(),
+    };
+    let how = if g.evaluated {
+        "evaluated"
+    } else {
+        "not evaluated"
+    };
+    let text = if g.text.chars().count() > ROUTE_GUARD_TEXT {
+        g.text
+            .chars()
+            .take(ROUTE_GUARD_TEXT - 1)
+            .collect::<String>()
+            + "…"
+    } else {
+        g.text.clone()
+    };
+    match &g.kind {
+        GuardKind::Must(b) if g.evaluated => format!("{text}: {b}, {how} ({at})"),
+        GuardKind::Must(b) => format!("{text}: must be {b}, {how} ({at})"),
+        GuardKind::Arm(_) => format!("case {text}: this arm, {how} ({at})"),
+        GuardKind::CaseElse => format!("case {text}: its else, {how} ({at})"),
+    }
+}
+
+/// r3 E2: an effect's `condition:` text from its witness route's guards
+/// (`None`: no route was replayed, or a route with no guard, whose effect's
+/// class (unconditional, in a loop, …) says what there is to say).
+fn route_guards_text(eff: &DigestEffectFull) -> Option<String> {
+    let guards = eff.flow_notes.as_ref()?.guards.as_ref()?;
+    if guards.is_empty() {
+        return None;
+    }
+    // A long route names its evaluated guards first, then the innermost
+    // others (nearest the effect), in route order; JSON keeps them all.
+    let mut shown: Vec<usize> = (0..guards.len())
+        .filter(|&i| guards[i].evaluated)
+        .take(ROUTE_GUARDS_SHOWN)
+        .collect();
+    for i in (0..guards.len()).rev() {
+        if shown.len() >= ROUTE_GUARDS_SHOWN {
+            break;
+        }
+        if !shown.contains(&i) {
+            shown.push(i);
+        }
+    }
+    shown.sort_unstable();
+    let mut parts: Vec<String> = shown
+        .iter()
+        .map(|&i| route_guard_text(&guards[i]))
+        .collect();
+    if guards.len() > shown.len() {
+        parts.push(format!(
+            "… +{} guards ({} guards in all)",
+            guards.len() - shown.len(),
+            guards.len()
+        ));
+    }
+    Some(parts.join("; "))
+}
+
+/// r3 E2 (additive): an effect's witness route guards as JSON
+/// (`routeGuards`), outermost first.
+fn route_guards_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
+    use crate::engine::l5::literal_reach::GuardKind;
+    let guards = eff
+        .flow_notes
+        .as_ref()?
+        .guards
+        .as_ref()
+        .filter(|g| !g.is_empty())?;
+    Some(
+        guards
+            .iter()
+            .map(|g| {
+                let mut m = serde_json::Map::new();
+                m.insert("routine".into(), g.routine.clone().into());
+                if let Some(l) = g.line {
+                    m.insert("line".into(), l.into());
+                }
+                m.insert("condition".into(), g.text.clone().into());
+                match &g.kind {
+                    GuardKind::Must(b) => {
+                        m.insert("kind".into(), "if".into());
+                        m.insert("mustBe".into(), (*b).into());
+                    }
+                    GuardKind::Arm(i) => {
+                        m.insert("kind".into(), "case-arm".into());
+                        m.insert("arm".into(), (*i as u64).into());
+                    }
+                    GuardKind::CaseElse => {
+                        m.insert("kind".into(), "case-else".into());
+                    }
+                }
+                m.insert("evaluated".into(), g.evaluated.into());
+                serde_json::Value::Object(m)
+            })
+            .collect(),
+    )
 }
 
 fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
@@ -1840,6 +2007,24 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     let o = &prove_result.obligations;
     if let Some(label) = o.assumption() {
         result_obj.insert("assumptions".into(), serde_json::json!([label]));
+    }
+    // r3 E2 (additive): the publishers whose loaded subscribers keep a value
+    // the evidence (or the answer) rests on, with the subscribers considered.
+    if !o.flow_assumed.is_empty() {
+        result_obj.insert(
+            "subscriberAssumptions".into(),
+            o.flow_assumed
+                .iter()
+                .map(|k| {
+                    serde_json::json!({
+                        "publisher": k.publisher,
+                        "parameter": k.parameter,
+                        "subscribers": k.subscribers,
+                        "statement": k.statement(),
+                    })
+                })
+                .collect(),
+        );
     }
 
     // routine ref
@@ -2408,10 +2593,22 @@ pub fn format_prove_human(
                     ),
                 _ => eff.effect_type.clone(),
             };
-            lines[answer_line] = format!(
-                "  answer:   yes — {what} {place} ({}){more}",
-                crate::engine::vocab::condition(eff.conditionality)
-            );
+            // r3 E2: a replayed route's guards decide the parenthesis.
+            let cond = match eff.flow_notes.as_ref().and_then(|n| n.guards.as_ref()) {
+                Some(g) if !g.is_empty() => {
+                    let evaluated = g.iter().filter(|x| x.evaluated).count();
+                    format!(
+                        "{} on the route, {evaluated} evaluated",
+                        if g.len() == 1 {
+                            "1 guard".to_string()
+                        } else {
+                            format!("{} guards", g.len())
+                        }
+                    )
+                }
+                _ => crate::engine::vocab::condition(eff.conditionality).to_string(),
+            };
+            lines[answer_line] = format!("  answer:   yes — {what} {place} ({cond}){more}");
         }
         // Per type: the folded rows' places, and how many more.
         let mut folded: BTreeMap<&str, (Vec<String>, usize)> = BTreeMap::new();
@@ -2486,7 +2683,11 @@ pub fn format_prove_human(
                 )),
                 None => {
                     lines.push(row);
-                    if eff.conditionality != "unknown" {
+                    // r3 E2: the route's guards, evaluated or not; the class
+                    // label only when no route was replayed.
+                    if let Some(g) = route_guards_text(eff) {
+                        lines.push(format!("      condition: {g}"));
+                    } else if eff.conditionality != "unknown" {
                         lines.push(format!(
                             "      condition: {}",
                             crate::engine::vocab::condition(eff.conditionality)
@@ -2946,13 +3147,25 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
             coverage.push_str("; alsem explain lists the workspace ones under gaps");
         }
     }
-    let assumptions = match o.assumption() {
+    let mut assumptions = match o.assumption() {
         Some(label) => format!("assumptions: {label}"),
+        None if !o.flow_assumed.is_empty() => "assumptions: loaded subscribers".to_string(),
         None if o.world != World::Closed => "assumptions: none (default world: an interface \
              call may reach an implementation that is not loaded)"
             .to_string(),
         None => "assumptions: none (closedWorld asked; the answer does not rely on it)".to_string(),
     };
+    // r3 E2: the loaded-subscriber assumption a route was decided by.
+    if !o.flow_assumed.is_empty() {
+        assumptions.push_str(&format!(
+            " — a route is ruled out because {}",
+            o.flow_assumed
+                .iter()
+                .map(|k| k.statement())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
     let mut limits = Vec::new();
     if o.analysis_gaps > 0 {
         limits.push(plural(o.analysis_gaps, "analysis gap", "analysis gaps"));
@@ -3089,6 +3302,10 @@ pub(crate) fn evidence_value(eff: &DigestEffectFull) -> serde_json::Value {
     }
     m.insert("confidence".into(), "static".into());
     m.insert("conditionality".into(), eff.conditionality.into());
+    // r3 E2 (additive): the guards on the listed witness route.
+    if let Some(g) = route_guards_value(eff) {
+        m.insert("routeGuards".into(), g);
+    }
     m.insert("transactionContext".into(), eff.transaction_context.into());
     let guarantees: Vec<serde_json::Value> =
         eff.guarantees.iter().map(|g| g.clone().into()).collect();
@@ -3331,6 +3548,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             coverage_open_world_only: false,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
+            flow_assumed: Vec::new(),
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -4517,6 +4735,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         };
         let entry = minimal_entry(
@@ -4683,6 +4902,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
@@ -4720,6 +4940,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
@@ -4857,6 +5078,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
@@ -4911,6 +5133,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);

@@ -51,6 +51,9 @@ pub(super) enum Val {
     /// identifies the value within its enum and every extension of it, so a
     /// value is compared by name; the IR carries no value numbers.
     Enum(Arc<str>, Arc<str>),
+    /// r3 E2: a Boolean (the within-routine flow's values only; no E1 frame
+    /// binds one).
+    Bool(bool),
 }
 
 /// A finite set of values, sorted and distinct.
@@ -77,7 +80,7 @@ pub(super) struct ValueFrame {
     pub by_site: HashMap<String, Vec<ValueReq>>,
 }
 
-fn fold(s: &str) -> String {
+pub(super) fn fold(s: &str) -> String {
     let t = s.trim();
     let inner = t
         .strip_prefix('"')

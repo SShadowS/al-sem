@@ -149,7 +149,7 @@ codeunit 50301 "Probe Writer"
     var
         Buffer: Record "Probe Row" temporary;
         Flag: Boolean;
-    begin CondTwice(Buffer, Flag); end;
+    begin Flag := Random(2) = 1; CondTwice(Buffer, Flag); end;
 
     procedure RecUi1(var R: Record "Probe Row"; N: Integer)
     begin

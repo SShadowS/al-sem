@@ -224,6 +224,7 @@ mod cli_prove_cross_app;
 mod cli_prove_dead_paths;
 mod cli_prove_event_anchor;
 mod cli_prove_field_guarded_write;
+mod cli_prove_flow_values;
 mod cli_prove_group_path;
 mod cli_prove_interface_holder;
 mod cli_prove_internal_interface;

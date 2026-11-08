@@ -1648,7 +1648,13 @@ pub(crate) fn cdo_round2_size_ratchets() {
             "c25",
             "alsem_digest",
             json!({"files": ["src/Features/Email/Sending/CDOSendMailManagement.Codeunit.al"], "tests": true}),
-            376_500,
+            // 376_500 -> 391_000 on 2026-11-08 (r3 E2, measured ~386.4 KB):
+            // the within-routine flow rules out more effect rows (125
+            // distinct rows, 43 literal-dead, against 95 and 15 on master
+            // 275bdb2d, E1's included; E1 alone passed 376_500), each kept
+            // listed with `status: literal-dead`, and each names the
+            // loaded-subscriber assumption it rests on (`assumes`, ~4 KB).
+            391_000,
         ),
         (
             "n10",

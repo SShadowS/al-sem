@@ -2978,6 +2978,16 @@ fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
         && let Some(o) = v.as_object_mut()
     {
         o.insert("literalUnreachable".into(), true.into());
+        // r3 E2 (additive): what ruling it out assumes.
+        let assumes: Vec<String> = e
+            .flow_notes
+            .iter()
+            .flat_map(|n| &n.assumed)
+            .map(|k| k.statement())
+            .collect();
+        if !assumes.is_empty() {
+            o.insert("literalAssumes".into(), assumes.into());
+        }
     }
 }
 

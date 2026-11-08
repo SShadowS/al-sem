@@ -47,6 +47,7 @@
 //!   - `PCFNNode.table_exit_guard`
 //!   - `PCFNNode.junction_guards`
 //!   - `PCFNNode.value_fact`
+//!   - `PCFNNode.flow`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -726,7 +727,64 @@ pub struct PCFNNode {
     /// Enum value ([`ValueFact`]). EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub value_fact: Option<ValueFact>,
+    /// In-memory ONLY (r3 E2): what the within-routine value flow reads from
+    /// the node ([`FlowFact`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub flow: Option<Box<FlowFact>>,
 }
+
+/// r3 E2: an expression as the within-routine value flow
+/// (`literal_reach`'s flow pass) reads it. Everything the pass does not model
+/// is [`FlowExpr::Unknown`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowExpr {
+    /// `true` / `false`.
+    Bool(bool),
+    /// An integer literal or a qualified label (resolved by the reader).
+    Label(ValueLabel),
+    /// A bare identifier (quoted or not), unquoted and folded. A call written
+    /// without parentheses is never one.
+    Var(String),
+    Not(Box<FlowExpr>),
+    And(Box<FlowExpr>, Box<FlowExpr>),
+    Or(Box<FlowExpr>, Box<FlowExpr>),
+    /// `A = B` (`equal`) or `A <> B`.
+    Cmp {
+        equal: bool,
+        lhs: Box<FlowExpr>,
+        rhs: Box<FlowExpr>,
+    },
+    /// `A in [B, …]`.
+    In(Box<FlowExpr>, Vec<FlowExpr>),
+    /// Any other expression: a call, a member, arithmetic, a range.
+    Unknown,
+}
+
+/// r3 E2: what one statement-tree node says to the within-routine value flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowFact {
+    /// On an assignment (an `other` node): the target's bare name, folded
+    /// (`None` for a member or an indexed target), the value, and whether
+    /// the assignment is compound (`+=`).
+    Assign {
+        target: Option<String>,
+        value: FlowExpr,
+        compound: bool,
+    },
+    /// On an `if`, a `while`, a `repeat` (its `until`) and a `case` (its
+    /// scrutinee): the condition, and its source text (whitespace folded,
+    /// at most [`FLOW_TEXT_MAX`] characters) for a witness to name it.
+    Cond { expr: FlowExpr, text: Box<str> },
+    /// On a call leaf: its arguments, by position.
+    Args(Vec<FlowExpr>),
+    /// A `with` statement: inside it a bare name may be a field.
+    With,
+    /// A statement the lowerer did not recognise: it may write anything.
+    Opaque,
+}
+
+/// The longest condition text a [`FlowFact::Cond`] keeps.
+pub const FLOW_TEXT_MAX: usize = 80;
 
 /// r3 E1: a literal value as written: an integer literal or a qualified
 /// label `Q::M`. Where a label points (an Option variable's member, an enum
@@ -1095,7 +1153,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 20, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 21, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

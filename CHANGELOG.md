@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
+
+- **A value computed inside a routine now prunes the branches it cannot take**
+  (spec `2026-11-08-output-validation-r3.md` §1 E2, n01). On DO, `CreateAndSendMail`
+  takes `UseSMTP` by value, may set it (`if UseHandleDoc then UseSMTP := true`), passes
+  it `var` to the publisher `OnBeforeCreateAndSendMailV2` and derives `IsEmailPreview :=
+  not UseSMTP`; the COMMIT in `OpenDOMail` runs only under `if IsEmailPreview`. E1 binds
+  only parameters that never change, so `prove … may-commit` on the Print/Email All
+  action led with that COMMIT, a route the action's arguments (`UseSMTP = true`) cannot
+  run. The literal reach has a new flow pass (`engine::l5::literal_flow`):
+  - Tracked: locals (starting at their type's default: `false`, `0`, the first Option
+    member; an Enum local starts unknown), by-value parameters (from their bound entry
+    value), and `var` parameters from their first assignment. Two `var` formals can name
+    one actual and a `var` formal can name a global, so a tracked `var` formal becomes
+    unknown at a write to another `var` formal, to a global of a compatible type (or a
+    name that may be one, or a member), and at any call or database operation. Globals
+    are never tracked. A routine with a `with` statement is not tracked.
+  - Each statement is evaluated with its incoming state, then its writes apply; a
+    condition or assigned value is read after the calls inside it. Values: literals,
+    labels (as E1 reads them), other tracked variables, `not`/`and`/`or`, `=`/`<>`/`in`.
+    A variable passed to a `var` parameter, to `Evaluate`, `Clear` (and `Get`, `Read`,
+    `StartSession`, `SelectToken` and kin), or to a call not resolved is written.
+    Feasible branches join; a variable written anywhere in a loop (its counter included)
+    is unknown at every read in the loop and after it.
+  - A `var` pass to an event publisher keeps the value only when every loaded subscriber
+    of the event in this universe is proven unable to change the matching parameter (it
+    does not assign it, pass it on `var`, to a call not resolved, or to
+    `Evaluate`/`Clear`). A subscriber whose body is not available, a subscription not
+    bound to a publisher object, or a model subscriber the event graph could not read
+    prevents keeping it.
+  - E1's last binding rule is wired: a caller's tracked local (or a parameter it
+    changed) binds a callee's Integer, Option, Enum or Boolean parameter.
+  On CDO the n01 answer now leads with `CDOLegacyeDocDispatcher.Codeunit.al:229`, a
+  COMMIT the action can reach, and says which assumption ruled the `:123` route out.
+  The statement tree carries the new in-memory fact `PCFNNode::flow` (never serialized).
+- **Answers state the loaded-subscriber assumption where it decides a route.** A row
+  ruled out only because a publisher's loaded subscribers keep a value counts in
+  prove's strict world, so a `no` that rests on it is labelled `loaded-subscribers`;
+  a `yes` whose evidence it changed says so in the `assumptions:` header (`a route is
+  ruled out because Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded
+  subscriber, so UseSMTP keeps its value`). Explain's commits line adds `assuming …` to
+  its literal-dead count.
+- **A witness's condition lists the guards on its route.** Prove's `condition:` line
+  names each `if`, `case` arm and earlier `if … then exit;` on the printed route, with
+  the value the route needs, `evaluated` when the flow knows the guard's value on that
+  route and `not evaluated` otherwise (never a class label presented as a guard); the
+  headline says how many guards there are and how many were evaluated. A long route
+  names its evaluated guards and the innermost others (4 at most) with the full count;
+  a route with no guard keeps the effect's class (`in a loop`). A COMMIT row whose
+  listed paths all cannot run now gets a searched witness, as a write row did (a COMMIT
+  in the root itself now prints `path: <root> (in the routine itself)`).
+
+**Consumer notice (additive JSON, no schema bump):** prove evidence rows gain
+`routeGuards` (`routine`, `line`, `condition`, `kind` `if`/`case-arm`/`case-else`,
+`mustBe` or `arm`, `evaluated`); prove's `payload.result` gains
+`subscriberAssumptions` (`publisher`, `parameter`, `subscribers`, `statement`); explain
+rows gain `literalAssumes`, explain's `commits.literalDead` gains `assumes`, and digest
+3.x effect rows gain `assumes` on a literal-dead row.
+
 ### Fixed (round-4 E1: Integer, Option and Enum literal values)
 
 - **A literal Integer, Option or Enum argument now prunes the branches it cannot take**

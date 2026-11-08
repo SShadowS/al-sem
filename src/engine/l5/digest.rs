@@ -4150,6 +4150,11 @@ pub struct DigestEffectResult {
     /// its typed edge set, targets and sites. `None` off a group. Read-side
     /// only: not serialized, and no R4-F projection reads it.
     pub crossing: Option<Arc<Crossing>>,
+    /// r3 E2: the loaded-subscriber assumptions `literal_unreachable` rests
+    /// on, and the listed witness route's guards
+    /// ([`crate::engine::l5::literal_reach::FlowNotes`]). Set only for
+    /// `prove`'s read.
+    pub(crate) flow_notes: Option<Box<crate::engine::l5::literal_reach::FlowNotes>>,
 }
 
 #[derive(Debug, Clone)]
@@ -5369,6 +5374,7 @@ fn digest_one_root<'i>(
                     .map(|(r, ops)| (r, ops.map(|s| s.into_iter().collect())))
                     .collect(),
                 literal_unreachable: false,
+                flow_notes: None,
                 dead_group_resources: Vec::new(),
                 group_resource_paths: Vec::new(),
                 group_terminal_path: None,

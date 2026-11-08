@@ -475,6 +475,7 @@ mod tests {
             table_exit_guard: None,
             junction_guards: None,
             value_fact: None,
+            flow: None,
         }
     }
 

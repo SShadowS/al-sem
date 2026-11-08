@@ -1153,6 +1153,8 @@ pub struct DigestEffectFull {
     /// followed ([`crate::engine::l5::literal_reach`]); a MAY question does not
     /// count it. Not serialized.
     pub literal_unreachable: bool,
+    /// r3 E2: `DigestEffectResult`'s field of the same name. Not serialized.
+    pub(crate) flow_notes: Option<Box<crate::engine::l5::literal_reach::FlowNotes>>,
     /// W2-2: a boundary group's crossing (design §3.3); `None` off a group.
     /// The rollup groups rows by it; the 3.x digest serializes it once per
     /// entry (`entries[].crossings`).
@@ -2012,10 +2014,18 @@ fn literal_reach_entries<'t>(
             .copied()
             .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
             .collect();
-        let (dead, dead_resources) =
-            reach.unreachable_effects(&entry.routine_id, &entry.effects, &per_site);
+        let (dead, dead_resources, assumed) =
+            reach.unreachable_effects_noted(&entry.routine_id, &entry.effects, &per_site);
         for i in dead {
             entry.effects[i].literal_unreachable = true;
+        }
+        // r3 E2: the rows dropped only under the loaded-subscribers
+        // assumption name it.
+        for (i, keeps) in assumed {
+            entry.effects[i]
+                .flow_notes
+                .get_or_insert_with(Default::default)
+                .assumed = keeps;
         }
         // G33: a group's resources reached only through code that cannot run.
         for (i, resources) in dead_resources {
@@ -2040,6 +2050,25 @@ fn literal_reach_entries<'t>(
             if e.via_paths.len() < before && e.via_paths.is_empty() {
                 e.via_paths_truncated = true;
             }
+            // r3 E2: the guards on the route a reader prints (the shortest
+            // listed one), each evaluated or not under the route's values.
+            if !e.boundary_group
+                && let Some(p) = e
+                    .via_paths
+                    .iter()
+                    .filter(|p| !p.is_empty())
+                    .min_by_key(|p| p.len())
+                    .or_else(|| e.via_paths.first())
+            {
+                let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
+                for op in &e.origin_operation_ids {
+                    if !ops.contains(op) {
+                        ops.push(op.clone());
+                    }
+                }
+                let guards = reach.route_guards(&entry.routine_id, p, &ops);
+                e.flow_notes.get_or_insert_with(Default::default).guards = Some(guards);
+            }
         }
         // Final CDO output review, item 2 (design §3.4.2): an own write row
         // left with no listed path still has a live route (it is not
@@ -2052,13 +2081,15 @@ fn literal_reach_entries<'t>(
         // Rows with no source position (`unavailable`) are the no-path
         // section's (§4.1 section 13), and known-temporary rows print no
         // path; neither is searched.
+        // r3 E2: a COMMIT row too (n01: the first-ranked commit's listed
+        // paths could not run, so its witness and its guards came from none).
         for e in entry.effects.iter_mut() {
             if e.boundary_group
                 || e.literal_unreachable
                 || e.via_paths.iter().any(|p| !p.is_empty())
                 || !matches!(
                     e.effect_type.as_str(),
-                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" | "COMMIT"
                 )
                 || e.evidence.source_kind == "unavailable"
                 || is_known_temp_state(e.temp_state.as_ref())
@@ -2083,6 +2114,20 @@ fn literal_reach_entries<'t>(
                         .as_ref(),
                 ),
             };
+            // r3 E2: the searched witness's guards, as a listed route's.
+            let guards = match tree {
+                None => ops
+                    .iter()
+                    .find(|op| reach.live_in_root(&entry.routine_id, op))
+                    .map(|op| reach.route_guards_steps(&entry.routine_id, &[], op)),
+                Some(Some(t)) => reach
+                    .tree_witness(t, &ops)
+                    .map(|(steps, op)| reach.route_guards_steps(&entry.routine_id, &steps, op)),
+                Some(None) => None,
+            };
+            if let Some(g) = guards {
+                e.flow_notes.get_or_insert_with(Default::default).guards = Some(g);
+            }
             e.own_path = Some(match tree {
                 None => group_paths.own_path_in_root(reach, &entry.routine_id, &ops),
                 Some(t) => group_paths.own_path(reach, t, &ops),
@@ -2417,6 +2462,7 @@ pub fn run_digest_query_full_from_entries(
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
+                    flow_notes: eff.flow_notes.take(),
                     crossing: eff.crossing.clone(),
                 });
             }
@@ -5051,6 +5097,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            flow_notes: None,
             crossing: None,
         }
     }

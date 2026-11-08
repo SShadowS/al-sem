@@ -764,6 +764,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // the removed boilerplate was shorter: IssueReminder's touches 3,030
         // B, RunReportID's may-commit 2,179 B on 2026-11-06.
         (_, "query touches human") => (20, 3_300),
+        // r3 E2 (2026-11-08): the witness's `condition:` line names the
+        // route's guards (4 of 14 shown, with the full count) instead of a
+        // class label: RunReportID's may-commit 2,428 B.
+        ("RunReportID", "prove may-commit human") => (20, 2_500),
         (_, "prove may-commit human") => (20, 2_400),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
         (_, "prove writes-table human") => (20, 2_500),
