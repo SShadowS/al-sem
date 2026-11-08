@@ -3,7 +3,7 @@ answer: writes: may write 412 tables (12 owned by this app, 400 by dependencies)
 analysis partial (interface-open-world; object-run-unresolved; 267 interface calls open world, 21 dynamic calls not resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments (at least 45 dependency routines entered at at least 52 dependency calls); no lock facts; dependencies: 11 apps
 more: detail: true lists every list in full; format: "json" for every row
 Codeunit "CDO E-Mail Handler"::RunReportID  defined at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:283
-  transaction, UI and errors: commits: may (6 sites, 8 dependency routines entered that commit, 2 sites more under literal arguments that cannot run); UI at 17 places; errors at 296 places
+  transaction, UI and errors: commits: may (6 sites; 9 dependency routines entered that commit; 2 sites more under literal arguments that cannot run); UI at 17 places; errors at 296 places
   other effects: events: 7,465 (72 raised in workspace code); HTTP at 21 places; file at 2 places; background tasks at 5 places; isolated storage at 17 places; telemetry at 23 places
   uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   starts by (a start, not a summary): `if RecRefFilter.Number > 0 then …` (:305); `if TemplateCodeFilter <> '' then …` (:312); +9 more
@@ -14,7 +14,7 @@ Codeunit "CDO E-Mail Handler"::RunReportID  defined at ws:src/Features/Email/Sen
     caller rule (checked by 1 caller: Codeunit "CDO E-Mail Handler"::RunReport; no equivalent check recognized in 1 analyzed caller: Codeunit "CDO E-Mail Handler"::RunReportSelection): rejects when not VariantRec.IsRecord: "You can not call this function with this variable type."  [Error ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:238]
     by caption (34 captions): Open Email 114, Print PDF 109, Save PDF 109, Queue Email 93, Send/Print 86, Print/Email 20, Send eDocument 20, Post and send/print 18, … +26 captions
     most actions (121 page objects): Page "CDO Sales Invoice Actions" 11, Page "CDO Sales Order Actions" 11, PageExtension CDOSalesInvoiceExt 10, PageExtension CDOSalesInvoiceListExt 10, PageExtension CDOSalesOrderExt 10, PageExtension CDOSalesOrderListExt 10, … +115 page objects (detail: true lists every action)
-  commits: may — 6 sites in workspace code; 8 dependency routines entered that commit:
+  commits: may — 6 sites in workspace code; 9 dependency routines entered that commit:
     COMMIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229 (condition not resolved)
       path: [segment S1: 5 hops] → [segment S2: 3 hops] → RunExportEDocReport
     COMMIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253 (condition not resolved)

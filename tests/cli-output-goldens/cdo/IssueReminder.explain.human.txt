@@ -3,7 +3,7 @@ answer: writes: may write 147 tables (11 owned by this app, 136 by dependencies)
 analysis partial (interface-open-world; object-run-unresolved; 267 interface calls open world, 21 dynamic calls not resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments (at least 46 dependency routines entered at at least 54 dependency calls); no lock facts; dependencies: 11 apps
 more: detail: true lists every list in full; format: "json" for every row
 Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:11
-  transaction, UI and errors: commits: may (4 sites, 7 dependency routines entered that commit, 4 sites and 3 dependency routines entered more under literal arguments that cannot run, assuming Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value); UI at 17 places; errors at 289 places
+  transaction, UI and errors: commits: may (4 sites; 6 dependency routines that commit, entered at 7 call sites; 4 sites and 4 dependency routines entered more under literal arguments that cannot run, assuming Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value); UI at 17 places; errors at 289 places
   other effects: events: 538 (75 raised in workspace code); HTTP at 20 places; file at 1 place; background tasks at 3 places; isolated storage at 16 places; telemetry at 23 places
   uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   starts by (a start, not a summary): `ReminderHeader.SETRECFILTER` (:17); `ReminderIssue.Set(ReminderHeader, false, 0D)` (:18); +4 more
@@ -13,7 +13,7 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
   target company: not established by this analysis (ChangeCompany at ws:src/Platform/Setup/CDOAzureBlobFolderMgt.Codeunit.al:403)
   callers: 1 direct — 1 page action in 1 object (detail: true lists them); 1 page action reaches it in all (directly or through callers)
     reached from page action Page "CDO Reminder Actions".action(IssueSendPrintAction "Issue and send/print") at ws:src/DocumentTypes/Finance/Reminder/CDOReminderActions.Page.al:132
-  commits: may — 4 sites in workspace code; 7 dependency routines entered that commit:
+  commits: may — 4 sites in workspace code; 6 dependency routines that commit, entered at 7 call sites:
     COMMIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229 (condition not resolved)
     COMMIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253 (condition not resolved)
     COMMIT at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241 (condition not resolved)

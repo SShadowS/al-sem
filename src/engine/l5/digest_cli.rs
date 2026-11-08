@@ -5641,6 +5641,171 @@ mod tests {
         assert!(!r.may_write.contains_key("ws/table/5"), "{t:?}");
     }
 
+    /// A boundary group row of `ty` through a crossing `id` into `targets`,
+    /// entered at `site` (`file`, 0-based `line`).
+    fn crossing_row(ty: &str, id: &str, targets: &[&str], site: (&str, u32)) -> DigestEffectFull {
+        let mut e = effect(ty, &[("boundary", id)], &[]);
+        e.crossing = Some(std::sync::Arc::new(crate::engine::l5::digest::Crossing {
+            id: id.to_string(),
+            site: crate::engine::l5::digest::CrossingSite::Callsite(id.to_string()),
+            edges: vec![],
+            targets: targets.iter().map(|t| (*t).to_string()).collect(),
+            sites: vec![crate::engine::l5::digest::SiteAnchor {
+                file: Some(site.0.to_string()),
+                line: Some(site.1),
+                column: None,
+            }],
+        }));
+        e
+    }
+
+    /// Round-4 n10: "dependency routines entered that commit" counts distinct
+    /// ROUTINES, never crossings (CDO DocSave printed 3 for `Sales-Calc.
+    /// Discount`::OnRun once and `CSC Core`::IsAppActiveOrAskToActivate twice,
+    /// which are 2 routines at 3 call sites), and the ruled-out commits count
+    /// the same way (they counted COMMIT ROWS: two dead rows of one crossing
+    /// were 2). Hand-stated crossings: live COMMIT rows through `cs:a` (into
+    /// `dep:Calc`), `cs:b` and `cs:c` (both into `dep:Core`), and `cs:g` (into
+    /// `dep:Y`, which has a dead COMMIT row as well, so it is a live entry
+    /// only); dead COMMIT rows through `cs:d` (two rows) and `cs:e`, both into
+    /// `dep:X`. Expected by hand: live 3 routines at 4 call sites (3 entry
+    /// points), ruled out 1 routine at 2 call sites (1 entry point).
+    ///
+    /// DISCRIMINATION (2026-11-08): counting the routines as crossings
+    /// (`crossing_counts` keying every crossing's routine by its own id, not
+    /// its targets) fails at "live entries" (routines 4, not 3); counting a
+    /// crossing with a live COMMIT row as ruled out too (`&& !c.commit`
+    /// removed in `totals_of`) fails at "ruled-out entries" (2 entry points,
+    /// not 1); each restored, passes.
+    #[test]
+    fn commit_entries_count_distinct_routines_not_crossings() {
+        use crate::engine::l5::routine_rollup::EntryCount;
+        let dead = |id: &str, t: &str, site: (&str, u32)| {
+            let mut e = crossing_row("COMMIT", id, &[t], site);
+            e.literal_unreachable = true;
+            e
+        };
+        let mut e = entry_with(vec![]);
+        e.effects = vec![
+            crossing_row("COMMIT", "cs:a", &["dep:Calc"], ("ws:src/F.al", 124)),
+            crossing_row("COMMIT", "cs:b", &["dep:Core"], ("ws:src/H.al", 239)),
+            crossing_row("COMMIT", "cs:c", &["dep:Core"], ("ws:src/M.al", 479)),
+            crossing_row("COMMIT", "cs:g", &["dep:Y"], ("ws:src/G.al", 9)),
+            dead("cs:g", "dep:Y", ("ws:src/G.al", 9)),
+            dead("cs:d", "dep:X", ("ws:src/D.al", 1)),
+            dead("cs:d", "dep:X", ("ws:src/D.al", 1)),
+            dead("cs:e", "dep:X", ("ws:src/E.al", 2)),
+        ];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let t = &r.totals;
+        assert_eq!(
+            t.commit_entries,
+            EntryCount {
+                points: 3,
+                routines: 3,
+                sites: 4
+            },
+            "live entries: {t:?}"
+        );
+        assert_eq!(
+            t.commit_dead_entries,
+            EntryCount {
+                points: 1,
+                routines: 1,
+                sites: 2
+            },
+            "ruled-out entries: {t:?}"
+        );
+        // The use: the summary's clause, the commits section's header and
+        // the JSON state the routines, with the call sites beside them.
+        let human = t.human("none");
+        assert!(
+            human.contains(
+                "commits: may (3 dependency routines that commit, entered at 4 call sites; \
+                 1 dependency routine entered at 2 call sites more under literal arguments that \
+                 cannot run)"
+            ),
+            "{human}"
+        );
+        let lines = crate::engine::l5::routine_rollup::commit_lines(
+            &r,
+            &e,
+            &cx,
+            crate::engine::l5::routine_rollup::RenderOpts::new(false, None),
+        );
+        assert_eq!(
+            lines[0],
+            "commits: may — none in workspace code; 3 dependency routines that commit, entered \
+             at 4 call sites:",
+            "{lines:?}"
+        );
+        let v = t.to_json();
+        let c = &v["commits"];
+        let n = |x: &serde_json::Value, k: &str| x[k].as_u64();
+        assert_eq!(
+            (n(c, "entryPoints"), n(c, "routines"), n(c, "callSites")),
+            (Some(3), Some(3), Some(4)),
+            "{c}"
+        );
+        let d = &c["literalDead"];
+        assert_eq!(
+            (n(d, "entryPoints"), n(d, "routines"), n(d, "callSites")),
+            (Some(1), Some(1), Some(2)),
+            "{c}"
+        );
+    }
+
+    /// Round-4 n10 (bug 1 as reported): "owned by this app" is the table's
+    /// DECLARING app, never where the write runs. Hand-stated: workspace code
+    /// inserts the dependency tables `dep/table/133` and `dep/table/130` (as
+    /// CDO's `CDOElectronicDocumentMgt` inserts Base App `Incoming Document
+    /// Attachment`), and a dependency routine entered at a crossing modifies
+    /// the workspace table `ws/table/7` (as CDO's `CDO Output Profile
+    /// Conflict` is written only beyond `Sales-Calc. Discount`::OnRun).
+    /// Expected by hand: 1 owned (`ws/table/7`), 2 by dependencies.
+    ///
+    /// DISCRIMINATION (2026-11-08): deciding ownership by where the write
+    /// runs (`owned` in `totals_of` counted as the workspace-code records,
+    /// `self.workspace_code.len()`) fails at "owned by the declaring app";
+    /// restored, passes.
+    #[test]
+    fn owned_tables_are_the_ones_the_workspace_declares() {
+        let own_insert = |id: &str, name: &str, line: u32| {
+            let mut own = effect(
+                "DB_INSERT",
+                &[
+                    ("resourceId", id),
+                    ("resourceDisplay", name),
+                    ("tempState", "known(false)"),
+                ],
+                &[],
+            );
+            own.evidence.source_kind = "source";
+            own.evidence.file = Some("ws:src/A.al".to_string());
+            own.evidence.line = Some(line);
+            own
+        };
+        let own = own_insert("dep/table/133", "Incoming Document Attachment", 181);
+        let own2 = own_insert("dep/table/130", "Incoming Document", 190);
+        let mut beyond = crossing_row("DB_MODIFY", "cs:p", &["dep:Calc"], ("ws:src/F.al", 124));
+        beyond.group_resources = vec![("ws/table/7".to_string(), "Conflict".to_string())];
+        let mut e = entry_with(vec![]);
+        e.effects = vec![own, own2, beyond];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.workspace_code.len(), 2, "two workspace-code records");
+        let t = &r.totals;
+        assert_eq!(t.may_write_tables, 3, "{t:?}");
+        assert_eq!(
+            (t.owned_by_app, t.by_dependencies),
+            (1, 2),
+            "owned by the declaring app: {t:?}"
+        );
+    }
+
     /// W2-5 (2e): an effect type no kind family names is never dropped; it is
     /// the explicit other-kinds bucket, counted per place (an own site and a
     /// crossing) and printed by its type name. The type is stated by

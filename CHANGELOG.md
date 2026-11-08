@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (round-4 n10: commit entries counted per routine)
+
+- **"dependency routines entered that commit" now counts routines, not crossings**
+  (round-4 fact check n10). On CDO, `explain` of `Codeunit "CDO E-Mail Handler"::DocSave`
+  said "3 dependency routines entered that commit" for `Sales-Calc. Discount`::OnRun
+  (entered once) and `CSC Core`::IsAppActiveOrAskToActivate (entered twice): 2 routines
+  at 3 call sites. The ruled-out part ("… dependency routines entered more under literal
+  arguments that cannot run") was worse: it counted COMMIT rows, so one crossing with two
+  ruled-out COMMIT rows counted twice. Both now count distinct routines and add the call
+  sites when there are more of them than routines: `commits: may (1 site; 2 dependency
+  routines that commit, entered at 3 call sites; …)`. The parts of that clause are now
+  separated by `; `, because a part can hold a comma. A crossing with a live COMMIT row is
+  a live entry only, never also a ruled-out one. A count can also go UP: one crossing
+  into two routines (CDO `RunReportID`'s insert into `Incoming Document Attachment`
+  enters both `Graph Mgt - Inc Doc Attachment`::HandleOnAfterInsert and the table's
+  OnInsert) is two routines, so `RunReportID` now says 9 where it said 8 (8 crossings).
+  `IssueReminder` now says 6 routines at 7 call sites where it said 7, and 4 ruled-out
+  routines where it counted 3 rows. The `commits:` section header of
+  `explain` and `digest` uses the same words. JSON: `commits.entryPoints` (shown as
+  `commits.dependencyCalls` in schema 5) now counts entry points grouped by target, as
+  `entryPoints.count` already did, and `commits.routines` and `commits.callSites` are new;
+  `commits.literalDead` gets the same three fields. Every other line that says
+  "dependency routines entered" (impact, query effects, the writes-beyond sections, the
+  scope line) already counted distinct routines; checked, unchanged.
+- **Checked, no change: "owned by this app" already means the table's declaring app.**
+  The same fact check read "250 tables (6 owned by this app, …)" as counting Base App
+  `Incoming Document Attachment` as owned. It does not: the 6 are the workspace's own
+  tables (`CDO E-Mail Log`, `CDO E-Mail Template Header`, `CDO File`, `CDO Queue Entry`,
+  `CDO Template Recipient Setup` and `CDO Output Profile Conflict`, the last written only
+  beyond `Sales-Calc. Discount`::OnRun). `Incoming Document Attachment` is listed under
+  "writes in workspace code" because workspace code inserts it
+  (`CDOElectronicDocumentMgt.Codeunit.al:182`), and counts under dependencies. A new
+  test pins that ownership follows the table's app id, not where the write runs.
+
 ### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
 
 - **A value computed inside a routine now prunes the branches it cannot take**

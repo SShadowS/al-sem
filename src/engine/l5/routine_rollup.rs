@@ -1305,6 +1305,11 @@ pub struct CrossingView {
     /// Non-DB effect types the crossing carries.
     pub kinds: BTreeSet<String>,
     pub commit: bool,
+    /// A COMMIT group row of this crossing is literal-dead (round-4 n10: the
+    /// ruled-out commit entries are counted per crossing, then per routine,
+    /// never per row). A crossing with a live COMMIT row as well is a live
+    /// commit entry ([`Self::commit`]) and not a ruled-out one.
+    pub dead_commit: bool,
     /// Literal-dead group rows.
     pub dead_rows: usize,
     /// The row whose shortest path is the crossing's prefix.
@@ -1368,11 +1373,16 @@ pub struct RollupTotals {
     /// `yes`, `may`, `none` (complete coverage, no limit) or `no observed`.
     pub commits: &'static str,
     pub commit_sites: usize,
-    pub commit_entry_points: usize,
+    /// The crossings with a live COMMIT row, as entry points, distinct
+    /// dependency routines entered and distinct call sites (round-4 n10: a
+    /// line that says "dependency routines entered" states `routines`, never
+    /// the crossings; one routine entered at two sites is one routine).
+    pub commit_entries: EntryCount,
     /// COMMIT rows under literal arguments that cannot run (output
-    /// validation §8.2, F53): own sites and dependency routines entered.
+    /// validation §8.2, F53): own sites, and the crossings whose COMMIT rows
+    /// are all ruled out, counted as [`Self::commit_entries`] is.
     pub commit_dead_sites: usize,
-    pub commit_dead_entry_points: usize,
+    pub commit_dead_entries: EntryCount,
     /// r3 E2: what ruling those rows out assumes (a publisher's loaded
     /// subscribers keep a value), one statement each.
     pub commit_dead_assumes: Vec<String>,
@@ -1479,7 +1489,12 @@ impl RollupTotals {
             "commits": {
                 "answer": self.commits,
                 "ownSites": self.commit_sites,
-                "entryPoints": self.commit_entry_points,
+                // Round-4 n10: entry points (crossings grouped by target, as
+                // `entryPoints.count`), the distinct routines entered and
+                // the distinct dependency call sites, never the crossings.
+                "entryPoints": self.commit_entries.points,
+                "routines": self.commit_entries.routines,
+                "callSites": self.commit_entries.sites,
             },
             "events": {"distinct": self.events, "inWorkspaceCode": self.events_in_workspace},
             "kinds": self.kinds,
@@ -1506,10 +1521,12 @@ impl RollupTotals {
         }
         // §8.2 (F53, additive): the COMMIT rows literal arguments rule out,
         // counted apart, so `effectsByType.COMMIT` reconciles.
-        if self.commit_dead_sites + self.commit_dead_entry_points > 0 {
+        if self.commit_dead_sites + self.commit_dead_entries.points > 0 {
             v["commits"]["literalDead"] = json!({
                 "sites": self.commit_dead_sites,
-                "entryPoints": self.commit_dead_entry_points,
+                "entryPoints": self.commit_dead_entries.points,
+                "routines": self.commit_dead_entries.routines,
+                "callSites": self.commit_dead_entries.sites,
             });
             // r3 E2 (additive): what ruling them out assumes.
             if !self.commit_dead_assumes.is_empty() {
@@ -1585,14 +1602,10 @@ impl RollupTotals {
                         plural(self.commit_sites, "site", "sites")
                     ));
                 }
-                if self.commit_entry_points > 0 {
+                if self.commit_entries.points > 0 {
                     where_.push(format!(
                         "{at_least}{}",
-                        plural(
-                            self.commit_entry_points,
-                            "dependency routine entered that commits",
-                            "dependency routines entered that commit",
-                        )
+                        commit_entries_words(self.commit_entries, true)
                     ));
                 }
                 // §8.2 (F53, c15): the rows literal arguments rule out.
@@ -1600,12 +1613,8 @@ impl RollupTotals {
                 if self.commit_dead_sites > 0 {
                     dead.push(plural(self.commit_dead_sites, "site", "sites"));
                 }
-                if self.commit_dead_entry_points > 0 {
-                    dead.push(plural(
-                        self.commit_dead_entry_points,
-                        "dependency routine entered",
-                        "dependency routines entered",
-                    ));
+                if self.commit_dead_entries.points > 0 {
+                    dead.push(commit_entries_words(self.commit_dead_entries, false));
                 }
                 if !dead.is_empty() {
                     // r3 E2: and what ruling them out assumes.
@@ -1619,7 +1628,8 @@ impl RollupTotals {
                         dead.join(" and ")
                     ));
                 }
-                format!("commits: {answer} ({})", where_.join(", "))
+                // `; `: a part may hold a comma of its own (round-4 n10).
+                format!("commits: {answer} ({})", where_.join("; "))
             }
         };
         let family = |key: &str, label: &str| -> Option<String> {
@@ -1921,9 +1931,9 @@ pub struct RoutineRollup {
     pub commit_sites: Vec<usize>,
     /// COMMIT rows the root's literal arguments rule out (output validation
     /// §8.2, F53): own ones (sites) and crossing ones (dependency routines
-    /// entered), counted apart from the live ones.
+    /// entered, from each crossing's [`CrossingView::dead_commit`]), counted
+    /// apart from the live ones.
     pub commit_dead_sites: usize,
-    pub commit_dead_crossings: usize,
     /// r3 E2: what those rows' removal assumes (the loaded subscribers of a
     /// publisher keep a value), one statement each, sorted and distinct.
     pub commit_dead_assumes: Vec<String>,
@@ -2098,7 +2108,7 @@ impl RoutineRollup {
                         }
                     }
                     if ty == "COMMIT" {
-                        r.commit_dead_crossings += 1;
+                        c.dead_commit = true;
                         r.note_dead_assumes(e);
                     }
                     r.literal_dead_rows.push(i);
@@ -2326,11 +2336,14 @@ impl RoutineRollup {
     ) -> RollupTotals {
         let live = &self.may_write;
         let owned = live.keys().filter(|id| cx.table_is_own(id)).count();
-        let commit_entry_points = self.crossings.iter().filter(|c| c.commit).count();
+        let commit_entries = crossing_counts(self.crossings.iter().filter(|c| c.commit));
+        // A crossing with a live COMMIT row is a live entry, not a ruled-out one.
+        let commit_dead_entries =
+            crossing_counts(self.crossings.iter().filter(|c| c.dead_commit && !c.commit));
         // §3.7: "none" only when coverage is complete and nothing limits it.
         let commits = if self.commit_unconditional {
             "yes"
-        } else if self.commit_sites.is_empty() && commit_entry_points == 0 {
+        } else if self.commit_sites.is_empty() && commit_entries.points == 0 {
             if complete { "none" } else { "no observed" }
         } else {
             "may"
@@ -2385,9 +2398,9 @@ impl RoutineRollup {
             commits,
             commit_sites: self.commit_sites.len(),
             commit_dead_sites: self.commit_dead_sites,
-            commit_dead_entry_points: self.commit_dead_crossings,
+            commit_dead_entries,
             commit_dead_assumes: self.commit_dead_assumes.clone(),
-            commit_entry_points,
+            commit_entries,
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
             entry_points_partial: false,
@@ -2627,6 +2640,77 @@ pub fn own_witness_lines(
 /// A crossing's display: its boundary name, else its id.
 fn crossing_name(c: &CrossingView) -> &str {
     if c.name.is_empty() { &c.id } else { &c.name }
+}
+
+/// Round-4 n10: the counts of a set of crossings, by the identities
+/// [`entry_points`] groups them on: entry points (a single-target crossing by
+/// its target, a multi-target one by its own id), the distinct dependency
+/// routines entered (a crossing with no known target by its id) and the
+/// distinct call sites (a crossing with no site by its id). One routine
+/// entered at two sites is one routine and two call sites; the crossings are
+/// never the routine count (CDO DocSave: `CSC Core`::IsAppActiveOrAskToActivate
+/// entered twice printed as 2 of "3 dependency routines entered that commit").
+#[must_use]
+pub fn crossing_counts<'c>(crossings: impl IntoIterator<Item = &'c CrossingView>) -> EntryCount {
+    let mut points: BTreeSet<&str> = BTreeSet::new();
+    let mut routines: BTreeSet<&str> = BTreeSet::new();
+    let mut sites: BTreeSet<&str> = BTreeSet::new();
+    for c in crossings {
+        points.insert(match c.target_ids.as_slice() {
+            [one] => one.as_str(),
+            _ => c.id.as_str(),
+        });
+        if c.target_ids.is_empty() {
+            routines.insert(c.id.as_str());
+        } else {
+            routines.extend(c.target_ids.iter().map(String::as_str));
+        }
+        if c.sites.is_empty() {
+            sites.insert(c.id.as_str());
+        } else {
+            sites.extend(c.sites.iter().map(String::as_str));
+        }
+    }
+    EntryCount {
+        points: points.len(),
+        routines: routines.len(),
+        sites: sites.len(),
+    }
+}
+
+/// The words of a commit-bearing [`EntryCount`] (round-4 n10): its distinct
+/// routines, and the call sites when they are more than the routines
+/// (`2 dependency routines that commit, entered at 3 call sites`). `live`:
+/// the live entries ("that commit"); else the ruled-out ones, which the
+/// caller follows with "more under literal arguments that cannot run".
+fn commit_entries_words(n: EntryCount, live: bool) -> String {
+    let same = n.sites <= n.routines;
+    match (live, same) {
+        (true, true) => plural(
+            n.routines,
+            "dependency routine entered that commits",
+            "dependency routines entered that commit",
+        ),
+        (true, false) => format!(
+            "{}, entered at {}",
+            plural(
+                n.routines,
+                "dependency routine that commits",
+                "dependency routines that commit"
+            ),
+            plural(n.sites, "call site", "call sites")
+        ),
+        (false, true) => plural(
+            n.routines,
+            "dependency routine entered",
+            "dependency routines entered",
+        ),
+        (false, false) => format!(
+            "{} entered at {}",
+            plural(n.routines, "dependency routine", "dependency routines"),
+            plural(n.sites, "call site", "call sites")
+        ),
+    }
 }
 
 /// One card's header facts (output validation §5.2): its summary block, and
@@ -2923,11 +3007,9 @@ pub fn commit_lines(
                 plural(r.commit_sites.len(), "site", "sites")
             )
         },
-        plural(
-            bearing.len(),
-            "dependency routine entered that commits",
-            "dependency routines entered that commit"
-        )
+        // Round-4 n10: the distinct routines (and call sites when more),
+        // never the crossings the rows below list one by one.
+        commit_entries_words(crossing_counts(bearing.iter().copied()), true)
     )];
     // MCP output step 2: the first `caps::PATHED_ROWS` sites and crossings
     // print their paths; the others their place only (`--detail`: all).
