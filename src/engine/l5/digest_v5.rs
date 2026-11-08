@@ -252,9 +252,30 @@ pub fn from_v4(mut payload: Value) -> Value {
     payload
 }
 
-/// The 4.0.0 payload of a 5.0.0 one: [`from_v4`]'s inverse.
+/// The key of r3 §7 R1's records (additive in 5.x; no earlier schema has it).
+const ASSUMPTION_RECORDS: &str = "assumptionRecords";
+
+/// r3 §7 R1: `v` without any `assumptionRecords` key, at any depth (an
+/// entry's own, its summary's `commits.literalDead`): what a 3.x or 4.x
+/// document leaves out. The rows' `assumes` strings stay.
+pub fn strip_assumption_records(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            m.remove(ASSUMPTION_RECORDS);
+            for x in m.values_mut() {
+                strip_assumption_records(x);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_assumption_records),
+        _ => {}
+    }
+}
+
+/// The 4.0.0 payload of a 5.0.0 one: [`from_v4`]'s inverse, but for r3 §7
+/// R1's `assumptionRecords`, which 4.0.0 does not carry.
 #[must_use]
 pub fn to_v4(mut payload: Value) -> Value {
+    strip_assumption_records(&mut payload);
     for d in diagnostics(&mut payload) {
         let rows = match d.get("candidates") {
             Some(Value::Array(rows)) if rows.iter().all(Value::is_object) && !rows.is_empty() => {

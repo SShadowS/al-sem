@@ -342,6 +342,65 @@ fn a_pending_write_inside_a_call_names_its_site_and_both_calls() {
     assert!(line.contains("C.al:12"), "{line}");
 }
 
+/// r3 §7 R3 (p09): a pending write the callee reaches only through an
+/// event (not a resolved call) still names its own site. Hand-stated: `C1.P`
+/// calls `Writer.W` (line 11) then `R` (line 12); `W` only raises `OnW`;
+/// the subscriber `Pw Sub.S`'s `Rec.Insert()` is on line 9 of `S.al`.
+///
+/// DISCRIMINATION (2026-11-08): `deep_write_site` without its sited-graph
+/// search (the resolved calls only, as before R3) fails the site assert
+/// (`Insert on "Pw Rec", inside the call Writer.W at …`: no site);
+/// restored, passes.
+#[test]
+fn a_pending_write_behind_an_event_names_its_own_site() {
+    let w = cu(
+        50111,
+        "Pw Writer",
+        "    procedure W()\n    begin\n        OnW();\n    end;\n\n    [IntegrationEvent(false, \
+         false)]\n    local procedure OnW()\n    begin\n    end;\n",
+    );
+    let s = cu(
+        50113,
+        "Pw Sub",
+        "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Pw Writer\", 'OnW', '', false, \
+         false)]\n    local procedure S()\n    var\n        Rec: Record \"Pw Rec\";\n    \
+         begin\n        Rec.Insert();\n    end;\n",
+    );
+    let c = caller(50110, "C1", "", "        Writer.W();\n        Target.R();").replace(
+        "Target: Codeunit \"Pw Target\";",
+        "Target: Codeunit \"Pw Target\";\n        Writer: Codeunit \"Pw Writer\";",
+    );
+    assert_eq!(
+        s.lines().position(|l| l.contains("Rec.Insert()")),
+        Some(8),
+        "precondition: the Insert is on line 9 of S.al: {s}"
+    );
+    let (v, human) = prove_both(
+        ws(&[
+            ("Rec.al", TABLE),
+            ("Target.al", TARGET),
+            ("W.al", &w),
+            ("S.al", &s),
+            ("C.al", &c),
+        ])
+        .path(),
+        "Pw Target::R",
+        "callers-have-pending-writes",
+        true,
+    );
+    assert_eq!(answer(&v), "yes", "{v:#}");
+    let line = human
+        .lines()
+        .find(|l| l.contains("pending-write:"))
+        .unwrap_or_else(|| panic!("a pending-write line: {human}"));
+    assert!(
+        line.contains("Insert on \"Pw Rec\" at ")
+            && line.contains("S.al:9, inside the call Writer.W at "),
+        "{line}"
+    );
+    assert!(line.contains("C.al:11, before the call at "), "{line}");
+}
+
 /// A table whose `OnModify` calls R.
 const TRIGGER_TABLE: &str = r#"table 50100 "Pw Rec"
 {

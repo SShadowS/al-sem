@@ -16,6 +16,6 @@ Codeunit "Calls Post"::ForwardPost  defined at ws:src/post.al:28
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:33): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:33; runs: OnModify trigger; table-event subscribers: none in the loaded program
-  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:8 (conditional); ERROR_IMPLICIT at ws:src/post.al:33 (unconditional on success); ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/order.al:25 (error-path)
+  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:8 (2 guards on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/post.al:33 (unconditional on success); ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (1 guard on the route, 0 evaluated); ERROR_THROW at ws:src/order.al:25 (error-path)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
 

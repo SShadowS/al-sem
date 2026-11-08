@@ -15,7 +15,7 @@ computed: current effects of the 4 routines these files touches, in the working 
     My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/InstallCU.al:33
       path: OnInstallAppPerCompany → DoSetup
-  errors at 1 place: ERROR_IMPLICIT at ws:src/InstallCU.al:33 (conditional)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/InstallCU.al:33 (1 guard on the route, 0 evaluated)
 
 --- Codeunit "Install Handler"::DoSetup ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): My Setup (Insert at :33)
@@ -28,7 +28,7 @@ computed: current effects of the 4 routines these files touches, in the working 
     My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
       Insert at ws:src/InstallCU.al:33
       path: DoSetup (in the routine itself)
-  errors at 1 place: ERROR_IMPLICIT at ws:src/InstallCU.al:33 (conditional)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/InstallCU.al:33 (1 guard on the route, 0 evaluated)
 
 --- Codeunit "Upgrade Handler"::DoUpgrade ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): My Setup (Modify at :16)
@@ -41,7 +41,7 @@ computed: current effects of the 4 routines these files touches, in the working 
     My Setup: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/UpgradeCU.al:16
       path: DoUpgrade (in the routine itself)
-  errors at 1 place: ERROR_IMPLICIT at ws:src/UpgradeCU.al:16 (conditional)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/UpgradeCU.al:16 (1 guard on the route, 0 evaluated)
 
 --- Codeunit "Upgrade Handler"::OnUpgradePerCompany ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): My Setup (Modify at :16)
@@ -55,4 +55,4 @@ computed: current effects of the 4 routines these files touches, in the working 
     My Setup: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/UpgradeCU.al:16
       path: OnUpgradePerCompany → DoUpgrade
-  errors at 1 place: ERROR_IMPLICIT at ws:src/UpgradeCU.al:16 (conditional)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/UpgradeCU.al:16 (1 guard on the route, 0 evaluated)

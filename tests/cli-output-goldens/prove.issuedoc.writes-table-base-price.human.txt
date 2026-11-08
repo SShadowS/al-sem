@@ -1,8 +1,9 @@
 prove Codeunit "Out Issue Document"::IssueDoc writes-table:Base Price (table 70022, Out Base)   [cross-app]
-answer: yes — DB_MODIFY beyond Codeunit "Base Calc"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 (condition not resolved)
+answer: yes — DB_MODIFY at dep:Out Base:src/BasePoster.Codeunit.al:68, beyond Codeunit "Base Calc"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 (1 guard on the route, 0 evaluated)
 analysis partial (2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 1 app
 more: --format json for every evidence row and its hops
   evidence: 1 effect
-    [DB_MODIFY] beyond Codeunit "Base Calc"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16
+    [DB_MODIFY] at dep:Out Base:src/BasePoster.Codeunit.al:68, beyond Codeunit "Base Calc"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16
+      condition: Price.Get(ItemNo): must be true, not evaluated (UpdatePrice line 66)
       path: IssueDoc → [run] Codeunit "Base Calc" (70101)::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   next: alsem explain --routine 'Codeunit "Out Issue Document"::IssueDoc' — lists the workspace ones under gaps

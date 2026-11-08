@@ -1164,6 +1164,33 @@ pub struct DigestEffectFull {
     pub crossing: Option<Arc<crate::engine::l5::digest::Crossing>>,
 }
 
+impl DigestEffectFull {
+    /// The row's site, `file:line` (1-based), or its file alone.
+    pub(crate) fn site_text(&self) -> Option<String> {
+        let f = self.evidence.file.as_ref()?;
+        Some(match self.evidence.line {
+            Some(l) => format!("{f}:{}", crate::engine::line_base::shown(l)),
+            None => f.clone(),
+        })
+    }
+}
+
+/// r3 §7 R1: the loaded-subscriber assumptions of `rows` of `effects`, one
+/// record per assumption with the rows' sites it rules out.
+pub(crate) fn assumption_records(
+    effects: &[DigestEffectFull],
+    rows: impl IntoIterator<Item = usize>,
+) -> Vec<crate::engine::l5::literal_reach::AssumptionRecord> {
+    crate::engine::l5::literal_reach::AssumptionRecord::collect(rows.into_iter().flat_map(|i| {
+        let e = &effects[i];
+        let site = e.site_text();
+        e.flow_notes
+            .iter()
+            .flat_map(|n| &n.assumed)
+            .map(move |k| (k, site.clone()))
+    }))
+}
+
 pub struct FullAnchor {
     pub source_kind: &'static str, // "source" | "unavailable"
     pub file: Option<String>,
@@ -2022,6 +2049,19 @@ fn literal_reach_entries<'t>(
                         .pop()
                         .map(|(_, o)| o);
                 }
+                // r3 §7 R5: the guards of the row's own terminal witness,
+                // through the dependency entry to the operation. A resource's
+                // witness keeps its own (`GroupPath::guards`): prove prints
+                // them with the resource's path.
+                let witness = e
+                    .group_terminal_path
+                    .as_ref()
+                    .and_then(|w| w.as_ref().ok()?.guards.clone());
+                if let Some(set) = witness {
+                    let notes = e.flow_notes.get_or_insert_with(Default::default);
+                    notes.beyond_unanalyzed = set.unanalyzed > 0;
+                    notes.guards = Some(set.guards);
+                }
                 // Each resource judged from THIS crossing's entry states.
                 e.group_resource_status = candidates
                     .iter()
@@ -2091,6 +2131,28 @@ fn literal_reach_entries<'t>(
             }
             // r3 E2: the guards on the route a reader prints (the shortest
             // listed one), each evaluated or not under the route's values.
+            // r3 §7 R5: a group with no witness through its entry (neither
+            // its own nor a resource's): the guards up to the entry, the
+            // rest not analyzed.
+            let witnessed = e
+                .group_terminal_path
+                .iter()
+                .chain(e.group_resource_paths.iter().map(|(_, w)| w))
+                .any(|w| w.as_ref().is_ok_and(|w| w.guards.is_some()));
+            if e.boundary_group
+                && !witnessed
+                && e.flow_notes.as_ref().is_none_or(|n| n.guards.is_none())
+                && let Some(p) = e
+                    .via_paths
+                    .iter()
+                    .filter(|p| !p.is_empty())
+                    .min_by_key(|p| p.len())
+            {
+                let guards = reach.route_guards(&entry.routine_id, p, &[]);
+                let notes = e.flow_notes.get_or_insert_with(Default::default);
+                notes.guards = Some(guards);
+                notes.beyond_unanalyzed = true;
+            }
             if !e.boundary_group
                 && let Some(p) = e
                     .via_paths
@@ -3311,6 +3373,10 @@ pub fn project_digest_document(
     // release.
     if v3.as_ref().is_some_and(|v| v.v4 && v.v5) {
         doc = sort_keys_keep_nulls(crate::engine::l5::digest_v5::document_from_v4(doc));
+    } else if let Some(p) = doc.get_mut("payload") {
+        // r3 §7 R1: `assumptionRecords` is 5.x's; `--schema 4` and 3 keep
+        // their documents as they were.
+        crate::engine::l5::digest_v5::strip_assumption_records(p);
     }
     if compact {
         let mut s = serde_json::to_string(&doc).expect("serde_json serialization");

@@ -738,6 +738,20 @@ pub fn entry_v3(
     m.insert("summary".into(), r.totals.to_json());
     m.insert("crossings".into(), Value::Object(crossings));
     m.insert("effects".into(), Value::Array(effects));
+    // r3 §7 R1 (additive, 5.x only: `digest_v5::strip_assumption_records`):
+    // the loaded-subscriber assumptions the literal-dead rows rest on, one
+    // record each with the sites it rules out. The rows' `assumes` strings
+    // stay.
+    let records = crate::engine::l5::digest_cli::assumption_records(
+        &entry.effects,
+        (0..entry.effects.len()).filter(|&i| entry.effects[i].literal_unreachable),
+    );
+    if !records.is_empty() {
+        m.insert(
+            "assumptionRecords".into(),
+            records.iter().map(|x| x.to_json()).collect(),
+        );
+    }
     if !more.is_empty() {
         // Per type and place, the items as one `; `-joined string.
         let joined: BTreeMap<&str, BTreeMap<String, String>> = more

@@ -98,6 +98,118 @@ pub(crate) struct KeepInfo {
     /// The loaded subscribers considered (`Codeunit "Y"::Handler`), sorted;
     /// empty when none is loaded.
     pub subscribers: Vec<String>,
+    /// r3 §7 R1: the universe whose subscribers were considered, in words
+    /// ([`universe_words`]).
+    pub universe: String,
+}
+
+/// r3 §7 R1: the universe a model's subscriber inventory covers, in words:
+/// the primary app, with its loaded dependencies when the model holds
+/// dependency code (a test universe's primary app is the test app).
+pub(crate) fn universe_words(model: &Model) -> String {
+    let app = model
+        .primary_app
+        .as_ref()
+        .map_or("the workspace app", |a| a.name.as_str());
+    let deps = model
+        .workspace
+        .routines
+        .iter()
+        .any(|r| r.source_anchor.source_unit_id.starts_with("dep:"));
+    if deps {
+        format!("{app} with its loaded dependencies")
+    } else {
+        format!("{app} alone")
+    }
+}
+
+/// r3 §7 R1: one publisher assumption with the sites it rules out, the one
+/// template prove, explain and digest print and the `assumptionRecords`
+/// entry they carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AssumptionRecord {
+    pub keep: KeepInfo,
+    /// The sites (`file:line`, 1-based) the assumption rules out, in file
+    /// then line order, each once.
+    pub rules_out: Vec<String>,
+}
+
+impl AssumptionRecord {
+    /// The records of `(assumption, site)` pairs: one per assumption, in
+    /// first-seen order, its sites sorted by file then line and distinct.
+    pub(crate) fn collect<'k>(
+        pairs: impl IntoIterator<Item = (&'k KeepInfo, Option<String>)>,
+    ) -> Vec<AssumptionRecord> {
+        let mut out: Vec<AssumptionRecord> = Vec::new();
+        for (k, site) in pairs {
+            let at = match out.iter().position(|r| &r.keep == k) {
+                Some(at) => at,
+                None => {
+                    out.push(AssumptionRecord {
+                        keep: k.clone(),
+                        rules_out: Vec::new(),
+                    });
+                    out.len() - 1
+                }
+            };
+            if let Some(s) = site
+                && !out[at].rules_out.contains(&s)
+            {
+                out[at].rules_out.push(s);
+            }
+        }
+        let key = |s: &String| -> (String, u32) {
+            match s.rsplit_once(':') {
+                Some((f, l)) if l.parse::<u32>().is_ok() => (f.to_string(), l.parse().unwrap_or(0)),
+                _ => (s.clone(), 0),
+            }
+        };
+        for r in &mut out {
+            r.rules_out.sort_by_key(key);
+        }
+        out
+    }
+
+    /// The sentence (r3 §7 R1): the closure assumption, then what it rules
+    /// out.
+    pub(crate) fn sentence(&self) -> String {
+        let k = &self.keep;
+        let mut s = if k.subscribers.is_empty() {
+            format!(
+                "assumes {} has no loaded subscriber, so {} keeps its value ({}; no additional \
+                 subscribers assumed)",
+                k.publisher, k.parameter, k.universe
+            )
+        } else {
+            format!(
+                "assumes no subscribers beyond those considered in {} ({}), none of which \
+                 changes {}",
+                k.universe,
+                k.subscribers.join(", "),
+                k.parameter
+            )
+        };
+        match self.rules_out.as_slice() {
+            [] => {}
+            [one] => s.push_str(&format!("; rules out {one}")),
+            [first, ..] => s.push_str(&format!(
+                "; rules out {} sites (first: {first})",
+                self.rules_out.len()
+            )),
+        }
+        s
+    }
+
+    /// The `assumptionRecords` entry (additive).
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "publisher": self.keep.publisher,
+            "parameter": self.keep.parameter,
+            "universe": self.keep.universe,
+            "subscribersConsidered": self.keep.subscribers,
+            "rulesOut": self.rules_out,
+        })
+    }
 }
 
 impl KeepInfo {
@@ -137,6 +249,15 @@ impl KeepInfo {
     }
 }
 
+/// r3 §7 R5: the guards of a route that crosses into dependency code, and
+/// how many routines on it had no statement tree (their guards not
+/// analyzed).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RouteGuardSet {
+    pub guards: Vec<RouteGuard>,
+    pub unanalyzed: usize,
+}
+
 /// r3 E2: what the literal reach adds to one effect row for a reader: the
 /// loaded-subscriber assumptions its removal rests on, and its witness
 /// route's guards.
@@ -148,6 +269,40 @@ pub(crate) struct FlowNotes {
     /// The guards on the row's listed witness route, outermost first
     /// (`None`: no route was replayed).
     pub guards: Option<Vec<RouteGuard>>,
+    /// r3 §7 R5: a boundary group's route was replayed only up to the
+    /// dependency entry (the routines beyond it, or one of them, had no
+    /// statement tree, or no witness through the entry was kept): its
+    /// guards beyond the entry were not analyzed, and `guards` counts the
+    /// analyzed part only.
+    pub beyond_unanalyzed: bool,
+}
+
+/// r3 §7 R5: the condition words of a row whose route was replayed
+/// (`N guards on the route, k evaluated`, or `on the analyzed route` with
+/// the boundary when the guards beyond the dependency entry were not
+/// analyzed); `None` when no route was replayed, or a fully analyzed route
+/// has no guard (the row's class label then says it). prove, explain and
+/// digest print this form alike.
+pub(crate) fn route_condition_words(notes: Option<&FlowNotes>) -> Option<String> {
+    let n = notes?;
+    let g = n.guards.as_ref()?;
+    if g.is_empty() && !n.beyond_unanalyzed {
+        return None;
+    }
+    let evaluated = g.iter().filter(|x| x.evaluated).count();
+    let count = if g.len() == 1 {
+        "1 guard".to_string()
+    } else {
+        format!("{} guards", g.len())
+    };
+    Some(if n.beyond_unanalyzed {
+        format!(
+            "{count} on the analyzed route, {evaluated} evaluated; guards beyond the dependency \
+             entry: not analyzed"
+        )
+    } else {
+        format!("{count} on the route, {evaluated} evaluated")
+    })
 }
 
 /// The most (routine, bindings) states one root's search visits.
@@ -757,6 +912,7 @@ fn build_flow<'a>(
             .push(e.subscriber_routine_id.as_str());
     }
     let mut keep_info: Vec<KeepInfo> = Vec::new();
+    let universe = universe_words(model);
     let mut verdicts: HashMap<(&str, u32), Option<u32>> = HashMap::new();
     let mut progs: HashMap<&'a str, lflow::FlowProgram> = HashMap::new();
     for r in &model.workspace.routines {
@@ -812,6 +968,7 @@ fn build_flow<'a>(
                     )
                     .map(|mut k| {
                         k.publisher = display(c);
+                        k.universe = universe.clone();
                         k.subscribers = subs
                             .get(
                                 crate::program::model::events::encode_event_id(
@@ -973,6 +1130,7 @@ fn keep_verdict(
         publisher: String::new(),
         parameter: p.name.trim().trim_matches('"').to_string(),
         subscribers: Vec::new(),
+        universe: String::new(),
     })
 }
 
@@ -2392,6 +2550,38 @@ impl<'a> LiteralReach<'a> {
         out
     }
 
+    /// r3 §7 R5: [`Self::route_guards_steps`] of a group witness (its route
+    /// through the dependency entry to its terminal operation `op`), with
+    /// how many routines on the route had no statement tree to read guards
+    /// from (their guards were not analyzed).
+    pub(crate) fn route_guards_checked(
+        &self,
+        root: &str,
+        steps: &[Step<'_>],
+        op: &str,
+    ) -> RouteGuardSet {
+        let unread = |r: &str| {
+            self.by_stable
+                .get(r)
+                .is_none_or(|m| m.statement_tree.is_none() && !self.flow_progs.contains_key(r))
+        };
+        let mut unanalyzed = 0usize;
+        let mut cur = root;
+        for s in steps {
+            if unread(s.from) {
+                unanalyzed += 1;
+            }
+            cur = s.to;
+        }
+        if unread(cur) {
+            unanalyzed += 1;
+        }
+        RouteGuardSet {
+            guards: self.route_guards_steps(root, steps, op),
+            unanalyzed,
+        }
+    }
+
     /// The guards `site` sits under in `routine` (r3 E2), evaluated under `b`.
     fn guards_at(&self, routine: &str, site: &str, b: &Bindings) -> Vec<RouteGuard> {
         let Some(r) = self.by_stable.get(routine) else {
@@ -2763,5 +2953,96 @@ impl<'a> LiteralReach<'a> {
             }
         }
         any_reached
+    }
+}
+
+#[cfg(test)]
+mod r7_tests {
+    use super::*;
+
+    fn guard(evaluated: bool) -> RouteGuard {
+        RouteGuard {
+            routine: "R".into(),
+            line: Some(1),
+            text: "X".into(),
+            kind: GuardKind::Must(true),
+            evaluated,
+        }
+    }
+
+    /// r3 §7 R5: a route whose guards beyond the dependency entry were not
+    /// analyzed counts the analyzed part only and says so; a fully analyzed
+    /// one counts the route; no replayed route (or a fully analyzed route
+    /// without a guard) leaves the class label.
+    ///
+    /// DISCRIMINATION (2026-11-08): `route_condition_words` ignoring
+    /// `beyond_unanalyzed` (always the `on the route` form) fails the first
+    /// assert; restored, passes.
+    #[test]
+    fn the_condition_words_state_the_analyzed_boundary() {
+        let notes = |guards: Option<Vec<RouteGuard>>, beyond: bool| FlowNotes {
+            assumed: Vec::new(),
+            guards,
+            beyond_unanalyzed: beyond,
+        };
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(vec![guard(true), guard(false)]), true)))
+                .as_deref(),
+            Some(
+                "2 guards on the analyzed route, 1 evaluated; guards beyond the dependency \
+                 entry: not analyzed"
+            )
+        );
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(vec![guard(false)]), false))).as_deref(),
+            Some("1 guard on the route, 0 evaluated")
+        );
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(Vec::new()), true))).as_deref(),
+            Some(
+                "0 guards on the analyzed route, 0 evaluated; guards beyond the dependency \
+                 entry: not analyzed"
+            )
+        );
+        assert_eq!(
+            route_condition_words(Some(&notes(Some(Vec::new()), false))),
+            None
+        );
+        assert_eq!(route_condition_words(Some(&notes(None, false))), None);
+        assert_eq!(route_condition_words(None), None);
+    }
+
+    /// r3 §7 R1: the two forms of the sentence and the two `rules out`
+    /// forms; the records group by assumption with their sites in file then
+    /// line order (`:9` before `:10`).
+    #[test]
+    fn an_assumption_record_reads_as_one_sentence() {
+        let keep = |subs: &[&str]| KeepInfo {
+            publisher: "Codeunit \"E\"::OnX".into(),
+            parameter: "P".into(),
+            subscribers: subs.iter().map(|s| s.to_string()).collect(),
+            universe: "App alone".into(),
+        };
+        let none = keep(&[]);
+        let recs = AssumptionRecord::collect([
+            (&none, Some("ws:a.al:10".to_string())),
+            (&none, Some("ws:a.al:9".to_string())),
+            (&none, Some("ws:a.al:10".to_string())),
+        ]);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].rules_out, vec!["ws:a.al:9", "ws:a.al:10"]);
+        assert_eq!(
+            recs[0].sentence(),
+            "assumes Codeunit \"E\"::OnX has no loaded subscriber, so P keeps its value (App \
+             alone; no additional subscribers assumed); rules out 2 sites (first: ws:a.al:9)"
+        );
+        let two = keep(&["Codeunit \"S\"::A", "Codeunit \"S\"::B"]);
+        let recs = AssumptionRecord::collect([(&two, Some("ws:a.al:3".to_string()))]);
+        assert_eq!(
+            recs[0].sentence(),
+            "assumes no subscribers beyond those considered in App alone (Codeunit \"S\"::A, \
+             Codeunit \"S\"::B), none of which changes P; rules out ws:a.al:3"
+        );
+        assert!(!recs[0].sentence().contains("loaded-subscribers"));
     }
 }
