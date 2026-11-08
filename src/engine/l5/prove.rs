@@ -4856,6 +4856,7 @@ mod tests {
             effect_is_kt: false,
             literal_unreachable: dead,
             crossing: None,
+            flow_notes: None,
         };
         let entry = minimal_entry(
             "complete",
