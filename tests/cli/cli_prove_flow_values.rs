@@ -906,3 +906,145 @@ fn an_unevaluated_guard_stays_in_the_condition() {
     // A guard whose value may be either is not evaluated either.
     assert!(cond.contains("Both: must be true, not evaluated"), "{cond}");
 }
+
+/// r3 §7 R1: two COMMITs ruled out by ONE publisher assumption. Hand-stated:
+/// `U := true`, passed `var` to `OnKeep` (no subscriber), then `if not U
+/// then Commit();` twice, on lines 10 and 12.
+const TWO_COMMITS: &str = r#"codeunit 50340 "AR Flow"
+{
+    procedure TwoCommits()
+    var
+        U: Boolean;
+    begin
+        U := true;
+        OnKeep(U);
+        if not U then
+            Commit();
+        if not U then
+            Commit();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnKeep(var Value: Boolean)
+    begin
+    end;
+}
+"#;
+
+/// r3 §7 R1: the publisher assumption in words, in prove's assumptions line,
+/// explain's commits line and digest alike (never the bare
+/// `loaded-subscribers` token), and as one `assumptionRecords` entry with
+/// its universe, the subscribers considered and every site it rules out;
+/// the existing strings stay. Digest 5.x carries the records, `--schema 4`
+/// does not, and the 4.0.0 rebuild of the 5.x document equals it.
+///
+/// DISCRIMINATION (2026-11-08): `AssumptionRecord::collect` keeping one
+/// record per (assumption, site) pair instead of one per assumption fails
+/// the `assumptionRecords` length assert (2 records); restored, passes.
+#[test]
+fn r1_a_publisher_assumption_names_its_universe_and_the_sites_it_rules_out() {
+    let lines: Vec<&str> = TWO_COMMITS.lines().collect();
+    assert_eq!(
+        (lines[9].trim(), lines[11].trim()),
+        ("Commit();", "Commit();"),
+        "precondition: the commits are on lines 10 and 12"
+    );
+    let ws = Ws::with_source(TWO_COMMITS);
+    let r = ws.prove("TwoCommits", "may-commit");
+    assert_eq!(r["answer"], "no", "{r:#}");
+    // The existing strings stay.
+    assert_eq!(
+        r["assumptions"],
+        serde_json::json!(["loaded-subscribers"]),
+        "{r:#}"
+    );
+    assert_eq!(r["subscriberAssumptions"][0]["parameter"], "Value", "{r:#}");
+    let recs = r["assumptionRecords"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{r:#}"));
+    assert_eq!(recs.len(), 1, "one record per assumption: {r:#}");
+    let rec = &recs[0];
+    assert_eq!(rec["publisher"], "Codeunit \"AR Flow\"::OnKeep", "{r:#}");
+    assert_eq!(rec["parameter"], "Value", "{r:#}");
+    assert_eq!(rec["universe"], "E2 alone", "{r:#}");
+    assert_eq!(rec["subscribersConsidered"], serde_json::json!([]), "{r:#}");
+    assert_eq!(
+        rec["rulesOut"],
+        serde_json::json!(["ws:src/Flow.al:10", "ws:src/Flow.al:12"]),
+        "{r:#}"
+    );
+    let sentence = "assumes Codeunit \"AR Flow\"::OnKeep has no loaded subscriber, so Value keeps \
+                    its value (E2 alone; no additional subscribers assumed); rules out 2 sites \
+                    (first: ws:src/Flow.al:10)";
+    let prove = ws.prove_human("TwoCommits", "may-commit");
+    assert!(prove.contains(sentence), "{prove}");
+    assert!(!prove.contains("loaded-subscribers"), "{prove}");
+    let explain = String::from_utf8_lossy(
+        &alsem_raw(
+            ws.dir.path(),
+            &[
+                "explain",
+                "ws",
+                "--routine",
+                ws.id("TwoCommits"),
+                "--format",
+                "human",
+            ],
+        )
+        .stdout,
+    )
+    .into_owned();
+    let commits = explain
+        .lines()
+        .find(|l| l.contains("commits:"))
+        .unwrap_or_else(|| panic!("a commits line: {explain}"));
+    assert!(commits.contains(sentence), "{commits}");
+    // Digest: 5.x has the records beside the rows' `assumes`; 4.0.0 has no
+    // records, and the 5.x document read back through `to_v4` equals it.
+    let digest = |extra: &[&str]| -> serde_json::Value {
+        let mut args = vec![
+            "digest",
+            "ws",
+            "--routine",
+            ws.id("TwoCommits"),
+            "--format",
+            "json",
+        ];
+        args.extend_from_slice(extra);
+        let out = alsem_raw(ws.dir.path(), &args);
+        serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{args:?}: {e}; {}", String::from_utf8_lossy(&out.stderr)))
+    };
+    let v5 = digest(&[]);
+    let entry = &v5["payload"]["entries"][0];
+    assert_eq!(
+        entry["assumptionRecords"][0]["rulesOut"], rec["rulesOut"],
+        "{entry:#}"
+    );
+    assert!(
+        v5.to_string().contains("\"assumes\""),
+        "the rows' strings stay: {v5:#}"
+    );
+    let v4 = digest(&["--schema", "4"]);
+    assert!(!v4.to_string().contains("assumptionRecords"), "{v4:#}");
+    // `dependencies.apps` is the one field 5.0.0 does not rebuild (round-2
+    // W5, `output_shared_evidence`).
+    let mut want = v4["payload"].clone();
+    let empty = want
+        .get_mut("dependencies")
+        .and_then(|d| d.as_object_mut())
+        .map(|d| {
+            d.remove("apps");
+            d.is_empty()
+        });
+    if empty == Some(true)
+        && let Some(m) = want.as_object_mut()
+    {
+        m.remove("dependencies");
+    }
+    assert_eq!(
+        al_sem::engine::l5::digest_v5::document_to_v4(v5)["payload"],
+        want,
+        "the 4.0.0 rebuild drops the records and nothing else"
+    );
+}

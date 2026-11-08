@@ -1389,6 +1389,10 @@ pub struct RollupTotals {
     /// r3 E2: what ruling those rows out assumes (a publisher's loaded
     /// subscribers keep a value), one statement each.
     pub commit_dead_assumes: Vec<String>,
+    /// r3 §7 R1: the same assumptions as the one sentence each
+    /// (`AssumptionRecord::sentence`) and as `assumptionRecords` entries.
+    pub commit_dead_sentences: Vec<String>,
+    pub commit_dead_records: Vec<Value>,
     /// The COMMIT site search stopped at its depth bound
     /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
     /// above are lower bounds, printed "at least".
@@ -1543,6 +1547,11 @@ impl RollupTotals {
             if !self.commit_dead_assumes.is_empty() {
                 v["commits"]["literalDead"]["assumes"] = json!(self.commit_dead_assumes);
             }
+            // r3 §7 R1 (additive): each with its universe and the sites it
+            // rules out.
+            if !self.commit_dead_records.is_empty() {
+                v["commits"]["literalDead"]["assumptionRecords"] = json!(self.commit_dead_records);
+            }
         }
         if let Some(d) = &self.dominant_entry_point {
             v["mayWriteTables"]["mostBeyond"] = json!({
@@ -1588,7 +1597,43 @@ impl RollupTotals {
     pub fn human(&self, writes: &str) -> String {
         let mut block = vec![format!("writes: {writes}")];
         let mut parts: Vec<String> = Vec::new();
+        // §8.2 (F53, c15): the rows literal arguments rule out; r3 E2 and
+        // r3 §7 R1: with what ruling them out assumes, in the one sentence.
+        let dead_words = |more: &str| -> Option<String> {
+            let mut dead = Vec::new();
+            if self.commit_dead_sites > 0 {
+                dead.push(plural(self.commit_dead_sites, "site", "sites"));
+            }
+            if self.commit_dead_entries.points > 0 {
+                dead.push(commit_entries_words(self.commit_dead_entries, false));
+            }
+            if dead.is_empty() {
+                return None;
+            }
+            let assuming = if self.commit_dead_sentences.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", self.commit_dead_sentences.join("; also "))
+            };
+            Some(format!(
+                "{}{more} under literal arguments that cannot run{assuming}",
+                dead.join(" and ")
+            ))
+        };
         let commits = match self.commits {
+            // r3 §7 R1: a `no` an assumption decided says so.
+            "no observed" | "none" if !self.commit_dead_sentences.is_empty() => format!(
+                "commits: {}; {}",
+                if self.commits == "none" {
+                    crate::engine::vocab::NO_EVERY_CANDIDATE_DECIDED.to_string()
+                } else {
+                    crate::engine::vocab::none_observed(
+                        "the cone through every resolved call",
+                        "calls not resolved",
+                    )
+                },
+                dead_words("").unwrap_or_default()
+            ),
             "no observed" => format!(
                 "commits: {}",
                 crate::engine::vocab::none_observed(
@@ -1619,25 +1664,8 @@ impl RollupTotals {
                         commit_entries_words(self.commit_entries, true)
                     ));
                 }
-                // §8.2 (F53, c15): the rows literal arguments rule out.
-                let mut dead = Vec::new();
-                if self.commit_dead_sites > 0 {
-                    dead.push(plural(self.commit_dead_sites, "site", "sites"));
-                }
-                if self.commit_dead_entries.points > 0 {
-                    dead.push(commit_entries_words(self.commit_dead_entries, false));
-                }
-                if !dead.is_empty() {
-                    // r3 E2: and what ruling them out assumes.
-                    let assuming = if self.commit_dead_assumes.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", assuming {}", self.commit_dead_assumes.join("; "))
-                    };
-                    where_.push(format!(
-                        "{} more under literal arguments that cannot run{assuming}",
-                        dead.join(" and ")
-                    ));
+                if let Some(d) = dead_words(" more") {
+                    where_.push(d);
                 }
                 // `; `: a part may hold a comma of its own (round-4 n10).
                 format!("commits: {answer} ({})", where_.join("; "))
@@ -1963,6 +1991,9 @@ pub struct RoutineRollup {
     /// r3 E2: what those rows' removal assumes (the loaded subscribers of a
     /// publisher keep a value), one statement each, sorted and distinct.
     pub commit_dead_assumes: Vec<String>,
+    /// r3 §7 R1: the literal-dead COMMIT rows whose removal assumes one, in
+    /// row order (the totals' records are built from them).
+    pub commit_dead_assume_rows: Vec<usize>,
     pub commit_unconditional: bool,
     /// Own EVENT_PUBLISH rows' event ids (live), with the row.
     pub events_ws: BTreeMap<String, usize>,
@@ -2001,7 +2032,10 @@ fn anchor_key(e: &DigestEffectFull) -> (String, u32) {
 
 impl RoutineRollup {
     /// r3 E2: records what a literal-dead COMMIT row's removal assumes.
-    fn note_dead_assumes(&mut self, e: &DigestEffectFull) {
+    fn note_dead_assumes(&mut self, i: usize, e: &DigestEffectFull) {
+        if e.flow_notes.iter().any(|n| !n.assumed.is_empty()) {
+            self.commit_dead_assume_rows.push(i);
+        }
         for k in e.flow_notes.iter().flat_map(|n| &n.assumed) {
             let s = k.statement();
             if let Err(at) = self.commit_dead_assumes.binary_search(&s) {
@@ -2140,7 +2174,7 @@ impl RoutineRollup {
                     }
                     if ty == "COMMIT" {
                         c.dead_commit = true;
-                        r.note_dead_assumes(e);
+                        r.note_dead_assumes(i, e);
                     }
                     r.literal_dead_rows.push(i);
                     continue;
@@ -2190,7 +2224,7 @@ impl RoutineRollup {
                 }
                 if ty == "COMMIT" {
                     r.commit_dead_sites += 1;
-                    r.note_dead_assumes(e);
+                    r.note_dead_assumes(i, e);
                 }
                 r.literal_dead_rows.push(i);
                 continue;
@@ -2341,6 +2375,13 @@ impl RoutineRollup {
             complete,
             crate::engine::l5::digest_cli::sites_partial(entry, "COMMIT"),
         );
+        // r3 §7 R1: the one sentence and record per assumption.
+        let records = crate::engine::l5::digest_cli::assumption_records(
+            &entry.effects,
+            r.commit_dead_assume_rows.iter().copied(),
+        );
+        r.totals.commit_dead_sentences = records.iter().map(|x| x.sentence()).collect();
+        r.totals.commit_dead_records = records.iter().map(|x| x.to_json()).collect();
         r.totals.kinds_partial = FAMILIES
             .iter()
             .map(|(key, _)| *key)
@@ -2431,6 +2472,9 @@ impl RoutineRollup {
             commit_dead_sites: self.commit_dead_sites,
             commit_dead_entries,
             commit_dead_assumes: self.commit_dead_assumes.clone(),
+            // Filled by the caller, which holds the rows.
+            commit_dead_sentences: Vec::new(),
+            commit_dead_records: Vec::new(),
             commit_entries,
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
@@ -3051,10 +3095,11 @@ pub fn commit_lines(
     let mut rest: Vec<String> = Vec::new();
     for (k, &i) in r.commit_sites.iter().enumerate() {
         let e = &entry.effects[i];
+        // r3 §7 R5: the route's guards when one was replayed, as prove.
         let row = format!(
             "COMMIT at {} ({})",
             row_anchor(e),
-            crate::engine::vocab::condition(e.conditionality)
+            crate::engine::l5::prove::condition_words(e)
         );
         if !pathed(k) {
             rest.push(row);
@@ -4063,11 +4108,13 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
                     .iter()
                     .find(|(k, _)| k == "starts")
                     .map_or(String::new(), |(_, s)| format!(", starts {s}"));
+                // r3 §7 R5: the route's guards when one was replayed, as
+                // prove; the class label otherwise.
                 format!(
                     "{} at {} ({}){starts}",
                     e.effect_type,
                     row_anchor(e),
-                    crate::engine::vocab::condition(e.conditionality)
+                    crate::engine::l5::prove::condition_words(e)
                 )
             })
             .collect();

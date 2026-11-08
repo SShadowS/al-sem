@@ -1,4 +1,4 @@
 prove Codeunit "D47 Sender"::SendAfterModify reaches-ui   [cross-app]
 answer: no — no UI site in the analyzed cone (every candidate decided; static candidates, not an observed trace)
-analysis complete · assumptions: loaded-subscribers · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+analysis complete · assumptions: assumes no subscribers beyond those considered in D47 HTTP No Commit Pos alone to the events its cone raises (the table events of its record operations); the analysis follows the loaded ones · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops

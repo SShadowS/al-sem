@@ -181,7 +181,7 @@ pub struct ProveObligations {
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
     /// The answer is a `no` whose cone raises an event an app outside the
-    /// program may subscribe to ([`relies_on_loaded_subscribers`]): it holds
+    /// program may subscribe to ([`events_raised`]): it holds
     /// only if no subscriber beyond the loaded ones exists. The
     /// `loaded-subscribers` label, when no stronger world's label applies.
     pub relies_on_loaded_subscribers: bool,
@@ -189,7 +189,48 @@ pub struct ProveObligations {
     /// because rows were ruled out only by these publishers' loaded
     /// subscribers keeping a value (`literal_reach`'s flow): the answer
     /// states them. Empty otherwise.
-    pub(crate) flow_assumed: Vec<crate::engine::l5::literal_reach::KeepInfo>,
+    pub(crate) flow_assumed: Vec<crate::engine::l5::literal_reach::AssumptionRecord>,
+    /// r3 §7 R1: what a `no` resting on [`Self::relies_on_loaded_subscribers`]
+    /// raises that a subscriber could hear, for its words.
+    pub(crate) events_raised: Option<EventsRaised>,
+    /// r3 §7 R1: the universe whose subscribers the answer considered
+    /// (`literal_reach::universe_words`); empty when not set.
+    pub(crate) universe: String,
+}
+
+/// r3 §7 R1: the events a cone raises that an unloaded subscriber could
+/// hear ([`events_raised`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct EventsRaised {
+    /// It writes or validates a record (the platform table events).
+    pub table_events: bool,
+    /// Live explicit event publications.
+    pub publications: usize,
+    /// Live page opens (the platform page events).
+    pub pages: usize,
+}
+
+impl EventsRaised {
+    /// `table events of its record operations, 2 event publications, 1
+    /// page opened`.
+    fn words(&self) -> String {
+        use crate::engine::l5::routine_rollup::plural;
+        let mut parts = Vec::new();
+        if self.table_events {
+            parts.push("the table events of its record operations".to_string());
+        }
+        if self.publications > 0 {
+            parts.push(plural(
+                self.publications,
+                "event publication",
+                "event publications",
+            ));
+        }
+        if self.pages > 0 {
+            parts.push(format!("{} opened", plural(self.pages, "page", "pages")));
+        }
+        parts.join(", ")
+    }
 }
 
 impl ProveObligations {
@@ -225,16 +266,38 @@ const SUBSCRIBABLE_EFFECTS: &[&str] = &["EVENT_PUBLISH", "UI_WINDOW_OPEN"];
 /// temporary records and with `RunTrigger = false` too), an explicit
 /// publisher, or a page opened. Over-approximates: an internal publisher only
 /// the declaring app's friends can subscribe to counts as well.
-fn relies_on_loaded_subscribers(
+///
+/// r3 §7 R1: what such a `no` rests on (the events raised, for its words);
+/// `None` when the answer does not rest on the loaded subscribers.
+fn events_raised(
     result: &ProveResult,
     entry: &DigestEntryFull,
     fires_table_events: bool,
-) -> bool {
-    result.answer == ProveAnswer::No
-        && (fires_table_events
-            || entry.effects.iter().any(|e| {
-                !e.literal_unreachable && SUBSCRIBABLE_EFFECTS.contains(&e.effect_type.as_str())
-            }))
+) -> Option<EventsRaised> {
+    let live = |ty: &str| {
+        entry
+            .effects
+            .iter()
+            .filter(|e| !e.literal_unreachable && e.effect_type == ty)
+            .count()
+    };
+    debug_assert_eq!(SUBSCRIBABLE_EFFECTS, ["EVENT_PUBLISH", "UI_WINDOW_OPEN"]);
+    let raised = EventsRaised {
+        table_events: fires_table_events,
+        publications: live("EVENT_PUBLISH"),
+        pages: live("UI_WINDOW_OPEN"),
+    };
+    (result.answer == ProveAnswer::No
+        && (raised.table_events || raised.publications + raised.pages > 0))
+        .then_some(raised)
+}
+
+/// Sets `r`'s [`ProveObligations::relies_on_loaded_subscribers`] and what it
+/// rests on.
+fn note_loaded_subscribers(r: &mut ProveResult, entry: &DigestEntryFull, fires_table_events: bool) {
+    let raised = events_raised(r, entry, fires_table_events);
+    r.obligations.relies_on_loaded_subscribers = raised.is_some();
+    r.obligations.events_raised = raised;
 }
 
 /// What a prove run assumes about code outside the loaded program, weakest
@@ -382,6 +445,8 @@ fn compute_obligations(
         answer_relies_on_world: false,
         relies_on_loaded_subscribers: false,
         flow_assumed: Vec::new(),
+        events_raised: None,
+        universe: String::new(),
     }
 }
 
@@ -1169,20 +1234,19 @@ pub fn prove_with_callers(
     let strict = run(World::Strict);
     // r3 E2: the publisher keeps the strict world's evidence holds and an
     // assumed world's does not: the rows only they rule out.
-    let flow_assumed = |assumed: &ProveResult| -> Vec<crate::engine::l5::literal_reach::KeepInfo> {
-        let mut out = Vec::new();
-        for &i in strict.evidence.iter().flatten() {
-            if assumed.evidence.as_ref().is_some_and(|e| e.contains(&i)) {
-                continue;
-            }
-            for k in entry.effects[i].flow_notes.iter().flat_map(|n| &n.assumed) {
-                if !out.contains(k) {
-                    out.push(k.clone());
-                }
-            }
-        }
-        out
-    };
+    // r3 §7 R1: with the sites each rules out.
+    let flow_assumed =
+        |assumed: &ProveResult| -> Vec<crate::engine::l5::literal_reach::AssumptionRecord> {
+            crate::engine::l5::digest_cli::assumption_records(
+                &entry.effects,
+                strict
+                    .evidence
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .filter(|i| !assumed.evidence.as_ref().is_some_and(|e| e.contains(i))),
+            )
+        };
     let mut last = None;
     for w in [World::LoadedSubscribers, World::Closed] {
         if w > world {
@@ -1321,8 +1385,8 @@ impl TableQuestions<'_> {
             &field_guarded,
             self.world,
         );
-        result.obligations.relies_on_loaded_subscribers =
-            relies_on_loaded_subscribers(&result, self.entry, self.fires_table_events);
+        note_loaded_subscribers(&mut result, self.entry, self.fires_table_events);
+        result.obligations.universe = crate::engine::l5::literal_reach::universe_words(self.model);
         Ok(TableAnswer {
             result,
             via_callers,
@@ -1429,8 +1493,13 @@ pub(crate) fn table_answer_human(table: &str, a: &TableAnswer) -> String {
     if let Some(b) = r.blocked_by.as_ref().filter(|b| !b.is_empty()) {
         s.push_str(&format!(" (blocked by {})", b.len()));
     }
-    if let Some(label) = r.obligations.assumption() {
-        s.push_str(&format!("; assumes {label}"));
+    // r3 §7 R1: the assumptions in prove's words, never the bare label.
+    for a in assumption_sentences(&r.obligations) {
+        if a.starts_with("assumes ") {
+            s.push_str(&format!("; {a}"));
+        } else {
+            s.push_str(&format!("; assumes {a}"));
+        }
     }
     s.push_str(" — the answer alsem prove gives");
     s
@@ -1521,8 +1590,119 @@ fn route_guard_text(g: &crate::engine::l5::literal_reach::RouteGuard) -> String 
 /// r3 E2: an effect's `condition:` text from its witness route's guards
 /// (`None`: no route was replayed, or a route with no guard, whose effect's
 /// class (unconditional, in a loop, …) says what there is to say).
-fn route_guards_text(eff: &DigestEffectFull) -> Option<String> {
-    let guards = eff.flow_notes.as_ref()?.guards.as_ref()?;
+/// r3 §7 R5: the event publishers `root` (a stable routine id) subscribes
+/// to, each `Codeunit "X"::OnSomething`, sorted and distinct; empty for a
+/// routine that subscribes to none.
+fn subscribed_publishers(
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    root: &str,
+) -> Vec<String> {
+    use crate::engine::l5::routine_rollup::format_object;
+    let graph = &cx.model.events.graph;
+    let mut out: Vec<String> = graph
+        .edges
+        .iter()
+        .filter(|e| e.subscriber_stable_routine_id == root)
+        .map(|e| {
+            let ev = graph.events.iter().find(|s| s.id == e.event_id);
+            let routine = ev
+                .and_then(|s| s.publisher_stable_routine_id.as_deref())
+                .and_then(|s| cx.names.display_with(s, false));
+            routine.unwrap_or_else(|| {
+                let (object, name) = match ev {
+                    Some(s) => (s.publisher_object_id.as_str(), s.event_name.clone()),
+                    None => {
+                        let (o, n) = e
+                            .event_id
+                            .split_once("/event/")
+                            .unwrap_or((e.event_id.as_str(), ""));
+                        (o, n.to_string())
+                    }
+                };
+                let mut shown = cx.object_display(object);
+                if shown == object
+                    && let Some(t) = cx
+                        .model
+                        .workspace
+                        .tables
+                        .iter()
+                        .find(|t| t.id == object && !t.is_extension_stub)
+                {
+                    shown = format_object("Table", &t.name, Some(t.table_number));
+                }
+                format!("{shown}::{name}")
+            })
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// r3 E2 + H2, r3 §7 R5: a row's short condition: its replayed route's
+/// guards (`literal_reach::route_condition_words`), the class label only
+/// when no route was replayed. prove, explain and digest print this form.
+pub(crate) fn condition_words(eff: &DigestEffectFull) -> String {
+    condition_words_of(eff, eff.flow_notes.as_deref())
+}
+
+/// [`condition_words`] over `notes`: the row's own, or those of the witness
+/// prove prints for it (a group resource's).
+fn condition_words_of(
+    eff: &DigestEffectFull,
+    notes: Option<&crate::engine::l5::literal_reach::FlowNotes>,
+) -> String {
+    if let Some(w) = crate::engine::l5::literal_reach::route_condition_words(notes) {
+        return w;
+    }
+    // A replayed route with no guard: the class label, unless it says the
+    // condition was not resolved (the replay resolved it).
+    let replayed = notes.is_some_and(|n| n.guards.is_some());
+    if replayed && eff.conditionality == crate::engine::l5::conditionality::UNKNOWN {
+        return "no guard on the route".to_string();
+    }
+    crate::engine::vocab::condition(eff.conditionality).to_string()
+}
+
+/// The witness prove prints for a group row: with a `writes-table`
+/// question, the asked table's resource path; otherwise the row's own
+/// terminal witness.
+fn printed_witness<'e>(
+    eff: &'e DigestEffectFull,
+    asked_table: Option<&str>,
+) -> Option<&'e crate::engine::l5::group_path::GroupPathOutcome> {
+    match asked_table {
+        Some(table) => eff.group_resource_paths.iter().find_map(|(id, w)| {
+            let display = eff
+                .group_resources
+                .iter()
+                .find(|(r, _)| r == id)
+                .map(|(_, d)| d.as_str());
+            name_or_id_matches(display, Some(id), table).then_some(w)
+        }),
+        None => eff.group_terminal_path.as_ref(),
+    }
+}
+
+/// r3 §7 R5: the notes of a group's witness (its route's guards), when it
+/// kept them.
+fn witness_notes(
+    w: Option<&crate::engine::l5::group_path::GroupPathOutcome>,
+) -> Option<crate::engine::l5::literal_reach::FlowNotes> {
+    let set = w?.as_ref().ok()?.guards.as_ref()?;
+    Some(crate::engine::l5::literal_reach::FlowNotes {
+        assumed: Vec::new(),
+        guards: Some(set.guards.clone()),
+        beyond_unanalyzed: set.unanalyzed > 0,
+    })
+}
+
+/// The `condition:` text of a replayed route's guards (`notes`: the row's
+/// own, or its printed group witness's).
+fn route_guards_text_of(
+    notes: Option<&crate::engine::l5::literal_reach::FlowNotes>,
+) -> Option<String> {
+    let guards = notes?.guards.as_ref()?;
     if guards.is_empty() {
         return None;
     }
@@ -2056,7 +2236,8 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
             "subscriberAssumptions".into(),
             o.flow_assumed
                 .iter()
-                .map(|k| {
+                .map(|r| {
+                    let k = &r.keep;
                     serde_json::json!({
                         "publisher": k.publisher,
                         "parameter": k.parameter,
@@ -2064,6 +2245,15 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
                         "statement": k.statement(),
                     })
                 })
+                .collect(),
+        );
+        // r3 §7 R1 (additive): each with its universe and the sites it
+        // rules out.
+        result_obj.insert(
+            "assumptionRecords".into(),
+            o.flow_assumed
+                .iter()
+                .map(crate::engine::l5::literal_reach::AssumptionRecord::to_json)
                 .collect(),
         );
     }
@@ -2596,12 +2786,16 @@ pub fn format_prove_human(
         // Round-3 m04, r3 H2(c): a group's witness ends at an operation in
         // dependency code; every row names it and where it is, never only
         // the dependency entry.
+        // r3 §7 R3: the witness a group row prints (the asked table's), so
+        // its terminal operation and site are the printed path's.
         let terminal_of = |eff: &DigestEffectFull| -> Option<(String, String)> {
             let p = paths?;
             if !is_group(eff) {
                 return None;
             }
-            let w = eff.group_terminal_path.as_ref()?.as_ref().ok()?;
+            let w = printed_witness(eff, asked_table.as_deref())?
+                .as_ref()
+                .ok()?;
             let kind =
                 p.cx.terminal_kind(&w.terminal.operation_id, &eff.effect_type)
                     .to_string();
@@ -2649,22 +2843,17 @@ pub fn format_prove_human(
         };
         // r3 E2 + H2: a replayed route's guards decide the short condition
         // text; the class label only when no route was replayed.
-        let cond_of = |eff: &DigestEffectFull| -> String {
-            match eff.flow_notes.as_ref().and_then(|n| n.guards.as_ref()) {
-                Some(g) if !g.is_empty() => {
-                    let evaluated = g.iter().filter(|x| x.evaluated).count();
-                    format!(
-                        "{} on the route, {evaluated} evaluated",
-                        if g.len() == 1 {
-                            "1 guard".to_string()
-                        } else {
-                            format!("{} guards", g.len())
-                        }
-                    )
-                }
-                _ => crate::engine::vocab::condition(eff.conditionality).to_string(),
-            }
-        };
+        // r3 §7 R5: the form explain and digest print too.
+        // A group row's are its printed witness's.
+        let notes_of =
+            |eff: &DigestEffectFull| -> Option<crate::engine::l5::literal_reach::FlowNotes> {
+                is_group(eff)
+                    .then(|| witness_notes(printed_witness(eff, asked_table.as_deref())))
+                    .flatten()
+                    .or_else(|| eff.flow_notes.as_deref().cloned())
+            };
+        let cond_of =
+            |eff: &DigestEffectFull| -> String { condition_words_of(eff, notes_of(eff).as_ref()) };
         // Round 2 G16: a `yes` names its first witness's site and condition
         // on the answer line.
         if prove_result.answer == ProveAnswer::Yes
@@ -2686,6 +2875,25 @@ pub fn format_prove_human(
         }
         // Per type: the folded rows' places, and how many more.
         let mut folded: BTreeMap<&str, (Vec<String>, usize)> = BTreeMap::new();
+        // r3 §7 R5: a row whose route's guards are the previous row's says
+        // so (two rows through one entry share their guards), counted so no
+        // two lines are the same.
+        let mut last_guards: Option<(String, usize)> = None;
+        let mut guards_line = |g: String| -> String {
+            match &mut last_guards {
+                Some((was, n)) if *was == g => {
+                    *n += 1;
+                    format!(
+                        "      condition: the same guards as the row above ({n} rows with them)"
+                    )
+                }
+                _ => {
+                    let line = format!("      condition: {g}");
+                    last_guards = Some((g, 1));
+                    line
+                }
+            }
+        };
         for &i in &ordered {
             let eff = &effects[i];
             let t = eff.effect_type.as_str();
@@ -2708,18 +2916,16 @@ pub fn format_prove_human(
                 } else {
                     place_of(eff)
                 };
-                folded
-                    .entry(t)
-                    .or_default()
-                    .0
-                    .push(if eff.conditionality != "unknown" {
-                        format!(
-                            "{place} ({})",
-                            crate::engine::vocab::condition(eff.conditionality)
-                        )
+                let notes = notes_of(eff);
+                folded.entry(t).or_default().0.push(
+                    if eff.conditionality != "unknown"
+                        || notes.as_ref().is_some_and(|n| n.guards.is_some())
+                    {
+                        format!("{place} ({})", condition_words_of(eff, notes.as_ref()))
                     } else {
                         place
-                    });
+                    },
+                );
                 continue;
             }
             // Round 2 G17: an implicit error names its operation, c27's form
@@ -2728,16 +2934,16 @@ pub fn format_prove_human(
             if named {
                 lines.push(format!("    {what} {} ({})", place_of(eff), cond_of(eff)));
                 // r3 E2: the route's guards, evaluated or not.
-                if let Some(g) = route_guards_text(eff) {
-                    lines.push(format!("      condition: {g}"));
+                if let Some(g) = route_guards_text_of(notes_of(eff).as_ref()) {
+                    lines.push(guards_line(g));
                 }
             } else {
                 lines.push(format!("    [{}] {}", eff.effect_type, place_of(eff)));
                 // r3 E2: the route's guards, evaluated or not; r3 H2(d): the
                 // class label's `condition:` form only when no route was
                 // replayed.
-                if let Some(g) = route_guards_text(eff) {
-                    lines.push(format!("      condition: {g}"));
+                if let Some(g) = route_guards_text_of(notes_of(eff).as_ref()) {
+                    lines.push(guards_line(g));
                 } else if eff.conditionality != "unknown" {
                     lines.push(format!(
                         "      condition: {}",
@@ -2749,17 +2955,7 @@ pub fn format_prove_human(
                 continue;
             };
             let witness = if group {
-                match &asked_table {
-                    Some(table) => eff.group_resource_paths.iter().find_map(|(id, w)| {
-                        let display = eff
-                            .group_resources
-                            .iter()
-                            .find(|(r, _)| r == id)
-                            .map(|(_, d)| d.as_str());
-                        name_or_id_matches(display, Some(id), table).then_some(w)
-                    }),
-                    None => eff.group_terminal_path.as_ref(),
-                }
+                printed_witness(eff, asked_table.as_deref())
             } else {
                 None
             };
@@ -2856,6 +3052,15 @@ pub fn format_prove_human(
                  error still propagates when the caller ignores the Boolean result)"
                     .to_string(),
             );
+        }
+        // r3 §7 R5: a subscriber's error stops its publisher only if it
+        // escapes the dispatch; that is not established here.
+        let publishers = subscribed_publishers(p.cx, p.root);
+        if !publishers.is_empty() {
+            lines.push(format!(
+                "  whether it escapes {}: not established",
+                publishers.join(", ")
+            ));
         }
         let f = crate::engine::follow_up::FollowUp::prove(
             p.fcx,
@@ -3174,6 +3379,50 @@ fn blocker_lines(
 /// The always-visible `coverage:`, `assumptions:` and `limits:` lines of a
 /// prove answer (W2-8, design §3.7): the obligations with counts and where
 /// they point, the answer's world, the analysis incompleteness.
+/// r3 §7 R1: the answer's assumptions, each a sentence: the world's (closed
+/// world; loaded subscribers, by what decides it), then each publisher
+/// assumption a route was decided by ([`AssumptionRecord::sentence`]).
+/// Empty when the answer assumes nothing.
+///
+/// [`AssumptionRecord::sentence`]: crate::engine::l5::literal_reach::AssumptionRecord::sentence
+fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
+    let universe = if o.universe.is_empty() {
+        "the loaded program"
+    } else {
+        o.universe.as_str()
+    };
+    let mut out = Vec::new();
+    if o.answer_relies_on_world && o.world == World::Closed {
+        // Not a subscriber assumption: its label stays.
+        out.push(World::Closed.label().unwrap_or("closed-world").to_string());
+    } else if o.answer_relies_on_world && o.waived_rows > 0 {
+        out.push(format!(
+            "assumes no subscribers beyond those considered in {universe}: an interface call \
+             whose implementations only an event subscriber registers reaches only the loaded \
+             ones"
+        ));
+    }
+    if let Some(e) = o
+        .events_raised
+        .filter(|_| o.relies_on_loaded_subscribers)
+        .map(|e| e.words())
+        .filter(|w| !w.is_empty())
+    {
+        out.push(format!(
+            "assumes no subscribers beyond those considered in {universe} to the events its \
+             cone raises ({e}); the analysis follows the loaded ones"
+        ));
+    }
+    out.extend(o.flow_assumed.iter().map(|r| r.sentence()));
+    if out.is_empty() && o.assumption().is_some() {
+        out.push(format!(
+            "assumes no subscribers beyond those considered in {universe}; the analysis follows \
+             the loaded ones"
+        ));
+    }
+    out
+}
+
 fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -> Vec<String> {
     use crate::engine::l5::routine_rollup::plural;
     let ws = |n: usize| match pointers {
@@ -3225,25 +3474,14 @@ fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -
             coverage.push_str("; alsem explain lists the workspace ones under gaps");
         }
     }
-    let mut assumptions = match o.assumption() {
-        Some(label) => format!("assumptions: {label}"),
-        None if !o.flow_assumed.is_empty() => "assumptions: loaded subscribers".to_string(),
-        None if o.world != World::Closed => "assumptions: none (default world: an interface \
+    // r3 §7 R1: every assumption in words, never the bare label.
+    let assumptions = match assumption_sentences(o) {
+        s if !s.is_empty() => format!("assumptions: {}", s.join("; also ")),
+        _ if o.world != World::Closed => "assumptions: none (default world: an interface \
              call may reach an implementation that is not loaded)"
             .to_string(),
-        None => "assumptions: none (closedWorld asked; the answer does not rely on it)".to_string(),
+        _ => "assumptions: none (closedWorld asked; the answer does not rely on it)".to_string(),
     };
-    // r3 E2: the loaded-subscriber assumption a route was decided by.
-    if !o.flow_assumed.is_empty() {
-        assumptions.push_str(&format!(
-            " — a route is ruled out because {}",
-            o.flow_assumed
-                .iter()
-                .map(|k| k.statement())
-                .collect::<Vec<_>>()
-                .join("; ")
-        ));
-    }
     let mut limits = Vec::new();
     if o.analysis_gaps > 0 {
         limits.push(plural(o.analysis_gaps, "analysis gap", "analysis gaps"));
@@ -3628,6 +3866,8 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
             flow_assumed: Vec::new(),
+            events_raised: None,
+            universe: String::new(),
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -3880,6 +4120,8 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         ),
         _ => HashMap::new(),
     };
+    // r3 §7 R1: the universe the answer's subscribers come from.
+    let universe = crate::engine::l5::literal_reach::universe_words(resolved);
     // The bundle's only borrower is dead: release `l4`.
     drop(temp_states);
     drop(owners);
@@ -3905,8 +4147,8 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
                 &HashMap::new(),
                 World::of_flags(closed_world),
             );
-            r.obligations.relies_on_loaded_subscribers =
-                relies_on_loaded_subscribers(&r, entry, fires_table_events);
+            note_loaded_subscribers(&mut r, entry, fires_table_events);
+            r.obligations.universe = universe;
             (r, other_via_callers)
         }
     };

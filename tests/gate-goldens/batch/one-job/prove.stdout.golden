@@ -28,7 +28,7 @@
       "scope": {
         "analysis": "complete",
         "assumptions": [
-          "loaded-subscribers"
+          "assumes no subscribers beyond those considered in D1 Multi Caller alone to the events its cone raises (the table events of its record operations); the analysis follows the loaded ones"
         ],
         "limits": [],
         "reasons": [],

@@ -2103,12 +2103,13 @@ fn prove_states_coverage_assumptions_and_limits() {
     // line (analysis · assumptions · limits · scope).
     let yes = run(ISSUE_DOC, "may-commit", "human");
     // Round 2 G16: a `yes` names its first witness; round-3 m04: a group's
-    // witness names where it ends, and the boundary in the one display.
+    // witness names where it ends, and the boundary in the one display;
+    // r3 §7 R5: its replayed route has no guard (never "not resolved").
     assert!(
         yes.contains(
             "\nanswer: yes — COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46, beyond \
              Codeunit \"Base Poster\"::OnRun, entered at \
-             ws:src/OutIssueDocument.Codeunit.al:15 (condition not resolved)\n"
+             ws:src/OutIssueDocument.Codeunit.al:15 (no guard on the route)\n"
         ),
         "{yes}"
     );
@@ -2127,15 +2128,20 @@ fn prove_states_coverage_assumptions_and_limits() {
     );
     let uj: Value = serde_json::from_str(&run(ISSUE_DOC, "writes-table:Out Item", "json")).unwrap();
     assert_eq!(uj["payload"]["result"]["answer"], "unknown");
+    // r3 §7 R1: the loaded-subscribers assumption in words, naming the
+    // universe and the events it rests on.
     let no = run(FIELD_OPS, "may-commit", "human");
     assert!(
         no.contains(
             "\nanswer: no — no COMMIT site in the analyzed cone (every candidate decided; static \
-             candidates, not an observed trace)\nanalysis complete · assumptions: \
-             loaded-subscribers · limits: none · "
+             candidates, not an observed trace)\nanalysis complete · assumptions: assumes no \
+             subscribers beyond those considered in Out Ws with its loaded dependencies to the \
+             events its cone raises (the table events of its record operations); the analysis \
+             follows the loaded ones · limits: none · "
         ),
         "{no}"
     );
+    assert!(!no.contains("loaded-subscribers"), "{no}");
 }
 
 /// Every table both fixture apps declare (`table <n> "<name>"`), read from

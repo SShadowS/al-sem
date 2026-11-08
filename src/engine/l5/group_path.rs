@@ -71,6 +71,9 @@ pub struct GroupPath {
     pub crossing: String,
     pub steps: Vec<WitnessStep>,
     pub terminal: WitnessTerminal,
+    /// r3 §7 R5: the guards on the route, through the dependency entry to
+    /// the terminal operation (`None` off a group witness).
+    pub(crate) guards: Option<crate::engine::l5::literal_reach::RouteGuardSet>,
 }
 
 /// A group resource's path, or why it has none: `no-witness` (the searches
@@ -214,6 +217,8 @@ impl<'a> GroupPaths<'a> {
                     crossing: crossing.id.clone(),
                     steps: steps.iter().map(|s| self.step(reach, s)).collect(),
                     terminal: self.terminal(reach, terminal),
+                    guards: through
+                        .then(|| reach.route_guards_checked(routines[0], steps, terminal)),
                 }),
             ));
         }
@@ -278,6 +283,7 @@ impl<'a> GroupPaths<'a> {
             crossing: String::new(),
             steps: steps.iter().map(|s| self.step(reach, s)).collect(),
             terminal: self.terminal(reach, op),
+            guards: None,
         }
     }
 
@@ -297,6 +303,7 @@ impl<'a> GroupPaths<'a> {
                 crossing: String::new(),
                 steps: Vec::new(),
                 terminal: self.terminal(reach, op),
+                guards: None,
             }),
             None => Err(NoGroupPath {
                 reason: "own-no-witness",

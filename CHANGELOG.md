@@ -52,6 +52,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `callerDependent`, `notResolved`, `temporary`) under `opFamily: "write"`, and
   `writeSites` in the new order. No consumer reads either today.
 
+### Changed (r3 §7 R1, R4, R5: assumptions in words, `starts by:`, error boundaries)
+
+- **R1: a publisher assumption is one sentence, never the bare `loaded-subscribers` token**
+  (spec `2026-11-08-output-validation-r3.md` §7; round-4 p05, n01, p09, c25). Wherever the
+  literal flow's publisher keep decides a route, prove's assumptions line, explain's and
+  digest's `commits:` line and the `--writes-table` answer line print the same template:
+  `assumes <publisher> has no loaded subscriber, so <parameter> keeps its value (<universe>;
+  no additional subscribers assumed)`, or with subscribers `assumes no subscribers beyond
+  those considered in <universe> (<names>), none of which changes <parameter>`, then
+  `rules out <site>` or `rules out <n> sites (first: <site>)`. The universe is the
+  primary app with its loaded dependencies (`Continia Document Output with its loaded
+  dependencies` on CDO), or the app alone. A `no` that rests on the loaded subscribers of
+  the events its cone raises (p05, which printed only `assumptions: loaded-subscribers`)
+  says which events (`the table events of its record operations, 1 event publication`);
+  a `commits: no` that an assumption decided now says so too. The JSON labels
+  (`assumptions: ["loaded-subscribers"]`), `subscriberAssumptions`, `literalAssumes`,
+  `commits.literalDead.assumes` and the digest rows' `assumes` strings are unchanged;
+  prove's `scope.assumptions` mirrors the human line, as before.
+- **R4: `starts by:` ends at a statement boundary and keeps literal arguments** (n10, p09,
+  c06, m07). A statement prints whole up to about 200 characters
+  (`RunReport(false, VariantRec, LanguageCodeFieldNo, TableView, OutputAction::SaveAsPDF,
+  false)`, where it was cut at 80 characters inside `OutputAction::SaveA`); a longer one is
+  cut at an argument boundary of its first call with `… (+k arguments)`, never inside an
+  argument (a quoted string's comma included), and a long `if`/`case`/loop prints its head
+  up to the statement inside it. Up to four statements are named while their text stays
+  within about 200 characters (m07 now shows three of four). It is never omitted: no
+  other line of the card carries a statement's literal arguments.
+- **R5: error answers state their boundary** (m04, n04, p08, n01). A witness that ends in
+  dependency code counts the guards of the route the analysis replayed through the
+  dependency entry to the operation, with their expressions and polarity (m04: `4 guards
+  on the route, 0 evaluated`, with `InsertDefaultCustomerSetup`'s two guards; it printed
+  `condition not resolved`). When the guards beyond the entry were not analyzed (a routine
+  on the route without a statement tree, or no witness through the entry), it says `N
+  guards on the analyzed route, k evaluated; guards beyond the dependency entry: not
+  analyzed`. A `throws-error` answer about an event subscriber adds `whether it escapes
+  <publisher>: not established` before the caller-interception follow-up. prove, explain
+  and digest print a row's condition alike: the replayed route's guard count when a route
+  was replayed (prove's folded `also` rows and explain's and digest's `COMMIT at` and
+  kind-family places included), the class label (`conditional`, `in a loop`, …) only
+  where none was; a replayed route with no guard whose class was `condition not resolved`
+  says `no guard on the route`. Two evidence rows whose routes share their guards print
+  the guards once (`condition: the same guards as the row above (2 rows with them)`).
+
+### Fixed (r3 §7 R3: a pending write in dependency code names its own site)
+
+- **A callers'-context pending-write witness names the write's own site when the write is
+  reached through an event, a trigger or an object run** (round-4 p09). The site search
+  followed resolved calls only, so p09's `Insert on "My Notifications" (1518)` printed no
+  location; it now also searches the sited graph's may-execute edges, entering only
+  routines whose cone performs the write (unguided, the search passed 20,000 nodes on
+  CDO): `Insert on "My Notifications" (1518) at dep:Base Application:src/Modules/System/
+  Notifications/MyNotifications.Table.al:160, inside the call CreateInventoryPick at …:70,
+  before the call at …:76`. c06's witness is unchanged. A prove witness ending in
+  dependency code named its terminal operation and site before `entered at` only for a
+  group's own witness (m04); a `writes-table` answer printed `DB_MODIFY beyond …,
+  entered at …` with no site. It now names the asked table's witness's site (`DB_MODIFY
+  at dep:Out Base:src/BasePoster.Codeunit.al:68, beyond …`), and its condition is that
+  route's guards, never another resource's.
+
+### Added (r3 §7 R1: `assumptionRecords`, additive)
+
+- **Consumer notice: a new structured field, `assumptionRecords`**, a list of
+  `{publisher, parameter, universe, subscribersConsidered: [names], rulesOut: [sites]}`
+  (sites `file:line`, 1-based, in file then line order). It appears in prove's
+  `payload.result` (beside `subscriberAssumptions`), in digest 5.x's
+  `entries[].assumptionRecords` (every literal-dead row's assumption) and in the routine
+  summary's `commits.literalDead.assumptionRecords` (explain JSON, digest 5.x, impact's
+  routine totals). Digest
+  `--schema 4` and `--schema 3` documents do not carry it, and `digest_v5::to_v4` drops it
+  (`strip_assumption_records`), so a 4.0.0 rebuild of a 5.x document stays exact.
+  Consumers reading the existing strings need no change.
+
 ### Fixed (context server: a reclaim could free only one artifact kind)
 
 - **An ask is no longer refused as "impossible" while other asks' trees fill the memory

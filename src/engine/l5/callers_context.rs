@@ -304,13 +304,41 @@ struct Index<'a> {
 /// How many routines [`Index::deep_write_site`] visits at most.
 const DEEP_SITE_VISITS: usize = 20_000;
 
+/// `r`'s own first physical `op` on `table` (not known temporary): its file
+/// and 1-based line.
+fn own_write_site(r: &ModelRoutine, table: &str, op: &str) -> Option<(String, u32)> {
+    r.record_operations
+        .iter()
+        .filter(|o| o.table_id.as_deref() == Some(table))
+        .filter(|o| o.op.eq_ignore_ascii_case(op))
+        .filter(|o| !crate::program::body::features::temp_state_suppresses(o.temp_state.as_ref()))
+        .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column))
+        .map(|o| {
+            (
+                o.source_anchor.source_unit_id.clone(),
+                o.source_anchor.start_line + 1,
+            )
+        })
+}
+
 impl<'a> Index<'a> {
     /// r3 H4 (c06): where a callee's cone performs `op` on `table`: the
     /// nearest routine (breadth first over the resolved calls, `callee`
     /// itself first) whose own physical record operation it is, and that
-    /// operation's first site (`file`, 1-based line). `None` when the search
-    /// finds none within [`DEEP_SITE_VISITS`] routines.
-    fn deep_write_site(&self, callee: &str, table: &str, op: &str) -> Option<(String, u32)> {
+    /// operation's first site (`file`, 1-based line). r3 §7 R3 (p09): when
+    /// the resolved calls reach none (the write sits behind an event, a
+    /// trigger or an object run, as the cone follows them), the same search
+    /// over the sited graph's may-execute edges from the callee's nodes,
+    /// into routines whose cone performs the write only (an unguided search
+    /// on CDO passed 20,000 nodes before reaching p09's write).
+    /// `None` when neither finds one within [`DEEP_SITE_VISITS`] routines.
+    fn deep_write_site(
+        &self,
+        cx: &CallersCx<'_>,
+        callee: &str,
+        table: &str,
+        op: &str,
+    ) -> Option<(String, u32)> {
         let calls = self.calls_from.get_or_init(|| {
             let mut m: HashMap<&str, Vec<&str>> = HashMap::new();
             for e in &self.model.calls.edges {
@@ -320,38 +348,68 @@ impl<'a> Index<'a> {
             }
             m
         });
+        let start = self.by_id.get(callee)?;
         let mut seen: HashSet<&str> = HashSet::new();
         let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
-        let start = self.by_id.get(callee)?.id.as_str();
-        seen.insert(start);
-        queue.push_back(start);
+        seen.insert(start.id.as_str());
+        queue.push_back(start.id.as_str());
         while let Some(id) = queue.pop_front() {
-            if let Some(r) = self.by_id.get(id) {
-                let own = r
-                    .record_operations
-                    .iter()
-                    .filter(|o| o.table_id.as_deref() == Some(table))
-                    .filter(|o| o.op.eq_ignore_ascii_case(op))
-                    .filter(|o| {
-                        !crate::program::body::features::temp_state_suppresses(
-                            o.temp_state.as_ref(),
-                        )
-                    })
-                    .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column));
-                if let Some(o) = own {
-                    return Some((
-                        o.source_anchor.source_unit_id.clone(),
-                        o.source_anchor.start_line + 1,
-                    ));
-                }
+            if let Some(site) = self
+                .by_id
+                .get(id)
+                .and_then(|r| own_write_site(r, table, op))
+            {
+                return Some(site);
             }
             for &to in calls.get(id).into_iter().flatten() {
                 if seen.len() >= DEEP_SITE_VISITS {
-                    return None;
+                    queue.clear();
+                    break;
                 }
                 if seen.insert(to) {
                     queue.push_back(to);
                 }
+            }
+        }
+        // The sited graph: every edge kind the cone follows, entering only
+        // a routine whose own cone still performs the write (a node with no
+        // model row, an object or a hub, is passed through).
+        let g = cx.g;
+        let cone_writes = |r: &ModelRoutine| {
+            cx.cone_derived
+                .physical_table_write_ops_of(&r.id)
+                .get(table)
+                .is_some_and(|ops| ops.iter().any(|o| o.eq_ignore_ascii_case(op)))
+        };
+        let mut seen: HashSet<NodeIx> = HashSet::new();
+        let mut queue: std::collections::VecDeque<NodeIx> = std::collections::VecDeque::new();
+        for n in g.nodes_with_stable_id(&start.stable_routine_id) {
+            if seen.insert(n) {
+                queue.push_back(n);
+            }
+        }
+        while let Some(n) = queue.pop_front() {
+            if let Some(site) = self
+                .rows_of(g, n)
+                .into_iter()
+                .find_map(|r| own_write_site(r, table, op))
+            {
+                return Some(site);
+            }
+            for &s in self.sites_from(n) {
+                let to = g.sites()[s as usize].to;
+                if seen.contains(&to) {
+                    continue;
+                }
+                let rows = self.rows_of(g, to);
+                if !rows.is_empty() && !rows.iter().any(|r| cone_writes(r)) {
+                    continue;
+                }
+                if seen.len() >= DEEP_SITE_VISITS {
+                    return None;
+                }
+                seen.insert(to);
+                queue.push_back(to);
             }
         }
         None
@@ -519,7 +577,7 @@ fn pending_call_words(
         })
         .unwrap_or_else(|| "a write".to_string());
     // r3 H4 (c06): the write's own site, in the callee or deeper in its cone.
-    let site = ix.deep_write_site(callee, table, &op);
+    let site = ix.deep_write_site(cx, callee, table, &op);
     let at = site
         .as_ref()
         .map(|(f, l)| format!(" at {f}:{l}"))

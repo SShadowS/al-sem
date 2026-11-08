@@ -1,8 +1,8 @@
 prove Codeunit "Out Issue Document"::IssueDoc writes-table:Base Ledger 12 (table 70012, Out Base)   [cross-app]
-answer: yes — DB_INSERT beyond Codeunit "Base Poster"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 (condition not resolved)
+answer: yes — DB_INSERT at dep:Out Base:src/BasePoster.Codeunit.al:40, beyond Codeunit "Base Poster"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 (no guard on the route)
 analysis partial (2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 1 app
 more: --format json for every evidence row and its hops
   evidence: 1 effect
-    [DB_INSERT] beyond Codeunit "Base Poster"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
+    [DB_INSERT] at dep:Out Base:src/BasePoster.Codeunit.al:40, beyond Codeunit "Base Poster"::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
       path: IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun → PostDocument (Insert at dep:Out Base:src/BasePoster.Codeunit.al:40)
   next: alsem explain --routine 'Codeunit "Out Issue Document"::IssueDoc' — lists the workspace ones under gaps
