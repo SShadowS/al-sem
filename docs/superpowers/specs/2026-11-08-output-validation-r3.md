@@ -1,7 +1,9 @@
 # Output validation, round 3 revision (r3): what round 4 builds
 
-Status: **revision 2, after both reviews** (Fable and astra: "accept with changes"; every
-required change is folded in below and listed in §0).
+Status: **revision 3**. Revision 2 folded in both reviews of the draft; revision 3 adds the
+second-pass changes (astra: `var`-formal aliasing, the case no-match edge, the rebuild dropping
+selectors, measuring with selectors; Fable: selectors without duplicating `display`, and
+selectors win over the inline target).
 Date: 2026-11-08. Base: master `275bdb2d`.
 Earlier specs: `2026-11-06-output-validation-r1.md`, `2026-11-07-output-validation-r2.md`.
 Inputs: the round-3 reviews and rechecks
@@ -72,8 +74,8 @@ the parameter on one side and a label or literal on the other:
 - an arm is dead only when **every** label in it resolved and none matches the bound set; a
   label the engine cannot resolve (an extension value from an unloaded app, `FromInteger`, a
   range, an expression) makes its arm live **and** keeps `else` live;
-- `else` (or the fall-through after the arms) is dead only when every bound value matches a
-  resolved label of some arm;
+- `else` (or, without one, the implicit no-match edge: never the shared code after the `case`)
+  is dead only when every bound value matches a resolved label of some arm;
 - an unknown enum value is never narrowed to the members loaded today (an enum extension can
   add values); a resolved extension member passed explicitly may be a one-value binding.
 
@@ -95,7 +97,11 @@ The witness condition "guarded-by-IsHandled" leaves out the real guards (`if IsE
 
 **Flow rules.**
 - **Tracked:** locals; by-value parameters; `var` parameters from their first in-routine
-  assignment. **Globals never.** Any expression the pass cannot evaluate gives unknown.
+  assignment, **with alias safety**: two `var` formals can name the same actual (`P(X, X)`),
+  and a `var` formal can name a global the routine also writes. So a tracked `var` formal
+  becomes unknown at any write to another `var` formal or to a global of a compatible type, and
+  at any call (a callee may write the aliased actual). **Globals never.** Any expression the
+  pass cannot evaluate gives unknown.
 - **Order:** each statement is evaluated with its incoming state; then its writes and call side
   effects apply.
 - **Values:** literals, other tracked variables, `not`/`and`/`or` over them, and E1's value
@@ -130,7 +136,8 @@ E2) for the whole answer; no stale values, no mixed modes. For a multi-root dige
 a question asks about" means the routes from the named roots.
 
 **Tests and proofs.** Literal flow, derived `not`, branch join, a loop-carried value (the
-example above), a `var` parameter's first assignment, a global (never tracked), a publisher with
+example above), a `var` parameter's first assignment, two `var` formals called with the same
+actual (`A := true; B := false; if not A then Write();` called as `P(X, X)` keeps the write), a global (never tracked), a publisher with
 no subscriber, one that assigns, one that forwards to a helper that assigns, an unavailable
 subscriber body, two subscribers, an unresolved guard kept in the condition. One proof per
 rule.
@@ -158,13 +165,17 @@ routine's stable id), `reachesHops` (a positionally parallel array of hop counts
 
 **3 → 2 rebuild (exact).** Replace each key with its routine's stable id; rebuild `reachesHops`
 in the same order; rebuild `reachesByNavigationOnly` as the ids whose relation is
-`UI navigation` (absent when empty, as schema 2 does); drop `key` and `candidate`; restore the
+`UI navigation` (absent when empty, as schema 2 does); drop every field schema 3 adds
+(`key`, `candidate`, and §5.2's `selector` fields wherever schema 3 adds them: overload rows
+of `changed[]`, `runFirst` rows, summary rows); restore the
 schema-2 version metadata; keep schema-2 ordering and the absent-versus-empty distinction.
 Tests: mixed code/navigation targets, an empty result, a partial inventory
 (`reachesComplete: false`), a non-trivial changed set, and a binary-level rebuild test like
 `every_v4_document_is_rebuilt_from_v5`.
 
-**Target.** c21 ≤ 38.8 KB, inline. Reach information is never cut to meet it. CHANGELOG
+**Target.** c21 ≤ 38.8 KB, inline, measured on the complete schema 3 (§5.2's selectors
+included; the 38,828 B figure was measured without them). If the complete answer exceeds the
+inline cap, it stays a file: reach information is never cut to meet the target. CHANGELOG
 consumer notice (bc-dev-mcp reads the tests output).
 
 ---
@@ -214,7 +225,7 @@ consumer notice (bc-dev-mcp reads the tests output).
 
 | Point | Decision |
 |---|---|
-| Selectors in tests (`changed[]`, returned tests, summary and index rows) | **Do** with T1: each gets a `selector` (test procedures in the test universe get their own selector form). |
+| Selectors in tests (`changed[]`, returned tests, summary and index rows) | **Do** with T1, without duplicating text: `changed[].display` is already the selector form, so it is **documented as the selector** (a row whose display is not a valid selector, such as an overload needing its parameter list, also carries `selector`); `runFirst` rows (which have `codeunit` and `procedure` but no routine string) and summary/index rows get a `selector` (test procedures use their own selector form). If selectors and the c21 inline target still conflict after the re-measure, **selectors win** and c21 stays a file. |
 | Remaining vocabulary: c22's field-level `write`, touches' `reads` without Gets, legacy `entryPoints` in summaries and indexes, old temporary-state strings | **Do**: the word table's terms in every place listed; `entryPoints` in digest-index summaries becomes `dependencyCalls` (digest 5.0.0 unreleased). |
 | Typo recovery: n06 and m08 rank the right name but give no ready call | **Do**: a complete corrected call for the first nearest name. |
 | Digest-index presentation: overall-effect sentences; repeated tests handoff | **Do** the handoff once per index; the per-answer sentences describe the overall effect, not the first row. |
