@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (output validation r3, X4: tests schema 3 and the round-3 leftovers)
+
+Spec `docs/superpowers/specs/2026-11-08-output-validation-r3.md` §2 (T1), §4 (L1–L4),
+§5.1 (F top-9's c28 headline) and §5.2 (selectors in tests).
+
+- **Consumer notice — `al-sem.tests` version 3 is the default JSON** (bc-dev-mcp reads
+  it). `--schema 2` / MCP `schema: 2` keeps the version 2 document for one release
+  (`schema: 1` the version 1 one); `render::v2_of_v3` is the exact rebuild. What
+  moves:
+  - `changed[]` entries carry `key` (`"c:1"`, `"c:2"`, … in `changed[]` order; unique
+    within one document, not stable across calls). `changed[].display` is the routine's
+    selector; an entry whose display is not one (a display another routine shares, a
+    dependency routine) also carries `selector`. `changed[].nearest.candidate` is new
+    (below).
+  - A `runFirst` row's `reaches` is one object per reached changed routine, in
+    `changed[]` order: `{"changed": "c:3", "hops": 8, "relation": "code"}`, plus
+    `"candidate": "runtime-editable"` when the only path is a candidate page path. Each
+    object prints on one line. `reachesHops` and `reachesByNavigationOnly` are gone
+    (version 2 rebuilds them: the ids in the same order, the hops beside them, the ids
+    whose relation is `UI navigation`, absent when none). Each row carries `selector`
+    (the test's own display); the envelope summary's test and routine rows do too.
+  - `result.selection` carries `reachLimit` and, when some changed routine was past
+    it, `notExpanded` (their keys).
+  - The relation of a reach changed meaning in every version: `code` when **any** path
+    from the test to that changed routine is code (its hops are that path's), `UI
+    navigation` only when every path opens a page. Before, it was the shortest path's
+    relation, so a test with a short UI path and a longer code path counted as
+    navigation-only (schema 2's `reachesByNavigationOnly` now means what its name says).
+- **The reach walk is complete for up to 128 changed routines, and says so past it**
+  (L4). Each of the first 128 changed routines gets a walk of its own (was 32); the
+  rest are named as not expanded (`notExpanded`, a human line `reach per changed
+  routine: limit 128 routines; not expanded: …`, and the header's `limits:`), their
+  tests counted only where they are the nearest changed routine, and their status still
+  comes from a walk of their own, so "not expanded" never reads as "no modeled path".
+  Measured on CDO (warm, `release-fast`, the select phase alone, median of 3): before,
+  32 roots took 2,116 ms, 64 4,466 ms and 128 7,275 ms (about 65 ms per root walk, and
+  each dependency entry's forward cone measured again for every root); now the per-root
+  walks run on up to 8 threads and each cone is measured once per call: 32 roots 830
+  ms, 64 568 ms, 128 1,083 ms (a shared, loaded machine; noisy). `ALSEM_SELECT_TIMING=1`
+  prints the select phase's own time to stderr.
+- **c21 on schema 3: 40,297 bytes** (was 52,390), selectors included (the spec's 38.8 KB
+  target was measured without them; selectors win). It is under the 40 KiB inline cap,
+  so it comes back inline.
+- **Candidate page paths are marked** (L3). A test whose every UI path to a changed
+  routine takes a page lifecycle into a record trigger the page declares
+  non-editable while code may make it editable at runtime keeps relation `UI
+  navigation` and carries `candidate: "runtime-editable"` (on the reach and on
+  `changed[].nearest`); an established route wins when one exists, and a nearest test
+  prefers it. Human text: `UI navigation (candidate)`. `explain`'s potential UI
+  surfaces mark such pages `(may be read-only at runtime)` and list them in JSON
+  (`mayBeReadOnlyAtRuntime`, additive). Impact already never promoted the edge (it is
+  `overRule`).
+- **c28's headline counts the UI-navigation codeunits** (F top-9): `337 more by UI
+  navigation only in 36 codeunits (…)` instead of 36 codeunit numbers; `groups` and
+  `runFirst` in the JSON still list them.
+
+### Fixed (output validation r3, X4: table-extension keys and `runs:`)
+
+- **A table extension's keys attach to the table it extends** (L1). The model kept them
+  on the extension's own stub only, so `query touches` table mode left them out of the
+  `keys:` line and a field's `declared keys` missed a key an extension adds. They now
+  follow the table's own keys, named by the extension (`("No.", "Ext Code"; from
+  tableextension "Cust Ext")`, JSON `declaredBy`), resolved against the base table's
+  fields (a key over a base field and an extension field keeps both); the base's first
+  key stays the primary key.
+- **`runs:` prints one set of parentheses** (L2): `Codeunit "Base Poster" (70100), Run
+  at :15`, not `(70100) (Run at :15)`.
+
 ### Fixed (round-3 recheck: impact's tests line)
 
 - **The tests left out of the pick are not "not in this filter".** Impact's `tests:`

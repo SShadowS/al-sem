@@ -115,6 +115,28 @@ codeunit 50890 "PU Tests"
     begin
         P.OpenNew();
     end;
+
+    [Test]
+    procedure NewOnBothPages()
+    var
+        P: TestPage "PU Read Only Set Page";
+        Q: TestPage "PU Open Page";
+    begin
+        P.OpenNew();
+        Q.OpenNew();
+    end;
+}
+codeunit 50891 "PU Candidate Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure NewOnReadOnlySetPage()
+    var
+        P: TestPage "PU Read Only Set Page";
+    begin
+        P.OpenNew();
+    end;
 }
 "#;
 
@@ -338,5 +360,112 @@ fn explain_surfaces_leave_out_pages_that_block_the_operation() {
             "Read Only Ext",
             "Temp"
         ])
+    );
+}
+
+fn alsem_text(args: &[&str]) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Output validation r3 L3: a test whose only path to `OnInsert` is a
+/// candidate page step (`PU Read Only Set Page` is `Editable = false`, and
+/// code may make it editable) keeps relation `UI navigation` and carries
+/// `candidate: "runtime-editable"`; a test that also opens an established
+/// page (`NewOnBothPages`) does not: the established route wins. The human
+/// text says `UI navigation (candidate)`; schema 2 drops the field.
+///
+/// DISCRIMINATION (2026-11-08): the walk not marking a candidate site
+/// (`ext::CANDIDATE` left out of `Sel::step`) fails "the candidate test
+/// carries it"; restored, it passes.
+#[test]
+fn a_test_through_a_candidate_page_is_marked_a_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace(dir.path());
+    let w = ws.to_str().unwrap();
+    let args = [
+        "tests",
+        w,
+        "--routine",
+        "\"PU Rec\"::OnInsert",
+        "--format",
+        "json",
+    ];
+    let v = alsem_json(&args);
+    let row = |p: &str| {
+        v["runFirst"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["procedure"] == p)
+            .cloned()
+            .unwrap_or_else(|| panic!("{p}: {v:#}"))
+    };
+    let cand = row("NewOnReadOnlySetPage");
+    assert_eq!(cand["reaches"][0]["relation"], "UI navigation", "{cand:#}");
+    assert_eq!(
+        cand["reaches"][0]["candidate"], "runtime-editable",
+        "the candidate test carries it: {cand:#}"
+    );
+    let both = row("NewOnBothPages");
+    assert_eq!(both["reaches"][0]["relation"], "UI navigation", "{both:#}");
+    assert!(both["reaches"][0].get("candidate").is_none(), "{both:#}");
+    // The nearest test is an established one.
+    assert!(
+        v["changed"][0]["nearest"].get("candidate").is_none(),
+        "{:#}",
+        v["changed"][0]
+    );
+    let mut old = args.to_vec();
+    old.extend(["--schema", "2"]);
+    assert!(!alsem_json(&old).to_string().contains("runtime-editable"));
+    let human = alsem_text(&["tests", w, "--routine", "\"PU Rec\"::OnInsert"]);
+    assert!(
+        human.contains("PU Candidate Tests: 1 test; first [local, UI navigation (candidate)]"),
+        "{human}"
+    );
+}
+
+/// Output validation r3 L3: `explain` marks a page that blocks the step only
+/// while no runtime `Editable(…)` setter makes it editable, and lists those
+/// pages in JSON (`mayBeReadOnlyAtRuntime`); a page without the property is
+/// not marked.
+///
+/// DISCRIMINATION (2026-11-08): `pages_on_table` never marking a page
+/// (`page_may_be_read_only` replaced by `false`) fails the first assert.
+#[test]
+fn explain_marks_pages_that_may_be_read_only_at_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace(dir.path());
+    let w = ws.to_str().unwrap();
+    let human = alsem_text(&["explain", w, "--routine", "\"PU Rec\"::OnInsert"]);
+    assert!(
+        human.contains("Page \"PU Read Only Set Page\" (may be read-only at runtime)"),
+        "{human}"
+    );
+    assert!(
+        !human.contains("Page \"PU Open Page\" (may be read-only at runtime)"),
+        "{human}"
+    );
+    let v = alsem_json(&[
+        "explain",
+        w,
+        "--routine",
+        "\"PU Rec\"::OnInsert",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(
+        v["cards"][0]["runBy"]["mayBeReadOnlyAtRuntime"],
+        serde_json::json!([
+            "Page \"PU Read Only Ext Page\"",
+            "Page \"PU Read Only Set Page\""
+        ]),
+        "{:#}",
+        v["cards"][0]["runBy"]
     );
 }

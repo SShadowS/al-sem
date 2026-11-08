@@ -13,7 +13,7 @@
 //! walked in al-sem's deterministic ingestion order, two extensions colliding on
 //! a field number resolve identically on both sides: the FIRST-ingested wins.
 
-use super::workspace::{ModelEntities, ModelField, ModelTable};
+use super::workspace::{ModelEntities, ModelField, ModelKey, ModelTable};
 use crate::engine::ids::{encode_field_id, encode_table_id};
 use std::collections::HashSet;
 
@@ -87,6 +87,48 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
             };
             workspace.tables[base_idx].fields.push(merged);
             existing.insert(field.field_number);
+        }
+
+        // Output validation r3 L1: the extension's keys attach to the table
+        // it extends, named by the extension, after the table's own keys (an
+        // extension adds secondary keys only, so the base's first key stays
+        // the primary key). Their members resolve against the base table's
+        // fields, the extension's merged in, and the system fields: a key on
+        // a base field (`key(K; "No.", "CDO Handled")`) keeps both.
+        let ext_keys = workspace.tables[ext_idx].keys.clone();
+        let base = &mut workspace.tables[base_idx];
+        let by_name: std::collections::HashMap<String, String> = base
+            .fields
+            .iter()
+            .map(|f| (f.name.to_lowercase(), f.id.clone()))
+            .collect();
+        for (index, k) in ext_keys.iter().enumerate() {
+            let fields = k
+                .members
+                .iter()
+                .filter_map(|name| {
+                    by_name.get(name).cloned().or_else(|| {
+                        super::workspace::SYSTEM_FIELDS
+                            .iter()
+                            .find(|(lc, _, _)| lc == name)
+                            .map(|(_, _, n)| encode_field_id(&base_table_id, *n))
+                    })
+                })
+                .collect();
+            let id = format!(
+                "{base_table_id}/key/ext/{}/{}/{index}",
+                object.app_guid, object.object_number
+            );
+            // Idempotent, as the field merge is.
+            if base.keys.iter().any(|b| b.id == id) {
+                continue;
+            }
+            base.keys.push(ModelKey {
+                id,
+                fields,
+                members: k.members.clone(),
+                declared_by: Some(object.name.clone()),
+            });
         }
     }
 }

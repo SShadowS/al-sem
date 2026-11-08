@@ -570,13 +570,7 @@ fn attach_program_calls_with(
         let graph = program.body().ctx.graph();
         crate::program::page_ui::page_ui_blocks(graph)
             .into_iter()
-            .filter(|(_, b)| b.certain != 0)
-            .map(|(id, b)| {
-                (
-                    crate::program::model::model_object_id(graph, &id),
-                    b.certain,
-                )
-            })
+            .map(|(id, b)| (crate::program::model::model_object_id(graph, &id), b))
             .collect()
     };
     let (meta, body) = program.into_parts();

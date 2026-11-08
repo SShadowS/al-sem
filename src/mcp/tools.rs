@@ -518,7 +518,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_tests",
-            "Which tests to run first for a change, and whether that is enough. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them) or `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level). The test scope comes first: the workspace's own [Test] procedures and the sibling test apps, from `testApps` (folders), else `testApps` in .al-sem.json (`[]` turns them off), else found under the git top level (at most 3 levels and 64 app.json files; a cap says discovery incomplete). Each test app is analyzed in a test universe of its own (the workspace app loaded into it as source; nothing is written into the test app), started on the first call; the production engine resolves the changed routines. Then each changed routine's status (reached, no-known-path, analysis-incomplete, not-loaded, not-in-projection), the tests to run first ranked by tier, hops and codeunit, grouped per codeunit with the first test's path, `selection complete: yes|no` and, when no, every reason the whole suite must run as well (ways to run no edge shows, calls from test code that resolve nowhere, a root not in a test universe), and a codeunit filter. Default (`format: human`): one line per test codeunit (the first 5), 2-6 KB. Ask for more: `tier: dependency` (also tests whose path passes dependency code) or `tier: all` (also paths over open sites), `maxTests: N` (at most N tests in runFirst), `format: json` (schema al-sem.tests/2: runFirst, requiredFallback, selectionComplete, byTier, hidden by class, next; `schema: 1` for version 1, one release). Lines are 1-based. Dependency code: a test reaching the routine only through dependency code is counted in its own tier, never as local, and when those paths go through nodes that may execute most of the program the answer calls the set broad and says why. Static reachability, not coverage. Next: run the runFirst filter, then the whole suite when selection complete is no. Returns the exact `alsem tests` stdout.",
+            "Which tests to run first for a change, and whether that is enough. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them) or `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level). The test scope comes first: the workspace's own [Test] procedures and the sibling test apps, from `testApps` (folders), else `testApps` in .al-sem.json (`[]` turns them off), else found under the git top level (at most 3 levels and 64 app.json files; a cap says discovery incomplete). Each test app is analyzed in a test universe of its own (the workspace app loaded into it as source; nothing is written into the test app), started on the first call; the production engine resolves the changed routines. Then each changed routine's status (reached, no-known-path, analysis-incomplete, not-loaded, not-in-projection), the tests to run first ranked by tier, hops and codeunit, grouped per codeunit with the first test's path, `selection complete: yes|no` and, when no, every reason the whole suite must run as well (ways to run no edge shows, calls from test code that resolve nowhere, a root not in a test universe), and a codeunit filter. Default (`format: human`): one line per test codeunit (the first 5), 2-6 KB. Ask for more: `tier: dependency` (also tests whose path passes dependency code) or `tier: all` (also paths over open sites), `maxTests: N` (at most N tests in runFirst), `format: json` (schema al-sem.tests/3: runFirst, each row with its selector and every changed routine it reaches (`reaches`: the changed routine's `key`, hops, relation `code` when any code path reaches it, `UI navigation` when every path opens a page, `candidate` when the page may be read-only at runtime), requiredFallback, selectionComplete, byTier, hidden by class, next; `schema: 2` for version 2, one release). Lines are 1-based. Dependency code: a test reaching the routine only through dependency code is counted in its own tier, never as local, and when those paths go through nodes that may execute most of the program the answer calls the set broad and says why. Static reachability, not coverage. Next: run the runFirst filter, then the whole suite when selection complete is no. Returns the exact `alsem tests` stdout.",
             schema(
                 vec![
                     (
@@ -559,7 +559,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "schema",
-                        json!({"type": "integer", "enum": [1, 2], "description": "JSON document version (default 2: `hidden` grouped by class with its reason once). 1: the version 1 document, for one release."}),
+                        json!({"type": "integer", "enum": [1, 2, 3], "description": "JSON document version (default 3: `changed[]` entries keyed `c:1`, …; each runFirst row's `reaches` one object per reached changed routine with its hops, relation and candidate step; selectors on runFirst rows). 2: the version 2 document, for one release; 1: the version 1 document."}),
                     ),
                 ],
                 &[],
@@ -1139,15 +1139,18 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let format = a.enumerated("format", &["human", "json"], "human")?;
             v.opt("format", &format);
             v.switch("single-app", universe == Universe::SingleApp);
-            // §7.4: `schema: 1` keeps the version 1 document for one release.
+            // Output validation r3 T1: `schema: 2` keeps the version 2
+            // document for one release (`schema: 1` the version 1 one).
             let schema = match a.count("schema")? {
-                None => 2,
-                Some(n @ (1 | 2)) => {
+                None => 3,
+                Some(n @ (1..=3)) => {
                     v.opt("schema", &n.to_string());
                     n as u32
                 }
                 Some(n) => {
-                    return Err(format!("alsem_tests: unknown schema {n}. Expected: 1 or 2"));
+                    return Err(format!(
+                        "alsem_tests: unknown schema {n}. Expected: 1, 2 or 3"
+                    ));
                 }
             };
             // §6.1: the MCP front end's answers are worded for it; the CLI's

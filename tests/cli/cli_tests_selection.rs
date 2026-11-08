@@ -131,7 +131,7 @@ fn workspace_tests_select_the_local_test_with_its_hops() {
     let ws = repo_root().join("tests/fixtures/test-selection-graph");
     let v = json(&ws, &["--routine", "ApplyDecay"]);
     assert_eq!(v["schema"], "al-sem.tests");
-    assert_eq!(v["version"], 2);
+    assert_eq!(v["version"], 3);
     assert_eq!(v["changed"][0]["testStatus"], "tests with a modeled path");
     assert!(v["changed"][0].get("status").is_none(), "{v:#}");
     let first = &v["runFirst"][0];
@@ -142,6 +142,44 @@ fn workspace_tests_select_the_local_test_with_its_hops() {
     let (human, code) = tests(&ws, &["--routine", "ApplyDecay"]);
     assert_eq!(code, 0);
     golden("selection-graph.applydecay.human.txt", &human, None);
+}
+
+/// Output validation r3 T1, through the shipped binary (as
+/// `every_v4_document_is_rebuilt_from_v5` for query and digest): every
+/// default (schema 3) document read back through `v2_of_v3` equals the
+/// `--schema 2` document of the same input — a whole file of changed
+/// routines (a non-trivial changed set, routines with and without tests), a
+/// sibling test app with two routines, a capped selection, and a routine no
+/// test reaches (an empty `runFirst`).
+#[test]
+fn every_schema_2_document_is_rebuilt_from_schema_3() {
+    use al_sem::engine::test_select::render::v2_of_v3;
+    let graph = repo_root().join("tests/fixtures/test-selection-graph");
+    let t = universe_repo();
+    let app = t.path().join("App");
+    let cases: Vec<(&Path, Vec<&str>)> = vec![
+        (&graph, vec!["--file", "src/Ledger.al"]),
+        (&graph, vec!["--file", "src/Loyalty.al", "--max-tests", "1"]),
+        (
+            &app,
+            vec!["--routine", "TU Core::Leaf", "--routine", "TU Core::Calc"],
+        ),
+        (&app, vec!["--routine", "TU Core::Untested"]),
+    ];
+    let mut checked_reaches = 0;
+    for (ws, args) in cases {
+        let v3 = json(ws, &args);
+        assert_eq!(v3["version"], 3, "{args:?}");
+        checked_reaches += v3["runFirst"].as_array().map_or(0, |r| {
+            r.iter().filter(|t| t["reaches"][0].is_object()).count()
+        });
+        let mut old = args.clone();
+        old.extend(["--schema", "2"]);
+        let v2 = json(ws, &old);
+        assert_eq!(v2["version"], 2, "{args:?}");
+        assert_eq!(v2_of_v3(v3), v2, "{args:?}");
+    }
+    assert!(checked_reaches > 0, "precondition: reach objects rebuilt");
 }
 
 /// C-1 order: tier first, then hops, then codeunit id. `Post` is reached at
@@ -169,7 +207,8 @@ fn ranks_by_tier_then_hops() {
 /// `TestFR` sibling skipped `no-source`), the production app is loaded into
 /// the test universe as local source, and the changed root's StableRoutineId
 /// (resolved in the production universe) is found there: `Post` is reached
-/// by `PostUpdatesQty` at 1 hop, and the test's `reaches` names that id.
+/// by `PostUpdatesQty` at 1 hop, and the test's `reaches` names that
+/// routine's `changed[]` key.
 #[test]
 fn a_sibling_test_app_is_discovered_and_reaches_the_production_root() {
     let t = universe_repo();
@@ -183,11 +222,13 @@ fn a_sibling_test_app_is_discovered_and_reaches_the_production_root() {
     assert_eq!(scope["apps"][0]["productionTier"], "local");
     assert_eq!(scope["apps"][0]["productionApproximate"], true);
     assert_eq!(scope["skipped"][0]["reason"], "no-source");
-    let id = v["changed"][0]["stableId"].as_str().unwrap().to_string();
+    assert!(v["changed"][0]["stableId"].is_string(), "{v:#}");
     assert_eq!(v["changed"][0]["testStatus"], "tests with a modeled path");
     assert_eq!(v["runFirst"][0]["procedure"], "PostUpdatesQty");
     assert_eq!(v["runFirst"][0]["hops"], 1);
-    assert_eq!(v["runFirst"][0]["reaches"][0], id);
+    // Schema 3: the reach names the changed routine's key.
+    assert_eq!(v["changed"][0]["key"], "c:1");
+    assert_eq!(v["runFirst"][0]["reaches"][0]["changed"], "c:1");
     assert_eq!(v["selectionComplete"], true, "{v:#}");
     // The test app declares Library Assert (Microsoft), which is not loaded.
     assert!(v["next"].as_str().unwrap().contains("Library Assert"));

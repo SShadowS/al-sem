@@ -393,12 +393,12 @@ struct TestsCli {
     #[arg(long = "max-tests")]
     max_tests: Option<usize>,
 
-    /// Output format: human | json (`al-sem.tests/2`).
+    /// Output format: human | json (`al-sem.tests/3`).
     #[arg(long = "format", default_value = "human")]
     format: String,
 
-    /// `1`: the `al-sem.tests/1` JSON document, kept for one release after
-    /// version 2. The default is 2.
+    /// `2`: the `al-sem.tests/2` JSON document, kept for one release after
+    /// version 3; `1`: the version 1 document. The default is 3.
     #[arg(long = "schema", value_parser = parse_tests_schema)]
     schema: Option<u32>,
 
@@ -724,12 +724,13 @@ struct QueryTouchesCli {
     schema: Option<u32>,
 }
 
-/// `--schema` of `alsem tests`: 1 or 2.
+/// `--schema` of `alsem tests`: 1, 2 or 3.
 fn parse_tests_schema(s: &str) -> Result<u32, String> {
     match s {
         "1" => Ok(1),
         "2" => Ok(2),
-        other => Err(format!("unknown --schema {other}. Expected: 1 or 2")),
+        "3" => Ok(3),
+        other => Err(format!("unknown --schema {other}. Expected: 1, 2 or 3")),
     }
 }
 
@@ -2350,7 +2351,7 @@ fn run_tests_cmd(t: TestsCli) -> ExitCode {
         json: t.format == "json",
         surface: t.surface,
         single_app: t.single_app,
-        schema: t.schema.unwrap_or(2),
+        schema: t.schema.unwrap_or(3),
     };
     let mut run = |_: al_sem::engine::test_select::run::Target<'_>,
                    argv: Vec<String>|
