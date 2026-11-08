@@ -1208,6 +1208,7 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
         routine_id: root.clone(),
         effects,
         partial_site_types: Vec::new(),
+        literal_dead_sites: Vec::new(),
     }];
     crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
     let row = entries[0]
@@ -1338,6 +1339,7 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
         routine_id: root.clone(),
         effects,
         partial_site_types: Vec::new(),
+        literal_dead_sites: Vec::new(),
     }];
     crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
     let row = entries[0]
@@ -1472,6 +1474,7 @@ fn cdo_crossing_census() {
             routine_id: root.clone(),
             effects: effects_of(&tree, model, root),
             partial_site_types: Vec::new(),
+            literal_dead_sites: Vec::new(),
         }];
         let started = std::time::Instant::now();
         crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);

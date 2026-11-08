@@ -1,10 +1,11 @@
 prove Codeunit "CDO Issue Document"::IssueReminder may-commit   [cross-app]
 answer: yes — COMMIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229 (2 guards on the route, 0 evaluated), and 10 more
-analysis partial (21 calls not resolved (6 in this workspace), 263 interface calls open world (10 in this workspace)) · assumptions: loaded subscribers — a route is ruled out because Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+analysis partial (21 calls not resolved (6 in this workspace), 260 interface calls open world (9 in this workspace)) · assumptions: loaded subscribers — a route is ruled out because Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 11 effects
     [COMMIT] at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229
       condition: IsHandled: must be false, not evaluated (OnRun line 40); (GlobalReminderHeader."Issuing No." = '…: must be true, not evaluated (OnRun line 83)
       path: IssueReminder → [run] Codeunit "Reminder-Issue" (393)::OnRun (ends at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:87)
     also [COMMIT]: at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253; at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241; at ws:src/Platform/Licensing/CDOUsageManagement.Codeunit.al:35; … +7 rows; 11 rows of this type in all (detail: true lists every row with its path)
+  ruled out by literal arguments: 5 call sites not resolved that no route from here can reach (not counted as blockers)
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps

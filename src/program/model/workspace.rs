@@ -117,6 +117,28 @@ pub struct ModelObject {
     /// [`ModelObject::run_actions`], which fails loudly), `Some(vec![])` for an
     /// object with none and for a symbol-only object (no source).
     pub run_actions: Option<Vec<CardAction>>,
+    /// Round-4 literal routes: an Enum's or EnumExtension's interface
+    /// implementations per value, read from source (`None` for every other
+    /// object, and for an enum known only from its symbols). The literal
+    /// reach narrows an interface call on a variable assigned from a known
+    /// enum value to that value's implementation.
+    pub enum_impls: Option<ModelEnumImpls>,
+}
+
+/// One interface implementation as an enum names it: (interface, folded,
+/// last namespace segment; the codeunit as written).
+pub type EnumImplPair = (String, crate::program::node_extract::ObjectRef);
+
+/// Round-4 literal routes: the interface implementations an Enum or an
+/// EnumExtension declares, per value ([`ModelObject::enum_impls`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelEnumImpls {
+    /// Each value: its name, folded, and its `Implementation` pairs; `None`
+    /// when the property cannot be read (an `#if` inside it, a qualified
+    /// codeunit), `Some([])` when the value declares none.
+    pub values: Vec<(String, Option<Vec<EnumImplPair>>)>,
+    /// The object's `DefaultImplementation` pairs, the same way.
+    pub default: Option<Vec<EnumImplPair>>,
 }
 
 impl ModelObject {
@@ -1681,6 +1703,7 @@ fn project_ir(
                     .map(|a| card_action(a, source_unit_id, cols))
                     .collect()
             }),
+            enum_impls: crate::program::node_extract::enum_value_impls(o),
         });
 
         if object_type == "Table" || object_type == "TableExtension" {

@@ -171,6 +171,12 @@ pub struct ProveObligations {
     /// the `re-analysis under an assumption:` line names it among what
     /// `closedWorld` removes).
     pub coverage_open_world_only: bool,
+    /// Round-4 literal routes: the cone's unresolved sites no route from the
+    /// root can reach under its literal arguments (they block nothing and
+    /// are left out of the counts above). When every coverage reason is a
+    /// kind of such a site and none of the cone's sites is left, the
+    /// coverage counts as complete.
+    pub literal_dead_sites: usize,
     /// The answer holds only in `world`: the strict world answers differently
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
@@ -342,11 +348,26 @@ fn compute_obligations(
             .iter()
             .all(|r| r == INTERFACE_OPEN_WORLD);
 
+    // Round-4 literal routes: coverage partial only through call sites the
+    // literal arguments rule out (every reason a call-site kind, no site of
+    // the cone left, the cone not cut) is complete for this root.
+    let coverage_closed_by_literals = !complete
+        && entry.unresolved_literal_dead > 0
+        && entry.unresolved.is_empty()
+        && !entry.unresolved_traversal.truncated
+        && entry.coverage_status == "partial"
+        && !entry.coverage_reasons.is_empty()
+        && entry
+            .coverage_reasons
+            .iter()
+            .all(|r| blocker_kind_of_coverage_reason(r).is_some());
+
     ProveObligations {
         unresolved_callsites,
         open_world_rows,
         analysis_gaps: gaps_in_cone_count,
-        coverage_complete: complete || coverage_closed_by_assumption,
+        coverage_complete: complete || coverage_closed_by_assumption || coverage_closed_by_literals,
+        literal_dead_sites: entry.unresolved_literal_dead,
         cone_truncated: entry.unresolved_traversal.truncated,
         world,
         waived_rows,
@@ -1574,6 +1595,19 @@ fn route_guards_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
     )
 }
 
+/// Round-4 literal routes: the one line saying how many unresolved call
+/// sites the literal arguments ruled out (no blocker, no gap); `None` for
+/// none.
+pub(crate) fn literal_dead_sites_line(n: usize) -> Option<String> {
+    (n > 0).then(|| {
+        format!(
+            "  ruled out by literal arguments: {} not resolved that no route from here can \
+             reach (not counted as blockers)",
+            crate::engine::l5::routine_rollup::plural(n, "call site", "call sites")
+        )
+    })
+}
+
 fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("analysisGaps".into(), (o.analysis_gaps as u64).into());
@@ -1594,6 +1628,13 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
     };
     if let Some(key) = waived_key {
         m.insert(key.into(), (o.waived_rows as u64).into());
+    }
+    // Round-4 literal routes: present only when a site was ruled out.
+    if o.literal_dead_sites > 0 {
+        m.insert(
+            "literalDeadSites".into(),
+            (o.literal_dead_sites as u64).into(),
+        );
     }
     serde_json::Value::Object(m)
 }
@@ -2838,6 +2879,10 @@ pub fn format_prove_human(
             paths.map(|p| p.fcx),
         ));
     }
+    // Round-4 literal routes: said once, blockers or not.
+    if let Some(l) = literal_dead_sites_line(prove_result.obligations.literal_dead_sites) {
+        lines.push(l);
+    }
 
     // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
     // visible; the answer above is prove's own and is never qualified here.
@@ -3579,6 +3624,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             waived_rows: 0,
             coverage_closed_by_assumption: false,
             coverage_open_world_only: false,
+            literal_dead_sites: 0,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
             flow_assumed: Vec::new(),
@@ -4693,6 +4739,7 @@ mod tests {
             coverage_reasons: Vec::new(),
             effects,
             unresolved,
+            unresolved_literal_dead: 0,
             unresolved_traversal: UnresolvedTraversal {
                 truncated: cone_truncated,
                 max_depth: 64,

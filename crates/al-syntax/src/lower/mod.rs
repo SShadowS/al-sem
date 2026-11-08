@@ -437,7 +437,7 @@ fn lower_object(
             collect_globals(member, source, &mut globals);
             collect_protected_names(member, source, &mut protected_globals);
             collect_properties(member, source, &mut properties);
-            if kind == ObjectKind::Enum {
+            if matches!(kind, ObjectKind::Enum | ObjectKind::EnumExtension) {
                 collect_enum_values(member, source, &mut enum_values);
             }
         }
@@ -8249,6 +8249,24 @@ enum 50102 "K" implements "I", "J"
         assert!(values[1].implementations.is_empty());
     }
 
+    /// Round-4 literal routes: an enum extension's values are lowered too,
+    /// with their `Implementation` (an extension value names its own).
+    #[test]
+    fn enum_extension_values_are_lowered_with_implementations() {
+        let src = r#"
+enumextension 50103 "K Ext" extends "K"
+{
+    value(10; Extra) { Implementation = "I" = "Impl X"; }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let values = &af.objects[0].enum_values;
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].name, "Extra");
+        assert_eq!(enum_impls(&values[0]), [r#""I" = "Impl X""#]);
+    }
+
     /// #264: an `#if` around a value's `Implementation` gives one entry per arm.
     #[test]
     fn enum_value_implementation_if_arms_give_one_entry_per_arm() {
@@ -8320,8 +8338,8 @@ enum 50102 K implements I
         assert_eq!(enum_impls(&values[1]), [r#""I" = "P""#]);
     }
 
-    /// #264: only Enum objects carry enum values. The enumextension holds a
-    /// `value` declaration, so it is the case that tells the kind guard apart.
+    /// #264: only Enum and (round-4 literal routes) EnumExtension objects
+    /// carry enum values.
     #[test]
     fn non_enum_objects_have_no_enum_values() {
         let src = r#"
@@ -8345,7 +8363,11 @@ enumextension 50103 E extends K
         let af = parse(src);
         assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
         assert_eq!(af.objects.len(), 3);
-        assert!(af.objects.iter().all(|o| o.enum_values.is_empty()));
+        // Round-4 literal routes: an enum extension's values are lowered
+        // too (`enum_extension_values_are_lowered_with_implementations`);
+        // a codeunit and a table carry none.
+        assert!(af.objects[..2].iter().all(|o| o.enum_values.is_empty()));
+        assert_eq!(af.objects[2].enum_values.len(), 1);
     }
 
     /// Date, time and datetime literals lower to their own `Literal` variants,

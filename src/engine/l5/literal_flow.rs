@@ -84,6 +84,14 @@ pub(super) const WRITING_BUILTINS: &[&str] = &[
 pub(super) enum FDom {
     Bool,
     Val(Domain),
+    /// Round-4 literal routes: an `Interface "I"` local (the interface's
+    /// name, folded, last segment). Its values are the enum values it was
+    /// assigned from: each selects that value's implementation of `I`.
+    Iface(Arc<str>),
+    /// Round-4 literal routes: a `Variant`. Its values are the static types
+    /// of what it holds ([`Val::Type`]), which decide its type tests
+    /// (`IsRecord`, `IsCodeunit`, …).
+    Variant,
 }
 
 /// The domain of a variable of type `type_text`; `None` for a type the flow
@@ -92,12 +100,22 @@ pub(super) fn flow_domain(type_text: &str) -> Option<FDom> {
     if type_text.trim().eq_ignore_ascii_case("boolean") {
         return Some(FDom::Bool);
     }
+    if type_text.trim().eq_ignore_ascii_case("variant") {
+        return Some(FDom::Variant);
+    }
+    if let Some(i) = values::interface_name(type_text) {
+        return Some(FDom::Iface(i));
+    }
     values::domain_of(type_text).map(FDom::Val)
 }
 
-/// `v` in domain `d` after AL's conversion, when it is modelled.
+/// `v` in domain `d` after AL's conversion, when it is modelled. An
+/// interface takes an enum value (its implementation is chosen then); a
+/// Variant takes a static type (a value assigned to one keeps its type).
 pub(super) fn conv(v: &Val, d: &FDom) -> Option<Val> {
     match (v, d) {
+        (Val::Enum(..), FDom::Iface(_)) | (Val::Type(_), FDom::Variant) => Some(v.clone()),
+        (_, FDom::Iface(_) | FDom::Variant) | (Val::Type(_), _) => None,
         (Val::Bool(b), FDom::Bool) => Some(Val::Bool(*b)),
         (Val::Bool(_), FDom::Val(_)) | (_, FDom::Bool) => None,
         (_, FDom::Val(d)) => values::in_domain(v, d),
@@ -120,6 +138,8 @@ fn compatible(a: &FDom, b: &FDom) -> bool {
         (FDom::Bool, FDom::Bool)
             | (FDom::Val(Domain::Int), FDom::Val(Domain::Int))
             | (FDom::Val(Domain::Enum(_)), FDom::Val(Domain::Enum(_)))
+            | (FDom::Iface(_), FDom::Iface(_))
+            | (FDom::Variant, FDom::Variant)
     )
 }
 
@@ -185,6 +205,9 @@ pub(super) struct FlowProgram {
     alias: HashMap<String, String>,
     /// By-value parameters (index, slot).
     params: Vec<(u32, u16)>,
+    /// Round-4 literal routes: per call site on a tracked interface local
+    /// (an interface dispatch), the local's slot.
+    recv: HashMap<String, u16>,
     /// Relevance (module [`relevance`]): the parameters whose entry value
     /// can decide a condition, bit per parameter index (< 64).
     pub(super) guard_mask: u64,
@@ -215,6 +238,9 @@ pub(super) struct FlowEval {
     args: HashMap<u32, Vec<(u32, VSet)>>,
     /// The keep verdicts a reachable call used ([`ArgWrite::Keep`]), sorted.
     pub(super) keeps: Vec<u32>,
+    /// Round-4 literal routes: per reachable interface call site (its index)
+    /// the enum values its receiver may hold there (`None`: unknown).
+    recv: HashMap<u32, Option<VSet>>,
 }
 
 /// Every node of `n`'s subtree, `n` first.
@@ -250,6 +276,7 @@ fn reads<'e>(e: &'e FlowExpr, out: &mut Vec<&'e str>) {
                 reads(i, out);
             }
         }
+        FlowExpr::TypeTest { var, .. } => out.push(var),
         FlowExpr::Bool(_) | FlowExpr::Label(_) | FlowExpr::Unknown => {}
     }
 }
@@ -297,6 +324,11 @@ impl FlowProgram {
                 else {
                     continue;
                 };
+                // Only an interface LOCAL is tracked: a parameter holds an
+                // implementation its caller chose, not an enum value.
+                if matches!(dom, FDom::Iface(_)) {
+                    continue;
+                }
                 if p.is_var {
                     Kind::VarParam
                 } else {
@@ -334,6 +366,18 @@ impl FlowProgram {
                 }
             }
         }
+        let mut recv = HashMap::new();
+        for cs in &r.call_sites {
+            let crate::program::body::features::PCallee::Member { receiver, .. } = &cs.callee
+            else {
+                continue;
+            };
+            if let Some(&slot) = by_name.get(&values::fold(receiver))
+                && matches!(vars[slot as usize].dom, FDom::Iface(_))
+            {
+                recv.insert(cs.id.clone(), slot);
+            }
+        }
         let mut sites = HashMap::new();
         visit(&tree, &mut |n| {
             for id in [&n.operation_id, &n.callsite_id].into_iter().flatten() {
@@ -363,6 +407,7 @@ impl FlowProgram {
             sites,
             alias,
             params,
+            recv,
             guard_mask: 0,
             arg_masks: Vec::new(),
             has_guard: false,
@@ -462,6 +507,12 @@ impl FlowProgram {
             }
             _ => {}
         }
+        // Round-4 literal routes: an interface call's receiver decides which
+        // implementation runs, as a condition decides a branch.
+        if let Some(&s) = n.callsite_id.as_ref().and_then(|cs| self.recv.get(cs)) {
+            w.guard |= mask[s as usize];
+            w.has_guard = true;
+        }
         for c in n.condition_leaves.iter().flatten() {
             self.mask_walk(c, ctrl, mask, w);
         }
@@ -530,6 +581,7 @@ impl FlowProgram {
             live: HashSet::new(),
             args: HashMap::new(),
             keeps: Vec::new(),
+            recv: HashMap::new(),
             loops: Vec::new(),
             conds,
         };
@@ -542,7 +594,22 @@ impl FlowProgram {
             dead: x.seen.difference(&x.live).copied().collect(),
             args: x.args,
             keeps,
+            recv: x.recv,
         }
+    }
+
+    /// Round-4 literal routes: at interface call site `cs`, the interface it
+    /// dispatches on and the enum values its receiver may hold under `ev`;
+    /// `None` when the site is not one on a tracked interface local, was not
+    /// reached, or the receiver's value is unknown.
+    pub(super) fn receiver_at<'e>(&self, ev: &'e FlowEval, cs: &str) -> Option<(&str, &'e VSet)> {
+        let slot = *self.recv.get(cs)?;
+        let FDom::Iface(iface) = &self.vars[slot as usize].dom else {
+            return None;
+        };
+        let i = self.sites.get(cs)?;
+        let v = ev.recv.get(i)?.as_ref()?;
+        Some((iface, v))
     }
 }
 
@@ -598,6 +665,7 @@ struct Exec<'p> {
     live: HashSet<u32>,
     args: HashMap<u32, Vec<(u32, VSet)>>,
     keeps: Vec<u32>,
+    recv: HashMap<u32, Option<VSet>>,
     /// Per enclosing loop: the states at its `break`s.
     loops: Vec<Vec<St>>,
     conds: Option<&'p mut HashMap<usize, Option<VSet>>>,
@@ -690,8 +758,40 @@ impl Exec<'_> {
                 }
                 Some(of_bools(out))
             }
+            FlowExpr::TypeTest { var, method } => {
+                let &slot = self.p.by_name.get(var)?;
+                if self.p.vars[slot as usize].dom != FDom::Variant {
+                    return None;
+                }
+                let held = s[slot as usize].as_ref()?;
+                let mut out = Vec::new();
+                for v in held.iter() {
+                    let Val::Type(t) = v else {
+                        return None;
+                    };
+                    out.push(values::variant_test(method, t)?);
+                }
+                Some(of_bools(out))
+            }
             FlowExpr::Unknown => None,
         }
+    }
+
+    /// Round-4 literal routes: record what an interface call site's receiver
+    /// holds in state `s` (joined over every visit).
+    fn record_recv(&mut self, n: &PCFNNode, s: &Slots) {
+        let Some(cs) = &n.callsite_id else {
+            return;
+        };
+        let (Some(&slot), Some(&i)) = (self.p.recv.get(cs), self.p.sites.get(cs)) else {
+            return;
+        };
+        let v = s[slot as usize].clone();
+        let joined = match self.recv.remove(&i) {
+            None => v,
+            Some(was) => join(Some(vec![was]), Some(vec![v])).and_then(|mut j| j.pop().flatten()),
+        };
+        self.recv.insert(i, joined);
     }
 
     fn mark(&mut self, n: &PCFNNode, st: &St) {
@@ -826,6 +926,9 @@ impl Exec<'_> {
             "call" | "op" | "error" => {
                 self.exec_leaves(n, st);
                 self.mark(n, st);
+                if let Some(s) = st.as_ref() {
+                    self.record_recv(n, s);
+                }
                 if st.is_some() {
                     if let (Some(cs), Some(FlowFact::Args(a)), Some(s)) =
                         (&n.callsite_id, n.flow.as_deref(), st.as_ref())

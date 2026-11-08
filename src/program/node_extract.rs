@@ -551,6 +551,44 @@ fn param_sig_key(params: &[Param]) -> String {
         .join("|")
 }
 
+/// Round-4 literal routes: an Enum's or EnumExtension's interface
+/// implementations per value (`ModelObject::enum_impls`); `None` for any
+/// other object. A value (or the `DefaultImplementation`) whose property has
+/// more than one `#if` arm, or that [`read_impl_pairs`] cannot read, is
+/// `None`: unknown, never a guess.
+pub(crate) fn enum_value_impls(
+    obj: &al_syntax::ir::ObjectDecl,
+) -> Option<crate::program::model::workspace::ModelEnumImpls> {
+    if !matches!(obj.kind, ObjectKind::Enum | ObjectKind::EnumExtension) {
+        return None;
+    }
+    let one = |raws: &[&str]| -> Option<Vec<(String, ObjectRef)>> {
+        match raws {
+            [] => Some(Vec::new()),
+            [raw] => read_impl_pairs(raw),
+            _ => None,
+        }
+    };
+    let defaults: Vec<&str> = obj
+        .properties
+        .iter()
+        .filter(|p| p.name == "defaultimplementation")
+        .map(|p| p.value.as_str())
+        .collect();
+    let values = obj
+        .enum_values
+        .iter()
+        .map(|v| {
+            let raws: Vec<&str> = v.implementations.iter().map(String::as_str).collect();
+            (v.name.as_str().fold_identifier(), one(&raws))
+        })
+        .collect();
+    Some(crate::program::model::workspace::ModelEnumImpls {
+        values,
+        default: one(&defaults),
+    })
+}
+
 /// The closed-enum fact of one SOURCE object (#264, spec §1), as
 /// `(closed_enum, enum_impls)` (see those [`ObjectNode`] fields). Closed only
 /// when the object is an Enum implementing at least one interface, its file

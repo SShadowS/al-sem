@@ -1743,6 +1743,7 @@ mod tests {
             source_anchor: None,
             declaration_only_routines: Vec::new(),
             run_actions: None,
+            enum_impls: None,
         };
         m.workspace.objects = vec![
             object("ws/Codeunit/1", "ws", "Send Mail Mgt", 1),
