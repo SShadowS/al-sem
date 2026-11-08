@@ -695,6 +695,54 @@ fn an_empty_eviction_publishes_nothing() {
     drop((ready, held));
 }
 
+/// A reclaim run by a fill's own reservation can evict kind after kind:
+/// the request holds no snapshot while it reserves, so the first eviction's
+/// new snapshot leaves every other unpinned value with one owner. Found on
+/// CDO (output validation round 4, p09): with 33 other requests' trees
+/// (2.5 GB) resident, a witness fill's reclaim evicted the witnesses, then
+/// found every tree held twice (the request's snapshot and the one the
+/// eviction published), freed nothing, read the floor as the whole RSS and
+/// refused as impossible.
+///
+/// DISCRIMINATION (2026-11-08): loading the fill's snapshot before the
+/// reservation (as before the fix) fails "then Y goes too" (0 evicted).
+#[test]
+fn a_fills_reclaim_evicts_every_unpinned_kind_in_turn() {
+    let store: Store<K, V> = Store::new();
+    let n = AtomicUsize::new(0);
+    // Precondition: A (B's prerequisite), X and Y published, unpinned.
+    store
+        .ensure_prepared(
+            &needs(&[K::A, K::X, K::Y]),
+            &no_estimate,
+            &numbered(&n),
+            &Control::unreserved(),
+        )
+        .unwrap();
+    let evicted = std::sync::Mutex::new(Vec::new());
+    // The request's only claim is B (A, X and Y are published), so this is
+    // B's reservation; it reclaims X first, then Y (two kinds, in order).
+    let reserve = |_: &'static str, _: usize| -> Result<Guard<'_>, String> {
+        let x = store.evict_unheld(&[K::X]);
+        let y = store.evict_unheld(&[K::Y]);
+        evicted.lock().unwrap().push((x, y));
+        Ok(Box::new(()))
+    };
+    let ctl = Control {
+        stop: &|| None,
+        reserve: &reserve,
+    };
+    let s = store
+        .ensure_prepared(&needs(&[K::B]), &no_estimate, &numbered(&n), &ctl)
+        .unwrap();
+    assert_eq!(s.get(&K::B).unwrap().read_a, Some(1), "B read its A");
+    let evicted = evicted.into_inner().unwrap();
+    assert_eq!(evicted.len(), 1, "B's fill reserved once");
+    assert_eq!(evicted[0].0, 1, "X goes");
+    assert_eq!(evicted[0].1, 1, "then Y goes too");
+    assert!(store.load().get(&K::Y).is_none());
+}
+
 /// A reclaim evicts only what no request holds: a value in a ready
 /// snapshot a request still computes over stays (evicting it would free
 /// nothing until the request ends); once released it goes. Found on CDO:
