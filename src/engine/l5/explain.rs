@@ -3039,6 +3039,7 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
         coverage_reasons: Vec::new(),
         effects: Vec::new(),
         unresolved: Vec::new(),
+        unresolved_literal_dead: 0,
         unresolved_traversal: crate::engine::l5::unresolved_cone::UnresolvedTraversal {
             truncated: false,
             max_depth: 0,
@@ -3109,6 +3110,10 @@ fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
         && let Some(o) = v.as_object_mut()
     {
         o.insert("literalUnreachable".into(), true.into());
+        // Round-4 p09: no route to a dead row can run, so the witness kept
+        // for it (which passes a branch the literals rule out) is not shown,
+        // as the human text shows none.
+        o.remove("via");
         // r3 E2 (additive): what ruling it out assumes.
         let assumes: Vec<String> = e
             .flow_notes
@@ -5582,6 +5587,13 @@ fn atom_json(a: &ConditionAtom) -> Value {
         ConditionAtom::ParamBool { index, value } => {
             json!({ "kind": "ParamBool", "index": index, "value": value })
         }
+        ConditionAtom::ParamVariantTest {
+            index,
+            method,
+            negated,
+        } => json!({
+            "kind": "ParamVariantTest", "index": index, "method": method, "negated": negated,
+        }),
         ConditionAtom::CallResult {
             callee_text,
             negated,

@@ -229,6 +229,7 @@ mod cli_prove_group_path;
 mod cli_prove_interface_holder;
 mod cli_prove_internal_interface;
 mod cli_prove_literal_error_guards;
+mod cli_prove_literal_routes;
 mod cli_prove_loaded_subscribers;
 mod cli_prove_platform_natives;
 mod cli_prove_publisher_scoped;

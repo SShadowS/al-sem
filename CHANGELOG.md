@@ -65,6 +65,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `first [local, code] …` is never followed by a path that opens a page.
   - Code tests rank by the tier and hops of that code path, the path the answer shows.
 
+### Fixed (round-4 fact check: literal arguments through interfaces, Variants and unresolved sites)
+
+- **An interface variable assigned from a known enum value now reaches only
+  that value's implementation** (c15). `ModuleLicense := ModuleType` with
+  `ModuleType` bound to `"CDO Module Type"::Essential` dispatched to every
+  implementation, so a digest listed a witness through `"CDO Security Module
+  License"` that cannot run. The literal reach now tracks interface locals in
+  the within-routine flow; at an interface call it keeps only the
+  implementation each known enum value names (its `Implementation`, else the
+  enum's `DefaultImplementation`; an enum extension value its own). An
+  unknown value, or an implementation that names no loaded codeunit, keeps
+  every implementation, as before. Enum extensions' values are now lowered
+  (`ObjectDecl::enum_values`), and a label written `"Enum Name"::Value`
+  (without `Enum::`) binds like `Enum::"Enum Name"::Value` when no variable
+  or field has that name.
+- **An unresolved call site no route can reach is no longer a gap or a
+  blocker** (c15). The interface call at `CDOModuleManager.Codeunit.al:55`,
+  reached only under `if ShowError` with every caller passing `false`, was a
+  table-answer blocker while the same routine's `Error` was marked
+  literal-dead. The unresolved cone now leaves out the sites the literal
+  reach rules out from the root, and says once how many: `prove` adds
+  `obligations.literalDeadSites` and a `ruled out by literal arguments` line;
+  digest and explain add `gaps.literalDead` and the count on the
+  `uncertainty:` line. Coverage partial only through such sites counts as
+  complete for that root.
+- **A `Variant` type test is decided by the argument's static type** (p01).
+  `RecordIsTemporary(Rec)` behind `if not VariantRecord.IsRecord then
+  Error(…)` was listed as an inherited rule, a caller rule and an
+  `ERROR_THROW`. A `Variant` parameter now holds the static type of the
+  caller's variable (`Record`, `RecordRef`, `Codeunit`, …; the implicit `Rec`
+  included), and `IsRecord`, `IsCodeunit` and the other type tests evaluate
+  on it, in the literal reach and in the rules across calls
+  (`ConditionAtom::ParamVariantTest`). Text, Code and number types stay
+  unknown.
+- **A dead row no longer shows a route** (p09). `explain`'s JSON kept a
+  `via` for `literalUnreachable` rows that went through a branch the literal
+  arguments rule out; it is now left out, as the human text shows none, and a
+  crossing's `prefix` is taken only from a row that can run.
+
 ### Fixed (round-4 E2: values inside a routine and publisher `var` parameters)
 
 - **A value computed inside a routine now prunes the branches it cannot take**

@@ -242,6 +242,17 @@ struct Step<'m> {
     op: Option<&'m ModelRecordOperation>,
 }
 
+/// Round-4 literal routes: a `Variant` type test across one call step
+/// ([`CrossRules::variant_across`]).
+enum VariantAcross {
+    /// The argument's static type decides it: whether the test holds.
+    Decided(bool),
+    /// The caller's own usable `Variant` parameter is passed: re-anchored.
+    Forwarded(u32),
+    /// Nothing is known: kept as written.
+    Unknown,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Kind {
     All,
@@ -703,6 +714,106 @@ impl<'m> CrossRules<'m> {
         u
     }
 
+    /// Round-4 literal routes: what a type test of the callee's `Variant`
+    /// parameter `index` becomes across `step`. The parameter must still
+    /// hold the argument at the test: never assigned in the callee, and
+    /// passed on only to `RecRef.GetTable` / `Format` or to a resolved
+    /// routine taking it by value. Then a caller variable of known static
+    /// type decides it, and a caller `Variant` parameter usable the same way
+    /// takes it over.
+    fn variant_across(
+        &self,
+        caller: usize,
+        step: &Step<'_>,
+        index: u32,
+        method: &str,
+    ) -> VariantAcross {
+        let Some(cs) = step.call else {
+            return VariantAcross::Unknown;
+        };
+        if !self.variant_usable(step.to, index) {
+            return VariantAcross::Unknown;
+        }
+        let Some(info) = cs.argument_infos.get(index as usize) else {
+            return VariantAcross::Unknown;
+        };
+        if !matches!(info.kind.as_str(), "identifier" | "quoted_identifier") {
+            return VariantAcross::Unknown;
+        }
+        let fold = |s: &str| s.trim().trim_matches('"').to_lowercase();
+        let name = fold(&info.text);
+        let c = self.row(caller);
+        if let Some(p) = c.parameters.iter().find(|p| fold(&p.name) == name)
+            && !p.is_var
+            && p.type_text.trim().eq_ignore_ascii_case("variant")
+        {
+            return if self.variant_usable(caller, p.index) {
+                VariantAcross::Forwarded(p.index)
+            } else {
+                VariantAcross::Unknown
+            };
+        }
+        let ty = match c.variables.iter().find(|v| fold(&v.name) == name) {
+            Some(v) => {
+                crate::engine::l5::literal_reach::values::variant_type_name(&v.declared_type)
+            }
+            None => c
+                .record_variables
+                .iter()
+                .any(|v| v.is_implicit_rec && fold(&v.name) == name)
+                .then_some("record"),
+        };
+        match ty.and_then(|t| crate::engine::l5::literal_reach::values::variant_test(method, t)) {
+            Some(holds) => VariantAcross::Decided(holds),
+            None => VariantAcross::Unknown,
+        }
+    }
+
+    /// Whether row `row`'s by-value `Variant` parameter `index` holds its
+    /// argument everywhere in the routine ([`Self::variant_across`]).
+    fn variant_usable(&self, row: usize, index: u32) -> bool {
+        let r = self.row(row);
+        let Some(p) = r.parameters.iter().find(|p| p.index == index) else {
+            return false;
+        };
+        if p.is_var || !p.type_text.trim().eq_ignore_ascii_case("variant") {
+            return false;
+        }
+        let fold = |s: &str| s.trim().trim_matches('"').to_lowercase();
+        let name = fold(&p.name);
+        if r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name) {
+            return false;
+        }
+        let routines = &self.model.workspace.routines;
+        let targets = self.ix.site_targets.get(&row);
+        r.call_sites.iter().all(|cs| {
+            cs.argument_bindings
+                .iter()
+                .filter(|b| b.source_kind == "parameter" && b.source_parameter_index == Some(index))
+                .all(|b| {
+                    let tos = targets.and_then(|m| m.get(cs.id.as_str()));
+                    match tos {
+                        Some(tos) if !tos.is_empty() => tos.iter().all(|&t| {
+                            routines[t]
+                                .parameters
+                                .iter()
+                                .find(|q| q.index == b.parameter_index)
+                                .is_some_and(|q| !q.is_var)
+                        }),
+                        _ => match &cs.callee {
+                            crate::program::body::features::PCallee::Member { method, .. } => {
+                                method.eq_ignore_ascii_case("gettable")
+                            }
+                            crate::program::body::features::PCallee::Bare { name } => {
+                                name.eq_ignore_ascii_case("format")
+                            }
+                            _ => false,
+                        },
+                    }
+                })
+        })
+    }
+
     /// `rule`, a rule in `callee`'s frame, seen from `caller` across `step`.
     /// `None`: an argument contradicts it, so it cannot fire through this call.
     fn across(&self, rule: &PRule, caller: usize, step: &Step<'_>) -> Option<PRule> {
@@ -717,6 +828,39 @@ impl<'m> CrossRules<'m> {
         for (k, (atom, text)) in rule.when.iter().zip(&rule.when_texts).enumerate() {
             earlier.resize(when.len(), last);
             last = rule.when_earlier.get(k).copied().unwrap_or(false);
+            if let ConditionAtom::ParamVariantTest {
+                index,
+                method,
+                negated,
+            } = atom
+            {
+                match self.variant_across(caller, step, *index, method) {
+                    // The argument's type decides the test: a rule whose
+                    // atom is then false cannot fire through this call; a
+                    // true atom holds and is dropped.
+                    VariantAcross::Decided(holds) => {
+                        if holds == *negated {
+                            return None;
+                        }
+                    }
+                    VariantAcross::Forwarded(j) => {
+                        when.push(ConditionAtom::ParamVariantTest {
+                            index: j,
+                            method: method.clone(),
+                            negated: *negated,
+                        });
+                        texts.push(text.clone());
+                    }
+                    VariantAcross::Unknown => {
+                        when.push(ConditionAtom::Other {
+                            text: text.clone(),
+                            anchor: rule.anchor.clone(),
+                        });
+                        texts.push(text.clone());
+                    }
+                }
+                continue;
+            }
             let ConditionAtom::ParamBool { index, value } = atom else {
                 when.push(atom.clone());
                 texts.push(text.clone());

@@ -780,8 +780,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // IssueReminder's `yes` ran through `Reminder-Issue`'s
         // `TempGenJnlLine` insert into a subscriber that exits on
         // `Rec.IsTemporary()`; without it the answer is `unknown` with its
-        // 287 blockers folded by kind (25 lines, 3,199 B).
-        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_400),
+        // 287 blockers folded by kind (25 lines, 3,199 B). Round-4 literal
+        // routes (2026-11-08): 284 blockers and one line for the 5 call
+        // sites the literal arguments rule out (26 lines, 3,429 B).
+        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_550),
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
         ("RunReportID", "digest human") => (135, 46_300),

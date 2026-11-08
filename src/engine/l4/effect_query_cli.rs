@@ -6944,6 +6944,7 @@ tableextension 50101 \"Cust Ext\" extends Cust
                 })
                 .collect(),
             run_actions: None,
+            enum_impls: None,
         }
     }
 

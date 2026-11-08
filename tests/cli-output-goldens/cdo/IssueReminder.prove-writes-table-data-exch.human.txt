@@ -1,18 +1,18 @@
 prove Codeunit "CDO Issue Document"::IssueReminder writes-table:Data Exch. (table 1220, Base Application)   [cross-app]
-answer: unknown (blocked by: interface dispatch (open world) 263, call not resolved 21, write on a table not resolved 2, and 1 more kind) — no matching effect was found in the analyzed cone
-analysis partial (21 calls not resolved (6 in this workspace), 263 interface calls open world (10 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+answer: unknown (blocked by: interface dispatch (open world) 260, call not resolved 21, write on a table not resolved 2, and 1 more kind) — no matching effect was found in the analyzed cone
+analysis partial (21 calls not resolved (6 in this workspace), 260 interface calls open world (9 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: detail: true lists every blocker and row; format: "json" for every evidence row and its hops
-  plain reading: no matching effect was found in the analyzed cone; unknown because of interface dispatch (open world) 263, call not resolved 21, write on a table not resolved 2, and 1 more kind
+  plain reading: no matching effect was found in the analyzed cone; unknown because of interface dispatch (open world) 260, call not resolved 21, write on a table not resolved 2, and 1 more kind
   not established: that it never writes Data Exch.
-  re-analysis under an assumption: alsem_prove {"routine": "Codeunit \"CDO Issue Document\"::IssueReminder", "question": "writes-table:Data Exch.", "closedWorld": true} — only if the deployment has no other implementations of these interfaces; it changes the assumption, not what runs; removes interface dispatch (open world) 263; stay: call not resolved 21, write on a table not resolved 2, coverage incomplete 1
-  blockedBy: 287 blockers in 4 kinds (at most 3 each, workspace ones first; detail: true lists every one)
+  re-analysis under an assumption: alsem_prove {"routine": "Codeunit \"CDO Issue Document\"::IssueReminder", "question": "writes-table:Data Exch.", "closedWorld": true} — only if the deployment has no other implementations of these interfaces; it changes the assumption, not what runs; removes interface dispatch (open world) 260; stay: call not resolved 21, write on a table not resolved 2, coverage incomplete 1
+  blockedBy: 284 blockers in 4 kinds (at most 3 each, workspace ones first; detail: true lists every one)
     coverage incomplete: 1
       coverage status: partial
-    interface dispatch (open world): 263 (10 in this workspace, 247 in dependency code, 6 not placed)
+    interface dispatch (open world): 260 (9 in this workspace, 245 in dependency code, 6 not placed)
       DispatcherFactory.CreateeDocumentDispatcher in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
       DispatcherFactory.CreateLegacyeDocDispatcher in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81
       DocumentDispatcher.DispatchDocument in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:83
-      … +260 blockers (of 263 blockers; detail: true lists them)
+      … +257 blockers (of 260 blockers; detail: true lists them)
     write on a table not resolved: 2 (2 in this workspace)
       DB_INSERT on a table that is not known @ ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:307
       DB_MODIFY on a table that is not known @ ws:src/Features/HandledState/CDOHandledFieldsManagement.Codeunit.al:247
@@ -21,6 +21,7 @@ more: detail: true lists every blocker and row; format: "json" for every evidenc
       Codeunit.Run(<dynamic>) in HandleDelivery @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:186
       Report.RunModal in TryRunReport @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:244
       … +18 blockers (of 21 blockers; detail: true lists them)
+  ruled out by literal arguments: 5 call sites not resolved that no route from here can reach (not counted as blockers)
   top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
   top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps

@@ -1114,6 +1114,9 @@ pub struct DigestEntryFull {
     pub coverage_reasons: Vec<String>,
     pub effects: Vec<DigestEffectFull>,
     pub unresolved: Vec<UnresolvedConeItem>,
+    /// Round-4 literal routes: the unresolved sites of the cone left out
+    /// because no route from the root to them can run.
+    pub unresolved_literal_dead: usize,
     pub unresolved_traversal: UnresolvedTraversal,
     pub entry_diagnostics: Vec<EntryDiagnostic>,
     /// An Interface / ControlAddIn procedure declaration (#71): no body, no effects.
@@ -1382,6 +1385,9 @@ pub struct DigestEffects {
 /// obligations read.
 pub struct UnresolvedCone {
     pub items: Vec<UnresolvedConeItem>,
+    /// Round-4 literal routes: how many of the cone's unresolved sites the
+    /// literal arguments rule out (left out of `items`).
+    pub literal_dead: usize,
     pub traversal: UnresolvedTraversal,
     /// The tree's analysis gaps whose subject the cone visits
     /// ([`count_gaps_in_cone`]), counted before the tree is dropped (#160
@@ -1717,10 +1723,22 @@ impl<'t> FinishCx<'t> {
                 let unresolved = roots
                     .iter()
                     .map(|r| {
-                        let c = unresolved_cone(tree, r);
+                        let mut c = unresolved_cone(tree, r);
+                        // Round-4 literal routes: the sites the literal
+                        // pass ruled out from this root leave the cone (as
+                        // a gap and as a blocker); their count stays.
+                        let dead = entries
+                            .iter()
+                            .find(|e| e.routine_id == *r)
+                            .map_or(&[][..], |e| e.literal_dead_sites.as_slice());
+                        let before = c.items.len();
+                        c.items
+                            .retain(|i| dead.binary_search(&i.callsite_id).is_err());
+                        let literal_dead = before - c.items.len();
                         (
                             r.clone(),
                             UnresolvedCone {
+                                literal_dead,
                                 gaps_in_cone: gaps_in_cone.then(|| {
                                     count_gaps_in_cone(
                                         &self.gap_subjects,
@@ -1872,6 +1890,9 @@ pub(crate) struct LiteralPass<'t> {
     reach: crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: crate::engine::l5::group_path::GroupPaths<'t>,
     suffixes: crate::engine::l5::literal_reach::SuffixCache<'t>,
+    /// Round-4 literal routes: the tree's unresolved call sites (the ledger
+    /// rows an unresolved cone lists), sorted and distinct.
+    unresolved_sites: Vec<&'t str>,
 }
 
 impl<'t> LiteralPass<'t> {
@@ -1889,12 +1910,21 @@ impl<'t> LiteralPass<'t> {
             let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
             crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
         };
+        let mut unresolved_sites: Vec<&str> = tree
+            .callsite_resolutions
+            .iter()
+            .filter(|r| crate::engine::l5::unresolved_cone::is_listed(r))
+            .map(|r| r.callsite_id.as_str())
+            .collect();
+        unresolved_sites.sort_unstable();
+        unresolved_sites.dedup();
         LiteralPass {
             reach,
             group_paths,
             // W2-0b (design §3.4.3): the suffix trees, shared by every root,
             // crossing and resource of this read.
             suffixes: crate::engine::l5::literal_reach::SuffixCache::default(),
+            unresolved_sites,
         }
     }
 
@@ -1904,8 +1934,9 @@ impl<'t> LiteralPass<'t> {
             reach,
             group_paths,
             suffixes,
+            unresolved_sites,
         } = self;
-        literal_reach_entries(reach, group_paths, suffixes, entries);
+        literal_reach_entries(reach, group_paths, suffixes, unresolved_sites, entries);
     }
 }
 
@@ -1913,6 +1944,7 @@ fn literal_reach_entries<'t>(
     reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: &crate::engine::l5::group_path::GroupPaths<'t>,
     suffixes: &mut crate::engine::l5::literal_reach::SuffixCache<'t>,
+    unresolved_sites: &[&str],
     entries: &mut [DigestEntryResult],
 ) {
     let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
@@ -2014,8 +2046,15 @@ fn literal_reach_entries<'t>(
             .copied()
             .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
             .collect();
-        let (dead, dead_resources, assumed) =
-            reach.unreachable_effects_noted(&entry.routine_id, &entry.effects, &per_site);
+        let (dead, dead_resources, assumed, dead_sites) = reach.unreachable_effects_noted(
+            &entry.routine_id,
+            &entry.effects,
+            &per_site,
+            unresolved_sites,
+        );
+        // Round-4 literal routes: an unresolved site no route from the root
+        // can reach is no gap and no blocker of this root.
+        entry.literal_dead_sites = dead_sites;
         for i in dead {
             entry.effects[i].literal_unreachable = true;
         }
@@ -2230,6 +2269,7 @@ pub fn run_digest_query_full_from_entries(
                 coverage_reasons: vec!["declaration-only".to_string()],
                 effects: Vec::new(),
                 unresolved: Vec::new(),
+                unresolved_literal_dead: 0,
                 unresolved_traversal: UnresolvedTraversal {
                     truncated: false,
                     max_depth: DEFAULT_MAX_DEPTH,
@@ -2490,6 +2530,7 @@ pub fn run_digest_query_full_from_entries(
             coverage_reasons: cov_reasons,
             effects: full_effects,
             unresolved: cone.items,
+            unresolved_literal_dead: cone.literal_dead,
             unresolved_traversal: cone.traversal,
             entry_diagnostics,
             declaration_only: false,
@@ -2717,6 +2758,15 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
         .map(unresolved_item_to_value)
         .collect();
     m.insert("unresolved".into(), serde_json::Value::Array(ur));
+    // Round-4 literal routes: the unresolved sites left out because no route
+    // from the root to them can run under its literal arguments. Present
+    // only then.
+    if entry.unresolved_literal_dead > 0 {
+        m.insert(
+            "unresolvedLiteralDead".into(),
+            (entry.unresolved_literal_dead as u64).into(),
+        );
+    }
 
     // unresolvedTraversal
     let mut trav = serde_json::Map::new();
@@ -5170,6 +5220,7 @@ mod tests {
             coverage_reasons: Vec::new(),
             effects: Vec::new(),
             unresolved: Vec::new(),
+            unresolved_literal_dead: 0,
             unresolved_traversal: UnresolvedTraversal {
                 truncated: false,
                 max_depth: 64,
@@ -5218,6 +5269,58 @@ mod tests {
             flow_notes: None,
             crossing: None,
         }
+    }
+
+    /// Round-4 literal routes (c15-7): a crossing's prefix path is taken
+    /// only from a row that can run. Hand-stated rows of one crossing: a
+    /// dead row with the shorter path and a live row with a longer one; and
+    /// the dead row alone, which leaves no prefix.
+    ///
+    /// DISCRIMINATION (2026-11-08): the `!e.literal_unreachable` condition
+    /// in `RoutineRollup::build` removed fails at "the live row's path";
+    /// restored, passes.
+    #[test]
+    fn a_crossing_prefix_comes_from_a_live_row() {
+        use crate::engine::l5::digest::{ProjectedHop, QueryWitnessHop};
+        let hop = |from: &str, to: &str| ProjectedHop {
+            inner: QueryWitnessHop {
+                kind: "call",
+                from_routine_id: from.to_string(),
+                from_display: from.to_string(),
+                to_routine_id: Some(to.to_string()),
+                to_display: Some(to.to_string()),
+                callee_display: None,
+                callsite_id: None,
+                event_id: None,
+                target_app_guid: None,
+                edge_kind: Some("direct-call".to_string()),
+                anchor: None,
+                receiver_type: None,
+                interface_name: None,
+                candidate_count: None,
+                operation_id: None,
+            },
+        };
+        let boundary = [("boundary", "Codeunit Dep::Entry")];
+        let dead = || {
+            let mut d = effect("UI_CONFIRM", &boundary, &[]);
+            d.via_paths = vec![vec![hop("r", "x")]];
+            d.literal_unreachable = true;
+            d
+        };
+        let mut live = effect("UI_MESSAGE", &boundary, &[]);
+        live.via_paths = vec![vec![hop("r", "a"), hop("a", "b")]];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let mut e = entry_with(vec![]);
+        e.effects = vec![dead(), live];
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.crossings.len(), 1, "precondition: one crossing");
+        assert_eq!(r.crossings[0].prefix_row, Some(1), "the live row's path");
+        let mut e = entry_with(vec![]);
+        e.effects = vec![dead()];
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.crossings[0].prefix_row, None, "a dead row gives none");
     }
 
     /// Output validation §8.2 (F53, c15) and §9.8 (F73): the summary row

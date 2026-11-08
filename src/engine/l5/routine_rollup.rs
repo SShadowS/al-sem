@@ -1342,6 +1342,9 @@ pub struct GapCounts {
     pub not_placed: Vec<usize>,
     /// Dependency gaps' callees, most frequent first.
     pub top_callees: Vec<(String, usize)>,
+    /// Round-4 literal routes: the cone's unresolved sites left out because
+    /// no route from the root to them can run.
+    pub literal_dead: usize,
 }
 
 /// The entry point behind most of a routine's may-persist tables.
@@ -1394,6 +1397,9 @@ pub struct RollupTotals {
     pub gaps_workspace: usize,
     pub gaps_dependency: usize,
     pub gaps_not_placed: usize,
+    /// Round-4 literal routes: unresolved sites ruled out by the literal
+    /// arguments (not counted as gaps above).
+    pub gaps_literal_dead: usize,
     pub temporary_only_tables: usize,
     pub literal_dead_tables: usize,
     pub no_path_operations: usize,
@@ -1503,6 +1509,11 @@ impl RollupTotals {
         });
         if self.commit_sites_partial {
             v["commits"]["atLeast"] = json!(true);
+        }
+        // Round-4 literal routes (additive): the unresolved sites the literal
+        // arguments rule out, not counted as gaps.
+        if self.gaps_literal_dead > 0 {
+            v["gaps"]["literalDead"] = json!(self.gaps_literal_dead);
         }
         // §8.2 (F53, additive): the COMMIT rows literal arguments rule out,
         // counted apart, so `effectsByType.COMMIT` reconciles.
@@ -1695,8 +1706,23 @@ impl RollupTotals {
             block.push(format!("callers and tests: {}", parts.join("; ")));
         }
         block.push(format!(
-            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed",
-            self.gaps_workspace, self.gaps_dependency, self.gaps_not_placed
+            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed{}",
+            self.gaps_workspace,
+            self.gaps_dependency,
+            self.gaps_not_placed,
+            if self.gaps_literal_dead > 0 {
+                format!(
+                    "; {} ruled out by literal arguments (no route reaches {})",
+                    self.gaps_literal_dead,
+                    if self.gaps_literal_dead == 1 {
+                        "it"
+                    } else {
+                        "them"
+                    }
+                )
+            } else {
+                String::new()
+            }
         ));
         format!("summary — {}", block.join("\n    "))
     }
@@ -2085,8 +2111,13 @@ impl RoutineRollup {
                 });
                 let c = &mut crossings[ci];
                 c.rows.push(i);
-                if c.prefix_row
-                    .is_none_or(|p| shortest(e) < shortest(&entry.effects[p]))
+                // Round-4 literal routes: only a live row's path (a dead
+                // row's kept witness passes code the literals rule out, as
+                // c15's `HasAccessToModule` prefix did); a crossing with only
+                // dead rows has none.
+                if !e.literal_unreachable
+                    && c.prefix_row
+                        .is_none_or(|p| shortest(e) < shortest(&entry.effects[p]))
                 {
                     c.prefix_row = (!e.via_paths.is_empty()).then_some(i).or(c.prefix_row);
                 }
@@ -2397,6 +2428,7 @@ impl RoutineRollup {
             gaps_workspace: self.gaps.workspace.len(),
             gaps_dependency: self.gaps.dependency,
             gaps_not_placed: self.gaps.not_placed.len(),
+            gaps_literal_dead: self.gaps.literal_dead,
             temporary_only_tables: self.temporary_only.len(),
             literal_dead_tables: self.literal_dead.len(),
             no_path_operations: self.no_path.len(),
@@ -2487,6 +2519,7 @@ fn gaps_of(entry: &DigestEntryFull) -> GapCounts {
         .collect();
     top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     g.top_callees = top;
+    g.literal_dead = entry.unresolved_literal_dead;
     g
 }
 

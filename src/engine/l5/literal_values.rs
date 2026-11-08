@@ -54,6 +54,153 @@ pub(super) enum Val {
     /// r3 E2: a Boolean (the within-routine flow's values only; no E1 frame
     /// binds one).
     Bool(bool),
+    /// Round-4 literal routes: the static type a `Variant` holds, as the
+    /// type keyword folded (`record`, `recordref`, `codeunit`, …; see
+    /// [`variant_test`]). The within-routine flow's values only.
+    Type(Arc<str>),
+}
+
+/// The static types whose `Variant` type tests [`variant_test`] decides.
+/// Others (Text and Code, whose tests overlap; numbers; an enum or option
+/// value) stay unknown.
+const DECIDED_TYPES: &[&str] = &[
+    "record",
+    "recordref",
+    "recordid",
+    "fieldref",
+    "codeunit",
+    "guid",
+    "boolean",
+    "date",
+    "time",
+    "datetime",
+];
+
+/// The static type a variable of declared type `type_text` gives a `Variant`
+/// it is passed to ([`Val::Type`]): its type keyword, folded, when
+/// [`variant_test`] decides tests of it; `None` otherwise.
+pub(super) fn variant_type_of(type_text: &str) -> Option<Val> {
+    variant_type_name(type_text).map(|k| Val::Type(Arc::from(k)))
+}
+
+/// [`variant_type_of`]'s keyword (also read by the rules across calls).
+pub(crate) fn variant_type_name(type_text: &str) -> Option<&'static str> {
+    let t = type_text.trim();
+    let kw: String = t
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    // A whole keyword: `Record "X"` and `Record X temporary`, not
+    // `RecordRefWrapper`.
+    let rest = &t[kw.len()..];
+    if !(rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == '"')) {
+        return None;
+    }
+    DECIDED_TYPES.iter().copied().find(|d| *d == kw.as_str())
+}
+
+/// Whether the `Variant` type test `method` (folded, `isrecord`, …) holds
+/// for a Variant holding static type `ty` ([`DECIDED_TYPES`]); `None` for a
+/// method this module does not know, or a type it does not decide.
+pub(crate) fn variant_test(method: &str, ty: &str) -> Option<bool> {
+    if !DECIDED_TYPES.contains(&ty) {
+        return None;
+    }
+    let tested = match method {
+        "isrecord" => "record",
+        "isrecordref" => "recordref",
+        "isrecordid" => "recordid",
+        "isfieldref" => "fieldref",
+        "iscodeunit" => "codeunit",
+        "isguid" => "guid",
+        "isboolean" => "boolean",
+        "isdate" => "date",
+        "istime" => "time",
+        "isdatetime" => "datetime",
+        // A test of a type this module does not track (IsText, IsInteger,
+        // IsJsonObject, …) is false for every type it does: each of those
+        // holds a value of exactly its own type.
+        m if VARIANT_TESTS.contains(&m) => return Some(false),
+        _ => return None,
+    };
+    Some(ty == tested)
+}
+
+/// Every `Variant.Is…` method of AL (folded), the ones [`variant_test`]
+/// matches by name included.
+pub(crate) const VARIANT_TESTS: &[&str] = &[
+    "isrecord",
+    "isrecordref",
+    "isrecordid",
+    "isfieldref",
+    "iscodeunit",
+    "isguid",
+    "isboolean",
+    "isdate",
+    "istime",
+    "isdatetime",
+    "isaction",
+    "isautomation",
+    "isbiginteger",
+    "isbinary",
+    "ischar",
+    "isclienttype",
+    "iscode",
+    "isdateformula",
+    "isdecimal",
+    "isdefaultlayout",
+    "isdictionary",
+    "isdotnet",
+    "isduration",
+    "isexecutionmode",
+    "isfile",
+    "isfilterpagebuilder",
+    "isinstream",
+    "isinteger",
+    "isjsonarray",
+    "isjsonobject",
+    "isjsontoken",
+    "isjsonvalue",
+    "islist",
+    "isnotification",
+    "isobjecttype",
+    "isoption",
+    "isoutstream",
+    "isreportformat",
+    "issecurityfiltering",
+    "istableconnectiontype",
+    "istestpermissions",
+    "istext",
+    "istextbuilder",
+    "istextconstant",
+    "istextencoding",
+    "istransactiontype",
+    "iswidechar",
+    "isxmlattribute",
+    "isxmlcdata",
+    "isxmlcomment",
+    "isxmldeclaration",
+    "isxmldocument",
+    "isxmldocumenttype",
+    "isxmlelement",
+    "isxmlnamespacemanager",
+    "isxmlnametable",
+    "isxmlnode",
+    "isxmlnodelist",
+    "isxmlprocessinginstruction",
+    "isxmlreadoptions",
+    "isxmltext",
+    "isxmlwriteoptions",
+];
+
+/// An `Interface "I"` (or `Interface Ns."I"`) type's interface name, folded
+/// (last segment).
+pub(super) fn interface_name(type_text: &str) -> Option<Arc<str>> {
+    let rest = after_keyword(type_text, "interface")?;
+    let last = split_outside_quotes(rest, '.').pop()?;
+    let name = fold(last);
+    (!name.is_empty()).then(|| Arc::from(name))
 }
 
 /// A finite set of values, sorted and distinct.
@@ -217,8 +364,19 @@ pub(super) fn resolve_label(
             if let Some(var) = r.variables.iter().find(|x| fold(&x.name) == *v) {
                 return typed_label(&var.declared_type, member);
             }
-            let rec = r.record_variables.iter().find(|x| x.is_implicit_rec)?;
-            field_of(rec.table_id.as_deref(), v)
+            // Round-4 literal routes: `"Enum Name"::Value` (no `Enum::`) names
+            // the enum's value when no variable and no field of the implicit
+            // `Rec` has that name (a Rec whose table is not loaded could have
+            // such a field: then nothing is concluded).
+            let enum_value = || Some(Val::Enum(Arc::from(v.as_str()), Arc::from(member)));
+            let Some(rec) = r.record_variables.iter().find(|x| x.is_implicit_rec) else {
+                return enum_value();
+            };
+            let table = tables.get(rec.table_id.as_deref()?)?;
+            if table.fields.iter().any(|f| fold(&f.name) == *v) {
+                return field_of(rec.table_id.as_deref(), v);
+            }
+            enum_value()
         }
         [rv, f] => {
             let rec = r.record_variables.iter().find(|x| fold(&x.name) == *rv)?;

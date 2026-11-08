@@ -1,11 +1,11 @@
 explain Codeunit "CDO Issue Document"::IssueReminder   [cross-app]
 answer: writes: may write 147 tables (11 owned by this app, 136 by dependencies) and 2 writes on a table not resolved; 83 of them beyond Codeunit "Reminder-Issue" (393)::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19)
-analysis partial (interface-open-world; object-run-unresolved; 267 interface calls open world, 21 dynamic calls not resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments (at least 46 dependency routines entered at at least 54 dependency calls); no lock facts; dependencies: 11 apps
+analysis partial (interface-open-world; object-run-unresolved; 262 interface calls open world, 21 dynamic calls not resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments (at least 46 dependency routines entered at at least 54 dependency calls); no lock facts; dependencies: 11 apps
 more: detail: true lists every list in full; format: "json" for every row
 Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:11
   transaction, UI and errors: commits: may (4 sites, 7 dependency routines entered that commit, 4 sites and 3 dependency routines entered more under literal arguments that cannot run, assuming Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value); UI at 17 places; errors at 289 places
   other effects: events: 538 (75 raised in workspace code); HTTP at 20 places; file at 1 place; background tasks at 3 places; isolated storage at 16 places; telemetry at 23 places
-  uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
+  uncertainty: gaps: 15 in workspace code, 261 in dependency code, 7 not placed; 5 ruled out by literal arguments (no route reaches them)
   starts by (a start, not a summary): `ReminderHeader.SETRECFILTER` (:17); `ReminderIssue.Set(ReminderHeader, false, 0D)` (:18); +4 more
   calls: Codeunit "Reminder-Issue" (393)::Set (called at :18); Codeunit "Reminder-Issue" (393)::GetIssuedReminder (called at :21); Codeunit "CDO E-Mail Handler"::DocHandle (called at :23)
   runs: Codeunit "Reminder-Issue" (393), Run at :19
@@ -113,7 +113,7 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
   isolated storage at 16 places: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:182 (IsHandled pattern, not evaluated); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:185 (IsHandled pattern, not evaluated); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (condition not resolved); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:223 (condition not resolved); ISOLATED_STORAGE at ws:src/Platform/Setup/CDOSetup.Table.al:678 (IsHandled pattern, not evaluated); ISOLATED_STORAGE at ws:src/Platform/Setup/CDOSetup.Table.al:683 (IsHandled pattern, not evaluated); … +10 places (detail: true lists them)
   errors at 289 places: ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOEDocumentResponse.Codeunit.al:29 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOEDocumentResponse.Codeunit.al:43 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:64 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:219 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:21 (condition not resolved); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:27 (condition not resolved); … +283 places (detail: true lists them)
   tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem_tests {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} selects them
-  gaps in workspace code (16 gaps):
+  gaps in workspace code (15 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81
     gap: unresolved-call (callee DocumentDispatcher.DispatchDocument, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:83
@@ -129,7 +129,6 @@ Codeunit "CDO Issue Document"::IssueReminder  defined at ws:src/DocumentTypes/Fi
     gap: unresolved-call (callee Codeunit.Run(<dynamic>), status dynamic-target) at ws:src/Features/MergeFields/CDOMergeTableField.Table.al:348
     gap: unresolved-call (callee ModuleLicense.IsModuleActivated, status polymorphic) at ws:src/Platform/Licensing/CDOModuleManager.Codeunit.al:16
     gap: unresolved-call (callee ModuleLicense.GetModuleCode, status polymorphic) at ws:src/Platform/Licensing/CDOModuleManager.Codeunit.al:42
-    gap: unresolved-call (callee ModuleLicense.GetModuleName, status polymorphic) at ws:src/Platform/Licensing/CDOModuleManager.Codeunit.al:55
-  gaps in dependency code: 265 (251 interface, 14 dynamic); not placed: 7; top callees (119 callees): CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×11, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8, PriceCalculation.ApplyPrice ×7, … +114 callees
+  gaps in dependency code: 261 (247 interface, 14 dynamic); not placed: 7; top callees (119 callees): CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×11, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8, PriceCalculation.ApplyPrice ×7, … +114 callees
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"], "callersContext": true} — its callers' pending writes, intercepted errors and non-interactive entries
 

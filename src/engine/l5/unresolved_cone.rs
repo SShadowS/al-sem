@@ -83,6 +83,18 @@ fn normalize_anchor_path(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+/// Whether a ledger row is an unresolved cone item: not "resolved" or
+/// "builtin" (open-world rule), and not a closed interface site (#264: a
+/// known candidate set, not an unresolved call).
+pub(crate) fn is_listed(row: &crate::engine::l5::snapshot::SnapshotCallsiteResolution) -> bool {
+    if row.status == "resolved" || row.status == "builtin" {
+        return false;
+    }
+    !(row.status == "polymorphic"
+        && row.open_world == Some(false)
+        && row.unresolved_candidates.as_ref().is_none_or(Vec::is_empty))
+}
+
 pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeResult {
     let max_depth = DEFAULT_MAX_DEPTH;
     let max_visited = DEFAULT_MAX_VISITED;
@@ -163,16 +175,7 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
             for row in rows {
-                // Skip "resolved" and "builtin" (open-world rule)
-                if row.status == "resolved" || row.status == "builtin" {
-                    continue;
-                }
-                // #264: a closed interface site is a known candidate set, not an
-                // unresolved call.
-                if row.status == "polymorphic"
-                    && row.open_world == Some(false)
-                    && row.unresolved_candidates.as_ref().is_none_or(Vec::is_empty)
-                {
+                if !is_listed(row) {
                     continue;
                 }
                 let cs_key = row.callsite_id.clone();

@@ -756,6 +756,13 @@ pub enum FlowExpr {
     },
     /// `A in [B, …]`.
     In(Box<FlowExpr>, Vec<FlowExpr>),
+    /// Round-4 literal routes: a `Variant` type test with no argument,
+    /// `V.IsRecord` / `V.IsRecord()`, `V` a bare identifier: `V`'s name and
+    /// the method, both unquoted and folded.
+    TypeTest {
+        var: String,
+        method: String,
+    },
     /// Any other expression: a call, a member, arithmetic, a range.
     Unknown,
 }
