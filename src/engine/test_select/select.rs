@@ -65,6 +65,16 @@
 //! path opens a page, and as a candidate (`candidate: "runtime-editable"`)
 //! only when every UI path takes a page lifecycle into a record trigger the
 //! page may block at runtime ([`SitedGraph::is_ui_candidate`]).
+//!
+//! Round-4 c28: a test's printed `path` is its shortest, which can open a
+//! page while another path reaches a changed routine by code calls (the
+//! test then counts as code, by its `reachesAll`). For such a test the
+//! per-root walks keep their code path, and the row carries the best one
+//! (`codePath`, `codePathTier`, `codePathHops`), so the answer shows a code
+//! path under a code test. A `reachesAll` entry whose relation is code also
+//! carries the root's best UI-navigation reach (`navigation`: tier, hops,
+//! candidate), so the renderer can judge the reach on its tier pick (a code
+//! path through a hub does not make a test a code test on a local path).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -460,15 +470,29 @@ struct RootWalk {
     /// (code when ANY path is code, r3 T1; a candidate only when every UI
     /// path takes a candidate step, L3).
     rel: Vec<(Class, Tier, u32)>,
+    /// Per test of `mine` whose class is code: its best UI-navigation reach
+    /// (an established one, else a candidate), when it has one (round-4
+    /// c28: the answer's tier pick can leave the code path out).
+    alt: Vec<Option<(Class, Tier, u32)>>,
     /// A cap fired, or a selection-relevant hidden channel is in the cone.
     incomplete: bool,
     /// Per through-dependency test of `mine`, in order: the first dependency
     /// node of its path.
     via: Vec<Option<NodeIx>>,
+    /// Round-4 c28: per test of `wanted` (a test whose printed path, the
+    /// multi-source walk's shortest one, opens a page) that reaches this
+    /// root by a code path: that path's (tier, hops, nodes), so a test
+    /// counted as code shows a code path, not only its UI one.
+    code_paths: Vec<(NodeIx, Tier, u32, Vec<NodeIx>)>,
 }
 
 impl RootWalk {
-    fn of(g: &SitedGraph, nodes: &[NodeIx], nav_nodes: &std::sync::Arc<Vec<bool>>) -> RootWalk {
+    fn of(
+        g: &SitedGraph,
+        nodes: &[NodeIx],
+        nav_nodes: &std::sync::Arc<Vec<bool>>,
+        wanted: &HashSet<NodeIx>,
+    ) -> RootWalk {
         let opts = WalkOptions {
             assume_no_dependents: true,
             ..Default::default()
@@ -505,16 +529,40 @@ impl RootWalk {
                     })
             })
             .collect();
+        let alt = mine
+            .iter()
+            .zip(&rel)
+            .map(|(x, r): (_, &ReachClass)| {
+                (r.0 == Class::Code)
+                    .then(|| {
+                        [Class::Navigation, Class::Candidate]
+                            .into_iter()
+                            .find_map(|c| own.by_class.get(&(x.0, c)).map(|b| (c, b.0, b.1)))
+                    })
+                    .flatten()
+            })
+            .collect();
         let via = mine
             .iter()
             .filter(|x| x.1 == Tier::ThroughDependency)
             .map(|x| first_dependency_node(g, &own.path(x.3)))
             .collect();
+        let code_paths = mine
+            .iter()
+            .filter(|x| wanted.contains(&x.0))
+            .filter_map(|x| {
+                own.by_class
+                    .get(&(x.0, Class::Code))
+                    .map(|b| (x.0, b.0, b.1, own.path(b.2)))
+            })
+            .collect();
         RootWalk {
             incomplete: own.limited || own.relevant_hidden(g),
             mine,
             rel,
+            alt,
             via,
+            code_paths,
         }
     }
 }
@@ -778,6 +826,15 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
     let mut cone_size: HashMap<NodeIx, usize> = HashMap::new();
     let mut nav: HashMap<NodeIx, bool> = HashMap::new();
     let nav_nodes = std::sync::Arc::new(nav_mask(g));
+    // Round-4 c28: the tests whose printed path (their shortest) opens a
+    // page; the per-root walks keep a code path for each of them.
+    let nav_printed: HashSet<NodeIx> = tests
+        .iter()
+        .filter(|t| {
+            path_relation(g, &sel.path(t.3), &mut nav) != crate::engine::vocab::RELATION_CODE
+        })
+        .map(|t| t.0)
+        .collect();
     // Output validation r3 L4: the first `REACH_LIMIT` roots each get a walk
     // of their own, run in parallel (each walk is independent and only its
     // summary outlives it); the others are not expanded (their tests come
@@ -785,8 +842,9 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
     let mut walks: Vec<Option<RootWalk>> = {
         use rayon::prelude::*;
         let expanded = args.roots.len().min(REACH_LIMIT);
-        let one =
-            |i: usize| (!mapped[i].is_empty()).then(|| RootWalk::of(g, &mapped[i], &nav_nodes));
+        let one = |i: usize| {
+            (!mapped[i].is_empty()).then(|| RootWalk::of(g, &mapped[i], &nav_nodes, &nav_printed))
+        };
         let threads = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .min(WALK_THREADS);
@@ -801,7 +859,14 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
     // Per test: every root it reaches, (root index, tier, hops, relation
     // class), from the per-root walks (exact: code when any path is code) or
     // the labels (the root of its shortest path only).
-    let mut reach_all: HashMap<NodeIx, Vec<(usize, Tier, u32, Class)>> = HashMap::new();
+    // Round-4 c28: with a code reach, the best UI-navigation reach of the
+    // same root too (a code path may lie outside the tier the answer picks).
+    type Reach = (usize, Tier, u32, Class, Option<ReachClass>);
+    let mut reach_all: HashMap<NodeIx, Vec<Reach>> = HashMap::new();
+    // Round-4 c28: per test whose printed path opens a page, its best code
+    // path to any changed routine (tier, hops, nodes; the first root wins a
+    // tie).
+    let mut code_path: HashMap<NodeIx, (Tier, u32, Vec<NodeIx>)> = HashMap::new();
     let label_class = |path: &[NodeIx], nav: &mut HashMap<NodeIx, bool>| -> Class {
         if path_relation(g, path, nav) == crate::engine::vocab::RELATION_CODE {
             Class::Code
@@ -829,27 +894,41 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
         // `REACH_LIMIT` roots (the multi-source walk labels a state with its
         // NEAREST root, so a root's tests nearer another root would be
         // counted there), else from the labels.
-        let own_walk: Option<RootWalk> = walks.get_mut(i).and_then(Option::take);
+        let mut own_walk: Option<RootWalk> = walks.get_mut(i).and_then(Option::take);
+        for (n, t, h, p) in own_walk
+            .as_mut()
+            .map(|w| std::mem::take(&mut w.code_paths))
+            .unwrap_or_default()
+        {
+            if code_path.get(&n).is_none_or(|b| (t, h) < (b.0, b.1)) {
+                code_path.insert(n, (t, h, p));
+            }
+        }
         if i >= REACH_LIMIT {
             not_expanded.push(id);
         }
-        let (mine, rel): (Vec<RootTest>, Vec<ReachClass>) = match &own_walk {
-            Some(w) => (w.mine.clone(), w.rel.clone()),
-            // Each label test's relation class, from its one path.
-            None => {
-                let mine: Vec<RootTest> = per_root[i]
-                    .iter()
-                    .map(|&j| (tests[j].0, tests[j].1, tests[j].2, tests[j].3))
-                    .collect();
-                let rel = mine
-                    .iter()
-                    .map(|x| (label_class(&sel.path(x.3), &mut nav), x.1, x.2))
-                    .collect();
-                (mine, rel)
-            }
-        };
-        for (x, r) in mine.iter().zip(&rel) {
-            reach_all.entry(x.0).or_default().push((i, r.1, r.2, r.0));
+        let (mine, rel, alt): (Vec<RootTest>, Vec<ReachClass>, Vec<Option<ReachClass>>) =
+            match &own_walk {
+                Some(w) => (w.mine.clone(), w.rel.clone(), w.alt.clone()),
+                // Each label test's relation class, from its one path.
+                None => {
+                    let mine: Vec<RootTest> = per_root[i]
+                        .iter()
+                        .map(|&j| (tests[j].0, tests[j].1, tests[j].2, tests[j].3))
+                        .collect();
+                    let rel = mine
+                        .iter()
+                        .map(|x| (label_class(&sel.path(x.3), &mut nav), x.1, x.2))
+                        .collect();
+                    let alt = vec![None; mine.len()];
+                    (mine, rel, alt)
+                }
+            };
+        for ((x, r), a) in mine.iter().zip(&rel).zip(&alt) {
+            reach_all
+                .entry(x.0)
+                .or_default()
+                .push((i, r.1, r.2, r.0, *a));
         }
         let count = |t: Tier| mine.iter().filter(|x| x.1 == t).count();
         let status = if !mine.is_empty() {
@@ -992,16 +1071,24 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
             // root is always one of them (a capped per-root walk may miss it).
             let mut all = reach_all.get(&n).cloned().unwrap_or_default();
             if !all.iter().any(|x| x.0 == root) {
-                all.push((root, t, h, label_class(&path, &mut nav)));
+                all.push((root, t, h, label_class(&path, &mut nav), None));
             }
             all.sort_by_key(|x| x.0);
             let reaches_all: Vec<Value> = all
                 .iter()
-                .map(|&(r, rt, rh, class)| {
+                .map(|&(r, rt, rh, class, alt)| {
                     let mut v = json!({"stableId": args.roots[r], "tier": tier_name(rt),
                                        "hops": rh, "relation": class.relation()});
                     if let Some(c) = class.candidate() {
                         v["candidate"] = json!(c);
+                    }
+                    // Round-4 c28: the best UI-navigation reach beside a
+                    // code one, for a tier pick the code path is outside of.
+                    if let Some((ac, at, ah)) = alt {
+                        v["navigation"] = json!({"tier": tier_name(at), "hops": ah});
+                        if let Some(c) = ac.candidate() {
+                            v["navigation"]["candidate"] = json!(c);
+                        }
                     }
                     v
                 })
@@ -1027,6 +1114,14 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
             });
             if path_is_candidate {
                 row["pathCandidate"] = json!(RUNTIME_EDITABLE);
+            }
+            // Round-4 c28: the printed path opens a page but a code path
+            // reaches a changed routine too (the test counts as code): that
+            // code path, so the answer can show it.
+            if let Some((ct, ch, cp)) = code_path.get(&n) {
+                row["codePath"] = json!(cp.iter().map(|&p| path_name(g, p)).collect::<Vec<_>>());
+                row["codePathTier"] = json!(tier_name(*ct));
+                row["codePathHops"] = json!(ch);
             }
             row
         })
@@ -1343,6 +1438,312 @@ mod tests {
             "{v:#}"
         );
         assert_eq!(v["roots"][0]["nearestRelation"], "code", "{v:#}");
+    }
+
+    /// Round-4 c28/c21: a test whose SHORTEST path opens a page but which
+    /// also reaches the changed routine by code calls is a code test in
+    /// every place that classifies a test: the row's `relation`, the
+    /// ranking, `byRelation` and the headline (schemas 1-3 and the human
+    /// text); its row shows a code path. Hand-stated program: `Both` opens
+    /// page `Ed` (a `TestPage`), whose action calls `Send` (3 hops, the
+    /// printed path), and calls `H1 → H2 → H3 → H4 → Send` (5 hops, code);
+    /// `Code` calls `G1 → G2 → G3 → Send` (4 hops, code only); `Nav` only
+    /// opens the page.
+    ///
+    /// DISCRIMINATION (2026-11-08): (1) the render's `relation` made the
+    /// printed path's relation again (`path_relation(t)` returned) fails
+    /// "Both is a code test" (byRelation code 1, UI navigation 2); (2) the
+    /// row's `codePath` not written (the `code_path.get(&n)` block removed)
+    /// fails "Both carries its code path"; (3) the ranking by the row's own
+    /// tier and hops (not the shown path's) fails "Code ranks before Both"
+    /// (Both's printed path has 3 hops, Code's 4). Each restored, it passes.
+    #[test]
+    fn a_test_with_any_code_path_is_a_code_test_everywhere() {
+        use super::super::render::{Part, RenderOpts, TierPick, render};
+        let mut w = World::default();
+        let a = w.app("A");
+        let mgt = w.obj(a, ObjectKind::Codeunit, 1, "Mgt", TrustTier::Workspace);
+        let page = w.obj(a, ObjectKind::Page, 2, "Ed", TrustTier::Workspace);
+        let tests = w.obj(a, ObjectKind::Codeunit, 3, "Tests", TrustTier::Workspace);
+        let nav_tests = w.obj(
+            a,
+            ObjectKind::Codeunit,
+            4,
+            "Nav Tests",
+            TrustTier::Workspace,
+        );
+        let code_tests = w.obj(
+            a,
+            ObjectKind::Codeunit,
+            5,
+            "Code Tests",
+            TrustTier::Workspace,
+        );
+        let send = w.rtn(&mgt, "Send");
+        let hs: Vec<_> = (1..=4).map(|i| w.rtn(&mgt, &format!("H{i}"))).collect();
+        let gs: Vec<_> = (1..=3).map(|i| w.rtn(&mgt, &format!("G{i}"))).collect();
+        let action = w.rtn_with(&page, "OnAction", |r| {
+            r.is_trigger = true;
+            r.id.enclosing_member_lc = Some("go".into());
+        });
+        let mut line = 0;
+        let mut call = |w: &mut World, f, t| {
+            line += 1;
+            w.call(f, t, line);
+        };
+        call(&mut w, &action, &send);
+        for p in hs.windows(2) {
+            call(&mut w, &p[0], &p[1]);
+        }
+        call(&mut w, &hs[3], &send);
+        for p in gs.windows(2) {
+            call(&mut w, &p[0], &p[1]);
+        }
+        call(&mut w, &gs[2], &send);
+        let both = w.rtn(&tests, "Both");
+        let nav = w.rtn(&nav_tests, "Nav");
+        let code = w.rtn(&code_tests, "Code");
+        call(&mut w, &both, &hs[0]);
+        call(&mut w, &code, &gs[0]);
+        for (t, pages) in [
+            (&both, vec![RunTarget::Object(page.clone())]),
+            (&nav, vec![RunTarget::Object(page.clone())]),
+            (&code, vec![]),
+        ] {
+            w.facts.routines.insert(
+                t.clone(),
+                RoutineFacts {
+                    test: true,
+                    test_pages: pages,
+                    ..Default::default()
+                },
+            );
+        }
+        let g = sited_of(&w, a, &[]);
+        let ix = |r: &crate::program::node::RoutineNodeId| g.routine_node(r).expect("a node");
+        let roots = vec!["send".to_string()];
+        let v = select_mapped(
+            &g,
+            &SelectArgs {
+                roots: &roots,
+                universe_key: "u",
+                test_app_id: "t",
+                production_app_id: "A-guid",
+                production_stamp: None,
+                declared: &[],
+                probes: &[],
+            },
+            &[vec![ix(&send)]],
+        );
+        let row = |r: &crate::program::node::RoutineNodeId| {
+            v["tests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["display"] == display(&g, ix(r)))
+                .cloned()
+                .unwrap_or_else(|| panic!("a row: {v:#}"))
+        };
+        let b = row(&both);
+        // Preconditions: Both's printed path opens the page and is shorter
+        // than Code's; its reach of Send is code, 5 hops.
+        assert!(
+            b["path"].as_array().unwrap().iter().any(|h| h
+                .as_str()
+                .is_some_and(super::super::render::is_navigation_hop)),
+            "{b:#}"
+        );
+        assert!(b["hops"].as_u64() < row(&code)["hops"].as_u64(), "{b:#}");
+        assert_eq!(b["reachesAll"][0]["relation"], "code", "{b:#}");
+        assert_eq!(b["reachesAll"][0]["hops"], 5, "{b:#}");
+        let code_path: Vec<String> = [&both, &hs[0], &hs[1], &hs[2], &hs[3], &send]
+            .iter()
+            .map(|r| display(&g, ix(r)))
+            .collect();
+        assert_eq!(
+            b["codePath"],
+            json!(code_path),
+            "Both carries its code path: {b:#}"
+        );
+        assert_eq!(b["codePathHops"], 5, "{b:#}");
+        assert!(row(&nav).get("codePath").is_none(), "Nav has none");
+        assert!(row(&code).get("codePath").is_none(), "Code's path is code");
+
+        let main = json!({
+            "roots": [{"stableId": "send", "display": "Codeunit Mgt::Send"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 0,
+        });
+        let part = || Part {
+            app: json!({"name": "T", "root": "t"}),
+            result: Ok(v.clone()),
+        };
+        let opts = |json: bool, schema: u32| RenderOpts {
+            tier: TierPick::All,
+            max_tests: None,
+            json,
+            surface: Default::default(),
+            single_app: false,
+            schema,
+        };
+        let names = |d: &Value| -> Vec<String> {
+            d["runFirst"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["procedure"].as_str().unwrap().to_string())
+                .collect()
+        };
+        for schema in [1, 2, 3] {
+            let d: Value =
+                serde_json::from_str(&render(&main, &[part()], opts(true, schema)).text).unwrap();
+            assert_eq!(
+                d["result"]["selection"]["byRelation"],
+                json!({"code": 2, "UI navigation": 1}),
+                "Both is a code test (schema {schema}): {d:#}"
+            );
+            assert_eq!(
+                names(&d),
+                ["Code", "Both", "Nav"],
+                "Code ranks before Both (schema {schema}): {d:#}"
+            );
+            let rb = &d["runFirst"][1];
+            assert_eq!(rb["relation"], "code", "{d:#}");
+            assert_eq!(rb["pathRelation"], "UI navigation", "{d:#}");
+            assert_eq!(rb["codePath"], json!(code_path), "{d:#}");
+            assert!(rb.get("reachesByNavigationOnly").is_none(), "{d:#}");
+            assert_eq!(d["runFirst"][2]["relation"], "UI navigation", "{d:#}");
+            assert!(d["runFirst"][0].get("pathRelation").is_none(), "{d:#}");
+        }
+        let human = render(&main, &[part()], opts(false, 3)).text;
+        assert!(
+            human.contains("2 tests by code calls (codeunits 5|3;")
+                && human.contains("1 more by UI navigation only in 1 codeunit"),
+            "{human}"
+        );
+        assert!(
+            human.contains("by relation: code 2, UI navigation 1"),
+            "{human}"
+        );
+        assert!(
+            human.contains("first [local, code] 5 hops (first: Both)"),
+            "{human}"
+        );
+        assert!(
+            human.contains(&format!("path: {}", code_path[1..].join(" → "))),
+            "the code path is printed: {human}"
+        );
+    }
+
+    /// Round-4 n02: a test whose only code path lies outside the answer's
+    /// tier pick is not counted as reached "by code calls" there. Hand-stated
+    /// program: `Both` opens page `Ed` (a `TestPage`), whose action calls
+    /// `Send` (a local UI-navigation path), and calls `Dep::Run` in
+    /// dependency app `D`, which calls `Send` (a via-dependency code path).
+    /// Under `--tier local` it is a UI-navigation test with no code path
+    /// shown; under `--tier dependency` a code test with that code path.
+    ///
+    /// DISCRIMINATION (2026-11-08): `on_tier` made a no-op (its body
+    /// removed) fails "a via-dependency code path does not make a local code
+    /// test" (byRelation code 1 under the local pick); the select part's
+    /// `navigation` alternative not written (the `if let Some((ac, at, ah))
+    /// = alt` block removed) fails the same assert. Each restored, it passes.
+    #[test]
+    fn a_code_path_outside_the_tier_pick_does_not_make_a_code_test() {
+        use super::super::render::{Part, RenderOpts, TierPick, render};
+        let mut w = World::default();
+        let a = w.app("A");
+        let d = w.app("D");
+        let mgt = w.obj(a, ObjectKind::Codeunit, 1, "Mgt", TrustTier::Workspace);
+        let page = w.obj(a, ObjectKind::Page, 2, "Ed", TrustTier::Workspace);
+        let tests = w.obj(a, ObjectKind::Codeunit, 3, "Tests", TrustTier::Workspace);
+        let dep = w.obj(d, ObjectKind::Codeunit, 9, "Dep", TrustTier::EmbeddedSource);
+        let send = w.rtn(&mgt, "Send");
+        let run = w.rtn(&dep, "Run");
+        let action = w.rtn_with(&page, "OnAction", |r| {
+            r.is_trigger = true;
+            r.id.enclosing_member_lc = Some("go".into());
+        });
+        w.call(&action, &send, 1);
+        w.call(&run, &send, 2);
+        let both = w.rtn(&tests, "Both");
+        w.call(&both, &run, 3);
+        w.facts.routines.insert(
+            both.clone(),
+            RoutineFacts {
+                test: true,
+                test_pages: vec![RunTarget::Object(page.clone())],
+                ..Default::default()
+            },
+        );
+        let g = sited_of(&w, a, &[]);
+        let ix = |r: &crate::program::node::RoutineNodeId| g.routine_node(r).expect("a node");
+        let roots = vec!["send".to_string()];
+        let v = select_mapped(
+            &g,
+            &SelectArgs {
+                roots: &roots,
+                universe_key: "u",
+                test_app_id: "t",
+                production_app_id: "A-guid",
+                production_stamp: None,
+                declared: &[],
+                probes: &[],
+            },
+            &[vec![ix(&send)]],
+        );
+        let b = &v["tests"][0];
+        // Preconditions: the printed path is local and opens the page; the
+        // reach is code through the dependency, a local UI one beside it.
+        assert_eq!(b["tier"], "local", "{v:#}");
+        assert!(
+            b["path"].as_array().unwrap().iter().any(|h| h
+                .as_str()
+                .is_some_and(super::super::render::is_navigation_hop)),
+            "{b:#}"
+        );
+        assert_eq!(b["reachesAll"][0]["relation"], "code", "{b:#}");
+        assert_eq!(b["reachesAll"][0]["tier"], "throughDependency", "{b:#}");
+        assert_eq!(b["codePathTier"], "throughDependency", "{b:#}");
+        let main = json!({
+            "roots": [{"stableId": "send", "display": "Codeunit Mgt::Send"}],
+            "scope": {"apps": [], "summary": "none", "complete": true},
+            "workspaceTests": 0,
+        });
+        let answer = |tier: TierPick| -> Value {
+            let part = Part {
+                app: json!({"name": "T", "root": "t"}),
+                result: Ok(v.clone()),
+            };
+            let opts = RenderOpts {
+                tier,
+                max_tests: None,
+                json: true,
+                surface: Default::default(),
+                single_app: false,
+                schema: 3,
+            };
+            serde_json::from_str(&render(&main, &[part], opts).text).unwrap()
+        };
+        let local = answer(TierPick::Local);
+        assert_eq!(
+            local["result"]["selection"]["byRelation"],
+            json!({"code": 0, "UI navigation": 1}),
+            "a via-dependency code path does not make a local code test: {local:#}"
+        );
+        let row = &local["runFirst"][0];
+        assert_eq!(row["relation"], "UI navigation", "{local:#}");
+        assert_eq!(row["reaches"][0]["relation"], "UI navigation", "{local:#}");
+        assert!(row.get("codePath").is_none(), "{local:#}");
+        let dep_pick = answer(TierPick::Dependency);
+        assert_eq!(
+            dep_pick["result"]["selection"]["byRelation"],
+            json!({"code": 1, "UI navigation": 0}),
+            "{dep_pick:#}"
+        );
+        let row = &dep_pick["runFirst"][0];
+        assert_eq!(row["reaches"][0]["relation"], "code", "{dep_pick:#}");
+        assert_eq!(row["codePathTier"], "via-dependency", "{dep_pick:#}");
     }
 
     /// The program of the reach-limit tests: `n` routines `R0..`, each
