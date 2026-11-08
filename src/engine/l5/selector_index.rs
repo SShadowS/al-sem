@@ -948,6 +948,54 @@ pub fn differs_in(cands: &[AmbiguousCandidate]) -> Option<String> {
     Some("the parameter lists".to_string())
 }
 
+/// r3 §5.2 (n06, m08): an unmatched selector's typo recovery, a complete
+/// call of `tool` for the first nearest name (its `selector` and how many
+/// `overloads` share it, as [`hints_json`] lists it), with `args`. An
+/// overloaded name's call comes back ambiguous, listing each overload's
+/// call, and the line says so.
+#[must_use]
+pub fn corrected_call_line(
+    tool: crate::engine::follow_up::Tool,
+    cx: crate::engine::follow_up::Cx,
+    selector: &str,
+    overloads: usize,
+    args: &[(&str, serde_json::Value)],
+) -> String {
+    use crate::engine::follow_up::{FollowUp, Tool};
+    let mut f = FollowUp::new(tool, cx, "the nearest name");
+    f = match tool {
+        Tool::Explain | Tool::Digest | Tool::Tests | Tool::Impact => f.arg(
+            "routines",
+            serde_json::Value::from(vec![selector.to_string()]),
+        ),
+        Tool::QueryTouches => f.arg("from", selector),
+        Tool::Prove | Tool::QueryEffects => f.arg("routine", selector),
+    };
+    for (k, v) in args {
+        f = f.arg(k, v.clone());
+    }
+    format!(
+        "  corrected call (the nearest name): {}{}",
+        f.text(cx.surface),
+        if overloads > 1 {
+            format!(" — names {overloads} overloads; the answer lists each one's call")
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// The first nearest name of a not-found diagnostic's JSON
+/// ([`hints_json`]): its selector and overload count.
+#[must_use]
+pub fn first_nearest(json: &serde_json::Value) -> Option<(&str, usize)> {
+    let n = json["nearest"].as_array()?.first()?;
+    Some((
+        n["selector"].as_str()?,
+        n["overloads"].as_u64().unwrap_or(1) as usize,
+    ))
+}
+
 /// The complete call an ambiguity offers (round-2 G40), in `surface`'s
 /// words: a tool that takes several routines gets one call with every
 /// candidate's selector (`complete call: alsem_explain {"routines": [...]}`);

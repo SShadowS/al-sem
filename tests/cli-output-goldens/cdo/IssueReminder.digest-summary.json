@@ -13,13 +13,13 @@
       "analysis": "partial",
       "answer": "may write 147 tables (11 owned by this app, 136 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 20; file 1; background tasks 3; isolated storage 16; telemetry 23; errors 289; analysis partial (interface-open-world; object-run-unresolved; 267 interface calls open world, 21 dynamic calls not resolved)",
       "index": 1,
-      "selector": "Codeunit \"CDO Issue Document\"::IssueReminder",
-      "testStatus": "not requested"
+      "selector": "Codeunit \"CDO Issue Document\"::IssueReminder"
     }
   ],
   "routinesListed": 1,
   "rowDetail": "compact: each row names its result-index row (`index`), which holds its signature, stable id, full answer and totals",
   "shared": {},
+  "testStatus": "not requested",
   "totalEffects": 806,
   "totalUnresolved": 288
 }

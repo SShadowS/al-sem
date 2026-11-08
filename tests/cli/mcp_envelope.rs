@@ -29,6 +29,93 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// r3 H5: a digest lookup failure (`ambiguous`, `not-found`) whose complete
+/// stdout fits the inline cap comes back inline, byte for byte the CLI
+/// answer; one byte over the cap, or an explicit `out`, still a file; a
+/// resolved digest stays a file whatever the cap. Tested at the boundary:
+/// the cap equal to the answer's length, and one byte under it.
+///
+/// DISCRIMINATION (2026-11-08): dropping the rule (`place_stdout` filing
+/// every digest: `wants_file` without `!lookup_failure_inline`) fails at
+/// "inline under a large cap"; comparing with `<` instead of `<=` against
+/// the cap fails at "inline at the cap"; restored, passes.
+#[test]
+fn a_small_digest_lookup_failure_comes_back_inline() {
+    let ws = ws_explain();
+    let mut s = Server::ready(&ws, None);
+    // The answer without its one volatile field (`generatedAt`).
+    let stable = |t: &str| -> Value {
+        match serde_json::from_str::<Value>(t) {
+            Ok(mut v) => {
+                v.as_object_mut().map(|m| m.remove("generatedAt"));
+                v
+            }
+            Err(_) => Value::String(t.to_string()),
+        }
+    };
+    for (selector, outcome) in [("CheckAmount", "ambiguous"), ("NoSuchRoutine", "not-found")] {
+        for format in ["json", "human"] {
+            let big = envelope(&s.call(
+                1,
+                "alsem_digest",
+                json!({"routines": [selector], "format": format, "maxInlineBytes": 1_000_000}),
+            ));
+            assert_eq!(big["outcome"], outcome, "{big}");
+            let text = big["stdoutText"]
+                .as_str()
+                .unwrap_or_else(|| panic!("inline under a large cap ({format}): {big}"))
+                .to_string();
+            let n = text.len();
+            let at = envelope(&s.call(
+                2,
+                "alsem_digest",
+                json!({"routines": [selector], "format": format, "maxInlineBytes": n}),
+            ));
+            let inline = at["stdoutText"]
+                .as_str()
+                .unwrap_or_else(|| panic!("inline at the cap ({selector}, {format}, {n}): {at}"));
+            assert_eq!(inline.len(), n, "{at}");
+            assert_eq!(stable(inline), stable(&text), "the CLI answer: {at}");
+            assert_eq!(at["outcome"], outcome, "{at}");
+            let over = envelope(&s.call(
+                3,
+                "alsem_digest",
+                json!({"routines": [selector], "format": format, "maxInlineBytes": n - 1}),
+            ));
+            assert!(
+                over["stdoutFile"].is_object(),
+                "filed one byte over the cap ({selector}, {format}): {over}"
+            );
+            let (bytes, _, _) = cli_bytes(&over);
+            assert_eq!(
+                stable(&String::from_utf8(bytes).unwrap()),
+                stable(&text),
+                "the same answer, filed"
+            );
+            let out = envelope(&s.call(
+                4,
+                "alsem_digest",
+                json!({"routines": [selector], "format": format, "out": format!("lookup-{selector}-{format}.txt")}),
+            ));
+            assert!(
+                out["stdoutFile"].is_object(),
+                "an explicit out writes a file: {out}"
+            );
+        }
+    }
+    let env = envelope(&s.call(
+        5,
+        "alsem_digest",
+        json!({"routines": ["Archive"], "maxInlineBytes": 4_000_000}),
+    ));
+    assert_eq!(env["outcome"], "answered", "{env}");
+    assert!(
+        env["stdoutFile"].is_object(),
+        "a resolved digest stays a file: {env}"
+    );
+    assert!(s.finish().success());
+}
+
 /// §12.1: the outcome mapping, every value an answer can give, with
 /// `no-routine-changed` only for an impact whose accounting is complete.
 #[test]

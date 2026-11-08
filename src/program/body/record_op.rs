@@ -53,6 +53,17 @@ impl FieldUse {
             FieldUse::ByNumber => "by-number",
         }
     }
+
+    /// The use in human text (r3 §5.2, the word table: "writes" means a
+    /// record write, so a field's write is a `field assignment`); JSON keeps
+    /// [`FieldUse::as_str`].
+    #[must_use]
+    pub fn human(self) -> &'static str {
+        match self {
+            FieldUse::Write => "field assignment",
+            u => u.as_str(),
+        }
+    }
 }
 
 /// Which arguments of a record method name a field.

@@ -2285,6 +2285,11 @@ pub(crate) fn header_and_body(
     }
     // Round-2 G31: a top-callees line prints only when it adds to the
     // blocker list (some callee it names is not on a body line already).
+    // r3 H2(a): a `yes` leads with what decides it; the unresolved lists do
+    // not change it (the header keeps `analysis partial` and its counts).
+    if answer.starts_with("yes") {
+        tops.clear();
+    }
     for t in tops {
         let names = t.split_once(": ").map_or("", |(_, r)| r);
         let adds = names.split(", ").any(|c| {
@@ -2442,6 +2447,14 @@ pub fn format_prove_human(
         ProveAnswer::Unknown if no_evidence && paths.is_some() => {
             "  answer:   unknown — no matching effect was found in the analyzed cone".to_string()
         }
+        // r3 H3: an existing-effects `no` (a may question: no site and every
+        // obligation clear) prints the one negative form.
+        ProveAnswer::No
+            if paths.is_some()
+                && let Some(site) = effect_site_noun(question) =>
+        {
+            negative_answer(&site)
+        }
         a => format!("  answer:   {}", a.as_str()),
     });
     // §4.4 (F19, F21): on `unknown`, the plain reading, what the answer does
@@ -2509,92 +2522,94 @@ pub fn format_prove_human(
                 (false, _) => 2,
             }
         };
+        // r3 H2(b): among the witnesses still eligible after the literal
+        // analysis (the evidence holds no literal-unreachable row), workspace
+        // sites first, then the least restrictive condition (unconditional
+        // before conditional; a condition not resolved last), then the
+        // shortest path.
+        let condition_rank = |i: usize| -> u32 {
+            crate::engine::l5::conditionality::rank(effects[i].conditionality).unwrap_or(u32::MAX)
+        };
+        let witness_key = |i: usize| (in_dependency(i), condition_rank(i), path_len(i));
+        // Rows in witness order (a stable sort: ties keep the input order);
+        // each type's witness is its first row.
         let mut ordered: Vec<usize> = indices.clone();
-        ordered.sort_by_key(|&i| in_dependency(i));
+        ordered.sort_by_key(|&i| witness_key(i));
         let mut witnessed: BTreeMap<&str, usize> = BTreeMap::new();
         for &i in &ordered {
-            let t = effects[i].effect_type.as_str();
-            match witnessed.get(t) {
-                Some(&j) if (in_dependency(j), path_len(j)) <= (in_dependency(i), path_len(i)) => {}
-                _ => {
-                    witnessed.insert(t, i);
-                }
-            }
+            witnessed
+                .entry(effects[i].effect_type.as_str())
+                .or_insert(i);
         }
-        // Round 2 G16: a `yes` names its first witness's site and condition
-        // on the answer line.
-        if prove_result.answer == ProveAnswer::Yes
-            && let Some(&first) = witnessed
-                .values()
-                .min_by_key(|&&i| (in_dependency(i), path_len(i)))
-        {
-            let eff = &effects[first];
-            let at = match (&eff.evidence.file, eff.evidence.line) {
+        // Where a row's own anchor is.
+        let at_of = |eff: &DigestEffectFull| -> String {
+            match (&eff.evidence.file, eff.evidence.line) {
                 (Some(f), Some(l)) => match paths {
                     Some(p) => p.cx.location(f, l),
                     None => format!("{f}:{}", shown(l)),
                 },
                 (Some(f), None) => f.clone(),
                 _ => "no position kept".to_string(),
+            }
+        };
+        // Round-3 m04, r3 H2(c): a group's witness ends at an operation in
+        // dependency code; every row names it and where it is, never only
+        // the dependency entry.
+        let terminal_of = |eff: &DigestEffectFull| -> Option<(String, String)> {
+            let p = paths?;
+            if !is_group(eff) {
+                return None;
+            }
+            let w = eff.group_terminal_path.as_ref()?.as_ref().ok()?;
+            let kind =
+                p.cx.terminal_kind(&w.terminal.operation_id, &eff.effect_type)
+                    .to_string();
+            let loc = match (&w.terminal.file, w.terminal.line) {
+                (Some(f), Some(l)) => format!("at {}, ", p.cx.location(f, l)),
+                _ => String::new(),
             };
-            // Round-3 m04: a group's witness ends at an operation in
-            // dependency code; the headline names it and where it is.
-            let terminal = match (is_group(eff), paths) {
-                (true, Some(p)) => eff
-                    .group_terminal_path
-                    .as_ref()
-                    .and_then(|w| w.as_ref().ok())
-                    .map(|w| {
-                        let kind =
-                            p.cx.terminal_kind(&w.terminal.operation_id, &eff.effect_type);
-                        let loc = match (&w.terminal.file, w.terminal.line) {
-                            (Some(f), Some(l)) => format!("at {}, ", p.cx.location(f, l)),
-                            _ => String::new(),
-                        };
-                        (kind, loc)
-                    }),
-                _ => None,
-            };
-            let place = match eff.detail.iter().find(|(k, _)| k == "boundary") {
+            Some((kind, loc))
+        };
+        // A row's place: its anchor, or for a group its terminal site, the
+        // boundary it is beyond and where workspace code enters it.
+        let place_of = |eff: &DigestEffectFull| -> String {
+            let at = at_of(eff);
+            match eff.detail.iter().find(|(k, _)| k == "boundary") {
                 Some((_, b)) if is_group(eff) => format!(
                     "{}beyond {}, entered at {at}",
-                    terminal.as_ref().map_or("", |(_, loc)| loc.as_str()),
+                    terminal_of(eff).map_or(String::new(), |(_, loc)| loc),
                     quoted_boundary(b)
                 ),
                 _ => format!("at {at}"),
-            };
-            let more = if indices.len() > 1 {
-                format!(
-                    ", and {} more",
-                    crate::engine::l5::routine_rollup::thousands(indices.len() - 1)
-                )
-            } else {
-                String::new()
-            };
-            // An implicit error names its operation (G17).
-            let what = match (eff.effect_type.as_str(), paths) {
-                ("ERROR_IMPLICIT", Some(_))
-                    if terminal
-                        .as_ref()
-                        .is_some_and(|(k, _)| *k != eff.effect_type) =>
-                {
-                    format!(
-                        "{} (implicit error)",
-                        terminal.as_ref().map_or("", |(k, _)| *k)
-                    )
+            }
+        };
+        // The operation a row names: an implicit error names its operation
+        // (G17), a group's its terminal one; else the effect type.
+        let what_of = |eff: &DigestEffectFull| -> String {
+            match (eff.effect_type.as_str(), paths) {
+                ("ERROR_IMPLICIT", Some(p)) => {
+                    let terminal = terminal_of(eff)
+                        .map(|(k, _)| k)
+                        .filter(|k| *k != eff.effect_type);
+                    terminal
+                        .or_else(|| {
+                            eff.origin_operation_ids
+                                .iter()
+                                .find_map(|o| p.cx.op_kind(o))
+                                .map(str::to_string)
+                        })
+                        .map_or_else(
+                            || eff.effect_type.clone(),
+                            |k| format!("{k} (implicit error)"),
+                        )
                 }
-                ("ERROR_IMPLICIT", Some(p)) => eff
-                    .origin_operation_ids
-                    .iter()
-                    .find_map(|o| p.cx.op_kind(o))
-                    .map_or_else(
-                        || eff.effect_type.clone(),
-                        |k| format!("{k} (implicit error)"),
-                    ),
                 _ => eff.effect_type.clone(),
-            };
-            // r3 E2: a replayed route's guards decide the parenthesis.
-            let cond = match eff.flow_notes.as_ref().and_then(|n| n.guards.as_ref()) {
+            }
+        };
+        // r3 E2 + H2: a replayed route's guards decide the short condition
+        // text; the class label only when no route was replayed.
+        let cond_of = |eff: &DigestEffectFull| -> String {
+            match eff.flow_notes.as_ref().and_then(|n| n.guards.as_ref()) {
                 Some(g) if !g.is_empty() => {
                     let evaluated = g.iter().filter(|x| x.evaluated).count();
                     format!(
@@ -2607,7 +2622,25 @@ pub fn format_prove_human(
                     )
                 }
                 _ => crate::engine::vocab::condition(eff.conditionality).to_string(),
+            }
+        };
+        // Round 2 G16: a `yes` names its first witness's site and condition
+        // on the answer line.
+        if prove_result.answer == ProveAnswer::Yes
+            && let Some(&first) = witnessed.values().min_by_key(|&&i| witness_key(i))
+        {
+            let eff = &effects[first];
+            let place = place_of(eff);
+            let more = if indices.len() > 1 {
+                format!(
+                    ", and {} more",
+                    crate::engine::l5::routine_rollup::thousands(indices.len() - 1)
+                )
+            } else {
+                String::new()
             };
+            let what = what_of(eff);
+            let cond = cond_of(eff);
             lines[answer_line] = format!("  answer:   yes — {what} {place} ({cond}){more}");
         }
         // Per type: the folded rows' places, and how many more.
@@ -2623,34 +2656,17 @@ pub fn format_prove_human(
                 }
             }
             let full = detail || witnessed.get(t) == Some(&i);
-            let at = match (&eff.evidence.file, eff.evidence.line) {
-                (Some(f), Some(l)) => match paths {
-                    Some(p) => p.cx.location(f, l),
-                    None => format!("{f}:{}", shown(l)),
-                },
-                (Some(f), None) => f.clone(),
-                _ => "no position kept".to_string(),
-            };
             let group = is_group(eff);
-            let boundary = eff
-                .detail
-                .iter()
-                .find(|(k, _)| k == "boundary")
-                .map(|(_, v)| v.as_str());
-            let row = match (group, boundary) {
-                (true, Some(b)) => format!(
-                    "    [{}] beyond {}, entered at {at}",
-                    eff.effect_type,
-                    quoted_boundary(b)
-                ),
-                _ => format!("    [{}] at {at}", eff.effect_type),
-            };
+            let what = what_of(eff);
+            let named = what != eff.effect_type;
             if !full {
-                // A folded row: its place and conditionality, no path.
-                let place = row
-                    .trim_start()
-                    .trim_start_matches(&format!("[{t}] "))
-                    .to_string();
+                // A folded row: its operation (when it names one), place and
+                // conditionality, no path.
+                let place = if named {
+                    format!("{what} {}", place_of(eff))
+                } else {
+                    place_of(eff)
+                };
                 folded
                     .entry(t)
                     .or_default()
@@ -2666,33 +2682,26 @@ pub fn format_prove_human(
                 continue;
             }
             // Round 2 G17: an implicit error names its operation, c27's form
-            // (`Get (implicit error) at …:50 (in a loop)`).
-            let implicit_op = (eff.effect_type == "ERROR_IMPLICIT" && !group)
-                .then(|| {
-                    paths.and_then(|p| {
-                        eff.origin_operation_ids
-                            .iter()
-                            .find_map(|o| p.cx.op_kind(o))
-                    })
-                })
-                .flatten();
-            match implicit_op {
-                Some(op) => lines.push(format!(
-                    "    {op} (implicit error) at {at} ({})",
-                    crate::engine::vocab::condition(eff.conditionality)
-                )),
-                None => {
-                    lines.push(row);
-                    // r3 E2: the route's guards, evaluated or not; the class
-                    // label only when no route was replayed.
-                    if let Some(g) = route_guards_text(eff) {
-                        lines.push(format!("      condition: {g}"));
-                    } else if eff.conditionality != "unknown" {
-                        lines.push(format!(
-                            "      condition: {}",
-                            crate::engine::vocab::condition(eff.conditionality)
-                        ));
-                    }
+            // (`Get (implicit error) at …:50 (in a loop)`); r3 H2(c): a
+            // group's too, with its terminal site before the boundary.
+            if named {
+                lines.push(format!("    {what} {} ({})", place_of(eff), cond_of(eff)));
+                // r3 E2: the route's guards, evaluated or not.
+                if let Some(g) = route_guards_text(eff) {
+                    lines.push(format!("      condition: {g}"));
+                }
+            } else {
+                lines.push(format!("    [{}] {}", eff.effect_type, place_of(eff)));
+                // r3 E2: the route's guards, evaluated or not; r3 H2(d): the
+                // class label's `condition:` form only when no route was
+                // replayed.
+                if let Some(g) = route_guards_text(eff) {
+                    lines.push(format!("      condition: {g}"));
+                } else if eff.conditionality != "unknown" {
+                    lines.push(format!(
+                        "      condition: {}",
+                        crate::engine::vocab::condition_line(eff.conditionality)
+                    ));
                 }
             }
             let Some(p) = paths else {
@@ -2876,6 +2885,30 @@ fn named_kinds(kinds: &[(&'static str, String, usize)], cap: usize) -> String {
 
 /// What an existing-effects `unknown` does not establish (§4.4), in the
 /// question's terms.
+/// r3 H3: the site a may question's `no` names (`COMMIT site`, `error site`,
+/// …); `None` for the must question and the callers' context ones, which
+/// keep their own subject.
+fn effect_site_noun(question: &str) -> Option<String> {
+    Some(match parse_question(question)? {
+        ProveQuestion::MayCommit => "COMMIT site".to_string(),
+        ProveQuestion::ReachesUi => "UI site".to_string(),
+        ProveQuestion::ThrowsError => "error site".to_string(),
+        ProveQuestion::WritesTable { table } => format!("write site on {table}"),
+        ProveQuestion::PublishesEvent { event } => format!("site raising {event}"),
+        ProveQuestion::CommitsOnSuccessPath => return None,
+    })
+}
+
+/// r3 H3: the one negative form of an effect question, `no — no <effect>
+/// site in the analyzed cone (every candidate decided; …)`. Only a `no`
+/// prints it: an answer with blockers stays `unknown`.
+fn negative_answer(site: &str) -> String {
+    format!(
+        "  answer:   no — no {site} in the analyzed cone (every candidate decided; {})",
+        crate::engine::l5::prove_slice::STATIC_LABEL
+    )
+}
+
 fn not_established_effect(question: &str) -> String {
     match parse_question(question) {
         Some(ProveQuestion::MayCommit) => "that it never commits".to_string(),
@@ -3678,6 +3711,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
                 human_text.push('\n');
             }
         }
+        // r3 §5.2 (n06, m08): a typo's recovery, ready to send.
+        if let Some(n) = changed_roots.diagnostics.iter().find_map(|d| match d {
+            ChangedRootsDiagnostic::SelectorUnmatched { hints, .. } => hints.nearest.first(),
+            _ => None,
+        }) {
+            human_text.push_str(&crate::engine::l5::selector_index::corrected_call_line(
+                crate::engine::follow_up::Tool::Prove,
+                job.fcx(),
+                &n.selector,
+                n.overloads,
+                &[("question", serde_json::Value::from(question_text))],
+            ));
+            human_text.push('\n');
+        }
 
         // §6.3 (round-2 n08): the outcome from the blockers' kinds
         // (`routine-ambiguous` / `routine-not-found`), not from the words.
@@ -4093,10 +4140,7 @@ fn format_prove_slice_human(
             "  answer:   yes — {} reachable from {header} ({STATIC_LABEL})",
             plural(matching, "matching site", "matching sites")
         ),
-        ProveAnswer::No => format!(
-            "  answer:   no — no {filtered} is reachable (every candidate decided; \
-             {STATIC_LABEL})"
-        ),
+        ProveAnswer::No => negative_answer(&filtered),
         ProveAnswer::Unknown => format!(
             "  answer:   unknown (blocked by: {}) — no {filtered} was found reachable, and some \
              sites or the analysis cannot rule one out ({STATIC_LABEL})",
@@ -4769,6 +4813,102 @@ mod tests {
             .expect("ws row");
         let dep = text.find("dep:Core:src/Wizard.al:118").expect("dep row");
         assert!(ws < dep, "workspace site first: {text}");
+    }
+
+    /// r3 H2(b, d): among workspace witnesses, an unconditional one leads
+    /// before a conditional one, whatever the input order; a witness the
+    /// literal analysis rules out is never the lead; the IsHandled class is
+    /// printed as a condition not evaluated, never as the guard. Hand-stated:
+    /// a guarded-by-IsHandled COMMIT listed first, a literal-unreachable
+    /// unconditional COMMIT, then an unconditional COMMIT.
+    ///
+    /// DISCRIMINATION (2026-11-08): ranking by workspace tier then path only
+    /// (dropping `condition_rank` from `witness_key`) fails the first assert:
+    /// the headline names `ws:src/Mail.al:124 (condition not evaluated:
+    /// IsHandled pattern)`; restored, passes. Counting a literal-unreachable
+    /// row (`evaluate_may_question` without `!e.literal_unreachable`) fails
+    /// it too: the headline names `ws:src/Mail.al:10`; restored, passes.
+    #[test]
+    fn a_yes_leads_with_an_unconditional_eligible_workspace_witness() {
+        let commit = |line: u32, cond: &'static str, dead: bool| DigestEffectFull {
+            effect_type: "COMMIT".to_string(),
+            detail: vec![],
+            provenance: "transitive",
+            evidence: crate::engine::l5::digest_cli::FullAnchor {
+                source_kind: "source",
+                file: Some("ws:src/Mail.al".to_string()),
+                line: Some(line),
+                column: None,
+                excerpt: None,
+            },
+            via_paths: vec![],
+            via_paths_truncated: false,
+            conditionality: cond,
+            transaction_context: "unknown",
+            guarantees: vec![],
+            fact_id: format!("f{line}"),
+            scoped_guarantees: vec![],
+            group_resources: vec![],
+            group_resource_paths: vec![],
+            group_terminal_path: None,
+            own_path: None,
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: dead,
+            crossing: None,
+        };
+        let entry = minimal_entry(
+            "complete",
+            vec![],
+            vec![
+                commit(123, "guarded-by-IsHandled", false),
+                commit(9, "unconditional-on-success", true),
+                commit(300, "unconditional-on-success", false),
+            ],
+            vec![],
+            false,
+        );
+        let result = prove(&entry, 0, &ProveQuestion::MayCommit);
+        assert_eq!(result.answer, ProveAnswer::Yes);
+        let text = format_prove_human(
+            "TestRoutine",
+            "",
+            "may-commit",
+            &result,
+            &entry.effects,
+            None,
+        );
+        assert!(
+            text.contains(
+                "  answer:   yes — COMMIT at ws:src/Mail.al:301 (unconditional on success), and 1 \
+                 more"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("Mail.al:10"), "literal-unreachable: {text}");
+        assert!(
+            text.contains("      condition: not evaluated (IsHandled pattern)"),
+            "{text}"
+        );
+        assert!(!text.contains("guarded-by-IsHandled"), "{text}");
+    }
+
+    /// r3 H3: an existing-effects `no` prints the one negative form, naming
+    /// the effect's site and the analyzed cone; the callers' context and
+    /// must questions keep their own subject.
+    #[test]
+    fn an_effect_no_names_its_site_in_the_analyzed_cone() {
+        assert_eq!(
+            negative_answer(&effect_site_noun("may-commit").unwrap()),
+            "  answer:   no — no COMMIT site in the analyzed cone (every candidate decided; \
+             static candidates, not an observed trace)"
+        );
+        assert_eq!(
+            effect_site_noun("writes-table:Customer").as_deref(),
+            Some("write site on Customer")
+        );
+        assert!(effect_site_noun("commits-on-success-path").is_none());
+        assert!(effect_site_noun("callers-intercept-errors").is_none());
     }
 
     /// Round 2 G13: partial coverage whose only reason is interface open

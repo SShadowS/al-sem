@@ -905,8 +905,11 @@ fn digest_summary_through_mcp_on_the_fixture() {
     // table the routine may persist itself.
     // Output validation V4 (§5.2, F77): the row's summary line, its test
     // status, its signature (one row per stable id); its result index row.
+    // r3 §5.2: the index row's sentence is the overall effect (the listed
+    // row's); the writes-only line is `writesAnswer`.
+    assert_eq!(r["answer"], listed["answer"], "{index}");
     assert!(
-        r["answer"]
+        r["writesAnswer"]
             .as_str()
             .is_some_and(|a| a.starts_with("writes: may write 16 tables")),
         "{summary}"
@@ -1694,7 +1697,7 @@ fn query_effects_writes_agree_with_the_cone_on_the_fixture() {
     ]);
     let s = &query["payload"]["summary"];
     assert_eq!(
-        s["scope"], "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+        s["scope"], "operations-one-routine-deep; writes-beyond-dependency-calls-full-cone",
         "the cone was read: {s}"
     );
     let (e_own, e_beyond) = explain_physical_tables(&explain["cards"][0]);
@@ -2127,7 +2130,9 @@ fn prove_states_coverage_assumptions_and_limits() {
     let no = run(FIELD_OPS, "may-commit", "human");
     assert!(
         no.contains(
-            "\nanswer: no\nanalysis complete · assumptions: loaded-subscribers · limits: none · "
+            "\nanswer: no — no COMMIT site in the analyzed cone (every candidate decided; static \
+             candidates, not an observed trace)\nanalysis complete · assumptions: \
+             loaded-subscribers · limits: none · "
         ),
         "{no}"
     );

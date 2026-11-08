@@ -102,6 +102,79 @@ rows gain `literalAssumes`, explain's `commits.literalDead` gains `assumes`, and
   itself". With E1 this added 60 false `extension point … 0 subscriber(s)` lines to the
   CDO `IssueReminder` explain. A row whose paths were all dropped is no longer one.
 
+### Changed (output validation r3, milestone X3: answers lead with what decides them)
+
+Spec `docs/superpowers/specs/2026-11-08-output-validation-r3.md` §3 (H1-H7) and the §5.1 and
+§5.2 items that are not about the tests tool.
+
+- **Impact folds the UI-navigation census (H1).** `entries by kind` and `by context` under
+  `reached by UI navigation` print only with `detail: true`, for one routine and for each
+  routine of several alike (diff mode with `detail: true` used to print none); the population
+  line keeps its count, share and nearest entry. The code census is unchanged.
+- **Prove's `yes` leads with what decides it (H2).** No `top callees not resolved` / `top
+  interface dispatch` lists on a `yes` (the header keeps `analysis partial` and its counts).
+  Witnesses rank workspace first, then the least restrictive condition (unconditional before
+  conditional, a condition not resolved last), then the shortest path; a witness the literal
+  analysis rules out is never one. A group row names its terminal operation and site before
+  the boundary (`Insert (implicit error) at dep:…:514, beyond …, entered at …`, `[COMMIT] at
+  dep:…, beyond …`), folded rows included. The IsHandled class prints `condition: not
+  evaluated (IsHandled pattern)` (in parentheses `IsHandled pattern, not evaluated`), never `guarded-by-IsHandled` (now a replaced word).
+- **One negative form for effect questions (H3).** An existing-effects `no` reads `no — no
+  <effect> site in the analyzed cone (every candidate decided; static candidates, not an
+  observed trace)` (`COMMIT site`, `UI site`, `error site`, `write site on T`, `site raising
+  E`; a filtered question names its filter, c27). The must question and the callers' context
+  questions keep their own subject; an answer with blockers stays `unknown`.
+- **Same-object callees read `this object: Name` (H4)** in explain and impact (was `::Name`).
+  A pending-write witness inside a call names the write's own site (found in the callee's
+  cone), the call it is inside with that call's location, and the call to the routine with
+  its own (c06: `Modify on … at …CDORecipientMgt.Codeunit.al:86, inside the call
+  DocOutput.GetRecipientsDescription at …:264, before the call at …:276`).
+- **A small digest lookup failure comes back inline (H5).** In the MCP server, a digest whose
+  outcome is `ambiguous` or `not-found` and whose whole stdout fits the inline cap is answered
+  inline (the CLI's bytes, in the requested format); an `out` still writes a file. The human
+  header says `answer: ambiguous — names 2 routines` / `answer: not found` and drops `more:
+  … for every effect row`.
+- **Lock-edit answers lead with the limit (H7).** With `callersContext`, the `answer:` line
+  ends `caller-held locks and their order: not analyzed`, and the callers' block's first line
+  is `locks held by callers: not analyzed (no lock facts)`. Above that block the header names
+  what `analysis complete` qualifies: `analysis complete (the routine's own cone)` (§5.2, c06).
+- **Shorter callers' context cards (A P5).** Above a callers' context block the card's
+  `callers:` line and caller rules keep their counts and the rule; names fold behind
+  `detail: true`; `through dependency code` names one witness (the JSON keeps three).
+- **`starts by:` (A P6, m07).** An explain card of a workspace routine names its first two
+  top-level statements, read from its statement tree and its own file, labelled `a start, not
+  a summary` (not with `showSource`, whose excerpt shows the first statement).
+- **Touches offer the complete write-only call (A P3)** when the record writes are folded:
+  `every record-write site (16): alsem_query_touches {"table": "…", "opFamily": "write"}`.
+- **Vocabulary (§5.2).** A field's write is a `field assignment` in touches field mode; the
+  table-mode read family is `other reads` (`Get` counts under key-relevant); a digest summary
+  row's commits say `none observed` / `no (every candidate decided)` (never `no observed`).
+- **Typo recovery (§5.2, n06, m08).** An explain or prove `not found` ends with `corrected
+  call (the nearest name): …`, the complete call for the first nearest name.
+- **query effects envelope summary (A P1).** The MCP summary and its index row carry
+  `analysis`, `reasons` and `scopes` (`operations`: one dependency routine deep; `deepWrites`:
+  the whole cone), and `beyondWrites.dependencyCalls` (was `entryPoints`).
+- **digest index (A P10, §5.2, F top-9).** The tests hand-off is once per index (the index
+  file's `testsNext`, `testsNextFor`), not on every row; an index row's `answer` is its
+  overall effect (every family) with the writes-only line as `writesAnswer`; `effectsByType`
+  leaves the index rows (`effectCounts` is the same map); the envelope summary states the
+  test status most rows share once (`testStatus`) and a listed row only where it differs;
+  index rows' `summary` names `dependencyCalls`.
+
+**Consumer notice (query 5.0.0 and digest 5.0.0, both unreleased; bc-dev-mcp, ConTinAI):**
+- `dependencyClosure` is renamed `dependencyFingerprint` (H6). Its value is unchanged:
+  `apps-v1:` and the first 16 hex digits of the blake3 hash of the dependency apps'
+  `appId@version` (appId lower case), sorted and joined with `\n`. It identifies an app set;
+  it is not a retrievable manifest and not proof of unchanged package contents.
+- query 5.0.0: `summary.scope` reads `operations-one-routine-deep;
+  writes-beyond-dependency-calls-full-cone`; an answer with no operation keeps `summary` as
+  `{operations: 0, scope}` (its `result.scope` with families, blockers and `covers` whole).
+- digest 5.0.0: an effect's `detail.tempState` uses the §8.1 words (`temporary`, `not
+  temporary`, `caller-dependent (parameter N)`, `caller-dependent (Rec)`, `not resolved`);
+  `entries[].tableAnswers` lists two entries or more carry alike are kept once in
+  `sharedTableAnswers` (`ta:<n>`) and those entries name the key.
+- `--schema 4` and the 5→4 adapters rebuild 4.0.0 exactly (rebuild tests cover each change).
+
 ### Fixed (round-3 recheck: impact's tests line)
 
 - **The tests left out of the pick are not "not in this filter".** Impact's `tests:`

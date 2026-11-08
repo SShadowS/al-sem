@@ -1772,6 +1772,26 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
     h.scope_json(extra)
 }
 
+/// r3 §5.1 (A P1): a query effects answer's status for its envelope summary
+/// and index row, from its `result.scope` (`scope`): `analysis`, `reasons`
+/// and `scopes`, the operations' family (`writes`: one dependency routine
+/// deep) and the deep writes' (`beyondDependencyCalls`: the whole cone)
+/// apart, each with its depth and inventory.
+fn effects_status(scope: &Value) -> Value {
+    let family = |k: &str| {
+        let f = &scope["families"][k];
+        json!({"depth": f["depth"], "inventory": f["inventory"]})
+    };
+    json!({
+        "analysis": scope["analysis"],
+        "reasons": scope["reasons"],
+        "scopes": {
+            "operations": family("writes"),
+            "deepWrites": family("beyondDependencyCalls"),
+        },
+    })
+}
+
 /// Render an unresolved/ambiguous selector as its own (exit-2) document, so a
 /// bad selector produces a well-formed answer instead of a silent empty result.
 fn selector_failure_doc<T>(
@@ -2738,8 +2758,10 @@ fn render_query_touches_body(
                         )
                     }
                     SiteFamily::Read | SiteFamily::Other if of.is_empty() => String::new(),
+                    // r3 §5.2 (P7): `Get` is counted under key-relevant
+                    // uses, so this family is the other reads.
                     SiteFamily::Read => format!(
-                        "  reads: {} — {by_text}\n",
+                        "  other reads: {} — {by_text}\n",
                         plural(of.len(), "site", "sites")
                     ),
                     SiteFamily::Other => format!(
@@ -2762,6 +2784,23 @@ fn render_query_touches_body(
                     human.push_str(&format!(
                         "    [{}] at {}:{} in {}{temp}{table_note}\n",
                         s.op, s.file, s.line, s.who
+                    ));
+                }
+                // r3 §5.1 (A P3): when the record writes are folded, the
+                // complete write-only call for this table, ready to send.
+                let shown = samples.iter().filter(|s| s.family() == f).count();
+                if f == SiteFamily::Write && !writes_only && shown < of.len() {
+                    let call = crate::engine::follow_up::FollowUp::new(
+                        crate::engine::follow_up::Tool::QueryTouches,
+                        crate::engine::follow_up::Cx::new(surface, single_app),
+                        "every record-write site",
+                    )
+                    .arg("table", table_selector)
+                    .arg("opFamily", "write");
+                    human.push_str(&format!(
+                        "    every record-write site ({}): {}\n",
+                        thousands(of.len()),
+                        call.text(surface)
                     ));
                 }
             }
@@ -5610,13 +5649,30 @@ fn render_query_effects_body(
     }
 
     let mut summary = effects_summary(&rr.qualified(), &effects, &tables);
-    // Wave 3a: the MCP summary states the cone's writes beyond entry points.
+    // r3 §5.1 (A P1): the envelope's summary and its index row carry the
+    // analysis status, its reasons and the two scopes apart: the operations
+    // (one dependency routine deep) and the deep writes (the whole cone).
+    let status = effects_status(&query_scope_json("query.effects", &payload, deps));
+    if let (Value::Object(m), Value::Object(s)) = (&mut summary, &status) {
+        for (k, v) in s {
+            m.insert(k.clone(), v.clone());
+        }
+        if let Some(Value::Array(rows)) = m.get_mut(crate::engine::result_index::ROWS_KEY) {
+            for r in rows.iter_mut().filter_map(Value::as_object_mut) {
+                for (k, v) in s {
+                    r.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    // Wave 3a: the MCP summary states the cone's writes beyond dependency
+    // calls (r3 §5.2: `dependencyCalls`, as the 5.0.0 payload names them).
     if beyond.is_some()
         && let Value::Object(m) = &mut summary
     {
         m.insert(
             "beyondWrites".into(),
-            json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
+            json!({"tables": beyond_tables.len(), "dependencyCalls": beyond_writes.len()}),
         );
         // Output validation §8.2 (F53): the two populations with their
         // units, so the operation tables and the whole-cone write tables
@@ -5880,10 +5936,7 @@ fn field_scope(
 
 /// A use list as text: `read+write`.
 fn uses_text(uses: &[crate::program::body::record_op::FieldUse]) -> String {
-    uses.iter()
-        .map(|u| u.as_str())
-        .collect::<Vec<_>>()
-        .join("+")
+    uses.iter().map(|u| u.human()).collect::<Vec<_>>().join("+")
 }
 
 /// What `--from` walks: the solve, and the sited graph when the demand
@@ -6393,9 +6446,9 @@ fn render_field_touches(
             .iter()
             .map(|(u, n)| {
                 if *u == FieldUse::Write && read_write_sites > 0 {
-                    format!("{} {n} ({read_write_sites} also read)", u.as_str())
+                    format!("{} {n} ({read_write_sites} also read)", u.human())
                 } else {
-                    format!("{} {n}", u.as_str())
+                    format!("{} {n}", u.human())
                 }
             })
             .collect();
@@ -6530,7 +6583,7 @@ fn render_field_touches(
         let obj_sites: Vec<ft::FieldSite<'_>> = ixs.iter().map(|&i| sites[i].0.clone()).collect();
         let obj_uses: Vec<String> = ft::use_counts(&obj_sites)
             .iter()
-            .map(|(u, n)| format!("{} {n}", u.as_str()))
+            .map(|(u, n)| format!("{} {n}", u.human()))
             .collect();
         let obj_routines: BTreeSet<usize> = obj_sites.iter().map(|s| s.routine_ix).collect();
         human.push_str(&format!(

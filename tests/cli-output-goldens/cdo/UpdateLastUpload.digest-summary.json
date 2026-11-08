@@ -11,15 +11,15 @@
   "routines": [
     {
       "analysis": "complete",
-      "answer": "caller-dependent writes on 1 table (only when the caller's record is not temporary); commits: none; errors 1",
+      "answer": "caller-dependent writes on 1 table (only when the caller's record is not temporary); commits: no (every candidate decided); errors 1",
       "index": 1,
-      "selector": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
-      "testStatus": "not requested"
+      "selector": "Codeunit \"CDO Telemetry\"::UpdateLastUpload"
     }
   ],
   "routinesListed": 1,
   "rowDetail": "compact: each row names its result-index row (`index`), which holds its signature, stable id, full answer and totals",
   "shared": {},
+  "testStatus": "not requested",
   "totalEffects": 2,
   "totalUnresolved": 0
 }

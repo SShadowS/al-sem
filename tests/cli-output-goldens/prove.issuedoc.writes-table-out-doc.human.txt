@@ -6,6 +6,4 @@ more: --format json for every evidence row and its hops
     [DB_MODIFY] at ws:src/OutIssueDocument.Codeunit.al:14
       condition: unconditional on success
       path: IssueDoc (in the routine itself)
-  top callees not resolved: Codeunit.Run(<dynamic>) ×2
-  top interface dispatch (open world): Handler.Handle ×1
   next: alsem explain --routine 'Codeunit "Out Issue Document"::IssueDoc' — lists the workspace ones under gaps

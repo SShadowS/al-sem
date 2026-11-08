@@ -14,6 +14,11 @@
 //!   with a dependency app's guid replaced by the app's name
 //!   (`dep:Base Application:src/…`, from `payload.dependencies.apps`);
 //!   `origin.file` keeps its guid form and is unchanged.
+//! - **Dependency apps** (G38, r3 H6): `dependencies.apps` leaves;
+//!   `dependencyCount` and `dependencyFingerprint` take its place (inputs and
+//!   canonical form: [`dependency_fingerprint`]). The fingerprint identifies
+//!   an app set; it is not a retrievable manifest and not proof of unchanged
+//!   package contents.
 //!
 //! [`to_v4`] is [`from_v4`]'s inverse; `--schema 4` writes the 4.0.0
 //! document itself for one release (r1 §8.3).
@@ -394,10 +399,15 @@ fn family_reasons(v: &mut Value, drop: bool) {
     }
 }
 
-/// G38: the dependency apps' count and a digest of their identities
-/// (`apps-v1:<blake3 of each "appId@version", sorted>`), in place of the
-/// full list.
-pub(crate) fn dependency_closure(apps: &[Value]) -> String {
+/// G38, r3 H6: `dependencyFingerprint`, a fingerprint of the dependency
+/// app set, in place of the full list. Inputs: each dependency app's
+/// `appId` (lower case) and `version`, as `appId@version`. Canonical form:
+/// those strings sorted, joined with `\n`, hashed with blake3; the value is
+/// `apps-v1:` followed by the first 16 hex digits of the hash. It
+/// identifies an app set (two answers with the same value were computed
+/// over the same apps at the same versions); it is not a retrievable
+/// manifest, and not proof that the packages' contents are unchanged.
+pub(crate) fn dependency_fingerprint(apps: &[Value]) -> String {
     let mut ids: Vec<String> = apps
         .iter()
         .map(|a| {
@@ -414,8 +424,9 @@ pub(crate) fn dependency_closure(apps: &[Value]) -> String {
 }
 
 /// G38: `dependencies.apps` leaves in 5.0.0; `dependencyCount` and
-/// `dependencyClosure` take its place (an empty `dependencies` object
-/// leaves too).
+/// `dependencyFingerprint` ([`dependency_fingerprint`]; r3 H6 renamed it
+/// from `dependencyClosure` inside the unreleased 5.0.0) take its place (an
+/// empty `dependencies` object leaves too).
 pub(crate) fn fold_dependencies(payload: &mut Value) {
     let Value::Object(m) = payload else { return };
     let Some(Value::Object(deps)) = m.get_mut("dependencies") else {
@@ -429,7 +440,10 @@ pub(crate) fn fold_dependencies(payload: &mut Value) {
         m.remove("dependencies");
     }
     m.insert("dependencyCount".into(), apps.len().into());
-    m.insert("dependencyClosure".into(), dependency_closure(&apps).into());
+    m.insert(
+        "dependencyFingerprint".into(),
+        dependency_fingerprint(&apps).into(),
+    );
 }
 
 /// [`fold_dependencies`]' partial inverse: the count and digest leave;
@@ -438,7 +452,70 @@ pub(crate) fn fold_dependencies(payload: &mut Value) {
 pub(crate) fn unfold_dependencies(payload: &mut Value) {
     if let Value::Object(m) = payload {
         m.remove("dependencyCount");
-        m.remove("dependencyClosure");
+        m.remove("dependencyFingerprint");
+    }
+}
+
+/// The 4.x `summary.scope` value and its 5.0.0 words (r3 §5.2: the
+/// dependency boundary is a dependency call, not an entry point).
+const SUMMARY_SCOPE: (&str, &str) = (
+    "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+    "operations-one-routine-deep; writes-beyond-dependency-calls-full-cone",
+);
+
+/// The query effects summary of an answer with no operation, in 5.0.0's
+/// key names, with its `scope` value (r3 §5.1, A P10). Every count is zero
+/// and every list empty.
+fn zero_effects_summary(scope: &Value) -> Value {
+    serde_json::json!({
+        "beyondDependencyCalls": [],
+        "beyondWrites": {"dependencyCalls": 0, "routinesEntered": 0, "sites": 0, "tables": 0,
+                         "tablesOnlyBeyond": 0},
+        "byTable": [],
+        "callerDependent": {"operations": 0, "tables": 0},
+        "literalRoutes": {"coneRoute": 0, "notInCone": 0, "notJudged": 0, "otherRoute": 0,
+                          "ruledOut": 0},
+        "locks": {"operations": 0, "tables": 0},
+        "reads": {"operations": 0, "tables": 0},
+        "scope": scope,
+        "tableNotResolved": {"operations": 0, "recordRef": {"operations": 0, "routines": 0},
+                             "routines": 0},
+        "temporary": {"operations": 0, "routines": 0, "tables": 0},
+        "unclassified": {"operations": 0, "ops": {}},
+        "validate": {"operations": 0, "tables": 0},
+        "writes": {"knownPersistent": 0, "operations": 0, "tables": 0, "tempStateUnknown": 0},
+    })
+}
+
+/// r3 §5.1 (A P10), §5.2: the effects `summary` in 5.0.0 (`forward`) or back
+/// in 4.0.0. Its `scope` value names dependency calls; an answer with no
+/// operation (`effectCount` 0, every count of the summary zero) keeps
+/// `{operations: 0, scope}` in place of the zero counts. The answer's
+/// `result.scope` (its families with their blockers, the page-context
+/// `covers` sentence) is left as it is. Exact both ways: a summary with any
+/// count is never compacted, and only the compact form is expanded.
+fn effects_summary(payload: &mut Value, forward: bool) {
+    let empty = payload.get("effectCount").and_then(Value::as_u64) == Some(0);
+    let Some(summary) = payload.get_mut("summary") else {
+        return;
+    };
+    let (from, to) = if forward {
+        (SUMMARY_SCOPE.0, SUMMARY_SCOPE.1)
+    } else {
+        (SUMMARY_SCOPE.1, SUMMARY_SCOPE.0)
+    };
+    if summary.get("scope").and_then(Value::as_str) == Some(from) {
+        summary["scope"] = to.into();
+    }
+    let scope = summary.get("scope").cloned().unwrap_or(Value::Null);
+    if forward {
+        if empty && *summary == zero_effects_summary(&scope) {
+            *summary = serde_json::json!({"operations": 0, "scope": scope});
+        }
+    } else if summary.as_object().is_some_and(|m| {
+        m.len() == 2 && m.get("operations") == Some(&Value::from(0)) && m.contains_key("scope")
+    }) {
+        *summary = zero_effects_summary(&scope);
     }
 }
 
@@ -446,6 +523,7 @@ pub(crate) fn unfold_dependencies(payload: &mut Value) {
 #[must_use]
 pub fn from_v4(mut payload: Value) -> Value {
     rename_keys(&mut payload, RENAMES);
+    effects_summary(&mut payload, true);
     let apps: Vec<Value> = payload
         .pointer("/dependencies/apps")
         .and_then(Value::as_array)
@@ -489,6 +567,7 @@ pub fn to_v4(mut payload: Value) -> Value {
     if let Some(f) = &files {
         unfold_files(&mut payload, f);
     }
+    effects_summary(&mut payload, false);
     rename_keys(&mut payload, &inverse(RENAMES));
     payload
 }
@@ -614,11 +693,54 @@ mod tests {
         assert_eq!(f["writes"]["reasons"], json!(["a different sentence"]));
         assert_eq!(v5["dependencyCount"], 1);
         assert!(
-            v5["dependencyClosure"]
+            v5["dependencyFingerprint"]
                 .as_str()
                 .is_some_and(|c| c.starts_with("apps-v1:"))
         );
         assert!(v5.get("dependencies").is_none());
+    }
+
+    /// r3 §5.1 (A P10), §5.2: an answer with no operation keeps its summary
+    /// as `{operations: 0, scope}` (its `result.scope` untouched), the scope
+    /// in dependency-call words; one count anywhere keeps every count; both
+    /// rebuild their 4.0.0 summary exactly. Hand-stated: the 4.0.0 zero
+    /// summary, and the same with one lock.
+    ///
+    /// DISCRIMINATION (2026-11-08): compacting on `effectCount` alone (the
+    /// `*summary == zero_effects_summary(..)` check dropped) fails the
+    /// second half: the summary with a lock is compacted and its 4.0.0
+    /// rebuild loses the lock; restored, passes.
+    #[test]
+    fn a_zero_operation_summary_is_compact_and_rebuilt() {
+        let scope = Value::from(SUMMARY_SCOPE.0);
+        let mut zero = zero_effects_summary(&scope);
+        rename_keys(&mut zero, &inverse(RENAMES));
+        let families = json!({"families": {"writes": {"depth": "oneDependencyRoutine",
+            "blockers": {"callNotResolved": 0},
+            "reasons": ["dependency code deeper than one routine is not inventoried for writes"]}},
+            "covers": "record operations only"});
+        let p = json!({"effectCount": 0, "effects": [], "summary": zero,
+                       "result": {"scope": families}});
+        let v5 = from_v4(p.clone());
+        assert_eq!(
+            v5["summary"],
+            json!({"operations": 0, "scope": SUMMARY_SCOPE.1}),
+            "{v5:#}"
+        );
+        let s = &v5["result"]["scope"];
+        assert_eq!(s["covers"], "record operations only", "{v5:#}");
+        assert_eq!(
+            s["families"]["writes"]["blockers"],
+            json!({"callNotResolved": 0}),
+            "{v5:#}"
+        );
+        assert_eq!(to_v4(v5), p);
+        let mut one = p.clone();
+        one["summary"]["locks"]["operations"] = 1.into();
+        let v5 = from_v4(one.clone());
+        assert_eq!(v5["summary"]["locks"]["operations"], 1, "{v5:#}");
+        assert_eq!(v5["summary"]["scope"], SUMMARY_SCOPE.1);
+        assert_eq!(to_v4(v5), one);
     }
 
     /// The previous schema's reconstruction rule (§4.6): `to_v4(from_v4(p))

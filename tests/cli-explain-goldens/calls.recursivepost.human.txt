@@ -8,6 +8,7 @@ Codeunit "Calls Post"::RecursivePost  defined at ws:src/post.al:44
   callers: none
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: table-trigger-rules-skipped 1
+  starts by (a start, not a summary): `Checks.PingCheck(Order)` (:48); `Order.Modify()` (:49)
   calls: Codeunit "Calls Checks"::PingCheck (called at :48)
   rules: none of its own
   inherits via PingCheck: rejects when Order.Amount < 0: "The amount is negative."  [Error ws:src/checks.al:70]

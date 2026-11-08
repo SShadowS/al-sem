@@ -296,9 +296,66 @@ struct Index<'a> {
     /// The one routine display (output validation V3, §2.1, §2.2).
     names: crate::engine::l5::routine_rollup::RoutineNames<'a>,
     model: &'a Model,
+    /// The model's resolved calls by caller row id, built on first use
+    /// (r3 H4: a pending write's own site deeper in a callee's cone).
+    calls_from: std::cell::OnceCell<HashMap<&'a str, Vec<&'a str>>>,
 }
 
+/// How many routines [`Index::deep_write_site`] visits at most.
+const DEEP_SITE_VISITS: usize = 20_000;
+
 impl<'a> Index<'a> {
+    /// r3 H4 (c06): where a callee's cone performs `op` on `table`: the
+    /// nearest routine (breadth first over the resolved calls, `callee`
+    /// itself first) whose own physical record operation it is, and that
+    /// operation's first site (`file`, 1-based line). `None` when the search
+    /// finds none within [`DEEP_SITE_VISITS`] routines.
+    fn deep_write_site(&self, callee: &str, table: &str, op: &str) -> Option<(String, u32)> {
+        let calls = self.calls_from.get_or_init(|| {
+            let mut m: HashMap<&str, Vec<&str>> = HashMap::new();
+            for e in &self.model.calls.edges {
+                if let Some(to) = e.to.as_deref() {
+                    m.entry(e.from.as_str()).or_default().push(to);
+                }
+            }
+            m
+        });
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+        let start = self.by_id.get(callee)?.id.as_str();
+        seen.insert(start);
+        queue.push_back(start);
+        while let Some(id) = queue.pop_front() {
+            if let Some(r) = self.by_id.get(id) {
+                let own = r
+                    .record_operations
+                    .iter()
+                    .filter(|o| o.table_id.as_deref() == Some(table))
+                    .filter(|o| o.op.eq_ignore_ascii_case(op))
+                    .filter(|o| {
+                        !crate::program::body::features::temp_state_suppresses(
+                            o.temp_state.as_ref(),
+                        )
+                    })
+                    .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column));
+                if let Some(o) = own {
+                    return Some((
+                        o.source_anchor.source_unit_id.clone(),
+                        o.source_anchor.start_line + 1,
+                    ));
+                }
+            }
+            for &to in calls.get(id).into_iter().flatten() {
+                if seen.len() >= DEEP_SITE_VISITS {
+                    return None;
+                }
+                if seen.insert(to) {
+                    queue.push_back(to);
+                }
+            }
+        }
+        None
+    }
     fn new(model: &'a Model, g: &SitedGraph) -> Index<'a> {
         let mut by_stable: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
         let mut by_id: HashMap<&str, &ModelRoutine> = HashMap::new();
@@ -345,6 +402,7 @@ impl<'a> Index<'a> {
             fwd_sites,
             names: crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]),
             model,
+            calls_from: std::cell::OnceCell::new(),
         }
     }
 
@@ -433,17 +491,19 @@ impl<'a> Index<'a> {
 }
 
 /// Round-2 G24: a pending write behind a call, by its operation and table:
-/// `Modify on "T" at <file:line> in <callee>, before the call` — the
-/// operation from the callee's cone (its physical write ops on the table),
-/// the site when the callee writes the table itself (else the operation is
-/// deeper in its callees and only the callee is named).
+/// `Modify on "T" at <file:line> in <callee>, before the call` (the JSON
+/// detail) — the operation from the callee's cone (its physical write ops on
+/// the table), and its site, in the callee or deeper (r3 H4). The second
+/// string is the human words: the write and its site, the call it is inside
+/// and that call's location, then the call to the routine (`root_call`).
 fn pending_call_words(
     ix: &Index<'_>,
     cx: &CallersCx<'_>,
     cs: &PCallSite,
     callee: &str,
     table: &str,
-) -> String {
+    root_call: Option<&(String, u32)>,
+) -> (String, String) {
     let display = ix.table(table);
     let name = display.strip_prefix("Table ").unwrap_or(&display);
     let ops = cx.cone_derived.physical_table_write_ops_of(callee);
@@ -458,23 +518,28 @@ fn pending_call_words(
             s
         })
         .unwrap_or_else(|| "a write".to_string());
-    let own = ix.by_id.get(callee).and_then(|r| {
-        r.record_operations
-            .iter()
-            .filter(|o| o.table_id.as_deref() == Some(table))
-            .filter(|o| o.op.eq_ignore_ascii_case(&op))
-            .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column))
-    });
-    let at = own
-        .map(|o| {
-            format!(
-                " at {}:{}",
-                o.source_anchor.source_unit_id,
-                o.source_anchor.start_line + 1
-            )
-        })
+    // r3 H4 (c06): the write's own site, in the callee or deeper in its cone.
+    let site = ix.deep_write_site(callee, table, &op);
+    let at = site
+        .as_ref()
+        .map(|(f, l)| format!(" at {f}:{l}"))
         .unwrap_or_default();
-    format!("{op} on {name}{at} in {}, before the call", cs.callee_text)
+    let detail = format!("{op} on {name}{at} in {}, before the call", cs.callee_text);
+    // The human words: the write and its site, the call it is inside with
+    // that call's location, and the call this answer is about with its own.
+    let inner = format!(
+        "{}:{}",
+        cs.source_anchor.source_unit_id,
+        cs.source_anchor.start_line + 1
+    );
+    let words = format!(
+        "{op} on {name}{at}, inside the call {} at {inner}{}",
+        cs.callee_text,
+        root_call
+            .map(|(f, l)| format!(", before the call at {f}:{l}"))
+            .unwrap_or_else(|| ", before the call".to_string())
+    );
+    (detail, words)
 }
 
 /// A site of a caller's body, found by its anchor.
@@ -765,6 +830,8 @@ struct Visitor<'a, 'c> {
     /// no `yes` alone.
     open_witnesses: Vec<Witness>,
     witness_keys: HashSet<(NodeIx, SiteIx, &'static str)>,
+    /// The human words of the next witness (r3 H4), taken by `witness`.
+    next_words: Option<String>,
     witness_count: usize,
     open_witness_count: usize,
     blockers: BTreeMap<&'static str, Vec<ProveBlocker>>,
@@ -860,6 +927,8 @@ impl<'a, 'c> Visitor<'a, 'c> {
         at: Option<(String, u32)>,
         caller_dependent: bool,
     ) {
+        // The human words set for this witness (r3 H4), if any.
+        let words = self.next_words.take();
         if !self.witness_keys.insert((caller, site, kind)) {
             return;
         }
@@ -895,7 +964,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
         path.extend(self.path_of(from));
         let w = Witness {
             kind,
-            words: None,
+            words,
             detail,
             file: at.as_ref().map(|a| a.0.clone()),
             line: at.map(|a| a.1),
@@ -1181,13 +1250,18 @@ impl<'a, 'c> Visitor<'a, 'c> {
                             })
                         });
                     match via {
-                        Some((cs, callee)) => (
-                            pending_call_words(self.ix, self.cx, cs, callee, t),
-                            Some((
-                                cs.source_anchor.source_unit_id.clone(),
-                                cs.source_anchor.start_line + 1,
-                            )),
-                        ),
+                        Some((cs, callee)) => {
+                            let (detail, words) =
+                                pending_call_words(self.ix, self.cx, cs, callee, t, at.as_ref());
+                            self.next_words = Some(words);
+                            (
+                                detail,
+                                Some((
+                                    cs.source_anchor.source_unit_id.clone(),
+                                    cs.source_anchor.start_line + 1,
+                                )),
+                            )
+                        }
                         None => (
                             format!("a write on {} before the call", self.ix.table(t)),
                             at.clone(),
@@ -1772,6 +1846,7 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         witnesses: Vec::new(),
         open_witnesses: Vec::new(),
         witness_keys: HashSet::new(),
+        next_words: None,
         witness_count: 0,
         open_witness_count: 0,
         blockers: BTreeMap::new(),
@@ -2446,8 +2521,13 @@ pub fn section(cx: &CallersCx<'_>, root: &str, hcx: &HumanCx<'_>) -> Option<Call
     // removes one. Round-2 G24: an answer that found nothing says among
     // which population (the direct callers the walk analyzed), and the
     // three answers' short forms are the card's `answer:` line.
-    let mut lines =
-        vec!["for adding a COMMIT, an error or UI here (callers' context):".to_string()];
+    // r3 H7: a lock edit's answer leads with its limit: no lock facts are
+    // kept for the callers (round-2 G24, G48), so the block's first line
+    // says their held locks are not analyzed.
+    let mut lines = vec![
+        "for adding a COMMIT, an error or UI here (callers' context):".to_string(),
+        "  locks held by callers: not analyzed (no lock facts)".to_string(),
+    ];
     let mut short: Vec<String> = Vec::new();
     let mut json = serde_json::Map::new();
     for q in [
@@ -2502,8 +2582,9 @@ pub fn section(cx: &CallersCx<'_>, root: &str, hcx: &HumanCx<'_>) -> Option<Call
         );
     }
     // Round-2 G24 (G48's output limitation): no lock facts are kept for the
-    // callers, so their held locks are not analyzed.
-    lines.push("  locks held by callers: not analyzed (no lock facts)".to_string());
+    // callers, so their held locks are not analyzed (the first line above;
+    // the `answer:` summary says so too).
+    short.push("caller-held locks and their order: not analyzed".to_string());
     json.insert(
         "locksHeldByCallers".into(),
         serde_json::json!({"analyzed": false, "reason": "no lock facts"}),
@@ -2662,6 +2743,9 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
                 let ctx = ctx.map(|c| format!(" [context: {c}]")).unwrap_or_default();
                 format!("    [{tier}] {kind}{ctx}: {words} ({hops})")
             }
+            // r3 H4: a pending write inside a call names its own words (the
+            // write's site, the call it is inside, both call locations).
+            (None, Some(words)) => format!("    [{tier}] {}: {words} ({hops})", w.kind),
             _ => {
                 let place = match (&w.file, w.line) {
                     (Some(f), Some(l)) => format!(" at {f}:{l}"),

@@ -21,8 +21,8 @@
     "dependencies": {
       "mode": "crossApp"
     },
-    "dependencyClosure": "apps-v1:af1349b9f5f9a1a6",
     "dependencyCount": 0,
+    "dependencyFingerprint": "apps-v1:af1349b9f5f9a1a6",
     "effects": {
       "e:1": {
         "confidence": "static",
@@ -171,7 +171,7 @@
           },
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:2",
             "factId": "1b8a1d95b74b8f7c",
@@ -349,7 +349,7 @@
           },
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:2",
             "factId": "63af67ee66fc4502",
@@ -515,7 +515,7 @@
           },
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:5",
             "factId": "cd5b1a00fdc31d54",
@@ -687,7 +687,7 @@
           },
           {
             "detail": {
-              "tempState": "known(false)"
+              "tempState": "not temporary"
             },
             "effect": "e:5",
             "factId": "ab9ed9a86a85e6f1",
