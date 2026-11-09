@@ -4248,6 +4248,15 @@ fn path_routines(p: &WitnessPath) -> impl Iterator<Item = &str> {
     p.hops.iter().filter_map(|h| h.routine_id())
 }
 
+/// Each hop a raw path passes as (routine id, the call site of the edge
+/// that enters it), root side first: what [`CbGraph::route_states`] reads
+/// (a checked `Codeunit.Run` is told by its call site).
+fn path_steps(p: &WitnessPath) -> impl Iterator<Item = (&str, Option<&str>)> {
+    p.hops
+        .iter()
+        .filter_map(|h| h.routine_id().map(|r| (r, hop_nonterminal_callsite_id(h))))
+}
+
 /// A raw path over `route` (root side first) ending on `terminal`.
 fn path_over(
     route: &[&SnapshotGraphEdge],
@@ -4271,7 +4280,9 @@ fn path_over(
 /// runs the commit normally (nothing changes).
 ///
 /// - A part with no boundary ends at the commit: each listed path's
-///   behaviors are its own routines' ([`CbGraph::route_states`]); the
+///   behaviors are its own routines', entered by its edges' steps (a
+///   checked `Codeunit.Run` pins the route normal, an object run lets the
+///   scope only MAY apply: [`CbGraph::route_states`]); the
 ///   commit's behaviors over EVERY route from the root
 ///   ([`CbGraph::states_at`]) decide what a listed path does not show, with
 ///   a route found for it ([`CbGraph::route_to`]).
@@ -4286,7 +4297,7 @@ fn split_commit_part(
     ix: &[usize],
     idx: &FingerprintIndexes,
 ) -> Option<CommitSplit> {
-    use crate::engine::l5::commit_scope::{E, N};
+    use crate::engine::l5::commit_scope::{E, N, norm};
     if ix.is_empty() {
         return None;
     }
@@ -4318,7 +4329,7 @@ fn split_commit_part(
             }
             origin = Some(last);
             for &i in ix {
-                states.push(cb.route_states(rid, path_routines(&outcome.paths[i])));
+                states.push(norm(cb.route_states(rid, path_steps(&outcome.paths[i]))));
             }
         }
         Some(b) => {
@@ -4326,13 +4337,13 @@ fn split_commit_part(
             for &i in ix {
                 let p = &outcome.paths[i];
                 let from = path_routines(p).last().unwrap_or(rid);
-                let prefix = cb.route_states(rid, path_routines(p));
+                let prefix = cb.route_states(rid, path_steps(p));
                 let s = crossing
                     .edges
                     .iter()
                     .filter(|e| e.from == from)
                     .fold(0u8, |acc, e| acc | cb.beyond(rid, prefix, &e.to));
-                states.push(if s == 0 { prefix } else { s });
+                states.push(if s == 0 { norm(prefix) } else { s });
             }
         }
     }
@@ -4366,7 +4377,7 @@ fn split_commit_part(
     let error_extra = found(E, &error_ix);
     // Twins (equal projection, so the same routines) follow their path.
     let commit_twins: Vec<usize> = (0..outcome.twins.len())
-        .filter(|&t| cb.route_states(rid, path_routines(&outcome.twins[t])) & N != 0)
+        .filter(|&t| norm(cb.route_states(rid, path_steps(&outcome.twins[t]))) & N != 0)
         .collect();
     // Why: the declaring routine on a route of that behavior — a listed
     // path's, else the found route's, else (boundary) one beyond it.
@@ -4396,7 +4407,7 @@ fn split_commit_part(
         // Beyond a crossing: a route from the routine it enters.
         let crossing = bnd.and_then(|b| idx.crossings.get(&b.id))?;
         let from = *nodes.last()?;
-        let prefix = cb.route_states(rid, path_routines(p));
+        let prefix = norm(cb.route_states(rid, path_steps(p)));
         for e in crossing.edges.iter().filter(|e| e.from == from) {
             for start in [N, crate::engine::l5::commit_scope::I, E] {
                 if prefix & start == 0 {

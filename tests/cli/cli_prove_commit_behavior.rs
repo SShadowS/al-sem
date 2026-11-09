@@ -108,6 +108,46 @@ const SOURCE: &str = r#"codeunit 50300 "CB Probe"
     begin
         OnlyCommit();
     end;
+
+    // The shortest route (IgnoreScope, 2 hops) is ignored; a longer one
+    // (H1 -> H2 -> OnlyCommit, 3 hops) commits normally.
+    procedure LongNormal()
+    begin
+        IgnoreScope();
+        H1();
+    end;
+
+    procedure H1()
+    begin
+        H2();
+    end;
+
+    procedure H2()
+    begin
+        OnlyCommit();
+    end;
+
+    // A checked run inside an Ignore scope: the run commits at its end.
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreCheckedRun()
+    begin
+        if Codeunit.Run(Codeunit::"CB Runner") then;
+    end;
+
+    // A checked run inside an Error scope: an error in the run is trapped
+    // by it, and its implicit commit is not affected.
+    [CommitBehavior(CommitBehavior::Error)]
+    procedure ErrorCheckedRun()
+    begin
+        if Codeunit.Run(Codeunit::"CB Runner") then;
+    end;
+
+    // An unchecked run inside an Ignore scope.
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreUncheckedRun()
+    begin
+        Codeunit.Run(Codeunit::"CB Runner");
+    end;
 }
 
 codeunit 50301 "CB Subscriber"
@@ -335,14 +375,109 @@ fn an_event_publisher_scope_covers_its_subscribers() {
 }
 
 #[test]
-fn a_codeunit_run_inside_an_error_scope_errors() {
+fn a_codeunit_run_inside_an_error_scope_may_error() {
+    // Learn does not say whether the scope follows into a codeunit started
+    // with an unchecked `Codeunit.Run`: the commit may raise an error (yes)
+    // and may run (no definite `no`).
     let ws = workspace();
     let r = prove(&ws, "CallsRunUnderError", "throws-error");
     assert_eq!(r["answer"], "yes", "{r}");
     assert_eq!(
         prove(&ws, "CallsRunUnderError", "may-commit")["answer"],
-        "no"
+        "yes"
     );
+    let r = prove(&ws, "IgnoreUncheckedRun", "may-commit");
+    assert_eq!(r["answer"], "yes", "{r}");
+}
+
+#[test]
+fn a_checked_run_inside_an_ignore_scope_still_commits() {
+    // Learn ("Codeunit.Run" method): a checked run commits at its end, and
+    // that implicit commit "isn't affected by CommitBehavior". Before the
+    // fix of this test's finding the branch answered `no` with a false
+    // "ignored" reason.
+    let ws = workspace();
+    for q in ["may-commit", "commits-on-success-path"] {
+        let r = prove(&ws, "IgnoreCheckedRun", q);
+        assert_ne!(r["answer"], "no", "{q}: {r}");
+        assert!(r.get("suppressedCommits").is_none(), "{q}: {r}");
+    }
+    assert_eq!(
+        prove(&ws, "IgnoreCheckedRun", "may-commit")["answer"],
+        "yes"
+    );
+    // Under Error the checked run pins the route normal too: the commit
+    // stays a commit, and no commit error escapes the run.
+    assert_eq!(prove(&ws, "ErrorCheckedRun", "may-commit")["answer"], "yes");
+    let e = prove(&ws, "ErrorCheckedRun", "throws-error");
+    assert!(
+        evidence(&e).iter().all(|(_, cb)| cb.is_none()),
+        "no commit error row past a checked run: {e}"
+    );
+}
+
+#[test]
+fn a_longer_normal_route_keeps_a_commit_the_listed_routes_ignore() {
+    // Precondition: the witness search lists only the shortest route
+    // (LongNormal -> IgnoreScope -> OnlyCommit), which is ignored; the
+    // normal route is one hop longer.
+    let ws = workspace();
+    let r = prove(&ws, "LongNormal", "may-commit");
+    assert_eq!(r["answer"], "yes", "{r}");
+    assert!(r.get("suppressedCommits").is_none(), "{r}");
+    let via = r["evidence"][0]["viaPaths"].to_string();
+    assert!(via.contains("H2"), "the found normal route is shown: {r}");
+}
+
+#[test]
+fn a_longer_normal_prefix_to_a_crossing_keeps_the_commit_beyond() {
+    // Root reaches the crossing (`Ws Work.CallChain` -> `Dep Lib.Outer`,
+    // which commits) by a short prefix through an Ignore routine and by a
+    // longer plain one. The witness lists only the short prefix.
+    use crate::dep_dispatch_fixture as dd;
+    let extra = r#"codeunit 50175 "Ws Scope"
+{
+    procedure Root()
+    begin
+        IgnoreW();
+        A1();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreW()
+    var
+        W: Codeunit "Ws Work";
+    begin
+        W.CallChain();
+    end;
+
+    procedure A1()
+    begin
+        A2();
+    end;
+
+    procedure A2()
+    var
+        W: Codeunit "Ws Work";
+    begin
+        W.CallChain();
+    end;
+}
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    dd::write_own(dir.path(), extra);
+    let ask = |routine: &str| {
+        json(
+            dir.path(),
+            &["prove", ".", routine, "may-commit", "--deterministic"],
+        )["payload"]["result"]
+            .clone()
+    };
+    // Control: through the Ignore routine alone the commit is ignored.
+    let ignored = ask("Codeunit \"Ws Scope\"::IgnoreW");
+    assert_eq!(ignored["answer"], "no", "precondition: {ignored}");
+    let r = ask("Codeunit \"Ws Scope\"::Root");
+    assert_eq!(r["answer"], "yes", "{r}");
 }
 
 #[test]

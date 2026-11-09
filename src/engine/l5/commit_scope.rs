@@ -6,14 +6,29 @@
 //! - `[CommitBehavior(CommitBehavior::Ignore)]` on a method makes every
 //!   explicit commit ignored while the method runs; `Error` makes it raise an
 //!   error. The behavior lasts for the method's whole scope (every method it
-//!   calls, the subscribers of an event it publishes, a codeunit it runs) and
+//!   calls, the subscribers of an event it publishes; object runs below) and
 //!   returns to the previous one when the method ends.
 //! - Only a MORE restrictive behavior can be set: under `Error`, an inner
 //!   `Ignore` keeps `Error`. So the behavior a commit runs under is the
 //!   strictest one declared on its route (`Normal < Ignore < Error`).
 //! - It applies to explicit commits only, not to the implicit commit of
-//!   `Codeunit.Run`. The cone's commit facts are explicit `Commit()` calls
-//!   only, so every one of them is in scope.
+//!   `Codeunit.Run`. A checked run (`if Codeunit.Run(…) then`, the result
+//!   used) commits its changes at its end unless an error occurs, and "the
+//!   implicit commit by `Codeunit.Run` isn't affected by `CommitBehavior`"
+//!   (Learn, "Codeunit.Run(Integer [, var Record]) Method",
+//!   <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/codeunit/codeunit-run-method>).
+//!   The cone has no fact for that implicit commit (an older gap, engine
+//!   limits L16), so a commit inside a checked run stands in for it: once a
+//!   route crosses a checked run ([`Step::CheckedRun`]) it runs normally
+//!   ([`P`], pinned), whatever is declared before or after the crossing. An
+//!   error the run's body raises is trapped by the run, so the pinned route
+//!   adds no error either.
+//! - Learn does not say whether the scope follows into an object started
+//!   with `Codeunit.Run` (or `Report.Run`, `Page.Run`) whose result is not
+//!   used. The engine reads it as MAY apply ([`Step::Run`]): the run's body
+//!   runs under the caller's behavior or under its own declarations alone,
+//!   so a commit in it stays possible and no definite "no" rests on the
+//!   unverified reading.
 //!
 //! An object's `InherentCommitBehavior` property (parsed for source and
 //! symbol objects) is not on Microsoft Learn. Its reading is the one that
@@ -30,8 +45,16 @@
 //! site (`ERROR_IMPLICIT` with detail `commitBehavior`).
 //!
 //! **Sets, not one value.** A route's behavior is a set of possible values
-//! (bits [`N`], [`I`], [`E`]): a declaration is one value, or two for the
-//! object property. [`lift`] composes two sets by the stricter-of rule.
+//! (bits [`N`], [`I`], [`E`], and [`P`] for a route pinned by a checked
+//! run): a declaration is one value, or two for the object property.
+//! [`lift`] composes two sets by the stricter-of rule; [`norm`] reads a
+//! pinned route as a normal one.
+//!
+//! **A known over-approximation.** [`CbGraph`] walks every typed edge, a
+//! superset of the edges the cone's witness search keeps. An extra edge can
+//! add a route the cone cannot take: it may keep a commit as a commit or
+//! add a possible error (a spurious `throws-error yes`), never drop one, so
+//! no definite "no" comes from it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -45,23 +68,84 @@ pub const N: u8 = 1;
 pub const I: u8 = 2;
 /// The commit raises an error.
 pub const E: u8 = 4;
+/// The route crossed a checked `Codeunit.Run`: the commit stands for the
+/// run's implicit commit, which no `[CommitBehavior]` changes. Read as
+/// [`N`] by every answer ([`norm`]); kept apart so that no declaration
+/// before or after the crossing can change it.
+pub const P: u8 = 8;
 
 /// The stricter-of composition of two behavior sets: every pair's stricter
-/// member. The bits are ordered `N < I < E`, so the stricter is the larger.
+/// member. The bits are ordered `N < I < E < P`, so the stricter is the
+/// larger, and a pinned side stays pinned.
 #[must_use]
 pub fn lift(a: u8, b: u8) -> u8 {
     let mut out = 0;
-    for x in [N, I, E] {
+    for x in [N, I, E, P] {
         if a & x == 0 {
             continue;
         }
-        for y in [N, I, E] {
+        for y in [N, I, E, P] {
             if b & y != 0 {
                 out |= x.max(y);
             }
         }
     }
     out
+}
+
+/// A behavior set as the answers read it: pinned ([`P`]) is normal.
+#[must_use]
+pub fn norm(s: u8) -> u8 {
+    if s & P != 0 { (s & !P) | N } else { s }
+}
+
+/// How an edge passes the caller's behavior on to its callee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Step {
+    /// A call, an event dispatch, a trigger: the callee runs under the
+    /// caller's behavior (and its own declaration, by the stricter-of rule).
+    Plain,
+    /// An object run whose result is not used: the scope MAY follow into it
+    /// (Learn is silent), so the callee runs under the caller's behavior or
+    /// under its own declaration alone.
+    Run,
+    /// A checked `Codeunit.Run`: whatever commits inside is the run's
+    /// implicit commit, which `[CommitBehavior]` does not change ([`P`]).
+    CheckedRun,
+}
+
+impl Step {
+    /// The behaviors the callee runs under, entered from a caller in `cur`
+    /// with its own declaration `decl`.
+    #[must_use]
+    pub fn enter(self, cur: u8, decl: u8) -> u8 {
+        match self {
+            Step::Plain => lift(cur, decl),
+            Step::Run => lift(cur, decl) | decl,
+            Step::CheckedRun => {
+                if cur == 0 {
+                    0
+                } else {
+                    P
+                }
+            }
+        }
+    }
+
+    /// The behaviors a commit in the callee can run under seen from the
+    /// caller (declaration `decl`), when the callee entered normally gives
+    /// `t` (0: it reaches none).
+    #[must_use]
+    fn back(self, decl: u8, t: u8) -> u8 {
+        if t == 0 {
+            return 0;
+        }
+        match self {
+            Step::Plain => lift(decl, t),
+            Step::Run => lift(decl, t) | t,
+            Step::CheckedRun => P,
+        }
+    }
 }
 
 /// Where a routine's declaration comes from.
@@ -139,10 +223,15 @@ pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declar
 #[derive(Debug, Clone, Default)]
 pub struct CommitScopes {
     by_routine: HashMap<String, Declared>,
+    /// The object-run call sites (by call-site id): [`Step::CheckedRun`]
+    /// for a checked `Codeunit.Run`, else [`Step::Run`]. Filled only when
+    /// some routine declares a behavior.
+    runs: HashMap<String, Step>,
 }
 
 impl CommitScopes {
-    /// The declarations of `model`'s routines.
+    /// The declarations of `model`'s routines, and (when there is one) its
+    /// object-run call sites.
     #[must_use]
     pub fn of_model(model: &Model) -> CommitScopes {
         let ws = &model.workspace;
@@ -152,7 +241,7 @@ impl CommitScopes {
             .filter(|o| o.inherent_commit_behavior.is_some())
             .map(|o| (o.id.as_str(), o))
             .collect();
-        let by_routine = ws
+        let by_routine: HashMap<String, Declared> = ws
             .routines
             .iter()
             .filter_map(|r| {
@@ -160,7 +249,21 @@ impl CommitScopes {
                     .map(|d| (r.stable_routine_id.clone(), d))
             })
             .collect();
-        CommitScopes { by_routine }
+        if by_routine.is_empty() {
+            return CommitScopes::default();
+        }
+        CommitScopes {
+            by_routine,
+            runs: object_runs(model),
+        }
+    }
+
+    /// How the edge at call site `callsite` passes the behavior on.
+    #[must_use]
+    pub fn step(&self, callsite: Option<&str>) -> Step {
+        callsite
+            .and_then(|c| self.runs.get(c).copied())
+            .unwrap_or(Step::Plain)
     }
 
     #[must_use]
@@ -174,6 +277,60 @@ impl CommitScopes {
     }
 }
 
+/// Every object-run call site of `model`: `Codeunit.Run(…)`, `Report.Run`,
+/// … ([`PCallee::ObjectRun`]) and a codeunit variable's `.Run` that reaches
+/// an `OnRun` trigger, checked by the one rule the transaction answers use
+/// ([`crate::engine::l5::pending_writes::is_checked_run`]).
+fn object_runs(model: &Model) -> HashMap<String, Step> {
+    use crate::engine::l5::pending_writes::is_checked_run;
+    use crate::program::body::features::PCallee;
+    let ws = &model.workspace;
+    let mut runs: HashMap<String, Step> = HashMap::new();
+    // Member `.Run` sites wait for their resolved target.
+    let mut member: HashMap<&str, &crate::program::body::features::PCallSite> = HashMap::new();
+    for r in &ws.routines {
+        for cs in &r.call_sites {
+            match &cs.callee {
+                PCallee::ObjectRun { .. } => {
+                    let step = if is_checked_run(cs, None) {
+                        Step::CheckedRun
+                    } else {
+                        Step::Run
+                    };
+                    runs.insert(cs.id.clone(), step);
+                }
+                PCallee::Member { method, .. } if method.eq_ignore_ascii_case("run") => {
+                    member.insert(cs.id.as_str(), cs);
+                }
+                _ => {}
+            }
+        }
+    }
+    if member.is_empty() {
+        return runs;
+    }
+    let by_id: HashMap<&str, &ModelRoutine> =
+        ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    for e in &model.calls.edges {
+        let Some(cs) = member.get(e.callsite_id.as_str()) else {
+            continue;
+        };
+        let Some(callee) = e.to.as_deref().and_then(|t| by_id.get(t)) else {
+            continue;
+        };
+        if callee.kind != "trigger" || !callee.name.eq_ignore_ascii_case("OnRun") {
+            continue;
+        }
+        let step = if is_checked_run(cs, Some(callee)) {
+            Step::CheckedRun
+        } else {
+            Step::Run
+        };
+        runs.insert(e.callsite_id.clone(), step);
+    }
+    runs
+}
+
 /// The snapshot's call graph with the declarations on its nodes, for one
 /// digest read (built once per read, shared by every root). Edge set: every
 /// typed edge with a target (calls, object runs, event dispatch, triggers,
@@ -182,8 +339,8 @@ impl CommitScopes {
 pub(crate) struct CbGraph<'a> {
     ix: HashMap<&'a str, u32>,
     names: Vec<&'a str>,
-    succ: Vec<Vec<(u32, &'a SnapshotGraphEdge)>>,
-    pred: Vec<Vec<u32>>,
+    succ: Vec<Vec<(u32, &'a SnapshotGraphEdge, Step)>>,
+    pred: Vec<Vec<(u32, Step)>>,
     /// Each node's declaration bits ([`N`] when it declares nothing).
     decl: Vec<u8>,
     /// Reachable from a declaring node (the node itself included): a commit
@@ -269,11 +426,12 @@ impl<'a> CbGraph<'a> {
         }
         let carriers: Vec<u32> = carriers.into_iter().map(|c| intern(c, &mut ix)).collect();
         let n = names.len();
-        let mut succ: Vec<Vec<(u32, &'a SnapshotGraphEdge)>> = vec![Vec::new(); n];
-        let mut pred: Vec<Vec<u32>> = vec![Vec::new(); n];
+        let mut succ: Vec<Vec<(u32, &'a SnapshotGraphEdge, Step)>> = vec![Vec::new(); n];
+        let mut pred: Vec<Vec<(u32, Step)>> = vec![Vec::new(); n];
         for (f, t, e) in raw {
-            succ[f as usize].push((t, e));
-            pred[t as usize].push(f);
+            let step = scopes.step(e.edge_callsite_id());
+            succ[f as usize].push((t, e, step));
+            pred[t as usize].push((f, step));
         }
         for p in &mut pred {
             p.sort_unstable();
@@ -291,7 +449,7 @@ impl<'a> CbGraph<'a> {
             zone[d as usize] = true;
         }
         while let Some(x) = stack.pop() {
-            for &(y, _) in &succ[x as usize] {
+            for &(y, _, _) in &succ[x as usize] {
                 if !zone[y as usize] {
                     zone[y as usize] = true;
                     stack.push(y);
@@ -308,7 +466,7 @@ impl<'a> CbGraph<'a> {
             }
             while let Some(x) = stack.pop() {
                 let b = bits[x as usize];
-                for &p in &pred[x as usize] {
+                for &(p, _) in &pred[x as usize] {
                     if bits[p as usize] | b != bits[p as usize] {
                         bits[p as usize] |= b;
                         stack.push(p);
@@ -347,7 +505,8 @@ impl<'a> CbGraph<'a> {
     }
 
     /// The backward fixpoint from `origins`: per node, the behaviors a commit
-    /// at one of them can run under when the node is entered normally.
+    /// at one of them can run under when the node is entered normally
+    /// ([`P`] kept: read it through [`norm`]).
     fn backward_states(&self, origins: &[u32]) -> Vec<u8> {
         let n = self.names.len();
         let mut t = vec![0u8; n];
@@ -358,8 +517,8 @@ impl<'a> CbGraph<'a> {
         }
         while let Some(x) = stack.pop() {
             let tx = t[x as usize];
-            for &p in &self.pred[x as usize] {
-                let new = t[p as usize] | lift(self.decl[p as usize], tx);
+            for &(p, step) in &self.pred[x as usize] {
+                let new = t[p as usize] | step.back(self.decl[p as usize], tx);
                 if new != t[p as usize] {
                     t[p as usize] = new;
                     stack.push(p);
@@ -409,27 +568,35 @@ impl<'a> CbGraph<'a> {
     pub(crate) fn states_at(&self, root: &str, origin: &str) -> Option<u8> {
         let (r, o) = (self.node(root)?, self.node(origin)?);
         let t = self.toward(o)[r as usize];
-        (t != 0).then_some(t)
+        (t != 0).then(|| norm(t))
     }
 
-    /// The behaviors of a listed route: the root's and each hop's
-    /// declarations, composed.
-    pub(crate) fn route_states<'s>(&self, root: &str, hops: impl Iterator<Item = &'s str>) -> u8 {
-        hops.fold(self.decl_of(root), |s, h| lift(s, self.decl_of(h)))
+    /// The behaviors of a listed route, [`P`] kept (read it through
+    /// [`norm`], or pass it to [`Self::beyond`]): the root's declaration,
+    /// then each hop `(routine, call site)` entered by its edge's [`Step`].
+    pub(crate) fn route_states<'s>(
+        &self,
+        root: &str,
+        hops: impl Iterator<Item = (&'s str, Option<&'s str>)>,
+    ) -> u8 {
+        hops.fold(self.decl_of(root), |s, (h, cs)| {
+            self.scopes.step(cs).enter(s, self.decl_of(h))
+        })
     }
 
     /// The behaviors a commit beyond a crossing can run under: the listed
-    /// prefix (`prefix` states, ending on the entered routine `entry`) and
-    /// any commit the entered routine reaches. When the root can reach a
-    /// declaring routine in primary code, a prefix that is not listed may
-    /// hold one: every behavior such a routine declares is then possible too.
+    /// prefix (`prefix` states from [`Self::route_states`], ending on the
+    /// entered routine `entry`) and any commit the entered routine reaches.
+    /// When the root can reach a declaring routine in primary code, a prefix
+    /// that is not listed may hold one: every behavior such a routine
+    /// declares is then possible too.
     pub(crate) fn beyond(&self, root: &str, prefix: u8, entry: &str) -> u8 {
         let Some(e) = self.node(entry) else {
-            return prefix;
+            return norm(prefix);
         };
         let reach = self.any_commit[e as usize];
         if reach == 0 {
-            return prefix;
+            return norm(prefix);
         }
         let mut pfx = prefix;
         if let Some(r) = self.node(root) {
@@ -438,7 +605,7 @@ impl<'a> CbGraph<'a> {
                 pfx |= lift(self.decl[r as usize], extra | N);
             }
         }
-        lift(pfx, reach)
+        norm(lift(pfx, reach))
     }
 
     /// One route from `root` to the commit at `origin` that runs it under
@@ -470,7 +637,8 @@ impl<'a> CbGraph<'a> {
 
     /// Breadth-first over (node, behavior) from `start` entering `s`: a step
     /// is taken only where `target` stays possible (`guide`), and the walk
-    /// ends at a goal node reached under exactly `target`.
+    /// ends at a goal node reached under exactly `target` (a pinned route,
+    /// [`P`], counts as [`N`]).
     fn guided_from(
         &self,
         s: u32,
@@ -479,19 +647,19 @@ impl<'a> CbGraph<'a> {
         target: u8,
         goal: impl Fn(u32) -> bool,
     ) -> Option<Route<'a>> {
-        let admissible = |x: u32, cur: u8| lift(cur, guide[x as usize]) & target != 0;
+        let admissible = |x: u32, cur: u8| norm(lift(cur, guide[x as usize])) & target != 0;
         // A search state: a node and the behavior it runs under.
         type State = (u32, u8);
         let mut parent: HashMap<State, Option<(State, &'a SnapshotGraphEdge)>> = HashMap::new();
         let mut queue = std::collections::VecDeque::new();
-        for a in [N, I, E] {
+        for a in [N, I, E, P] {
             if lift(start, self.decl[s as usize]) & a != 0 && admissible(s, a) {
                 parent.insert((s, a), None);
                 queue.push_back((s, a));
             }
         }
         while let Some((x, cur)) = queue.pop_front() {
-            if cur == target && goal(x) {
+            if norm(cur) == target && goal(x) {
                 let mut route = Vec::new();
                 let mut at = (x, cur);
                 while let Some(Some((prev, e))) = parent.get(&at) {
@@ -501,12 +669,12 @@ impl<'a> CbGraph<'a> {
                 route.reverse();
                 return Some(route);
             }
-            for &(y, e) in &self.succ[x as usize] {
-                for a in [N, I, E] {
-                    if self.decl[y as usize] & a == 0 {
+            for &(y, e, step) in &self.succ[x as usize] {
+                let entered = step.enter(cur, self.decl[y as usize]);
+                for next in [N, I, E, P] {
+                    if entered & next == 0 {
                         continue;
                     }
-                    let next = cur.max(a);
                     if admissible(y, next) && !parent.contains_key(&(y, next)) {
                         parent.insert((y, next), Some(((x, cur), e)));
                         queue.push_back((y, next));
@@ -543,5 +711,20 @@ mod tests {
         assert_eq!(lift(E, I), E);
         assert_eq!(lift(N | I, N), N | I);
         assert_eq!(lift(N | E, I), I | E);
+        // A pinned route stays pinned under any later declaration.
+        assert_eq!(lift(P, E), P);
+        assert_eq!(norm(P | I), N | I);
+    }
+
+    #[test]
+    fn a_run_step_may_reset_and_a_checked_run_pins() {
+        // An object run: the caller's Ignore may or may not follow.
+        assert_eq!(Step::Run.enter(I, N), I | N);
+        assert_eq!(Step::Run.back(I, N), I | N);
+        // A checked run: its implicit commit ignores every declaration.
+        assert_eq!(Step::CheckedRun.enter(E, I), P);
+        assert_eq!(Step::CheckedRun.back(E, I), P);
+        assert_eq!(Step::CheckedRun.back(E, 0), 0);
+        assert_eq!(Step::Plain.enter(I, N), I);
     }
 }
