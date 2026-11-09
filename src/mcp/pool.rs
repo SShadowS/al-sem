@@ -666,6 +666,7 @@ impl Pool {
         let started = Instant::now();
         let mut production_rev = Value::Null;
         let mut test_revs: Vec<Value> = Vec::new();
+        let mut parts_fresh = PartsFreshness::default();
         let mut run = |t: Target<'_>, argv: Vec<String>| -> Result<Value, String> {
             let base = &call.command;
             let roots = matches!(t, Target::Production);
@@ -704,6 +705,7 @@ impl Pool {
                 None => return Err("the part was not run".into()),
             };
             let (head, stdout) = part_answer(&frame)?;
+            parts_fresh.note(&head);
             let rev = json!({"workspace": workspace, "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
                              "revision": head.get("revision").cloned().unwrap_or(Value::Null)});
             let v: Value = serde_json::from_str(&stdout)
@@ -783,8 +785,7 @@ impl Pool {
         envelope["revision"] = production_rev["revision"].clone();
         envelope["revisions"] = json!({"production": production_rev, "tests": test_revs});
         envelope["universe"] = json!(call.command.universe.as_str());
-        envelope["freshness"] =
-            json!({"requested": call.command.freshness.as_str(), "served": "fresh"});
+        parts_fresh.apply(&mut envelope, call.command.freshness);
         envelope["timing"] = json!({"computeMs": compute_ms});
         let is_error = envelope["kind"] == "failed";
         let output = match (&envelope.get("stdoutText"), call.opts.json) {
@@ -848,6 +849,7 @@ impl Pool {
             };
         let main_rev = std::cell::RefCell::new(Value::Null);
         let mut part_revs: Vec<Value> = Vec::new();
+        let mut parts_fresh = PartsFreshness::default();
         let rendered = match prepared {
             Err(e) => Err(e),
             Ok((cmp, diff_text)) => {
@@ -894,6 +896,7 @@ impl Pool {
                         None => return Err("the part was not run".into()),
                     };
                     let (head, stdout) = part_answer(&frame)?;
+                    parts_fresh.note(&head);
                     // Each part's wall time and the engine's own timing: where
                     // an answer's time went.
                     let rev = json!({"workspace": workspace,
@@ -1026,8 +1029,7 @@ impl Pool {
         envelope["revision"] = main_rev["revision"].clone();
         envelope["revisions"] = json!({"production": main_rev, "parts": part_revs});
         envelope["universe"] = json!(call.command.universe.as_str());
-        envelope["freshness"] =
-            json!({"requested": call.command.freshness.as_str(), "served": "fresh"});
+        parts_fresh.apply(&mut envelope, call.command.freshness);
         envelope["timing"] = json!({"computeMs": compute_ms});
         let is_error = envelope["kind"] == "failed";
         let output = match (&envelope.get("stdoutText"), call.opts.json) {
@@ -1877,6 +1879,50 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
 /// A part's answer from its response message: the envelope's head and its
 /// stdout (inline, or read from its file), or why it has none (a failed
 /// answer, a non-zero exit with its stderr).
+/// The freshness of a composite answer (`alsem_tests`, `alsem_impact`),
+/// gathered from its parts' headers (engine limits wave 0, B8): stale when
+/// any part was served from an older revision (`latest-built`), with the
+/// union of the parts' changed paths. Before, the composite header said
+/// `stale: false` and `served: fresh` whatever its parts said.
+#[derive(Default)]
+struct PartsFreshness {
+    stale: bool,
+    changed: std::collections::BTreeSet<String>,
+    truncated: bool,
+}
+
+impl PartsFreshness {
+    /// One part's envelope header.
+    fn note(&mut self, head: &Value) {
+        if head["stale"] == json!(true) {
+            self.stale = true;
+        }
+        if head["changedPathsTruncated"] == json!(true) {
+            self.truncated = true;
+        }
+        for p in head["changedPaths"].as_array().into_iter().flatten() {
+            if let Some(p) = p.as_str() {
+                self.changed.insert(p.to_string());
+            }
+        }
+    }
+
+    /// The composite envelope's `freshness` block, and on a `cli` answer
+    /// its `stale` and changed paths (cut as the wire cuts them).
+    fn apply(self, envelope: &mut Value, requested: tools::Freshness) {
+        envelope["freshness"] = super::freshness::answer_freshness(requested, self.stale);
+        if envelope["kind"] != "cli" {
+            return;
+        }
+        let kept = crate::wire::CHANGED_PATHS_KEPT;
+        let truncated = self.truncated || self.changed.len() > kept;
+        let paths: Vec<String> = self.changed.into_iter().take(kept).collect();
+        envelope["stale"] = json!(self.stale);
+        envelope["changedPaths"] = json!(paths);
+        envelope["changedPathsTruncated"] = json!(truncated);
+    }
+}
+
 fn part_answer(frame: &Value) -> Result<(Value, String), String> {
     let content = frame["result"]["content"]
         .as_array()
@@ -2287,7 +2333,7 @@ fn run_command(
     notify(1, &format!("{}: answered", call.tool));
     // The engine's timing, plus the front end's own queue time.
     let engine_timing = meta.timing.unwrap_or_default();
-    let served = if meta.stale { "latest-built" } else { "fresh" };
+    let freshness = super::freshness::answer_freshness(call.freshness, meta.stale);
     let answer = Answer {
         id: id.clone(),
         outcome,
@@ -2296,7 +2342,7 @@ fn run_command(
     };
     let extras = json!({
         "universe": call.universe.as_str(),
-        "freshness": {"requested": call.freshness.as_str(), "served": served},
+        "freshness": freshness,
         "timing": {
             "queuedMs": queued_ms as u64 + engine_timing.queued_ms,
             "waitedForBuildMs": engine_timing.waited_for_build_ms,
