@@ -31,7 +31,7 @@
 #   before (phases in a row, whole --lib): 1184 s and 1164 s; peak 39.5 GB
 #     program_resolve_harness 41-45 s, lsp 8 s, l4_summary_differential 17-18 s,
 #     cli output_cdo 780-808 s, --lib 290-317 s (3,214 tests)
-#   after (two lanes): 834-886 s; peak 55-58 GB (the summed RSS of the gate's
+#   after (two lanes): 834-910 s; peak 51-58 GB (the summed RSS of the gate's
 #     processes, its cgroup's memory.peak). The length is output_cdo's impact
 #     ratchets (768 s and 886 s in the last run); lane 2 ended at 736 s.
 # output_cdo was long because its impact ratchets ran their one-shot `alsem

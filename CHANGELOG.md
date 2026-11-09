@@ -29,8 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     alone (nextest `-j 1`) they take 594 s summed, the longest 137 s
     (`cdo_crossing_census`), 118 s, 111 s.
   - After: 834 s and 880 s in two runs of the two-lane version, peak 57-58 GB (each in
-    its own cgroup); the final tree (lib phase at 4 threads) 886 s, peak 55.4 GB. That is
-    25-29% shorter. In the final run `output_cdo` was the gate's length (886 s): its
+    its own cgroup); the final tree (lib phase at 4 threads) 886 s, peak 55.4 GB, and
+    910 s, peak 50.6 GB, started at a load average of 178. That is 22-29% shorter. In the final run `output_cdo` was the gate's length (886 s): its
     other 22 tests ended by 404 s, `cdo_impact_ratchets` at 768 s,
     `cdo_impact_base_ratchets` at 886 s; lane 2 took 736 s at `nice 10` (harness 159 s,
     lsp 31 s, l4 46 s, lib 500 s). The gate is CPU-bound on this shared machine (11,000

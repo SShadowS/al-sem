@@ -77,7 +77,7 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   environment says. In a debug build they cost ~5 minutes per run
   (`abi_ingestion_integrity_cdo_gate` alone took 243 s). `scripts/cdo-gate` is the one
   runner for them, built with the `cdo` profile (warm, after an edit: 236 s, against
-  ~375 s on `release-fast`; measured 2026-10-07; the whole gate took 834-886 s on
+  ~375 s on `release-fast`; measured 2026-10-07; the whole gate took 834-910 s on
   2026-11-09, see below). **Do not run `cdo-gate` per commit**:
   while iterating, the CDO number you are moving comes straight from
   `target/cdo/aldump.exe --program-call-graph-stats` / `--dependency-bodies-stats`
@@ -96,8 +96,8 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   the task gate when the calling test is outside the gate's filters (`on_the_cdo_gate`
   in `tests/common/cdo.rs`; in the lib, put `cdo` in the test's name). Measured
   2026-11-09 (Linux, 22 cores, `cdo` profile, warm, other agents loading the machine):
-  1,164-1,184 s before (output_cdo 780-808 s, whole lib 290-317 s), 834-886 s after,
-  peak memory 39.5 GB before, 55-58 GB after. The length is `output_cdo`'s impact
+  1,164-1,184 s before (output_cdo 780-808 s, whole lib 290-317 s), 834-910 s after,
+  peak memory 39.5 GB before, 51-58 GB after. The length is `output_cdo`'s impact
   ratchets, whose one-shot `alsem impact` calls take 4-7 minutes each.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
