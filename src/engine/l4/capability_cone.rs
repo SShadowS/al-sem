@@ -7505,7 +7505,8 @@ codeunit 50111 "Cell Calls"
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 221),
         // 64: + `write-order` (output validation r3 §7 R6, 2026-11-08).
-        ("fixtures", 64),
+        // 65: + `isolated-events/ws` (engine limits B3, 2026-11-09).
+        ("fixtures", 65),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),

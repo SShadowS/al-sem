@@ -562,6 +562,7 @@ impl Classify for RoutineNode {
             subscriber_instance_manual,
             publisher_kind,
             include_sender,
+            publisher_isolated,
             abi_routine_kind,
             abi_event_kind,
             param_sig_key,
@@ -585,6 +586,7 @@ impl Classify for RoutineNode {
         subscriber_instance_manual.classify(h);
         publisher_kind.classify(h);
         include_sender.classify(h);
+        publisher_isolated.classify(h);
         abi_routine_kind.classify(h);
         abi_event_kind.classify(h);
         param_sig_key.classify(h);

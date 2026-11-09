@@ -126,8 +126,9 @@ fn publisher_event_kind(attrs: &[AttributeInfo]) -> &'static str {
 /// `true` or carries the arg as a non-literal (conservative, Rule 5: prefer
 /// exclusion over a false weave); None when every reading is absent /
 /// explicit-false. (`InternalEvent` was not read while internal events were no
-/// publishers, G10.)
-fn parse_isolated(attrs: &[AttributeInfo]) -> Option<bool> {
+/// publishers, G10.) ABI ingestion reads a symbol-only publisher with it too
+/// (`RoutineNode::publisher_isolated`).
+pub(crate) fn parse_isolated(attrs: &[AttributeInfo]) -> Option<bool> {
     let isolated = attrs.iter().any(|a| {
         let index = match a.name.to_lowercase().as_str() {
             "integrationevent" => 2,
@@ -512,8 +513,12 @@ pub fn program_event_graph(
                                 element_name: element,
                                 signature_hash: sha256_hex(&id),
                                 parameters,
-                                // Not read from dependency attributes yet.
-                                isolated: None,
+                                // The dependency publisher's own `Isolated`
+                                // argument (source or symbols), read at
+                                // node extraction.
+                                isolated: node
+                                    .is_some_and(|n| n.publisher_isolated)
+                                    .then_some(true),
                                 provenance: vec![Evidence {
                                     source: "program".to_string(),
                                     note: Some(note.to_string()),

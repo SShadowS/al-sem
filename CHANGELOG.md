@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 0, B3)
+
+- **`prove … callers-intercept-errors` no longer answers a wrong `no` for a subscriber of
+  an isolated event.** An isolated event (`[IntegrationEvent(_, _, true)]`,
+  `[BusinessEvent(_, true)]`, `[InternalEvent(_, true)]`) runs each subscriber in a
+  transaction of its own. When a subscriber fails, the platform rolls back that
+  subscriber's database changes and goes on with the next subscriber and then the
+  publisher. This does not hold when the raising transaction has a write pending, or
+  while an extension is installed, uninstalled or upgraded: then the event runs as a
+  normal event and the error fails the whole operation (Microsoft Learn, "Isolated
+  events in AL",
+  <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-events-isolated>).
+  The question ignored isolation, so the fixture subscriber `HandleIso` got `no (every
+  candidate decided) — every path propagates an error to its entry`. Now the dispatch
+  from an isolated publisher is a new witness kind, `isolated-event`, which names the
+  publisher and the condition; the answer is `yes`. Since the trap does not hold with a
+  write pending, the walk still goes on above the publisher. Isolated witnesses are
+  listed after the traps that always hold, as `collectible` ones are.
+- **The isolated flag now reaches the program graph for every publisher.** A new
+  `RoutineNode::publisher_isolated` is read from source attributes
+  (`resolve::event::publisher_isolated`) and from a symbol-only dependency's
+  `SymbolReference.json` attributes (the rule of `model::events::parse_isolated`:
+  isolated when any reading passes `true` or a value that is not a literal). `#if` arms
+  of one publisher merge it (isolated in any arm). The sited graph keeps the isolated
+  publishers (`SitedGraph::is_isolated_publisher`). The event graph's symbol for a
+  dependency publisher that is not a model row (`--single-app`) now carries it too; it
+  was always `None` ("not read from dependency attributes yet"). Dependencies on the
+  CDO baseline declare 12 isolated events (Base App 5, System Application 5, System 1,
+  Continia Core 1). The dependency pack schema moves to 14.
+- **An event dispatch no longer needs the publisher's body facts in
+  `callers-intercept-errors`.** Whether an error crosses the dispatch depends only on
+  the publisher's declaration, but a symbol-only publisher (such as System's
+  `Company Triggers::OnCompanyOpenCompleted`) blocked `no` with `order-unknown` ("no
+  body facts in the model"). On CDO, `CDO Telemetry`'s `OnCompanyOpenCompleted`
+  subscriber got `unknown`; the answer is now `yes`.
+- **`prove … throws-error` on a subscriber of an isolated event says whether the error
+  escapes** (r3 §7 R5): `whether it escapes <publisher>: no, unless the raising
+  transaction has a write pending or an extension is being installed or upgraded`, with
+  the reason. A normal event keeps `not established`, because the forward answer does
+  not yet apply the traps inside the subscriber (B7).
+- Tests: `tests/fixtures/isolated-events` (a workspace and a symbol-only dependency,
+  each with an isolated and a normal event) and five tests in
+  `engine::l5::callers_context::tests`: four pin the rules (each rule with a
+  discrimination proof), the fifth is the normal-event control.
+
 ### Fixed (performance: finding the keeps an assumption record needs)
 
 - **Naming every publisher a ruled-out row needs no longer reruns the whole search per

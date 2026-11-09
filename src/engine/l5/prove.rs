@@ -1605,24 +1605,26 @@ fn route_guard_text(g: &crate::engine::l5::literal_reach::RouteGuard) -> String 
 /// (`None`: no route was replayed, or a route with no guard, whose effect's
 /// class (unconditional, in a loop, …) says what there is to say).
 /// r3 §7 R5: the event publishers `root` (a stable routine id) subscribes
-/// to, each `Codeunit "X"::OnSomething`, sorted and distinct; empty for a
-/// routine that subscribes to none.
+/// to, each `Codeunit "X"::OnSomething` with whether the event is isolated
+/// (`EventSymbol::isolated`, for workspace and dependency publishers alike),
+/// sorted and distinct; empty for a routine that subscribes to none.
 fn subscribed_publishers(
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     root: &str,
-) -> Vec<String> {
+) -> Vec<(String, bool)> {
     use crate::engine::l5::routine_rollup::format_object;
     let graph = &cx.model.events.graph;
-    let mut out: Vec<String> = graph
+    let mut out: Vec<(String, bool)> = graph
         .edges
         .iter()
         .filter(|e| e.subscriber_stable_routine_id == root)
         .map(|e| {
             let ev = graph.events.iter().find(|s| s.id == e.event_id);
+            let isolated = ev.is_some_and(|s| s.isolated == Some(true));
             let routine = ev
                 .and_then(|s| s.publisher_stable_routine_id.as_deref())
                 .and_then(|s| cx.names.display_with(s, false));
-            routine.unwrap_or_else(|| {
+            let name = routine.unwrap_or_else(|| {
                 let (object, name) = match ev {
                     Some(s) => (s.publisher_object_id.as_str(), s.event_name.clone()),
                     None => {
@@ -1645,7 +1647,8 @@ fn subscribed_publishers(
                     shown = format_object("Table", &t.name, Some(t.table_number));
                 }
                 format!("{shown}::{name}")
-            })
+            });
+            (name, isolated)
         })
         .collect();
     out.sort();
@@ -3113,12 +3116,28 @@ pub fn format_prove_human(
             );
         }
         // r3 §7 R5: a subscriber's error stops its publisher only if it
-        // escapes the dispatch; that is not established here.
+        // escapes the dispatch. An isolated event catches it (Microsoft
+        // Learn, "Isolated events in AL"), except with a write pending in the
+        // raising transaction or during an install or upgrade. For a normal
+        // event it is not established here: the forward answer does not yet
+        // apply the traps inside the subscriber (engine limits B7).
         let publishers = subscribed_publishers(p.cx, p.root);
-        if !publishers.is_empty() {
+        let (isolated, normal): (Vec<_>, Vec<_>) = publishers.into_iter().partition(|(_, i)| *i);
+        if !normal.is_empty() {
+            let names: Vec<String> = normal.into_iter().map(|(n, _)| n).collect();
             lines.push(format!(
                 "  whether it escapes {}: not established",
-                publishers.join(", ")
+                names.join(", ")
+            ));
+        }
+        if !isolated.is_empty() {
+            let names: Vec<String> = isolated.into_iter().map(|(n, _)| n).collect();
+            lines.push(format!(
+                "  whether it escapes {}: no, unless the raising transaction has a write \
+                 pending or an extension is being installed or upgraded (an isolated event \
+                 runs each subscriber in a transaction of its own; an error rolls back the \
+                 subscriber's database changes and the publisher goes on)",
+                names.join(", ")
             ));
         }
         let f = crate::engine::follow_up::FollowUp::prove(
