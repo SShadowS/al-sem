@@ -2441,6 +2441,32 @@ pub(crate) fn object_receiver_target<'g>(
     }
 }
 
+/// Whether the member call `method_lc` (folded) with `arity` arguments on a
+/// variable of the object `target` (of `kind`) starts the object: runs its
+/// entry triggers ([`dispatch_entry_trigger`]) instead of calling one of its
+/// procedures. The method is one of [`crate::program::resolve::dataset::
+/// starts_object`]'s; `Run`, `RunModal`, `Import` and `Export` take at most
+/// one argument (a codeunit's record), while a report's `SaveAs*`/`Execute`/
+/// `Print` and a query's `Open`/`SaveAs*` take others; and a call with
+/// arguments to an object that declares a procedure of that name binds to the
+/// procedure ([`declares_entry_method_overload`]). Read by the member arm of
+/// [`resolve_member_with_args`] and by the resolver's site fact
+/// (`full::SiteFacts::starts_object`), so both agree by construction.
+pub(crate) fn member_starts_object(
+    kind: ObjectKind,
+    method_lc: &str,
+    arity: usize,
+    target: &ObjectNode,
+    from_object: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> bool {
+    crate::program::resolve::dataset::starts_object(kind, method_lc)
+        && (arity <= 1 || !matches!(method_lc, "run" | "runmodal" | "import" | "export"))
+        && !(arity >= 1
+            && declares_entry_method_overload(target, method_lc, from_object, graph, index))
+}
+
 /// Whether `target` declares a procedure named `method_lc` that hides the
 /// built-in entry-dispatch method of the same name (`Run`, `RunModal`,
 /// `Import`, `Export`, and since B6 a report's `SaveAs*`/`Execute`/`Print`
@@ -3200,38 +3226,13 @@ pub(crate) fn resolve_member_with_args(
             // ENTRY_DISPATCH_BUILTIN_IDS`). Codeunit has no RunModal member
             // (MS Learn documents RunModal only on Page/Report), so "runmodal"
             // is only an entry dispatch for Page/Report.
-            let is_entry_trigger_dispatch = match *kind {
-                ObjectKind::Codeunit => method_lc == "run",
-                ObjectKind::Page | ObjectKind::Report => {
-                    method_lc == "run" || method_lc == "runmodal"
-                }
-                // An XmlPort runs its own triggers on Run, Import and Export.
-                ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
-                _ => false,
-            };
-            // B6: `Rep.SaveAsPdf(…)`, `Rep.Execute(…)`, `Rep.Print(…)` run the
+            // An XmlPort runs its own triggers on Run, Import and Export; B6:
+            // `Rep.SaveAsPdf(…)`, `Rep.Execute(…)`, `Rep.Print(…)` run the
             // report as `Run` does (its triggers and its dataset), and
             // `Q.Open()`/`Q.SaveAsCsv(…)` open the query (its `OnBeforeOpen`
-            // and its dataset); they take other arguments than `Run`, so the
-            // arity bound does not apply.
-            let is_run_by_other_name = match *kind {
-                ObjectKind::Report => {
-                    crate::program::resolve::dataset::is_report_output_method(method_lc)
-                }
-                ObjectKind::Query => {
-                    crate::program::resolve::dataset::dataset_mode(ObjectKind::Query, method_lc)
-                        .is_some()
-                }
-                _ => false,
-            };
-            // A call with arguments to an object that declares a procedure of
-            // that name binds to the procedure, never to the built-in run
-            // (`declares_entry_method_overload`); the general dispatch below
-            // resolves it.
-            if ((is_entry_trigger_dispatch && arity <= 1) || is_run_by_other_name)
-                && !(arity >= 1
-                    && declares_entry_method_overload(target, method_lc, from_object, graph, index))
-            {
+            // and its dataset). The rule is [`member_starts_object`], which
+            // the resolver's site fact reads too (B4).
+            if member_starts_object(*kind, method_lc, arity, target, from_object, graph, index) {
                 // ponytail: completeness is re-derived from the shape by the
                 // caller (`full.rs`), so a closed empty codeunit/XmlPort run reads
                 // `Partial` there; both classify as honest-empty.

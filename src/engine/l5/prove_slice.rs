@@ -1011,9 +1011,13 @@ pub(crate) fn compute_slice(
             out.temporary += 1;
             continue;
         }
+        // Ruled by the site's row type as this answer reads it: a commit
+        // turned into an error (`ERROR_IMPLICIT` above) is trapped like any
+        // other error, as the unfiltered answer and the digest rule it (B4
+        // review, finding C).
         let trap = scope
             .as_ref()
-            .filter(|_| crate::engine::l5::digest_cli::is_error_row_type(rec.effect_type))
+            .filter(|_| crate::engine::l5::digest_cli::is_error_row_type(effect_type))
             .and_then(|s| reach.trap_verdict(live, s, &ops));
         if let Some(TrapVerdict::Caught(at)) = &trap {
             let anchor = r.and_then(|r| anchor_in(r, rec.terminal.id()));

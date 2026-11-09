@@ -194,6 +194,14 @@ pub struct CallEdge {
     /// validate event), and whether the subscription may be skipped (a manual
     /// or conditional subscriber). `None` on every other edge.
     pub table_event: Option<TableEventMeta>,
+    /// B4: the call starts an object (a run, a report save, a query open, …)
+    /// rather than calling one of its procedures: the resolver's
+    /// `SiteFacts::starts_object`, on every edge of the call site. Its
+    /// dispatch kind does not say so for a variable form (`Rep.Run()` is a
+    /// `Method` edge). Read by the commit scope
+    /// (`engine::l5::commit_scope`), whose `[CommitBehavior]` only MAY
+    /// follow into a started object.
+    pub starts_object: bool,
 }
 
 /// The platform event behind a `TableEvent` [`CallEdge`] (F1).
@@ -233,6 +241,7 @@ impl CallEdge {
             receiver_shape: None,
             fires: None,
             table_event: None,
+            starts_object: false,
         }
     }
 }

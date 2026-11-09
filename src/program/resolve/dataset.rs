@@ -119,24 +119,41 @@ pub fn is_report_output_method(method_lc: &str) -> bool {
 /// RecordRef flow asks this instead (`l5::recref_flow`).
 #[must_use]
 pub fn keyword_run_kind(receiver_lc: &str, method_lc: &str) -> Option<ObjectKind> {
-    let (kind, runs) = match receiver_lc {
-        "codeunit" => (ObjectKind::Codeunit, method_lc == "run"),
-        "page" => (ObjectKind::Page, matches!(method_lc, "run" | "runmodal")),
-        "report" => (
-            ObjectKind::Report,
-            matches!(method_lc, "run" | "runmodal") || is_report_output_method(method_lc),
-        ),
-        "xmlport" => (
-            ObjectKind::XmlPort,
-            matches!(method_lc, "run" | "import" | "export"),
-        ),
-        "query" => (
-            ObjectKind::Query,
-            matches!(method_lc, "saveascsv" | "saveasjson" | "saveasxml"),
-        ),
+    let kind = match receiver_lc {
+        "codeunit" => ObjectKind::Codeunit,
+        "page" => ObjectKind::Page,
+        "report" => ObjectKind::Report,
+        "xmlport" => ObjectKind::XmlPort,
+        "query" => ObjectKind::Query,
         _ => return None,
     };
-    runs.then_some(kind)
+    // A query has no static `Open`: only an instance opens.
+    let static_form = !(kind == ObjectKind::Query && method_lc == "open");
+    (static_form && starts_object(kind, method_lc)).then_some(kind)
+}
+
+/// THE list of the methods that start an object of `kind` (`method_lc`
+/// folded): the call runs the object's entry triggers (and its dataset)
+/// instead of a procedure of it. Learn, the "Codeunit", "Page", "Report",
+/// "XmlPort" and "Query" data types: a codeunit's `Run`; a page's `Run` and
+/// `RunModal`; a report's `Run`, `RunModal`, `Execute`, `Print` and
+/// `SaveAs*`; an XmlPort's `Run`, `Import` and `Export`; a query's `Open` and
+/// `SaveAsCsv`/`SaveAsJson`/`SaveAsXml`. The keyword forms
+/// ([`keyword_run_kind`], `extract::classify_call`) and the variable forms
+/// (`resolver::member_starts_object`) both read it, and the resolver's
+/// `SiteFacts::starts_object` tells every consumer (B4's commit scope).
+#[must_use]
+pub fn starts_object(kind: ObjectKind, method_lc: &str) -> bool {
+    match kind {
+        ObjectKind::Codeunit => method_lc == "run",
+        ObjectKind::Page => matches!(method_lc, "run" | "runmodal"),
+        ObjectKind::Report => {
+            matches!(method_lc, "run" | "runmodal") || is_report_output_method(method_lc)
+        }
+        ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
+        ObjectKind::Query => dataset_mode(ObjectKind::Query, method_lc).is_some(),
+        _ => false,
+    }
 }
 
 /// The dataset mode of method `method_lc` (folded) on an object of `kind`: the

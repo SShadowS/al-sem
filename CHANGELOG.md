@@ -89,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one when the method ends, only a stricter behavior can be set inside (`Error` over
   `Ignore` stays `Error`), and it applies to explicit commits only, not to the implicit
   commit of `Codeunit.Run`.
-- **A checked `Codeunit.Run` still commits inside an `Ignore` or `Error` scope.** Learn
+- **A checked `Codeunit.Run` still commits inside an `Ignore` scope.** Learn
   ("Codeunit.Run(Integer [, var Record]) Method",
   <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/codeunit/codeunit-run-method>):
   when the return value is used, the changes are committed at the end of the codeunit
@@ -97,19 +97,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CommitBehavior`". The engine has no fact for that implicit commit (an older gap: a
   checked run with no explicit `Commit()` answers `may-commit no`, before and after this
   change; engine limits L16). So a commit inside a checked run stands in for it: once a
-  route crosses a checked run, no declaration before or after the crossing changes it, and
-  no commit error escapes the run (the run traps it). Without this, `[CommitBehavior(Ignore)]
-  procedure P() begin if Codeunit.Run(X) then; end` (X commits) answered a wrong `may-commit
-  no` with a false "ignored" reason.
-- **Learn does not say whether the scope follows into an object started with
-  `Codeunit.Run` (or `Report.Run`, `Page.Run`) whose result is not used.** The engine reads
-  it as *may* apply: the commit stays possible, and under `Error` a possible error is added.
-  No definite `no` rests on that reading.
+  route crosses a checked run, a commit that runs normally or is ignored is the run's
+  commit, and no commit error escapes the run (the run traps it). Without this,
+  `[CommitBehavior(Ignore)] procedure P() begin if Codeunit.Run(X) then; end` (X commits)
+  answered a wrong `may-commit no` with a false "ignored" reason.
+- **A checked run under `Error` may commit, but not for certain.** Learn does not say
+  whether the scope follows into a checked run. If it does, the commit inside raises an
+  error, the run traps it (returns `false`, rolls back) and nothing commits; if it does not,
+  the run commits. So `may-commit` says `yes`, `commits-on-success-path` says `unknown`
+  (before: `yes … unconditional on success`, a definite reading of something Learn does not
+  state), and `throws-error` adds no commit error. Same for an `Error` declared inside the
+  run.
+- **Learn does not say whether the scope follows into an object a call starts.** The
+  engine reads it as *may* apply for every way of starting one: any `Run` or `RunModal`, a
+  report's `SaveAs*`, `Execute` and `Print`, an XmlPort's `Import` and `Export`, a query's
+  `Open` and `SaveAs*`, keyword form (`Report.Run(Report::X)`) or variable form
+  (`Rep.Run()`), and the dataset operations of the started object (an XmlPort import's
+  insert runs the table's `OnInsert`). The commit stays possible, it is never
+  `unconditional on success` (before: it could be), and under `Error` a possible error is
+  added. No definite `no` rests on that reading. Before this round only `Codeunit.Run(…)`,
+  `Report.Run`/`Page.Run` in keyword form and a codeunit variable's `.Run` were runs: a
+  report variable's `.Run()`, `Report.SaveAsPdf(Report::X, …)`, `Rep.SaveAsPdf(…)` and the
+  other B6 run routes were plain calls, so `Ignore` answered a definite (wrong) `no`.
+  **What starts an object is decided once**, where the call resolves: one list of methods
+  (`resolve::dataset::starts_object`), read by the keyword form (`extract::classify_call`
+  through `dataset::keyword_run_kind`) and the variable form
+  (`resolver::member_starts_object`, also the resolver's own member arm); the resolver
+  records it as `SiteFacts::starts_object`, the model carries it on each edge
+  (`CallEdge::starts_object`), and the commit scope reads only that.
+- **A run into a dependency follows the same rule.** The crossing edge into a dependency
+  was composed as a plain call whatever its kind, so a checked or unchecked
+  `Codeunit.Run(Codeunit::"Dep Runner")` (or `if R.Run() then;`) of a dependency codeunit
+  under `Ignore` answered a definite (wrong) `may-commit no`, `commits-on-success-path no`
+  and digest `commits: no`. The crossing edge now enters by its own step.
+- **The filtered slice traps a commit turned into an error.** `prove … throws-error --site`
+  (also `--match`, `--op`) ruled the trap by the site's own row type, which is `COMMIT` for
+  such a site, so a commit under `Error` inside a used `[TryFunction]` answered `yes` while
+  the unfiltered answer and the digest said `no (caught … by the TryFunction)`. The slice
+  now rules it by the row type it reports (`ERROR_IMPLICIT`), like the other two, and keeps
+  the isolated-event note (`escapes only if a write is pending …`).
 - **How:** one rule, `commit_scope::declared` (the routine's attribute, else its object's
   `InherentCommitBehavior`), read by the callers' question and by the digest. For each
   COMMIT the digest reports, it finds the behaviors the commit can run under over every
   route from the root (a backward search per commit site over the snapshot's edges, shared
-  by all roots, done only for sites a declaring routine can reach). A commit no route runs
+  by all roots, done only for sites a declaring routine can reach). The search keeps, per
+  routine, what the commit runs under for each behavior the routine may be entered under,
+  so a "may" step deep in the graph (an object run below a plain call) composes exactly
+  with a declaration above it; with one set per routine, `Ignore` on a caller two calls
+  above an object run read as a definite "ignored". A commit no route runs
   normally is no COMMIT row; it is listed as `suppressedCommits` (prove, digest JSON) and as
   a `commit behavior:` line (prove, digest and explain human) with why, e.g. `COMMIT at
   ws:src/A.al:12 is ignored (CommitBehavior Ignore on Codeunit "X"::Y)`. A commit some route
@@ -118,8 +153,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the listed paths that run it normally, so an ignored unconditional route no longer makes
   it `unconditional on success`. For a commit inside the workspace's reach (a part with no
   rule-B boundary), a route the witness search did not list (it lists shortest paths only)
-  is found and shown; for a boundary part, a longer unlisted prefix to the crossing is
-  accounted for by the behaviors the root can reach, without a shown route. A commit beyond a rule-B crossing follows the
+  is found and shown; for a boundary part, every route from the root to the routine the
+  crossing leaves counts (the same search, with that routine as its target), without a
+  shown route. A commit beyond a rule-B crossing follows the
   dependency's declarations (Base Application has 16: 15 `Ignore`, 1 `Error` on posting
   preview). The filtered `prove --site/--match` slice applies the same rule.
 - **`InherentCommitBehavior` is not on Microsoft Learn.** It is read as *may* apply: the
@@ -129,6 +165,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `suppressedCommits` (`behavior`, `file`, `line`, `beyond`, `reason`), only when present;
   an `ERROR_IMPLICIT` row's `detail.commitBehavior`. Outputs move only where a declaring
   routine is on a route.
+- **Tests:** `tests/cli/cli_prove_commit_behavior.rs` through the CLI, each stating its
+  precondition with a control: `every_way_of_starting_an_object_lets_the_scope_only_may_apply`
+  (13 ways of starting a report, page, query, XmlPort or codeunit under `Ignore`; controls:
+  a procedure call and the routine's own insert answer `no`),
+  `an_object_run_into_a_dependency_keeps_its_commit` (a dependency `.app` with a run
+  codeunit; control: a plain call into it answers `no`),
+  `the_filtered_slice_traps_a_commit_turned_into_an_error` (control: a plain `Error` in a
+  used TryFunction), and `a_checked_run_inside_an_ignore_scope_still_commits` (now also
+  `commits-on-success-path unknown` under `Error`); unit test
+  `commit_scope::a_run_below_a_declaration_keeps_its_may` (hand-stated graph). Five
+  adapter tests (`program_calls_adapter_tests`) now expect `starts_object` on run edges.
+- **Discrimination proofs** (break with Edit, run the narrowest test, revert, rerun: all
+  19 tests of `cli_prove_commit_behavior` and the 3 `commit_scope` unit tests pass after
+  every revert):
+  1. crossing edge entered as `Step::Plain` in `split_commit_part` →
+     `an_object_run_into_a_dependency_keeps_its_commit` FAILS (`IgnoreCheckedDepRun`
+     answers `no`, "ignored").
+  2. the member arm's `starts_object` fact forced `false` (`full.rs`) →
+     `every_way_…` FAILS on `ReportVarRun` and `an_object_run_into_a_dependency_…` on
+     `IgnoreCheckedDepMember` (both `no`).
+  3. a dataset operation not given its run's step (`object_runs`) → `every_way_…` FAILS on
+     `XmlportImport` (`no`).
+  4. the slice's trap gated on `rec.effect_type` again (`prove_slice.rs`) →
+     `the_filtered_slice_traps_…` FAILS (`--site` answers `yes`).
+  5. the backward pass composed by one set per routine
+     (`lift(v, apply(t, step.enter_one(N, d)))`) →
+     `a_run_below_a_declaration_keeps_its_may` FAILS (`Some(2)` = Ignore, want `N|I`).
+  6. a checked run always pinned (`P`, the round-1 reading) →
+     `a_checked_run_inside_an_ignore_scope_still_commits` FAILS (`ErrorCheckedRun`
+     `commits-on-success-path` answers `yes`, unconditional).
+  7. `at_least_conditional` disabled → `every_way_…` FAILS (`ReportRun` answers
+     `commits-on-success-path yes`) and `a_checked_run_…` FAILS.
+  8. the all-routes prefix at a crossing dropped (`CbGraph::beyond`, the guard that
+     replaced round 1's `anc_primary` widening) →
+     `a_longer_normal_prefix_to_a_crossing_keeps_the_commit_beyond` FAILS (`Root` answers
+     `no`).
+  9. round 1's found normal route dropped (`commit_extra` = `None`) →
+     `a_longer_normal_route_keeps_a_commit_the_listed_routes_ignore` FAILS (`no`); this
+     records the proof round 1 left unrecorded.
 
 ### Fixed (engine limits wave 2, B5)
 

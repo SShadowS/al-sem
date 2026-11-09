@@ -4222,6 +4222,10 @@ struct CommitSplit {
     commit_ix: Vec<usize>,
     commit_extra: Option<WitnessPath>,
     commit_twins: Vec<usize>,
+    /// The commit routes that commit on one reading only.
+    uncertain: Uncertain,
+    /// The error routes that error on one reading only.
+    error_uncertain: Uncertain,
     error_ix: Vec<usize>,
     error_extra: Option<WitnessPath>,
     /// `CommitBehavior Error on …`, when some route errors.
@@ -4240,6 +4244,33 @@ struct PartOffer {
     extra: Option<WitnessPath>,
     twins: Option<Vec<usize>>,
     error_reason: Option<String>,
+    uncertain: Uncertain,
+}
+
+/// B4: the routes of a commit row that commit on one reading only (a
+/// `[CommitBehavior]` that MAY follow into a started object, or a checked
+/// run that may trap the commit): listed paths (by index), the found route,
+/// the twins (by index). Each counts as at least `conditional`, so such a
+/// route never makes the commit `unconditional on success`.
+#[derive(Default)]
+struct Uncertain {
+    ix: Vec<usize>,
+    extra: bool,
+    twins: Vec<usize>,
+}
+
+/// `c`, or `conditional` when `c` is `unconditional on success` and the
+/// route commits on one reading only.
+fn at_least_conditional(
+    c: crate::engine::l5::conditionality::EffectConditionality,
+    uncertain: bool,
+) -> crate::engine::l5::conditionality::EffectConditionality {
+    use crate::engine::l5::conditionality::{CONDITIONAL, UNCONDITIONAL};
+    if uncertain && c == UNCONDITIONAL {
+        CONDITIONAL
+    } else {
+        c
+    }
 }
 
 /// The routine ids a raw path passes, root side first (the root not
@@ -4297,7 +4328,7 @@ fn split_commit_part(
     ix: &[usize],
     idx: &FingerprintIndexes,
 ) -> Option<CommitSplit> {
-    use crate::engine::l5::commit_scope::{E, N, norm};
+    use crate::engine::l5::commit_scope::{E, N, norm, uncertain};
     if ix.is_empty() {
         return None;
     }
@@ -4338,11 +4369,17 @@ fn split_commit_part(
                 let p = &outcome.paths[i];
                 let from = path_routines(p).last().unwrap_or(rid);
                 let prefix = cb.route_states(rid, path_steps(p));
+                // Each crossing edge enters by its own step: a checked run
+                // pins the commits beyond, an object run lets the scope only
+                // MAY follow (B4 review, finding A).
                 let s = crossing
                     .edges
                     .iter()
                     .filter(|e| e.from == from)
-                    .fold(0u8, |acc, e| acc | cb.beyond(rid, prefix, &e.to));
+                    .fold(0u8, |acc, e| {
+                        let step = cb.step_at(e.site.guarded_id());
+                        acc | cb.beyond(rid, prefix, from, &e.to, step)
+                    });
                 states.push(if s == 0 { norm(prefix) } else { s });
             }
         }
@@ -4364,6 +4401,15 @@ fn split_commit_part(
     };
     let commit_ix = pick(N);
     let error_ix = pick(E);
+    // A listed path that commits on one reading only (a scope that MAY
+    // follow into a started object, a checked run that may trap the commit):
+    // it does not make the commit unconditional.
+    let commit_uncertain: Vec<usize> = ix
+        .iter()
+        .zip(&states)
+        .filter(|(_, s)| uncertain(**s))
+        .map(|(&i, _)| i)
+        .collect();
     // A route for a behavior no listed path shows (a part with no boundary).
     let found = |bit: u8, listed_ix: &[usize]| -> Option<WitnessPath> {
         if all & bit == 0 || !listed_ix.is_empty() {
@@ -4374,10 +4420,35 @@ fn split_commit_part(
             .map(|route| path_over(&route, &terminal, idx))
     };
     let commit_extra = found(N, &commit_ix);
+    let extra_uncertain = commit_extra
+        .as_ref()
+        .is_some_and(|p| uncertain(cb.route_states(rid, path_steps(p))));
     let error_extra = found(E, &error_ix);
+    // An error route that errors on one reading only.
+    let errs_maybe = |s: u8| s & E != 0 && s != E;
+    let error_uncertain = Uncertain {
+        ix: ix
+            .iter()
+            .zip(&states)
+            .filter(|(_, s)| errs_maybe(**s))
+            .map(|(&i, _)| i)
+            .collect(),
+        extra: error_extra
+            .as_ref()
+            .is_some_and(|p| errs_maybe(norm(cb.route_states(rid, path_steps(p))))),
+        twins: Vec::new(),
+    };
     // Twins (equal projection, so the same routines) follow their path.
+    let twin_states: Vec<u8> = outcome
+        .twins
+        .iter()
+        .map(|t| norm(cb.route_states(rid, path_steps(t))))
+        .collect();
     let commit_twins: Vec<usize> = (0..outcome.twins.len())
-        .filter(|&t| norm(cb.route_states(rid, path_steps(&outcome.twins[t]))) & N != 0)
+        .filter(|&t| twin_states[t] & N != 0)
+        .collect();
+    let twins_uncertain: Vec<usize> = (0..outcome.twins.len())
+        .filter(|&t| uncertain(twin_states[t]))
         .collect();
     // Why: the declaring routine on a route of that behavior — a listed
     // path's, else the found route's, else (boundary) one beyond it.
@@ -4407,19 +4478,15 @@ fn split_commit_part(
         // Beyond a crossing: a route from the routine it enters.
         let crossing = bnd.and_then(|b| idx.crossings.get(&b.id))?;
         let from = *nodes.last()?;
-        let prefix = norm(cb.route_states(rid, path_steps(p)));
+        let prefix = cb.route_states(rid, path_steps(p));
         for e in crossing.edges.iter().filter(|e| e.from == from) {
-            for start in [N, crate::engine::l5::commit_scope::I, E] {
-                if prefix & start == 0 {
-                    continue;
-                }
-                if let Some(route) = cb.route_beyond(&e.to, start, bit) {
-                    let beyond: Vec<&str> = std::iter::once(e.to.as_str())
-                        .chain(route.iter().filter_map(|x| edge_to(x)))
-                        .collect();
-                    if let Some(r) = reason_on(&beyond) {
-                        return Some(r);
-                    }
+            let start = cb.entered(prefix, cb.step_at(e.site.guarded_id()), &e.to);
+            if let Some(route) = cb.route_beyond(&e.to, start, bit) {
+                let beyond: Vec<&str> = std::iter::once(e.to.as_str())
+                    .chain(route.iter().filter_map(|x| edge_to(x)))
+                    .collect();
+                if let Some(r) = reason_on(&beyond) {
+                    return Some(r);
                 }
             }
         }
@@ -4451,6 +4518,12 @@ fn split_commit_part(
         commit_ix,
         commit_extra,
         commit_twins,
+        uncertain: Uncertain {
+            ix: commit_uncertain,
+            extra: extra_uncertain,
+            twins: twins_uncertain,
+        },
+        error_uncertain,
         error_ix,
         error_extra,
         error_reason,
@@ -5356,6 +5429,7 @@ fn digest_one_root<'i>(
                             extra: None,
                             twins: None,
                             error_reason: None,
+                            uncertain: Uncertain::default(),
                         });
                         continue;
                     };
@@ -5370,6 +5444,7 @@ fn digest_one_root<'i>(
                             extra: split.commit_extra,
                             twins: Some(split.commit_twins),
                             error_reason: None,
+                            uncertain: split.uncertain,
                         });
                     }
                     if !split.error_ix.is_empty() || split.error_extra.is_some() {
@@ -5382,6 +5457,7 @@ fn digest_one_root<'i>(
                             error_reason: Some(split.error_reason.unwrap_or_else(|| {
                                 "CommitBehavior Error on a routine of its route".to_string()
                             })),
+                            uncertain: split.error_uncertain,
                         });
                     }
                 }
@@ -5394,6 +5470,7 @@ fn digest_one_root<'i>(
                         extra,
                         twins: twin_sel,
                         error_reason,
+                        uncertain,
                     } = offer;
                     // A commit turned into an error names why (B4/L16).
                     let detail = match &error_reason {
@@ -5434,7 +5511,14 @@ fn digest_one_root<'i>(
                             None => ix
                                 .iter()
                                 .map(|&i| {
-                                    compute_path_conditionality(&outcome.paths[i], cs_ctx, op_ctx)
+                                    at_least_conditional(
+                                        compute_path_conditionality(
+                                            &outcome.paths[i],
+                                            cs_ctx,
+                                            op_ctx,
+                                        ),
+                                        uncertain.ix.contains(&i),
+                                    )
                                 })
                                 .collect(),
                         };
@@ -5442,7 +5526,10 @@ fn digest_one_root<'i>(
                     // behavior no listed path shows.
                     if let Some(p) = &extra {
                         paths.push(ProjPath::from_hops(project_path(p, rid, &display, idx)));
-                        conds.push(compute_path_conditionality(p, cs_ctx, op_ctx));
+                        conds.push(at_least_conditional(
+                            compute_path_conditionality(p, cs_ctx, op_ctx),
+                            uncertain.extra,
+                        ));
                     }
                     let selected_twins: Vec<
                         crate::engine::l5::conditionality::EffectConditionality,
@@ -5452,7 +5539,15 @@ fn digest_one_root<'i>(
                             (Some(_), _) => &[],
                             (None, None) => &twin_conds,
                             (None, Some(sel)) => {
-                                selected_twins = sel.iter().map(|&t| twin_conds[t]).collect();
+                                selected_twins = sel
+                                    .iter()
+                                    .map(|&t| {
+                                        at_least_conditional(
+                                            twin_conds[t],
+                                            uncertain.twins.contains(&t),
+                                        )
+                                    })
+                                    .collect();
                                 &selected_twins
                             }
                         };

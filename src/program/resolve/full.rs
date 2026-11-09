@@ -225,6 +225,16 @@ pub struct SiteFacts {
     /// ([`crate::program::resolve::dataset`]). `None` for any other call, and
     /// for a run whose target is not static.
     pub dataset_run: Option<DatasetRun>,
+    /// B4: the call starts an object (runs its entry triggers) rather than
+    /// calling one of its procedures: every keyword run (`Codeunit.Run(…)`,
+    /// `Report.SaveAsPdf(Report::X, …)`, `Xmlport.Import(…)`, …,
+    /// `extract::classify_call`) and every variable form the resolver
+    /// dispatches to the run triggers (`Rep.Run()`, `Rep.SaveAsPdf(…)`,
+    /// `Q.Open()`, …, [`crate::program::resolve::resolver::member_starts_object`]).
+    /// Both read one list of methods,
+    /// [`crate::program::resolve::dataset::starts_object`]. The model carries
+    /// it on the call's edges (`CallEdge::starts_object`).
+    pub starts_object: bool,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -843,6 +853,23 @@ fn resolve_call_site_obligation(
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
                 facts_out.dataset_run =
                     member_dataset_run(&recv, &method_lc, arity, obj_node, graph, index);
+                // B4: whether the call starts its object (the member arm's
+                // own rule, read here for the model).
+                if let ReceiverType::Object { kind, name_lc, id } = &recv
+                    && crate::program::resolve::dataset::starts_object(*kind, &method_lc)
+                    && let Some(target) = crate::program::resolve::resolver::object_receiver_target(
+                        kind,
+                        name_lc,
+                        id.as_ref(),
+                        obj_node,
+                        graph,
+                    )
+                {
+                    facts_out.starts_object =
+                        crate::program::resolve::resolver::member_starts_object(
+                            *kind, &method_lc, arity, target, obj_node, graph, index,
+                        );
+                }
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
                 if s == DispatchShape::Multicast
@@ -947,6 +974,9 @@ fn resolve_call_site_obligation(
             target_ref,
             target_is_name,
         } => {
+            // A keyword run starts its object (`extract::classify_call` made
+            // it an `ObjectRun` by `dataset::starts_object`).
+            facts_out.starts_object = true;
             let okind_opt = match object_kind.as_str() {
                 "Codeunit" => Some(ObjectKind::Codeunit),
                 "Page" => Some(ObjectKind::Page),
