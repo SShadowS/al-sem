@@ -1048,3 +1048,224 @@ fn r1_a_publisher_assumption_names_its_universe_and_the_sites_it_rules_out() {
         "the 4.0.0 rebuild drops the records and nothing else"
     );
 }
+
+/// r3 §7 R1, round-4 c25: ONE commit (in `Log`, line 20) reached by two
+/// routes, each cut by its own publisher. Hand-stated: `H1 := true`, passed
+/// `var` to `OnFirst` (no subscriber, line 9), then `if not H1 then Log();`;
+/// `H2 := true`, passed `var` to `OnSecond` (no subscriber, line 13), then
+/// `if not H2 then Log();`. A subscriber to either publisher reaches the
+/// commit, so ruling it out needs both keeps. (Master at 669879ff followed
+/// one route only and named `OnSecond` alone here.)
+const TWO_PUBLISHERS: &str = r#"codeunit 50341 "AR Two"
+{
+    procedure Start()
+    var
+        H1: Boolean;
+        H2: Boolean;
+    begin
+        H1 := true;
+        OnFirst(H1);
+        if not H1 then
+            Log();
+        H2 := true;
+        OnSecond(H2);
+        if not H2 then
+            Log();
+    end;
+
+    local procedure Log()
+    begin
+        Commit();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnFirst(var Value: Boolean)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnSecond(var Value: Boolean)
+    begin
+    end;
+}
+"#;
+
+/// r3 §7 R1, round-4 c25: a site ruled out only by two publishers' keeps
+/// together names both, everywhere: one record per publisher in prove's
+/// `assumptionRecords`, digest 5.x's `entries[].assumptionRecords` and
+/// `summary.commits.literalDead.assumptionRecords`, each listing the site;
+/// both in the rows' `assumes` strings; and one sentence naming both
+/// publishers in prove's assumptions line and explain's commits line
+/// (never two sentences that each read as enough alone).
+///
+/// DISCRIMINATION (2026-11-09): `LiteralReach::relied_keeps` returning only
+/// the first needed keep (`needed[..1]`) fails the record count assert (1
+/// record, `OnFirst` alone; round 4's c25 showed one publisher alone the
+/// same way); restored, passes. The 669879ff binary on this fixture names
+/// `OnSecond` alone.
+/// `AssumptionRecord::sentences` grouping each site by its first record only
+/// (one sentence per record) fails the prove sentence assert; restored,
+/// passes.
+#[test]
+fn r1_a_site_ruled_out_by_two_publishers_names_both() {
+    let lines: Vec<&str> = TWO_PUBLISHERS.lines().collect();
+    assert_eq!(
+        (lines[8].trim(), lines[12].trim(), lines[19].trim()),
+        ("OnFirst(H1);", "OnSecond(H2);", "Commit();"),
+        "precondition: the publishers on lines 9 and 13, the commit on line 20"
+    );
+    let ws = Ws::with_source(TWO_PUBLISHERS);
+    let r = ws.prove("Start", "may-commit");
+    assert_eq!(r["answer"], "no", "{r:#}");
+    let site = serde_json::json!(["ws:src/Flow.al:20"]);
+    let records = |recs: &serde_json::Value, ctx: &dyn std::fmt::Display| {
+        let recs = recs.as_array().unwrap_or_else(|| panic!("records: {ctx}"));
+        let mut pubs: Vec<&str> = recs
+            .iter()
+            .map(|x| x["publisher"].as_str().unwrap_or_default())
+            .collect();
+        pubs.sort_unstable();
+        assert_eq!(
+            pubs,
+            vec![
+                "Codeunit \"AR Two\"::OnFirst",
+                "Codeunit \"AR Two\"::OnSecond"
+            ],
+            "one record per publisher the ruling needs: {ctx}"
+        );
+        for x in recs {
+            assert_eq!(x["rulesOut"], site, "{ctx}");
+            assert_eq!(x["parameter"], "Value", "{ctx}");
+        }
+    };
+    records(&r["assumptionRecords"], &format!("{r:#}"));
+    let sentence = "assumes Codeunit \"AR Two\"::OnFirst and Codeunit \"AR Two\"::OnSecond have \
+                    no loaded subscriber, so Value keeps its value (E2 alone; no additional \
+                    subscribers assumed); rules out ws:src/Flow.al:20";
+    let prove = ws.prove_human("Start", "may-commit");
+    assert!(prove.contains(sentence), "{prove}");
+    assert!(
+        !prove.contains("::OnFirst has no loaded subscriber"),
+        "no sentence reads as if one publisher were enough: {prove}"
+    );
+    let explain = String::from_utf8_lossy(
+        &alsem_raw(
+            ws.dir.path(),
+            &[
+                "explain",
+                "ws",
+                "--routine",
+                ws.id("Start"),
+                "--format",
+                "human",
+            ],
+        )
+        .stdout,
+    )
+    .into_owned();
+    let commits = explain
+        .lines()
+        .find(|l| l.contains("commits:"))
+        .unwrap_or_else(|| panic!("a commits line: {explain}"));
+    assert!(commits.contains(sentence), "{commits}");
+    let out = alsem_raw(
+        ws.dir.path(),
+        &[
+            "digest",
+            "ws",
+            "--routine",
+            ws.id("Start"),
+            "--format",
+            "json",
+        ],
+    );
+    let v5: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}; {}", String::from_utf8_lossy(&out.stderr)));
+    let entry = &v5["payload"]["entries"][0];
+    records(&entry["assumptionRecords"], &format!("{entry:#}"));
+    records(
+        &entry["summary"]["commits"]["literalDead"]["assumptionRecords"],
+        &format!("{entry:#}"),
+    );
+    assert_eq!(
+        entry["summary"]["commits"]["literalDead"]["assumes"]
+            .as_array()
+            .map(Vec::len),
+        Some(2),
+        "both publishers in the `assumes` strings: {entry:#}"
+    );
+}
+
+/// r3 §7 R1: a commit ruled out by `OnA`'s keep AND either of `OnB`'s or
+/// `OnC`'s. Hand-stated: route 1 is `if not H then Log();` with `H` kept by
+/// `OnA`; route 2 is `if not (G1 or G2) then Log();` with `G1` kept by
+/// `OnB` and `G2` by `OnC`, so either one alone keeps route 2 cut. No keep
+/// but `OnA` is needed alone, and `OnA` alone does not rule the commit out.
+const NEEDED_TOGETHER: &str = r#"codeunit 50342 "AR Three"
+{
+    procedure Start()
+    var
+        H: Boolean;
+        G1: Boolean;
+        G2: Boolean;
+    begin
+        H := true;
+        OnA(H);
+        if not H then
+            Log();
+        G1 := true;
+        OnB(G1);
+        G2 := true;
+        OnC(G2);
+        if not (G1 or G2) then
+            Log();
+    end;
+
+    local procedure Log()
+    begin
+        Commit();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnA(var Value: Boolean)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnB(var Value: Boolean)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnC(var Value: Boolean)
+    begin
+    end;
+}
+"#;
+
+/// r3 §7 R1: when the keeps needed alone (`OnA`) do not rule a site out by
+/// themselves, the records name a smallest set that does, every member
+/// needed: `OnA` and one of `OnB`/`OnC` (`OnC`: `OnB` is tried first and
+/// is not needed beside `OnC`), never `OnA` alone (a subscriber to `OnB`
+/// and `OnC` together would reach the commit) and never all three.
+///
+/// DISCRIMINATION (2026-11-09): `relied_keeps` returning the needed-alone
+/// set without checking that it rules the site out (`OnA` alone) fails the
+/// publishers assert; restored, passes.
+#[test]
+fn r1_keeps_needed_only_together_are_all_named() {
+    let ws = Ws::with_source(NEEDED_TOGETHER);
+    let r = ws.prove("Start", "may-commit");
+    assert_eq!(r["answer"], "no", "{r:#}");
+    let pubs: Vec<&str> = r["assumptionRecords"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{r:#}"))
+        .iter()
+        .map(|x| x["publisher"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        pubs,
+        vec!["Codeunit \"AR Three\"::OnA", "Codeunit \"AR Three\"::OnC"],
+        "{r:#}"
+    );
+}

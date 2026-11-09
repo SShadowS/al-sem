@@ -1392,8 +1392,9 @@ pub struct RollupTotals {
     /// r3 E2: what ruling those rows out assumes (a publisher's loaded
     /// subscribers keep a value), one statement each.
     pub commit_dead_assumes: Vec<String>,
-    /// r3 §7 R1: the same assumptions as the one sentence each
-    /// (`AssumptionRecord::sentence`) and as `assumptionRecords` entries.
+    /// r3 §7 R1: the same assumptions as sentences, a site needing several
+    /// assumptions stated with all of them (`AssumptionRecord::sentences`),
+    /// and as `assumptionRecords` entries, one per assumption.
     pub commit_dead_sentences: Vec<String>,
     pub commit_dead_records: Vec<Value>,
     /// The COMMIT site search stopped at its depth bound
@@ -2404,7 +2405,8 @@ impl RoutineRollup {
             &entry.effects,
             r.commit_dead_assume_rows.iter().copied(),
         );
-        r.totals.commit_dead_sentences = records.iter().map(|x| x.sentence()).collect();
+        r.totals.commit_dead_sentences =
+            crate::engine::l5::literal_reach::AssumptionRecord::sentences(&records);
         r.totals.commit_dead_records = records.iter().map(|x| x.to_json()).collect();
         r.totals.kinds_partial = FAMILIES
             .iter()
