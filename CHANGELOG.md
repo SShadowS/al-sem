@@ -64,8 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls still block a `no`), and 7,246 of the 7,249 error sites are named as caught. Unfiltered
   `throws-error`: 317 evidence rows before, 3 now (`DOSetup.Get()` at :27 and the two
   `Modify()` at :41 and :49, the only error sites outside the checked run), 314 caught.
-  `RunReportID`'s explain: `errors at 296 places` before, 271 and 37 caught now (TryFunctions);
-  `IssueReminder`: 289 before, 286 and 16 caught.
+  `RunReportID`'s explain: `errors at 296 places` before, 271 and 26 caught now (TryFunctions);
+  `IssueReminder`: 289 before, 286 and 4 caught. `scripts/cdo-speed` (load 350-490): PASS,
+  prove CPU x0.88, round total x0.89, memory x1.02.
 
 ### Changed (engine limits wave 1, L14 review fixes)
 
