@@ -120,6 +120,10 @@ fn build_proutine(
     app_guid: &str,
     source: &str,
     source_unit_id: &str,
+    next_base_by_id: &mut std::collections::HashMap<
+        String,
+        crate::program::body::ir_walk::SiteIdBase,
+    >,
 ) -> Option<PRoutine> {
     use crate::program::body::ir_walk;
 
@@ -151,7 +155,13 @@ fn build_proutine(
         &parameters,
         return_type_text.as_deref(),
     );
-    let mut features: PFeatures = ir_walk::project_routine_features_ir(
+    // Engine limits B2 (per-arm ids): a later `#if` arm of the same routine
+    // id numbers its sites after the earlier arms, as the model builder does.
+    let base = next_base_by_id
+        .get(&routine_id)
+        .copied()
+        .unwrap_or_default();
+    let (mut features, next): (PFeatures, _) = ir_walk::project_routine_features_ir_at(
         ir_file,
         oi,
         ir_routine,
@@ -159,7 +169,9 @@ fn build_proutine(
         source,
         source_unit_id,
         source_table_name,
+        base,
     );
+    next_base_by_id.insert(routine_id.clone(), next);
 
     // R1b: control-context lattice over the CFN skeleton (+ metadata). Populates
     // `controlContext` on each op/callsite (absent when none), including the
@@ -277,6 +289,9 @@ fn project_file(
     routines: &mut Vec<PRoutine>,
 ) {
     let ir_file = al_syntax::parse(source);
+    // Engine limits B2 (per-arm ids): per file, as the model builder numbers
+    // the declarations of one routine id (`workspace::project_ir`).
+    let mut next_base_by_id = std::collections::HashMap::new();
 
     for (oi, o) in ir_file.objects.iter().enumerate() {
         let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
@@ -326,6 +341,7 @@ fn project_file(
                 app_guid,
                 source,
                 source_unit_id,
+                &mut next_base_by_id,
             ) {
                 routines.push(routine);
             }
@@ -472,6 +488,8 @@ pub fn project_named_routine(
         let (_, _, source_table_name, _) =
             crate::program::body::ir_walk::ir_object_metadata(o, object_type);
 
+        // The first declaration of the name: its ids start at 0.
+        let mut next_base_by_id = std::collections::HashMap::new();
         for ir_routine in &o.routines {
             if ir_routine.name != routine_name {
                 continue;
@@ -487,6 +505,7 @@ pub fn project_named_routine(
                 app_guid,
                 source,
                 source_unit_id,
+                &mut next_base_by_id,
             ) {
                 return Some(routine);
             }

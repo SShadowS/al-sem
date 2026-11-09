@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 per-arm ids)
+
+- **A routine declared in two `#if` arms cites each arm's own line.** `#if A procedure
+  P() … #else procedure P() … #endif` is two declarations under one routine id (#160
+  step 11b). Each declaration numbered its sites from 0, so both arms minted
+  `{id}/op0`, `{id}/cs0`, and every reader that resolves a site id to one row (the
+  last) cited arm B's line for arm A's fact: `prove CallsOnlyInClean writes-table:"Log
+  A"` on the values probe answered `:58` (arm B's `LogB.Insert`) where the write is at
+  `:51`. Owner decision 2026-11-09: give each arm its own ids.
+  - The model builder (`workspace::project_ir`) walks the declarations of one id in a
+    FILE in document order and starts each one where the earlier ones stopped
+    (`ir_walk::SiteIdBase`: `op`, `cs`, `loop`, `u`; the rules' `rule` too). A routine
+    declared once keeps its ids, and so does the first arm. The L2 projection
+    (`l2_workspace`) numbers the same way. Two `#if` arms of a whole object in one file
+    count as one file's declarations too.
+  - `prove`, `explain` and `digest` now cite `:51` for Log A and `:58` for Log B on the
+    probe; every such answer stays `conditional` (a build runs one arm).
+  - **The #160 step 11b answers, decided again for per-arm ids** (BC compiles one arm
+    per build; no reading turns a possible effect into a definite "no"):
+    - a duplicated declaration's write is one producer PER ARM (two seeds), each citing
+      its own line (`digest::tests::per_arm_declarations_are_one_producer_each`);
+    - an interface call in each arm is one call site per arm, each dispatching to every
+      implementer with `candidate_count` = the number of implementers (2 sites × 2
+      implementers = 4 edges, never a count of 4 candidates;
+      `natural_interface_call_counts_per_arm_site`);
+    - d1 seeds each arm's in-loop call at its own site with its own callee
+      (`natural_d1_seeds_each_arm_at_its_own_site`);
+    - d35's closed arm has its own closed site; the open arm's site stays open and the
+      unknown-Commit finding stays (`i264_fo1`);
+    - `query effects` anchors each arm's operation at its own arm
+      (`query_effects_origin_is_each_arms_own_operation`).
+  - **The 11b collision rules stay**, for rows that share site ids for other reasons:
+    one id declared in two FILES still shares them (numbering never crosses a file,
+    the unit the session's row cache reuses). The 11b tests now state the shared ids
+    BY ASSIGNMENT: `workspace::share_collided_site_ids` renumbers every collided row's
+    sites from 0 on the raw rows before the attach (and asserts it missed no field,
+    by comparing the row's `Debug` text), through the test entries
+    `assemble_and_resolve_inline_program_shared_site_ids` /
+    `assemble_and_resolve_workspace_program_shared_site_ids`; their assertions about
+    collision handling are unchanged. `collided()` asserts the shared `cs0`/`op0`.
+    The L4 host oracle `t1u` takes its collision from two files.
+  - The collision census line gains `groups_one_file` (groups whose rows come from
+    one file: numbered apart now).
+- **Output and ids outside consumers read.** Only routines declared in two arms of one
+  file move: their second arm's site ids (`…/opN`, `…/csN`) and lines, and so the
+  digest `factId`s and `evidenceOperationId`/`callsiteId`s of its facts, the snapshot
+  and `diff` operation ids, and `explain`/`prove` lines. Fingerprints strip site
+  segments (`fingerprint::ROUTINE_SITE_TAGS`), so baselines do not move; `alsem graph`
+  takes its sites from the program graph, not these ids, so it does not move. Routine
+  ids and stable ids do not change. No golden moved.
+- **The impact-base cache's summary schema is 3** (`impact::keys::SUMMARY_SCHEMA`): a
+  base cached before could cite the other arm's line for a site, so it is not read.
+
 ### Fixed (engine limits wave 2, B2)
 
 - **The arms of a statement `#if` are alternatives, not one sequence.** The lowerer spliced
@@ -52,16 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unconditional on success` through its callers. The model builder now lifts the
   `top-level` sites of every row of a collided id to `conditional`
   (`program::model::workspace::lift_arm_declarations`).
-- **Not fixed: a routine declared in two `#if` arms still cites one arm's line for the
-  other's write.** Both arms mint the same site ids (`{routine}/op0`), and readers resolve
-  an id to one row (#160 step 11b, class P: the last row). Giving each arm its own ids
-  (a site-number stride per arm) fixes the citation, and was tried twice and reverted:
-  it breaks 19 tests that build their collided-site precondition from two `#if` arms
-  (the 11b acceptance tests, `cli_11b_policy_collision`, d35's `i264_fo1`, the r4
-  dep-order test, the L4 host oracle `t1u`), and it changes real answers the 11b design
-  settled (two producers for one duplicated declaration, an interface call counted per
-  arm, d1 keeping one seed instead of both). That is a change to an accepted design, so
-  it needs the owner's decision. Recorded in `docs/engine-limits.md` (B2).
+- **Not fixed here (fixed by "B2 per-arm ids" above): a routine declared in two `#if`
+  arms still cited one arm's line for the other's write.** Both arms minted the same site
+  ids (`{routine}/op0`), and readers resolve an id to one row (#160 step 11b, class P:
+  the last row).
 - The #288 trust-gate tests G1/G2 state their dead marks by assignment: production no
   longer marks the code after an arm's `exit` unreachable, which those tests relied on.
 - Leading-guard readers that stop at the first non-statement now stop at a group too

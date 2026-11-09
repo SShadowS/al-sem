@@ -48,8 +48,12 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 
 /// The summaries' schema version (a cached base whose summaries carry
 /// another is not read). 2: a routine's labels and callers carry its short
-/// handle (`Name/n`), and the summary its `handle`.
-pub const SUMMARY_SCHEMA: u32 = 2;
+/// handle (`Name/n`), and the summary its `handle`. 3 (engine limits B2,
+/// per-arm ids): a routine declared in two `#if` arms of one file gives each
+/// arm its own site ids, so each arm's site carries its own line; a base
+/// cached before could cite the other arm's line for it, and a delta against
+/// it would report a moved site that did not move.
+pub const SUMMARY_SCHEMA: u32 = 3;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -319,6 +319,16 @@ impl RuleDraft {
             .filter(|_| self.stops.is_none())
             .map(|(cs, _)| cs.as_str())
     }
+
+    /// Rewrite the draft's own id and its call-site ids with `f` (a test
+    /// stating shared site ids by assignment,
+    /// `workspace::share_collided_site_ids`).
+    pub(crate) fn rekey_ids(&mut self, f: &dyn Fn(&str) -> String) {
+        self.id = f(&self.id);
+        for (cs, _) in &mut self.builtin_sites {
+            *cs = f(cs);
+        }
+    }
 }
 
 /// Turn one routine's drafts into rules. `binds_builtin(callsite_id)` answers
@@ -389,6 +399,11 @@ pub struct RuleInputs<'a> {
     pub object_clean: bool,
     /// The anchor of an IR origin, as the model spells anchors.
     pub anchor: &'a dyn Fn(&Origin) -> PAnchor,
+    /// The first `rule` number: 0 for a routine's first declaration, the
+    /// earlier declarations' rule count for a later `#if` arm of the same
+    /// routine id (engine limits B2, per-arm ids; see
+    /// `ir_walk::SiteIdBase`).
+    pub rule_base: u32,
 }
 
 /// The rule drafts of one routine, in source order (see the module doc).
@@ -1355,7 +1370,11 @@ impl Walker<'_, '_> {
         let draft = RuleDraft {
             on_path,
             at_exit: ctx.up_exit,
-            id: format!("{}/rule{}", self.cx.routine_id, self.drafts.len()),
+            id: format!(
+                "{}/rule{}",
+                self.cx.routine_id,
+                self.cx.rule_base as usize + self.drafts.len()
+            ),
             kind,
             anchor: (self.cx.anchor)(origin),
             comment: self.comment(origin.start.row, origin.end.row, owner_row),

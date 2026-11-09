@@ -1737,7 +1737,8 @@ const OPEN_KIND: &str = r#"enum 50105 "Open Kind" implements "Demo Strategy"
 
 /// The subscriber declared twice under `#if CLEAN99 … #else … #endif`: one arm
 /// writes the interface from the closed `Demo Kind`, the other from the
-/// extensible `Open Kind`. Both arms share one routine id and one call-site id.
+/// extensible `Open Kind`. Both arms share one routine id; since engine limits
+/// B2 (per-arm ids) each arm has its own call-site id.
 fn two_arm_subscriber(first: &str, second: &str) -> String {
     let arm = |value: &str| {
         format!(
@@ -1751,8 +1752,16 @@ fn two_arm_subscriber(first: &str, second: &str) -> String {
     )
 }
 
-/// Final panel FO1: whatever the arm order, one open arm keeps the shared site
+/// Final panel FO1: whatever the arm order, one open arm keeps a SHARED site
 /// open: d35 still reports the unknown Commit, and no layer calls it closed.
+///
+/// Engine limits B2 (per-arm ids, owner decision 2026-11-09): production now
+/// gives each arm its own call site, so the closed arm's site is closed (in a
+/// build that compiles that arm, it is) and the open arm's site stays open; the
+/// d35 finding stays. FO1's rule for one site id shared by an open and a closed
+/// row is kept by stating the shared id by assignment
+/// (`assemble_and_resolve_workspace_program_shared_site_ids`): then no layer
+/// calls the shared site closed.
 #[test]
 fn i264_fo1_if_alternative_routines_close_only_when_every_arm_is_closed() {
     const CLOSED_VALUE: &str = "Enum::\"Demo Kind\"::Standard";
@@ -1773,18 +1782,43 @@ fn i264_fo1_if_alternative_routines_close_only_when_every_arm_is_closed() {
             !findings.is_empty(),
             "FO1 {label}: the open arm must keep the unknown Commit, got none"
         );
-        let snapshot = compose_snapshot(&single_app_model(&ws));
-        let closed_rows: Vec<_> = snapshot
-            .callsite_resolutions
+        // The subscriber's (50104) polymorphic sites only (the publisher's
+        // IsDue is closed): (call-site id, open world).
+        let sites = |m: &Model| -> Vec<(String, Option<bool>)> {
+            compose_snapshot(m)
+                .callsite_resolutions
+                .iter()
+                .filter(|r| r.from.contains(":Codeunit:50104#") && r.status == "polymorphic")
+                .map(|r| (r.callsite_id.clone(), r.open_world))
+                .collect()
+        };
+        // Stated by assignment: both arms' calls are ONE site, open in one row
+        // and closed in the other: no layer calls it closed.
+        let shared = sites(
+            &al_sem::program::model::program_calls::assemble_and_resolve_workspace_program_shared_site_ids(
+                &read_inputs(&ws),
+                false,
+                false,
+            ),
+        );
+        assert!(
+            !shared.is_empty() && shared.iter().all(|(_, open)| *open != Some(false)),
+            "FO1 {label}: the shared site stays open: {shared:#?}"
+        );
+        // Production: one site per arm, closed for the closed arm only.
+        let natural = sites(&single_app_model(&ws));
+        let closed: Vec<_> = natural
             .iter()
-            // The subscriber's (50104) site only: the publisher's IsDue is closed.
-            .filter(|r| {
-                r.from.contains(":Codeunit:50104#")
-                    && r.status == "polymorphic"
-                    && r.open_world == Some(false)
-            })
+            .filter(|(_, open)| *open == Some(false))
             .collect();
-        assert!(closed_rows.is_empty(), "FO1 {label}: {closed_rows:#?}");
+        let ids: std::collections::BTreeSet<&str> =
+            natural.iter().map(|(cs, _)| cs.as_str()).collect();
+        assert_eq!(ids.len(), 2, "FO1 {label}: one site per arm: {natural:#?}");
+        assert_eq!(
+            closed.len(),
+            1,
+            "FO1 {label}: only the closed arm's own site is closed: {natural:#?}"
+        );
     }
 }
 

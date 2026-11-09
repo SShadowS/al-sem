@@ -298,3 +298,99 @@ fn each_arm_of_a_two_arm_routine_is_conditional() {
         assert_eq!(e["conditionality"], "conditional", "{table}: {r:#}");
     }
 }
+
+/// Run `alsem <args…> --single-app` and parse its JSON stdout.
+fn alsem_json(args: &[&str]) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .arg("--single-app")
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("json")
+}
+
+/// The 1-based lines of `TwoArms`' two inserts: arm A's `LogA.Insert();` and
+/// arm B's `LogB.Insert();` (the first after the first `TwoArms` header is arm
+/// B's: arm A writes only Log A).
+fn two_arm_lines() -> (u64, u64) {
+    let a = line_of("LogA.Insert();", "procedure TwoArms()");
+    let b = line_of("LogB.Insert();", "procedure TwoArms()");
+    assert!(a < b, "precondition: arm A comes first");
+    (a, b)
+}
+
+/// Engine limits B2, per-arm ids: a routine declared in two `#if` arms cites
+/// EACH ARM'S OWN line for its facts. Both arms used to mint the same site ids
+/// (`…/op0`), and readers resolve an id to one row (the last), so `prove`
+/// cited arm B's line for arm A's write. Each answer stays `conditional`: a
+/// build runs one arm. Break: number every arm from 0 (the model builder's
+/// `SiteIdBase`) -> Log A's insert cites arm B's line.
+#[test]
+fn a_two_arm_routine_cites_each_arms_own_line_in_prove() {
+    let t = workspace();
+    let ws = t.path().to_string_lossy().into_owned();
+    let (a, b) = two_arm_lines();
+    for (table, line) in [("B2 Log A", a), ("B2 Log B", b)] {
+        let r = prove(
+            &ws,
+            "B2 Preproc::CallsTwoArms",
+            &format!("writes-table:{table}"),
+        );
+        assert_eq!(r["answer"], "yes", "{table}: {r:#}");
+        let e = &r["evidence"][0];
+        assert_eq!(e["type"], "DB_INSERT", "{table}: {r:#}");
+        assert_eq!(e["evidence"]["line"], line, "{table}: {r:#}");
+        assert_eq!(e["conditionality"], "conditional", "{table}: {r:#}");
+    }
+}
+
+/// The same through `explain` (its writes card) and `digest` (its effects):
+/// each table's write cites its own arm's line, `conditional` in explain.
+#[test]
+fn a_two_arm_routine_cites_each_arms_own_line_in_explain_and_digest() {
+    let t = workspace();
+    let ws = t.path().to_string_lossy().into_owned();
+    let (a, b) = two_arm_lines();
+    let want = [("B2 Log A", a), ("B2 Log B", b)];
+
+    let ex = alsem_json(&[
+        "explain",
+        &ws,
+        "--routine",
+        "B2 Preproc::CallsTwoArms",
+        "--format",
+        "json",
+    ]);
+    let writes = ex["cards"][0]["effects"]["writes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("explain writes: {ex:#}"));
+    for (table, line) in want {
+        let w: Vec<&Value> = writes.iter().filter(|w| w["table"] == table).collect();
+        assert_eq!(w.len(), 1, "explain {table}: {ex:#}");
+        assert_eq!(w[0]["anchor"]["line"], line, "explain {table}: {ex:#}");
+        assert_eq!(
+            w[0]["conditionality"], "conditional",
+            "explain {table}: {ex:#}"
+        );
+    }
+
+    let dg = alsem_json(&["digest", &ws, "--routine", "B2 Preproc::CallsTwoArms"]);
+    let effects = dg["payload"]["effects"]
+        .as_object()
+        .unwrap_or_else(|| panic!("digest effects: {dg:#}"));
+    for (table, line) in want {
+        let lines: Vec<&Value> = effects
+            .values()
+            .filter(|e| e["type"] == "DB_INSERT" && e["detail"]["resourceDisplay"] == table)
+            .map(|e| &e["evidence"]["line"])
+            .collect();
+        assert_eq!(lines, vec![&Value::from(line)], "digest {table}: {dg:#}");
+    }
+}

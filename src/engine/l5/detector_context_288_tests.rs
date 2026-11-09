@@ -1219,9 +1219,17 @@ fn collided_src(arm_b: &str) -> String {
 }
 
 /// The collided `Work`'s two rows (preconditions: one id, both trusted, the
-/// first row's `cs` site dead) and its detector-context coverage.
+/// first row's `cs` site dead) and its detector-context coverage. The rows
+/// share their site ids BY ASSIGNMENT (engine limits B2: production gives each
+/// `#if` arm its own ids; M6 is about one site id dead in one row and live in
+/// the other, so it states the shared id).
 fn collided_work(arm_b: &str) -> (Vec<ModelRoutine>, CoverageRecordOwned) {
-    let m = build(&collided_src(arm_b));
+    let m =
+        crate::program::model::program_calls::assemble_and_resolve_inline_program_shared_site_ids(
+            &[("src/T288.al".to_string(), collided_src(arm_b))],
+            APP,
+            false,
+        );
     let rows: Vec<ModelRoutine> = m
         .workspace
         .routines
