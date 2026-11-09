@@ -3195,6 +3195,7 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
         effects: Vec::new(),
         unresolved: Vec::new(),
         unresolved_literal_dead: 0,
+        unresolved_literal_narrowed: 0,
         unresolved_traversal: crate::engine::l5::unresolved_cone::UnresolvedTraversal {
             truncated: false,
             max_depth: 0,

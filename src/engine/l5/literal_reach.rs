@@ -556,11 +556,14 @@ type FlowKey = (usize, Vec<(u32, VSet)>, bool);
 /// per group its dead resources, and per effect dead only by an assumption
 /// the keep verdicts it rests on.
 /// Round-4 literal routes: and of the call sites asked about, those that
-/// cannot run from the root (without relying on a publisher keep).
+/// cannot run from the root (without relying on a publisher keep), and
+/// (r4 final) the interface call sites among them whose implementation the
+/// literal arguments fix on every route ([`LiteralReach::narrowed_sites`]).
 pub(crate) type NotedUnreachable = (
     HashSet<usize>,
     HashMap<usize, Vec<String>>,
     HashMap<usize, Vec<KeepInfo>>,
+    Vec<String>,
     Vec<String>,
 );
 
@@ -2656,7 +2659,8 @@ impl<'a> LiteralReach<'a> {
         effects: &[DigestEffectResult],
         per_site: &[&str],
     ) -> (HashSet<usize>, HashMap<usize, Vec<String>>) {
-        let (dead, resources, _, _) = self.unreachable_effects_noted(root, effects, per_site, &[]);
+        let (dead, resources, _, _, _) =
+            self.unreachable_effects_noted(root, effects, per_site, &[]);
         (dead, resources)
     }
 
@@ -2671,6 +2675,60 @@ impl<'a> LiteralReach<'a> {
                     .get(**s)
                     .is_some_and(|o| reached.0.contains(o))
                     && self.op_dead(reached, s, keep)
+            })
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// r4 final (m02, c15): the interface call sites of `sites` that run from
+    /// the root, but only with a receiver whose implementation the literal
+    /// arguments fix: in every reached state of the site's routine where the
+    /// site can run, the receiver holds known enum values, and each value's
+    /// implementation of the interface is a loaded codeunit
+    /// ([`EnumImpls::implementers`]). An enum extension cannot change an
+    /// existing value's implementation, so such a site is not open world:
+    /// the search already follows its dispatch only to those codeunits
+    /// ([`Self::dispatch_excluded`]). One state with the receiver not known
+    /// (a route that passes a variable enum, a value read from a table, a
+    /// `foreach` over the ordinals) keeps the site open world. A site no
+    /// state can run is not here: [`Self::dead_sites`] has it.
+    fn narrowed_sites(&self, reached: &Reached<'a>, sites: &[&str], keep: bool) -> Vec<String> {
+        let (plain, states) = reached;
+        sites
+            .iter()
+            .filter(|s| {
+                let Some(&owner) = self.op_owner.get(**s) else {
+                    return false;
+                };
+                let Some(p) = self.flow_progs.get(owner) else {
+                    return false;
+                };
+                if !plain.contains(owner) {
+                    return false;
+                }
+                let Some(bs) = states.get(owner) else {
+                    return false;
+                };
+                let mut live = false;
+                for b in bs {
+                    if self.dead_at_m(owner, s, b, keep) {
+                        continue;
+                    }
+                    live = true;
+                    let fixed = self.flow_eval(owner, b, keep).is_some_and(|ev| {
+                        p.receiver_at(&ev, s).is_some_and(|(iface, vals)| {
+                            !vals.is_empty()
+                                && self
+                                    .enum_impls
+                                    .implementers(iface, vals)
+                                    .is_some_and(|refs| !refs.is_empty())
+                        })
+                    });
+                    if !fixed {
+                        return false;
+                    }
+                }
+                live
             })
             .map(|s| s.to_string())
             .collect()
@@ -2715,13 +2773,17 @@ impl<'a> LiteralReach<'a> {
         keeps.dedup();
         if keeps.is_empty() {
             let dead_sites = self.dead_sites(&reached, sites, true);
-            return (dead, resources, HashMap::new(), dead_sites);
+            let narrowed = self.narrowed_sites(&reached, sites, true);
+            return (dead, resources, HashMap::new(), dead_sites, narrowed);
         }
         // Without the publisher keeps: what is dead only through them.
         let strict_reached = self.search(root, false);
         let dead_sites = strict_reached
             .as_ref()
             .map_or_else(Vec::new, |r| self.dead_sites(r, sites, false));
+        let narrowed = strict_reached
+            .as_ref()
+            .map_or_else(Vec::new, |r| self.narrowed_sites(r, sites, false));
         let strict = strict_reached.map(|r| self.judge(&r, effects, per_site, false));
         let infos_of = |ks: &[u32]| -> Vec<KeepInfo> {
             ks.iter()
@@ -2777,7 +2839,7 @@ impl<'a> LiteralReach<'a> {
             }
         }
         resources.retain(|_, l| !l.is_empty());
-        (dead, resources, assumed, dead_sites)
+        (dead, resources, assumed, dead_sites, narrowed)
     }
 
     /// r3 E2: the keep verdicts that cut the route to one of `ops`: along the

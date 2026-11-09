@@ -772,23 +772,29 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // r3 E2 (2026-11-08): the witness's `condition:` line names the
         // route's guards (4 of 14 shown, with the full count) instead of a
         // class label: RunReportID's may-commit 2,428 B.
-        ("RunReportID", "prove may-commit human") => (20, 2_500),
+        // r4 final (m02, c15, 2026-11-09): one `fixed by literal arguments:`
+        // line for the 2 interface calls (`CDOModuleManager.Codeunit.al:16`,
+        // `:42`) every route fixes by an enum literal: 2,515 B.
+        ("RunReportID", "prove may-commit human") => (20, 2_650),
         (_, "prove may-commit human") => (20, 2_400),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
         (_, "prove writes-table human") => (20, 2_500),
         // Final CDO review, item 1: IssueReminder's 287 blockers fold by
         // kind (22 lines, 2,061 B on 2026-11-05; before 294 / 47,875).
         // RunReportID answers `yes` with 5 evidence rows and their paths
-        // (17 lines, 7,366 B).
-        ("RunReportID", "prove writes-table data-exch human") => (20, 8_200),
+        // (17 lines, 7,366 B). r4 final (m02, c15, 2026-11-09): the
+        // `fixed by literal arguments:` line, 21 lines.
+        ("RunReportID", "prove writes-table data-exch human") => (22, 8_200),
         // Round-2 fix, table events on temporary records (2026-11-07):
         // IssueReminder's `yes` ran through `Reminder-Issue`'s
         // `TempGenJnlLine` insert into a subscriber that exits on
         // `Rec.IsTemporary()`; without it the answer is `unknown` with its
         // 287 blockers folded by kind (25 lines, 3,199 B). Round-4 literal
         // routes (2026-11-08): 284 blockers and one line for the 5 call
-        // sites the literal arguments rule out (26 lines, 3,429 B).
-        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_550),
+        // sites the literal arguments rule out (26 lines, 3,429 B). r4 final
+        // (m02, c15, 2026-11-09): 282 blockers and one line for the 2
+        // interface calls every route fixes by an enum literal (3,573 B).
+        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_700),
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
         ("RunReportID", "digest human") => (135, 46_300),

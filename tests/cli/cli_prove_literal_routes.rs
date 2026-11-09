@@ -218,6 +218,58 @@ codeunit 50445 "LR Commit"
 }
 "#;
 
+/// r4 final (m02, c15): an interface call reached from several routes. In
+/// `AllLiteral` every route binds the enum to a literal (`Fast`, `Slow`), so
+/// the implementation is fixed and the call is not open world. `Mixed` adds
+/// one route with a variable enum and `Loop` one with a `foreach` over the
+/// ordinals (CDO's `CDOCoreEventHandler.Codeunit.al:38`): open world.
+const NARROW: &str = r#"
+table 50460 "LN Seen" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+codeunit 50461 "LN Manager"
+{
+    procedure IsActive(Kind: Enum "LR Kind"; Show: Boolean)
+    var
+        S: Interface "LR Strategy";
+    begin
+        S := Kind;
+        S.Run();
+    end;
+}
+codeunit 50462 "LN Roots"
+{
+    procedure AllLiteral()
+    var
+        Seen: Record "LN Seen";
+        M: Codeunit "LN Manager";
+    begin
+        M.IsActive("LR Kind"::Fast, false);
+        M.IsActive("LR Kind"::Slow, false);
+        Seen.Get('X');
+    end;
+
+    procedure Mixed(K: Enum "LR Kind")
+    var
+        Seen: Record "LN Seen";
+        M: Codeunit "LN Manager";
+    begin
+        M.IsActive("LR Kind"::Fast, false);
+        M.IsActive(K, false);
+        Seen.Get('X');
+    end;
+
+    procedure Loop()
+    var
+        Seen: Record "LN Seen";
+        M: Codeunit "LN Manager";
+        K: Enum "LR Kind";
+    begin
+        foreach K in Enum::"LR Kind".Ordinals() do
+            M.IsActive(K, false);
+        Seen.Get('X');
+    end;
+}
+"#;
+
 /// A table whose trigger passes its own `Rec` to a `Variant` (p01's shape):
 /// `OnInsert` → `NextNo` → `IsTemp(Rec)`, whose `Error` runs only when the
 /// argument is not a record.
@@ -461,6 +513,47 @@ fn an_unresolved_site_the_literals_rule_out_blocks_nothing() {
         1,
         "{h}"
     );
+}
+
+/// r4 final (m02, c15): an interface call that every route fixes to known
+/// implementations by a literal enum value is no open-world gap: no blocker,
+/// counted once as narrowed, and the analysis line does not count it. One
+/// route with a variable enum (a parameter, a `foreach` over the ordinals)
+/// keeps it open world. `LN Seen` is written nowhere, so the answer turns
+/// on the blockers alone. Break: `narrowed_sites` returning every live site
+/// (`Mixed`/`Loop` then lose their blocker), or none (`AllLiteral` is
+/// `unknown` again).
+#[test]
+fn an_interface_call_every_route_fixes_is_not_open_world() {
+    let ws = Ws::with_source(&format!("{SOURCE}{NARROW}"));
+    let all = ws.prove("AllLiteral", "writes-table:LN Seen");
+    assert_eq!(all["answer"], "no", "{all:#}");
+    assert_eq!(all["obligations"]["openWorldRows"], 0, "{all:#}");
+    assert_eq!(all["obligations"]["literalNarrowedSites"], 1, "{all:#}");
+    let h = ws.prove_human("AllLiteral", "writes-table:LN Seen");
+    assert_eq!(
+        h.matches("fixed by literal arguments: 1 interface call ")
+            .count(),
+        1,
+        "{h}"
+    );
+    let e = ws.explain_human("Codeunit \"LN Roots\"::AllLiteral");
+    assert!(!e.contains("open world"), "{e}");
+    assert!(
+        e.contains("1 interface call fixed by literal arguments"),
+        "{e}"
+    );
+    for root in ["Mixed", "Loop"] {
+        let v = ws.prove(root, "writes-table:LN Seen");
+        assert_eq!(v["answer"], "unknown", "{root}: {v:#}");
+        assert_eq!(v["obligations"]["openWorldRows"], 1, "{root}: {v:#}");
+        assert!(
+            v["obligations"].get("literalNarrowedSites").is_none(),
+            "{root}: {v:#}"
+        );
+        let e = ws.explain_human(&format!("Codeunit \"LN Roots\"::{root}"));
+        assert!(e.contains("1 interface call open world"), "{root}: {e}");
+    }
 }
 
 /// p09: a commit site no route can reach stays listed as

@@ -1350,6 +1350,9 @@ pub struct GapCounts {
     /// Round-4 literal routes: the cone's unresolved sites left out because
     /// no route from the root to them can run.
     pub literal_dead: usize,
+    /// r4 final (m02, c15): the cone's unresolved interface calls left out
+    /// because every route fixes their implementation by a literal enum value.
+    pub literal_narrowed: usize,
 }
 
 /// The entry point behind most of a routine's may-persist tables.
@@ -1414,6 +1417,9 @@ pub struct RollupTotals {
     /// Round-4 literal routes: unresolved sites ruled out by the literal
     /// arguments (not counted as gaps above).
     pub gaps_literal_dead: usize,
+    /// r4 final (m02, c15): interface calls whose implementation every
+    /// route's literal enum value fixes (not counted as gaps above).
+    pub gaps_literal_narrowed: usize,
     pub temporary_only_tables: usize,
     pub literal_dead_tables: usize,
     pub no_path_operations: usize,
@@ -1533,6 +1539,11 @@ impl RollupTotals {
         // arguments rule out, not counted as gaps.
         if self.gaps_literal_dead > 0 {
             v["gaps"]["literalDead"] = json!(self.gaps_literal_dead);
+        }
+        // r4 final (additive): the interface calls a literal enum value
+        // narrows to a known implementation, not counted as gaps.
+        if self.gaps_literal_narrowed > 0 {
+            v["gaps"]["literalNarrowed"] = json!(self.gaps_literal_narrowed);
         }
         // §8.2 (F53, additive): the COMMIT rows literal arguments rule out,
         // counted apart, so `effectsByType.COMMIT` reconciles.
@@ -1744,7 +1755,7 @@ impl RollupTotals {
             block.push(format!("callers and tests: {}", parts.join("; ")));
         }
         block.push(format!(
-            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed{}",
+            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed{}{}",
             self.gaps_workspace,
             self.gaps_dependency,
             self.gaps_not_placed,
@@ -1757,6 +1768,19 @@ impl RollupTotals {
                     } else {
                         "them"
                     }
+                )
+            } else {
+                String::new()
+            },
+            if self.gaps_literal_narrowed > 0 {
+                format!(
+                    "; {} fixed by literal arguments (every route's enum value selects the \
+                     implementation)",
+                    plural(
+                        self.gaps_literal_narrowed,
+                        "interface call",
+                        "interface calls"
+                    )
                 )
             } else {
                 String::new()
@@ -2486,6 +2510,7 @@ impl RoutineRollup {
             gaps_dependency: self.gaps.dependency,
             gaps_not_placed: self.gaps.not_placed.len(),
             gaps_literal_dead: self.gaps.literal_dead,
+            gaps_literal_narrowed: self.gaps.literal_narrowed,
             temporary_only_tables: self.temporary_only.len(),
             literal_dead_tables: self.literal_dead.len(),
             no_path_operations: self.no_path.len(),
@@ -2577,6 +2602,7 @@ fn gaps_of(entry: &DigestEntryFull) -> GapCounts {
     top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     g.top_callees = top;
     g.literal_dead = entry.unresolved_literal_dead;
+    g.literal_narrowed = entry.unresolved_literal_narrowed;
     g
 }
 
