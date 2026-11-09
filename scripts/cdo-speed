@@ -1,0 +1,544 @@
+#!/usr/bin/env python3
+"""scripts/cdo-speed: the CDO speed and memory gate (docs/engine-limits.md L14).
+
+Usage:
+  scripts/cdo-speed <cdo-workspace> [--base REV] [--head REV] [--rounds N]
+                    [--build-only] [--no-build] [--out DIR]
+
+It compares two `alsem` binaries, both built with the `release-fast` profile, on
+a fixed set of CDO calls:
+  head: the working tree (built in place, like every other gate), or `--head REV`;
+  base: `--base REV`, by default the merge base of HEAD and `master`.
+A base binary is built from `git archive REV` and cached by commit under
+`${ALSEM_SPEED_CACHE:-~/.cache/al-sem/cdo-speed}/bin/<sha>/`, so each master
+commit is built once per machine, whatever worktree asks for it.
+
+What runs: one `alsem mcp` server per side (the resident path agents use), both
+alive for the whole run, asked the same calls in turn:
+  warm-up (round 0, one sample per call): the first ask builds the CDO model
+    (`build`), then one call of each tool builds the per-revision artifacts and the
+    test universe (`warm-tests`);
+  rounds 1..N (default 3): one CDO routine per round, a different one each round
+    (a resident answer is kept, so asking the same routine again measures
+    nothing), asked prove may-commit, explain, digest, query effects, tests and
+    impact. Round 1 is RunReportID, the routine of the round-4 slowdown.
+The side order flips every round, so neither side always goes first.
+
+What is judged, per call, head over base:
+  rounds: CPU time (user + system of the server and its engine children, from
+    /proc) and wall time; the median of the per-round ratios must be at most
+    CPU_LIMIT and WALL_LIMIT. The round total (every call of a round summed) is
+    judged the same way;
+  warm-up: one sample each, so CPU time only, at most WARM_CPU_LIMIT (wall time
+    of a single sample swings too far on a loaded machine), and only the calls
+    of at least WARM_MIN_SECONDS (the model build and the test universe);
+  peak memory: the sum of every server process's VmHWM at the end, at most
+    MEM_LIMIT.
+A call whose base CPU time is under MIN_SECONDS is judged in the round total only
+(a ratio of two tiny times is mostly noise). The CHANGELOG's engine-limits wave 1,
+L14 entry gives the measured noise behind each limit. When the rounds disagree
+about a call (some ratios over its limit, some not), more rounds run, up to
+--max-rounds; then the median decides.
+
+Output equality is reported (a branch may change answers on purpose), never
+judged here: the CDO goldens do that.
+
+Exit: 0 pass, 1 fail (slower or larger), 2 cannot run (usage, build, a call that
+failed). Linux only (/proc).
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import select
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+# The limits, head over base. See the module doc.
+CPU_LIMIT = 1.20
+WALL_LIMIT = 1.30
+# The warm-up's calls have one sample each: CPU time only, a wider limit.
+WARM_CPU_LIMIT = 1.30
+MEM_LIMIT = 1.10
+MIN_SECONDS = 2.0
+# A warm-up call is judged when its base CPU time is at least this: the model
+# build (~160 s CPU) and the test universe (~135 s), not the 1-5 s calls whose
+# single sample swung up to x1.19 against the same binary under load.
+WARM_MIN_SECONDS = 20.0
+
+RRID = "CDO E-Mail Handler::RunReportID"
+ISSUE = "CDO Issue Document::IssueReminder"
+TELEMETRY = "CDO Telemetry::UpdateLastUpload"
+
+# One routine per round (round 1 first); --max-rounds is at most this many.
+# Each one's first prove costs 10-20 s on master (release-fast, 2026-11-09): a
+# routine whose answer takes 1-2 s says little about a slowdown.
+ROUND_ROUTINES = [
+    RRID,
+    ISSUE,
+    "CDO E-Mail Handler::DocEMailSend",
+    "CDO E-Mail Handler::DocSave",
+    "CDO E-Mail Handler::RunReport",
+]
+
+
+def calls_for(routine):
+    """(id, tool, arguments) for one routine. Prove first: explain reuses its search."""
+    q = routine.replace("::", ".")
+    return [
+        ("prove", "alsem_prove",
+         {"routine": routine, "question": "may-commit", "deterministic": True}),
+        ("explain", "alsem_explain", {"routines": [routine]}),
+        ("digest", "alsem_digest", {"routines": [routine], "deterministic": True}),
+        ("query", "alsem_query_effects", {"routine": q, "deterministic": True}),
+        ("tests", "alsem_tests", {"routines": [routine]}),
+        ("impact", "alsem_impact", {"routines": [routine]}),
+    ]
+
+
+# Round 0: `build` is the first ask (the model); the rest build what each tool
+# needs once per revision (the test universe for `tests`).
+WARM_UP = [("build", "alsem_explain", {"routines": [TELEMETRY]})] + [
+    (f"warm-{cid}", tool, args) for cid, tool, args in calls_for(TELEMETRY)]
+
+CALL_TIMEOUT = 900
+TICK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+
+def log(msg):
+    print(f"cdo-speed: {msg}", flush=True)
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def child_env():
+    # Nothing that changes the engine's behaviour or adds tracing cost.
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("ALSEM_") and k != "C1_CONE_CENSUS"}
+
+
+# ---------------------------------------------------------------------------
+# Binaries
+# ---------------------------------------------------------------------------
+
+def target_dir(repo):
+    return os.environ.get("CARGO_TARGET_DIR") or os.path.join(repo, "target")
+
+
+def build_working_tree(repo, logf):
+    """Build the working tree's alsem (release-fast) in place; return its path."""
+    log("building the working tree (release-fast, alsem)")
+    t0 = time.monotonic()
+    rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem"],
+                        cwd=repo, stdout=logf, stderr=subprocess.STDOUT).returncode
+    if rc != 0:
+        raise SystemExit(f"cdo-speed: the working tree's build failed (log: {logf.name})")
+    log(f"  built in {time.monotonic() - t0:.0f} s")
+    return os.path.join(target_dir(repo), "release-fast", "alsem")
+
+
+def cache_root():
+    return os.environ.get("ALSEM_SPEED_CACHE") or os.path.join(
+        os.path.expanduser("~"), ".cache", "al-sem", "cdo-speed")
+
+
+def cached_binary(repo, rev, logf):
+    """The release-fast alsem of commit `rev`, built once per commit and cached."""
+    sha = git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}")
+    root = cache_root()
+    exe = os.path.join(root, "bin", sha, "alsem")
+    os.makedirs(root, exist_ok=True)
+    # One build at a time per cache (two gates may want the same commit).
+    with open(os.path.join(root, "lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.exists(exe):
+            log(f"{rev} = {sha[:10]}: cached binary {exe}")
+            return exe, sha
+        src = os.path.join(root, "build", "src")
+        log(f"{rev} = {sha[:10]}: building (once per commit) in {src}")
+        shutil.rmtree(src, ignore_errors=True)
+        os.makedirs(src)
+        # `tar -m`: every file gets the current time, so cargo rebuilds the
+        # workspace crates. An archive keeps commit times, and an older commit's
+        # files would look older than the last build's outputs (a stale binary).
+        archive = subprocess.Popen(["git", "-C", repo, "archive", "--format=tar", sha],
+                                   stdout=subprocess.PIPE)
+        untar = subprocess.run(["tar", "-x", "-m", "-C", src], stdin=archive.stdout)
+        archive.stdout.close()
+        if archive.wait() != 0 or untar.returncode != 0:
+            raise SystemExit(f"cdo-speed: git archive {sha} failed")
+        env = dict(os.environ)
+        env["CARGO_TARGET_DIR"] = os.path.join(root, "build", "target")
+        if not env.get("TREE_SITTER_AL_PATH"):
+            # The archive has no grammar clone; the checkout's own is the one
+            # this repository builds against.
+            env["TREE_SITTER_AL_PATH"] = os.path.normpath(os.path.join(
+                git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                "..", "tree-sitter-al"))
+        t0 = time.monotonic()
+        rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem"],
+                            cwd=src, env=env, stdout=logf, stderr=subprocess.STDOUT).returncode
+        if rc != 0:
+            raise SystemExit(
+                f"cdo-speed: building {rev} ({sha[:10]}) failed (log: {logf.name}). A grammar "
+                "change since that commit stops its build (node-types.sha256); then pass a "
+                "--base that builds against the current grammar, or skip the speed check.")
+        os.makedirs(os.path.dirname(exe), exist_ok=True)
+        tmp = exe + ".tmp"
+        shutil.copy2(os.path.join(env["CARGO_TARGET_DIR"], "release-fast", "alsem"), tmp)
+        os.replace(tmp, exe)
+        log(f"  built in {time.monotonic() - t0:.0f} s")
+        return exe, sha
+
+
+# ---------------------------------------------------------------------------
+# Measuring
+# ---------------------------------------------------------------------------
+
+def proc_status_kib(pid, key):
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith(key + ":"):
+                    return int(line.split()[1])
+    except OSError:
+        pass
+    return 0
+
+
+def proc_cpu_seconds(pid):
+    """User + system time of `pid` and of its children it has waited for."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            stat = f.read()
+        fields = stat[stat.rindex(")") + 2:].split()
+        # utime, stime, cutime, cstime (fields 14-17 of proc(5)).
+        return sum(int(x) for x in fields[11:15]) / TICK
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def descendants(pid):
+    """Every live descendant of `pid` (from /proc's parent links)."""
+    parents = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/stat") as f:
+                stat = f.read()
+            parents.setdefault(int(stat[stat.rindex(")") + 2:].split()[1]), []).append(int(d))
+        except (OSError, ValueError, IndexError):
+            continue
+    out, todo = [], [pid]
+    while todo:
+        kids = parents.get(todo.pop(), [])
+        out.extend(kids)
+        todo.extend(kids)
+    return out
+
+
+class Server:
+    """One `alsem mcp` server over stdio (newline-delimited JSON-RPC)."""
+
+    def __init__(self, exe, ws, outdir, name):
+        self.name = name
+        self.root = tempfile.mkdtemp(prefix=f"cdo-speed-{name}-", dir=outdir)
+        self.err = open(os.path.join(outdir, f"{name}.server.err"), "wb")
+        self.p = subprocess.Popen(
+            [exe, "mcp", "--workspace", ws, "--output-root", self.root],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, env=child_env())
+        self.buf = b""
+        self.next_id = 0
+        r = self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                        "clientInfo": {"name": "cdo-speed", "version": "1"}})
+        if "result" not in r:
+            raise SystemExit(f"cdo-speed: {name}: initialize failed: {r}")
+        self.send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+
+    def send(self, msg):
+        self.p.stdin.write((json.dumps(msg) + "\n").encode())
+        self.p.stdin.flush()
+
+    def readline(self, deadline):
+        while b"\n" not in self.buf:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise SystemExit(f"cdo-speed: {self.name}: an MCP call timed out")
+            ready, _, _ = select.select([self.p.stdout], [], [], left)
+            if ready:
+                chunk = os.read(self.p.stdout.fileno(), 1 << 20)
+                if not chunk:
+                    raise SystemExit(f"cdo-speed: {self.name}: the MCP server closed its stdout")
+                self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        return json.loads(line)
+
+    def request(self, method, params):
+        self.next_id += 1
+        rid = self.next_id
+        self.send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        deadline = time.monotonic() + CALL_TIMEOUT
+        while True:
+            msg = self.readline(deadline)
+            if msg.get("id") == rid:
+                return msg
+
+    def cpu(self):
+        """CPU seconds of the server and every live engine child (with their
+        own waited-for children)."""
+        return sum(proc_cpu_seconds(p) for p in [self.p.pid, *descendants(self.p.pid)])
+
+    def call(self, tool, args):
+        """(wall s, CPU s, stdout sha256, exit code) of one tool call."""
+        c0 = self.cpu()
+        t0 = time.monotonic()
+        r = self.request("tools/call", {"name": tool, "arguments": args})
+        wall = time.monotonic() - t0
+        cpu = self.cpu() - c0
+        if "error" in r:
+            raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
+        env = r["result"].get("structuredContent", {})
+        if "stdoutFile" in env:
+            sha = env["stdoutFile"].get("sha256", "")[:16]
+        else:
+            text = env.get("stdoutText", env.get("output", ""))
+            if not isinstance(text, str):
+                text = json.dumps(text, sort_keys=True)
+            sha = hashlib.sha256(text.encode()).hexdigest()[:16]
+        return wall, cpu, sha, env.get("exitCode", -1)
+
+    def peak_mib(self):
+        """The server's and its children's peak RSS (VmHWM), summed."""
+        return sum(proc_status_kib(p, "VmHWM")
+                   for p in [self.p.pid, *descendants(self.p.pid)]) / 1024
+
+    def close(self):
+        try:
+            self.p.stdin.close()
+            self.p.wait(timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            self.p.kill()
+        self.err.close()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# The run
+# ---------------------------------------------------------------------------
+
+def run_round(rnd, servers, records):
+    order = ["base", "head"] if rnd % 2 == 0 else ["head", "base"]
+    if rnd == 0:
+        calls = WARM_UP
+    else:
+        calls = calls_for(ROUND_ROUTINES[rnd - 1])
+        log(f"round {rnd}: {ROUND_ROUTINES[rnd - 1]}")
+    for cid, tool, args in calls:
+        for side in order:
+            wall, cpu, sha, code = servers[side].call(tool, args)
+            if code != 0:
+                raise SystemExit(f"cdo-speed: {cid} on {side} (round {rnd}) exited {code}; "
+                                 f"its stderr is in the server's output folder")
+            records.append(dict(call=cid, side=side, round=rnd, wall=wall, cpu=cpu, sha=sha))
+            log(f"  r{rnd} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s")
+
+
+def judge(records):
+    """Per call: (rows, the calls too noisy to judge)."""
+    rows, noisy = [], []
+    calls = list(dict.fromkeys(r["call"] for r in records))
+    rounds = sorted({r["round"] for r in records if r["round"] > 0})
+    # The round total: every counted call's time summed per round and side.
+    for side in ("base", "head"):
+        for rnd in rounds:
+            rs = [r for r in records if r["round"] == rnd and r["side"] == side]
+            records.append(dict(call="round-total", side=side, round=rnd, total=True,
+                                wall=sum(r["wall"] for r in rs),
+                                cpu=sum(r["cpu"] for r in rs), sha=""))
+    calls.append("round-total")
+    for cid in calls:
+        rs = [r for r in records if r["call"] == cid]
+        a = {r["round"]: r for r in rs if r["side"] == "base"}
+        b = {r["round"]: r for r in rs if r["side"] == "head"}
+        paired = sorted(set(a) & set(b))
+        row = dict(call=cid, rounds=paired, same_output=(
+            [a[k]["sha"] for k in paired] == [b[k]["sha"] for k in paired]))
+        for m in ("cpu", "wall"):
+            ratios = [b[k][m] / a[k][m] if a[k][m] > 0 else 1.0 for k in paired]
+            row[m] = dict(base=statistics.median(a[k][m] for k in paired),
+                          head=statistics.median(b[k][m] for k in paired),
+                          ratio=statistics.median(ratios), ratios=ratios,
+                          spread=(max(ratios) / min(ratios)) if min(ratios) > 0 else 9.9)
+        row["judged"] = row["cpu"]["base"] >= MIN_SECONDS
+        rows.append(row)
+        # Undecided: the rounds disagree about the verdict (some ratios over
+        # the limit, some not). The ratios differ by routine on a real change
+        # too (round 4's slowdown cost each routine its own number of
+        # searches), so a wide spread alone is not noise.
+        if row["judged"] and any(
+                min(row[m]["ratios"]) <= lim < max(row[m]["ratios"])
+                for m, lim in (("cpu", CPU_LIMIT), ("wall", WALL_LIMIT))):
+            noisy.append(cid)
+    return rows, noisy
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("workspace")
+    ap.add_argument("--base", help="the base commit (default: merge-base HEAD master)")
+    ap.add_argument("--head", help="a commit to time instead of the working tree")
+    ap.add_argument("--base-exe", help="a built base binary (noise measurements; no build)")
+    ap.add_argument("--head-exe", help="a built head binary (noise measurements; no build)")
+    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--max-rounds", type=int, default=len(ROUND_ROUTINES))
+    ap.add_argument("--out", help="the folder for outputs and speed.json")
+    ap.add_argument("--build-only", action="store_true", help="build both binaries, time nothing")
+    ap.add_argument("--no-build", action="store_true",
+                    help="the working tree's release-fast alsem is already built")
+    args = ap.parse_args()
+    args.max_rounds = min(max(args.max_rounds, args.rounds), len(ROUND_ROUTINES))
+
+    if not sys.platform.startswith("linux"):
+        log("this gate reads /proc: Linux only")
+        return 2
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ws = os.path.abspath(args.workspace)
+    if not os.path.isdir(ws):
+        log(f"no workspace at {ws}")
+        return 2
+    outdir = os.path.abspath(args.out or os.path.join(
+        target_dir(repo), "cdo-speed-runs", time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"))
+    os.makedirs(outdir, exist_ok=True)
+    log(f"outputs in {outdir}")
+
+    t_start = time.monotonic()
+    with open(os.path.join(outdir, "build.log"), "a") as logf:
+        if args.base_exe:
+            base_rev, base_exe, base_sha = args.base_exe, args.base_exe, "given-binary"
+        else:
+            base_rev = args.base or git(repo, "merge-base", "HEAD", "master")
+            base_exe, base_sha = cached_binary(repo, base_rev, logf)
+        if args.head_exe:
+            head_exe, head_label = args.head_exe, args.head_exe
+        elif args.head:
+            head_exe, head_sha = cached_binary(repo, args.head, logf)
+            head_label = head_sha[:10]
+        else:
+            built = (os.path.join(target_dir(repo), "release-fast", "alsem") if args.no_build
+                     else build_working_tree(repo, logf))
+            if not os.path.exists(built):
+                log(f"no binary at {built}")
+                return 2
+            # A copy: a later build into the target folder cannot swap it mid-run.
+            head_exe = os.path.join(outdir, "head-alsem")
+            if not args.build_only:
+                shutil.copy2(built, head_exe)
+            dirty = git(repo, "status", "--porcelain", "--untracked-files=no")
+            head_label = git(repo, "rev-parse", "--short=10", "HEAD") + (" + edits" if dirty else "")
+    t_built = time.monotonic()
+    if args.build_only:
+        log(f"built (no timing asked) in {t_built - t_start:.0f} s")
+        return 0
+
+    log(f"base {base_sha[:10]} ({base_rev}) against head {head_label}; workspace {ws}")
+    load0 = os.getloadavg()[0]
+    records = []
+    servers = {}
+    try:
+        servers["base"] = Server(base_exe, ws, outdir, "base")
+        servers["head"] = Server(head_exe, ws, outdir, "head")
+        log("round 0: the warm-up (one sample per call)")
+        run_round(0, servers, records)
+        rnd = 0
+        while True:
+            rnd += 1
+            run_round(rnd, servers, records)
+            if rnd < args.rounds:
+                continue
+            _, noisy = judge([dict(r) for r in records if r["round"] > 0])
+            if noisy and rnd < args.max_rounds:
+                log(f"the rounds disagree about {', '.join(noisy)}: one more round")
+                continue
+            break
+        peaks = {side: servers[side].peak_mib() for side in servers}
+    finally:
+        for s in servers.values():
+            s.close()
+
+    warm = [r for r in records if r["round"] == 0]
+    rows, noisy = judge([r for r in records if r["round"] > 0])
+    # The warm-up's calls: one sample each, judged by the same limits.
+    warm_rows, _ = judge([dict(r, round=1) for r in warm])
+    warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
+    failed = []
+    log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
+        f"median ratio, warm-up cpu {WARM_CPU_LIMIT}, memory {MEM_LIMIT}; a call is judged "
+        f"alone when its base CPU is at least {MIN_SECONDS} s):")
+    for row in warm_rows:
+        row["warm"] = True
+        row["judged"] = row["cpu"]["base"] >= WARM_MIN_SECONDS
+    for row in warm_rows + rows:
+        c, w = row["cpu"], row["wall"]
+        warm = row.get("warm", False)
+        note = "" if row["judged"] else (
+            "  (reported only)" if warm else "  (in the round total only)")
+        if row["call"] in noisy:
+            note += "  (rounds disagree: the median decides)"
+        if not row["same_output"] and row["call"] != "round-total":
+            note += "  [outputs differ]"
+        log(f"  {row['call']:<14} cpu {c['base']:7.2f} -> {c['head']:7.2f} s x{c['ratio']:.3f}"
+            f"   wall {w['base']:7.2f} -> {w['head']:7.2f} s x{w['ratio']:.3f}"
+            f"   spread {c['spread']:.2f}/{w['spread']:.2f}{note}")
+        if not row["judged"]:
+            continue
+        if warm:
+            if c["ratio"] > WARM_CPU_LIMIT:
+                failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} "
+                              f"(limit {WARM_CPU_LIMIT}, one sample)")
+            continue
+        if c["ratio"] > CPU_LIMIT:
+            failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} (limit {CPU_LIMIT})")
+        if w["ratio"] > WALL_LIMIT:
+            failed.append(f"{row['call']}: wall time x{w['ratio']:.2f} (limit {WALL_LIMIT})")
+    mem_ratio = peaks["head"] / peaks["base"] if peaks["base"] else 9.9
+    log(f"  {'peak memory':<14} {peaks['base']:.0f} -> {peaks['head']:.0f} MiB x{mem_ratio:.3f}"
+        " (every server process's VmHWM, summed)")
+    if mem_ratio > MEM_LIMIT:
+        failed.append(f"peak memory x{mem_ratio:.2f} (limit {MEM_LIMIT})")
+    elapsed = time.monotonic() - t_start
+    with open(os.path.join(outdir, "speed.json"), "w") as f:
+        json.dump(dict(base=base_sha, head=head_label, workspace=ws, rounds=rnd,
+                       limits=dict(cpu=CPU_LIMIT, wall=WALL_LIMIT, mem=MEM_LIMIT,
+                                   warm_cpu=WARM_CPU_LIMIT, min_seconds=MIN_SECONDS),
+                       build_s=t_built - t_start, timing_s=elapsed - (t_built - t_start),
+                       peaks_mib=peaks, warm_rows=warm_rows, rows=rows, records=records,
+                       failed=failed, loadavg_start=load0, loadavg_end=os.getloadavg()[0]),
+                  f, indent=1)
+    log(f"build {t_built - t_start:.0f} s, timing {elapsed - (t_built - t_start):.0f} s, "
+        f"load average {load0:.1f} at the start, {os.getloadavg()[0]:.1f} at the end")
+    if failed:
+        for line in failed:
+            log(f"FAIL: {line}")
+        return 1
+    log("PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except SystemExit as e:
+        if isinstance(e.code, str):  # a "cannot run" message
+            print(e.code, file=sys.stderr, flush=True)
+            sys.exit(2)
+        raise

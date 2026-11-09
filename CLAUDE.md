@@ -70,7 +70,7 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
 |------|------|---------|--------------|
 | 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::`; per agent task `scripts/ci-steps task-affected` | only what you touched (`task-affected`: fmt, dev clippy, gen-syntax, the lib tests and the test binaries the changed paths reach; an unmapped path runs the whole suite) |
 | 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, the WHOLE suite once — which already includes every `check-goldens` target |
-| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite |
+| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite and the CDO speed and memory check |
 
 - **The debug suites never run the CDO tests.** `ci-steps test`, `check-goldens` and
   the pre-commit hook unset `CDO_WS`, so the CDO-gated tests skip there whatever your
@@ -99,6 +99,19 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   1,164-1,184 s before (output_cdo 780-808 s, whole lib 290-317 s), 834-910 s after,
   peak memory 39.5 GB before, 51-58 GB after. The length is `output_cdo`'s impact
   ratchets, whose one-shot `alsem impact` calls take 4-7 minutes each.
+- **`cdo-gate` checks speed and memory first (since 2026-11-09, engine limits L14).**
+  Phase `speed` (`scripts/cdo-speed`, read its doc) builds the working tree's `alsem`
+  with `release-fast` and compares it with the merge base's (built once per commit,
+  cached in `~/.cache/al-sem/cdo-speed/`): two resident `alsem mcp` servers on CDO, a
+  warm-up, then 3 rounds of prove, explain, digest, query effects, tests and impact on a
+  new routine each. It fails when the median CPU ratio passes 1.20 (wall 1.30), the
+  model build or test universe passes 1.30 in CPU, or peak memory passes 1.10. It runs
+  ALONE before the test lanes (their load is noise to it); never run two gates or a
+  build beside it if you can help it. `--no-speed` skips it and prints that speed was
+  not checked; a tree that lands without it must say why. Measured 2026-11-09 (Linux,
+  22 cores): the timing 219-301 s (505 s with every core busy elsewhere); round 4's
+  slowdown fails it at x2.1, master against itself passes at x0.94-1.06. The whole
+  gate with it: SEE_RUN.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
   `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the

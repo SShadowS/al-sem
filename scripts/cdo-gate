@@ -8,12 +8,22 @@
 # locally (cron / Task Scheduler), not run in CI.
 #
 # Usage:
-#   scripts/cdo-gate <path-to-cdo-workspace>
+#   scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>
 #   CDO_WS=/path/to/workspace scripts/cdo-gate
 #
 # A positional argument takes precedence over the CDO_WS env var when both
 # are given. `CDO_GATE_SERIAL=1` runs the phases one after another (for a
 # machine short of memory, or to time one phase alone).
+#
+# ⟨2026-11-09, engine limits wave 1, L14⟩ The first phase is `speed`
+# (`scripts/cdo-speed`): the working tree's release-fast `alsem` against the
+# merge base's (cached per commit), on a fixed set of resident CDO calls,
+# judged on CPU time, wall time and peak memory. It runs alone, before the
+# test lanes. `--no-speed` (or CDO_GATE_NO_SPEED=1) skips it and says so
+# loudly. Measured cost on 2026-11-09 (Linux, 22 cores): its timing 219-301 s
+# (505 s with every core busy elsewhere), plus the working tree's release-fast
+# build (incremental) and, once per master commit, the base build (~245 s,
+# beside the test build).
 #
 # ⟨2026-11-09, engine limits wave 1⟩ How it runs: every test target is built
 # ONCE (`cargo test --no-run`), then the phases run in two lanes at once:
@@ -40,6 +50,18 @@
 # read CDO_WS); the rest read no CDO_WS and run in every task gate
 # (`scripts/ci-steps task`/`test`), with the same result.
 set -uo pipefail
+
+# ⟨2026-11-09, engine limits wave 1, L14⟩ The speed and memory phase
+# (`scripts/cdo-speed`, its doc says how it measures and judges). It is on by
+# default; `--no-speed` (or CDO_GATE_NO_SPEED=1) skips it for a machine where
+# timing is impossible, and the gate then says so loudly at the start and in
+# its summary. Never skip it on a tree about to land without saying why.
+speed=1
+if [[ "${1:-}" == "--no-speed" ]]; then
+    speed=0
+    shift
+fi
+[[ "${CDO_GATE_NO_SPEED:-}" == "1" ]] && speed=0
 
 ws="${1:-${CDO_WS:-}}"
 
@@ -120,12 +142,44 @@ run_phase() {
 # Build every phase's test target once. The phases' own `cargo test` calls
 # then only check freshness, so two of them can run at once.
 # ---------------------------------------------------------------------------
+if [[ "$speed" -eq 0 ]]; then
+    loud_no_speed() {
+        echo "cdo-gate: ****************************************************************"
+        echo "cdo-gate: **  SPEED AND MEMORY WERE NOT CHECKED (--no-speed).            **"
+        echo "cdo-gate: **  A slowdown or a memory rise on CDO passes this gate unseen.  **"
+        echo "cdo-gate: ****************************************************************"
+    }
+    loud_no_speed
+else
+    # The speed phase's two release-fast binaries (the working tree's, and the
+    # base commit's from its cache) are built beside the test build. The
+    # working tree's waits for the test build's lock on the target folder; the
+    # base's has a folder of its own.
+    run_phase speed_build "$(dirname "$0")/cdo-speed" "$ws" --build-only \
+        --out "$logs/speed" &
+    speed_build=$!
+fi
 if ! run_phase build cargo test "${profile[@]}" --no-run \
     --test program_resolve_harness --test lsp --test l4_summary_differential \
     --test cli -p al-sem --lib; then
     tail -n 60 "$logs/build.log"
     echo "cdo-gate: FAIL (the build; full log: $logs/build.log)"
+    [[ "$speed" -eq 1 ]] && kill "$speed_build" 2>/dev/null
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# The speed phase runs ALONE, before the test lanes: their load (tens of GB,
+# every core) would be noise in its timings.
+# ---------------------------------------------------------------------------
+if [[ "$speed" -eq 1 ]]; then
+    if wait "$speed_build"; then
+        run_phase speed "$(dirname "$0")/cdo-speed" "$ws" --no-build --out "$logs/speed"
+    else
+        # No timing without both binaries: the phase fails with the build.
+        echo "1 0" > "$logs/speed.status"
+        cp "$logs/speed_build.log" "$logs/speed.log"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -221,6 +275,7 @@ fi
 # failure), its `test result:` lines, and a failed phase's failures.
 # ---------------------------------------------------------------------------
 phases=(program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo)
+[[ "$speed" -eq 1 ]] && phases=(speed "${phases[@]}")
 # A phase's exit status and wall seconds; "missing -" when it never ended.
 phase_result() {
     if [[ -f "$logs/$1.status" ]]; then
@@ -241,8 +296,13 @@ for name in "${phases[@]}"; do
     fi
     counts="$(grep -hE '^ *[0-9]+ test result:' "$logs/$name.log" 2>/dev/null |
         sed -E 's/^ *[0-9]+ test result: //' | paste -sd '|' -)"
+    if [[ "$name" == "speed" ]]; then
+        counts="$(grep -hE 'cdo-speed: (PASS|FAIL)' "$logs/speed.log" 2>/dev/null |
+            sed -E 's/^ *[0-9]+ cdo-speed: //' | paste -sd '|' -)"
+    fi
     printf 'cdo-gate:   %-26s %-12s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
 done
+[[ "$speed" -eq 0 ]] && loud_no_speed
 
 if [[ "$status" -ne 0 ]]; then
     for name in "${phases[@]}"; do
@@ -256,6 +316,8 @@ if [[ "$status" -ne 0 ]]; then
         fi
     done
     echo "cdo-gate: FAIL"
+elif [[ "$speed" -eq 0 ]]; then
+    echo "cdo-gate: PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)"
 else
     echo "cdo-gate: PASS"
 fi

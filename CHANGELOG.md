@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (engine limits wave 1, L14: a CDO speed and memory gate)
+
+- **`scripts/cdo-gate` now fails a branch that makes CDO answers slower or larger.** Its
+  new first phase, `speed`, runs `scripts/cdo-speed`: the working tree's `alsem`
+  (`release-fast`) against the merge base's, on the CDO baseline. Before this nothing
+  timed anything on CDO; round 4's slowdown (the c25 assumption-records fix made prove
+  and explain ~45% slower, RunReportID `prove … may-commit` 28 s → 41 s, until
+  `df5c8fe7`) was noticed only because a golden run took three times as long.
+  `--no-speed` (or `CDO_GATE_NO_SPEED=1`) skips the phase for a machine where timing is
+  impossible; the gate then prints a banner at the start and in its summary, and its
+  last line says `PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)`.
+- **What it runs.** One `alsem mcp` server per side (the resident path agents use), both
+  alive for the whole run and asked the same calls in turn. Round 0 warms up: the first
+  ask builds the CDO model (`build`), then one call of each tool (on `CDO Telemetry::
+  UpdateLastUpload`) builds the per-revision artifacts and the test universe. Then
+  3 rounds, each on a new routine (RunReportID, IssueReminder, DocEMailSend; DocSave and
+  RunReport when more rounds are needed): prove `may-commit`, explain, digest, query
+  effects, tests and impact. A new routine each round, because the engine keeps answers:
+  asking RunReportID twice measured ~1 s the second time, nothing of the search that
+  regressed. The side order flips every round.
+- **Why A/B against the merge base, and why CPU time.** Measured first: on this shared
+  machine (other agents' load 10-70) one-shot `prove RunReportID` of ONE binary took
+  39.0 s and 66.3 s in two runs, so stored per-host budgets would need a margin wider
+  than the slowdown they are to catch. Comparing two binaries interleaved cancels most
+  load; CPU time (user + system of the server and its engine children, from `/proc`)
+  cancels more, since a single-threaded answer's CPU time does not grow while it waits
+  for a core. Wall time is judged too, with a wider limit, so a change that loses
+  parallelism (more wall, same CPU) still shows. The base binary is built from
+  `git archive <sha>` once per commit and cached under `~/.cache/al-sem/cdo-speed/`
+  (every worktree shares it), beside the test build.
+- **Measured noise: the same binary against itself** (master `4129eb52`, release-fast,
+  2026-11-09; the median of the per-round ratios of the rounds' prove, which is ~11-20 s
+  per routine; and the single-sample warm-up):
+  - quiet (load 7-9), two runs: prove CPU x0.94 and x1.06 (single rounds 0.92-1.19),
+    round total x1.01 and x1.03; model build CPU x1.01 and x0.96; test universe CPU x1.02 and x1.07;
+    peak memory x1.006 and x0.976.
+  - beside a release-fast build of master (all 22 cores; this run `58d0c94e` against
+    itself): prove x0.97 (single rounds 0.78-1.07); model build CPU x1.09 but its wall x1.32; a 4 s warm-up prove x1.19.
+  - beside 22 busy loops (load ~45 on 22 cores): prove x1.12 (5 rounds: 1.12, 1.12, 1.68,
+    1.25, 0.98), round total x1.07, model build CPU x0.95, test universe CPU x1.08,
+    wall x1.31; the timing took 505 s instead of 220-300 s.
+- **The limits that follow** (head over base): the rounds' median CPU ratio at most 1.20
+  and wall ratio at most 1.30, per call whose base CPU is at least 2 s (prove) and for the
+  round total; the warm-up's model build and test universe (single samples, base CPU at
+  least 20 s) at most 1.30 in CPU; the 1-5 s calls are reported only (single samples
+  of them swung to x1.19 under load), and count in the round total; peak memory (every
+  server process's VmHWM, summed: ~9.1-9.8 GB, the base engine, the test universe and the
+  front end) at most 1.10. When the rounds disagree about a call (some ratios over its
+  limit, some not), up to 5 rounds run and the median decides.
+- **The must-catch proof.** `1127e74e` (the c25 fix without `df5c8fe7`) against
+  `58d0c94e` (with it), an earlier draft of the script that ran 5 rounds: prove x1.77
+  (rounds 2.52, 2.25, 1.77, 1.45, 1.09; median 14.8 s → 33.3 s), round total x1.62, FAIL.
+  Against master `4129eb52` with the final routines and limits: prove x2.13 CPU and
+  x2.12 wall (RunReportID 14.4 → 30.6 s, IssueReminder 13.7 → 32.8 s, DocEMailSend
+  19.2 → 34.2 s), round total x1.88, exit 1, 301 s. Master against itself, same script:
+  prove x1.06, round total x1.03, memory x0.98, PASS, 231 s.
+- **What it adds to the branch gate:** the timing, 219-301 s on a quiet machine; the
+  working tree's release-fast build (a cold one took 233 s; after an edit, the al-sem
+  crates only); the base build, ~245 s once per master commit, beside the test build.
+  Peak memory: two engines and two test universes, ~19 GB, before the test lanes start.
+
 ### Changed (engine limits wave 1, cdo-gate faster)
 
 - **`scripts/cdo-gate` builds once and runs in two lanes; the lib phase runs only the
