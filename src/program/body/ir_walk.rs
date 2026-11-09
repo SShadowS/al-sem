@@ -1721,6 +1721,16 @@ fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo 
 
 // ---- CFN (statement_tree) as a real PCFNNode ----
 
+/// r3 E2: a flow fact's condition text: `raw` with whitespace folded, cut at
+/// [`FLOW_TEXT_MAX`] characters (a longer one ends in `…`).
+fn flow_text(raw: &str) -> Box<str> {
+    let mut text: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > FLOW_TEXT_MAX {
+        text = text.chars().take(FLOW_TEXT_MAX - 1).collect::<String>() + "…";
+    }
+    text.into()
+}
+
 fn cfn_node(kind: &str) -> PCFNNode {
     PCFNNode {
         kind: kind.to_string(),
@@ -1839,14 +1849,22 @@ impl<'a> IrCfn<'a> {
     /// r3 E2: a condition's [`FlowFact::Cond`]: its value and its source text,
     /// whitespace folded and cut at [`FLOW_TEXT_MAX`] characters.
     fn flow_cond(&self, e: ExprId) -> Option<Box<FlowFact>> {
-        let raw = &self.source[self.ir().expr(e).origin.byte.clone()];
-        let mut text: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-        if text.chars().count() > FLOW_TEXT_MAX {
-            text = text.chars().take(FLOW_TEXT_MAX - 1).collect::<String>() + "…";
-        }
         Some(Box::new(FlowFact::Cond {
             expr: self.flow_expr(e),
-            text: text.into(),
+            text: flow_text(self.expr_text(e)),
+        }))
+    }
+
+    /// An expression's source text as written.
+    fn expr_text(&self, e: ExprId) -> &str {
+        &self.source[self.ir().expr(e).origin.byte.clone()]
+    }
+
+    /// A loop's [`FlowFact::Loop`]: its condition as written (`raw`), folded
+    /// as a [`FlowFact::Cond`]'s text is.
+    fn flow_loop(raw: &str) -> Option<Box<FlowFact>> {
+        Some(Box::new(FlowFact::Loop {
+            text: flow_text(raw),
         }))
     }
 
@@ -2467,8 +2485,8 @@ impl<'a> IrCfn<'a> {
                 var,
                 from,
                 to,
+                down,
                 body,
-                ..
             } => {
                 let mut n = cfn_node("for");
                 n.children = Some(vec![self.build_block(*body)]);
@@ -2476,6 +2494,14 @@ impl<'a> IrCfn<'a> {
                 leaves.extend(self.harvest_vec(*to));
                 n.condition_leaves = some_if(leaves);
                 n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
+                // The text `site_guards` gives a `for` (`V := A to B`).
+                n.flow = Self::flow_loop(&format!(
+                    "{} := {} {} {}",
+                    self.expr_text(*var).trim(),
+                    self.expr_text(*from).trim(),
+                    if *down { "downto" } else { "to" },
+                    self.expr_text(*to).trim()
+                ));
                 n
             }
             Foreach {
@@ -2487,12 +2513,18 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(vec![self.build_block(*body)]);
                 n.condition_leaves = some_if(self.harvest_vec(*iterable));
                 n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
+                n.flow = Self::flow_loop(&format!(
+                    "{} in {}",
+                    self.expr_text(*var).trim(),
+                    self.expr_text(*iterable).trim()
+                ));
                 n
             }
             Repeat { body, until } => {
                 let mut n = cfn_node("repeat");
                 n.children = Some(self.block_items(*body));
                 n.condition_leaves = some_if(self.harvest_vec(*until));
+                n.flow = Self::flow_loop(self.expr_text(*until));
                 n
             }
             Try { .. } => {

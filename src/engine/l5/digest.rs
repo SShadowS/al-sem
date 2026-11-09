@@ -4184,6 +4184,11 @@ pub struct DigestEntryResult {
     /// pass rules out from this root (no route to them can run), sorted;
     /// empty before the pass. The unresolved cone leaves them out.
     pub literal_dead_sites: Vec<String>,
+    /// r4 final (m02, c15): the cone's unresolved interface call sites that
+    /// run from this root only with an implementation the literal arguments
+    /// fix (an enum value's own implementation), sorted; empty before the
+    /// pass. No open-world gap: the unresolved cone leaves them out too.
+    pub literal_narrowed_sites: Vec<String>,
 }
 
 /// The callsiteId of a NON-terminal witness hop (the `callsiteId?` field TS reads on
@@ -5506,6 +5511,7 @@ fn digest_one_root<'i>(
             effects,
             partial_site_types: partial_site_types.into_iter().map(str::to_string).collect(),
             literal_dead_sites: Vec::new(),
+            literal_narrowed_sites: Vec::new(),
         })
     }
 }

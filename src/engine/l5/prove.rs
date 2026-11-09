@@ -177,6 +177,13 @@ pub struct ProveObligations {
     /// kind of such a site and none of the cone's sites is left, the
     /// coverage counts as complete.
     pub literal_dead_sites: usize,
+    /// r4 final (m02, c15): the cone's unresolved interface calls whose
+    /// implementation every route's literal arguments fix (an enum value's
+    /// own implementation, which no extension can change): they run, but
+    /// only into code the cone already follows, so they block nothing and
+    /// are left out of the counts above. They close coverage as
+    /// `literal_dead_sites` do.
+    pub literal_narrowed_sites: usize,
     /// The answer holds only in `world`: the strict world answers differently
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
@@ -415,7 +422,7 @@ fn compute_obligations(
     // literal arguments rule out (every reason a call-site kind, no site of
     // the cone left, the cone not cut) is complete for this root.
     let coverage_closed_by_literals = !complete
-        && entry.unresolved_literal_dead > 0
+        && entry.unresolved_literal_dead + entry.unresolved_literal_narrowed > 0
         && entry.unresolved.is_empty()
         && !entry.unresolved_traversal.truncated
         && entry.coverage_status == "partial"
@@ -431,6 +438,7 @@ fn compute_obligations(
         analysis_gaps: gaps_in_cone_count,
         coverage_complete: complete || coverage_closed_by_assumption || coverage_closed_by_literals,
         literal_dead_sites: entry.unresolved_literal_dead,
+        literal_narrowed_sites: entry.unresolved_literal_narrowed,
         cone_truncated: entry.unresolved_traversal.truncated,
         world,
         waived_rows,
@@ -1584,6 +1592,12 @@ fn route_guard_text(g: &crate::engine::l5::literal_reach::RouteGuard) -> String 
         GuardKind::Must(b) => format!("{text}: must be {b}, {how} ({at})"),
         GuardKind::Arm(_) => format!("case {text}: this arm, {how} ({at})"),
         GuardKind::CaseElse => format!("case {text}: its else, {how} ({at})"),
+        GuardKind::Exit if g.evaluated => format!("earlier exit if {text}: false, {how} ({at})"),
+        GuardKind::Exit => format!("earlier exit if {text}: must be false, {how} ({at})"),
+        GuardKind::Loop(l) if *l == crate::engine::l5::literal_reach::LoopKind::Repeat => {
+            format!("repeat … until {text}: continuation, {how} ({at})")
+        }
+        GuardKind::Loop(l) => format!("{} {text}: loop body, {how} ({at})", l.construct()),
     }
 }
 
@@ -1726,13 +1740,28 @@ fn route_guards_text_of(
         .map(|&i| route_guard_text(&guards[i]))
         .collect();
     if guards.len() > shown.len() {
-        parts.push(format!(
-            "… +{} guards ({} guards in all)",
-            guards.len() - shown.len(),
-            guards.len()
-        ));
+        parts.push(shown_of_words(shown.len(), guards));
     }
     Some(parts.join("; "))
+}
+
+/// r4 final (c05): how many of a route's guards a `condition:` line shows,
+/// in `prove --site`'s words (`shown (k of M enclosing conditions)`): `M`
+/// is the route's full count of enclosing conditions
+/// (`literal_reach::route_guard_counts`, the count the row's `N guards on
+/// the route` prints), the earlier exits named apart.
+fn shown_of_words(shown: usize, guards: &[crate::engine::l5::literal_reach::RouteGuard]) -> String {
+    let (enclosing, _, exits, _) = crate::engine::l5::literal_reach::route_guard_counts(guards);
+    let conds = if enclosing == 1 {
+        "1 enclosing condition".to_string()
+    } else {
+        format!("{enclosing} enclosing conditions")
+    };
+    match exits {
+        0 => format!("… shown ({shown} of {conds})"),
+        1 => format!("… shown ({shown} of {conds} and 1 earlier exit)"),
+        e => format!("… shown ({shown} of {conds} and {e} earlier exits)"),
+    }
 }
 
 /// r3 E2 (additive): an effect's witness route guards as JSON
@@ -1767,6 +1796,16 @@ fn route_guards_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
                     GuardKind::CaseElse => {
                         m.insert("kind".into(), "case-else".into());
                     }
+                    // r4 final (c05): a loop the site sits in (`for`,
+                    // `foreach`, `repeat`), and an earlier `if … then exit`
+                    // (not an enclosing condition).
+                    GuardKind::Loop(l) => {
+                        m.insert("kind".into(), l.construct().into());
+                    }
+                    GuardKind::Exit => {
+                        m.insert("kind".into(), "exit".into());
+                        m.insert("mustBe".into(), false.into());
+                    }
                 }
                 m.insert("evaluated".into(), g.evaluated.into());
                 serde_json::Value::Object(m)
@@ -1784,6 +1823,19 @@ pub(crate) fn literal_dead_sites_line(n: usize) -> Option<String> {
             "  ruled out by literal arguments: {} not resolved that no route from here can \
              reach (not counted as blockers)",
             crate::engine::l5::routine_rollup::plural(n, "call site", "call sites")
+        )
+    })
+}
+
+/// r4 final (m02, c15): the one line saying how many interface calls the
+/// literal arguments narrowed to a known implementation (no blocker, not
+/// open world); `None` for none.
+pub(crate) fn literal_narrowed_sites_line(n: usize) -> Option<String> {
+    (n > 0).then(|| {
+        format!(
+            "  fixed by literal arguments: {} whose implementation every route's enum value \
+             selects (not open world, not counted as blockers)",
+            crate::engine::l5::routine_rollup::plural(n, "interface call", "interface calls")
         )
     })
 }
@@ -1814,6 +1866,13 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
         m.insert(
             "literalDeadSites".into(),
             (o.literal_dead_sites as u64).into(),
+        );
+    }
+    // r4 final: present only when an interface call was narrowed.
+    if o.literal_narrowed_sites > 0 {
+        m.insert(
+            "literalNarrowedSites".into(),
+            (o.literal_narrowed_sites as u64).into(),
         );
     }
     serde_json::Value::Object(m)
@@ -3088,6 +3147,9 @@ pub fn format_prove_human(
     if let Some(l) = literal_dead_sites_line(prove_result.obligations.literal_dead_sites) {
         lines.push(l);
     }
+    if let Some(l) = literal_narrowed_sites_line(prove_result.obligations.literal_narrowed_sites) {
+        lines.push(l);
+    }
 
     // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
     // visible; the answer above is prove's own and is never qualified here.
@@ -3381,10 +3443,11 @@ fn blocker_lines(
 /// they point, the answer's world, the analysis incompleteness.
 /// r3 §7 R1: the answer's assumptions, each a sentence: the world's (closed
 /// world; loaded subscribers, by what decides it), then each publisher
-/// assumption a route was decided by ([`AssumptionRecord::sentence`]).
+/// assumption a route was decided by, a site that needs several stated with
+/// all of them ([`AssumptionRecord::sentences`]).
 /// Empty when the answer assumes nothing.
 ///
-/// [`AssumptionRecord::sentence`]: crate::engine::l5::literal_reach::AssumptionRecord::sentence
+/// [`AssumptionRecord::sentences`]: crate::engine::l5::literal_reach::AssumptionRecord::sentences
 fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
     let universe = if o.universe.is_empty() {
         "the loaded program"
@@ -3413,7 +3476,7 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
              cone raises ({e}); the analysis follows the loaded ones"
         ));
     }
-    out.extend(o.flow_assumed.iter().map(|r| r.sentence()));
+    out.extend(crate::engine::l5::literal_reach::AssumptionRecord::sentences(&o.flow_assumed));
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
@@ -3863,6 +3926,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             coverage_closed_by_assumption: false,
             coverage_open_world_only: false,
             literal_dead_sites: 0,
+            literal_narrowed_sites: 0,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
             flow_assumed: Vec::new(),
@@ -4982,6 +5046,7 @@ mod tests {
             effects,
             unresolved,
             unresolved_literal_dead: 0,
+            unresolved_literal_narrowed: 0,
             unresolved_traversal: UnresolvedTraversal {
                 truncated: cone_truncated,
                 max_depth: 64,

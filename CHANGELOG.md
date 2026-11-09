@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (performance: finding the keeps an assumption record needs)
+
+- **Naming every publisher a ruled-out row needs no longer reruns the whole search per
+  keep.** The fix that names every publisher keep a literal-dead row relies on (r3 §7 R1)
+  ran one full guarded search per keep the root's search used, plus one more for the
+  whole set. On the CDO baseline `CDO E-Mail Handler::RunReportID` uses 88 keeps, so
+  `prove … may-commit` and `explain` spent 13 s in 91 searches (each ~140 ms, as each
+  keep choice also missed the flow-evaluation cache). Now the search with every keep
+  followed is kept as a graph, and each keep choice replays it: a state whose flow
+  evaluation asked about no dropped keep keeps its recorded successors and rulings, and
+  only the states that did, and the new states they lead to, are stepped again; only
+  the rows being explained are judged, over those states only. A flow evaluation now
+  records every keep verdict it asked about (`FlowEval::consulted`), which is what
+  makes the reuse exact. The answers are the same byte for byte. Measured on the CDO
+  baseline (release-fast, one shot): `prove RunReportID may-commit` 40.6 s → 28.4 s
+  (before the R1 fix: 28.4 s), `explain RunReportID` 39.5 s → 27.1 s (27.3 s),
+  `prove "CDO Issue Document"::IssueReminder may-commit` 39.2 s → 27.6 s (27.3 s).
+  A lib test (`a_replayed_search_rules_out_what_the_search_does`) checks the replay
+  against the real search for every keep choice.
+
+### Fixed (output validation round 4 final, c05: route guard counts)
+
+- **"N guards on the route" is the route's full count, the one `prove --site` uses.**
+  Explain printed `CDOTableFieldArrayMgt.Codeunit.al:278 (8 guards on the route, 0
+  evaluated)` where `prove --site …:278` lists "8 of 11 enclosing conditions". The 8 was
+  no display cap: it was a different population. The words counted the `if`/`case`/
+  `while` conditions plus the earlier `if … then exit` checks, but no `for`, `foreach`
+  or `repeat`, and they lost the guards of the effect's own site when that site is a
+  call (`Evaluate`, `Message`, `Commit`) or an `Error` statement. prove's listing counts
+  every enclosing `if`/`case`/loop and no exit. Now:
+  - The witness route's guards include the loops a site sits in (`for i := 1 to 10:
+    loop body`, `repeat … until X: continuation`), and the guards of the effect's own
+    site for a call-site effect (the evidence call site) and for an `Error` statement
+    (the call at the operation's position).
+  - `N guards on the route, k evaluated` counts the enclosing conditions only, the
+    population of prove's "of M enclosing conditions"; the earlier exits are counted
+    apart: `(11 guards on the route, 0 evaluated; 6 earlier exits, 0 evaluated)`. One
+    function (`literal_reach::route_guard_counts`) counts for explain, digest and prove.
+  - A `condition:` line that lists only some guards says how many, in prove's words:
+    `… shown (4 of 18 enclosing conditions and 10 earlier exits)` (was `… +21 guards
+    (25 guards in all)`). An exit reads `earlier exit if <condition>: must be false`.
+  - JSON `routeGuards`: a loop's `kind` is `for`, `foreach` or `repeat`; an earlier exit's
+    is `exit` (was `if` with `mustBe: false`).
+  - Rows whose route has only loops or exits now print the guard form instead of the
+    class label (`(in a loop)`, `(error-path)`, `(IsHandled pattern, not evaluated)`).
+
+### Fixed (round-4 final m02, c15, c25: an interface call a literal enum value fixes is not open world)
+
+- **An interface call whose implementation every route fixes is no open-world gap.** The
+  literal reach already followed `ModuleLicense := ModuleType; ModuleLicense.X()` only
+  into the implementation of the enum value the route binds (an enum extension cannot
+  change an existing value's implementation), but the call itself stayed in the
+  unresolved cone as a polymorphic, open-world site. On CDO, m02's
+  `CDOModuleManager.Codeunit.al:16` is reached only through `IsSecurityActivated`
+  (`"CDO Module Type"::Security`), and c15/c25's `:16` and `:42` only through
+  `LogUsage("CDO Module Type"::Essential, …)`; each was still counted in "N interface calls
+  open world", listed as a blocker and as a workspace gap.
+  - The literal reach now returns, next to the sites no route can reach, the unresolved
+    interface calls whose receiver holds known enum values in every reached state where
+    the call can run, each value's implementation a loaded codeunit
+    (`LiteralReach::narrowed_sites`). The unresolved cone leaves them out, so they are no
+    blocker, no gap and no open-world count.
+  - A single route with the enum not known (a parameter its caller does not bind, a
+    `foreach` over the ordinals, a value read from a table) keeps the call open world. On
+    CDO, `CDOCoreEventHandler.Codeunit.al:39` and `:117` and `CDOUsageManagement.Codeunit.al:27`
+    route the enum variably, so a cone that holds them keeps the call.
+  - They are counted apart, additively: prove's `obligations.literalNarrowedSites` and the
+    line `fixed by literal arguments: N interface calls whose implementation every route's
+    enum value selects (not open world, not counted as blockers)`; digest's entry
+    `unresolvedLiteralNarrowed`; explain's, digest's and impact's `gaps.literalNarrowed`
+    and `; N interface calls fixed by literal arguments (…)` on the uncertainty line. A
+    coverage that is partial only through such calls (or literal-dead sites) counts as
+    complete for prove, as before for literal-dead sites.
+  - Known limit, unchanged: a literal is carried only as deep as the literal reach
+    carries it today (m10's literal three frames above the dispatch is not).
+  - On CDO: m02 "6 interface calls open world" is now 5 (0 in workspace code); c15's
+    `scope.reasons` 9 → 7 and its `CDO File` answer loses the `:16`/`:42` blockers;
+    IssueReminder's and RunReportID's cones (c08, c12) 262 → 260. The CDO rendering
+    goldens moved by exactly these sites, and three human prove ratchets grew by the new
+    line (RunReportID may-commit 2,650 B, RunReportID writes-table data-exch 22 lines,
+    IssueReminder writes-table data-exch 3,700 B).
+
+### Fixed (output validation round 4: assumption records name every publisher a site needs)
+
+- **A site ruled out only by several publishers' keeps names all of them (r3 §7 R1).**
+  Round-4 c25: the commit at `CDOUsageManagement.Codeunit.al:35` is reached from
+  `StartEvents` after `OnBeforeSendMailV2` AND after `OnBeforeSendMailExtV2`, both taking
+  `SendHandled` by `var`, yet its assumption record named `OnBeforeSendMailV2` alone. The
+  engine read the deciding keep off ONE route (the first the strict search found), so a
+  publisher guarding another route to the same site was dropped.
+  - The literal reach now judges which keeps a ruling depends on over the whole search:
+    it reruns the search following only some keeps (a new keep mask beside "all" and
+    "none") and keeps a smallest set that still rules the row out, every member needed.
+    The searches are shared by the rows of one root. Measured on the five affected CDO
+    calls: no slowdown.
+  - Every consumer reads the same set: the rows' `assumes` / `literalAssumes` strings,
+    prove's `assumptionRecords` and `subscriberAssumptions`, digest 5.x
+    `entries[].assumptionRecords` and `summary.commits.literalDead`, explain and the
+    routine totals. On CDO, `StartEvents`' 43 literal-dead rows now all name both
+    publishers (40 named `OnBeforeSendMailV2` alone).
+  - The sentence names every publisher a site needs: `assumes <A> and <B> have no loaded
+    subscriber, so <parameter> keeps its value (…); rules out <site>` (was one sentence
+    per publisher, each reading as if it alone ruled the site out). Records stay one per
+    publisher; a site listed in several records needs all of them. `--schema 4` is
+    unchanged (records stripped).
+
 ### Changed (output validation r3 §7: B1 completed, R2 lookup failures, R6 write order)
 
 - **Tests: a test's relation is a property of its path set, in every count and line

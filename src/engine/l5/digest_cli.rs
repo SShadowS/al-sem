@@ -1117,6 +1117,10 @@ pub struct DigestEntryFull {
     /// Round-4 literal routes: the unresolved sites of the cone left out
     /// because no route from the root to them can run.
     pub unresolved_literal_dead: usize,
+    /// r4 final (m02, c15): the unresolved interface calls of the cone left
+    /// out because every route from the root fixes their implementation by a
+    /// literal enum value (not open world).
+    pub unresolved_literal_narrowed: usize,
     pub unresolved_traversal: UnresolvedTraversal,
     pub entry_diagnostics: Vec<EntryDiagnostic>,
     /// An Interface / ControlAddIn procedure declaration (#71): no body, no effects.
@@ -1415,6 +1419,10 @@ pub struct UnresolvedCone {
     /// Round-4 literal routes: how many of the cone's unresolved sites the
     /// literal arguments rule out (left out of `items`).
     pub literal_dead: usize,
+    /// r4 final (m02, c15): how many of the cone's unresolved interface
+    /// calls run only with an implementation the literal arguments fix (left
+    /// out of `items`: not open world).
+    pub literal_narrowed: usize,
     pub traversal: UnresolvedTraversal,
     /// The tree's analysis gaps whose subject the cone visits
     /// ([`count_gaps_in_cone`]), counted before the tree is dropped (#160
@@ -1754,18 +1762,25 @@ impl<'t> FinishCx<'t> {
                         // Round-4 literal routes: the sites the literal
                         // pass ruled out from this root leave the cone (as
                         // a gap and as a blocker); their count stays.
-                        let dead = entries
-                            .iter()
-                            .find(|e| e.routine_id == *r)
-                            .map_or(&[][..], |e| e.literal_dead_sites.as_slice());
+                        let own = entries.iter().find(|e| e.routine_id == *r);
+                        let dead = own.map_or(&[][..], |e| e.literal_dead_sites.as_slice());
                         let before = c.items.len();
                         c.items
                             .retain(|i| dead.binary_search(&i.callsite_id).is_err());
                         let literal_dead = before - c.items.len();
+                        // r4 final: and the interface calls whose
+                        // implementation the literal arguments fix on
+                        // every route: not open world.
+                        let narrowed = own.map_or(&[][..], |e| e.literal_narrowed_sites.as_slice());
+                        let before = c.items.len();
+                        c.items
+                            .retain(|i| narrowed.binary_search(&i.callsite_id).is_err());
+                        let literal_narrowed = before - c.items.len();
                         (
                             r.clone(),
                             UnresolvedCone {
                                 literal_dead,
+                                literal_narrowed,
                                 gaps_in_cone: gaps_in_cone.then(|| {
                                     count_gaps_in_cone(
                                         &self.gap_subjects,
@@ -2086,15 +2101,19 @@ fn literal_reach_entries<'t>(
             .copied()
             .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
             .collect();
-        let (dead, dead_resources, assumed, dead_sites) = reach.unreachable_effects_noted(
-            &entry.routine_id,
-            &entry.effects,
-            &per_site,
-            unresolved_sites,
-        );
+        let (dead, dead_resources, assumed, dead_sites, narrowed) = reach
+            .unreachable_effects_noted(
+                &entry.routine_id,
+                &entry.effects,
+                &per_site,
+                unresolved_sites,
+            );
         // Round-4 literal routes: an unresolved site no route from the root
         // can reach is no gap and no blocker of this root.
         entry.literal_dead_sites = dead_sites;
+        // r4 final: nor is an interface call whose implementation every
+        // route's literal arguments fix (the search follows only that one).
+        entry.literal_narrowed_sites = narrowed;
         for i in dead {
             entry.effects[i].literal_unreachable = true;
         }
@@ -2161,7 +2180,16 @@ fn literal_reach_entries<'t>(
                     .min_by_key(|p| p.len())
                     .or_else(|| e.via_paths.first())
             {
-                let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
+                // The evidence site, by operation or (an implicit error of a
+                // call such as `Evaluate`, a COMMIT) by call site: without
+                // it the terminal site's own guards were lost (r4 final c05:
+                // `if EqualPos > 0` around the `Evaluate` at :278).
+                let mut ops: Vec<String> = e
+                    .evidence_operation_id
+                    .iter()
+                    .chain(&e.evidence_callsite_id)
+                    .cloned()
+                    .collect();
                 for op in &e.origin_operation_ids {
                     if !ops.contains(op) {
                         ops.push(op.clone());
@@ -2332,6 +2360,7 @@ pub fn run_digest_query_full_from_entries(
                 effects: Vec::new(),
                 unresolved: Vec::new(),
                 unresolved_literal_dead: 0,
+                unresolved_literal_narrowed: 0,
                 unresolved_traversal: UnresolvedTraversal {
                     truncated: false,
                     max_depth: DEFAULT_MAX_DEPTH,
@@ -2593,6 +2622,7 @@ pub fn run_digest_query_full_from_entries(
             effects: full_effects,
             unresolved: cone.items,
             unresolved_literal_dead: cone.literal_dead,
+            unresolved_literal_narrowed: cone.literal_narrowed,
             unresolved_traversal: cone.traversal,
             entry_diagnostics,
             declaration_only: false,
@@ -2827,6 +2857,14 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
         m.insert(
             "unresolvedLiteralDead".into(),
             (entry.unresolved_literal_dead as u64).into(),
+        );
+    }
+    // r4 final: the interface calls left out because the literal arguments
+    // fix their implementation on every route. Present only then.
+    if entry.unresolved_literal_narrowed > 0 {
+        m.insert(
+            "unresolvedLiteralNarrowed".into(),
+            (entry.unresolved_literal_narrowed as u64).into(),
         );
     }
 
@@ -5407,6 +5445,7 @@ mod tests {
             effects: Vec::new(),
             unresolved: Vec::new(),
             unresolved_literal_dead: 0,
+            unresolved_literal_narrowed: 0,
             unresolved_traversal: UnresolvedTraversal {
                 truncated: false,
                 max_depth: 64,

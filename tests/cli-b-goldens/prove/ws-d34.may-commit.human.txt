@@ -1,8 +1,8 @@
 prove Codeunit "D34 Demo"::DirectCommitInLoop may-commit   [cross-app]
-answer: yes — COMMIT at ws:src/Codeunit.al:10 (in a loop)
+answer: yes — COMMIT at ws:src/Codeunit.al:10 (1 guard on the route, 0 evaluated)
 analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops
   evidence: 1 effect
     [COMMIT] at ws:src/Codeunit.al:10
-      condition: in a loop
+      condition: for i := 1 to 10: loop body, not evaluated (DirectCommitInLoop line 8)
       path: DirectCommitInLoop (in the routine itself)

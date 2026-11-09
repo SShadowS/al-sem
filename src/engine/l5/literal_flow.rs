@@ -238,6 +238,11 @@ pub(super) struct FlowEval {
     args: HashMap<u32, Vec<(u32, VSet)>>,
     /// The keep verdicts a reachable call used ([`ArgWrite::Keep`]), sorted.
     pub(super) keeps: Vec<u32>,
+    /// Every keep verdict the evaluation asked about (followed or not, at a
+    /// reachable call or in a loop's write set), sorted. Filled by the
+    /// caller that supplies `keep` (the literal reach): an evaluation under
+    /// another keep choice that answers these the same way is this one.
+    pub(super) consulted: Vec<u32>,
     /// Round-4 literal routes: per reachable interface call site (its index)
     /// the enum values its receiver may hold there (`None`: unknown).
     recv: HashMap<u32, Option<VSet>>,
@@ -594,6 +599,7 @@ impl FlowProgram {
             dead: x.seen.difference(&x.live).copied().collect(),
             args: x.args,
             keeps,
+            consulted: Vec::new(),
             recv: x.recv,
         }
     }
@@ -1235,15 +1241,61 @@ pub(super) fn subscriber_changes(
 }
 
 /// What a guard on a route is (a witness's condition, module doc).
+///
+/// Two populations (r4 final, c05): the **enclosing conditions** of a
+/// route's sites, every `if`/`case`/loop whose body holds the site, the
+/// population `prove --site`'s route listing counts from the IR
+/// (`crate::program::body::site_guards`, "of M enclosing conditions"); and
+/// the **earlier exits** ([`GuardKind::Exit`]), which enclose nothing.
+/// [`GuardKind::encloses`] tells them apart, so every reader counts the
+/// enclosing ones as prove does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GuardKind {
-    /// An `if` (or `while`) whose condition must be this value; also an
-    /// earlier `if … then exit;` (its condition must be false).
+    /// An `if` (or `while`) whose condition must be this value: `true` in
+    /// its then-branch (a `while`'s body), `false` in its else-branch.
     Must(bool),
     /// One arm of a `case` (its position among the non-`else` arms).
     Arm(usize),
     /// The `else` of a `case`.
     CaseElse,
+    /// The body of a `for`, a `foreach` or a `repeat` (its construct): the
+    /// flow evaluates none of them.
+    Loop(LoopKind),
+    /// An earlier `if … then exit;` the site comes after: its condition
+    /// must be false. Not an enclosing condition.
+    Exit,
+}
+
+impl GuardKind {
+    /// Whether the guard encloses the site (every kind but
+    /// [`GuardKind::Exit`]): the population prove's "of M enclosing
+    /// conditions" counts.
+    pub(crate) fn encloses(&self) -> bool {
+        !matches!(self, GuardKind::Exit)
+    }
+}
+
+/// The loop a [`GuardKind::Loop`] guard is the body of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoopKind {
+    /// `for V := A to B do`: a loop-entry condition.
+    For,
+    /// `foreach V in X do`: a loop-entry condition.
+    Foreach,
+    /// `repeat … until C`: a continuation condition (the body runs once
+    /// before `C` is tested).
+    Repeat,
+}
+
+impl LoopKind {
+    /// The construct's keyword.
+    pub(crate) fn construct(self) -> &'static str {
+        match self {
+            LoopKind::For => "for",
+            LoopKind::Foreach => "foreach",
+            LoopKind::Repeat => "repeat",
+        }
+    }
 }
 
 /// One guard on a witness's route.
@@ -1253,7 +1305,8 @@ pub(crate) struct RouteGuard {
     pub routine: String,
     /// 1-based line of the guard statement.
     pub line: Option<u32>,
-    /// The condition's (or the `case` scrutinee's) source text.
+    /// The condition's (or the `case` scrutinee's, or the loop's) source
+    /// text.
     pub text: String,
     pub kind: GuardKind,
     /// Whether the flow evaluated it on this route (its value is known and
@@ -1325,6 +1378,24 @@ pub(super) fn guards_of<'t>(
                 }
                 false
             }
+            // A loop's body: an enclosing condition of every site in it, as
+            // `site_guards` counts it (r4 final, c05).
+            "for" | "foreach" | "repeat" => {
+                let kind = match n.kind.as_str() {
+                    "for" => LoopKind::For,
+                    "foreach" => LoopKind::Foreach,
+                    _ => LoopKind::Repeat,
+                };
+                let len = acc.len();
+                acc.push((n, GuardKind::Loop(kind)));
+                for c in n.children.iter().chain(&n.else_children) {
+                    if walk_list(c, site, acc) {
+                        return true;
+                    }
+                }
+                acc.truncate(len);
+                false
+            }
             _ => {
                 for c in n.children.iter().chain(&n.else_children) {
                     if walk_list(c, site, acc) {
@@ -1351,7 +1422,7 @@ pub(super) fn guards_of<'t>(
                 && matches!(n.flow.as_deref(), Some(FlowFact::Cond { .. }))
                 && always_leaves(n.children.as_ref())
             {
-                acc.push((n, GuardKind::Must(false)));
+                acc.push((n, GuardKind::Exit));
             }
         }
         acc.truncate(len);
@@ -1381,6 +1452,9 @@ impl FlowProgram {
         };
         match kind {
             GuardKind::Must(b) => bools(v).is_some_and(|bs| bs == [*b]),
+            GuardKind::Exit => bools(v).is_some_and(|bs| bs == [false]),
+            // The flow records no value for a loop.
+            GuardKind::Loop(_) => false,
             GuardKind::Arm(_) | GuardKind::CaseElse => {
                 let d = match node.flow.as_deref() {
                     Some(FlowFact::Cond {
@@ -1422,7 +1496,7 @@ impl FlowProgram {
                     GuardKind::Arm(i) => sets
                         .get(*i)
                         .is_some_and(|s| v.iter().all(|x| s.contains(x))),
-                    GuardKind::Must(_) => false,
+                    GuardKind::Must(_) | GuardKind::Exit | GuardKind::Loop(_) => false,
                 }
             }
         }

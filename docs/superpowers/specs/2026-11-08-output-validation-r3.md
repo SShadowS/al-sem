@@ -293,6 +293,16 @@ the rows' `relation`. (On `fix/r4-tests-relation`; this states the review condit
 | R5 | F4, A4 | **Error answers state their boundary.** A `yes` to throws-error whose witness ends beyond a dependency entry says `guards beyond the dependency entry: not analyzed` only when they were not analyzed; guards that were analyzed but not decided keep their expressions and polarity as `not evaluated` / `unresolved`, and `N guards` counts the analyzed part of the route only (`N guards on the analyzed route`). An error question about a subscriber adds `whether it escapes <publisher>: not established` (the caller-interception follow-up stays). Explain's `(conditional)` / `(error-path)` tags stay as class labels only where no route was replayed; otherwise explain uses the shared guard form, as prove and digest do. | m04, n04, p08 |
 | R6 | F5, A9 | **Touches lead with the operations the task asks about.** With `opFamily: "write"` (and in the write follow-up the answers offer), write sites are ordered persistent → caller-dependent → temporary state not resolved → temporary, Insert before Modify before Delete, and the heading states the split (`record writes: 38 sites — persistent 32, caller-dependent 1, not resolved 0, temporary 5`). Without a mode, the neutral family sampler stays; c30's key mode keeps its key-relevant order. In field mode, in-memory assignments and validations stay apart from record persistence and do not take the record-write heading. | p03, n03, m09, c30 |
 
+**R1 amendment (round-4 final, c25).** A site may be ruled out only by several publisher
+keeps together (two routes to it, each cut by its own publisher). Then every one of them is
+an assumption of that site: the records stay one per publisher, each listing the site in
+`rulesOut`, and a site listed in several records needs all of them. The sentence names them
+together, never one per publisher: `assumes <A> and <B> have no loaded subscriber, so
+<parameter> keeps its value (<universe>; no additional subscribers assumed); rules out
+<site>` (other mixes join each assumption's own clause with `, and`). The set is judged over
+the whole search, not one route: a smallest set of keeps that still rules the site out, each
+member needed.
+
 **Items only one reviewer raised** (each in the owner write-up, not built now): astra 6
 (compact zero-operation results), 7 (label count populations and analysis components), 8
 (caller-card repetition); Fable 6 (`hubs on these paths` behind detail), 8 (`blockedBy:` →

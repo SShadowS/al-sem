@@ -12,7 +12,7 @@ computed: current effects of the 4 routines these files touches, in the working 
     MC Customer: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerB → ModifyHelper
-  errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:33 (unconditional on success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (1 guard on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:33 (unconditional on success)
 
 --- Codeunit "D1 Multi Caller"::CallerC ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): MC Customer (Modify at :19)
@@ -23,7 +23,7 @@ computed: current effects of the 4 routines these files touches, in the working 
     MC Customer: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerC → ModifyHelper
-  errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:41 (unconditional on success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (1 guard on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:41 (unconditional on success)
 
 --- Codeunit "D1 Multi Caller"::CallerA ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): MC Customer (Modify at :19)
@@ -34,7 +34,7 @@ computed: current effects of the 4 routines these files touches, in the working 
     MC Customer: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerA → ModifyHelper
-  errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:25 (unconditional on success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (1 guard on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:25 (unconditional on success)
 
 --- Codeunit "D1 Multi Caller"::ModifyHelper ---
   summary — writes: may modify persistent MC Customer records (Modify at :19) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)

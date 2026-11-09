@@ -19,8 +19,8 @@ Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
   events raised (1 in workspace code, its own and downstream): Codeunit "Explain Post": OnBeforePostOrder; 0 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
-  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (IsHandled pattern, not evaluated)
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (1 guard on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/post.al:18 (2 guards on the route, 1 evaluated); ERROR_THROW at ws:src/post.al:11 (error-path)
+  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (0 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (0 guards on the route, 0 evaluated; 1 earlier exit, 0 evaluated); ERROR_IMPLICIT at ws:src/post.al:18 (0 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated); ERROR_THROW at ws:src/post.al:11 (1 guard on the route, 0 evaluated)
   test Codeunit "Explain Tests"::PostUnreleasedFails (3 own assert(s))
   next: alsem explain --callers-context --routine 'Codeunit "Explain Post"::PostOrder' — its callers' pending writes, intercepted errors and non-interactive entries
 

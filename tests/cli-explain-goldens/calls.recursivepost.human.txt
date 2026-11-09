@@ -14,7 +14,7 @@ Codeunit "Calls Post"::RecursivePost  defined at ws:src/post.al:44
   inherits via PingCheck: rejects when Order.Amount < 0: "The amount is negative."  [Error ws:src/checks.al:70]
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:49; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
-  errors at 2 places: ERROR_IMPLICIT at ws:src/post.al:49 (unconditional on success); ERROR_THROW at ws:src/checks.al:70 (error-path)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/post.al:49 (unconditional on success); ERROR_THROW at ws:src/checks.al:70 (1 guard on the route, 0 evaluated)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   gaps in workspace code (1 gap):
     gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:49

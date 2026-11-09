@@ -1130,3 +1130,139 @@ fn a_cancelled_enumeration_stops_with_its_limit() {
     assert!(stopped.routes.is_empty());
     assert!(stopped.counts.unexplored >= 1);
 }
+
+/// r4 final (c05): one route, `GcRoot` → `GcStep` → `GcLeaf`, whose sites sit
+/// under 8 enclosing conditions (3 + 3 + 2: a `for`, a `foreach` and an `if`
+/// around the first call; an `if FindSet`, its `repeat` and an `else` around
+/// the second; a `case` else and an `if` around both errors), more than a
+/// `condition:` line shows (4) and more than the `--site` listing shows per
+/// site (2). Two earlier `if … then exit` checks come before the calls.
+const GUARD_COUNT_CODE: &str = r#"codeunit 50150 "Gc Root"
+{
+    procedure GcRoot()
+    var
+        Step: Codeunit "Gc Step";
+        I: Integer;
+        Names: List of [Text];
+        Name: Text;
+        Stop: Boolean;
+    begin
+        if Stop then
+            exit;
+        for I := 1 to 3 do
+            foreach Name in Names do
+                if Name <> '' then
+                    Step.GcStep(Name, I);
+    end;
+}
+
+codeunit 50151 "Gc Step"
+{
+    procedure GcStep(Name: Text; I: Integer)
+    var
+        Rec: Record "Sl Rec";
+    begin
+        if Name = 'skip' then
+            exit;
+        if Rec.FindSet() then
+            repeat
+                if I > 1 then
+                    Rec.Init()
+                else
+                    GcLeaf(I, Name);
+            until Rec.Next() = 0;
+    end;
+
+    local procedure GcLeaf(I: Integer; Name: Text)
+    begin
+        case I of
+            1:
+                exit;
+            else
+                if I < 100 then begin
+                    Evaluate(I, Name);
+                    Error('gc leaf error');
+                end;
+        end;
+    end;
+}
+"#;
+
+/// r4 final (c05): "N guards on the route" is the route's FULL count of
+/// enclosing conditions, the population `prove --site`'s route listing
+/// counts ("shown (k of M enclosing conditions …)"), never the subset a
+/// line displays; earlier exits are counted apart; a `condition:` line that
+/// lists some guards says how many it shows, of the same full count. Both
+/// terminal kinds are pinned: an `Error` (an operation the statement tree
+/// holds as its call) and an `Evaluate` implicit error (a call site).
+///
+/// DISCRIMINATION (2026-11-09), each break made with Edit, run, reverted:
+/// - `route_condition_words` counting the displayed list again (the
+///   innermost `ROUTE_GUARDS_SHOWN` = 4 guards): `4 guards on the route`,
+///   fails;
+/// - `GuardKind::encloses` true for an earlier exit too (the old single
+///   population): `10 guards`, fails;
+/// - `guards_of` without its `for`/`foreach`/`repeat` arm (loops not
+///   counted, the c05 defect): `5 guards`, fails;
+/// - `guards_at` without its call-site fallback: the `Error` row loses its
+///   own site's 2 guards (`6 guards`), fails;
+/// - `digest_cli` without the evidence call site among the terminal
+///   operations: the `Evaluate` row loses its 2 (`6 guards`), fails.
+#[test]
+fn route_guard_counts_are_the_full_enclosing_count() {
+    let tmp = ws(&[("Table.al", TABLE), ("Gc.al", GUARD_COUNT_CODE)]);
+    let err_line = GUARD_COUNT_CODE
+        .lines()
+        .position(|l| l.contains("Error('gc leaf error');"))
+        .unwrap()
+        + 1;
+    // The `--site` listing's count: its population, and the precondition
+    // (more guards than any display shows).
+    let (v, human) = prove(
+        tmp.path(),
+        "GcRoot",
+        "throws-error",
+        None,
+        Some(&format!("Gc.al:{err_line}")),
+        None,
+        None,
+    );
+    assert_eq!(answer(&v), "yes", "{human}");
+    let route = &evidence(&v)[0]["route"];
+    assert_eq!(
+        route["guardsTotal"], 8,
+        "precondition: 8 enclosing: {route}"
+    );
+    assert_eq!(
+        route["guardsShown"], 6,
+        "precondition: the listing shows fewer: {route}"
+    );
+    assert!(
+        human.contains("guards shown (6 of 8 enclosing conditions;"),
+        "{human}"
+    );
+    // The rows without a filter: each error's words count the same 8.
+    let (v, human) = prove(tmp.path(), "GcRoot", "throws-error", None, None, None, None);
+    assert_eq!(answer(&v), "yes", "{human}");
+    assert!(
+        human.contains("(8 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated)"),
+        "the answer line's words: {human}"
+    );
+    assert!(
+        human.contains("… shown (4 of 8 enclosing conditions and 2 earlier exits)"),
+        "{human}"
+    );
+    // The JSON lists every guard of each row's route: 8 enclosing, 2 exits,
+    // for the `Evaluate` (a call site) and the `Error` (an operation) alike.
+    let ev = evidence(&v);
+    let mut lines: Vec<u64> = Vec::new();
+    for e in &ev {
+        let g = e["routeGuards"].as_array().cloned().unwrap_or_default();
+        let exits = g.iter().filter(|g| g["kind"] == "exit").count();
+        assert_eq!((g.len() - exits, exits), (8, 2), "{e}");
+        lines.push(e["evidence"]["line"].as_u64().unwrap_or_default());
+    }
+    lines.sort_unstable();
+    let err = err_line as u64;
+    assert_eq!(lines, [err - 1, err], "the Evaluate and the Error: {ev:?}");
+}
