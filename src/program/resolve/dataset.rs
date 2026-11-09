@@ -114,9 +114,9 @@ pub fn is_report_output_method(method_lc: &str) -> bool {
 /// Such a call is a platform method: its Integer, Option and Enum arguments
 /// (object number, format, flags) are by value, and it cannot rebind a
 /// RecordRef or Variant passed to it. Its routes name the object's triggers,
-/// or nothing for a dynamic id, so the flow passes that read call targets
-/// would otherwise take it for an unknown call that may write its arguments;
-/// they ask this instead (`l5::literal_reach`, `l5::recref_flow`).
+/// or nothing for a dynamic id, so a flow pass that reads call targets would
+/// otherwise take it for an unknown call that may rebind its arguments; the
+/// RecordRef flow asks this instead (`l5::recref_flow`).
 #[must_use]
 pub fn keyword_run_kind(receiver_lc: &str, method_lc: &str) -> Option<ObjectKind> {
     let (kind, runs) = match receiver_lc {
