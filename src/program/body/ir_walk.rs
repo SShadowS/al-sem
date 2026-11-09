@@ -910,21 +910,20 @@ impl<'a> SpineCtx<'a> {
         // the FIRST statement that is an unconditional exit makes its immediate
         // next sibling unreachable. Comments/keywords are not IR statements, so the
         // block's Stmt items already match legacy's filtered `block_statements`.
-        let stmts: Vec<al_syntax::ir::StmtId> = self
-            .file
-            .ir
-            .block(bid)
-            .items
-            .iter()
-            .filter_map(|it| match it {
-                BlockItem::Stmt(s) => Some(*s),
-                BlockItem::Preproc(_) => None,
-            })
-            .collect();
-        for i in 0..stmts.len().saturating_sub(1) {
-            if let Some(exit_kind) = self.unconditional_exit_kind(stmts[i]) {
-                let exit_anchor = self.anchor(&self.file.ir.stmt(stmts[i]).origin);
-                let unreachable_anchor = self.anchor(&self.file.ir.stmt(stmts[i + 1]).origin);
+        // A `#if` group is a sibling too (B2): an exit before it makes the group
+        // unreachable, and an exit INSIDE one of its branches ends that branch only
+        // (its own block's scan), never the code after the group.
+        let items = &self.file.ir.block(bid).items;
+        for i in 0..items.len().saturating_sub(1) {
+            let BlockItem::Stmt(s) = items[i] else {
+                continue;
+            };
+            if let Some(exit_kind) = self.unconditional_exit_kind(s) {
+                let exit_anchor = self.anchor(&self.file.ir.stmt(s).origin);
+                let unreachable_anchor = self.anchor(match &items[i + 1] {
+                    BlockItem::Stmt(next) => &self.file.ir.stmt(*next).origin,
+                    BlockItem::Preproc(g) => &g.origin,
+                });
                 self.unreachable_statements.push(PUnreachableStatement {
                     // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
                     id: format!("{}/u{}", self.routine_id, self.unreachable_index),
@@ -1894,14 +1893,38 @@ impl<'a> IrCfn<'a> {
                         out.push(c);
                     }
                 }
-                BlockItem::Preproc(g) => {
-                    for b in &g.branches {
-                        out.extend(self.block_items(*b));
-                    }
-                }
+                BlockItem::Preproc(g) => out.push(self.build_preproc(g)),
             }
         }
         out
+    }
+
+    /// A statement-position `#if` chain (engine limits B2): its branches are
+    /// alternatives, a build compiles at most one. It is a `case` with no
+    /// scrutinee (no condition leaves, flow fact or value fact), one `case-branch`
+    /// per branch. With no implicit empty branch (`#else` present, or a branch the
+    /// build context decides true) the last branch is the case's else, so the
+    /// case is exhaustive; otherwise the no-match path falls through, as a `case`
+    /// without `else` does. Every walker of the tree already reads a `case` this
+    /// way, so none treats the branches as one sequence.
+    fn build_preproc(&self, g: &al_syntax::ir::PreprocGroup) -> PCFNNode {
+        let last = g.branches.len().saturating_sub(1);
+        let branches = g
+            .branches
+            .iter()
+            .enumerate()
+            .map(|(i, &bid)| {
+                let mut b = cfn_node("case-branch");
+                b.is_case_else = i == last && !g.falls_through;
+                b.source_range = self.range_of(&self.ir().block(bid).origin);
+                b.children = Some(vec![self.build_block(bid)]);
+                b
+            })
+            .collect();
+        let mut n = cfn_node("case");
+        n.source_range = self.range_of(&g.origin);
+        n.children = Some(branches);
+        n
     }
 
     pub fn build_block(&self, bid: BlockId) -> PCFNNode {
@@ -3264,10 +3287,11 @@ fn ir_is_temporary_error_guard(file: &AlFile, sid: al_syntax::ir::StmtId) -> Opt
 /// is a record var). The guard must be the FIRST body statement.
 pub fn ir_entry_temp_guard_receiver(file: &AlFile, routine: &RoutineDecl) -> Option<String> {
     let body = routine.body?;
-    let first = file.ir.block(body).items.iter().find_map(|it| match it {
-        al_syntax::ir::BlockItem::Stmt(s) => Some(*s),
-        _ => None,
-    })?;
+    // A leading `#if` group is not the guard: some build may skip it (B2).
+    let first = match file.ir.block(body).items.first()? {
+        al_syntax::ir::BlockItem::Stmt(s) => *s,
+        al_syntax::ir::BlockItem::Preproc(_) => return None,
+    };
     ir_is_temporary_error_guard(file, first)
 }
 
@@ -4263,5 +4287,125 @@ table 50011 T
                 row("RecReturn", "Rec", None, false),
             ]
         );
+    }
+}
+
+/// Engine limits B2: a statement-position `#if` group is a `case` of its
+/// branches in the statement tree, never one sequence, and the control-context
+/// walk reads it so.
+#[cfg(test)]
+mod preproc_group_tests {
+    use crate::program::body::features::PCFNNode;
+    use crate::program::body::l2_workspace::ir_features_for_named_routine;
+
+    const SRC: &str = r#"
+codeunit 50002 T
+{
+    procedure NoElse()
+    var
+        L: Record Customer;
+    begin
+#if not CLEAN99
+        exit;
+#endif
+        L.Insert();
+    end;
+
+    procedure IfElse()
+    var
+        L: Record Customer;
+    begin
+#if CLEAN99
+        L.Insert();
+#else
+        L.Modify();
+#endif
+        L.Delete();
+    end;
+}
+"#;
+
+    fn tree(name: &str) -> (PCFNNode, crate::program::body::features::PFeatures) {
+        let (mut f, params, _) = ir_features_for_named_routine(SRC, name, "g", "u").expect(name);
+        crate::program::body::control_context::apply_control_contexts(&mut f, &[], &params);
+        (f.statement_tree.clone().expect("a body"), f)
+    }
+
+    /// `(kind, is_case_else)` of the top-level statements and of the group's arms.
+    fn shape(t: &PCFNNode) -> (Vec<&str>, Vec<bool>) {
+        let top: Vec<&PCFNNode> = t.children.iter().flatten().collect();
+        let group = top.iter().find(|n| n.kind == "case").expect("a group");
+        (
+            top.iter().map(|n| n.kind.as_str()).collect(),
+            group
+                .children
+                .iter()
+                .flatten()
+                .map(|b| {
+                    assert_eq!(b.kind, "case-branch");
+                    b.is_case_else
+                })
+                .collect(),
+        )
+    }
+
+    fn context(f: &crate::program::body::features::PFeatures, op: &str) -> Option<String> {
+        let id = &f
+            .record_operations
+            .iter()
+            .find(|o| o.op == op)
+            .unwrap_or_else(|| panic!("no {op}"))
+            .id;
+        f.operation_sites
+            .iter()
+            .find(|s| &s.id == id)
+            .unwrap_or_else(|| panic!("no site {id}"))
+            .control_context
+            .clone()
+    }
+
+    #[test]
+    fn a_group_without_else_falls_through() {
+        let (t, f) = tree("NoElse");
+        // One arm and the implicit empty one: no arm is the case's else.
+        assert_eq!(shape(&t), (vec!["case", "op"], vec![false]));
+        // The write after the group is reachable (an arm may exit first).
+        assert_eq!(context(&f, "Insert").as_deref(), Some("conditional"));
+    }
+
+    /// The temporary-record entry guard must be the routine's first statement in
+    /// every build: one inside a leading `#if` arm is skipped by the build that
+    /// skips the arm. The same guard outside the group is still read.
+    #[test]
+    fn a_guard_in_a_leading_arm_is_no_entry_guard() {
+        let src = |guard: &str| {
+            format!(
+                "table 50003 T\n{{\n    fields {{ field(1; A; Integer) {{ }} }}\n    \
+                 procedure P(var Rec: Record T)\n    begin\n{guard}        Rec.Insert();\n    \
+                 end;\n}}\n"
+            )
+        };
+        let guard = |src: &str| {
+            let f = al_syntax::parse(src);
+            super::ir_entry_temp_guard_receiver(&f, &f.objects[0].routines[0])
+        };
+        let plain = "        if not Rec.IsTemporary then\n            Error('temp only');\n";
+        assert_eq!(guard(&src(plain)).as_deref(), Some("rec"), "precondition");
+        let armed = format!("#if not CLEAN99\n{plain}#endif\n");
+        assert_eq!(guard(&src(&armed)), None);
+        // A leading group runs first in some build, so the guard after it is
+        // not the first statement either.
+        let after = format!("#if not CLEAN99\n        Message('x');\n#endif\n{plain}");
+        assert_eq!(guard(&src(&after)), None);
+    }
+
+    #[test]
+    fn a_group_with_else_is_exhaustive() {
+        let (t, f) = tree("IfElse");
+        // `#else` is the case's else: a build takes exactly one arm.
+        assert_eq!(shape(&t), (vec!["case", "op"], vec![false, true]));
+        assert_eq!(context(&f, "Insert").as_deref(), Some("conditional"));
+        assert_eq!(context(&f, "Modify").as_deref(), Some("conditional"));
+        assert_eq!(context(&f, "Delete").as_deref(), Some("top-level"));
     }
 }

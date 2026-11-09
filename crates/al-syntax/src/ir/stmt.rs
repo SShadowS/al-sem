@@ -1,12 +1,14 @@
 //! IR statements, blocks, and the preproc grouping.
 //!
 //! A [`Block`] is an ordered list of [`BlockItem`]s. Most are `Stmt`; a
-//! `#if`/`#else` region is a [`PreprocGroup`] holding BOTH branches (legacy indexes
-//! both for BC version-compat — the IR is not a single-configuration projection).
-//! Recursive feature walkers descend a `PreprocGroup`'s branches in document order
-//! (preserving visit order, spec INV-1); block-sibling analyses may treat the group
-//! as a boundary (matching legacy `block_statements`, which splices only
-//! `statement_block`). The flat-vs-structured choice is validated by Phase 1 dual-run.
+//! statement-position `#if`/`#elif`/`#else` chain is a [`PreprocGroup`] holding
+//! every branch the routine's build context leaves live (the IR is not a
+//! single-configuration projection). The branches are ALTERNATIVES: one build
+//! compiles at most one of them (engine limits B2). Collecting walkers descend a
+//! group's branches in document order (preserving visit order); a control-flow
+//! walk must treat them as alternatives, like a `case`'s arms, with an implicit
+//! empty arm when [`PreprocGroup::falls_through`]; block-sibling analyses treat the
+//! group as a boundary.
 
 use super::{BlockId, ExprId, Origin, StmtId};
 
@@ -20,11 +22,22 @@ pub enum BlockItem {
     Preproc(PreprocGroup),
 }
 
-/// A `#if cond ... #else ... #endif` region. Both branches are lowered and kept;
-/// directives are not evaluated.
+/// A `#if cond ... #elif ... #else ... #endif` chain in statement position. Its
+/// branches are alternatives (a build compiles at most one). Only the routine's
+/// own build context decides a directive (a branch it decides false is left out);
+/// no app's `preprocessorSymbols` are read.
+///
+/// The lowerer emits a group only when it is a real choice: two or more live
+/// branches, or one with [`Self::falls_through`]. A chain whose single live branch
+/// every build takes is spliced into the enclosing block as plain statements.
 pub struct PreprocGroup {
-    /// One `Block` per branch (`#if`, each `#elif`, `#else`), in source order.
+    /// One `Block` per live branch (`#if`, each `#elif`, `#else`), in source order.
+    /// Each block's origin runs from its directive to the next directive.
     pub branches: Vec<BlockId>,
+    /// Some build takes none of the branches (no `#else`, and no branch the build
+    /// context decides true): the implicit empty branch.
+    pub falls_through: bool,
+    /// From the `#if` directive to the end of its `#endif`.
     pub origin: Origin,
 }
 
