@@ -192,6 +192,158 @@ fn answers_are_byte_identical_to_the_cli() {
     assert!(report.status.is_some_and(|s| s.success()), "{report:?}");
 }
 
+/// Engine limits B1: `prove` with a filter (`--match`, `--table`, `--op`,
+/// `--site`, `--routes`) reads each routine's guard arms
+/// (`ViewNeeds::PROVE_SLICE`), which the revision's own needs
+/// (`REVISION_NEEDS`, explain's) leave out. Before the fix the first such ask
+/// panicked in the child ("site guards not built") and killed the engine.
+///
+/// Precondition, stated: the first ask is an UNFILTERED prove, so the
+/// published revision exists and was built without guard arms when the first
+/// filtered ask arrives (checked: no needs rebuild yet). Then every filter,
+/// in each universe, answers the one-shot CLI's bytes, through one child that
+/// never dies; the revision is widened exactly once (`needsRebuilds` 1, class
+/// `needs`), and every later filtered ask is served off the widened revision.
+///
+/// DISCRIMINATION (2026-11-09): turning off the engine host's retry on
+/// `PrepareError::Needs` (`if false && needs_more.is_none()`) fails this test
+/// at the first filter ("a revision answers": an engine error instead);
+/// deleting the revision's `covers` check fails it the same way (the child
+/// panics and dies). Each restored, it passes.
+#[test]
+fn every_prove_filter_is_answered_off_a_widened_revision() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let filtered: [&[&str]; 8] = [
+        &[
+            "prove",
+            w,
+            "PostOrder",
+            "throws-error",
+            "--match",
+            "not released",
+        ],
+        &[
+            "prove",
+            w,
+            "PostOrder",
+            "throws-error",
+            "--table",
+            "Explain Order",
+        ],
+        &["prove", w, "PostOrder", "throws-error", "--op", "TestField"],
+        &[
+            "prove",
+            w,
+            "PostOrder",
+            "writes-table:Explain Order",
+            "--op",
+            "Modify",
+        ],
+        &[
+            "prove",
+            w,
+            "PostOrder",
+            "throws-error",
+            "--site",
+            "src/post.al:11",
+        ],
+        &[
+            "prove",
+            w,
+            "Archive",
+            "may-commit",
+            "--site",
+            "src/post.al:27",
+        ],
+        &[
+            "prove",
+            w,
+            "PostOrder",
+            "reaches-ui",
+            "--site",
+            "src/post.al:19",
+        ],
+        &[
+            "prove",
+            w,
+            "PostOrder",
+            "throws-error",
+            "--match",
+            "released",
+            "--routes",
+            "2",
+        ],
+    ];
+    for universe in [
+        al_sem::engine::host::Universe::CrossApp,
+        al_sem::engine::host::Universe::SingleApp,
+    ] {
+        let single = universe == al_sem::engine::host::Universe::SingleApp;
+        let with_universe = |argv: &[&str]| -> Vec<String> {
+            let mut v: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            v.push("--deterministic".into());
+            if single {
+                v.push("--single-app".into());
+            }
+            v
+        };
+        let mut cfg = FrontConfig::new(ALSEM, &ws);
+        cfg.universe = universe;
+        let mut front = EngineFront::new(cfg).expect("front end");
+        let needs_rebuilds = |front: &mut EngineFront| {
+            front
+                .status()
+                .unwrap()
+                .session
+                .expect("the session's stats")["needsRebuilds"]
+                .as_u64()
+                .expect("needsRebuilds")
+        };
+        let plain = with_universe(&["prove", w, "PostOrder", "may-commit"]);
+        let plain: Vec<&str> = plain.iter().map(String::as_str).collect();
+        let answer = front.ask(ask(&plain));
+        assert_eq!(cli_answer(answer.outcome), cli(&plain), "{plain:?}");
+        assert_eq!(
+            needs_rebuilds(&mut front),
+            0,
+            "{universe:?}: no guard arms yet"
+        );
+        for argv in filtered {
+            let argv = with_universe(argv);
+            let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+            let expected = cli(&argv);
+            assert_eq!(expected.2, 0, "{argv:?}: the CLI answers");
+            let answer = front.ask(ask(&argv));
+            assert!(answer.revision.is_some(), "{argv:?}: a revision answers");
+            assert_eq!(cli_answer(answer.outcome), expected, "{argv:?}");
+        }
+        let stats = front.stats();
+        assert_eq!(
+            (stats.spawns, stats.deaths),
+            (1, 0),
+            "{universe:?}: {stats:?}"
+        );
+        let status = front.status().unwrap();
+        let session = status.session.expect("the session's stats");
+        assert_eq!(session["needsRebuilds"], 1, "{universe:?}: {session}");
+        assert_eq!(
+            session["lastBuildClass"], "needs",
+            "{universe:?}: {session}"
+        );
+        // The unfiltered question still answers the CLI's bytes off the
+        // widened revision.
+        let answer = front.ask(ask(&plain));
+        assert_eq!(
+            cli_answer(answer.outcome),
+            cli(&plain),
+            "{plain:?} (widened)"
+        );
+        let report = front.shutdown();
+        assert!(report.graceful, "{report:?}");
+    }
+}
+
 /// `alsem <argv>` as a process fed `stdin`: (stdout, stderr, exit).
 ///
 /// A process may exit without reading its stdin (a clap error exits before

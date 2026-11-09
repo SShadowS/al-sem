@@ -49,12 +49,15 @@ use crate::engine::session::{
 };
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::calls::CallEdge;
+use crate::program::model::workspace::AssemblyNeeds;
 use crate::wire::RevisionId;
 
 /// The commands a revision answers off its retained cells: one view, the
-/// model the revision built ([`crate::engine::batch::job::ViewNeeds::EXPLAIN`]
-/// covers each), no analyze extras, no program. Every other command runs the
-/// one-shot job path over the revision's inputs.
+/// model the revision built, no analyze extras, no program. A job whose
+/// demand needs model rows the revision lacks (`prove` with a filter reads
+/// the guard arms) is refused with [`PrepareError::Needs`], and the engine
+/// host widens the session ([`crate::engine::resident::session::ResidentSession::pin_needs`]).
+/// Every other command runs the one-shot job path over the revision's inputs.
 pub const SERVED_COMMANDS: &[&str] = &[
     "query",
     "digest",
@@ -302,6 +305,8 @@ pub struct Revision {
     pub inputs: Arc<WorkspaceInputs>,
     pub single_app: bool,
     target: Arc<AnalysisTarget>,
+    /// What the model's rows were built with ([`Revision::model_needs`]).
+    needs: AssemblyNeeds,
     rel: Arc<ExecRelation>,
     dependency_calls: Option<Arc<Vec<CallEdge>>>,
     store: Store<ArtifactKey, Artifact>,
@@ -377,20 +382,29 @@ impl ArtifactKey {
 }
 
 impl Revision {
-    /// A revision over `target`, built from `inputs`.
+    /// A revision over `target`, built from `inputs` with the assembly
+    /// `needs` (what its model's rows hold).
     #[must_use]
-    pub fn new(id: RevisionId, inputs: Arc<WorkspaceInputs>, target: AnalysisTarget) -> Revision {
-        Revision::seeded(id, inputs, target, None)
+    pub fn new(
+        id: RevisionId,
+        inputs: Arc<WorkspaceInputs>,
+        target: AnalysisTarget,
+        needs: AssemblyNeeds,
+    ) -> Revision {
+        Revision::seeded(id, inputs, target, needs, None)
     }
 
     /// A revision whose `L4` fill starts from `prev`'s seed (design §6.9):
     /// `prev`'s published solve, else the seed `prev` itself still holds,
     /// when its [`seed_key`] equals this revision's; else a full solve.
+    /// `needs`: the assembly needs `target`'s model was built with; a job
+    /// whose demand needs more is not answered ([`PrepareError::Needs`]).
     #[must_use]
     pub fn seeded(
         id: RevisionId,
         inputs: Arc<WorkspaceInputs>,
         target: AnalysisTarget,
+        needs: AssemblyNeeds,
         prev: Option<&Revision>,
     ) -> Revision {
         let rel = relation_of(&target);
@@ -412,6 +426,7 @@ impl Revision {
             inputs,
             single_app,
             target: Arc::new(target),
+            needs,
             rel,
             dependency_calls,
             store: Store::new(),
@@ -426,6 +441,12 @@ impl Revision {
             raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
         }
+    }
+
+    /// The assembly needs this revision's model rows were built with.
+    #[must_use]
+    pub fn model_needs(&self) -> AssemblyNeeds {
+        self.needs
     }
 
     /// Whether an effects read over `roots` roots memoizes their witnesses
@@ -1751,6 +1772,16 @@ impl Revision {
                 "'{}' needs a view this revision did not build",
                 job.name()
             )));
+        }
+        // The job's demand states which model rows it reads (rules, card
+        // text, guard arms). A revision built with fewer is never asked to
+        // compute it: a row read it lacks panics (engine limits B1: prove
+        // with a filter reads the guard arms, which the revision's
+        // `REVISION_NEEDS` leaves out, and the panic killed the engine). The
+        // front end pins with `pin_needs` and asks again.
+        let wanted = d.needs.assembly();
+        if !self.needs.covers(wanted) {
+            return Err(PrepareError::Needs(wanted));
         }
         let model = self.target.resolved();
         let part = match job.resolve(d.side, &ResolveCx::new(model, &d.inputs)) {

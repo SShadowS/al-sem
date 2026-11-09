@@ -3997,7 +3997,7 @@ mod engine {
     use al_sem::engine::host::{AskParams, ChildStatus, Decisions, OpenParams, Universe};
     use al_sem::engine::resident::budget::{Budget, Case, Estimates, ProcMeter};
     use al_sem::engine::resident::revision::{SERVED_COMMANDS, answer_failed_build};
-    use al_sem::engine::resident::session::{Built, PinError, ResidentSession};
+    use al_sem::engine::resident::session::{Built, PinError, Pinned, ResidentSession};
     use al_sem::engine::resident::store::{Control, PrepareError, Stop};
     use al_sem::wire::{
         Answer, FailedOutcome, Outcome, Stderr, Stdout, Timing, WireError, WorkDone, clamp_inline,
@@ -4484,119 +4484,175 @@ mod engine {
             || (ask.argv.first().is_some_and(|c| c == "impact") && part_is("up"))
             || wants_sited)
             && !open.session.is_graph_only();
-        let pin = if reads_sited {
-            open.session.pin_sited(ask.freshness, cx.stop)
-        } else {
-            open.session.pin(ask.freshness, cx.stop)
-        };
-        let pinned = match pin {
-            Ok(p) => p,
-            Err(PinError::Stopped(s)) => return stopped(s, &[]),
-            Err(PinError::Unstable(m)) => return failed(FailedOutcome::InputsUnstable, &m),
-            Err(PinError::Budget(r)) => return over_budget(&r),
-        };
-        timing.waited_for_build_ms = pinned.waited_for_build_ms;
-        if let Some(s) = (cx.stop)() {
-            return stopped(s, &["pin"]);
-        }
-        // Bind: plan again over the pinned read (it may read nothing else).
-        let command = match decode(&ask.argv) {
-            Ok(c) => c,
-            Err(out) => return cli(&out, None, timing),
-        };
-        let (command, mut bound) = match decided(command, &ask, &reads) {
-            Ok(d) => d,
-            Err(why) => return failed(FailedOutcome::Protocol, &why),
-        };
-        bound.inputs = Some(Arc::clone(pinned.built.inputs()));
-        let planned = plan(command, true, &bound);
-        let reader = reader_for(planned.reads(), &bound);
-        let slots = [Slot::new()];
-        let jobs = make_jobs(vec![planned], &reader, &slots);
-        let job = &*jobs[0];
-        (cx.progress)("prepare");
-        let served = SERVED_COMMANDS.contains(&job.name());
-        let compute = Instant::now();
-        let (out, revision) = match &pinned.built {
-            Built::Revision(rev) if served => {
-                // Every fill and the trees reserve first (fill workers are
-                // counted while they hold theirs).
-                let refused = std::sync::Mutex::new(None);
-                // Each estimate is read, and each peak observed, in the
-                // work's size class (its roots): a large request's peak never
-                // becomes a small one's estimate.
-                let reserve = |kind: &'static str,
-                               units: usize|
-                 -> Result<al_sem::engine::resident::store::Guard<'_>, String> {
-                    let case = if kind == "trees" {
-                        Case::Trees
-                    } else {
-                        Case::Fill(kind)
+        // The model rows the job's demand reads beyond the revision's
+        // (engine limits B1): `None` on the first pass; the job's own
+        // assembly needs once the pinned revision refused it for them
+        // (`PrepareError::Needs`). The second pass pins with `pin_needs`
+        // (the session's needs widen and the model is rebuilt once; every
+        // later build keeps them) and asks again. Every job kind is covered:
+        // the job's demand is the one statement of what it reads.
+        let mut needs_more: Option<al_sem::program::model::workspace::AssemblyNeeds> = None;
+        let (pinned, out, revision, compute) = loop {
+            let pin = match needs_more {
+                Some(n) => open
+                    .session
+                    .pin_needs(ask.freshness, n, cx.stop)
+                    .and_then(|p| {
+                        if reads_sited {
+                            // The widened revision with its sited graph (a
+                            // build of the widened model, never a narrower one:
+                            // the session's needs stay widened).
+                            open.session
+                                .pin_sited(ask.freshness, cx.stop)
+                                .map(|s| Pinned {
+                                    waited_for_build_ms: p.waited_for_build_ms
+                                        + s.waited_for_build_ms,
+                                    ..s
+                                })
+                        } else {
+                            Ok(p)
+                        }
+                    }),
+                None if reads_sited => open.session.pin_sited(ask.freshness, cx.stop),
+                None => open.session.pin(ask.freshness, cx.stop),
+            };
+            let pinned = match pin {
+                Ok(p) => p,
+                Err(PinError::Stopped(s)) => return stopped(s, &[]),
+                Err(PinError::Unstable(m)) => return failed(FailedOutcome::InputsUnstable, &m),
+                Err(PinError::Budget(r)) => return over_budget(&r),
+            };
+            timing.waited_for_build_ms += pinned.waited_for_build_ms;
+            if let Some(s) = (cx.stop)() {
+                return stopped(s, &["pin"]);
+            }
+            // Bind: plan again over the pinned read (it may read nothing else).
+            let command = match decode(&ask.argv) {
+                Ok(c) => c,
+                Err(out) => return cli(&out, None, timing),
+            };
+            let (command, mut bound) = match decided(command, &ask, &reads) {
+                Ok(d) => d,
+                Err(why) => return failed(FailedOutcome::Protocol, &why),
+            };
+            bound.inputs = Some(Arc::clone(pinned.built.inputs()));
+            let planned = plan(command, true, &bound);
+            let reader = reader_for(planned.reads(), &bound);
+            let slots = [Slot::new()];
+            let jobs = make_jobs(vec![planned], &reader, &slots);
+            let job = &*jobs[0];
+            (cx.progress)("prepare");
+            let served = SERVED_COMMANDS.contains(&job.name());
+            let compute = Instant::now();
+            let (out, revision) = match &pinned.built {
+                Built::Revision(rev) if served => {
+                    // Every fill and the trees reserve first (fill workers are
+                    // counted while they hold theirs).
+                    let refused = std::sync::Mutex::new(None);
+                    // Each estimate is read, and each peak observed, in the
+                    // work's size class (its roots): a large request's peak never
+                    // becomes a small one's estimate.
+                    let reserve = |kind: &'static str,
+                                   units: usize|
+                     -> Result<
+                        al_sem::engine::resident::store::Guard<'_>,
+                        String,
+                    > {
+                        let case = if kind == "trees" {
+                            Case::Trees
+                        } else {
+                            Case::Fill(kind)
+                        };
+                        let units = units as u64;
+                        let estimate = open.budget.estimate_sized(case, Default::default(), units);
+                        match open.session.reserve_or_reclaim_sized(
+                            &open.budget,
+                            case,
+                            units,
+                            estimate,
+                            1,
+                            &is_stopped,
+                        ) {
+                            Ok(r) => Ok(Box::new(r)),
+                            Err(f) => {
+                                let m = f.message();
+                                *refused.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
+                                Err(m)
+                            }
+                        }
                     };
-                    let units = units as u64;
-                    let estimate = open
-                        .budget
-                        .estimate_sized(case, Default::default(), units);
-                    match open.session.reserve_or_reclaim_sized(
-                        &open.budget,
-                        case,
-                        units,
-                        estimate,
-                        1,
-                        &is_stopped,
-                    ) {
-                        Ok(r) => Ok(Box::new(r)),
-                        Err(f) => {
-                            let m = f.message();
-                            *refused.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
-                            Err(m)
+                    let ctl = Control {
+                        stop: cx.stop,
+                        reserve: &reserve,
+                    };
+                    let answered = rev.answer_timed(job, &ctl);
+                    open.session.update_floor();
+                    match answered {
+                        Ok((out, (fill_ms, compute_ms))) => {
+                            timing.shared_fill_ms = fill_ms;
+                            timing.compute_ms = compute_ms;
+                            (out, Some(rev.id.clone()))
+                        }
+                        Err(PrepareError::Cancelled) => {
+                            return stopped(Stop::Cancelled, &["pin"]);
+                        }
+                        Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
+                        Err(PrepareError::Budget(m)) => {
+                            return match refused.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                                Some(r) => over_budget(&r),
+                                None => failed(FailedOutcome::Budget, &m),
+                            };
+                        }
+                        Err(PrepareError::Engine(m)) => {
+                            return failed(FailedOutcome::EngineError, &m);
+                        }
+                        // The revision lacks the rows the job reads: widen and
+                        // ask again, once. A widened revision that still lacks
+                        // them is an engine error, never a loop.
+                        Err(PrepareError::Needs(n)) if needs_more.is_none() => {
+                            needs_more = Some(n);
+                            continue;
+                        }
+                        Err(PrepareError::Needs(n)) => {
+                            return failed(
+                                FailedOutcome::EngineError,
+                                &format!(
+                                    "'{}' needs model rows ({n:?}) the widened revision \
+                                 did not build",
+                                    job.name()
+                                ),
+                            );
                         }
                     }
-                };
-                let ctl = Control {
-                    stop: cx.stop,
-                    reserve: &reserve,
-                };
-                let answered = rev.answer_timed(job, &ctl);
-                open.session.update_floor();
-                match answered {
-                    Ok((out, (fill_ms, compute_ms))) => {
-                        timing.shared_fill_ms = fill_ms;
-                        timing.compute_ms = compute_ms;
-                        (out, Some(rev.id.clone()))
-                    }
-                    Err(PrepareError::Cancelled) => {
-                        return stopped(Stop::Cancelled, &["pin"]);
-                    }
-                    Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
-                    Err(PrepareError::Budget(m)) => {
-                        return match refused.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                            Some(r) => over_budget(&r),
-                            None => failed(FailedOutcome::Budget, &m),
-                        };
-                    }
-                    Err(PrepareError::Engine(m)) => {
-                        return failed(FailedOutcome::EngineError, &m);
-                    }
                 }
-            }
-            // A graph-only engine (agent-tasks M0-2) answers a sited-graph
-            // job off its graph and refuses every other with the reason.
-            Built::Graph(g) => match g.answer(job) {
-                Ok(out) => (out, Some(g.id.clone())),
-                Err(PrepareError::Engine(m)) => return failed(FailedOutcome::EngineError, &m),
-                Err(PrepareError::Cancelled) => return stopped(Stop::Cancelled, &["pin"]),
-                Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
-                Err(PrepareError::Budget(m)) => return failed(FailedOutcome::Budget, &m),
-            },
-            Built::Failed(f) if served => (answer_failed_build(job, &f.failure), None),
-            // The one-shot job path over the pinned read: the same inputs,
-            // its own model (equal to the revision's by the stage-4 contract).
-            Built::Revision(rev) => (
-                al_sem::engine::batch::standalone_output(job),
-                Some(rev.id.clone()),
-            ),
-            Built::Failed(_) => (al_sem::engine::batch::standalone_output(job), None),
+                // A graph-only engine (agent-tasks M0-2) answers a sited-graph
+                // job off its graph and refuses every other with the reason.
+                Built::Graph(g) => match g.answer(job) {
+                    Ok(out) => (out, Some(g.id.clone())),
+                    Err(PrepareError::Engine(m)) => return failed(FailedOutcome::EngineError, &m),
+                    Err(PrepareError::Cancelled) => return stopped(Stop::Cancelled, &["pin"]),
+                    Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
+                    Err(PrepareError::Budget(m)) => return failed(FailedOutcome::Budget, &m),
+                    Err(PrepareError::Needs(n)) => {
+                        return failed(
+                            FailedOutcome::EngineError,
+                            &format!(
+                                "'{}' needs model rows ({n:?}); a graph-only engine builds no model",
+                                job.name()
+                            ),
+                        );
+                    }
+                },
+                Built::Failed(f) if served => (answer_failed_build(job, &f.failure), None),
+                // The one-shot job path over the pinned read: the same inputs,
+                // its own model (equal to the revision's by the stage-4 contract).
+                Built::Revision(rev) => (
+                    al_sem::engine::batch::standalone_output(job),
+                    Some(rev.id.clone()),
+                ),
+                Built::Failed(_) => (al_sem::engine::batch::standalone_output(job), None),
+            };
+            break (pinned, out, revision, compute);
         };
         if timing.compute_ms == 0 {
             timing.compute_ms = compute.elapsed().as_millis() as u64;

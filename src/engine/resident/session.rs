@@ -47,8 +47,14 @@ pub const REVISION_READ: WorkspaceNeeds = WorkspaceNeeds {
     fingerprint_rows: true,
 };
 
-/// The model a revision builds: what every served command's view needs
-/// (explain's rules and card text on top of the model).
+/// The model a revision builds first: what most served commands' views need
+/// (explain's rules and card text on top of the model). It does NOT cover
+/// every demand: `prove` with a filter also reads the guard arms
+/// (`ViewNeeds::PROVE_SLICE`). Such a job is refused by the revision with
+/// its needs (`PrepareError::Needs`) and the engine host pins again with
+/// [`ResidentSession::pin_needs`], which widens the session's needs for
+/// every later build (engine limits B1). Guard arms stay out of this
+/// constant so a session that never sees a filter does not pay for them.
 pub const REVISION_NEEDS: ViewNeeds = ViewNeeds::EXPLAIN;
 
 /// A request's freshness mode (§5.1).
@@ -276,6 +282,8 @@ impl ResidentSession {
     /// model is rebuilt once (`Pinned::rebuilt_for: "needs"`, class `needs`;
     /// the row cache misses every file whose recorded needs differ). A
     /// rebuild the budget refuses is `PinError::Budget`, with the reason.
+    /// The engine host calls it when a revision refused a job for its needs
+    /// (`PrepareError::Needs`, engine limits B1).
     pub fn pin_needs(
         self: &Arc<Self>,
         mode: Freshness,
@@ -1023,7 +1031,7 @@ impl ResidentSession {
                         Some(Built::Revision(r)) => Some(&**r),
                         _ => None,
                     };
-                    let mut rev = Revision::seeded(id, inputs, target, seed_from);
+                    let mut rev = Revision::seeded(id, inputs, target, needs.assembly(), seed_from);
                     if let Some(s) = sited.take() {
                         count_sited(&s);
                         rev = rev.with_sited(Arc::new(s.graph));
