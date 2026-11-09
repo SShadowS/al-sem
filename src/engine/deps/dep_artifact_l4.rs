@@ -404,7 +404,9 @@ fn artifact_from_model(
                 },
             );
         }
-        for ro in &r.record_operations {
+        // The record operations and the `FieldRef` operations (engine limits
+        // B5): every operation an effect can cite.
+        for ro in r.effect_operations() {
             if !cited_op_ids.contains(&ro.id) {
                 continue;
             }

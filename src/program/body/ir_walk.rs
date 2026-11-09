@@ -1389,6 +1389,24 @@ impl<'a> SpineCtx<'a> {
                 } else {
                     (None, None)
                 };
+                // The record a bare record method is called on
+                // (`PCallSite::implicit_receiver`): the innermost record frame,
+                // unless the name is one of the object's own routines.
+                let implicit_receiver = match &callee {
+                    PCallee::Bare { name }
+                        if !self
+                            .scope
+                            .object_procedure_names
+                            .contains(&name.to_ascii_lowercase()) =>
+                    {
+                        self.implicit
+                            .iter()
+                            .rev()
+                            .find(|f| f.is_record)
+                            .map(|f| f.text.clone())
+                    }
+                    _ => None,
+                };
                 self.site_exprs.calls.push(expr_ix);
                 self.call_sites.push(PCallSite {
                     id: cs_id,
@@ -1408,6 +1426,7 @@ impl<'a> SpineCtx<'a> {
                     in_statement_position: self.in_stmt_position,
                     result_tested: self.tested_calls.contains(&eid),
                     receiver_temp_state: None,
+                    implicit_receiver,
                 });
                 self.cs_arg_exprs.push(args.clone());
             }

@@ -628,7 +628,13 @@ pub(crate) fn direct_facts_for_routine(
     };
 
     // ── table family (al-sem table.ts) ─────────────────────────────────────
-    for op in &record_ops {
+    // The record operations, then the `FieldRef` operations (engine limits
+    // B5; never at an unreachable call site, `flow_fields`).
+    for op in record_ops
+        .iter()
+        .copied()
+        .chain(&routine.field_ref_operations)
+    {
         // Engine limits B5: a read of each FlowField destination table this
         // operation reads (`program::model::flow_fields`); an undecided one is
         // an unresolved table read, never no read. A `CalcFields` of a

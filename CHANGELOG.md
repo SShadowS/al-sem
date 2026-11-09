@@ -149,13 +149,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filter issues no query, so this places a may-read one step early); and on every
   `Get`/`Find*`/`Next` of a record the same routine calls `SetAutoCalcFields` on (Learn:
   the fields are "automatically calculated when the record is retrieved from the
-  database"). A bare `SetAutoCalcFields(F)` is a call on the implicit `Rec`; because an
-  obsolete `with X do` can make it a call on `X`, it is also a may-read on the routine's
-  other retrievals whose table has a FlowField of that name. When the record is
-  object-level (an object global, or the implicit `Rec` a page or table keeps between
-  triggers), every `Get`/`Find*`/`Next` of it in every routine of the same object gets
-  the read too (`SetAutoCalcFields` in `OnOpenPage`, `Rec.FindSet` in an action); a
-  routine with a local or parameter of that name is not touched. Each read is a
+  database"). A bare `SetAutoCalcFields(F)` is a call on the record of its innermost
+  implicit record frame: the `X` of an enclosing `with X do`, else the object's implicit
+  `Rec` (see round 2 below). When the record is shared between routines (the implicit
+  `Rec`, or an object global), every `Get`/`Find*`/`Next` of it in every routine that
+  shares it gets the read too (`SetAutoCalcFields` in `OnOpenPage`, `Rec.FindSet` in an
+  action, also one a page extension adds); a routine with a local or parameter of that
+  name is not touched. Each read is a
   `CalcFields` row on the formula's table, at the
   operation's own line, and reaches `query touches` (down, up and table mode), `query
   effects` (the human row names the field: `[CalcFields] on Detailed Cust. Ledg. Entry
@@ -169,7 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is read (a FlowField with no formula in the symbols, a formula that does not parse, a
   table that is not loaded, a table name that two loaded tables share (the model keeps no
   namespace, so the engine does not pick one by load order), an argument that names no
-  field of the table), the read goes
+  field of a table that has FlowFields), the read goes
   to the `unknown` table bucket with its reason, so a touches answer says `unknown`,
   never `no`. On CDO no workspace site is undecided.
 - **Not FlowField reads:** `CalcSums` (sums ordinary fields of the record's own table,
@@ -191,8 +191,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `query touches`' table mode each emit it once. In `query effects` only the derived
   `CalcFields` row names the FlowField; the `FindSet` row of a `SetAutoCalcFields` read
   is the record's own read and no longer says "through FlowField".
+- **Round 2 (second review of the integrated tree).** Four wrong answers fixed:
+  - *A wrong `yes` from a bare `SetAutoCalcFields`.* The first fix-up made a bare call a
+    may-read on EVERY retrieval of the routine whose table has that FlowField, to cover
+    an obsolete `with X do`. That fired in routines with no `with` at all:
+    `SetAutoCalcFields("Line Count"); Other.FindFirst()` in a table procedure answered
+    `yes`, though `Rec`'s setting does not apply to `Other`. The fallback is gone. The body
+    walk now records, for each bare call, the record of its innermost implicit record
+    frame (`PCallSite::implicit_receiver`): the `with` record, else `Rec`. That is the same
+    frame a bare `FindFirst()` takes its record from, so a bare call inside `with X do`
+    reaches `X`'s retrievals and nothing else. AL looks a bare name up in the `with`
+    record first and then outward, so a `with` on a non-record does not hide `Rec`.
+  - *A wrong `no` across a page extension.* The implicit `Rec` was shared only between
+    routines of one object. A page extension's triggers run on the extended page's `Rec`,
+    and a table extension's procedures on the table's (Learn's table extension example
+    reads `rec.ShoeSize` in an extension trigger). So `Rec.SetAutoCalcFields` in a page's
+    `OnOpenPage` and `Rec.FindSet()` in an action a page extension adds answered `no`.
+    Sharing is now keyed by the base object: `page:<name>` for a page and every extension
+    of it, likewise tables and reports (an extension names its target by name; a
+    namespace-qualified target also matches by its last part). An object global is
+    shared by its own object's routines, and a base object's global also by its
+    extensions (a `protected var`). Two same-named pages of different apps share too,
+    which can only add a may-read.
+  - *A wrong `no` for a qualified field argument.* `X.SetFilter(X."Total Amount", ...)`
+    kept the text `X."Total Amount"`, found no field and added nothing. A field
+    argument now names the field after its last dot outside quotes, and `Rec.FieldNo(F)`
+    names `F`; `X.CalcFields(X."F")` is now decided (it was `unknown`). An argument that
+    still names no field is "not decided" on a table that has FlowFields (it was ignored
+    for a filter) and reads nothing more on a table without any (it was "not decided"
+    for `CalcFields`): nothing can be calculated there.
+  - *A silent `no` for `FieldRef.CalcField()`.* Learn: it "Updates FlowFields in a
+    record", like `Record.CalcFields`. It is not a record operation, so no read existed.
+    `FieldRef.CalcField()`, and `FieldRef.SetFilter`/`SetRange` on a FlowField, are now
+    operations on the FieldRef's record, kept in a new list
+    (`ModelRoutine::field_ref_operations`) so detectors see exactly what they saw before;
+    the effect builders read both lists (`ModelRoutine::effect_operations`: the base
+    summary, the capability cone's table family, the operation index behind `query
+    effects`, `query touches`' table mode and the dependency evidence). The field comes
+    from `FR := RecRef.Field(<number> | '<name>' | Rec.FieldNo(<field>))` (a local
+    FieldRef that nothing else binds), the table from the RecordRef's resolved
+    operations or its provable `Open`/`GetTable` bindings. A `CalcField` whose table is
+    not known (a FieldRef parameter, for example) is a read of a table not resolved, so
+    the answer is `unknown`; a field that is not known (`FieldIndex(i)`) on a table with
+    FlowFields is "not decided". `RecRef.SetAutoCalcFields(4)` names fields by NUMBER
+    (Learn: `RecordRef.SetAutoCalcFields([Fields: Integer,...])`); field 4 is now looked
+    up by number (it was "not decided"). RecordRef has no `CalcFields` method.
+  - Tests (`tests/cli/cli_flowfield_reads.rs`, through the `alsem` binary, built from the
+    reviewer's probes): `bare_set_auto_calc_fields_is_on_its_implicit_record`,
+    `implicit_rec_is_shared_across_an_object_and_its_extensions`,
+    `qualified_and_unknown_field_arguments`, `record_ref_and_field_ref_flowfield_reads`;
+    lib tests in `flow_fields`: `field_arguments_name_their_field`,
+    `a_field_that_is_not_found_is_undecided_only_where_flowfields_exist`,
+    `extensions_share_their_base_objects_group`.
+  - Discrimination proofs (each guard broken with Edit, the narrowest test run, then
+    reverted and run again; after all reverts the 10 `cli_flowfield_reads` tests and the
+    6 `flow_field` lib tests pass). Each line: guard, break, what failed.
+    (1) Bare-call collection: the `implicit_receiver` arm skips every call; `BareAuto`,
+    `TabFetchBare` and `WithAuto` answered `down: no`.
+    (2) Innermost record frame: the walk takes the OUTERMOST frame; `WithAuto` answered
+    `down: no`.
+    (3) No blanket fallback: a `Rec`-keyed call applies to every retrieval;
+    `NoWithOther` answered `down: yes`.
+    (4) `Rec` keyed across routines: an undeclared name shares nothing; `TabFetchBare`
+    answered `down: no`.
+    (5) Sharing with extensions: an extension gets its own group; the page extension's
+    `OnAction` answered `down: no`.
+    (6) Shadowing exclusion: a local is shared object-wide; `Shadowed` (and
+    `ReadBlobAndSums`, `MissingFilter`) answered `down: yes`.
+    (7) Object globals: a global gets no object scope; `Fetch` answered `down: no`.
+    (8) `TABLE_AMBIGUOUS`: a name collision keeps the last table; the ambiguous-name
+    test's `query effects` lost the "not decided" row.
+    (9) Cone self-read skip (`repeats_host_read && false`):
+    `a_flowfield_over_its_own_table_is_one_read_fact` failed (2 facts, want 1).
+    (10) Table-mode self-read skip: `flowfield_over_its_own_table_is_one_read` read
+    `CalcFields 2, Get 1`.
+    (11) Qualified argument: the whole text is the field name; `QualifiedFilter`
+    answered `down: unknown`.
+    (12) Not-found field on a FlowField table: nothing is pushed; `MissingFilter` and
+    `FieldRefByIndex` answered `down: no`, and the lib test failed.
+    (13) Host table not loaded: nothing is pushed; the lib test failed (`[]`, want
+    `the record's table is not loaded`).
+    (14) Field by number: never found; `RecRefCalc` answered `down: unknown`.
+    (15) FieldRef operations: none are written; `RecRefCalc` answered `down: no`.
+    (16) A `CalcField` with no known table stays a read: dropped when the table is
+    unknown; `FieldRefParam` answered `down: no`.
+    (17) FieldRef filter: the `setfilter` arm never matches; `FieldRefFilter` answered
+    `down: no`.
+    (18) Base summary reads `effect_operations`: back to `record_operations`;
+    `RecRefCalc` answered `down: no`.
+    (19) Cone reads the FieldRef operations: chain filtered out; `digest
+    --include-reads` had 0 `DB_READ`s of B5 Line (want 1).
+    (20) Table mode reads them: back to `record_operations`; `query touches --table "B5
+    Line"` no longer listed `RecRefCalc`.
+    The first round's proofs (65ba25d1) for the derived-read loops, the undecided
+    branch, the FieldClass gate, the SetAutoCalcFields and filter rules, the base
+    summary dedup and the symbol reader still stand: this change does not touch them.
+  - Learn: [FieldRef.CalcField](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/fieldref/fieldref-calcfield-method),
+    [RecordRef.SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/recordref/recordref-setautocalcfields-method),
+    [RecordRef data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/recordref/recordref-data-type),
+    [Page extension object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-page-ext-object).
 - **Still open (rest of L19):** (1) a page that shows a FlowField calculates it when it
-  is displayed, which no routine's cone holds; that needs L2's page column index. (2) A
+  is displayed, which no routine's cone holds; that needs L2's page column index. A
+  report dataitem's `CalcFields` property is the same kind of declared read and is not
+  read yet either. (2) A
   record passed to another routine: a caller's `SetAutoCalcFields` followed by the
   callee's `Find*`/`Get`/`Next` on the record it received is not linked, so the caller's
   answer can still be `no`. A caller's filter on a FlowField is placed at the filter, so
@@ -200,7 +301,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be `no`, because it depends on what its caller set. Linking these needs the resolved
   calls with their record arguments, which L3 resolve does not have; a `SetAutoCalcFields`
   is not a record operation, so a read cannot be placed at it. CDO has no such
-  `SetAutoCalcFields` case; the filter case was not counted.
+  `SetAutoCalcFields` case; the filter case was not counted. The same holds for a
+  FieldRef or RecordRef received from a caller: its table and field are not known here
+  (a `CalcField` on it answers `unknown`, a filter on it adds nothing). (3)
+  `Record.GetBySystemId` is not a record operation at all (engine limits L35), so a
+  `SetAutoCalcFields` read at it, and its own host read, are missing.
 - Learn: [CalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-calcfields-method),
   [SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setautocalcfields-method),
   [FlowFields overview](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-flowfields).

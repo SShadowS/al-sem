@@ -791,6 +791,17 @@ pub struct ModelRoutine {
     /// `record_types` gives their operations the one table the bindings
     /// name. Empty for most routines.
     pub recordref_bindings: Vec<(String, Vec<crate::program::recordref_table::Binding>)>,
+    /// Engine limits B5: the record reads a `FieldRef` call makes, each as an
+    /// operation on the FieldRef's record (`FieldRef.CalcField()` as a
+    /// `CalcFields`, `FieldRef.SetFilter` / `SetRange` as that filter), with
+    /// its FlowField reads ([`ModelRecordOperation::flow_field_reads`]).
+    /// Written at L3 resolve by
+    /// [`super::flow_fields::attach_flow_field_reads`]; ids are
+    /// `{call site id}/fieldref`. Kept apart from `record_operations`, so the
+    /// detectors see exactly the operations they saw before; the effect
+    /// builders read both ([`ModelRoutine::effect_operations`]). Empty for
+    /// most routines.
+    pub field_ref_operations: Vec<ModelRecordOperation>,
     /// The routine's rules (intent-evidence spec §4.2): `None` when the view
     /// did not declare `ViewNeeds::rules` (not built), `Some(vec![])` when they
     /// were built and the routine has none (a routine with no body, a
@@ -916,6 +927,26 @@ impl ModelRoutine {
                 .iter()
                 .map(|fa| (fa, "implicit-access")),
         )
+    }
+
+    /// Every operation the effect builders read: the record operations, then
+    /// the `FieldRef` operations (`field_ref_operations`, engine limits B5).
+    /// The ONE list the base summary, the capability cone's table family, the
+    /// operation index and `query touches`' table mode share, so an effect
+    /// row always finds its operation. Detectors read `record_operations`.
+    pub fn effect_operations(&self) -> impl Iterator<Item = &ModelRecordOperation> {
+        self.record_operations
+            .iter()
+            .chain(&self.field_ref_operations)
+    }
+
+    /// The operation at index `i` of [`Self::effect_operations`].
+    #[must_use]
+    pub fn effect_operation(&self, i: usize) -> Option<&ModelRecordOperation> {
+        self.record_operations.get(i).or_else(|| {
+            self.field_ref_operations
+                .get(i.checked_sub(self.record_operations.len())?)
+        })
     }
 
     /// The routine's rules. Reading them from a model built without
@@ -2337,6 +2368,7 @@ fn project_ir(
                 recordref_bindings: crate::program::recordref_table::local_recordref_bindings_all(
                     ir_file, ir_routine,
                 ),
+                field_ref_operations: Vec::new(),
                 rules: None,
                 rule_drafts,
                 card_text,

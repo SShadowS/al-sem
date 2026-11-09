@@ -21,21 +21,53 @@
 //!   `SetAutoCalcFields(F, ...)` on: Learn: the fields are "automatically
 //!   calculated when the record is retrieved from the database". The calls are
 //!   not ordered here: every read on that record in the routine gets them. A
-//!   bare `SetAutoCalcFields(F)` is a call on the implicit record (`Rec`); as
-//!   an obsolete `with X do` can make it a call on `X`, it also applies to the
-//!   routine's other retrievals whose table has a FlowField of that name;
-//! - and, when that record is object-level (an object global, or the implicit
-//!   `Rec` a page or table keeps between triggers), every `Get` / `Find*` /
-//!   `Next` on it in every routine of the same object: `SetAutoCalcFields` in
-//!   `OnOpenPage` and `Rec.FindSet` in an action trigger is one record. A
-//!   routine that declares a local or parameter of that name is not touched.
+//!   bare `SetAutoCalcFields(F)` is a call on the record of its innermost
+//!   implicit record frame (`PCallSite::implicit_receiver`): the `X` of an
+//!   enclosing `with X do`, else the object's implicit `Rec`. That is the same
+//!   frame a bare `FindSet()` takes its record from, so a bare call never
+//!   reaches another variable's retrieval;
+//! - and, when that record is object-level, every `Get` / `Find*` / `Next` on
+//!   it in every routine that shares it. The implicit `Rec` (any name the
+//!   routine does not declare) is shared by the routines of the object AND of
+//!   every extension of the same base object: a page extension's triggers run
+//!   on the extended page's `Rec`, a table extension's procedures on the
+//!   table's. So `SetAutoCalcFields` in a page's `OnOpenPage` and `Rec.FindSet`
+//!   in an action a page extension adds is one record. An object global is
+//!   shared by the routines of its own object; a base object's global also by
+//!   its extensions (a `protected var`). A routine that declares a local or
+//!   parameter of that name is not touched. The sharing is keyed by the base
+//!   object's type and NAME (an extension names its target by name), so two
+//!   same-named pages of different apps share too: a may-read, never a lost
+//!   one;
+//! - a RecordRef: `RecRef.SetAutoCalcFields(N, ...)` names fields by NUMBER
+//!   (Learn, `RecordRef.SetAutoCalcFields([Fields: Integer,...])`), looked up
+//!   by number in the RecordRef's table;
+//! - a `FieldRef` (Learn: `FieldRef.CalcField()` "Updates FlowFields in a
+//!   record", like `Record.CalcFields`): `FR.CalcField()` is a `CalcFields`
+//!   of the FieldRef's field on its RecordRef's record, and
+//!   `FR.SetFilter`/`SetRange` a filter on it. These are not record
+//!   operations, so they become [`ModelRoutine::field_ref_operations`] (the
+//!   detectors do not see them). The FieldRef's field is read off
+//!   `FR := RecRef.Field(<number>|'<name>'|Rec.FieldNo(<field>))` and its
+//!   table off the RecordRef's resolved operations or provable bindings. A
+//!   `CalcField` whose table is not known is a read of a table not resolved
+//!   ("unknown"); a field that is not known on a table with FlowFields is
+//!   "not decided".
+//!
+//! A field argument written with its record (`X.SetFilter(X."Total
+//! Amount", ...)`, `X.CalcFields(X."F")`) names the field after the last dot.
+//! An argument that names no field of a table that HAS FlowFields is not
+//! decided; on a table without FlowFields nothing can be calculated, so it
+//! reads nothing more.
 //!
 //! Not covered (engine limits L19): a record passed to another routine. A
 //! caller's `SetAutoCalcFields` or filter on a FlowField followed by a callee's
 //! `Find*` on the record it received gives no read in either routine, so the
 //! callee's own answer, and a caller's answer through a `SetAutoCalcFields` it
 //! makes, can still be a "no". A filter in the caller is placed at the filter
-//! (above), so the caller's answer is right in that case.
+//! (above), so the caller's answer is right in that case. Likewise a FieldRef
+//! or RecordRef received as a parameter or from a call (its table and field
+//! are then not known).
 //!
 //! Each entry is one destination table, or [`FlowFieldSource::Undecided`] with
 //! its reason when the engine cannot tell which table the field reads (no
@@ -66,8 +98,12 @@
 
 use std::collections::HashMap;
 
-use super::workspace::{ModelEntities, ModelField, ModelRecordOperation, ModelRoutine, ModelTable};
-use crate::program::body::features::PCallee;
+use al_syntax::IdentifierFoldExt;
+
+use super::workspace::{
+    ModelEntities, ModelField, ModelObject, ModelRecordOperation, ModelRoutine, ModelTable,
+};
+use crate::program::body::features::{PAnchor, PCallSite, PCallee, PTempState};
 use crate::program::body::node_util::strip_quotes;
 
 /// Which table one FlowField read reads.
@@ -137,6 +173,9 @@ pub(crate) const TABLE_NOT_LOADED: &str = "the CalcFormula's table is not loaded
 pub(crate) const TABLE_AMBIGUOUS: &str =
     "the CalcFormula's table name matches more than one loaded table";
 pub(crate) const FIELD_NOT_FOUND: &str = "the argument names no field of the record's table";
+pub(crate) const HOST_NOT_LOADED: &str = "the record's table is not loaded";
+pub(crate) const FIELD_REF_FIELD_UNKNOWN: &str =
+    "the FieldRef's field is not known, and its table has FlowFields";
 
 /// The destination table NAME of a `CalcFormula` (logical: quotes stripped,
 /// `""` read as `"`), or `None` when the text does not have the documented
@@ -199,9 +238,113 @@ pub fn calc_formula_table(formula: &str) -> Option<String> {
     Some(table.clone())
 }
 
-/// A field argument as written, as the field name it names (logical).
-fn arg_field_name(arg: &str) -> String {
-    strip_quotes(arg.trim()).replace("\"\"", "\"")
+/// How an argument names a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FieldSel {
+    /// By name (logical: quotes stripped, `""` read as `"`).
+    Name(String),
+    /// By number (a RecordRef's `SetAutoCalcFields(4)`, `Field(4)`).
+    Number(i64),
+    /// Not readable from the text.
+    Unknown,
+}
+
+/// The dotted segments of `s` outside double quotes (`X."No."` -> `X`,
+/// `"No."`), each trimmed.
+fn dotted_segments(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '.' if !in_quotes => {
+                out.push(s[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(s[start..].trim());
+    out
+}
+
+/// A name as written, logical: quotes stripped, `""` read as `"`.
+fn logical_name(s: &str) -> String {
+    strip_quotes(s.trim()).replace("\"\"", "\"")
+}
+
+/// `Recv.Method(Args)` as written: the receiver text, the method folded and
+/// the argument text, or `None` for any other shape.
+fn member_call(text: &str) -> Option<(&str, String, &str)> {
+    let t = text.trim();
+    let body = t.strip_suffix(')')?;
+    // The `(` that opens the final argument list, outside quotes and nested
+    // parentheses.
+    let mut depth = 0usize;
+    let mut in_dq = false;
+    let mut in_sq = false;
+    let mut open = None;
+    for (i, c) in body.char_indices().rev() {
+        match c {
+            '"' if !in_sq => in_dq = !in_dq,
+            '\'' if !in_dq => in_sq = !in_sq,
+            ')' if !in_dq && !in_sq => depth += 1,
+            '(' if !in_dq && !in_sq => {
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let head = &body[..open];
+    let segments = dotted_segments(head);
+    if segments.len() < 2 {
+        return None;
+    }
+    let method = segments[segments.len() - 1];
+    let recv_len = head.rfind(method)?;
+    let recv = head[..recv_len].trim_end().strip_suffix('.')?.trim();
+    Some((recv, logical_name(method).to_lowercase(), &body[open + 1..]))
+}
+
+/// The field an argument names. A record-qualified field (`X."Total
+/// Amount"`) names the field after its last dot; `Rec.FieldNo(F)` names `F`;
+/// an integer literal is a field number; a text literal (`RecRef.Field('No.')`)
+/// a field name.
+fn field_sel(arg: &str) -> FieldSel {
+    let a = arg.trim();
+    if let Ok(n) = a.parse::<i64>() {
+        return FieldSel::Number(n);
+    }
+    if let Some(inner) = a.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        return FieldSel::Name(inner.replace("''", "'"));
+    }
+    if a.ends_with(')') {
+        // A bare `FieldNo(F)` on the implicit record.
+        if let Some(head) = a.get(..8)
+            && head.eq_ignore_ascii_case("fieldno(")
+        {
+            return field_sel(&a[8..a.len() - 1]);
+        }
+        return match member_call(a) {
+            Some((_, method, inner)) if method == "fieldno" => field_sel(inner),
+            _ => FieldSel::Unknown,
+        };
+    }
+    let segments = dotted_segments(a);
+    let last = segments.last().copied().unwrap_or_default();
+    // A name ending in a dot outside quotes (`"No."` stripped elsewhere) is
+    // not split: read the whole text.
+    let name = if last.is_empty() { a } else { last };
+    if name.is_empty() {
+        return FieldSel::Unknown;
+    }
+    FieldSel::Name(logical_name(name))
 }
 
 /// The tables of the model, by id (a real table wins over an extension stub,
@@ -213,6 +356,9 @@ struct Tables<'a> {
     by_id: HashMap<&'a str, &'a ModelTable>,
     real_by_name: HashMap<String, Option<&'a ModelTable>>,
     stub_by_name: HashMap<String, Option<&'a ModelTable>>,
+    /// Real tables by number (a RecordRef's `Open(18)`); `None` when two
+    /// apps' tables share the number.
+    real_by_number: HashMap<i64, Option<&'a ModelTable>>,
 }
 
 impl<'a> Tables<'a> {
@@ -220,7 +366,18 @@ impl<'a> Tables<'a> {
         let mut by_id: HashMap<&str, &ModelTable> = HashMap::new();
         let mut real_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
         let mut stub_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
+        let mut real_by_number: HashMap<i64, Option<&ModelTable>> = HashMap::new();
         for t in tables {
+            if !t.is_extension_stub {
+                real_by_number
+                    .entry(t.table_number)
+                    .and_modify(|seen| {
+                        if seen.is_some_and(|p| p.id != t.id) {
+                            *seen = None;
+                        }
+                    })
+                    .or_insert(Some(t));
+            }
             let keep_id = by_id
                 .get(t.id.as_str())
                 .is_some_and(|p| !p.is_extension_stub && t.is_extension_stub);
@@ -245,6 +402,7 @@ impl<'a> Tables<'a> {
             by_id,
             real_by_name,
             stub_by_name,
+            real_by_number,
         }
     }
 
@@ -262,25 +420,73 @@ impl<'a> Tables<'a> {
         }
     }
 
-    /// What reading field `arg` of table `table_id` reads through a FlowField.
-    /// `strict`: a field that is not found is undecided (`CalcFields`,
-    /// `SetAutoCalcFields`); otherwise it is not a FlowField read (a filter).
-    fn reads_of(&self, table_id: &str, arg: &str, strict: bool, out: &mut Vec<FlowFieldRead>) {
+    /// What reading field argument `arg` of table `table_id` reads through a
+    /// FlowField ([`field_sel`]).
+    fn reads_of(&self, table_id: &str, arg: &str, calculates: bool, out: &mut Vec<FlowFieldRead>) {
+        self.sel_reads(
+            table_id,
+            &field_sel(arg),
+            arg.trim(),
+            calculates,
+            FIELD_NOT_FOUND,
+            out,
+        );
+    }
+
+    /// What reading the field `sel` of table `table_id` reads through a
+    /// FlowField. A field that is not found (or not known) is not decided
+    /// (`not_found`) when the table has a FlowField, and reads nothing more
+    /// when it has none. `calculates`: the call computes the field it names
+    /// (`CalcFields`, `SetAutoCalcFields`, `CalcField`), so a table that is not
+    /// loaded is not decided; a filter on such a table adds nothing (its
+    /// retrieval is the read).
+    fn sel_reads(
+        &self,
+        table_id: &str,
+        sel: &FieldSel,
+        written: &str,
+        calculates: bool,
+        not_found: &'static str,
+        out: &mut Vec<FlowFieldRead>,
+    ) {
         let Some(host) = self.by_id.get(table_id) else {
-            return;
-        };
-        let name = arg_field_name(arg);
-        let Some(field) = host
-            .fields
-            .iter()
-            .find(|f| f.name.eq_ignore_ascii_case(&name))
-        else {
-            if strict {
-                push(out, &name, FlowFieldSource::Undecided(FIELD_NOT_FOUND));
+            if calculates {
+                push(out, written, FlowFieldSource::Undecided(HOST_NOT_LOADED));
             }
             return;
         };
-        self.field_reads(field, out);
+        let field = match sel {
+            FieldSel::Name(name) => host
+                .fields
+                .iter()
+                .find(|f| f.name.eq_ignore_ascii_case(name)),
+            FieldSel::Number(n) => host.fields.iter().find(|f| f.field_number == *n),
+            FieldSel::Unknown => None,
+        };
+        match field {
+            Some(field) => self.field_reads(field, out),
+            None if host.fields.iter().any(|f| f.field_class == "FlowField") => {
+                let label = match sel {
+                    FieldSel::Name(name) => name.clone(),
+                    _ => written.to_string(),
+                };
+                push(out, &label, FlowFieldSource::Undecided(not_found));
+            }
+            None => {}
+        }
+    }
+
+    /// The table a RecordRef `Open(<literal>)` binding names.
+    fn by_reference(&self, reference: &str, is_name: bool) -> Option<&'a ModelTable> {
+        if is_name {
+            self.by_name(reference).ok()
+        } else {
+            reference
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .and_then(|n| self.real_by_number.get(&n).copied().flatten())
+        }
     }
 
     fn field_reads(&self, field: &ModelField, out: &mut Vec<FlowFieldRead>) {
@@ -332,76 +538,357 @@ fn var_key(raw: &str) -> String {
         .to_lowercase()
 }
 
-/// The implicit record's key: a bare record call is a call on `Rec` (the
-/// L2 walk's root implicit frame).
-const IMPLICIT_REC: &str = "rec";
-
-/// One routine's `SetAutoCalcFields` calls: (record key, field argument,
-/// written bare). A bare call is keyed as [`IMPLICIT_REC`].
-fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
+/// One routine's `SetAutoCalcFields` calls: (record key, field argument). A
+/// bare call is keyed by its implicit record frame
+/// (`PCallSite::implicit_receiver`: a `with` record, else `Rec`), the frame a
+/// bare retrieval takes its record from; a bare call with no record frame is
+/// not a record method.
+fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for cs in &routine.call_sites {
-        let (key, bare) = match &cs.callee {
+        let key = match &cs.callee {
             PCallee::Member { receiver, method }
                 if method.eq_ignore_ascii_case("setautocalcfields") =>
             {
-                (var_key(receiver), false)
+                var_key(receiver)
             }
             PCallee::Bare { name } if name.eq_ignore_ascii_case("setautocalcfields") => {
-                (IMPLICIT_REC.to_string(), true)
+                match &cs.implicit_receiver {
+                    Some(r) => var_key(r),
+                    None => continue,
+                }
             }
             _ => continue,
         };
         for arg in &cs.argument_texts {
-            out.push((key.clone(), arg.clone(), bare));
+            out.push((key.clone(), arg.clone()));
         }
     }
     out
 }
 
-/// True when `key` names an object-level record in `routine`: an object
-/// global, or a name the routine does not declare (the implicit `Rec`). A
-/// parameter or local of that name is the routine's own record.
-fn is_object_level(routine: &ModelRoutine, key: &str) -> bool {
-    match routine.variables.iter().find(|v| v.name == key) {
-        Some(v) => v.scope.as_deref() == Some("global"),
-        None => true,
+/// What an object's routines share an implicit record with (module doc):
+/// the sharing groups (`page:<base name>` for a page and its extensions,
+/// likewise `table:` and `report:`; `id:<object id>` for any other object),
+/// and whether the object is a base object (its globals are visible to its
+/// extensions as `protected var`).
+struct Sharing<'a> {
+    by_object: HashMap<&'a str, (Vec<String>, bool)>,
+}
+
+impl<'a> Sharing<'a> {
+    fn new(objects: &'a [ModelObject]) -> Self {
+        let mut by_object: HashMap<&'a str, (Vec<String>, bool)> = HashMap::new();
+        for o in objects {
+            let (groups, base) = object_groups(o);
+            // An `#if`-split object has a row per arm under one id: their
+            // groups add up.
+            let entry = by_object.entry(o.id.as_str()).or_default();
+            for g in groups {
+                if !entry.0.contains(&g) {
+                    entry.0.push(g);
+                }
+            }
+            entry.1 |= base;
+        }
+        Sharing { by_object }
+    }
+
+    /// The scopes record `key` is shared in, seen from `routine`: none for
+    /// its own local or parameter; the object for a global (and the group
+    /// for a base object's global); the group for a name the routine does
+    /// not declare (the implicit `Rec`).
+    fn scopes(&self, routine: &ModelRoutine, key: &str) -> Vec<String> {
+        let own = self.by_object.get(routine.object_id.as_str());
+        let group_scopes = || -> Vec<String> {
+            match own {
+                Some((groups, _)) => groups.iter().map(|g| format!("{g}|{key}")).collect(),
+                None => vec![format!("id:{}|{key}", routine.object_id)],
+            }
+        };
+        match routine.variables.iter().find(|v| var_key(&v.name) == key) {
+            Some(v) if v.scope.as_deref() == Some("global") => {
+                let mut s = vec![format!("obj:{}|{key}", routine.object_id)];
+                if own.is_some_and(|(_, base)| *base) {
+                    s.extend(group_scopes());
+                }
+                s
+            }
+            Some(_) => Vec::new(),
+            None => group_scopes(),
+        }
     }
 }
 
+/// The sharing groups of one object row and whether it is a base object.
+fn object_groups(o: &ModelObject) -> (Vec<String>, bool) {
+    let family = match o.object_type.as_str() {
+        "Page" | "PageExtension" => "page",
+        "Table" | "TableExtension" => "table",
+        "Report" | "ReportExtension" => "report",
+        _ => return (vec![format!("id:{}", o.id)], false),
+    };
+    if !o.object_type.ends_with("Extension") {
+        return (vec![format!("{family}:{}", o.name.fold_identifier())], true);
+    }
+    let Some(target) = o.extends_target_name.as_deref() else {
+        return (vec![format!("id:{}", o.id)], false);
+    };
+    // The target as written, and its last dotted segment when it is
+    // namespace-qualified (`Microsoft.Sales."Customer Card"`).
+    let mut groups = vec![format!("{family}:{}", target.fold_identifier())];
+    let segments = dotted_segments(target);
+    if segments.len() > 1
+        && let Some(last) = segments.last().filter(|s| !s.is_empty())
+    {
+        let g = format!("{family}:{}", logical_name(last).fold_identifier());
+        if !groups.contains(&g) {
+            groups.push(g);
+        }
+    }
+    (groups, false)
+}
+
+/// The table and temp state a RecordRef `key` holds in `routine`: the one
+/// table its resolved operations name, else the one table its provable
+/// bindings name (`ModelRoutine::recordref_bindings`); `None` when neither
+/// decides it.
+fn record_ref_table(
+    routine: &ModelRoutine,
+    key: &str,
+    tables: &Tables<'_>,
+) -> (Option<String>, Option<PTempState>) {
+    let mut table: Option<&str> = None;
+    let mut seen = false;
+    let mut decided = true;
+    let mut temp: Option<&PTempState> = None;
+    let mut temp_decided = true;
+    for op in &routine.record_operations {
+        if var_key(&op.record_variable_name) != key {
+            continue;
+        }
+        seen = true;
+        match (op.table_id.as_deref(), table) {
+            (Some(t), None) => table = Some(t),
+            (Some(t), Some(x)) if t == x => {}
+            _ => decided = false,
+        }
+        match (op.temp_state.as_ref(), temp) {
+            (Some(t), None) => temp = Some(t),
+            (Some(t), Some(x)) if t == x => {}
+            _ => temp_decided = false,
+        }
+    }
+    let temp = temp.filter(|_| temp_decided).cloned();
+    if seen {
+        return (table.filter(|_| decided).map(str::to_string), temp);
+    }
+    let Some((_, bindings)) = routine.recordref_bindings.iter().find(|(v, _)| v == key) else {
+        return (None, None);
+    };
+    let mut table: Option<String> = None;
+    for b in bindings {
+        let t = match b {
+            crate::program::recordref_table::Binding::Table { reference, is_name } => tables
+                .by_reference(reference, *is_name)
+                .map(|t| t.id.clone()),
+            crate::program::recordref_table::Binding::GetTable(v) => routine
+                .record_variables
+                .iter()
+                .find(|rv| rv.name.eq_fold_identifier(v))
+                .and_then(|rv| rv.table_id.clone()),
+        };
+        match (t, &table) {
+            (Some(t), None) => table = Some(t),
+            (Some(t), Some(x)) if t == *x => {}
+            _ => return (None, None),
+        }
+    }
+    (table, None)
+}
+
+/// True when `receiver` is a FieldRef: a variable declared `FieldRef`, or a
+/// `RecRef.Field(...)` / `RecRef.FieldIndex(...)` written in place.
+fn is_field_ref(routine: &ModelRoutine, receiver: &str) -> bool {
+    if let Some((_, m, _)) = member_call(receiver) {
+        return m == "field" || m == "fieldindex";
+    }
+    let key = var_key(receiver);
+    routine
+        .variables
+        .iter()
+        .find(|v| var_key(&v.name) == key)
+        .is_some_and(|v| v.declared_type.trim().eq_ignore_ascii_case("fieldref"))
+}
+
+fn within(inner: &PAnchor, outer: &PAnchor) -> bool {
+    (inner.start_line, inner.start_column) >= (outer.start_line, outer.start_column)
+        && (inner.end_line, inner.end_column) <= (outer.end_line, outer.end_column)
+}
+
+/// Where a FieldRef receiver comes from: each (RecordRef key, field) it can
+/// be, or `None` when that is not readable. A `RecRef.Field(n)` in place is
+/// itself; a LOCAL FieldRef variable is every `FR := RecRef.Field(...)` /
+/// `FieldIndex(...)` assigned to it, provided nothing else binds it (another
+/// assignment, or passing it to a call, which a `var` parameter could
+/// rebind). A parameter or global is bound outside the routine.
+fn field_ref_sources(routine: &ModelRoutine, receiver: &str) -> Option<Vec<(String, FieldSel)>> {
+    let from_call = |text: &str| -> Option<(String, FieldSel)> {
+        let (recv, m, inner) = member_call(text)?;
+        match m.as_str() {
+            "field" => Some((var_key(recv), field_sel(inner))),
+            "fieldindex" => Some((var_key(recv), FieldSel::Unknown)),
+            _ => None,
+        }
+    };
+    if receiver.trim().ends_with(')') {
+        return from_call(receiver).map(|s| vec![s]);
+    }
+    let key = var_key(receiver);
+    let var = routine.variables.iter().find(|v| var_key(&v.name) == key)?;
+    if var.scope.as_deref() != Some("local") {
+        return None;
+    }
+    let passed = routine
+        .call_sites
+        .iter()
+        .any(|cs| cs.argument_texts.iter().any(|a| var_key(a) == key));
+    if passed {
+        return None;
+    }
+    let mut out = Vec::new();
+    for a in routine
+        .var_assignments
+        .iter()
+        .filter(|a| var_key(&a.lhs_name) == key)
+    {
+        // The assignment's whole right-hand side is a `RecRef.Field(...)` /
+        // `FieldIndex(...)` call: a call site inside the statement that ends
+        // where the statement ends.
+        let cs: &PCallSite = routine.call_sites.iter().find(|cs| {
+            within(&cs.source_anchor, &a.source_anchor)
+                && (cs.source_anchor.end_line, cs.source_anchor.end_column)
+                    == (a.source_anchor.end_line, a.source_anchor.end_column)
+        })?;
+        let PCallee::Member { receiver, method } = &cs.callee else {
+            return None;
+        };
+        let sel = match method.to_ascii_lowercase().as_str() {
+            "field" => cs
+                .argument_texts
+                .first()
+                .map_or(FieldSel::Unknown, |arg| field_sel(arg)),
+            "fieldindex" => FieldSel::Unknown,
+            _ => return None,
+        };
+        out.push((var_key(receiver), sel));
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The routine's FieldRef operations (module doc,
+/// [`ModelRoutine::field_ref_operations`]).
+fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<ModelRecordOperation> {
+    let mut out = Vec::new();
+    for cs in &routine.call_sites {
+        if cs.control_context.as_deref() == Some("unreachable") {
+            continue;
+        }
+        let PCallee::Member { receiver, method } = &cs.callee else {
+            continue;
+        };
+        let op = match method.to_ascii_lowercase().as_str() {
+            "calcfield" => "CalcFields",
+            "setfilter" => "SetFilter",
+            "setrange" => "SetRange",
+            _ => continue,
+        };
+        if !is_field_ref(routine, receiver) {
+            continue;
+        }
+        let sources = field_ref_sources(routine, receiver);
+        let (mut table_id, mut temp_state, mut field) = (None, None, FieldSel::Unknown);
+        if let Some(sources) = &sources {
+            let mut tables_of = sources
+                .iter()
+                .map(|(recref, _)| record_ref_table(routine, recref, tables));
+            let first = tables_of.next().unwrap_or((None, None));
+            if tables_of.all(|t| t == first) {
+                (table_id, temp_state) = first;
+            }
+            if sources.iter().all(|(_, f)| *f == sources[0].1) {
+                field = sources[0].1.clone();
+            }
+        }
+        let calculates = op == "CalcFields";
+        let mut reads = Vec::new();
+        if let Some(t) = &table_id {
+            tables.sel_reads(
+                t,
+                &field,
+                receiver,
+                calculates,
+                FIELD_REF_FIELD_UNKNOWN,
+                &mut reads,
+            );
+        }
+        // A filter that reads no FlowField is no effect; a `CalcField` is a
+        // read of its record (an unresolved one when the table is not known).
+        if !calculates && reads.is_empty() {
+            continue;
+        }
+        out.push(ModelRecordOperation {
+            id: format!("{}/fieldref", cs.id),
+            op: op.to_string(),
+            record_variable_name: receiver.clone(),
+            record_variable_id: None,
+            table_id,
+            temp_state: Some(temp_state.unwrap_or_else(|| PTempState {
+                kind: "unknown".to_string(),
+                value: None,
+                parameter_index: None,
+            })),
+            field_arguments: None,
+            source_anchor: cs.source_anchor.clone(),
+            loop_stack: cs.loop_stack.clone(),
+            field_argument_infos: None,
+            in_until_condition: false,
+            in_statement_position: cs.in_statement_position,
+            run_trigger: None,
+            modify_all_field: None,
+            transfer_fields_source: None,
+            receiver_is_record_ref: true,
+            flow_field_reads: reads,
+            dataset_reason: None,
+        });
+    }
+    out
+}
+
 /// Write every record operation's [`ModelRecordOperation::flow_field_reads`]
-/// (module doc). Runs after record types are resolved and extension fields
-/// merged.
+/// and every routine's [`ModelRoutine::field_ref_operations`] (module doc).
+/// Runs after record types are resolved and extension fields merged.
 pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
     let tables = Tables::new(&workspace.tables);
-    // `SetAutoCalcFields` on an object-level record: object id -> record key
-    // -> field arguments. Every routine of the object that retrieves that
-    // record gets them.
-    let mut object_auto: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+    let sharing = Sharing::new(&workspace.objects);
+    // `SetAutoCalcFields` on a shared record: scope (module doc) -> field
+    // arguments. Every routine that retrieves that record in that scope gets
+    // them.
+    let mut shared_auto: HashMap<String, Vec<String>> = HashMap::new();
     for routine in &workspace.routines {
-        for (key, arg, _) in auto_calc_calls(routine) {
-            if is_object_level(routine, &key) {
-                object_auto
-                    .entry(routine.object_id.clone())
-                    .or_default()
-                    .entry(key)
-                    .or_default()
-                    .push(arg);
+        for (key, arg) in auto_calc_calls(routine) {
+            for scope in sharing.scopes(routine, &key) {
+                shared_auto.entry(scope).or_default().push(arg.clone());
             }
         }
     }
     for routine in &mut workspace.routines {
         let auto = auto_calc_calls(routine);
-        let shared = object_auto.get(&routine.object_id);
-        // The object-level keys this routine's own scope does not shadow.
-        let shared: Vec<(&str, &[String])> = shared
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| is_object_level(routine, key))
-            .map(|(key, args)| (key.as_str(), args.as_slice()))
-            .collect();
-        for op in &mut routine.record_operations {
+        let mut scopes_of: HashMap<String, Vec<String>> = HashMap::new();
+        let mut ops = std::mem::take(&mut routine.record_operations);
+        for op in &mut ops {
             let Some(table_id) = op.table_id.as_deref() else {
+                op.flow_field_reads = Vec::new();
                 continue;
             };
             let mut reads = Vec::new();
@@ -418,21 +905,17 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
                 }
                 o if is_retrieval(o) => {
                     let key = var_key(&op.record_variable_name);
-                    for (k, arg, bare) in &auto {
+                    for (k, arg) in &auto {
                         if *k == key {
                             tables.reads_of(table_id, arg, true, &mut reads);
-                        } else if *bare {
-                            // A bare call under an obsolete `with X do` is a
-                            // call on X: a may-read where X's table has the
-                            // FlowField.
-                            tables.reads_of(table_id, arg, false, &mut reads);
                         }
                     }
-                    for (k, args) in &shared {
-                        if *k == key {
-                            for arg in *args {
-                                tables.reads_of(table_id, arg, true, &mut reads);
-                            }
+                    let scopes = scopes_of
+                        .entry(key.clone())
+                        .or_insert_with(|| sharing.scopes(routine, &key));
+                    for scope in scopes.iter() {
+                        for arg in shared_auto.get(scope).into_iter().flatten() {
+                            tables.reads_of(table_id, arg, true, &mut reads);
                         }
                     }
                 }
@@ -440,12 +923,163 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
             }
             op.flow_field_reads = reads;
         }
+        routine.record_operations = ops;
+        routine.field_ref_operations = field_ref_operations(routine, &tables);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_arguments_name_their_field() {
+        let cases = [
+            ("\"Total Amount\"", FieldSel::Name("Total Amount".into())),
+            ("X.\"Total Amount\"", FieldSel::Name("Total Amount".into())),
+            ("Rec.\"No.\"", FieldSel::Name("No.".into())),
+            ("\"No.\"", FieldSel::Name("No.".into())),
+            ("Amount", FieldSel::Name("Amount".into())),
+            ("4", FieldSel::Number(4)),
+            ("'Line Count'", FieldSel::Name("Line Count".into())),
+            (
+                "H.FieldNo(\"Total Amount\")",
+                FieldSel::Name("Total Amount".into()),
+            ),
+            ("FieldNo(Amount)", FieldSel::Name("Amount".into())),
+            ("GetNo()", FieldSel::Unknown),
+        ];
+        for (arg, want) in cases {
+            assert_eq!(field_sel(arg), want, "{arg}");
+        }
+        assert_eq!(
+            member_call("RR.Field(4)"),
+            Some(("RR", "field".to_string(), "4"))
+        );
+        assert_eq!(
+            member_call("\"My Ref\".FieldIndex(F(1))"),
+            Some(("\"My Ref\"", "fieldindex".to_string(), "F(1)"))
+        );
+        assert_eq!(member_call("Field(4)"), None);
+    }
+
+    fn table(id: &str, fields: Vec<(i64, &str, &str)>) -> ModelTable {
+        ModelTable {
+            id: id.to_string(),
+            app_guid: "app".to_string(),
+            table_number: 1,
+            name: id.to_string(),
+            fields: fields
+                .into_iter()
+                .map(|(n, name, class)| ModelField {
+                    id: format!("{id}/{n}"),
+                    physical_table_id: id.to_string(),
+                    declaring_object_id: id.to_string(),
+                    declaring_app_id: "app".to_string(),
+                    field_number: n,
+                    name: name.to_string(),
+                    field_class: class.to_string(),
+                    data_type: "Decimal".to_string(),
+                    is_blob_like: false,
+                    captions: Vec::new(),
+                    calc_formula: Vec::new(),
+                })
+                .collect(),
+            keys: Vec::new(),
+            is_temporary: false,
+            is_extension_stub: false,
+        }
+    }
+
+    /// Hand-stated: a table WITH a FlowField and one without. A field that
+    /// is not found is "not decided" only where a FlowField exists; a
+    /// calculation on a record whose table is not loaded is "not decided".
+    #[test]
+    fn a_field_that_is_not_found_is_undecided_only_where_flowfields_exist() {
+        let tables = [
+            table("flow", vec![(1, "No.", "Normal"), (2, "F", "FlowField")]),
+            table("plain", vec![(1, "No.", "Normal")]),
+        ];
+        let t = Tables::new(&tables);
+        let mut out = Vec::new();
+        t.reads_of("flow", "Missing", false, &mut out);
+        assert_eq!(
+            out.iter().map(|r| r.source.clone()).collect::<Vec<_>>(),
+            vec![FlowFieldSource::Undecided(FIELD_NOT_FOUND)]
+        );
+        let mut out = Vec::new();
+        t.reads_of("plain", "Missing", true, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+        let mut out = Vec::new();
+        t.reads_of("gone", "F", true, &mut out);
+        assert_eq!(
+            out.iter().map(|r| r.source.clone()).collect::<Vec<_>>(),
+            vec![FlowFieldSource::Undecided(HOST_NOT_LOADED)]
+        );
+        let mut out = Vec::new();
+        t.reads_of("gone", "F", false, &mut out);
+        assert!(out.is_empty(), "a filter's retrieval is the read: {out:?}");
+    }
+
+    #[test]
+    fn extensions_share_their_base_objects_group() {
+        let obj = |id: &str, ty: &str, name: &str, ext: Option<&str>| ModelObject {
+            id: id.to_string(),
+            app_guid: "app".to_string(),
+            object_type: ty.to_string(),
+            object_number: 1,
+            object_key: "1".to_string(),
+            name: name.to_string(),
+            source_table_name: None,
+            extends_target_name: ext.map(str::to_string),
+            implements_interfaces: None,
+            object_subtype: None,
+            page_type: None,
+            inherent_commit_behavior: None,
+            source_table_temporary: None,
+            page_controls: Vec::new(),
+            single_instance: None,
+            editable: None,
+            insert_allowed: None,
+            modify_allowed: None,
+            delete_allowed: None,
+            source_anchor: None,
+            declaration_only_routines: Vec::new(),
+            run_actions: None,
+            enum_impls: None,
+        };
+        assert_eq!(
+            object_groups(&obj("p", "Page", "Q Card", None)),
+            (vec!["page:q card".to_string()], true)
+        );
+        assert_eq!(
+            object_groups(&obj("e", "PageExtension", "Q Ext", Some("Q Card"))),
+            (vec!["page:q card".to_string()], false)
+        );
+        assert_eq!(
+            object_groups(&obj(
+                "e",
+                "PageExtension",
+                "Q Ext",
+                Some("Microsoft.Sales.\"Q Card\"")
+            )),
+            (
+                vec![
+                    "page:microsoft.sales.\"q card\"".to_string(),
+                    "page:q card".to_string()
+                ],
+                false
+            )
+        );
+        assert_eq!(
+            object_groups(&obj("t", "TableExtension", "T Ext", Some("Cust."))),
+            (vec!["table:cust.".to_string()], false)
+        );
+        assert_eq!(
+            object_groups(&obj("c", "Codeunit", "C", None)),
+            (vec!["id:c".to_string()], false)
+        );
+    }
 
     #[test]
     fn calc_formula_table_reads_every_documented_shape() {
