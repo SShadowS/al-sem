@@ -35,6 +35,18 @@ fn prove_both(
     question: &str,
     no_deps: bool,
 ) -> (serde_json::Value, String) {
+    prove_mode(ws, routine, question, no_deps, false)
+}
+
+/// [`prove_both`] in cross-app mode (`single_app` false, the default) or
+/// with `--single-app`.
+fn prove_mode(
+    ws: &std::path::Path,
+    routine: &str,
+    question: &str,
+    no_deps: bool,
+    single_app: bool,
+) -> (serde_json::Value, String) {
     // The binary's read for prove (`FINGERPRINT_ROWS`).
     let needs = crate::program::inputs::WorkspaceNeeds {
         build_only: false,
@@ -48,7 +60,7 @@ fn prove_both(
         question_text: question,
         alsem_ver: "test",
         deterministic: true,
-        single_app: false,
+        single_app,
         closed_world: false,
         assume_no_dependents: no_deps,
         human: false,
@@ -1089,4 +1101,224 @@ fn the_analyzed_direct_callers_are_one_hop_up() {
         "precondition: the walk reaches more than the direct caller: {r:#}"
     );
     assert_eq!(r["directCallersAnalyzed"], 1, "{r:#}");
+}
+
+// ── Isolated events (engine limits B3) ─────────────────────────────────────
+// `tests/fixtures/isolated-events` (its README states every case): a
+// workspace with an isolated and a normal event, and a symbol-only dependency
+// (`dep/SymbolReference.json`, packed into `.alpackages` here) with one of
+// each. Each test answers through `alsem prove`'s own job.
+
+/// The fixture's workspace in a temporary folder, with the dependency packed
+/// as a symbol-only `.app`. The folder must outlive the use.
+fn isolated_ws() -> (tempfile::TempDir, std::path::PathBuf) {
+    use std::io::Write;
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/isolated-events");
+    let t = tempfile::tempdir().unwrap();
+    // A `.git` marker stops the package discovery's ancestor walk.
+    std::fs::create_dir_all(t.path().join(".git")).unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    for f in ["app.json", "src/Events.al"] {
+        std::fs::copy(fixture.join("ws").join(f), ws.join(f)).unwrap();
+    }
+    let symbols = std::fs::read_to_string(fixture.join("dep/SymbolReference.json")).unwrap();
+    let guid = "15015015-0000-4000-8000-0000000d0150";
+    let manifest = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{guid}" Name="Iso Dep" Publisher="probe" Version="1.0.0.0" Runtime="13.0" /></Package>"#
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut bytes);
+        let opts =
+            zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::default());
+        zip.start_file("NavxManifest.xml", opts).unwrap();
+        zip.write_all(manifest.as_bytes()).unwrap();
+        zip.start_file("SymbolReference.json", opts).unwrap();
+        zip.write_all(symbols.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+    let mut out = vec![0u8; 40];
+    out.extend_from_slice(bytes.get_ref());
+    std::fs::create_dir_all(ws.join(".alpackages")).unwrap();
+    std::fs::write(ws.join(".alpackages/probe_Iso Dep_1.0.0.0.app"), out).unwrap();
+    (t, ws)
+}
+
+/// The precondition every isolated-events test states: the subscriber is
+/// bound to its publisher (the walk crosses an event dispatch), so a missing
+/// witness is the rule's absence, not a lost subscription.
+fn assert_bound(v: &serde_json::Value) {
+    assert!(
+        v["payload"]["result"]["cone"]["nodes"]
+            .as_u64()
+            .is_some_and(|n| n >= 2),
+        "precondition: the walk reaches the publisher above the subscriber: {v:#}"
+    );
+}
+
+/// B3: a subscriber of a workspace isolated event (`[IntegrationEvent(false,
+/// false, true)]`) has an intercepting caller: the isolated dispatch. Before
+/// the fix the answer was a definite `no (every candidate decided)`.
+///
+/// Discrimination (recorded in the commit): drop the `is_isolated_publisher`
+/// test in `eval_intercept_dispatch` -> `no`, fails; drop the source read in
+/// `node_extract` (`publisher_isolated: false`) -> `no`, fails.
+#[test]
+fn a_subscriber_of_an_isolated_event_is_intercepted() {
+    let (_t, ws) = isolated_ws();
+    let (v, human) = prove_both(
+        &ws,
+        "Iso Subscriber::HandleIso",
+        "callers-intercept-errors",
+        true,
+    );
+    assert_bound(&v);
+    assert_eq!(answer(&v), "yes", "{v:#}");
+    assert_eq!(kinds(&v), ["isolated-event"], "{v:#}");
+    assert!(
+        human.contains("isolated-event: isolated event Codeunit \"Iso Publisher\"::OnIsoEvent"),
+        "{human}"
+    );
+    assert!(human.contains("has a write pending"), "{human}");
+}
+
+/// The control: a normal event's subscriber, with no trap above, is `no`; the
+/// isolated rule does not fire on it.
+#[test]
+fn a_subscriber_of_a_normal_event_is_not_intercepted() {
+    let (_t, ws) = isolated_ws();
+    let (v, _) = prove_both(
+        &ws,
+        "Iso Subscriber::HandlePlain",
+        "callers-intercept-errors",
+        true,
+    );
+    assert_bound(&v);
+    assert_eq!(answer(&v), "no", "{v:#}");
+    assert!(kinds(&v).is_empty(), "{v:#}");
+}
+
+/// B3 on a symbol-only dependency publisher (`[BusinessEvent(False, True)]`
+/// in its `SymbolReference.json`, as System's `OnCompanyOpenCompleted`): the
+/// isolated flag reaches the graph from the symbols, and the publisher's
+/// missing body facts do not block. The normal event of the same dependency
+/// gives no `isolated-event` witness.
+///
+/// Discrimination (recorded in the commit): drop the ABI read in
+/// `abi_ingest` (`publisher_isolated: false`) -> no witness, fails; send a
+/// symbol-only publisher's dispatch through the body-facts lookup again ->
+/// `unknown` with `order-unknown`, fails.
+#[test]
+fn a_subscriber_of_a_dependency_isolated_event_is_intercepted() {
+    let (_t, ws) = isolated_ws();
+    let (v, _) = prove_both(
+        &ws,
+        "Iso Subscriber::HandleDepIso",
+        "callers-intercept-errors",
+        true,
+    );
+    assert_bound(&v);
+    assert_eq!(answer(&v), "yes", "{v:#}");
+    assert_eq!(kinds(&v), ["isolated-event"], "{v:#}");
+    // The symbol-only publisher has no body facts; the dispatch needs none.
+    assert!(!blocked(&v).contains(&"order-unknown".to_string()), "{v:#}");
+    let (plain, _) = prove_both(
+        &ws,
+        "Iso Subscriber::HandleDepPlain",
+        "callers-intercept-errors",
+        true,
+    );
+    assert_bound(&plain);
+    assert!(
+        !kinds(&plain).contains(&"isolated-event".to_string()),
+        "{plain:#}"
+    );
+}
+
+/// r3 §7 R5 on an isolated event: `throws-error` on the subscriber says the
+/// error does not escape the publisher, with the condition and the reason;
+/// a normal event's subscriber keeps `not established`. Both for a workspace
+/// and for a symbol-only dependency publisher, cross-app and `--single-app`.
+/// Cross-app, the dependency publisher is a model row (read from its symbol
+/// attributes); with `--single-app` it is not, and the event graph takes the
+/// flag from the program node.
+///
+/// Discrimination (recorded in the commit): read no isolation in
+/// `subscribed_publishers` -> `not established` for both isolated
+/// subscribers, fails; leave the dependency symbol's `isolated` `None` in
+/// `model::events` -> the `--single-app` dependency case fails.
+#[test]
+fn throws_error_says_whether_the_error_escapes_an_isolated_event() {
+    let (_t, ws) = isolated_ws();
+    for single_app in [false, true] {
+        for (routine, publisher) in [
+            (
+                "Iso Subscriber::HandleIso",
+                "Codeunit \"Iso Publisher\"::OnIsoEvent",
+            ),
+            // The dependency publisher's display differs by mode (a raw
+            // object id with `--single-app`); its routine part does not.
+            ("Iso Subscriber::HandleDepIso", "::OnDepIso"),
+        ] {
+            let (_, human) = prove_mode(&ws, routine, "throws-error", true, single_app);
+            assert!(
+                human.lines().any(|l| l.starts_with("  whether it escapes ")
+                    && l.contains(&format!(
+                        "{publisher}: no, unless the raising transaction has a write pending"
+                    ))),
+                "{routine} (single app: {single_app}): {human}"
+            );
+            assert!(
+                !human.contains("not established"),
+                "{routine} (single app: {single_app}): {human}"
+            );
+        }
+        for routine in [
+            "Iso Subscriber::HandlePlain",
+            "Iso Subscriber::HandleDepPlain",
+        ] {
+            let (_, human) = prove_mode(&ws, routine, "throws-error", true, single_app);
+            assert!(
+                human.contains(": not established"),
+                "{routine} (single app: {single_app}): {human}"
+            );
+            assert!(
+                !human.contains("unless the raising transaction"),
+                "{routine} (single app: {single_app}): {human}"
+            );
+        }
+    }
+}
+
+/// A publisher declared in two `#if` arms, isolated only in the second (the
+/// `#else`): some build isolates it, so the dispatch is a trap (the rule of
+/// `model::events::parse_isolated`: isolated in any build). The two arms have
+/// one signature, so the build keeps one node and merges the arms' event
+/// facts (`build::EventFacts`); the survivor is the first, non-isolated arm.
+///
+/// Discrimination (recorded in the commit): in `EventFacts::union` take the
+/// survivor's own flag instead of any arm's -> `no`, fails.
+#[test]
+fn an_event_isolated_in_one_if_arm_is_isolated() {
+    let publisher = "codeunit 50150 \"Arm Publisher\"\n{\n    procedure Raise()\n    begin\n        \
+                     OnArm();\n    end;\n\n#if SOME_UNDEFINED_SYMBOL\n    \
+                     [IntegrationEvent(false, false)]\n    local procedure OnArm()\n    begin\n    \
+                     end;\n#else\n    [IntegrationEvent(false, false, true)]\n    local procedure \
+                     OnArm()\n    begin\n    end;\n#endif\n}\n";
+    let subscriber = "codeunit 50151 \"Arm Subscriber\"\n{\n    \
+                      [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Arm Publisher\", 'OnArm', \
+                      '', false, false)]\n    local procedure HandleArm()\n    begin\n        \
+                      Error('arm subscriber failed');\n    end;\n}\n";
+    let w = ws(&[("Pub.al", publisher), ("Sub.al", subscriber)]);
+    let (v, _) = prove_both(
+        w.path(),
+        "Arm Subscriber::HandleArm",
+        "callers-intercept-errors",
+        true,
+    );
+    assert_bound(&v);
+    assert_eq!(answer(&v), "yes", "{v:#}");
+    assert_eq!(kinds(&v), ["isolated-event"], "{v:#}");
 }

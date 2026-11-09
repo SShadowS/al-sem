@@ -49,7 +49,14 @@
 //! is under `asserterror`; `collectible` when C carries
 //! `[ErrorBehavior(ErrorBehavior::Collect)]` (only errors raised as
 //! collectible are collected; the walk goes on, since an ordinary error is
-//! not); otherwise it propagates. **A TryFunction does not roll back the
+//! not); `isolated-event` when the edge is an event dispatch from the
+//! publisher of an isolated event (`[IntegrationEvent(_, _, true)]`,
+//! `[BusinessEvent(_, true)]`, `[InternalEvent(_, true)]`, source or symbols):
+//! the platform runs each subscriber in its own transaction and rolls it back
+//! on an error, and the publisher goes on (Microsoft Learn, "Isolated events
+//! in AL"). That trap does not hold when the raising transaction has a write
+//! pending or during an install or upgrade, so the walk goes on above the
+//! publisher; otherwise it propagates. **A TryFunction does not roll back the
 //! database changes made before the error** (Microsoft, "Handling errors
 //! using Try methods"); nothing here says it does. A trap does not cross a
 //! session or task boundary: a background start ends the path.
@@ -154,7 +161,8 @@ impl CallersQuestion {
 #[derive(Clone, Debug)]
 pub struct Witness {
     /// `pending-write`, `inside-write`, `catch-and-return-false`,
-    /// `asserterror`, `collectible`, `non-interactive-entry`.
+    /// `asserterror`, `collectible`, `isolated-event`,
+    /// `non-interactive-entry`.
     pub kind: &'static str,
     /// What it is, in words (`Modify on "Customer"`, `checked Codeunit.Run`).
     pub detail: String,
@@ -1050,6 +1058,12 @@ impl<'a, 'c> Visitor<'a, 'c> {
         if cf & flag::HUB != 0 || g.object_node(c).is_some() {
             return SiteEval::default();
         }
+        // An error crossing an event dispatch is decided by the publisher's
+        // declaration alone, so its body facts are not needed (a symbol-only
+        // publisher, such as System's `OnCompanyOpenCompleted`, has none).
+        if self.q == CallersQuestion::InterceptErrors && st.boundary == Boundary::EventDispatch {
+            return self.eval_intercept_dispatch(from, site, c);
+        }
         let unit = st.anchor.map(|a| g.unit(a.unit).to_string());
         let Some(r) = self.ix.row_for(g, c, unit.as_deref()) else {
             let d = self.ix.display(g, c);
@@ -1350,10 +1364,6 @@ impl<'a, 'c> Visitor<'a, 'c> {
         let g = self.cx.g;
         let st = g.sites()[site as usize];
         let display = self.ix.display(g, c);
-        if st.boundary == Boundary::EventDispatch {
-            // A subscriber's error reaches the publisher's caller.
-            return SiteEval::default();
-        }
         let collect =
             attr_member(r, "ErrorBehavior").is_some_and(|m| m.eq_ignore_ascii_case("collect"));
         if collect {
@@ -1468,6 +1478,40 @@ impl<'a, 'c> Visitor<'a, 'c> {
                 stop: Some("try-function"),
                 bits: 0,
             };
+        }
+        SiteEval::default()
+    }
+
+    /// Intercepted errors at an event dispatch `publisher --event-->
+    /// subscriber`. A subscriber's error reaches the publisher's caller,
+    /// except on an isolated event: the platform runs each subscriber in a
+    /// transaction of its own, rolls that transaction back on an error, and
+    /// goes on with the next subscriber and then the publisher (Microsoft
+    /// Learn, "Isolated events in AL"). That is a trap, and a witness. It
+    /// holds only when the raising transaction has no write pending (with
+    /// one, the event runs as a normal event) and not during an extension's
+    /// install, uninstall or upgrade, so the walk goes on above the publisher:
+    /// a path above may still let the error through.
+    fn eval_intercept_dispatch(&mut self, from: WalkState, site: SiteIx, c: NodeIx) -> SiteEval {
+        let g = self.cx.g;
+        let st = g.sites()[site as usize];
+        if st.via() == "eventFlow" && g.is_isolated_publisher(c) {
+            let display = self.ix.display(g, c);
+            self.witness(
+                "isolated-event",
+                c,
+                site,
+                from,
+                format!(
+                    "isolated event {display}: the subscriber runs in a transaction of its own; \
+                     an error rolls back its database changes and the publisher goes on (unless \
+                     the raising transaction has a write pending, or an extension is being \
+                     installed or upgraded: then it runs as a normal event and the error \
+                     propagates)"
+                ),
+                None,
+                false,
+            );
         }
         SiteEval::default()
     }
@@ -1979,8 +2023,15 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         ProveAnswer::Unknown
     };
     let mut witnesses = v.witnesses;
-    // A collectible-only trap after the ones that catch every error.
-    witnesses.sort_by_key(|w| (w.tier, w.hops, w.kind == "collectible"));
+    // A collectible-only trap, and an isolated event's (it holds only with no
+    // write pending), after the ones that catch every error.
+    witnesses.sort_by_key(|w| {
+        (
+            w.tier,
+            w.hops,
+            matches!(w.kind, "collectible" | "isolated-event"),
+        )
+    });
     let mut open = v.open_witnesses;
     open.sort_by_key(|w| w.hops);
     witnesses.extend(open);

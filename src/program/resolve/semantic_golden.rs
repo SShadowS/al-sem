@@ -1623,6 +1623,7 @@ mod tests {
             subscriber_instance_manual: false,
             publisher_kind: None,
             include_sender: None,
+            publisher_isolated: false,
             abi_routine_kind: None,
             abi_event_kind: None,
             param_sig_key: Default::default(),

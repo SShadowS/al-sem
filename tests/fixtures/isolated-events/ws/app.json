@@ -1,0 +1,16 @@
+{
+  "id": "15015015-0000-4000-8000-000000000150",
+  "name": "Isolated Events Workspace",
+  "publisher": "probe",
+  "version": "1.0.0.0",
+  "runtime": "13.0",
+  "idRanges": [{ "from": 53000, "to": 53099 }],
+  "dependencies": [
+    {
+      "id": "15015015-0000-4000-8000-0000000d0150",
+      "name": "Iso Dep",
+      "publisher": "probe",
+      "version": "1.0.0.0"
+    }
+  ]
+}
