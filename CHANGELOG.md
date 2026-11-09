@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (output validation round 4: assumption records name every publisher a site needs)
+
+- **A site ruled out only by several publishers' keeps names all of them (r3 §7 R1).**
+  Round-4 c25: the commit at `CDOUsageManagement.Codeunit.al:35` is reached from
+  `StartEvents` after `OnBeforeSendMailV2` AND after `OnBeforeSendMailExtV2`, both taking
+  `SendHandled` by `var`, yet its assumption record named `OnBeforeSendMailV2` alone. The
+  engine read the deciding keep off ONE route (the first the strict search found), so a
+  publisher guarding another route to the same site was dropped.
+  - The literal reach now judges which keeps a ruling depends on over the whole search:
+    it reruns the search following only some keeps (a new keep mask beside "all" and
+    "none") and keeps a smallest set that still rules the row out, every member needed.
+    The searches are shared by the rows of one root. Measured on the five affected CDO
+    calls: no slowdown.
+  - Every consumer reads the same set: the rows' `assumes` / `literalAssumes` strings,
+    prove's `assumptionRecords` and `subscriberAssumptions`, digest 5.x
+    `entries[].assumptionRecords` and `summary.commits.literalDead`, explain and the
+    routine totals. On CDO, `StartEvents`' 43 literal-dead rows now all name both
+    publishers (40 named `OnBeforeSendMailV2` alone).
+  - The sentence names every publisher a site needs: `assumes <A> and <B> have no loaded
+    subscriber, so <parameter> keeps its value (…); rules out <site>` (was one sentence
+    per publisher, each reading as if it alone ruled the site out). Records stay one per
+    publisher; a site listed in several records needs all of them. `--schema 4` is
+    unchanged (records stripped).
+
 ### Changed (output validation r3 §7: B1 completed, R2 lookup failures, R6 write order)
 
 - **Tests: a test's relation is a property of its path set, in every count and line

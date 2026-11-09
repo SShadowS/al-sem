@@ -171,30 +171,104 @@ impl AssumptionRecord {
     }
 
     /// The sentence (r3 §7 R1): the closure assumption, then what it rules
-    /// out.
+    /// out. A site in other records too needs their assumptions as well:
+    /// [`Self::sentences`] states such sites with all of them.
+    #[cfg(test)]
     pub(crate) fn sentence(&self) -> String {
-        let k = &self.keep;
-        let mut s = if k.subscribers.is_empty() {
-            format!(
-                "assumes {} has no loaded subscriber, so {} keeps its value ({}; no additional \
-                 subscribers assumed)",
-                k.publisher, k.parameter, k.universe
-            )
-        } else {
-            format!(
-                "assumes no subscribers beyond those considered in {} ({}), none of which \
-                 changes {}",
-                k.universe,
-                k.subscribers.join(", "),
-                k.parameter
-            )
+        Self::joint_sentence(&[&self.keep], &self.rules_out)
+    }
+
+    /// The sentences of `records` (r3 §7 R1): its sites grouped by the
+    /// records that list them, one sentence per group naming every
+    /// assumption the group's sites need together (a site ruled out only by
+    /// two publishers' keeps is stated with both, never as if either alone
+    /// ruled it out). Groups in the order their first site is met (records
+    /// in order, then their sites); a record with no site stands alone.
+    pub(crate) fn sentences(records: &[AssumptionRecord]) -> Vec<String> {
+        let mut groups: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (ri, r) in records.iter().enumerate() {
+            if r.rules_out.is_empty() {
+                groups.push((vec![ri], Vec::new()));
+            }
+            for site in &r.rules_out {
+                if !seen.insert(site.as_str()) {
+                    continue;
+                }
+                let with: Vec<usize> = records
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| x.rules_out.contains(site))
+                    .map(|(j, _)| j)
+                    .collect();
+                match groups.iter_mut().find(|(w, s)| *w == with && !s.is_empty()) {
+                    Some((_, sites)) => sites.push(site.clone()),
+                    None => groups.push((with, vec![site.clone()])),
+                }
+            }
+        }
+        groups
+            .iter()
+            .map(|(with, sites)| {
+                let keeps: Vec<&KeepInfo> = with.iter().map(|&j| &records[j].keep).collect();
+                Self::joint_sentence(&keeps, sites)
+            })
+            .collect()
+    }
+
+    /// One sentence: the assumptions `keeps` (all needed together), then the
+    /// sites they rule out.
+    fn joint_sentence(keeps: &[&KeepInfo], sites: &[String]) -> String {
+        let clause = |k: &KeepInfo| -> String {
+            if k.subscribers.is_empty() {
+                format!(
+                    "assumes {} has no loaded subscriber, so {} keeps its value ({}; no \
+                     additional subscribers assumed)",
+                    k.publisher, k.parameter, k.universe
+                )
+            } else {
+                format!(
+                    "assumes no subscribers beyond those considered in {} ({}), none of which \
+                     changes {}",
+                    k.universe,
+                    k.subscribers.join(", "),
+                    k.parameter
+                )
+            }
         };
-        match self.rules_out.as_slice() {
+        let mut s = match keeps {
+            [] => String::new(),
+            [one] => clause(one),
+            [first, rest @ ..]
+                if first.subscribers.is_empty()
+                    && rest.iter().all(|k| {
+                        k.subscribers.is_empty()
+                            && k.parameter == first.parameter
+                            && k.universe == first.universe
+                    }) =>
+            {
+                let names: Vec<&str> = keeps.iter().map(|k| k.publisher.as_str()).collect();
+                let (last, head) = names.split_last().unwrap_or((&"", &[]));
+                format!(
+                    "assumes {} and {last} have no loaded subscriber, so {} keeps its value ({}; \
+                     no additional subscribers assumed)",
+                    head.join(", "),
+                    first.parameter,
+                    first.universe
+                )
+            }
+            _ => keeps
+                .iter()
+                .map(|k| clause(k))
+                .collect::<Vec<_>>()
+                .join(", and "),
+        };
+        match sites {
             [] => {}
             [one] => s.push_str(&format!("; rules out {one}")),
             [first, ..] => s.push_str(&format!(
                 "; rules out {} sites (first: {first})",
-                self.rules_out.len()
+                sites.len()
             )),
         }
         s
@@ -264,7 +338,8 @@ pub(crate) struct RouteGuardSet {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FlowNotes {
     /// The row is unreachable only because these publishers' loaded
-    /// subscribers keep a value (empty: not by an assumption).
+    /// subscribers keep a value, all of them needed together (empty: not by
+    /// an assumption).
     pub assumed: Vec<KeepInfo>,
     /// The guards on the row's listed witness route, outermost first
     /// (`None`: no route was replayed).
@@ -547,10 +622,38 @@ impl Bindings {
     }
 }
 
+/// r3 E2: which publisher keep verdicts ([`lflow`]) a search follows: all of
+/// them (the loaded-subscribers world), none (the strict world), or (r3 §7
+/// R1) only the listed ones, sorted, every other publisher pass writing its
+/// `var` arguments. The last one finds which keeps a ruling depends on
+/// ([`LiteralReach::relied_keeps`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Keeps {
+    All,
+    None,
+    Only(Arc<[u32]>),
+}
+
+impl Keeps {
+    /// Whether keep verdict `k` is followed.
+    fn follows(&self, k: u32) -> bool {
+        match self {
+            Keeps::All => true,
+            Keeps::None => false,
+            Keeps::Only(ks) => ks.binary_search(&k).is_ok(),
+        }
+    }
+}
+
+/// [`Keeps::All`], to pass by reference.
+const ALL: &Keeps = &Keeps::All;
+/// [`Keeps::None`], to pass by reference.
+const NONE: &Keeps = &Keeps::None;
+
 /// r3 E2: the flow evaluation cache key: (the program, by address: the
-/// programs never move once built; entry values; whether publisher keeps are
+/// programs never move once built; entry values; which publisher keeps are
 /// followed). No borrowed id, so the reach stays covariant in its lifetime.
-type FlowKey = (usize, Vec<(u32, VSet)>, bool);
+type FlowKey = (usize, Vec<(u32, VSet)>, Keeps);
 
 /// [`LiteralReach::unreachable_effects_noted`]'s result: the dead effects,
 /// per group its dead resources, and per effect dead only by an assumption
@@ -1619,7 +1722,7 @@ impl<'a> LiteralReach<'a> {
         to: &str,
         kind: &str,
         b: &Bindings,
-        keep: bool,
+        keep: &Keeps,
     ) -> bool {
         self.dead_at_m(f, site, b, keep)
             || (kind == "interface-dispatch" && self.dispatch_excluded(f, site, to, b, keep))
@@ -1630,7 +1733,7 @@ impl<'a> LiteralReach<'a> {
     /// assigned from enum values the flow knows ([`lflow`]), each value's
     /// implementation of the interface resolves to a loaded codeunit, and
     /// `to` is in none of them. Anything unknown keeps the edge.
-    fn dispatch_excluded(&self, f: &str, site: &str, to: &str, b: &Bindings, keep: bool) -> bool {
+    fn dispatch_excluded(&self, f: &str, site: &str, to: &str, b: &Bindings, keep: &Keeps) -> bool {
         let Some(p) = self.flow_progs.get(f) else {
             return false;
         };
@@ -1692,12 +1795,12 @@ impl<'a> LiteralReach<'a> {
 
     /// Whether `site` of `routine` cannot run under `b`.
     fn dead_at(&self, routine: &str, site: &str, b: &Bindings) -> bool {
-        self.dead_at_m(routine, site, b, true)
+        self.dead_at_m(routine, site, b, ALL)
     }
 
-    /// [`Self::dead_at`]; `keep` says whether the flow follows publisher keeps
+    /// [`Self::dead_at`]; `keep` says which publisher keeps the flow follows
     /// (r3 E2, [`lflow`]).
-    fn dead_at_m(&self, routine: &str, site: &str, b: &Bindings, keep: bool) -> bool {
+    fn dead_at_m(&self, routine: &str, site: &str, b: &Bindings, keep: &Keeps) -> bool {
         contradicts(self.reqs_at(routine, site), b)
             || contradicts_tables(self.table_reqs_at(routine, site), b)
             || values::contradicts(self.value_reqs_at(routine, site), b)
@@ -1714,14 +1817,14 @@ impl<'a> LiteralReach<'a> {
 
     /// r3 E2: the evaluation of `routine`'s flow program under `b`'s entry
     /// values, cached by its key. `None` when the routine has no program.
-    fn flow_eval(&self, routine: &str, b: &Bindings, keep: bool) -> Option<Arc<lflow::FlowEval>> {
+    fn flow_eval(&self, routine: &str, b: &Bindings, keep: &Keeps) -> Option<Arc<lflow::FlowEval>> {
         let p = self.flow_progs.get(routine)?;
         let entry: Vec<(u32, VSet)> = p
             .key_params
             .iter()
             .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
             .collect();
-        let key: FlowKey = (p as *const lflow::FlowProgram as usize, entry, keep);
+        let key: FlowKey = (p as *const lflow::FlowProgram as usize, entry, keep.clone());
         if let Some(ev) = self.flow_cache.lock().expect("flow cache").get(&key) {
             return Some(Arc::clone(ev));
         }
@@ -1729,7 +1832,7 @@ impl<'a> LiteralReach<'a> {
         let resolve = |l: &crate::program::body::features::ValueLabel| {
             values::resolve_label(r, &self.tables_by_id, l)
         };
-        let ev = Arc::new(p.eval(&key.1, &resolve, &|_| keep, None));
+        let ev = Arc::new(p.eval(&key.1, &resolve, &|k| keep.follows(k), None));
         let mut cache = self.flow_cache.lock().expect("flow cache");
         if cache.len() >= FLOW_CACHE_MAX {
             cache.clear();
@@ -1740,17 +1843,24 @@ impl<'a> LiteralReach<'a> {
 
     /// r3 E2: the keep verdicts the flow used at `routine` under `b`.
     fn keeps_at(&self, routine: &str, b: &Bindings) -> Vec<u32> {
-        self.flow_eval(routine, b, true)
+        self.flow_eval(routine, b, ALL)
             .map_or_else(Vec::new, |ev| ev.keeps.clone())
     }
 
     /// The callee's bindings across a call at `site` of `caller` with `b`.
     fn bind(&self, caller: &str, site: &str, callee: &str, b: &Bindings) -> Bindings {
-        self.bind_m(caller, site, callee, b, true)
+        self.bind_m(caller, site, callee, b, ALL)
     }
 
     /// [`Self::bind`]; `keep` as in [`Self::dead_at_m`].
-    fn bind_m(&self, caller: &str, site: &str, callee: &str, b: &Bindings, keep: bool) -> Bindings {
+    fn bind_m(
+        &self,
+        caller: &str,
+        site: &str,
+        callee: &str,
+        b: &Bindings,
+        keep: &Keeps,
+    ) -> Bindings {
         let (f, t) = (self.frames.get(callee), self.tables.get(callee));
         let vf = self.value_frames.get(callee);
         let fb = self.flow_bind.get(callee);
@@ -1966,7 +2076,7 @@ impl<'a> LiteralReach<'a> {
 
     /// Every routine reached from `root` with guards ignored, and the binding
     /// states reached with them; `None` when the guarded search hit the cap.
-    fn search(&self, root: &'a str, keep: bool) -> Option<Reached<'a>> {
+    fn search(&self, root: &'a str, keep: &Keeps) -> Option<Reached<'a>> {
         let mut plain: HashSet<&str> = HashSet::from([root]);
         let mut q = VecDeque::from([root]);
         while let Some(f) = q.pop_front() {
@@ -2050,7 +2160,7 @@ impl<'a> LiteralReach<'a> {
         cancel: &dyn Fn() -> bool,
         rec: Option<&mut routes::Recorder<'a>>,
     ) -> Result<LiveTree<'a>, Stop> {
-        self.tree_recording_m(start, cap, cancel, rec, true)
+        self.tree_recording_m(start, cap, cancel, rec, ALL)
     }
 
     /// [`Self::tree_recording`]; `keep` as in [`Self::dead_at_m`].
@@ -2060,7 +2170,7 @@ impl<'a> LiteralReach<'a> {
         cap: usize,
         cancel: &dyn Fn() -> bool,
         mut rec: Option<&mut routes::Recorder<'a>>,
-        keep: bool,
+        keep: &Keeps,
     ) -> Result<LiveTree<'a>, Stop> {
         let mut parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>> =
             HashMap::from([(start.clone(), None)]);
@@ -2314,7 +2424,7 @@ impl<'a> LiteralReach<'a> {
                 }
                 let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
-                    && self.edge_dead(f, s, to, kind, b, true)
+                    && self.edge_dead(f, s, to, kind, b, ALL)
                 {
                     continue;
                 }
@@ -2468,7 +2578,7 @@ impl<'a> LiteralReach<'a> {
             };
             if let (Some("interface-dispatch"), Some(cs)) =
                 (h.edge_kind.as_deref(), h.callsite_id.as_deref())
-                && self.dispatch_excluded(from, cs, to, &b, true)
+                && self.dispatch_excluded(from, cs, to, &b, ALL)
             {
                 return false;
             }
@@ -2626,7 +2736,7 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// Under the root's search: whether operation `op` cannot run (module doc).
-    fn op_dead(&self, reached: &Reached<'a>, op: &str, keep: bool) -> bool {
+    fn op_dead(&self, reached: &Reached<'a>, op: &str, keep: &Keeps) -> bool {
         let (plain, states) = reached;
         let Some(&owner) = self.op_owner.get(op) else {
             return false;
@@ -2663,7 +2773,7 @@ impl<'a> LiteralReach<'a> {
     /// Round-4 literal routes: the call sites of `sites` the search
     /// `reached` (made with `keep`) rules out: each one's routine is reached
     /// with guards ignored, and no reached state of it lets the site run.
-    fn dead_sites(&self, reached: &Reached<'a>, sites: &[&str], keep: bool) -> Vec<String> {
+    fn dead_sites(&self, reached: &Reached<'a>, sites: &[&str], keep: &Keeps) -> Vec<String> {
         sites
             .iter()
             .filter(|s| {
@@ -2678,7 +2788,8 @@ impl<'a> LiteralReach<'a> {
 
     /// [`Self::unreachable_effects`], and (r3 E2) per effect it drops ONLY
     /// because a publisher's loaded subscribers keep a value ([`lflow`]), the
-    /// keep verdicts the root's search used: a reader states that assumption,
+    /// keep verdicts its ruling depends on ([`Self::relied_keeps`]: every
+    /// route to it, not one): a reader states that assumption,
     /// and a world that does not make it counts the effect. A group resource
     /// is dropped only when it is dead without the assumption too.
     ///
@@ -2701,10 +2812,10 @@ impl<'a> LiteralReach<'a> {
         {
             return Default::default();
         }
-        let Some(reached) = self.search(root, true) else {
+        let Some(reached) = self.search(root, ALL) else {
             return Default::default();
         };
-        let (dead, mut resources) = self.judge(&reached, effects, per_site, true);
+        let (dead, mut resources) = self.judge(&reached, effects, per_site, ALL);
         let mut keeps: Vec<u32> = reached
             .1
             .iter()
@@ -2714,15 +2825,15 @@ impl<'a> LiteralReach<'a> {
         keeps.sort_unstable();
         keeps.dedup();
         if keeps.is_empty() {
-            let dead_sites = self.dead_sites(&reached, sites, true);
+            let dead_sites = self.dead_sites(&reached, sites, ALL);
             return (dead, resources, HashMap::new(), dead_sites);
         }
         // Without the publisher keeps: what is dead only through them.
-        let strict_reached = self.search(root, false);
+        let strict_reached = self.search(root, NONE);
         let dead_sites = strict_reached
             .as_ref()
-            .map_or_else(Vec::new, |r| self.dead_sites(r, sites, false));
-        let strict = strict_reached.map(|r| self.judge(&r, effects, per_site, false));
+            .map_or_else(Vec::new, |r| self.dead_sites(r, sites, NONE));
+        let strict = strict_reached.map(|r| self.judge(&r, effects, per_site, NONE));
         let infos_of = |ks: &[u32]| -> Vec<KeepInfo> {
             ks.iter()
                 .filter_map(|&k| self.keep_info.get(k as usize).cloned())
@@ -2732,38 +2843,11 @@ impl<'a> LiteralReach<'a> {
         let mut assumed = HashMap::new();
         match &strict {
             Some((d2, r2)) => {
-                // Per effect, the verdicts that cut its strict route.
-                let tree = self
-                    .tree_recording_m(
-                        (root, Bindings::default()),
-                        STATE_CAP,
-                        &|| false,
-                        None,
-                        false,
-                    )
-                    .ok();
-                for &i in dead.difference(d2) {
-                    let e = &effects[i];
-                    let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
-                    ops.extend(e.origin_operation_ids.iter().cloned());
-                    if ops.is_empty() {
-                        let resource = e
-                            .detail
-                            .iter()
-                            .find(|(k, _)| k == "resourceId")
-                            .map(|(_, v)| v.as_str());
-                        ops = self
-                            .terminals
-                            .of_kind((e.effect_type.as_str(), resource))
-                            .map(|r| r.terminal.id().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                    }
-                    let deciding = tree
-                        .as_ref()
-                        .map(|t| self.deciding_keeps(t, &ops))
-                        .filter(|k| !k.is_empty());
-                    assumed.insert(i, deciding.map_or_else(|| infos.clone(), |k| infos_of(&k)));
+                // Per effect, the verdicts its ruling depends on.
+                let mut only: Vec<usize> = dead.difference(d2).copied().collect();
+                only.sort_unstable();
+                for (i, ks) in self.relied_keeps(root, effects, per_site, &keeps, &only) {
+                    assumed.insert(i, infos_of(&ks));
                 }
                 for (i, list) in resources.iter_mut() {
                     list.retain(|res| r2.get(i).is_some_and(|l| l.contains(res)));
@@ -2780,78 +2864,68 @@ impl<'a> LiteralReach<'a> {
         (dead, resources, assumed, dead_sites)
     }
 
-    /// r3 E2: the keep verdicts that cut the route to one of `ops`: along the
-    /// strict search's (`strict`, made without keeps) path to the first live
-    /// owner, the first site the kept values make dead; of the verdicts its
-    /// routine's flow used there, those without which the site is live again
-    /// (all it used when no single one decides). Empty when no site on the
-    /// path is cut that way (the cut came through a binding upstream).
-    fn deciding_keeps(&self, strict: &LiveTree<'a>, ops: &[String]) -> Vec<u32> {
-        let mut found: Option<(&State<'a>, &str)> = None;
-        'outer: for o in ops {
-            let Some(owner) = self.op_owner.get(o.as_str()) else {
-                continue;
-            };
-            for &i in strict.states_of(owner) {
-                let st = &strict.order[i as usize];
-                if !self.dead_at_m(st.0, o, &st.1, false) {
-                    found = Some((st, o.as_str()));
-                    break 'outer;
-                }
-            }
-        }
-        let Some((state, op)) = found else {
-            return Vec::new();
-        };
-        // The states from the root to `state`, each with the site it leaves by.
-        let mut chain: Vec<(State<'a>, &str)> = vec![(state.clone(), op)];
-        let mut cur = state.clone();
-        while let Some(Some((p, (site, _)))) = strict.parent.get(&cur) {
-            if let Some(s) = site.and_then(EdgeSite::guarded) {
-                chain.push((p.clone(), s));
-            }
-            cur = p.clone();
-        }
-        chain.reverse();
-        let mut used_all: Vec<u32> = Vec::new();
-        for ((f, b), s) in &chain {
-            let Some(p) = self.flow_progs.get(f) else {
-                continue;
-            };
-            let Some(r) = self.by_stable.get(f) else {
-                continue;
-            };
-            let resolve = |l: &crate::program::body::features::ValueLabel| {
-                values::resolve_label(r, &self.tables_by_id, l)
-            };
-            let entry: Vec<(u32, VSet)> = p
-                .key_params
-                .iter()
-                .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
-                .collect();
-            let full = p.eval(&entry, &resolve, &|_| true, None);
-            used_all.extend(full.keeps.iter().copied());
-            if !p.dead(&full, s) {
-                continue;
-            }
-            let deciding: Vec<u32> = full
-                .keeps
-                .iter()
-                .copied()
-                .filter(|&k| {
-                    let ev = p.eval(&entry, &resolve, &|x| x != k, None);
-                    !p.dead(&ev, s)
+    /// r3 §7 R1: per effect of `only` (each dead from `root` when every keep
+    /// verdict of `keeps` is followed, live when none is), the verdicts its
+    /// ruling depends on, judged over the WHOLE search, not one route: an
+    /// effect reached by two routes, each cut by its own publisher, needs
+    /// both publishers' keeps, and a subscriber to either one makes it live.
+    ///
+    /// The set is a smallest one that still rules the effect out when only
+    /// it is followed, every member needed (dropping any one makes the
+    /// effect live): first the verdicts that are needed alone (dropping one
+    /// with all the others followed makes it live); when they do not rule it
+    /// out together, the rest of `keeps` minus each one that is not needed,
+    /// in order. Fewer followed keeps never make more dead, so a verdict
+    /// needed alone stays needed in every smaller set. All of `keeps` when a
+    /// search is capped or following exactly `keeps` does not rule it out.
+    /// The searches are shared by every effect.
+    fn relied_keeps(
+        &self,
+        root: &'a str,
+        effects: &[DigestEffectResult],
+        per_site: &[&str],
+        keeps: &[u32],
+        only: &[usize],
+    ) -> Vec<(usize, Vec<u32>)> {
+        let mut memo: HashMap<Vec<u32>, Option<HashSet<usize>>> = HashMap::new();
+        let mut dead_with = |set: &[u32], i: usize| -> bool {
+            memo.entry(set.to_vec())
+                .or_insert_with(|| {
+                    let ks = Keeps::Only(set.into());
+                    self.search(root, &ks)
+                        .map(|r| self.judge(&r, effects, per_site, &ks).0)
                 })
-                .collect();
-            return if deciding.is_empty() {
-                full.keeps.clone()
-            } else {
-                deciding
-            };
-        }
-        used_all.sort_unstable();
-        used_all.dedup();
-        used_all
+                .as_ref()
+                .is_some_and(|d| d.contains(&i))
+        };
+        let without =
+            |set: &[u32], k: u32| -> Vec<u32> { set.iter().copied().filter(|&x| x != k).collect() };
+        only.iter()
+            .map(|&i| {
+                if !dead_with(keeps, i) {
+                    return (i, keeps.to_vec());
+                }
+                let needed: Vec<u32> = keeps
+                    .iter()
+                    .copied()
+                    .filter(|&k| !dead_with(&without(keeps, k), i))
+                    .collect();
+                if !needed.is_empty() && dead_with(&needed, i) {
+                    return (i, needed);
+                }
+                let mut set = keeps.to_vec();
+                for &k in keeps {
+                    if needed.contains(&k) {
+                        continue;
+                    }
+                    let fewer = without(&set, k);
+                    if dead_with(&fewer, i) {
+                        set = fewer;
+                    }
+                }
+                (i, set)
+            })
+            .collect()
     }
 
     /// The effects the search `reached` (made with `keep`) rules out, and per
@@ -2861,7 +2935,7 @@ impl<'a> LiteralReach<'a> {
         reached: &Reached<'a>,
         effects: &[DigestEffectResult],
         per_site: &[&str],
-        keep: bool,
+        keep: &Keeps,
     ) -> (HashSet<usize>, HashMap<usize, Vec<String>>) {
         let mut out = HashSet::new();
         let mut dead_resources: HashMap<usize, Vec<String>> = HashMap::new();
@@ -2932,7 +3006,7 @@ impl<'a> LiteralReach<'a> {
     /// is concluded), and none sits in a reached state of its routine where its
     /// site can run. A routine reached only through code that cannot run has
     /// no state, so its facts count as dead.
-    fn kind_dead(&self, reached: &Reached<'a>, kind: (&str, Option<&str>), keep: bool) -> bool {
+    fn kind_dead(&self, reached: &Reached<'a>, kind: (&str, Option<&str>), keep: &Keeps) -> bool {
         let mut any_reached = false;
         for r in self.terminals.of_kind(kind) {
             let (subject, site) = (r.owner, r.terminal.id());
@@ -3044,5 +3118,49 @@ mod r7_tests {
              Codeunit \"S\"::B), none of which changes P; rules out ws:a.al:3"
         );
         assert!(!recs[0].sentence().contains("loaded-subscribers"));
+    }
+
+    /// r3 §7 R1, round-4 c25: a site two records list needs both
+    /// assumptions, and its sentence names both; a site one record lists
+    /// alone keeps that record's own sentence. Hand-stated records: `OnX`
+    /// rules out `:5` and `:7`, `OnY` rules out `:5`; a third, `OnZ` with a
+    /// subscriber, also rules out `:9` with `OnX` (the mixed form).
+    ///
+    /// DISCRIMINATION (2026-11-09): grouping each site by its first record
+    /// only (`with = vec![ri]`) prints `OnX` alone for `:5` and fails the
+    /// first assert; restored, passes.
+    #[test]
+    fn a_site_two_assumptions_rule_out_names_both() {
+        let keep = |p: &str, subs: &[&str]| KeepInfo {
+            publisher: format!("Codeunit \"E\"::{p}"),
+            parameter: "P".into(),
+            subscribers: subs.iter().map(|s| s.to_string()).collect(),
+            universe: "App alone".into(),
+        };
+        let (x, y, z) = (keep("OnX", &[]), keep("OnY", &[]), keep("OnZ", &["S::A"]));
+        let recs = AssumptionRecord::collect([
+            (&x, Some("ws:a.al:5".to_string())),
+            (&x, Some("ws:a.al:7".to_string())),
+            (&y, Some("ws:a.al:5".to_string())),
+            (&x, Some("ws:a.al:9".to_string())),
+            (&z, Some("ws:a.al:9".to_string())),
+        ]);
+        assert_eq!(
+            AssumptionRecord::sentences(&recs),
+            vec![
+                "assumes Codeunit \"E\"::OnX and Codeunit \"E\"::OnY have no loaded subscriber, \
+                 so P keeps its value (App alone; no additional subscribers assumed); rules out \
+                 ws:a.al:5"
+                    .to_string(),
+                "assumes Codeunit \"E\"::OnX has no loaded subscriber, so P keeps its value (App \
+                 alone; no additional subscribers assumed); rules out ws:a.al:7"
+                    .to_string(),
+                "assumes Codeunit \"E\"::OnX has no loaded subscriber, so P keeps its value (App \
+                 alone; no additional subscribers assumed), and assumes no subscribers beyond \
+                 those considered in App alone (S::A), none of which changes P; rules out \
+                 ws:a.al:9"
+                    .to_string(),
+            ]
+        );
     }
 }

@@ -3381,10 +3381,11 @@ fn blocker_lines(
 /// they point, the answer's world, the analysis incompleteness.
 /// r3 §7 R1: the answer's assumptions, each a sentence: the world's (closed
 /// world; loaded subscribers, by what decides it), then each publisher
-/// assumption a route was decided by ([`AssumptionRecord::sentence`]).
+/// assumption a route was decided by, a site that needs several stated with
+/// all of them ([`AssumptionRecord::sentences`]).
 /// Empty when the answer assumes nothing.
 ///
-/// [`AssumptionRecord::sentence`]: crate::engine::l5::literal_reach::AssumptionRecord::sentence
+/// [`AssumptionRecord::sentences`]: crate::engine::l5::literal_reach::AssumptionRecord::sentences
 fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
     let universe = if o.universe.is_empty() {
         "the loaded program"
@@ -3413,7 +3414,7 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
              cone raises ({e}); the analysis follows the loaded ones"
         ));
     }
-    out.extend(o.flow_assumed.iter().map(|r| r.sentence()));
+    out.extend(crate::engine::l5::literal_reach::AssumptionRecord::sentences(&o.flow_assumed));
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
