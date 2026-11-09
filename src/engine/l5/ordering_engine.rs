@@ -1739,6 +1739,7 @@ mod tests {
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
+            commit_scopes: Default::default(),
         }
     }
 

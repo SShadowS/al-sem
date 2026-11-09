@@ -1125,6 +1125,9 @@ pub struct DigestEntryFull {
     pub entry_diagnostics: Vec<EntryDiagnostic>,
     /// An Interface / ControlAddIn procedure declaration (#71): no body, no effects.
     pub declaration_only: bool,
+    /// B4/L16: the commits no route runs as a commit, with why
+    /// ([`crate::engine::l5::digest::DigestEntryResult::suppressed_commits`]).
+    pub suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
 }
 
 pub struct DigestEffectFull {
@@ -2092,7 +2095,14 @@ fn literal_reach_entries<'t>(
                     && !e.effect_type.starts_with("DB_")
                     && e.effect_type != "EVENT_PUBLISH"
                 {
-                    let ops = vec![(String::new(), reach.terminal_ops(&e.effect_type))];
+                    // B4/L16: a group of commits that raise an error ends
+                    // on a commit.
+                    let ty = if e.detail.iter().any(|(k, _)| k == "commitBehavior") {
+                        "COMMIT"
+                    } else {
+                        e.effect_type.as_str()
+                    };
+                    let ops = vec![(String::new(), reach.terminal_ops(ty))];
                     e.group_terminal_path = group_paths
                         .paths(reach, tree, entries, e, &ops, suffixes, &never)
                         .pop()
@@ -2403,6 +2413,7 @@ pub fn run_digest_query_full_from_entries(
                 },
                 entry_diagnostics: Vec::new(),
                 declaration_only: true,
+                suppressed_commits: Vec::new(),
             });
             continue;
         }
@@ -2435,8 +2446,10 @@ pub fn run_digest_query_full_from_entries(
 
         let mut full_effects: Vec<DigestEffectFull> = Vec::new();
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
+        let mut suppressed_commits = Vec::new();
 
         if let Some(entry) = base_entry {
+            suppressed_commits = std::mem::take(&mut entry.suppressed_commits);
             // A site list the search could not finish (the depth bound): its
             // count is a lower bound, and the renderers say "at least".
             for ty in &entry.partial_site_types {
@@ -2660,6 +2673,7 @@ pub fn run_digest_query_full_from_entries(
             unresolved_traversal: cone.traversal,
             entry_diagnostics,
             declaration_only: false,
+            suppressed_commits,
         });
     }
 
@@ -2674,6 +2688,55 @@ pub fn run_digest_query_full_from_entries(
 // ---------------------------------------------------------------------------
 // JSON document projection
 // ---------------------------------------------------------------------------
+
+/// B4/L16: one suppressed commit as a sentence, for prove, digest and
+/// explain: `COMMIT at <file:line> is ignored (CommitBehavior Ignore on …)`,
+/// or `raises an error instead (…)`; a commit beyond a crossing is named by
+/// the crossing.
+#[must_use]
+pub fn suppressed_commit_words(s: &crate::engine::l5::digest::SuppressedCommit) -> String {
+    let at = match (&s.file, s.line) {
+        (Some(f), Some(l)) => format!(" at {f}:{}", crate::engine::line_base::shown(l)),
+        (Some(f), None) => format!(" at {f}"),
+        _ => String::new(),
+    };
+    let what = match &s.beyond {
+        Some(b) => format!("the COMMITs beyond {b}, entered{at},"),
+        None => format!("COMMIT{at}"),
+    };
+    let (verb_one, verb_many) = if s.behavior == "Error" {
+        ("raises an error instead", "raise an error instead")
+    } else {
+        ("is ignored", "are ignored")
+    };
+    let verb = if s.beyond.is_some() {
+        verb_many
+    } else {
+        verb_one
+    };
+    format!("{what} {verb} ({})", s.reason)
+}
+
+/// B4/L16: one suppressed commit's JSON (`behavior`, `file`, `line`
+/// 1-based, `beyond`, `reason`).
+#[must_use]
+pub fn suppressed_commit_value(
+    s: &crate::engine::l5::digest::SuppressedCommit,
+) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("behavior".into(), s.behavior.into());
+    if let Some(f) = &s.file {
+        m.insert("file".into(), f.clone().into());
+    }
+    if let Some(l) = s.line {
+        m.insert("line".into(), crate::engine::line_base::shown(l).into());
+    }
+    if let Some(b) = &s.beyond {
+        m.insert("beyond".into(), b.clone().into());
+    }
+    m.insert("reason".into(), s.reason.clone().into());
+    serde_json::Value::Object(m)
+}
 
 /// An anchor's JSON: `a.line` is the model's 0-based row, written 1-based
 /// (`lineBase: 1`, [`crate::engine::line_base`]).
@@ -2920,6 +2983,18 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
         "unresolvedTraversal".into(),
         serde_json::Value::Object(trav),
     );
+    // B4/L16 (additive): the commits a `[CommitBehavior]` ignores or turns
+    // into an error.
+    if !entry.suppressed_commits.is_empty() {
+        m.insert(
+            "suppressedCommits".into(),
+            entry
+                .suppressed_commits
+                .iter()
+                .map(suppressed_commit_value)
+                .collect(),
+        );
+    }
 
     serde_json::Value::Object(m)
 }
@@ -5488,6 +5563,7 @@ mod tests {
             },
             entry_diagnostics: diagnostics,
             declaration_only: false,
+            suppressed_commits: Vec::new(),
         }
     }
 

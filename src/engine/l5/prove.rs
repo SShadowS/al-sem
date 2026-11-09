@@ -203,6 +203,10 @@ pub struct ProveObligations {
     /// r3 §7 R1: the universe whose subscribers the answer considered
     /// (`literal_reach::universe_words`); empty when not set.
     pub(crate) universe: String,
+    /// B4/L16: the commits no route runs as a commit (a `[CommitBehavior]`
+    /// ignores them or makes them an error), which a commit answer names
+    /// with why. From the entry.
+    pub(crate) suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
 }
 
 /// r3 §7 R1: the events a cone raises that an unloaded subscriber could
@@ -455,6 +459,7 @@ fn compute_obligations(
         flow_assumed: Vec::new(),
         events_raised: None,
         universe: String::new(),
+        suppressed_commits: entry.suppressed_commits.clone(),
     }
 }
 
@@ -2285,6 +2290,21 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         m.extend(o);
     }
     result_obj.insert("obligations".into(), obligations);
+    // B4/L16 (additive): a commit question names the commits a
+    // `[CommitBehavior]` ignores or turns into an error, with why.
+    if is_commit_question(question) && !prove_result.obligations.suppressed_commits.is_empty() {
+        result_obj.insert(
+            "suppressedCommits".into(),
+            serde_json::Value::Array(
+                prove_result
+                    .obligations
+                    .suppressed_commits
+                    .iter()
+                    .map(crate::engine::l5::digest_cli::suppressed_commit_value)
+                    .collect(),
+            ),
+        );
+    }
     // G24/G29: the label a KB needs for an answer that holds only in a world
     // beyond the open one.
     let o = &prove_result.obligations;
@@ -2750,6 +2770,16 @@ pub fn format_prove_human(
         }
         a => format!("  answer:   {}", a.as_str()),
     });
+    // B4/L16: the commits a `[CommitBehavior]` ignores or turns into an
+    // error are no commit; a commit answer says so and why.
+    if is_commit_question(question) {
+        for s in &prove_result.obligations.suppressed_commits {
+            lines.push(format!(
+                "  commit behavior: {}",
+                crate::engine::l5::digest_cli::suppressed_commit_words(s)
+            ));
+        }
+    }
     // §4.4 (F19, F21): on `unknown`, the plain reading, what the answer does
     // not establish, and every input that removes a blocker kind.
     if prove_result.answer == ProveAnswer::Unknown
@@ -2883,6 +2913,10 @@ pub fn format_prove_human(
         // The operation a row names: an implicit error names its operation
         // (G17), a group's its terminal one; else the effect type.
         let what_of = |eff: &DigestEffectFull| -> String {
+            // B4/L16: a commit a `[CommitBehavior]` turns into an error.
+            if let Some((_, why)) = eff.detail.iter().find(|(k, _)| k == "commitBehavior") {
+                return format!("COMMIT (an error: {why})");
+            }
             match (eff.effect_type.as_str(), paths) {
                 ("ERROR_IMPLICIT", Some(p)) => {
                     let terminal = terminal_of(eff)
@@ -3228,6 +3262,16 @@ fn effect_site_noun(question: &str) -> Option<String> {
         ProveQuestion::PublishesEvent { event } => format!("site raising {event}"),
         ProveQuestion::CommitsOnSuccessPath => return None,
     })
+}
+
+/// B4/L16: a question about the routine's commits (`may-commit`,
+/// `commits-on-success-path`), whose answer names the commits a
+/// `[CommitBehavior]` ignores or turns into an error.
+fn is_commit_question(question: &str) -> bool {
+    matches!(
+        parse_question(question),
+        Some(ProveQuestion::MayCommit | ProveQuestion::CommitsOnSuccessPath)
+    )
 }
 
 /// r3 H3: the one negative form of an effect question, `no — no <effect>
@@ -3951,6 +3995,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             flow_assumed: Vec::new(),
             events_raised: None,
             universe: String::new(),
+            suppressed_commits: Vec::new(),
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -5074,6 +5119,7 @@ mod tests {
             },
             entry_diagnostics,
             declaration_only: false,
+            suppressed_commits: Vec::new(),
         }
     }
 

@@ -902,13 +902,39 @@ pub(crate) fn compute_slice(
         }
     };
     let errors = req.question == SliceQuestion::Errors;
+    // B4/L16: a commit no route from the root runs normally is no commit
+    // site, and one some route runs under `CommitBehavior::Error` is an
+    // error site (the digest's rule, `commit_scope`).
+    let commit_scopes = crate::engine::l5::commit_scope::CbGraph::of_tree(tree);
+    let commit_states = |owner: &str| -> u8 {
+        commit_scopes
+            .as_ref()
+            .filter(|cb| !cb.root_unaffected(root))
+            .and_then(|cb| cb.states_at(root, owner))
+            .unwrap_or(crate::engine::l5::commit_scope::N)
+    };
     let mut seen: HashSet<(&str, &str, &str)> = HashSet::new();
     // Per site: the site, and whether its write is caller-dependent.
     let mut sites: Vec<(SliceSite, Option<Vec<String>>)> = Vec::new();
     for rec in reach.terminals().records() {
-        if !fits(rec.effect_type, rec.resource) || !reach.reaches(live, rec.owner) {
+        // A commit that raises an error under `CommitBehavior::Error`.
+        let commit_error = rec.effect_type == "COMMIT"
+            && commit_states(rec.owner) & crate::engine::l5::commit_scope::E != 0;
+        let fits_here = match (&req.question, rec.effect_type) {
+            (SliceQuestion::Commits, "COMMIT") => {
+                commit_states(rec.owner) & crate::engine::l5::commit_scope::N != 0
+            }
+            (SliceQuestion::Errors, "COMMIT") => commit_error,
+            _ => fits(rec.effect_type, rec.resource),
+        };
+        if !fits_here || !reach.reaches(live, rec.owner) {
             continue;
         }
+        let effect_type = if errors && rec.effect_type == "COMMIT" {
+            "ERROR_IMPLICIT"
+        } else {
+            rec.effect_type
+        };
         if !seen.insert((rec.effect_type, rec.owner, rec.terminal.id())) {
             continue;
         }
@@ -917,7 +943,7 @@ pub(crate) fn compute_slice(
             // A fact with no site (a platform native that may error): in
             // reach, but with no place, text or route.
             let site = SliceSite {
-                effect_type: rec.effect_type,
+                effect_type,
                 op_id: String::new(),
                 owner: rec.owner.to_string(),
                 file: None,
@@ -966,7 +992,7 @@ pub(crate) fn compute_slice(
             _ => None,
         };
         let mut site = SliceSite {
-            effect_type: rec.effect_type,
+            effect_type,
             op_id: ops[0].clone(),
             owner: rec.owner.to_string(),
             file: anchor.map(|a| a.source_unit_id.clone()),

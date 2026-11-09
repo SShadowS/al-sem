@@ -839,6 +839,18 @@ pub fn entry_v3(
             "visitedRoutines": entry.unresolved_traversal.visited_routines,
         }),
     );
+    // B4/L16 (additive): the commits a `[CommitBehavior]` ignores or turns
+    // into an error.
+    if !entry.suppressed_commits.is_empty() {
+        m.insert(
+            "suppressedCommits".into(),
+            entry
+                .suppressed_commits
+                .iter()
+                .map(crate::engine::l5::digest_cli::suppressed_commit_value)
+                .collect(),
+        );
+    }
     Value::Object(m)
 }
 

@@ -3204,6 +3204,7 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
         },
         entry_diagnostics: Vec::new(),
         declaration_only: false,
+        suppressed_commits: Vec::new(),
     }
 }
 

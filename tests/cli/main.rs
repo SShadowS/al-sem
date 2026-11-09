@@ -233,6 +233,7 @@ mod cli_page_ui_permissions;
 mod cli_parameterless_symbol_method;
 mod cli_policy_pins;
 mod cli_prove_closed_world;
+mod cli_prove_commit_behavior;
 mod cli_prove_cross_app;
 mod cli_prove_dead_paths;
 mod cli_prove_event_anchor;

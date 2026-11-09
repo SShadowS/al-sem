@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B4/L16)
+
+- **`[CommitBehavior]` now decides what a commit does in every forward answer.** Before,
+  only the callers' question read it: `prove … throws-error` answered `no (every candidate
+  decided)` for a `Commit()` under `CommitBehavior::Error`, and `may-commit` /
+  `commits-on-success-path` answered `yes` for a commit under `Ignore` (engine limits B4).
+  The rule, from Microsoft Learn ("CommitBehavior attribute",
+  <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/attributes/devenv-commitbehavior-attribute>):
+  the behavior lasts for the attributed method's whole scope (everything it calls, the
+  subscribers of an event it publishes), returns to the previous one when the method ends,
+  only a stricter behavior can be set inside (`Error` over `Ignore` stays `Error`), and it
+  applies to explicit commits only (the cone's commit facts are explicit `Commit()` calls).
+  Learn does not say whether the scope follows `Codeunit.Run`; it says the attribute leaves
+  only the run's *implicit* commit alone, so an explicit commit inside a run codeunit is
+  read as in scope.
+- **How:** one rule, `commit_scope::declared` (the routine's attribute, else its object's
+  `InherentCommitBehavior`), read by the callers' question and by the digest. For each
+  COMMIT the digest reports, it finds the behaviors the commit can run under over every
+  route from the root (a backward search per commit site over the snapshot's edges, shared
+  by all roots, done only for sites a declaring routine can reach). A commit no route runs
+  normally is no COMMIT row; it is listed as `suppressedCommits` (prove, digest JSON) and as
+  a `commit behavior:` line (prove, digest and explain human) with why, e.g. `COMMIT at
+  ws:src/A.al:12 is ignored (CommitBehavior Ignore on Codeunit "X"::Y)`. A commit some route
+  runs under `Error` is an `ERROR_IMPLICIT` row with detail `commitBehavior` (`throws-error`
+  says `COMMIT (an error: CommitBehavior Error on …)`). A commit kept as a commit keeps only
+  the listed paths that run it normally, so an ignored unconditional route no longer makes
+  it `unconditional on success`. A route the witness search did not list (it lists shortest
+  paths only) is found and shown. A commit beyond a rule-B crossing follows the
+  dependency's declarations (Base Application has 16: 15 `Ignore`, 1 `Error` on posting
+  preview). The filtered `prove --site/--match` slice applies the same rule.
+- **`InherentCommitBehavior` is not on Microsoft Learn.** It is read as *may* apply: the
+  commit stays possible and, under `Error`, a possible error is added, so no definite `no`
+  rests on it. CDO and its dependencies have 0 uses.
+- **Output (additive):** prove JSON `result.suppressedCommits` and digest JSON entry
+  `suppressedCommits` (`behavior`, `file`, `line`, `beyond`, `reason`), only when present;
+  an `ERROR_IMPLICIT` row's `detail.commitBehavior`. Outputs move only where a declaring
+  routine is on a route.
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said

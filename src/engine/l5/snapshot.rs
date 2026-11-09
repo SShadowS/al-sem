@@ -1265,6 +1265,11 @@ pub struct CapabilitySnapshot {
     /// #160 step 6 rule B (spec §14.3.5): set only on digest's tree over the
     /// cone graph ([`compose_tree`]); `None` on the cut. Never serialized.
     pub boundary: Option<BoundaryRule>,
+    /// B4/L16: every routine's `[CommitBehavior]` declaration
+    /// ([`crate::engine::l5::commit_scope`]), which the digest applies to
+    /// each COMMIT it reports. Empty when no routine declares one. Shared;
+    /// never serialized.
+    pub commit_scopes: std::sync::Arc<crate::engine::l5::commit_scope::CommitScopes>,
 }
 
 /// Rule B's input (spec §14.3.5): the tree's dependency routines, by the role
@@ -1733,6 +1738,7 @@ pub fn compose_snapshot_from_base(
         routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         pd_solution,
         boundary: None,
+        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(resolved).into(),
     })
 }
 
@@ -2164,6 +2170,7 @@ pub(crate) fn compose_tree_over(
         routine_order_frames,
         pd_solution,
         boundary: Some(boundary),
+        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(model).into(),
     })
 }
 

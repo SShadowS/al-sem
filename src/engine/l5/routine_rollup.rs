@@ -3060,9 +3060,26 @@ fn complete(entry: &DigestEntryFull, r: &RoutineRollup) -> bool {
         && !entry.unresolved_traversal.truncated
 }
 
-/// `commits:` and its sites (design §4.1 section 9).
+/// `commits:` and its sites (design §4.1 section 9), then (B4/L16) each
+/// commit a `[CommitBehavior]` ignores or turns into an error, with why.
 #[must_use]
 pub fn commit_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    cx: &RollupCx<'_>,
+    o: RenderOpts,
+) -> Vec<String> {
+    let mut out = commit_site_lines(r, entry, cx, o);
+    out.extend(entry.suppressed_commits.iter().map(|s| {
+        format!(
+            "commit behavior: {}",
+            crate::engine::l5::digest_cli::suppressed_commit_words(s)
+        )
+    }));
+    out
+}
+
+fn commit_site_lines(
     r: &RoutineRollup,
     entry: &DigestEntryFull,
     cx: &RollupCx<'_>,
@@ -4137,6 +4154,11 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
                     .iter()
                     .find(|(k, _)| k == "starts")
                     .map_or(String::new(), |(_, s)| format!(", starts {s}"));
+                // B4/L16: a COMMIT a `[CommitBehavior]` turns into an error.
+                let starts = match e.detail.iter().find(|(k, _)| k == "commitBehavior") {
+                    Some((_, why)) => format!("{starts}, a COMMIT that raises an error: {why}"),
+                    None => starts,
+                };
                 // r3 §7 R5: the route's guards when one was replayed, as
                 // prove; the class label otherwise.
                 let text = format!(
