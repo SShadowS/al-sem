@@ -522,6 +522,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       answered `yes`. Reverted: PASS.
     - Not proven: the every-op-needs-an-owner guard (`trap_verdict`); no CLI fixture can build
       a row with an ownerless operation.
+  - `scripts/cdo-speed` against `integrate/w2` (load average 321 at the start, 30 at the end,
+    so the samples are noisy): PASS. prove CPU x0.98, round total CPU x1.02 (wall x0.97),
+    model build CPU x1.01 (wall x1.42, under the 1.60 warm-up limit), warm-tests CPU x0.98,
+    peak memory x1.03. The extra work is a second pending-writes pass only for roots where a
+    `Commit()` ended a write, and one `[CommitBehavior]` graph per read when a declaration and
+    a checked run both exist.
   - **Output (outside consumers), additive:** prove `obligations.assumesNoCommitBehaviorAtEntry`;
     digest and explain `summary.assumesNoPendingWriteAtEntry` /
     `summary.assumesNoCommitBehaviorAtEntry` and the two `coverage.assumptions` labels; the
