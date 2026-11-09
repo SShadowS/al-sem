@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (performance: finding the keeps an assumption record needs)
+
+- **Naming every publisher a ruled-out row needs no longer reruns the whole search per
+  keep.** The fix that names every publisher keep a literal-dead row relies on (r3 §7 R1)
+  ran one full guarded search per keep the root's search used, plus one more for the
+  whole set. On the CDO baseline `CDO E-Mail Handler::RunReportID` uses 88 keeps, so
+  `prove … may-commit` and `explain` spent 13 s in 91 searches (each ~140 ms, as each
+  keep choice also missed the flow-evaluation cache). Now the search with every keep
+  followed is kept as a graph, and each keep choice replays it: a state whose flow
+  evaluation asked about no dropped keep keeps its recorded successors and rulings, and
+  only the states that did, and the new states they lead to, are stepped again; only
+  the rows being explained are judged, over those states only. A flow evaluation now
+  records every keep verdict it asked about (`FlowEval::consulted`), which is what
+  makes the reuse exact. The answers are the same byte for byte. Measured on the CDO
+  baseline (release-fast, one shot): `prove RunReportID may-commit` 40.6 s → 28.4 s
+  (before the R1 fix: 28.4 s), `explain RunReportID` 39.5 s → 27.1 s (27.3 s),
+  `prove "CDO Issue Document"::IssueReminder may-commit` 39.2 s → 27.6 s (27.3 s).
+  A lib test (`a_replayed_search_rules_out_what_the_search_does`) checks the replay
+  against the real search for every keep choice.
+
 ### Fixed (output validation round 4 final, c05: route guard counts)
 
 - **"N guards on the route" is the route's full count, the one `prove --site` uses.**

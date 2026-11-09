@@ -673,6 +673,18 @@ impl Keeps {
     }
 }
 
+/// r3 §7 R1: a root's guarded search with every keep verdict followed, as a
+/// graph ([`LiteralReach::keep_graph`]): its states in visit order (the
+/// root's first), each one's index, each one's successors, and the keep
+/// verdicts each one's flow evaluation asked about. [`LiteralReach::dead_under`]
+/// replays it under fewer keeps.
+struct KeepGraph<'a> {
+    states: Vec<State<'a>>,
+    index: HashMap<State<'a>, usize>,
+    succ: Vec<Vec<usize>>,
+    asked: Vec<Vec<u32>>,
+}
+
 /// [`Keeps::All`], to pass by reference.
 const ALL: &Keeps = &Keeps::All;
 /// [`Keeps::None`], to pass by reference.
@@ -1863,7 +1875,24 @@ impl<'a> LiteralReach<'a> {
         let resolve = |l: &crate::program::body::features::ValueLabel| {
             values::resolve_label(r, &self.tables_by_id, l)
         };
-        let ev = Arc::new(p.eval(&key.1, &resolve, &|k| keep.follows(k), None));
+        // The verdicts the evaluation asks about: an evaluation answers the
+        // same under any keep choice that answers these the same way
+        // ([`Self::dead_under`] reuses the full search on that).
+        let asked = std::cell::RefCell::new(Vec::new());
+        let mut ev = p.eval(
+            &key.1,
+            &resolve,
+            &|k| {
+                asked.borrow_mut().push(k);
+                keep.follows(k)
+            },
+            None,
+        );
+        let mut asked = asked.into_inner();
+        asked.sort_unstable();
+        asked.dedup();
+        ev.consulted = asked;
+        let ev = Arc::new(ev);
         let mut cache = self.flow_cache.lock().expect("flow cache");
         if cache.len() >= FLOW_CACHE_MAX {
             cache.clear();
@@ -2122,17 +2151,7 @@ impl<'a> LiteralReach<'a> {
             HashMap::from([(root, vec![Bindings::default()])]);
         let mut q = VecDeque::from([(root, Bindings::default())]);
         while let Some((f, b)) = q.pop_front() {
-            for &(to, site, binds, kind) in self.out.get(f).into_iter().flatten() {
-                let site = site.and_then(EdgeSite::guarded);
-                if let Some(s) = site
-                    && self.edge_dead(f, s, to, kind, &b, keep)
-                {
-                    continue;
-                }
-                let nb = match (binds, site) {
-                    (true, Some(s)) => self.bind_m(f, s, to, &b, keep),
-                    _ => Bindings::default(),
-                };
+            for (to, nb) in self.successors(f, &b, keep) {
                 if seen.insert((to, nb.clone())) {
                     if seen.len() > STATE_CAP {
                         return None;
@@ -2143,6 +2162,162 @@ impl<'a> LiteralReach<'a> {
             }
         }
         Some((plain, states))
+    }
+
+    /// The states the guarded search ([`Self::search`]) steps to from `f`
+    /// entered with `b`, following the keep verdicts `keep` follows: one per
+    /// out-edge that can run, in edge order.
+    fn successors(&self, f: &'a str, b: &Bindings, keep: &Keeps) -> Vec<State<'a>> {
+        let mut out = Vec::new();
+        for &(to, site, binds, kind) in self.out.get(f).into_iter().flatten() {
+            let site = site.and_then(EdgeSite::guarded);
+            if let Some(s) = site
+                && self.edge_dead(f, s, to, kind, b, keep)
+            {
+                continue;
+            }
+            let nb = match (binds, site) {
+                (true, Some(s)) => self.bind_m(f, s, to, b, keep),
+                _ => Bindings::default(),
+            };
+            out.push((to, nb));
+        }
+        out
+    }
+
+    /// r3 §7 R1: the guarded search from `root` with every keep verdict
+    /// followed ([`Self::search`]), kept as a graph for
+    /// [`Self::dead_under`]. `None` when it hits the cap.
+    fn keep_graph(&self, root: &'a str) -> Option<KeepGraph<'a>> {
+        let start: State<'a> = (root, Bindings::default());
+        let mut g = KeepGraph {
+            states: vec![start.clone()],
+            index: HashMap::from([(start, 0)]),
+            succ: Vec::new(),
+            asked: Vec::new(),
+        };
+        let mut i = 0;
+        while i < g.states.len() {
+            let (f, b) = g.states[i].clone();
+            g.asked.push(
+                self.flow_eval(f, &b, ALL)
+                    .map_or_else(Vec::new, |ev| ev.consulted.clone()),
+            );
+            let mut next = Vec::new();
+            for s in self.successors(f, &b, ALL) {
+                let j = match g.index.get(&s) {
+                    Some(&j) => j,
+                    None => {
+                        let j = g.states.len();
+                        g.index.insert(s.clone(), j);
+                        g.states.push(s);
+                        if g.states.len() > STATE_CAP {
+                            return None;
+                        }
+                        j
+                    }
+                };
+                next.push(j);
+            }
+            g.succ.push(next);
+            i += 1;
+        }
+        Some(g)
+    }
+
+    /// r3 §7 R1: of `rows` (rows the search with every keep followed rules
+    /// out), those the search following only `keep`'s verdicts rules out
+    /// too, exactly as [`Self::search`] and [`Self::judge`] under `keep`
+    /// would say (`None`: that search hits the cap), without running it.
+    /// `shell` holds the search's routines reached with guards ignored
+    /// (they do not depend on the keeps); its states are filled for the
+    /// judging and left empty.
+    ///
+    /// A state's flow evaluation depends on the keep choice only through
+    /// the verdicts it asks about ([`lflow::FlowEval::consulted`]), and
+    /// everything the search and the judge read of a state under a keep
+    /// choice comes from that one evaluation ([`Self::flow_eval`]). So a
+    /// state of `g` whose evaluation `keep` answers the same way as under
+    /// every keep (every verdict it asked about followed) has the same
+    /// successors and the same rulings: its successors are read from `g`.
+    /// Only the other states, and the states not in `g` they lead to, are
+    /// stepped again. Which states are reached does not depend on the order
+    /// they are met, so the cap is hit exactly when the search hits it.
+    /// A row of `rows` stays dead unless a reached state that is stepped
+    /// again lets it run (every other reached state rules it out as in
+    /// `g`), so only those states, and only `rows`, are judged
+    /// ([`Self::judge_row`], the judge's own ruling of one row).
+    fn dead_under(
+        &self,
+        g: &KeepGraph<'a>,
+        shell: &mut Reached<'a>,
+        rows: &[usize],
+        keep: &Keeps,
+        effects: &[DigestEffectResult],
+        per_site: &[&str],
+    ) -> Option<HashSet<usize>> {
+        let same = |i: usize| g.asked[i].iter().all(|&k| keep.follows(k));
+        let mut seen = vec![false; g.states.len()];
+        seen[0] = true;
+        let mut count = 1usize;
+        let mut fresh: HashSet<State<'a>> = HashSet::new();
+        let mut q_old: VecDeque<usize> = VecDeque::from([0]);
+        let mut q_new: VecDeque<State<'a>> = VecDeque::new();
+        let mut stepped: HashMap<&'a str, Vec<Bindings>> = HashMap::new();
+        loop {
+            let (f, b) = if let Some(i) = q_old.pop_front() {
+                if same(i) {
+                    for &j in &g.succ[i] {
+                        if !seen[j] {
+                            seen[j] = true;
+                            count += 1;
+                            if count > STATE_CAP {
+                                return None;
+                            }
+                            q_old.push_back(j);
+                        }
+                    }
+                    continue;
+                }
+                g.states[i].clone()
+            } else if let Some(s) = q_new.pop_front() {
+                s
+            } else {
+                break;
+            };
+            for s in self.successors(f, &b, keep) {
+                match g.index.get(&s) {
+                    Some(&j) => {
+                        if !seen[j] {
+                            seen[j] = true;
+                            count += 1;
+                            if count > STATE_CAP {
+                                return None;
+                            }
+                            q_old.push_back(j);
+                        }
+                    }
+                    None => {
+                        if fresh.insert(s.clone()) {
+                            count += 1;
+                            if count > STATE_CAP {
+                                return None;
+                            }
+                            q_new.push_back(s);
+                        }
+                    }
+                }
+            }
+            stepped.entry(f).or_default().push(b);
+        }
+        shell.1 = stepped;
+        let out = rows
+            .iter()
+            .copied()
+            .filter(|&i| self.judge_row(shell, &effects[i], per_site, keep, None))
+            .collect();
+        shell.1.clear();
+        Some(out)
     }
 
     /// G35: the guarded search from `root`, keeping each state's parent and
@@ -2949,7 +3124,7 @@ impl<'a> LiteralReach<'a> {
                 // Per effect, the verdicts its ruling depends on.
                 let mut only: Vec<usize> = dead.difference(d2).copied().collect();
                 only.sort_unstable();
-                for (i, ks) in self.relied_keeps(root, effects, per_site, &keeps, &only) {
+                for (i, ks) in self.relied_keeps(root, &reached, effects, per_site, &keeps, &only) {
                     assumed.insert(i, infos_of(&ks));
                 }
                 for (i, list) in resources.iter_mut() {
@@ -2981,22 +3156,31 @@ impl<'a> LiteralReach<'a> {
     /// in order. Fewer followed keeps never make more dead, so a verdict
     /// needed alone stays needed in every smaller set. All of `keeps` when a
     /// search is capped or following exactly `keeps` does not rule it out.
-    /// The searches are shared by every effect.
+    /// The searches are shared by every effect, and each one is the search
+    /// with every keep followed (`reached`) replayed where the dropped
+    /// verdicts change it, judging `only` ([`Self::dead_under`]).
     fn relied_keeps(
         &self,
         root: &'a str,
+        reached: &Reached<'a>,
         effects: &[DigestEffectResult],
         per_site: &[&str],
         keeps: &[u32],
         only: &[usize],
     ) -> Vec<(usize, Vec<u32>)> {
+        if only.is_empty() {
+            return Vec::new();
+        }
+        let Some(g) = self.keep_graph(root) else {
+            return only.iter().map(|&i| (i, keeps.to_vec())).collect();
+        };
+        let mut shell: Reached<'a> = (reached.0.clone(), HashMap::new());
         let mut memo: HashMap<Vec<u32>, Option<HashSet<usize>>> = HashMap::new();
         let mut dead_with = |set: &[u32], i: usize| -> bool {
             memo.entry(set.to_vec())
                 .or_insert_with(|| {
                     let ks = Keeps::Only(set.into());
-                    self.search(root, &ks)
-                        .map(|r| self.judge(&r, effects, per_site, &ks).0)
+                    self.dead_under(&g, &mut shell, only, &ks, effects, per_site)
                 })
                 .as_ref()
                 .is_some_and(|d| d.contains(&i))
@@ -3043,64 +3227,78 @@ impl<'a> LiteralReach<'a> {
         let mut out = HashSet::new();
         let mut dead_resources: HashMap<usize, Vec<String>> = HashMap::new();
         for (i, e) in effects.iter().enumerate() {
-            // G48: a group is one crossing into a dependency (its boundary
-            // identity is that call site or operation). It cannot run when the
-            // crossing itself cannot, whatever its facts are: UI, events,
-            // commits as well as table writes. Its merged facts do NOT decide
-            // it: the cone keeps one representative fact per kind per root, so
-            // a dead representative says nothing of the kind's other origins.
-            if e.boundary_group {
-                // W2-0a: the crossing's own typed site (an event crossing has
-                // no guard, so it is never dead here); a hand-built group with
-                // no record falls back to its evidence ids.
-                let site = match &e.crossing {
-                    Some(c) => c.site.guarded_id(),
-                    None => e
-                        .evidence_callsite_id
-                        .as_deref()
-                        .or(e.evidence_operation_id.as_deref()),
-                };
-                let crossing_dead = site.is_some_and(|site| self.op_dead(reached, site, keep));
-                if crossing_dead {
-                    out.insert(i);
-                    continue;
-                }
-            }
-            // An effect's (or a group resource's) merged facts are the cone's
-            // representatives, one per kind per root: a dead representative
-            // says nothing of the kind's other origins. So a kind is judged by
-            // EVERY direct fact of it in the root's reach ([`Self::kind_dead`]).
-            let kind = e.effect_type.as_str();
-            if e.boundary_group {
-                let dead: Vec<String> = e
-                    .group_resources
-                    .iter()
-                    .filter(|(r, _)| self.kind_dead(reached, (kind, Some(r.as_str())), keep))
-                    .map(|(r, _)| r.clone())
-                    .collect();
-                if !dead.is_empty() {
-                    dead_resources.insert(i, dead);
-                }
-                continue;
-            }
-            if per_site.contains(&kind)
-                && let Some(op) = e.evidence_operation_id.as_deref()
-            {
-                if self.op_dead(reached, op, keep) {
-                    out.insert(i);
-                }
-                continue;
-            }
-            let resource = e
-                .detail
-                .iter()
-                .find(|(k, _)| k == "resourceId")
-                .map(|(_, v)| v.as_str());
-            if self.kind_dead(reached, (kind, resource), keep) {
+            let mut dead = Vec::new();
+            if self.judge_row(reached, e, per_site, keep, Some(&mut dead)) {
                 out.insert(i);
+            }
+            if !dead.is_empty() {
+                dead_resources.insert(i, dead);
             }
         }
         (out, dead_resources)
+    }
+
+    /// [`Self::judge`]'s ruling of one row `e`: whether the search
+    /// `reached` (made with `keep`) rules it out. A group whose crossing can
+    /// run is not ruled out; its dead resources go to `resources` when
+    /// given (left alone when not: they never decide the row).
+    fn judge_row(
+        &self,
+        reached: &Reached<'a>,
+        e: &DigestEffectResult,
+        per_site: &[&str],
+        keep: &Keeps,
+        resources: Option<&mut Vec<String>>,
+    ) -> bool {
+        // G48: a group is one crossing into a dependency (its boundary
+        // identity is that call site or operation). It cannot run when the
+        // crossing itself cannot, whatever its facts are: UI, events,
+        // commits as well as table writes. Its merged facts do NOT decide
+        // it: the cone keeps one representative fact per kind per root, so
+        // a dead representative says nothing of the kind's other origins.
+        if e.boundary_group {
+            // W2-0a: the crossing's own typed site (an event crossing has
+            // no guard, so it is never dead here); a hand-built group with
+            // no record falls back to its evidence ids.
+            let site = match &e.crossing {
+                Some(c) => c.site.guarded_id(),
+                None => e
+                    .evidence_callsite_id
+                    .as_deref()
+                    .or(e.evidence_operation_id.as_deref()),
+            };
+            let crossing_dead = site.is_some_and(|site| self.op_dead(reached, site, keep));
+            if crossing_dead {
+                return true;
+            }
+        }
+        // An effect's (or a group resource's) merged facts are the cone's
+        // representatives, one per kind per root: a dead representative
+        // says nothing of the kind's other origins. So a kind is judged by
+        // EVERY direct fact of it in the root's reach ([`Self::kind_dead`]).
+        let kind = e.effect_type.as_str();
+        if e.boundary_group {
+            if let Some(out) = resources {
+                out.extend(
+                    e.group_resources
+                        .iter()
+                        .filter(|(r, _)| self.kind_dead(reached, (kind, Some(r.as_str())), keep))
+                        .map(|(r, _)| r.clone()),
+                );
+            }
+            return false;
+        }
+        if per_site.contains(&kind)
+            && let Some(op) = e.evidence_operation_id.as_deref()
+        {
+            return self.op_dead(reached, op, keep);
+        }
+        let resource = e
+            .detail
+            .iter()
+            .find(|(k, _)| k == "resourceId")
+            .map(|(_, v)| v.as_str());
+        self.kind_dead(reached, (kind, resource), keep)
     }
 
     /// Whether no direct fact of `kind` (effect type, resource id) can run

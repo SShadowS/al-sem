@@ -238,6 +238,11 @@ pub(super) struct FlowEval {
     args: HashMap<u32, Vec<(u32, VSet)>>,
     /// The keep verdicts a reachable call used ([`ArgWrite::Keep`]), sorted.
     pub(super) keeps: Vec<u32>,
+    /// Every keep verdict the evaluation asked about (followed or not, at a
+    /// reachable call or in a loop's write set), sorted. Filled by the
+    /// caller that supplies `keep` (the literal reach): an evaluation under
+    /// another keep choice that answers these the same way is this one.
+    pub(super) consulted: Vec<u32>,
     /// Round-4 literal routes: per reachable interface call site (its index)
     /// the enum values its receiver may hold there (`None`: unknown).
     recv: HashMap<u32, Option<VSet>>,
@@ -594,6 +599,7 @@ impl FlowProgram {
             dead: x.seen.difference(&x.live).copied().collect(),
             args: x.args,
             keeps,
+            consulted: Vec::new(),
             recv: x.recv,
         }
     }
