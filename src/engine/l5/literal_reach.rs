@@ -1585,6 +1585,13 @@ impl Untrap {
     }
 }
 
+/// B7/L23: a root's routines reached with guards ignored and some traps not
+/// crossed ([`LiteralReach::open_reach`]): each with the edge (caller, its
+/// position among the caller's out-edges) it was first reached by.
+pub(crate) struct OpenReach<'a> {
+    parent: HashMap<&'a str, Option<(&'a str, u32)>>,
+}
+
 /// B7/L23: where a route is trapped: the trap's kind, the routine whose
 /// edge it is (stable id), and the place of its call site (or, for an
 /// isolated event, of the publisher), 0-based line.
@@ -2788,30 +2795,92 @@ impl<'a> LiteralReach<'a> {
         }
     }
 
+    /// B7/L23: the routines `root` reaches over the snapshot's edges with
+    /// guards IGNORED and without crossing a trap `untrap` stops, each with
+    /// the edge it was first reached by. Guards ignored, it reaches at least
+    /// every routine any guarded search that crosses no such trap reaches,
+    /// so a routine it does not reach is reached only through a trap: the
+    /// ruling "caught" is sound under any literal arguments and any keep
+    /// verdict. (A guarded search here cost prove about x1.25 CPU on CDO;
+    /// this one is a plain walk over the edges.) `None` for a root the model
+    /// has no row for.
+    pub(crate) fn open_reach(&self, root: &str, untrap: Untrap) -> Option<OpenReach<'a>> {
+        let (&root, _) = self.by_stable.get_key_value(root)?;
+        let mut parent: HashMap<&'a str, Option<(&'a str, u32)>> = HashMap::from([(root, None)]);
+        let mut q = VecDeque::from([root]);
+        while let Some(f) = q.pop_front() {
+            let traps = self.traps.get(f).map_or(&[][..], Vec::as_slice);
+            for (j, &(to, _, _, _)) in self.out.get(f).into_iter().flatten().enumerate() {
+                if traps
+                    .iter()
+                    .any(|&(t, k)| t as usize == j && untrap.stops(k))
+                {
+                    continue;
+                }
+                if let std::collections::hash_map::Entry::Vacant(v) = parent.entry(to) {
+                    v.insert(Some((
+                        f,
+                        u32::try_from(j).expect("an edge position fits u32"),
+                    )));
+                    q.push_back(to);
+                }
+            }
+        }
+        Some(OpenReach { parent })
+    }
+
+    /// The edges [`Self::open_reach`] first reached `to` by, from its root.
+    fn open_steps(&self, r: &OpenReach<'a>, to: &'a str) -> Vec<Step<'a>> {
+        let mut steps = Vec::new();
+        let mut cur = to;
+        while let Some(Some((from, j))) = r.parent.get(cur) {
+            let (t, site, _, kind) = self.out[from][*j as usize];
+            steps.push(Step {
+                from,
+                to: t,
+                site,
+                kind,
+            });
+            cur = from;
+        }
+        steps.reverse();
+        steps
+    }
+
     /// B7/L23: how the traps decide an error site `ops` (its operation and
     /// call-site ids) from the root of `full` (the ordinary search):
-    /// `definite` is the root's search that crosses no definite trap,
-    /// `all` (when an isolated event is in reach) the one that crosses no
-    /// trap. `None`: the site has no live route in `full` (nothing to
-    /// rule), or no route crosses a trap the ruling can name.
+    /// `definite` is the root's [`Self::open_reach`] that crosses no
+    /// definite trap, `all` (when an isolated event is in reach) the one that
+    /// crosses no trap. The site is caught when no routine owning one of
+    /// `ops` is in `definite` (and owners are known). `None`: the site has no
+    /// live route in `full` (nothing to rule), or no route crosses a trap the
+    /// ruling can name. A site whose only trap-free route the literal
+    /// arguments rule out stays escaping (`definite` ignores guards).
     pub(crate) fn trap_verdict(
         &self,
         full: &LiveTree<'a>,
-        definite: &LiveTree<'a>,
-        all: Option<&LiveTree<'a>>,
+        definite: &OpenReach<'a>,
+        all: Option<&OpenReach<'a>>,
         ops: &[String],
     ) -> Option<TrapVerdict> {
         let (steps, _) = self.tree_witness(full, ops)?;
-        let Some((open, _)) = self.first_live_owner_m(definite, ops, NONE) else {
+        let owners: Vec<&'a str> = ops
+            .iter()
+            .filter_map(|o| self.op_owner.get(o.as_str()).copied())
+            .collect();
+        if owners.is_empty() {
+            return None;
+        }
+        let Some(&open) = owners.iter().find(|o| definite.parent.contains_key(*o)) else {
             return self
                 .first_trap(&steps, Untrap::Definite)
                 .map(TrapVerdict::Caught);
         };
         if let Some(all) = all
-            && self.first_live_owner_m(all, ops, NONE).is_none()
+            && owners.iter().all(|o| !all.parent.contains_key(o))
         {
             return self
-                .first_trap(&definite.steps_to(open), Untrap::All)
+                .first_trap(&self.open_steps(definite, open), Untrap::All)
                 .map(TrapVerdict::UnlessWritePending);
         }
         self.first_trap(&steps, Untrap::Definite)

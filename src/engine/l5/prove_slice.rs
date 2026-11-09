@@ -921,22 +921,25 @@ pub(crate) fn compute_slice(
     };
     let errors = req.question == SliceQuestion::Errors;
     // B7/L23: an error site a definite trap catches on every route is not
-    // reachable as an error of the root: the searches that cross no trap,
-    // only when a trap is in reach (`None` inside: capped, nothing ruled).
-    // (The errors question's sites, and the error dialogs, `UI_ERROR`, of
-    // the UI question.)
+    // reachable as an error of the root: the walks that cross no trap
+    // ([`LiteralReach::open_reach`]), only when a trap is in reach. (The
+    // errors question's sites, and the error dialogs, `UI_ERROR`, of the UI
+    // question.)
     let trapped_question = matches!(req.question, SliceQuestion::Errors | SliceQuestion::Ui);
     let (untrapped, untrapped_all) = match trapped_question.then(|| reach.traps_reached(live)) {
         Some((definite, isolated)) if definite || isolated => (
-            reach.untrapped_tree(root, Untrap::Definite),
+            reach.open_reach(root, Untrap::Definite),
             if isolated {
-                reach.untrapped_tree(root, Untrap::All)
+                reach.open_reach(root, Untrap::All)
             } else {
                 None
             },
         ),
         _ => (None, None),
     };
+    // The guarded search that crosses no definite trap, built only for a
+    // matching site that escapes on some routes (its printed route).
+    let mut open_tree: Option<Option<LiveTree>> = None;
     let mut seen: HashSet<(&str, &str, &str)> = HashSet::new();
     // Per site: the site, and whether its write is caller-dependent.
     let mut sites: Vec<(SliceSite, Option<Vec<String>>)> = Vec::new();
@@ -1062,7 +1065,8 @@ pub(crate) fn compute_slice(
         // B7/L23: a site that escapes on some routes only prints a route
         // that crosses no trap (the first route found is trapped).
         let open = match &sites[i].0.trap {
-            Some(TrapVerdict::SomeRoutes(_)) => untrapped
+            Some(TrapVerdict::SomeRoutes(_)) => open_tree
+                .get_or_insert_with(|| reach.untrapped_tree(root, Untrap::Definite))
                 .as_ref()
                 .and_then(|u| group_paths.own_path(&reach, Some(u), &ops).ok()),
             _ => None,

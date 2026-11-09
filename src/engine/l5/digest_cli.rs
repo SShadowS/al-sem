@@ -2070,12 +2070,12 @@ fn judge_traps<'t>(
         return;
     }
     let untrapped = if definite || isolated {
-        reach.untrapped_tree(&entry.routine_id, Untrap::Definite)
+        reach.open_reach(&entry.routine_id, Untrap::Definite)
     } else {
         None
     };
     let all = if isolated {
-        reach.untrapped_tree(&entry.routine_id, Untrap::All)
+        reach.open_reach(&entry.routine_id, Untrap::All)
     } else {
         None
     };

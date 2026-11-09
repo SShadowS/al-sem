@@ -42,9 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One trap rule for both directions:** `src/engine/l5/traps.rs` holds it;
   `callers-intercept-errors` (callers_context), the pending-writes walk and the forward answers
   all read it (the checked-run test was in three copies before). The forward search
-  (`literal_reach`) marks trap edges once and runs a second guarded search that does not cross
-  them only for a root with a trap in its reach; only a completed search rules a row caught,
-  and that search follows no loaded-subscriber assumption, so `caught` never rests on one.
+  (`literal_reach`) marks trap edges once; for a root with a trap in its reach it walks the
+  edges again with guards ignored and trap edges not crossed. A site whose routine that walk
+  does not reach is caught: ignoring guards reaches at least what any literal arguments and
+  any loaded-subscriber assumption reach, so `caught` rests on neither. (A first version ran a
+  second guarded search instead; `scripts/cdo-speed` failed it at prove CPU x1.27.) A site
+  whose only trap-free route the literal arguments rule out stays escaping.
 - **The same applies to the error's dialog (`UI_ERROR`)**: `reaches-ui` no longer counts the
   dialog of an error caught on every route.
 - **Output (outside consumers):** digest's per-effect `status` has a new value `caught`;
