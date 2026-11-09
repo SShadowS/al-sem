@@ -21,7 +21,7 @@
 //! `summary:` line prints it. Every total is a union by identity, never a sum
 //! of section counts (T-W2-1).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Value, json};
 
@@ -4123,7 +4123,8 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
         if n == 0 || (*key == "telemetry" && !detail) {
             continue;
         }
-        let mut places: Vec<String> = r
+        // Each item: its text and how many places it stands for.
+        let mut places: Vec<(String, usize)> = r
             .kind_sites
             .get(key)
             .into_iter()
@@ -4138,43 +4139,88 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
                     .map_or(String::new(), |(_, s)| format!(", starts {s}"));
                 // r3 §7 R5: the route's guards when one was replayed, as
                 // prove; the class label otherwise.
-                format!(
+                let text = format!(
                     "{} at {} ({}){starts}",
                     e.effect_type,
                     row_anchor(e),
                     crate::engine::l5::prove::condition_words(e)
-                )
+                );
+                (text, 1)
             })
             .collect();
-        for &ci in r.kind_crossings.get(key).into_iter().flatten() {
-            let c = &r.crossings[ci];
-            let types: Vec<&str> = c
-                .kinds
-                .iter()
-                .map(String::as_str)
-                .filter(|k| family_of(k) == Some(*key) || (*key == "errors" && *k == "UI_ERROR"))
-                .collect();
-            places.push(format!("{} beyond {}", types.join(", "), crossing_name(c)));
-        }
-        // MCP output step 2: the first places, the rest counted.
-        let places = fold(places, caps::KIND_PLACES, "places", detail);
+        places.extend(crossing_places(r, key, detail));
+        // MCP output step 2: the first places, the rest counted (a grouped
+        // item hides all of its places).
+        let shown = fold_len(places.len(), caps::KIND_PLACES, detail);
+        let hidden: usize = places[shown..].iter().map(|(_, k)| k).sum();
+        let shown: Vec<String> = places.into_iter().take(shown).map(|(t, _)| t).collect();
         out.push(format!(
             "{label} at {}{}: {}{}",
             at_least(r.totals.kinds_partial.contains(key)),
             plural(n, "place", "places"),
-            places.shown.join("; "),
-            if places.hidden > 0 {
-                format!(
-                    "; … +{} places ({} lists them)",
-                    places.hidden,
-                    o.detail_input()
-                )
+            shown.join("; "),
+            if hidden > 0 {
+                format!("; … +{hidden} places ({} lists them)", o.detail_input())
             } else {
                 String::new()
             }
         ));
     }
     out
+}
+
+/// The places of family `key` beyond dependency calls, for [`kind_lines`]:
+/// one item per distinct (effect types, dependency routines entered), in
+/// first-crossing order, each with the number of crossings (places) it
+/// stands for. Engine limits wave 0 (B8): a routine that enters the same
+/// dependency routines from many call sites (CDO `SetHandled`: an event with
+/// five subscribers raised at 10 `ModifyAll` sites) printed the five names
+/// once per site, about 5 KB, while the sites themselves were never shown.
+/// Now the names print once and the group lists where it is entered; a
+/// group of one crossing prints as before.
+fn crossing_places(r: &RoutineRollup, key: &str, detail: bool) -> Vec<(String, usize)> {
+    // (types, name) → (crossings, their distinct sites in order).
+    let mut groups: Vec<((String, &str), usize, Vec<&str>)> = Vec::new();
+    let mut index: HashMap<(String, &str), usize> = HashMap::new();
+    let mut seen: HashSet<(usize, &str)> = HashSet::new();
+    for &ci in r.kind_crossings.get(key).into_iter().flatten() {
+        let c = &r.crossings[ci];
+        let types: Vec<&str> = c
+            .kinds
+            .iter()
+            .map(String::as_str)
+            .filter(|k| family_of(k) == Some(key) || (key == "errors" && *k == "UI_ERROR"))
+            .collect();
+        let id = (types.join(", "), crossing_name(c));
+        let g = *index.entry(id.clone()).or_insert_with(|| {
+            groups.push((id, 0, Vec::new()));
+            groups.len() - 1
+        });
+        groups[g].1 += 1;
+        for s in &c.sites {
+            if seen.insert((g, s.as_str())) {
+                groups[g].2.push(s);
+            }
+        }
+    }
+    groups
+        .into_iter()
+        .map(|((types, name), k, sites)| {
+            let mut text = format!("{types} beyond {name}");
+            if k > 1 {
+                text.push_str(&format!(" ({k} places"));
+                if !sites.is_empty() {
+                    let f = fold(sites, caps::KIND_PLACES, "sites", detail);
+                    text.push_str(&format!(", entered at {}", f.shown.join(", ")));
+                    if f.hidden > 0 {
+                        text.push_str(&format!(", … +{} more", f.hidden));
+                    }
+                }
+                text.push(')');
+            }
+            (text, k)
+        })
+        .collect()
 }
 
 /// `gaps in dependency code` (design §4.1 section 21).

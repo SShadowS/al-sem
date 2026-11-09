@@ -30,6 +30,17 @@
 //!    the 200-odd other fixtures' `app.json` files (which hit the cap and
 //!    made every fixture's answer depend on the repository's layout).
 //!
+//!    **Other projects are not entered** (engine limits wave 0, B8): below the
+//!    search root the walk does not descend into a folder that holds a
+//!    [`PROJECTS_MARKER`] or a `.git` of its own (a nested clone, a worktree,
+//!    a submodule) unless the workspace is inside it. Without this, a
+//!    workspace elsewhere in this repository (under `target/tmp`, `docs/`)
+//!    walked into `tests/r0-corpus/` from the git top level, read 64 fixture
+//!    `app.json` files and answered "discovery incomplete". A folder holding
+//!    an `app.json` is read as an app before the check, so a sibling test app
+//!    that is its own repository is still found. The cap stays as a safety
+//!    net.
+//!
 //! An app **qualifies** when its `app.json` lists the workspace app's `id` in
 //! `dependencies` AND one of its `.al` files declares a codeunit with
 //! `Subtype = Test`. A dependent with no `.al` file is skipped `no-source`
@@ -476,6 +487,18 @@ fn skip_dir(name: &str) -> bool {
         || name.starts_with("target-")
 }
 
+/// The walk does not enter `dir` (below the search root): it is a project of
+/// its own that does not hold the workspace. Either a repository of its own
+/// (it holds `.git`: a nested clone, a worktree, a submodule), the git
+/// boundary dependency discovery stops at too, or a project collection (it
+/// holds [`PROJECTS_MARKER`]: each subfolder is an unrelated project). A
+/// folder holding an `app.json` is still read as one app before this check,
+/// so a test app that is its own repository is found.
+fn other_project(dir: &Path, workspace: &Path) -> bool {
+    !workspace.starts_with(dir)
+        && (dir.join(".git").exists() || dir.join(PROJECTS_MARKER).is_file())
+}
+
 /// Depth-first, sorted, over `dir` at `depth` (see the module doc).
 fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize) {
     if !scope.complete && scope.searched >= MAX_APP_JSON {
@@ -502,7 +525,7 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize) {
         }
         return;
     }
-    if depth >= MAX_DEPTH {
+    if depth >= MAX_DEPTH || (depth > 0 && other_project(dir, workspace)) {
         return;
     }
     let mut subdirs: Vec<PathBuf> = match std::fs::read_dir(dir) {

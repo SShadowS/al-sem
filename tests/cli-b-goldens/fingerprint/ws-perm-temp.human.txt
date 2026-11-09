@@ -4,7 +4,7 @@ Codeunit "PT Writer"::ByParam  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000e130/table/50300"
   permissions:
-    TableData "11111111-0000-0000-0000-00000000e130/table/50300" W
+    TableData "11111111-0000-0000-0000-00000000e130/table/50300" I
 
   witnesses:
     error-implicit error — 1 path shown
@@ -38,7 +38,7 @@ Codeunit "PT Writer"::Mixed  [public-procedure]
   coverage:   complete
   writes:     TableData "11111111-0000-0000-0000-00000000e130/table/50300"
   permissions:
-    TableData "11111111-0000-0000-0000-00000000e130/table/50300" W
+    TableData "11111111-0000-0000-0000-00000000e130/table/50300" I
 
   witnesses:
     error-implicit error — 1 path shown

@@ -447,6 +447,16 @@ mapping) marks paths dirty; dirty texts and dirty packages are re-hashed and the
 entries confirmed. Stated residual: a rewrite preserving mtime and length with no watcher
 event is missed until `verify`.
 
+**The answer states it too** (engine limits wave 0, B8). Before, a command answer's header
+said `freshness: {requested, served: "fresh"}` even when it could be stale by this
+residual; only `alsem_status` named it. Now `freshness` is `{requested, served, residual}`
+(`src/mcp/freshness.rs` `answer_freshness`): `served` is `fresh-by-size-and-time` (the
+stat check passed; the residual above applies), `verified` (every input hashed; only unsaved
+buffers remain) or `latest-built` (`stale: true`, the files in `changedPaths` changed), and
+`residual` says in words what that check cannot see. A composite answer (`alsem_tests`,
+`alsem_impact`) takes `stale`, `changedPaths` and `served` from its parts: stale when any
+part was.
+
 ## 6. Incremental update of a revision
 
 ### 6.1 Classifying the change
@@ -1336,7 +1346,8 @@ binary's clap, so flags and defaults are the CLI's.
 kind: "cli" | "failed";  revision: {engineInstanceId, generation, inputsStamp} | null  (always present)
 cli:    exitCode (the CLI's: 0, 1, 2 or 3), stdoutText XOR stdoutFile{path,bytes,sha256},
         stderr[] XOR stderrFile XOR stderrBytes (lossless, §3), stale, changedPaths, changedPathsTruncated,
-        universe, timing{queuedMs, waitedForBuildMs, sharedFillMs, computeMs}
+        universe, timing{queuedMs, waitedForBuildMs, sharedFillMs, computeMs},
+        freshness{requested, served ∈ {fresh-by-size-and-time, verified, latest-built}, residual} (§5.3)
 failed: outcome ∈ {cancelled, deadline, budget, busy, engineError, refusedPath, notThisWorkspace, inputsUnstable, protocol},
         message (≤ MESSAGE_INLINE_BYTES), diagnosticFile?, workDoneMs?, skippedPhases?, rootsProcessed?, rootsTotal?,
         estimateKiB?, budgetKiB?, retainedFloorKiB?

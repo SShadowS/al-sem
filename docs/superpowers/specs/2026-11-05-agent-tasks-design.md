@@ -1590,6 +1590,13 @@ dependency files on the route); `--low-mem`.
   route's sites. A route through a TryFunction is not marked as trapped
   (`callers-intercept-errors` answers that question).
 - A filtered document is schema 2.5.0; an unfiltered one stays 2.4.0, byte for byte.
+- **Resident (engine limits B1, 2026-11-09).** E1 shipped without wiring M0-4: the resident
+  revision builds with `REVISION_NEEDS` (explain's needs, no guard arms) and nothing called
+  `pin_needs`, so the first filtered prove in `alsem mcp` panicked in the engine child ("site
+  guards not built") and killed it. Now a revision refuses a job whose demand reads model rows it
+  lacks (`PrepareError::Needs`), and the engine host pins with `pin_needs` and asks again: one
+  rebuild of class `needs`, and the session keeps guard arms in every later build (about 5.6 MB
+  on CDO, by the measurement above). Test: `engine_host::every_prove_filter_is_answered_off_a_widened_revision`.
 
 ---
 

@@ -300,16 +300,6 @@ fn resolve_resource_display(
     (None, "<unknown>".to_string(), None)
 }
 
-fn table_op_to_right(op: &str) -> Option<&'static str> {
-    match op {
-        "read" => Some("R"),
-        "insert" => Some("W"),
-        "modify" => Some("M"),
-        "delete" => Some("D"),
-        _ => None,
-    }
-}
-
 /// A witness's terminal evidence (#160 step 9 S9-2): the boundary of the first
 /// of `paths` that has one, in their order; else the fact's own operation
 /// evidence from the snapshot's operation index (`None` when the fact names no
@@ -569,7 +559,9 @@ fn build_block<'w>(
         let Some(rid_res) = f.resource_id() else {
             continue;
         };
-        let Some(right) = table_op_to_right(f.op()) else {
+        // Engine limits B8: AL's own rights (`RIMD`), from the one mapping the
+        // full snapshot reads too.
+        let Some(right) = crate::engine::l5::table_rights::table_op_right(f.op()) else {
             continue;
         };
         // #20: a provably temporary record needs no TableData permission. Per
@@ -587,13 +579,8 @@ fn build_block<'w>(
         let key = format!("table|{rid_res}");
         if let Some(&pos) = perm_pos.get(&key) {
             let p = &mut perm_map[pos].1;
-            if !p.rights.contains(right) {
-                p.rights.push_str(right);
-                // Keep rights sorted.
-                let mut chars: Vec<char> = p.rights.chars().collect();
-                chars.sort();
-                p.rights = chars.into_iter().collect();
-            }
+            // In AL's order (`RIMD`), each right once.
+            p.rights = crate::engine::l5::table_rights::with_right(&p.rights, right);
         } else {
             let pos = perm_map.len();
             perm_pos.insert(key.clone(), pos);

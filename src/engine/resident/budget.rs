@@ -83,6 +83,31 @@ pub fn default_budget(single_app: bool, low_mem: bool) -> u64 {
     }
 }
 
+/// The `--memory-budget` defaults in the words `--help` prints
+/// (`8G cross-app, 6G cross-app with --low-mem, 2G single-app`), from the
+/// constants above, so the help cannot drift from them again (engine limits
+/// B8: it said `6G cross-app` after the default became 8 GiB).
+#[must_use]
+pub fn default_budget_text() -> String {
+    format!(
+        "{} cross-app, {} cross-app with --low-mem, {} single-app",
+        size_text(DEFAULT_BUDGET_CROSS_APP),
+        size_text(DEFAULT_BUDGET_CROSS_APP_LOW_MEM),
+        size_text(DEFAULT_BUDGET_SINGLE_APP)
+    )
+}
+
+/// `bytes` with the largest of G, M or K that divides it (the suffixes
+/// `--memory-budget` takes), else in bytes.
+fn size_text(bytes: u64) -> String {
+    for (unit, suffix) in [(GIB, "G"), (MIB, "M"), (1 << 10, "K")] {
+        if bytes >= unit && bytes.is_multiple_of(unit) {
+            return format!("{}{suffix}", bytes / unit);
+        }
+    }
+    bytes.to_string()
+}
+
 /// The pre-model estimate's floor, cross-app (§4.5).
 pub const ESTIMATE_FLOOR_CROSS_APP: u64 = 3 * GIB / 2;
 

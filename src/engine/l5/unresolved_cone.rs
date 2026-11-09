@@ -314,6 +314,34 @@ fn item_order(a: &UnresolvedConeItem, b: &UnresolvedConeItem) -> std::cmp::Order
         .then_with(|| a.callsite_id.cmp(&b.callsite_id))
 }
 
+/// Place the items the snapshot holds no call-site evidence for (engine
+/// limits B8). The snapshot's `callsite_index` keeps only the sites a fact
+/// or a typed edge names, so a call with no target at all (an interface
+/// call no loaded object implements) has a ledger row but no evidence, and
+/// its item came out with no anchor: the rollup counted it `not placed`
+/// while explain, which falls back to the model's call site, listed it
+/// under `gaps in workspace code`. `site_of(owning routine, call site id)`
+/// is that model call site's anchor (`file`, line, column); every reader of
+/// the cone (explain, digest, prove, query) then places the item alike. The
+/// items are sorted again, as their order reads the anchor.
+pub(crate) fn place_items(
+    items: &mut [UnresolvedConeItem],
+    site_of: impl Fn(&str, &str) -> Option<(String, u32, u32)>,
+) {
+    let mut placed = false;
+    for it in items.iter_mut().filter(|i| i.callsite_file.is_none()) {
+        if let Some((file, line, column)) = site_of(&it.owning_routine, &it.callsite_id) {
+            it.callsite_file = Some(normalize_anchor_path(&file));
+            it.callsite_line = Some(line);
+            it.callsite_column = Some(column);
+            placed = true;
+        }
+    }
+    if placed {
+        items.sort_by(item_order);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Edge accessors (the snapshot's public ones)
 // ---------------------------------------------------------------------------

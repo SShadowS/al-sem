@@ -234,3 +234,75 @@ fn a_projects_marker_bounds_the_search_to_the_project() {
          with a test codeunit (searched 0 app.json files)"
     );
 }
+
+/// Engine limits wave 0 (B8): a workspace that sits in a repository beside a
+/// project collection (a folder holding `.al-sem-projects`) and a nested
+/// repository (a folder holding its own `.git`), each with more than
+/// [`MAX_APP_JSON`] unrelated `app.json` files, is searched from the git top
+/// level without entering either: the search completes, finds the sibling
+/// test app, and finds a test app that is a repository of its own (its
+/// `app.json` is read before the nested-repository check). The precondition
+/// is stated: the workspace is under neither folder, so `search_root` is the
+/// git top level and only the walk can keep out of them.
+///
+/// DISCRIMINATION (2026-11-09): `other_project` without its `.git` arm
+/// fails at `complete` ("the cap of 64 app.json files was reached ...",
+/// searched 64 from `vendor/clone`); without its marker arm fails the same
+/// way from `corpus`; restored, passes.
+#[test]
+fn the_walk_does_not_enter_other_projects() {
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    std::fs::create_dir(r.join(".git")).unwrap();
+    app(&r.join("work/App"), PROD, "Prod", &[]);
+    app(
+        &r.join("work/Test"),
+        "22222222-2222-2222-2222-222222222222",
+        "Prod Tests",
+        &[PROD],
+    );
+    al(&r.join("work/Test/src"), "T.Codeunit.al", TEST_CU);
+    // A test app that is a repository of its own (a submodule, a clone).
+    app(
+        &r.join("TestRepo"),
+        "33333333-3333-3333-3333-333333333333",
+        "Prod Tests Repo",
+        &[PROD],
+    );
+    std::fs::write(r.join("TestRepo/.git"), "gitdir: elsewhere\n").unwrap();
+    al(&r.join("TestRepo/src"), "T.Codeunit.al", TEST_CU);
+    // A project collection and a nested repository, each over the cap, each
+    // holding a dependent test app that must not be found.
+    let corpus = r.join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::write(corpus.join(PROJECTS_MARKER), "").unwrap();
+    let clone = r.join("vendor/clone");
+    std::fs::create_dir_all(clone.join(".git")).unwrap();
+    for base in [&corpus, &clone] {
+        app(
+            &base.join("dep"),
+            "44444444-4444-4444-4444-444444444444",
+            "Unrelated Tests",
+            &[PROD],
+        );
+        al(&base.join("dep/src"), "T.Codeunit.al", TEST_CU);
+        for i in 0..(MAX_APP_JSON + 3) {
+            app(
+                &base.join(format!("n{i:03}")),
+                &format!("{i:08}-0000-0000-0000-000000000000"),
+                "n",
+                &[],
+            );
+        }
+    }
+    let s = discover(&r.join("work/App"), &ScopeRequest::default());
+    assert_eq!(
+        s.search_root.as_ref(),
+        Some(&(r.to_path_buf(), true)),
+        "precondition: searched from the git top level"
+    );
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Prod Tests Repo", "Prod Tests"]);
+    assert_eq!(s.searched, 2, "TestRepo and work/Test only");
+}

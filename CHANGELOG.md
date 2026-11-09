@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 0, B1)
+
+- **`alsem_prove` with a filter no longer kills the resident engine.** `prove` with
+  `--match`, `--table`, `--op`, `--site` or `--routes` reads each routine's guard arms
+  (the conditions around a site). The resident engine (`alsem mcp`, `engine-host`, the
+  LSP's `al-call-hierarchy/prove`) builds its revision with explain's needs, which leave
+  the guard arms out, and nothing widened them: the first filtered ask panicked in the
+  engine child ("site guards not built") and the engine died with signal 6. The
+  one-shot CLI was right. Now a revision refuses any job whose demand reads model rows
+  it was not built with (`PrepareError::Needs`, checked against the job's own demand,
+  so it covers every job kind, not just prove), and the engine host then pins with
+  `ResidentSession::pin_needs`: the session's needs widen, the model is rebuilt once
+  (build class `needs`), and every later build keeps the guard arms. An audit of every
+  served command's demand found prove with a filter is the only one that needed more
+  than the revision's needs today. New tests: a resident contract test asks every
+  filter in both universes after an unfiltered prove and checks each answer equals the
+  CLI's bytes, with one rebuild and no engine death; a revision test checks the refusal
+  and the widened answer. Cost, measured on the `ws-explain` fixture (release-fast,
+  `alsem mcp`, warm): the first filtered prove took 48 ms (the rebuild and the new
+  revision's fills), later ones 4 ms; RSS 52.0 MB before, 52.8 MB after. Not measured
+  on CDO: there the first filtered ask pays one model rebuild of class `needs` (every
+  row projected again, the parses reused) and the new revision's fills, and the session
+  then keeps the guard arms (5.6 MB on CDO by the E1 measurement). A session that never
+  gets a filtered prove pays nothing.
+
+### Fixed (engine limits wave 0, B3)
+
+- **`prove … callers-intercept-errors` no longer answers a wrong `no` for a subscriber of
+  an isolated event.** An isolated event (`[IntegrationEvent(_, _, true)]`,
+  `[BusinessEvent(_, true)]`, `[InternalEvent(_, true)]`) runs each subscriber in a
+  transaction of its own. When a subscriber fails, the platform rolls back that
+  subscriber's database changes and goes on with the next subscriber and then the
+  publisher. This does not hold when the raising transaction has a write pending, or
+  while an extension is installed, uninstalled or upgraded: then the event runs as a
+  normal event and the error fails the whole operation (Microsoft Learn, "Isolated
+  events in AL",
+  <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-events-isolated>).
+  The question ignored isolation, so the fixture subscriber `HandleIso` got `no (every
+  candidate decided) — every path propagates an error to its entry`. Now the dispatch
+  from an isolated publisher is a new witness kind, `isolated-event`, which names the
+  publisher and the condition; the answer is `yes`. Since the trap does not hold with a
+  write pending, the walk still goes on above the publisher. Isolated witnesses are
+  listed after the traps that always hold, as `collectible` ones are.
+- **The isolated flag now reaches the program graph for every publisher.** A new
+  `RoutineNode::publisher_isolated` is read from source attributes
+  (`resolve::event::publisher_isolated`) and from a symbol-only dependency's
+  `SymbolReference.json` attributes (the rule of `model::events::parse_isolated`:
+  isolated when any reading passes `true` or a value that is not a literal). `#if` arms
+  of one publisher merge it (isolated in any arm). The sited graph keeps the isolated
+  publishers (`SitedGraph::is_isolated_publisher`). The event graph's symbol for a
+  dependency publisher that is not a model row (`--single-app`) now carries it too; it
+  was always `None` ("not read from dependency attributes yet"). Dependencies on the
+  CDO baseline declare 12 isolated events (Base App 5, System Application 5, System 1,
+  Continia Core 1). The dependency pack schema moves to 14.
+- **An event dispatch no longer needs the publisher's body facts in
+  `callers-intercept-errors`.** Whether an error crosses the dispatch depends only on
+  the publisher's declaration, but a symbol-only publisher (such as System's
+  `Company Triggers::OnCompanyOpenCompleted`) blocked `no` with `order-unknown` ("no
+  body facts in the model"). On CDO, `CDO Telemetry`'s `OnCompanyOpenCompleted`
+  subscriber got `unknown`; the answer is now `yes`.
+- **`prove … throws-error` on a subscriber of an isolated event says whether the error
+  escapes** (r3 §7 R5): `whether it escapes <publisher>: no, unless the raising
+  transaction has a write pending or an extension is being installed or upgraded`, with
+  the reason. A normal event keeps `not established`, because the forward answer does
+  not yet apply the traps inside the subscriber (B7).
+- Tests: `tests/fixtures/isolated-events` (a workspace and a symbol-only dependency,
+  each with an isolated and a normal event) and five tests in
+  `engine::l5::callers_context::tests`: four pin the rules (each rule with a
+  discrimination proof), the fifth is the normal-event control.
+
+### Fixed (engine limits wave 0, B8 first half)
+
+Five small wrong outputs from `docs/engine-limits.md` §1, B8.
+
+- **`alsem fingerprint` prints AL's own TableData rights.** The human answer and the query
+  JSON (`--witness`) printed `W` for an insert; AL's rights are `R`, `I`, `M`, `D`. The full
+  snapshot's `permissionFacts` already said `I`. Both now read one mapping
+  (`src/engine/l5/table_rights.rs`), and a table's rights print in AL's order (`RM`, not
+  `MR`). Fingerprint goldens moved: `W` → `I`, `MR` → `RM`, `RW` → `RI`.
+- **A follow-up runs as printed in single-app mode.** A single-app `throws-error` answer
+  suggested `alsem prove … callers-intercept-errors --single-app`, and a single-app explain
+  card suggested `alsem explain --callers-context … --single-app`; the CLI refuses both
+  (they walk the cross-app program). The shared follow-up table
+  (`src/engine/follow_up.rs`, `FollowUp::cross_app_only`) now leaves `--single-app`
+  (`singleApp`) off them. A new test runs every follow-up that single-app and cross-app
+  answers print and checks that none is refused.
+- **The `--memory-budget` help of `alsem mcp` and `alsem engine-host` states the real
+  defaults** (`8G cross-app, 6G cross-app with --low-mem, 2G single-app`). It said `6G
+  cross-app`. The text is now built from the constants in `budget.rs`.
+- **`query effects` blames dependency depth only when the cone enters dependency code.**
+  `locks: none observed (one dependency routine deep; …)`, the same `reads:` line and the
+  header limit `reads, locks and validations one dependency routine deep` printed even
+  for a cone with no dependency code. When the cone enters none (the cone was read, not
+  cut short, visits no dependency routine, and no operation is dependency code's), the
+  lines say `none observed (searched: the whole cone)`, the header says `limits: none`,
+  and each operation family's JSON scope is `depth: wholeCone` (`exhaustive` unless a
+  call was not resolved).
+- **An interface call with no implementer is a gap in workspace code, in the count and
+  in the list alike.** The snapshot keeps no call-site evidence for a call with no target,
+  so its unresolved-cone item had no position: the explain card counted it `not placed`
+  while listing it under `gaps in workspace code`. Such an item now takes its model call
+  site's position (`unresolved_cone::place_items`), for every reader of the cone. The same
+  holds for a single-app call into a dependency that is not loaded: prove's blocker is now
+  placed at its call site and counted `1 in this workspace`.
+
+### Fixed (engine limits wave 0, B8 second half)
+
+- **An MCP answer that may be stale no longer says plainly `served: fresh`.** A file
+  rewritten with the same size and modification time is not seen by the default check
+  until a `verify` (the context-server spec's stated residual, §5.3), but the answer's
+  header said `served: fresh`; only `alsem_status` named the residual. The header's
+  `freshness` block is now `{requested, served, residual}`: `served` is
+  `fresh-by-size-and-time`, `verified` (every input hashed) or `latest-built` (stale),
+  and `residual` says what that check cannot see. `alsem_tests` and `alsem_impact`, which
+  run in parts, said `stale: false` and `served: fresh` whatever their parts said; they
+  now take `stale`, the changed paths and `served` from their parts.
+- **explain and digest no longer repeat the same dependency routine names once per
+  place.** A kind line (`errors at N places`, `background tasks at N places`, …) listed
+  each dependency call as `TYPE beyond <routines>`, so calls into the same routines from
+  many sites printed the same names many times, and never the sites. On CDO
+  `CDO Update Handled Sales::SetHandled` (an event with five subscribers, raised at 10
+  sites) that was about 5 KB. Calls into the same routines are now one item, named
+  once, with their place count and the call sites (`… beyond <routines> (10 places,
+  entered at …)`). Every place and every count is kept; a folded group counts all of
+  its places in `+N places`. CDO's `IssueReminder` explain golden is expected to move
+  (`HTTP beyond Codeunit "CSC Core"::IsAppActiveOrAskToActivate` appears twice there).
+- **Test-app discovery no longer stops at 64 `app.json` files for a workspace inside a
+  repository with fixture folders.** The walk from the git top level entered folders
+  marked as project collections (`.al-sem-projects`, such as this repository's
+  `tests/r0-corpus/`) and nested repositories, read 64 unrelated `app.json` files and
+  answered "test app discovery incomplete" (seen for workspaces under `target/tmp`).
+  It now does not enter a folder holding `.al-sem-projects` or its own `.git` unless the
+  workspace is inside it; a folder that is itself an app is still read first, so a
+  test app that is its own repository is still found. The 64 cap stays as a safety net.
+
 ### Fixed (performance: finding the keeps an assumption record needs)
 
 - **Naming every publisher a ruled-out row needs no longer reruns the whole search per

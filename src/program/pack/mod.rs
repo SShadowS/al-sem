@@ -75,7 +75,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 11: `ObjectNode::lookup_pages`.
 /// 12: `ObjectNode::obsolete_gone`.
 /// 13: `ObjectNode::page_ui`.
-pub const PACK_SCHEMA: u32 = 13;
+/// 14: `RoutineNode::publisher_isolated`.
+pub const PACK_SCHEMA: u32 = 14;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -538,13 +539,15 @@ mod tests {
     /// id on the node, the declared id and `[TryFunction]` flag on its meta),
     /// and so is an object's `Access = Internal` (schema 9) and a table's
     /// `LookupPageId` values (schema 11). (Schema 10 changed only
-    /// `AbiParamRetained`, which no source routine in a pack carries.)
+    /// `AbiParamRetained`, which no source routine in a pack carries.) A
+    /// publisher's `Isolated` flag is payload since schema 14.
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 13);
+        assert_eq!(PACK_SCHEMA, 14);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
+        pack.files[0].routines[0].publisher_isolated = true;
         let meta = &mut pack.files[0].routine_meta[0].1;
         (meta.method_id, meta.try_function) = (Some(-7), true);
         pack.files[0].objects[0].internal = true;
@@ -580,6 +583,10 @@ mod tests {
         assert_eq!(
             back.files[0].objects[0].page_ui, page_ui,
             "schema 13: ObjectNode::page_ui"
+        );
+        assert!(
+            back.files[0].routines[0].publisher_isolated,
+            "schema 14: RoutineNode::publisher_isolated"
         );
     }
 

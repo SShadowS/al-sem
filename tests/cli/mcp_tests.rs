@@ -273,3 +273,61 @@ fn a_cancelled_tests_call_stops_its_parts_and_is_not_answered() {
     );
     assert!(s.finish().success());
 }
+
+/// Engine limits wave 0 (B8): a composite answer's header says how fresh
+/// its parts were. Unedited, `alsem_tests` is served
+/// `fresh-by-size-and-time` with that check's residual; after an edit, asked
+/// `latest-built`, the production part answers from the old revision, so
+/// the composite says `stale: true`, `served: latest-built` and names the
+/// edited file. The precondition is stated: the edit changes the file's
+/// size, so the stat check sees it.
+///
+/// DISCRIMINATION (2026-11-09): `PartsFreshness::note` ignoring the part's
+/// `stale` (the old composite header, `stale: false` and `served: fresh`
+/// whatever the parts said) fails at "a stale part makes the composite
+/// stale"; restored, passes.
+#[test]
+fn a_composite_answer_says_how_fresh_its_parts_were() {
+    let t = repo();
+    let ws = t.path().join("App");
+    let mut s = Server::ready(&ws, None);
+    let q = json!({"routines": ["TU Core::Post"], "format": "json"});
+    let env = envelope(&s.call(1, "alsem_tests", q.clone()));
+    assert_eq!(env["kind"], "cli", "{env}");
+    assert_eq!(env["stale"], false, "{env}");
+    assert_eq!(
+        env["freshness"]["served"], "fresh-by-size-and-time",
+        "{env}"
+    );
+    assert!(
+        env["freshness"]["residual"]
+            .as_str()
+            .is_some_and(|r| r.contains("seen only with freshness: verify")),
+        "{env}"
+    );
+    let core = ws.join("src/Core.al");
+    let text = std::fs::read_to_string(&core).unwrap();
+    let edited = text.replace(
+        "        Item.Qty := Item.Qty + 1;",
+        "        Item.Qty := Item.Qty + 2; // edited",
+    );
+    assert_ne!(edited.len(), text.len(), "precondition: the size moves");
+    std::fs::write(&core, edited).unwrap();
+    let mut stale = q.clone();
+    stale["freshness"] = json!("latest-built");
+    let env = envelope(&s.call(2, "alsem_tests", stale));
+    assert_eq!(env["kind"], "cli", "{env}");
+    assert_eq!(
+        env["stale"], true,
+        "a stale part makes the composite stale: {env}"
+    );
+    assert_eq!(env["freshness"]["requested"], "latest-built", "{env}");
+    assert_eq!(env["freshness"]["served"], "latest-built", "{env}");
+    assert!(
+        env["changedPaths"].as_array().is_some_and(|p| p
+            .iter()
+            .any(|p| p.as_str().is_some_and(|p| p.ends_with("Core.al")))),
+        "{env}"
+    );
+    assert!(s.finish().success());
+}

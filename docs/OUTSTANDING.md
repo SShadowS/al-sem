@@ -56,6 +56,13 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+- [ ] **Engine limits from output validation, rounds 1–4** (recorded 2026-11-09, master
+  `58d0c94e`): see `docs/engine-limits.md`. It has 34 limits L1–L34, all probed on
+  2026-11-09, and 8 wrong answers or crashes B1–B8 the probes found (among them: prove with a
+  filter crashes the resident engine; `#if` arms are flattened; isolated events and
+  `CommitBehavior` are ignored in error and commit answers). It also has a proposed order in
+  waves 0–8.
+
 - [ ] **False-positive causes exposed by S8.6** (recorded 2026-10-07; triage
   `s86-triage.md`, 43 new CDO/DO findings, all newly followed edges real).
   - **Event subscribers that exit on an event argument.** `if ExtensionId <> GetAppId()

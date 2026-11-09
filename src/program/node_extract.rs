@@ -9,7 +9,7 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId, SharedSt
 use crate::program::resolve::edge::{AbiEventKind, AbiRoutineKind};
 use crate::program::resolve::event::{
     ParsedSubscriberArgs, PublisherKind, is_event_publisher, parse_event_subscriber_ir,
-    publisher_include_sender, read_event_subscriber_instance,
+    publisher_include_sender, publisher_isolated, read_event_subscriber_instance,
 };
 use crate::program::resolve::receiver::unquote_identifier;
 use crate::program::sig_fp::source_routine_node_id;
@@ -316,6 +316,18 @@ pub struct RoutineNode {
     /// see that function's doc for why the `+1` Sender tolerance must be
     /// CONDITIONAL on this field, never blanket.
     pub include_sender: Option<bool>,
+    /// The publisher attribute's `Isolated` argument (`[IntegrationEvent(_,
+    /// _, Isolated)]`, `[BusinessEvent(_, Isolated)]`,
+    /// `[InternalEvent(_, Isolated)]`): `true` when any reading passes `true`
+    /// or a value that is not a literal (the conservative reading of
+    /// `model::events::parse_isolated`); `false` for a non-isolated publisher
+    /// and every routine that is not a publisher. Source routines via
+    /// `crate::program::resolve::event::publisher_isolated`; ABI routines via
+    /// `model::events::parse_isolated` over the symbol's attributes. An
+    /// isolated event runs each subscriber in its own transaction and catches
+    /// its error (Microsoft Learn, "Isolated events in AL"), which the callers'
+    /// questions read through [`crate::program::impact_graph::SitedGraph`].
+    pub publisher_isolated: bool,
     /// ABI-only: the routine kind for ABI-boundary routing. `None` for source routines.
     pub abi_routine_kind: Option<AbiRoutineKind>,
     /// ABI-only: the event kind for ABI-boundary publisher annotation. `None` for source routines.
@@ -1052,6 +1064,7 @@ pub fn extract_nodes(
             // businessevent / internalevent), so this is always `None` on a
             // non-publisher routine.
             let include_sender = publisher_include_sender(r, &file.ir);
+            let publisher_isolated = publisher_isolated(r, &file.ir);
             routines.push(RoutineNode {
                 id: source_routine_node_id(obj_id.clone(), r),
                 name: r.name.as_str().into(),
@@ -1062,6 +1075,7 @@ pub fn extract_nodes(
                 subscriber_instance_manual,
                 publisher_kind,
                 include_sender,
+                publisher_isolated,
                 abi_routine_kind: None,
                 abi_event_kind: None,
                 param_sig_key: param_sig_key(&r.params).into(),
@@ -1141,6 +1155,7 @@ pub(crate) mod test_fixtures {
             subscriber_instance_manual: true,
             publisher_kind: Some(PublisherKind::Business),
             include_sender: Some(false),
+            publisher_isolated: true,
             abi_routine_kind: Some(AbiRoutineKind::EventPublisher),
             abi_event_kind: Some(AbiEventKind::Business),
             param_sig_key: "integer|code[20]".into(),

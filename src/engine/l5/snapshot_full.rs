@@ -1086,7 +1086,7 @@ fn derive_permissions(
 
         for f in facts {
             if f.resource_kind() == "table" && f.resource_id().is_some() {
-                let Some(right) = table_op_to_right(f.op()) else {
+                let Some(right) = crate::engine::l5::table_rights::table_op_right(f.op()) else {
                     continue;
                 };
                 // #13: a provably temporary record needs no TableData permission.
@@ -1140,16 +1140,6 @@ fn derive_permissions(
     // al-sem `derivePermissions`: `.sort((a,b) => permKey(a).localeCompare(permKey(b)))`.
     rows.sort_by(|a, b| locale_compare(&a.0, &b.0));
     CborValue::Array(rows.into_iter().map(|(_, v)| v).collect())
-}
-
-fn table_op_to_right(op: &str) -> Option<&'static str> {
-    match op {
-        "read" => Some("R"),
-        "insert" => Some("I"),
-        "modify" => Some("M"),
-        "delete" => Some("D"),
-        _ => None,
-    }
 }
 
 /// Internal table id `${appGuid}/table/${N}` → stable `${appGuid}:Table:${N}`.

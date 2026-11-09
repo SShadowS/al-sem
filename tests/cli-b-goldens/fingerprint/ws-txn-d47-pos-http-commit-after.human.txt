@@ -6,7 +6,7 @@ Codeunit "D47 Sender"::SendThenCommit  [public-procedure]
   commit:     yes
   http:       "https://example.test/ping"
   permissions:
-    TableData "11111111-0000-0000-0000-0000000d4702/table/50100" MR
+    TableData "11111111-0000-0000-0000-0000000d4702/table/50100" RM
 
   witnesses:
     commit transaction — 1 path shown

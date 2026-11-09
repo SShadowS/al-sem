@@ -824,6 +824,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 // anyway, so `None` correctly yields no `+1` tolerance via
                 // `event::subscriber_arity_bound`.
                 include_sender: None,
+                publisher_isolated: false,
                 abi_routine_kind: None,
                 abi_event_kind: None,
                 param_sig_key: Default::default(),
@@ -1148,6 +1149,7 @@ struct EventFacts {
     event_subscribers: Vec<crate::program::resolve::event::ParsedSubscriberArgs>,
     publisher_kind: Option<PublisherKind>,
     include_sender: Option<bool>,
+    publisher_isolated: bool,
 }
 
 impl EventFacts {
@@ -1178,6 +1180,7 @@ impl EventFacts {
             o.event_subscribers == survivor.event_subscribers
                 && o.publisher_kind == survivor.publisher_kind
                 && o.include_sender == survivor.include_sender
+                && o.publisher_isolated == survivor.publisher_isolated
         }) {
             return None;
         }
@@ -1196,6 +1199,8 @@ impl EventFacts {
     ///   valid); `Some(false)` when every publisher arm is known `false`;
     ///   otherwise (no publisher arm, or an unreadable one and none `true`)
     ///   `None`.
+    /// - `publisher_isolated`: `true` when ANY arm is isolated (the rule of
+    ///   `model::events::parse_isolated`: isolated in any build).
     ///
     /// The merged facts carry no per-arm build condition: like
     /// `preproc_context`, the possible-build over-approximation.
@@ -1217,6 +1222,7 @@ impl EventFacts {
             event_subscribers,
             publisher_kind: arms.iter().find_map(|c| c.publisher_kind),
             include_sender,
+            publisher_isolated: arms.iter().any(|c| c.publisher_isolated),
         }
     }
 
@@ -1224,6 +1230,7 @@ impl EventFacts {
         survivor.event_subscribers = self.event_subscribers;
         survivor.publisher_kind = self.publisher_kind;
         survivor.include_sender = self.include_sender;
+        survivor.publisher_isolated = self.publisher_isolated;
     }
 }
 
@@ -1759,6 +1766,7 @@ codeunit 50100 "Ws2 Cu"
             subscriber_instance_manual: false,
             publisher_kind: None,
             include_sender: None,
+            publisher_isolated: false,
             abi_routine_kind: None,
             abi_event_kind: None,
             param_sig_key: Default::default(),
@@ -1803,6 +1811,7 @@ codeunit 50100 "Ws2 Cu"
             subscriber_instance_manual: false,
             publisher_kind: None,
             include_sender: None,
+            publisher_isolated: false,
             abi_routine_kind: None,
             abi_event_kind: None,
             param_sig_key: param_sig_key.into(),

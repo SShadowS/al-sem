@@ -320,6 +320,31 @@ pub fn publisher_include_sender(decl: &RoutineDecl, ir: &Ir) -> Option<bool> {
     )
 }
 
+/// Read `Isolated` from a publisher routine's raw IR: argument 2 of
+/// `[IntegrationEvent(IncludeSender, GlobalVarAccess, Isolated)]`, argument 1
+/// of `[BusinessEvent(IncludeSender, Isolated)]` and
+/// `[InternalEvent(IncludeSender, Isolated)]` (Microsoft Learn, "Isolated
+/// events in AL"). The same rule as `model::events::parse_isolated`, which
+/// reads the model's attribute form: isolated when ANY reading (#104) passes
+/// `true`, or passes something that is not a boolean literal (conservative:
+/// a non-literal could be `true`); not isolated when every reading is absent
+/// or a literal `false`, and for a routine with no publisher attribute.
+#[must_use]
+pub fn publisher_isolated(decl: &RoutineDecl, ir: &Ir) -> bool {
+    decl.attributes_parsed.iter().any(|a| {
+        let index = match a.name.to_ascii_lowercase().as_str() {
+            "integrationevent" => 2,
+            "businessevent" | "internalevent" => 1,
+            _ => return false,
+        };
+        match a.args.get(index).map(|&id| &ir.expr(id).kind) {
+            Some(ExprKind::Literal(Literal::Bool(b))) => *b,
+            Some(_) => true,
+            None => false,
+        }
+    })
+}
+
 /// The ONE rule for combining several `IncludeSender` readings of one
 /// publisher (per-build attribute readings, #104; `#if`-duplicate publisher
 /// arms, #103): `Some(true)` when ANY reading is `true` (some build passes

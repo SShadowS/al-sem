@@ -5,7 +5,7 @@ Codeunit "D47 Sender"::SendAfterModify  [public-procedure]
   reads:      TableData "11111111-0000-0000-0000-0000000d4701/table/50100"
   http:       "https://example.test/ping"
   permissions:
-    TableData "11111111-0000-0000-0000-0000000d4701/table/50100" MR
+    TableData "11111111-0000-0000-0000-0000000d4701/table/50100" RM
 
   witnesses:
     error-implicit error — 1 path shown

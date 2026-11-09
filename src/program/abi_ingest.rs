@@ -732,6 +732,12 @@ fn ingest_abi_objects(
             let rid = abi_routine_node_id(&obj_id, routine);
             let (routine_kind, event_kind, publisher_kind) = abi_routine_kind_from_str(routine);
             let include_sender = abi_publisher_include_sender(&routine.attributes_parsed);
+            // A symbol-only publisher's `Isolated` argument, read as the model
+            // reads a source publisher's (System's `OnCompanyOpenCompleted` is
+            // `[BusinessEvent(false, true)]`).
+            let publisher_isolated =
+                crate::program::model::events::parse_isolated(&routine.attributes_parsed)
+                    == Some(true);
 
             routines.push(RoutineNode {
                 id: rid,
@@ -758,6 +764,7 @@ fn ingest_abi_objects(
                 subscriber_instance_manual: false,
                 publisher_kind,
                 include_sender,
+                publisher_isolated,
                 abi_routine_kind: Some(routine_kind),
                 abi_event_kind: Some(event_kind),
                 // Hardcoded empty — STILL correct post-Task-2, for a DIFFERENT

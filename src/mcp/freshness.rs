@@ -89,6 +89,41 @@ fn unix_ms(t: SystemTime) -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// The `freshness` block of a command answer's header (engine limits wave 0,
+/// B8; design §5.1, §5.3): what was asked, what was served, and what the
+/// check behind it cannot see. `served` names the check's strength, so an
+/// answer that may be stale is never labelled plainly `fresh`:
+/// `latest-built` when the answer came from an older revision (`stale`),
+/// `verified` after a `verify` (every input hashed), else
+/// `fresh-by-size-and-time` (a file whose length and modification time did
+/// not move was trusted; a same-size, same-time rewrite is missed until a
+/// `verify`, design §5.3's stated residual). `residual` says what the check
+/// cannot see, as the status answer's `residual` does for the same strength.
+#[must_use]
+pub fn answer_freshness(requested: crate::mcp::tools::Freshness, stale: bool) -> Value {
+    use crate::mcp::tools::Freshness;
+    let verify = requested == Freshness::Verify;
+    let (served, residual) = if stale {
+        (
+            "latest-built",
+            "files changed since this revision was built (changedPaths lists them)",
+        )
+    } else if verify {
+        ("verified", "unsaved editor buffers are not inputs")
+    } else {
+        (
+            "fresh-by-size-and-time",
+            "a rewrite that keeps a file's size and modification time is seen only with \
+             freshness: verify; unsaved editor buffers are not inputs",
+        )
+    };
+    json!({
+        "requested": requested.as_str(),
+        "served": served,
+        "residual": residual,
+    })
+}
+
 /// The refresh class the changed categories imply (§2.3's table), from the
 /// session's own rules (`program::session`): a package, the root `app.json`
 /// or a source dependency is `Package` (the dependency key or the app's

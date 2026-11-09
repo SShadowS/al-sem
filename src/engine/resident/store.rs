@@ -198,7 +198,8 @@ impl Default for Entry {
     }
 }
 
-/// Why `ensure_prepared` returned no snapshot.
+/// Why `ensure_prepared` returned no snapshot, or why a revision did not
+/// answer a job.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrepareError {
     /// The request was cancelled (while waiting or between phases).
@@ -209,6 +210,11 @@ pub enum PrepareError {
     Budget(String),
     /// A fill failed, or a key churned past [`MAX_DISCARDS`].
     Engine(String),
+    /// The job's demand needs model rows the revision was not built with
+    /// (`Revision::answer`, engine limits B1): the job's own assembly needs.
+    /// Nothing was computed. The front end pins again with
+    /// `ResidentSession::pin_needs` and asks the widened revision.
+    Needs(crate::program::model::workspace::AssemblyNeeds),
 }
 
 /// Why a request stops: its flag, read by the store between steps.

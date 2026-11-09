@@ -4,7 +4,7 @@ Codeunit "D1 Multi Caller"::CallerB  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d01a/table/50101"
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d01a/table/50101" MR
+    TableData "11111111-0000-0000-0000-00000000d01a/table/50101" RM
 
   witnesses:
     error-implicit error — 1 path shown
@@ -30,7 +30,7 @@ Codeunit "D1 Multi Caller"::CallerC  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d01a/table/50101"
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d01a/table/50101" MR
+    TableData "11111111-0000-0000-0000-00000000d01a/table/50101" RM
 
   witnesses:
     error-implicit error — 1 path shown
@@ -56,7 +56,7 @@ Codeunit "D1 Multi Caller"::CallerA  [public-procedure]
   coverage:   complete
   reads:      TableData "11111111-0000-0000-0000-00000000d01a/table/50101"
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d01a/table/50101" MR
+    TableData "11111111-0000-0000-0000-00000000d01a/table/50101" RM
 
   witnesses:
     error-implicit error — 1 path shown

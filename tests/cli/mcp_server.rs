@@ -1223,6 +1223,21 @@ fn a_stale_verify_rebuilds_as_its_description_says() {
         env["revision"]["generation"], 1,
         "fresh trusts the stat: {env}"
     );
+    // Engine limits wave 0 (B8): the answer that may be stale says which
+    // check it passed and what that check cannot see, never plainly
+    // `fresh`. DISCRIMINATION (2026-11-09): `answer_freshness` serving
+    // `fresh` for a stat check (the old header) fails here; restored,
+    // passes.
+    assert_eq!(
+        env["freshness"],
+        json!({
+            "requested": "fresh",
+            "served": "fresh-by-size-and-time",
+            "residual": "a rewrite that keeps a file's size and modification time is seen only \
+                         with freshness: verify; unsaved editor buffers are not inputs",
+        }),
+        "the header names the residual: {env}"
+    );
     let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
     assert_eq!(
         st["engines"][0]["check"]["fresh"], true,
@@ -1236,6 +1251,7 @@ fn a_stale_verify_rebuilds_as_its_description_says() {
     v["freshness"] = json!("verify");
     let env = envelope(&s.call(5, "alsem_query_effects", v));
     assert_eq!(env["revision"]["generation"], 2, "verify rebuilds: {env}");
+    assert_eq!(env["freshness"]["served"], "verified", "{env}");
     assert!(
         env["stdoutText"].as_str().unwrap().contains("Insert"),
         "the new text answers: {env}"

@@ -1,11 +1,12 @@
 prove Codeunit "Ws Work"::CallChain may-commit   [single-app]
 answer: unknown (blocked by: call not resolved 1, coverage incomplete 1) — no matching effect was found in the analyzed cone
-analysis partial (1 call not resolved (0 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+analysis partial (1 call not resolved (1 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
 more: --format json for every evidence row and its hops
   plain reading: no matching effect was found in the analyzed cone; unknown because of call not resolved 1, coverage incomplete 1
   not established: that it never commits
   blockedBy: 2 blockers in 2 kinds
     coverage incomplete: 1
       coverage status: partial
-    call not resolved: 1
-      Lib.Outer in CallChain
+    call not resolved: 1 (1 in this workspace)
+      Lib.Outer in CallChain @ ws:src/Work.al:17
+  next: alsem explain --routine 'Codeunit "Ws Work"::CallChain' --single-app — lists the workspace ones under gaps

@@ -279,6 +279,10 @@ pub struct SitedGraph {
     /// The platform's table-event publishers (`OnAfterModifyEvent`, …: the
     /// synthetic publishers a subscriber binds to), ascending.
     platform_publishers: Vec<u32>,
+    /// The publishers of isolated events
+    /// ([`crate::program::node_extract::RoutineNode::publisher_isolated`]),
+    /// source and symbol-only alike, ascending.
+    isolated_publishers: Vec<u32>,
     /// The sites carrying `configuredDispatch`, ascending, with the catalog
     /// entry and arm that labelled each ([`super::configured_dispatch`]).
     configured_arms: Vec<(u32, ConfiguredArm)>,
@@ -422,6 +426,15 @@ impl SitedGraph {
     #[must_use]
     pub fn is_platform_publisher(&self, ix: u32) -> bool {
         self.platform_publishers.binary_search(&ix).is_ok()
+    }
+
+    /// Whether `ix` publishes an isolated event: the platform runs each of
+    /// its subscribers in a transaction of its own and catches a
+    /// subscriber's error, unless the raising transaction has a write
+    /// pending (Microsoft Learn, "Isolated events in AL").
+    #[must_use]
+    pub fn is_isolated_publisher(&self, ix: u32) -> bool {
+        self.isolated_publishers.binary_search(&ix).is_ok()
     }
 
     /// Every loaded app's `(guid, name)` (the apps the node table names).
@@ -766,7 +779,8 @@ impl SitedGraph {
                 n.object.len() + n.routine.len() + n.file.len() + size_of::<(u32, LocalName)>() + 8
             })
             .sum::<usize>()
-            + self.platform_publishers.capacity() * size_of::<u32>();
+            + self.platform_publishers.capacity() * size_of::<u32>()
+            + self.isolated_publishers.capacity() * size_of::<u32>();
         let configured: usize = self
             .configured_arms
             .iter()
@@ -900,6 +914,7 @@ impl SitedBuilder {
         let mut stable: Vec<StableEntry> = Vec::new();
         let mut local_names: HashMap<u32, LocalName> = HashMap::new();
         let mut platform_publishers: Vec<u32> = Vec::new();
+        let mut isolated_publishers: Vec<u32> = Vec::new();
         let mut routine_names: Vec<Option<crate::program::str_pool::SharedStr>> = vec![None; n];
         let mut member_names: HashMap<u32, crate::program::str_pool::SharedStr> = HashMap::new();
         let mut object_names: HashMap<
@@ -968,6 +983,9 @@ impl SitedBuilder {
                         Some(crate::program::resolve::event::PublisherKind::Platform)
                     ) {
                         platform_publishers.push(i as u32);
+                    }
+                    if node.publisher_isolated {
+                        isolated_publishers.push(i as u32);
                     }
                     if node.tier == TrustTier::SymbolOnly {
                         *f |= flag::SYMBOL_ONLY;
@@ -1197,6 +1215,7 @@ impl SitedBuilder {
             object_names,
             member_names,
             platform_publishers,
+            isolated_publishers,
             configured_arms: self.configured_arms,
             catalog: inp.facts.catalog.clone(),
         }
