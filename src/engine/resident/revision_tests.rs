@@ -139,7 +139,12 @@ pub(super) fn revision(f: &Fixture) -> Revision {
     let built = build_view_model(&f.inputs, &key, REVISION_NEEDS, |_| {})
         .unwrap_or_else(|e| panic!("the fixture builds: {e:?}"))
         .expect("a model view");
-    Revision::new(test_id(1), Arc::clone(&f.inputs), built.target)
+    Revision::new(
+        test_id(1),
+        Arc::clone(&f.inputs),
+        built.target,
+        REVISION_NEEDS.assembly(),
+    )
 }
 
 fn answer(rev: &Revision, cmd: Cmd, f: &Fixture) -> JobOutput {
@@ -454,6 +459,75 @@ fn a_job_over_another_read_is_refused() {
         matches!(&err, PrepareError::Engine(m) if m.contains("another read")),
         "{err:?}"
     );
+}
+
+/// Engine limits B1: a job whose demand reads model rows the revision was not
+/// built with is refused with its needs ([`PrepareError::Needs`]), never
+/// computed (reading the missing guard arms panicked and killed the engine
+/// child). Precondition, stated: the revision is built with
+/// `REVISION_NEEDS`, which holds no guard arms, and the job is `prove
+/// throws-error --match` (its demand is `ViewNeeds::PROVE_SLICE`). A
+/// revision built with the widened needs answers it as a cold run does.
+///
+/// DISCRIMINATION (2026-11-09): deleting the `covers` check in
+/// `answer_inner` fails this test with the panic "site guards not built:
+/// declare ViewNeeds::site_guards"; restored, it passes.
+#[test]
+fn a_job_needing_rows_the_revision_lacks_is_refused_with_its_needs() {
+    let f = r0("ws-explain", "PostOrder");
+    let slice = crate::engine::l5::prove_slice::SliceRequest::of(
+        "throws-error",
+        Some("not released"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("a valid filter")
+    .expect("a filter is given");
+    let prove = || crate::engine::l5::prove::ProveJob {
+        detectors: crate::engine::l5::detectors::default_detectors(),
+        inputs: &f.inputs,
+        routine_selector: f.routine,
+        question_text: "throws-error",
+        alsem_ver: "test",
+        deterministic: true,
+        single_app: f.single_app,
+        closed_world: false,
+        assume_no_dependents: false,
+        human: false,
+        detail: false,
+        out: None,
+        slice: Some(slice.clone()),
+        surface: Default::default(),
+    };
+    let rev = revision(&f);
+    assert!(
+        !rev.model_needs().site_guards,
+        "precondition: the revision holds no guard arms"
+    );
+    let err = rev.answer(&prove(), &Control::unreserved()).unwrap_err();
+    assert_eq!(
+        err,
+        PrepareError::Needs(crate::engine::batch::job::ViewNeeds::PROVE_SLICE.assembly())
+    );
+    // The widened revision (the session's needs after `pin_needs`).
+    let widened = REVISION_NEEDS.union(crate::engine::batch::job::ViewNeeds::PROVE_SLICE);
+    let key = ViewKey::new(&f.inputs.workspace, f.single_app, false);
+    let built = build_view_model(&f.inputs, &key, widened, |_| {})
+        .unwrap_or_else(|e| panic!("the fixture builds: {e:?}"))
+        .expect("a model view");
+    let rev = Revision::new(
+        test_id(2),
+        Arc::clone(&f.inputs),
+        built.target,
+        widened.assembly(),
+    );
+    let warm = rev
+        .answer(&prove(), &Control::unreserved())
+        .expect("the widened revision answers");
+    let cold = crate::engine::batch::standalone_output(&prove());
+    assert_eq!(warm, cold);
 }
 
 /// A request that stops before its ready snapshot answers `cancelled` and
@@ -1550,7 +1624,12 @@ fn retained_emission_equals_a_composition_for_every_routine() {
         let Ok(Some(built)) = build_view_model(&f.inputs, &key, REVISION_NEEDS, |_| {}) else {
             continue;
         };
-        let rev = Revision::new(test_id(1), Arc::clone(&f.inputs), built.target);
+        let rev = Revision::new(
+            test_id(1),
+            Arc::clone(&f.inputs),
+            built.target,
+            REVISION_NEEDS.assembly(),
+        );
         let snap = fold_of(&rev);
         let Some(ArtifactValue::Fold(fold)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
             panic!("the fold is published");
@@ -1617,7 +1696,12 @@ fn retained_emission_equals_a_composition_on_cdo() {
         let built = build_view_model(&inputs, &key, REVISION_NEEDS, |_| {})
             .expect("cross-app CDO builds")
             .expect("a model view");
-        let rev = Revision::new(test_id(1), Arc::clone(&inputs), built.target);
+        let rev = Revision::new(
+            test_id(1),
+            Arc::clone(&inputs),
+            built.target,
+            REVISION_NEEDS.assembly(),
+        );
         let snap = fold_of(&rev);
         let Some(ArtifactValue::Fold(fold)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
             panic!("the fold is published");

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 0, B1)
+
+- **`alsem_prove` with a filter no longer kills the resident engine.** `prove` with
+  `--match`, `--table`, `--op`, `--site` or `--routes` reads each routine's guard arms
+  (the conditions around a site). The resident engine (`alsem mcp`, `engine-host`, the
+  LSP's `al-call-hierarchy/prove`) builds its revision with explain's needs, which leave
+  the guard arms out, and nothing widened them: the first filtered ask panicked in the
+  engine child ("site guards not built") and the engine died with signal 6. The
+  one-shot CLI was right. Now a revision refuses any job whose demand reads model rows
+  it was not built with (`PrepareError::Needs`, checked against the job's own demand,
+  so it covers every job kind, not just prove), and the engine host then pins with
+  `ResidentSession::pin_needs`: the session's needs widen, the model is rebuilt once
+  (build class `needs`), and every later build keeps the guard arms. An audit of every
+  served command's demand found prove with a filter is the only one that needed more
+  than the revision's needs today. New tests: a resident contract test asks every
+  filter in both universes after an unfiltered prove and checks each answer equals the
+  CLI's bytes, with one rebuild and no engine death; a revision test checks the refusal
+  and the widened answer. Cost, measured on the `ws-explain` fixture (release-fast,
+  `alsem mcp`, warm): the first filtered prove took 48 ms (the rebuild and the new
+  revision's fills), later ones 4 ms; RSS 52.0 MB before, 52.8 MB after. Not measured
+  on CDO: there the first filtered ask pays one model rebuild of class `needs` (every
+  row projected again, the parses reused) and the new revision's fills, and the session
+  then keeps the guard arms (5.6 MB on CDO by the E1 measurement). A session that never
+  gets a filtered prove pays nothing.
+
 ### Fixed (performance: finding the keeps an assumption record needs)
 
 - **Naming every publisher a ruled-out row needs no longer reruns the whole search per
