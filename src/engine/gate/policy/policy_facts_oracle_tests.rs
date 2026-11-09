@@ -40,6 +40,12 @@
 //! `Rec.Modify()` raises them too; those subscribers' facts are now inherited.
 //! Both re-recordings were made on their own branch; the file was recorded
 //! again on the integration of the two (`integrate/outval-r1-fixes`).
+//!
+//! Re-recorded (2026-11-09, engine limits B5: a FlowField's `CalcFormula`
+//! table is read where the FlowField is calculated) with
+//! `REMINT_POLICY_FACTS_ORACLE=1`: only `r0/ws-d21` and `r0/ws-d22` (cross and
+//! single) moved, `direct` and `any` +1 each: the `CalcFields` of
+//! `Customer."Balance (LCY)"` now also reads `Ledger Entry`.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

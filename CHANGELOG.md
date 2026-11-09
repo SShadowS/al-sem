@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B5)
+
+- **A table read through a FlowField is now a read of that table.** A FlowField stores
+  nothing: BC computes it from its `CalcFormula` over the formula's table. So
+  `Cust.CalcFields("Net Change (LCY)")` reads `Detailed Cust. Ledg. Entry`, though the
+  record is a `Customer`. Before, every effect answer saw only the record's own table, and
+  `query touches --direction down` answered a definite `no (every candidate decided)`. On
+  CDO, `query touches --table "Detailed Cust. Ledg. Entry" --from "CDO Customer
+  Setup.Balance" --direction down` now answers `down: yes` (was `no`), and `query touches
+  --table "Detailed Cust. Ledg. Entry"` counts 35 workspace sites (was 5; 30 are
+  `CalcFields`). `ValidateHandledFilterOnSalesInvoice` (a `SetFilter` on the FlowField
+  `"CDO Email Log"`) now touches `CDO E-Mail Log` (was `no`).
+- **Where the read is placed** (new `program::model::flow_fields`, run once at L3
+  resolve, after table-extension fields are merged): on `CalcFields(F1, F2, ...)`, each
+  argument that is a FlowField; on `SetRange`/`SetFilter` of a FlowField (Learn: "if you
+  apply a filter to a FlowField, the calculation is based on the filtered data"; the
+  filter issues no query, so this places a may-read one step early); and on every
+  `Get`/`Find*`/`Next` of a record variable the same routine calls `SetAutoCalcFields`
+  on (Learn: the fields are "automatically calculated when the record is retrieved from
+  the database"). Each read is a `CalcFields` row on the formula's table, at the
+  operation's own line, and reaches `query touches` (down, up and table mode), `query
+  effects` (the human row names the field: `[CalcFields] on Detailed Cust. Ledg. Entry
+  through FlowField "Net Change (LCY)"`), `digest --include-reads` (a `DB_READ`) and
+  `fingerprint` (an `R` right on the table). `prove` asks no read question, and
+  explain lists no reads, so neither changes.
+- **The formula's table comes from source or from the symbols.** The lowerer keeps each
+  field's `CalcFormula` text (one per `#if` arm, `FieldDecl::calc_formula`), and the
+  symbol reader keeps the `CalcFormula` property of `SymbolReference.json` (Base
+  Application's symbols carry it: 2,094 formulas). When the engine cannot tell which table
+  is read (a FlowField with no formula in the symbols, a formula that does not parse, a
+  table that is not loaded, an argument that names no field of the table), the read goes
+  to the `unknown` table bucket with its reason, so a touches answer says `unknown`,
+  never `no`. On CDO no workspace site is undecided.
+- **Not FlowField reads:** `CalcSums` (sums ordinary fields of the record's own table,
+  already a read of it), `CalcFields` of a Blob, and a FlowFilter field's value. A
+  formula's `WHERE` part names only fields of its own table and constants, filters or
+  fields of the record, so the formula's table is the only table it reads
+  ([CalcFormula property](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-calcformula-property)).
+- **Temp state:** Learn does not say how a FlowField of a temporary record is computed.
+  The rule takes the reading that never hides a read: the formula's table is read as the
+  table it is (temporary only when declared `TableType = Temporary`), as d1's FlowField
+  gate already assumed.
+- **Detectors see nothing new:** the reads hang off the record operation
+  (`ModelRecordOperation::flow_field_reads`), not the operation list, so no detector
+  input changed (no r4 golden moved). The r3a2/r3a3 goldens gain one effect and one
+  capability fact each in `ws-d21` and `ws-d22` (their `Customer."Balance (LCY)"`
+  FlowField over `Ledger Entry`), and the manifest matrices move by those 2.
+- **Still open (rest of L19):** a page that shows a FlowField calculates it when it is
+  displayed, which no routine's cone holds; that needs L2's page column index.
+  `SetAutoCalcFields` in one routine and the read in another (the record passed on) is
+  not linked.
+- Learn: [CalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-calcfields-method),
+  [SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setautocalcfields-method),
+  [FlowFields overview](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-flowfields).
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said

@@ -25,7 +25,7 @@
     "routineCount": 584,
     "routinesWithInheritedEffects": 57,
     "viaKinds": {
-      "direct": 326,
+      "direct": 328,
       "event-subscriber": 15,
       "implicit-trigger": 1,
       "inherited": 55

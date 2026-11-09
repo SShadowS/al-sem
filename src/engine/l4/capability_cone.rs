@@ -629,6 +629,45 @@ pub(crate) fn direct_facts_for_routine(
 
     // ── table family (al-sem table.ts) ─────────────────────────────────────
     for op in &record_ops {
+        // Engine limits B5: a read of each FlowField destination table this
+        // operation reads (`program::model::flow_fields`); an undecided one is
+        // an unresolved table read, never no read.
+        for ffr in &op.flow_field_reads {
+            let resource_id = match &ffr.source {
+                crate::program::model::flow_fields::FlowFieldSource::Table { table_id, .. } => {
+                    Some(table_id.clone())
+                }
+                crate::program::model::flow_fields::FlowFieldSource::Undecided(_) => None,
+            };
+            let confidence = if resource_id.is_some() {
+                "static"
+            } else {
+                "unresolved"
+            };
+            facts.push(CapabilityFact {
+                subject: routine.id.clone(),
+                op: "read",
+                resource_kind: "table",
+                resource_id,
+                resource_arg_source: None,
+                confidence,
+                provenance: "direct",
+                via: "self",
+                witness_operation_id: Some(op.id.clone()),
+                witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+                extra: Some(CapabilityExtra::Table {
+                    record_variable_id: None,
+                    temp_state: Some(crate::program::body::features::PTempState {
+                        kind: "known".to_string(),
+                        value: Some(ffr.temporary()),
+                        parameter_index: None,
+                    }),
+                    op_subtype: Some("CalcFields".to_string()),
+                }),
+            });
+        }
         // The one table op map shared with L2 (#69 D5, #100).
         let Some(cap_op) = table_commit::map_op(&op.op) else {
             continue;

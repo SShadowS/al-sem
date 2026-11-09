@@ -203,6 +203,12 @@ pub struct ModelField {
     /// the engine does not read a caption from (intent-evidence spec open
     /// question 2). A plain fact, like the IR's (spec §4.1b).
     pub captions: Vec<String>,
+    /// The field's `CalcFormula` text(s): from source one per textually present
+    /// `#if` arm (`FieldDecl::calc_formula`), from a symbol-only dependency the
+    /// `SymbolReference.json` property (0 or 1). Empty for a FlowField means the
+    /// formula is not known, never that the field reads nothing
+    /// ([`super::flow_fields`], engine limits B5).
+    pub calc_formula: Vec<String>,
 }
 
 /// A workspace table key (the L3-relevant subset of al-sem's `Key`). Only the
@@ -426,6 +432,14 @@ pub struct ModelRecordOperation {
     /// the operation's table is decided at run time. Read by `alsem query`'s
     /// "table not resolved" wording. Never serialized.
     pub receiver_is_record_ref: bool,
+    /// Engine limits B5: the FlowField source tables this operation reads
+    /// through a `CalcFormula` (a `CalcFields`, a filter on a FlowField, or a
+    /// read after `SetAutoCalcFields`), one entry per source table, or one
+    /// "not decided" entry with its reason. Written at L3 resolve
+    /// ([`super::flow_fields::attach_flow_field_reads`]); empty for every other
+    /// operation. The record operation list itself is unchanged, so detectors
+    /// do not see these reads. Never serialized.
+    pub flow_field_reads: Vec<super::flow_fields::FlowFieldRead>,
 }
 
 /// A lexical variable (params → locals → globals) carrying its declared type, for
@@ -956,6 +970,7 @@ fn index_table_ir(
             data_type: f.data_type.clone(),
             is_blob_like: f.is_blob_like,
             captions: f.caption.clone(),
+            calc_formula: f.calc_formula.clone(),
         })
         .collect();
     let fields_by_name: std::collections::HashMap<String, String> = fields
@@ -1928,6 +1943,7 @@ fn project_ir(
                     in_statement_position: op.in_statement_position,
                     run_trigger: op.run_trigger,
                     receiver_is_record_ref: op.receiver_is_record_ref,
+                    flow_field_reads: Vec::new(),
                 })
                 .collect();
             let field_accesses = std::mem::take(&mut features.field_accesses);
@@ -3304,6 +3320,10 @@ pub fn resolve(workspace: &mut ModelEntities) {
     }
 
     merge_extension_fields(workspace);
+
+    // Engine limits B5: after the merge, so a table extension's FlowField on a
+    // dependency table is found.
+    super::flow_fields::attach_flow_field_reads(workspace);
 }
 
 // ---------------------------------------------------------------------------

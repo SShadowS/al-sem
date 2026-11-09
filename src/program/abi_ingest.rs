@@ -2064,6 +2064,7 @@ codeunit 50900 "Subscriber CU"
                             data_type: "Code[20]".into(),
                             field_class: "Normal".into(),
                             is_blob_like: false,
+                            calc_formula: None,
                         },
                         AbiField {
                             field_number: 2,
@@ -2075,6 +2076,7 @@ codeunit 50900 "Subscriber CU"
                             data_type: "Enum \"Dep Status\"".into(),
                             field_class: "Normal".into(),
                             is_blob_like: false,
+                            calc_formula: None,
                         },
                     ],
                     keys: vec![],

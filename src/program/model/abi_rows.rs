@@ -83,6 +83,7 @@ fn dep_field_to_l3(f: &crate::engine::deps::projection::ProjectedField) -> Model
         is_blob_like: f.is_blob_like,
         // A symbol-only field: no caption is read (spec open question 2).
         captions: Vec::new(),
+        calc_formula: f.calc_formula.iter().cloned().collect(),
     }
 }
 
