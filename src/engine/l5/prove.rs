@@ -177,6 +177,13 @@ pub struct ProveObligations {
     /// kind of such a site and none of the cone's sites is left, the
     /// coverage counts as complete.
     pub literal_dead_sites: usize,
+    /// r4 final (m02, c15): the cone's unresolved interface calls whose
+    /// implementation every route's literal arguments fix (an enum value's
+    /// own implementation, which no extension can change): they run, but
+    /// only into code the cone already follows, so they block nothing and
+    /// are left out of the counts above. They close coverage as
+    /// `literal_dead_sites` do.
+    pub literal_narrowed_sites: usize,
     /// The answer holds only in `world`: the strict world answers differently
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
@@ -415,7 +422,7 @@ fn compute_obligations(
     // literal arguments rule out (every reason a call-site kind, no site of
     // the cone left, the cone not cut) is complete for this root.
     let coverage_closed_by_literals = !complete
-        && entry.unresolved_literal_dead > 0
+        && entry.unresolved_literal_dead + entry.unresolved_literal_narrowed > 0
         && entry.unresolved.is_empty()
         && !entry.unresolved_traversal.truncated
         && entry.coverage_status == "partial"
@@ -431,6 +438,7 @@ fn compute_obligations(
         analysis_gaps: gaps_in_cone_count,
         coverage_complete: complete || coverage_closed_by_assumption || coverage_closed_by_literals,
         literal_dead_sites: entry.unresolved_literal_dead,
+        literal_narrowed_sites: entry.unresolved_literal_narrowed,
         cone_truncated: entry.unresolved_traversal.truncated,
         world,
         waived_rows,
@@ -1819,6 +1827,19 @@ pub(crate) fn literal_dead_sites_line(n: usize) -> Option<String> {
     })
 }
 
+/// r4 final (m02, c15): the one line saying how many interface calls the
+/// literal arguments narrowed to a known implementation (no blocker, not
+/// open world); `None` for none.
+pub(crate) fn literal_narrowed_sites_line(n: usize) -> Option<String> {
+    (n > 0).then(|| {
+        format!(
+            "  fixed by literal arguments: {} whose implementation every route's enum value \
+             selects (not open world, not counted as blockers)",
+            crate::engine::l5::routine_rollup::plural(n, "interface call", "interface calls")
+        )
+    })
+}
+
 fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("analysisGaps".into(), (o.analysis_gaps as u64).into());
@@ -1845,6 +1866,13 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
         m.insert(
             "literalDeadSites".into(),
             (o.literal_dead_sites as u64).into(),
+        );
+    }
+    // r4 final: present only when an interface call was narrowed.
+    if o.literal_narrowed_sites > 0 {
+        m.insert(
+            "literalNarrowedSites".into(),
+            (o.literal_narrowed_sites as u64).into(),
         );
     }
     serde_json::Value::Object(m)
@@ -3119,6 +3147,9 @@ pub fn format_prove_human(
     if let Some(l) = literal_dead_sites_line(prove_result.obligations.literal_dead_sites) {
         lines.push(l);
     }
+    if let Some(l) = literal_narrowed_sites_line(prove_result.obligations.literal_narrowed_sites) {
+        lines.push(l);
+    }
 
     // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
     // visible; the answer above is prove's own and is never qualified here.
@@ -3894,6 +3925,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             coverage_closed_by_assumption: false,
             coverage_open_world_only: false,
             literal_dead_sites: 0,
+            literal_narrowed_sites: 0,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
             flow_assumed: Vec::new(),
@@ -5013,6 +5045,7 @@ mod tests {
             effects,
             unresolved,
             unresolved_literal_dead: 0,
+            unresolved_literal_narrowed: 0,
             unresolved_traversal: UnresolvedTraversal {
                 truncated: cone_truncated,
                 max_depth: 64,

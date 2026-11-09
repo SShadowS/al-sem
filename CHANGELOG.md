@@ -33,6 +33,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Rows whose route has only loops or exits now print the guard form instead of the
     class label (`(in a loop)`, `(error-path)`, `(IsHandled pattern, not evaluated)`).
 
+### Fixed (round-4 final m02, c15, c25: an interface call a literal enum value fixes is not open world)
+
+- **An interface call whose implementation every route fixes is no open-world gap.** The
+  literal reach already followed `ModuleLicense := ModuleType; ModuleLicense.X()` only
+  into the implementation of the enum value the route binds (an enum extension cannot
+  change an existing value's implementation), but the call itself stayed in the
+  unresolved cone as a polymorphic, open-world site. On CDO, m02's
+  `CDOModuleManager.Codeunit.al:16` is reached only through `IsSecurityActivated`
+  (`"CDO Module Type"::Security`), and c15/c25's `:16` and `:42` only through
+  `LogUsage("CDO Module Type"::Essential, …)`; each was still counted in "N interface calls
+  open world", listed as a blocker and as a workspace gap.
+  - The literal reach now returns, next to the sites no route can reach, the unresolved
+    interface calls whose receiver holds known enum values in every reached state where
+    the call can run, each value's implementation a loaded codeunit
+    (`LiteralReach::narrowed_sites`). The unresolved cone leaves them out, so they are no
+    blocker, no gap and no open-world count.
+  - A single route with the enum not known (a parameter its caller does not bind, a
+    `foreach` over the ordinals, a value read from a table) keeps the call open world. On
+    CDO, `CDOCoreEventHandler.Codeunit.al:39` and `:117` and `CDOUsageManagement.Codeunit.al:27`
+    route the enum variably, so a cone that holds them keeps the call.
+  - They are counted apart, additively: prove's `obligations.literalNarrowedSites` and the
+    line `fixed by literal arguments: N interface calls whose implementation every route's
+    enum value selects (not open world, not counted as blockers)`; digest's entry
+    `unresolvedLiteralNarrowed`; explain's, digest's and impact's `gaps.literalNarrowed`
+    and `; N interface calls fixed by literal arguments (…)` on the uncertainty line. A
+    coverage that is partial only through such calls (or literal-dead sites) counts as
+    complete for prove, as before for literal-dead sites.
+  - Known limit, unchanged: a literal is carried only as deep as the literal reach
+    carries it today (m10's literal three frames above the dispatch is not).
+  - On CDO: m02 "6 interface calls open world" is now 5 (0 in workspace code); c15's
+    `scope.reasons` 9 → 7 and its `CDO File` answer loses the `:16`/`:42` blockers;
+    IssueReminder's and RunReportID's cones (c08, c12) 262 → 260. The CDO rendering
+    goldens moved by exactly these sites, and three human prove ratchets grew by the new
+    line (RunReportID may-commit 2,650 B, RunReportID writes-table data-exch 22 lines,
+    IssueReminder writes-table data-exch 3,700 B).
+
 ### Changed (output validation r3 §7: B1 completed, R2 lookup failures, R6 write order)
 
 - **Tests: a test's relation is a property of its path set, in every count and line
