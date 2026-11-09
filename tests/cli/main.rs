@@ -181,6 +181,7 @@ mod cli_d65_guard_bypass;
 mod cli_database_commit;
 mod cli_dataitem_name_arg;
 mod cli_dataitem_record_ops;
+mod cli_dataset_operations;
 mod cli_decision7_precedence;
 mod cli_dependency_callers;
 mod cli_dependency_diagnostics;

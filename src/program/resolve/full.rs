@@ -51,6 +51,7 @@ use crate::program::resolve::abi_check::{
 };
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
 use crate::program::resolve::background;
+use crate::program::resolve::dataset::{DatasetRun, dataset_mode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
     CanonicalSpan, Condition, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram,
@@ -219,6 +220,11 @@ pub struct SiteFacts {
     /// site), and its consumers drop it per site: the model's table-event
     /// edges (`program_calls`) and the sited graph's reverse walk.
     pub table_event_raise: Option<crate::program::table_event_guard::RaiseContext>,
+    /// B6: the report, XmlPort or query this call runs, and the operations the
+    /// platform performs on its dataset by itself
+    /// ([`crate::program::resolve::dataset`]). `None` for any other call, and
+    /// for a run whose target is not static.
+    pub dataset_run: Option<DatasetRun>,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -834,6 +840,18 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
+                facts_out.dataset_run = member_dataset_run(
+                    &recv,
+                    &receiver_lc,
+                    &method_lc,
+                    routine,
+                    obj,
+                    obj_node,
+                    file,
+                    call_args,
+                    graph,
+                    index,
+                );
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
                 if s == DispatchShape::Multicast
@@ -990,6 +1008,27 @@ fn resolve_call_site_obligation(
                     None,
                 )
             } else if let Some(okind) = okind_opt {
+                // B6: `Report.Run(Report::X)`, `Xmlport.Import(Xmlport::X, …)`.
+                let method_lc = callee_text
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or_default()
+                    .fold_identifier();
+                if let (Some(mode), Some(t)) = (dataset_mode(okind, &method_lc), target_ref) {
+                    facts_out.dataset_run = crate::program::resolve::resolver::object_run_target(
+                        caller_app,
+                        okind,
+                        t,
+                        *target_is_name,
+                        graph,
+                        index,
+                    )
+                    .map(|o| DatasetRun {
+                        object: o.id.clone(),
+                        mode,
+                        effects: Vec::new(),
+                    });
+                }
                 let (shape, completeness, routes) = resolve_object_run(
                     caller_app,
                     okind,
@@ -1308,6 +1347,16 @@ pub(crate) fn resolve_file_obligations(
                     &pf.text,
                     &mut table_events,
                 );
+                // B6: what the platform does with the run object's dataset.
+                if let Some(run) = facts.dataset_run.as_mut() {
+                    run.effects = crate::program::resolve::dataset::dataset_effects(
+                        &run.object,
+                        run.mode,
+                        graph,
+                        index,
+                        surface,
+                    );
+                }
                 // A parens-less value read is a call only when it reaches a
                 // routine; otherwise it is a variable, field or built-in read.
                 // ponytail: a parens-less built-in (`Rec.Count`) is dropped too,
@@ -1600,6 +1649,68 @@ fn zero_page_table(
 /// The [`ReceiverFact`] for a member call whose receiver typed as `recv`
 /// (engine-switch S6.0). An object's name is the declaration's as written when
 /// the receiver is a declared variable naming that object, else the folded name.
+/// B6: the dataset run of a member call ([`SiteFacts::dataset_run`]): a
+/// report, XmlPort or query variable's own method (`Rep.SaveAsPdf(…)`,
+/// `Xp.Import()`, `Q.Open()`), or a static `Report.SaveAsPdf(Report::X, …)` /
+/// `Query.SaveAsCsv(Query::X, …)` whose first argument names the object. A
+/// `CurrReport`/`CurrXmlPort` call names no other object: `None`.
+#[allow(clippy::too_many_arguments)]
+fn member_dataset_run(
+    recv: &ReceiverType,
+    receiver_lc: &str,
+    method_lc: &str,
+    routine: &al_syntax::ir::RoutineDecl,
+    obj: &al_syntax::ir::ObjectDecl,
+    from_object: &ObjectNode,
+    file: &al_syntax::ir::AlFile,
+    call_args: &[al_syntax::ir::ExprId],
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> Option<DatasetRun> {
+    if let ReceiverType::Object { kind, name_lc, id } = recv {
+        let mode = dataset_mode(*kind, method_lc)?;
+        let target = crate::program::resolve::resolver::object_receiver_target(
+            kind,
+            name_lc,
+            id.as_ref(),
+            from_object,
+            graph,
+        )?;
+        return Some(DatasetRun {
+            object: target.id.clone(),
+            mode,
+            effects: Vec::new(),
+        });
+    }
+    // The keyword receivers: a variable of that name shadows the keyword.
+    let kind = match receiver_lc {
+        "report" => ObjectKind::Report,
+        "query" => ObjectKind::Query,
+        "xmlport" => ObjectKind::XmlPort,
+        _ => return None,
+    };
+    if crate::program::resolve::receiver::receiver_declared_type(receiver_lc, routine, &obj.globals)
+        .is_some()
+    {
+        return None;
+    }
+    let mode = dataset_mode(kind, method_lc)?;
+    let (target, is_name) = static_database_reference_target(file, call_args)?;
+    let target = crate::program::resolve::resolver::object_run_target(
+        from_object.id.app,
+        kind,
+        &target,
+        is_name,
+        graph,
+        index,
+    )?;
+    Some(DatasetRun {
+        object: target.id.clone(),
+        mode,
+        effects: Vec::new(),
+    })
+}
+
 fn receiver_fact(
     recv: &ReceiverType,
     receiver_lc: &str,

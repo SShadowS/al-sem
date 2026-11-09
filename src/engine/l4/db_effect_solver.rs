@@ -1917,6 +1917,7 @@ pub(crate) mod tests {
             modify_all_field: None,
             transfer_fields_source: None,
             receiver_is_record_ref: false,
+            dataset_reason: None,
         }
     }
 

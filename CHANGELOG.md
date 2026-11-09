@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B6)
+
+- **`prove writes-table` no longer says a definite `no` for a table written only by an
+  XmlPort's automatic insert** (B6, L20). The platform's own dataset operations are now
+  record operations of the call that runs the object, anchored at that call, each with
+  its reason: `XMLport "DS Import" imports into table "DS Line" (tableelement LineEl,
+  AutoSave)`. They reach `prove writes-table`, `explain` (a `platform:` line under the
+  write's anchor), `digest` and `prove` evidence (the evidence excerpt is the reason),
+  and `query effects` / `query touches` (`origin.platform` in JSON, `(platform: …)` in
+  human output). What runs what:
+  - A **report** run, run-modal, print, execute or save (`Report.Run`/`RunModal`/
+    `Execute`/`Print`/`SaveAs*`, static with `Report::X` or on a report variable) reads
+    every dataitem's table, its report extensions' dataitems included, and a
+    `ProcessingOnly` report too ([Report object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-report-object):
+    the report object "specifies which database tables and fields to pull data from").
+    `RunRequestPage` runs no dataset.
+  - A **query** reads every dataitem's table at `Open` or a save (`SaveAsCsv/Json/Xml`):
+    "you must call the Open method before the Read method"
+    ([Query.Read](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/query/queryinstance-read-method),
+    [Query object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-query-object)).
+  - An **XmlPort import** (`Xmlport.Import`, or the variable's `Import`) looks up and
+    inserts each table element's record when `AutoSave` is true, the default, and also
+    modifies an existing one when `AutoUpdate` or `AutoReplace` is true
+    ([AutoSave](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-autosave-property),
+    [AutoUpdate](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-autoupdate-property),
+    [AutoReplace](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-autoreplace-property)).
+    An export reads each table element's table. `Xmlport.Run` imports, exports or both
+    as `Direction` allows, `Both` by default
+    ([Direction](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-direction-property)).
+  - `UseTemporary = true` makes the operation's record temporary; a property that `#if`
+    arms set differently reads as "may" (temp state not resolved, AutoSave may be on).
+  - **Learn is silent** on whether an XmlPort's own insert or modify runs the table's
+    `OnInsert`/`OnModify` trigger. The engine reads it as "may run" (a `Maybe` trigger
+    edge), which never turns a possible write into a `no`; the platform table events
+    (`OnAfterInsertEvent`, …) are followed as for any insert.
+  - **A dataset that is not known** (a symbol-only report, XmlPort or query: the symbol
+    data has no dataitems or `AutoSave`; or a file that did not parse cleanly) gives
+    operations with no table, with the reason. `prove writes-table` then answers
+    `unknown (blocked by: write on a table not resolved …)`, never `no`; `query effects`
+    lists the read under `table not resolved`.
+  - The trigger code inside the object was already followed through the run edge; the
+    platform's operations are new rows, so nothing is counted twice.
+- **Plumbing:** the IR keeps `ObjectDecl::dataset_items` (report and query dataitems,
+  XmlPort table elements, with `UseTemporary`/`AutoSave`/`AutoUpdate`/`AutoReplace` per
+  build), the graph `ObjectNode::dataset` (pack schema 15), the resolver
+  `SiteFacts::dataset_run` with each operation's trigger and table-event routes
+  (`program::resolve::dataset`), and the model `ModelRecordOperation::dataset_reason`.
+- **Output that outside consumers read:** `query effects`/`touches` JSON gains
+  `origin.platform` on such rows; the evidence `excerpt` of such an operation is its
+  reason instead of `Var.Op`. No field was removed or renamed.
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said

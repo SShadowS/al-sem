@@ -1641,6 +1641,7 @@ pub(crate) mod tests {
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,

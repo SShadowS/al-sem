@@ -99,6 +99,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         modify_all_field: None,
         transfer_fields_source: None,
         receiver_is_record_ref: false,
+        dataset_reason: None,
     };
 
     ModelRoutine {

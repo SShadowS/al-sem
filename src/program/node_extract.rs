@@ -92,6 +92,89 @@ pub struct DataitemNode {
     pub source_table: ObjectRef,
 }
 
+/// What the platform itself reads and writes when a report, XmlPort or query runs
+/// (B6, engine limits L20): its dataset items, and for an XmlPort the directions its
+/// `Direction` property allows. Empty for every other kind and for a symbol-only
+/// object (the symbol data has no dataset; see [`Self::known`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatasetNode {
+    /// `true` when the items were read from source: a symbol-only object's
+    /// dataset is not known, which is not the same as empty.
+    pub known: bool,
+    pub items: Vec<DatasetItemNode>,
+    /// XmlPort only: a `Run` may import (`Direction` is `Import` or `Both`, the
+    /// default, in some build).
+    pub may_import: bool,
+    /// XmlPort only: a `Run` may export (`Direction` is `Export` or `Both`).
+    pub may_export: bool,
+}
+
+/// One item of a [`DatasetNode`] (`al_syntax::ir::DatasetItemDecl`, its table
+/// parsed like `SourceTable`). Each property is `None` when builds disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatasetItemNode {
+    pub kind: DatasetItemKind,
+    pub name: SharedStr,
+    pub source_table: ObjectRef,
+    pub use_temporary: Option<bool>,
+    pub auto_save: Option<bool>,
+    pub auto_update: Option<bool>,
+    pub auto_replace: Option<bool>,
+}
+
+/// [`al_syntax::ir::DatasetItemKind`], serializable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DatasetItemKind {
+    ReportDataitem,
+    XmlPortTableElement,
+    QueryDataitem,
+}
+
+/// The [`DatasetNode`] of a source object.
+fn dataset_of(obj: &al_syntax::ir::ObjectDecl) -> DatasetNode {
+    use al_syntax::ir::DatasetItemKind as K;
+    let items = obj
+        .dataset_items
+        .iter()
+        .map(|d| DatasetItemNode {
+            kind: match d.kind {
+                K::ReportDataitem => DatasetItemKind::ReportDataitem,
+                K::XmlPortTableElement => DatasetItemKind::XmlPortTableElement,
+                K::QueryDataitem => DatasetItemKind::QueryDataitem,
+            },
+            name: d.name.as_str().into(),
+            source_table: parse_object_ref_value(&d.table).0,
+            use_temporary: d.use_temporary,
+            auto_save: d.auto_save,
+            auto_update: d.auto_update,
+            auto_replace: d.auto_replace,
+        })
+        .collect();
+    // `Direction`, one entry per `#if` arm; not written is `Both` (Learn,
+    // "Direction property"). A value we do not know allows both. Limit: a
+    // `Direction` written inside an `#if` arm alone reads as written in every
+    // build (the properties do not say which are conditional).
+    let (mut may_import, mut may_export) = (false, false);
+    let mut written = false;
+    for p in obj.properties.iter().filter(|p| p.name == "direction") {
+        written = true;
+        match p.value.trim().to_ascii_lowercase().as_str() {
+            "import" => may_import = true,
+            "export" => may_export = true,
+            _ => (may_import, may_export) = (true, true),
+        }
+    }
+    if !written {
+        (may_import, may_export) = (true, true);
+    }
+    DatasetNode {
+        known: true,
+        items,
+        may_import: may_import && obj.kind == al_syntax::ir::ObjectKind::XmlPort,
+        may_export: may_export && obj.kind == al_syntax::ir::ObjectKind::XmlPort,
+    }
+}
+
 /// One plain query column (Query only, S9.0e): `column(Name; "Field")` with no
 /// `Method`, which has its source field's type. `source_table` is its enclosing
 /// dataitem's table; `field_lc` the lowercased, unquoted source field name.
@@ -160,6 +243,8 @@ pub struct ObjectNode {
     /// A Query's plain columns, document order; empty for every other kind.
     /// Consumed by `receiver::infer_compound_member_receiver` (`Q.Column.X()`).
     pub query_columns: Vec<QueryColumnNode>,
+    /// What the platform reads and writes by itself when the object runs (B6).
+    pub dataset: DatasetNode,
     /// The object's `protected var` globals as `(name lowercased, declared type
     /// text)`, document order: what an extension of it can read (S9.0e).
     pub protected_vars: Vec<(SharedStr, SharedStr)>,
@@ -506,6 +591,9 @@ impl ShareStrings for ObjectNode {
         for q in &mut self.query_columns {
             pool.share(&mut q.name_lc);
             pool.share(&mut q.field_lc);
+        }
+        for d in &mut self.dataset.items {
+            pool.share(&mut d.name);
         }
         for (name, ty) in &mut self.protected_vars {
             pool.share(name);
@@ -1009,6 +1097,7 @@ pub fn extract_nodes(
                     field_lc: field.fold_identifier().into(),
                 })
                 .collect(),
+            dataset: dataset_of(obj),
             protected_vars: obj
                 .protected_globals
                 .iter()
@@ -1218,6 +1307,7 @@ pub(crate) mod test_fixtures {
                 source_table: ObjectRef::Id(18),
             }],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: vec![("item".into(), "Record Item".into())],
             parse_incomplete: true,
             // Maximal, not realistic: a Page carries no closure fact.

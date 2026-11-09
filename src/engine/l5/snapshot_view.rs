@@ -138,15 +138,7 @@ fn op_candidates(
         }
         let matching = r.operation_sites.iter().find(|op| op.id == ro.id);
         let a = &ro.source_anchor;
-        let display = format!(
-            "{}.{}",
-            if ro.record_variable_name.is_empty() {
-                "?".to_string()
-            } else {
-                ro.record_variable_name.clone()
-            },
-            ro.op
-        );
+        let display = ro.evidence_text();
         let entry = SnapshotOperationEvidence {
             operation_id: ro.id.clone(),
             routine: stable.to_string(),

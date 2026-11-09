@@ -855,6 +855,40 @@ const ENUM_I: &str = "interface \"EI Shape\"\n{\n    procedure Area(): Integer;\
 const ENUM_E: &str = "enum 50130 \"EI Kind\" implements \"EI Shape\"\n{\n    Extensible = false;\n    value(0; Square) { Implementation = \"EI Shape\" = \"EI Square\"; }\n    value(1; Circle) { Implementation = \"EI Shape\" = \"EI Circle\"; }\n}\n";
 const ENUM_USE: &str = "codeunit 50133 \"EI Use\"\n{\n    procedure Go(K: Enum \"EI Kind\"): Integer\n    var\n        S: Interface \"EI Shape\";\n    begin\n        S := K;\n        exit(S.Area());\n    end;\n}\n";
 
+const DS_PORT: &str = "table 50140 \"DS T\"\n{\n    fields { field(1; K; Integer) { } }\n    keys { key(PK; K) { } }\n}\nxmlport 50141 \"DS Port\"\n{\n    schema\n    {\n        textelement(Root)\n        {\n            tableelement(El; \"DS T\")\n            {\n                AutoSave = false;\n            }\n        }\n    }\n}\n";
+const DS_USE: &str = "codeunit 50142 \"DS Use\"\n{\n    procedure Go()\n    begin\n        Xmlport.Import(Xmlport::\"DS Port\");\n    end;\n}\n";
+
+/// B6: an XmlPort's `AutoSave` (S, its file's projection) decides whether an
+/// UNCHANGED caller's import inserts: the caller's file is re-resolved, its
+/// dataset operations follow. Stated precondition: the caller's file is not
+/// edited, and the first revision's import writes nothing.
+fn dataset_property_of_an_unchanged_caller(mode: MemoryMode) {
+    let ws = Ws::new(&[("Port.al", DS_PORT), ("Use.Codeunit.al", DS_USE)]);
+    let inserts = |s: &mut WorkspaceSession| -> usize {
+        let inputs = ws.inputs();
+        let program = s.refresh_program(&inputs).expect("session program");
+        let model = s
+            .refresh_model(Ok(program), &inputs, false, AssemblyNeeds::RULES)
+            .expect("session model");
+        model
+            .resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == "Go")
+            .flat_map(|r| &r.record_operations)
+            .filter(|o| o.op == "Insert" && o.dataset_reason.is_some())
+            .count()
+    };
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold (no AutoSave)");
+    assert_eq!(inserts(&mut s), 0, "precondition: AutoSave = false");
+    ws.edit("Port.al", "AutoSave = false;", "AutoSave = true;");
+    let r = refresh_and_compare(&mut s, &ws, "AutoSave on");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert_eq!(inserts(&mut s), 1, "the import inserts once AutoSave is on");
+}
+
 /// An enum's extensibility and implementation map (S) close or open an
 /// unchanged caller's interface dispatch.
 fn enum_extensibility_and_impls(mode: MemoryMode) {
@@ -1493,6 +1527,7 @@ in_both_modes!(
     temp_proof_revocation_in_an_unchanged_subscriber,
     method_id_change_through_a_synthesized_dispatch,
     enum_extensibility_and_impls,
+    dataset_property_of_an_unchanged_caller,
     package_change_rebuilds_and_roots_config_is_b,
     coverage_config_and_nested_app_json_are_b,
     app_json_change_is_p,
