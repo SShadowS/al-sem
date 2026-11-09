@@ -264,6 +264,9 @@ pub struct AbiField {
     /// "Normal" | "FlowField" | "FlowFilter".
     pub field_class: String,
     pub is_blob_like: bool,
+    /// The `CalcFormula` property text from `SymbolReference.json` (a
+    /// FlowField's formula), `None` when the symbols carry none.
+    pub calc_formula: Option<String>,
 }
 
 /// An ABI key — references fields by name; index is array position.
@@ -1123,8 +1126,13 @@ fn parse_field(f: &RawField) -> AbiField {
     let (data_type, _subtype_id, _subtype_raw_name, _subtype_tag) =
         reconstruct_param_field_type(f.type_definition.as_ref());
     let mut field_class = "Normal".to_string();
+    let mut calc_formula = None;
     for p in f.properties.clone().unwrap_or_default().iter() {
-        if p.name.clone().unwrap_or_default().to_lowercase() == "fieldclass" {
+        let name = p.name.clone().unwrap_or_default().to_lowercase();
+        if name == "calcformula" {
+            calc_formula = p.value.clone().filter(|v| !v.trim().is_empty());
+        }
+        if name == "fieldclass" {
             let v = p.value.clone().unwrap_or_default().to_lowercase();
             if v.contains("flowfield") {
                 field_class = "FlowField".to_string();
@@ -1145,6 +1153,7 @@ fn parse_field(f: &RawField) -> AbiField {
         data_type,
         field_class,
         is_blob_like: blob_like(&base_token),
+        calc_formula,
     }
 }
 

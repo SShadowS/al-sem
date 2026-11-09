@@ -208,6 +208,7 @@ mod cli_field_writers;
 mod cli_fingerprint_inventory_format;
 mod cli_fingerprint_rights;
 mod cli_fingerprint_routine_cross_app;
+mod cli_flowfield_reads;
 mod cli_full_snapshot_split;
 mod cli_git_env_isolation;
 mod cli_graph_export;

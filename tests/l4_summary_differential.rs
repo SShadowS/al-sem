@@ -1379,6 +1379,7 @@ mod fixtures {
             modify_all_field: None,
             transfer_fields_source: None,
             receiver_is_record_ref: false,
+            flow_field_reads: Vec::new(),
         }
     }
 

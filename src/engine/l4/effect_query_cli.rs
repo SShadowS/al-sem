@@ -1460,6 +1460,30 @@ impl<'a> OperationJoin<'a> {
             .is_some_and(|(_, op)| op.receiver_is_record_ref)
     }
 
+    /// Engine limits B5: the FlowField read of `table_id` the operation
+    /// makes (`ModelRecordOperation::flow_field_reads`), read off the same
+    /// claiming row [`Self::get`] reads. `None` for an effect row that is not a
+    /// FlowField read (its `effect_op` is the operation's own, such as the
+    /// `FindSet` row of a `SetAutoCalcFields` read), for a `CalcFields` on its
+    /// own table, and for an operation outside the model's routines.
+    pub fn flow_field(
+        &self,
+        operation_id: &str,
+        effect_op: &str,
+        table_id: &str,
+    ) -> Option<&'a crate::program::model::flow_fields::FlowFieldRead> {
+        if effect_op != "CalcFields" {
+            return None;
+        }
+        let (_, op) = self.index.last_record_operation(operation_id)?;
+        if op.op == "CalcFields" && op.table_id.as_deref() == Some(table_id) {
+            return None;
+        }
+        op.flow_field_reads
+            .iter()
+            .find(|f| f.effect_table_id() == table_id)
+    }
+
     /// The operation is dependency code's: its owning row is not a
     /// workspace routine, or the model holds no owner for it (a retained
     /// dependency leaf). Touches' absence reasons count these (the cone
@@ -2550,6 +2574,37 @@ fn render_query_touches_body(
                         Some(t) => t == table.id || (unknown && is_unknown_table(t)),
                         None => unknown,
                     };
+                    // Engine limits B5: a read of the table through a
+                    // FlowField at this operation is a `CalcFields` site of
+                    // it, unless the operation is already one on this table.
+                    for ffr in &o.flow_field_reads {
+                        if ffr.effect_table_id() != table.id || ffr.repeats_host_read(o) {
+                            continue;
+                        }
+                        if primary {
+                            ws_routines.insert(r.stable_routine_id.as_str());
+                            ws_sites.push(TableSite {
+                                file: o.source_anchor.source_unit_id.clone(),
+                                line: o.source_anchor.start_line + 1,
+                                op: "CalcFields".to_string(),
+                                who: names.display(&r.stable_routine_id),
+                                object: join.of(r).object_display,
+                                key: None,
+                                unresolved: match &ffr.source {
+                                    crate::program::model::flow_fields::FlowFieldSource::Undecided(
+                                        why,
+                                    ) => format!("FlowField {}: {why}", ffr.field),
+                                    crate::program::model::flow_fields::FlowFieldSource::Table {
+                                        ..
+                                    } => String::new(),
+                                },
+                                temp: TempStateKind::Known(ffr.temporary()),
+                            });
+                        } else {
+                            dep_routines.insert(r.stable_routine_id.as_str());
+                            *dep_by_op.entry("CalcFields".to_string()).or_default() += 1;
+                        }
+                    }
                     if !hit {
                         continue;
                     }
@@ -5798,7 +5853,14 @@ fn render_query_effects_body(
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
     for (e, lit) in effects.iter().zip(&literal).filter(|_| all) {
-        let table = if is_unknown_table(e.table_id) {
+        // Engine limits B5: a read through a FlowField names the field (and,
+        // when the table is not decided, why).
+        let flow_field = ops.flow_field(e.operation_id, e.op, e.table_id);
+        let table = if let Some(ff) = flow_field
+            && let crate::program::model::flow_fields::FlowFieldSource::Undecided(why) = &ff.source
+        {
+            format!("table not decided ({why})")
+        } else if is_unknown_table(e.table_id) {
             unresolved_label(ops.receiver_is_record_ref(e.operation_id)).to_string()
         } else {
             match tables.get(e.table_id) {
@@ -5829,8 +5891,11 @@ fn render_query_effects_body(
                 _ => "temp state not resolved".to_string(),
             },
         };
+        let through = flow_field.map_or(String::new(), |ff| {
+            format!(" through FlowField \"{}\"", ff.field)
+        });
         human.push_str(&format!(
-            "    [{}] on {} via {}, {temp} — {}{mark}\n",
+            "    [{}] on {}{through} via {}, {temp} — {}{mark}\n",
             e.op,
             table,
             e.via.as_str(),

@@ -896,6 +896,11 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         caption: literal_values(&props, "caption"),
         tooltip: literal_values(&props, "tooltip"),
         option_caption: literal_values(&props, "optioncaption"),
+        calc_formula: props
+            .iter()
+            .filter(|p| p.name == "calcformula" && !p.value.is_empty())
+            .map(|p| p.value.clone())
+            .collect(),
         doc: None,
         origin: origin_of(node),
     }
@@ -6842,6 +6847,47 @@ table 50120 T
         assert_eq!(f[1].obsolete_state, ["Pending", "Removed"], "both #if arms");
         assert_eq!(f[1].obsolete_reason, ["Replaced."]);
         assert!(f[2].obsolete_state.is_empty() && f[2].obsolete_reason.is_empty());
+    }
+
+    /// Engine limits B5: a field's `CalcFormula` text is kept, one per `#if`
+    /// arm, so the FlowField read rule can name its table.
+    #[test]
+    fn field_calc_formula_is_kept_per_arm() {
+        let src = r#"
+table 50121 T
+{
+    fields
+    {
+        field(1; Total; Decimal)
+        {
+            FieldClass = FlowField;
+            CalcFormula = sum("Cust. Ledger Entry".Amount where("Customer No." = field("No.")));
+        }
+        field(2; Moving; Integer)
+        {
+            FieldClass = FlowField;
+#if not CLEAN24
+            CalcFormula = count("Old Entry");
+#else
+            CalcFormula = count("New Entry");
+#endif
+        }
+        field(3; Plain; Integer) { }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let f = &af.objects[0].fields;
+        assert_eq!(
+            f[0].calc_formula,
+            [r#"sum("Cust. Ledger Entry".Amount where("Customer No." = field("No.")))"#]
+        );
+        assert_eq!(
+            f[1].calc_formula,
+            [r#"count("Old Entry")"#, r#"count("New Entry")"#]
+        );
+        assert!(f[2].calc_formula.is_empty());
     }
 
     /// A whole-value `#if` property gives one `ObjectProperty` per nonempty arm,

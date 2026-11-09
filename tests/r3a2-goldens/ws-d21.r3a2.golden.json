@@ -73,6 +73,17 @@
             "value": false
           },
           "via": "direct"
+        },
+        {
+          "effectKey": "CalcFields|11111111-0000-0000-0000-00000000d210:Table:50701|11111111-0000-0000-0000-00000000d210:Codeunit:50700#d5bd2f04811dd6c33bfc27da492de24331aa6c9b7197bd547f65ca01113aa591/op0|f",
+          "op": "CalcFields",
+          "tableId": "11111111-0000-0000-0000-00000000d210:Table:50701",
+          "operationId": "11111111-0000-0000-0000-00000000d210:Codeunit:50700#d5bd2f04811dd6c33bfc27da492de24331aa6c9b7197bd547f65ca01113aa591/op0",
+          "tempState": {
+            "kind": "known",
+            "value": false
+          },
+          "via": "direct"
         }
       ],
       "uncertainties": [],

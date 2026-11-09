@@ -159,6 +159,10 @@ pub struct FieldDecl {
     /// The field's `OptionCaption` text(s), same rule (the whole comma list as one
     /// string: `A,B`).
     pub option_caption: Vec<String>,
+    /// The field's `CalcFormula` value text(s) as written (`sum("Cust. Ledger
+    /// Entry".Amount where(...))`), one per textually present `#if` arm; empty
+    /// = none declared. Read by the FlowField read rule (engine limits B5).
+    pub calc_formula: Vec<String>,
     /// The comment run directly above the field (see [`RoutineDecl::doc`]).
     pub doc: Option<String>,
     /// The field declaration node's origin (for a field whose header is split

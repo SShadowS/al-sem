@@ -130,6 +130,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an `ERROR_IMPLICIT` row's `detail.commitBehavior`. Outputs move only where a declaring
   routine is on a route.
 
+### Fixed (engine limits wave 2, B5)
+
+- **A table read through a FlowField is now a read of that table.** A FlowField stores
+  nothing: BC computes it from its `CalcFormula` over the formula's table. So
+  `Cust.CalcFields("Net Change (LCY)")` reads `Detailed Cust. Ledg. Entry`, though the
+  record is a `Customer`. Before, every effect answer saw only the record's own table, and
+  `query touches --direction down` answered a definite `no (every candidate decided)`. On
+  CDO, `query touches --table "Detailed Cust. Ledg. Entry" --from "CDO Customer
+  Setup.Balance" --direction down` now answers `down: yes` (was `no`), and `query touches
+  --table "Detailed Cust. Ledg. Entry"` counts 35 workspace sites (was 5; 30 are
+  `CalcFields`). `ValidateHandledFilterOnSalesInvoice` (a `SetFilter` on the FlowField
+  `"CDO Email Log"`) now touches `CDO E-Mail Log` (was `no`).
+- **Where the read is placed** (new `program::model::flow_fields`, run once at L3
+  resolve, after table-extension fields are merged): on `CalcFields(F1, F2, ...)`, each
+  argument that is a FlowField; on `SetRange`/`SetFilter` of a FlowField (Learn: "if you
+  apply a filter to a FlowField, the calculation is based on the filtered data"; the
+  filter issues no query, so this places a may-read one step early); and on every
+  `Get`/`Find*`/`Next` of a record the same routine calls `SetAutoCalcFields` on (Learn:
+  the fields are "automatically calculated when the record is retrieved from the
+  database"). A bare `SetAutoCalcFields(F)` is a call on the implicit `Rec`; because an
+  obsolete `with X do` can make it a call on `X`, it is also a may-read on the routine's
+  other retrievals whose table has a FlowField of that name. When the record is
+  object-level (an object global, or the implicit `Rec` a page or table keeps between
+  triggers), every `Get`/`Find*`/`Next` of it in every routine of the same object gets
+  the read too (`SetAutoCalcFields` in `OnOpenPage`, `Rec.FindSet` in an action); a
+  routine with a local or parameter of that name is not touched. Each read is a
+  `CalcFields` row on the formula's table, at the
+  operation's own line, and reaches `query touches` (down, up and table mode), `query
+  effects` (the human row names the field: `[CalcFields] on Detailed Cust. Ledg. Entry
+  through FlowField "Net Change (LCY)"`), `digest --include-reads` (a `DB_READ`) and
+  `fingerprint` (an `R` right on the table). `prove` asks no read question, and
+  explain lists no reads, so neither changes.
+- **The formula's table comes from source or from the symbols.** The lowerer keeps each
+  field's `CalcFormula` text (one per `#if` arm, `FieldDecl::calc_formula`), and the
+  symbol reader keeps the `CalcFormula` property of `SymbolReference.json` (Base
+  Application's symbols carry it: 2,094 formulas). When the engine cannot tell which table
+  is read (a FlowField with no formula in the symbols, a formula that does not parse, a
+  table that is not loaded, a table name that two loaded tables share (the model keeps no
+  namespace, so the engine does not pick one by load order), an argument that names no
+  field of the table), the read goes
+  to the `unknown` table bucket with its reason, so a touches answer says `unknown`,
+  never `no`. On CDO no workspace site is undecided.
+- **Not FlowField reads:** `CalcSums` (sums ordinary fields of the record's own table,
+  already a read of it), `CalcFields` of a Blob, and a FlowFilter field's value. A
+  formula's `WHERE` part names only fields of its own table and constants, filters or
+  fields of the record, so the formula's table is the only table it reads
+  ([CalcFormula property](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-calcformula-property)).
+- **Temp state:** Learn does not say how a FlowField of a temporary record is computed.
+  The rule takes the reading that never hides a read: the formula's table is read as the
+  table it is (temporary only when declared `TableType = Temporary`), as d1's FlowField
+  gate already assumed.
+- **Detectors see nothing new:** the reads hang off the record operation
+  (`ModelRecordOperation::flow_field_reads`), not the operation list, so no detector
+  input changed (no r4 golden moved). The r3a2/r3a3 goldens gain one effect and one
+  capability fact each in `ws-d21` and `ws-d22` (their `Customer."Balance (LCY)"`
+  FlowField over `Ledger Entry`), and the manifest matrices move by those 2.
+- **One read, not two:** a `CalcFields` of a FlowField over the record's own table, with
+  the same temp state, is the record's own read. The base summary, the capability cone
+  and `query touches`' table mode each emit it once. In `query effects` only the derived
+  `CalcFields` row names the FlowField; the `FindSet` row of a `SetAutoCalcFields` read
+  is the record's own read and no longer says "through FlowField".
+- **Still open (rest of L19):** (1) a page that shows a FlowField calculates it when it
+  is displayed, which no routine's cone holds; that needs L2's page column index. (2) A
+  record passed to another routine: a caller's `SetAutoCalcFields` followed by the
+  callee's `Find*`/`Get`/`Next` on the record it received is not linked, so the caller's
+  answer can still be `no`. A caller's filter on a FlowField is placed at the filter, so
+  the caller answers `yes`, but the callee's own answer (`--from` the callee) can still
+  be `no`, because it depends on what its caller set. Linking these needs the resolved
+  calls with their record arguments, which L3 resolve does not have; a `SetAutoCalcFields`
+  is not a record operation, so a read cannot be placed at it. CDO has no such
+  `SetAutoCalcFields` case; the filter case was not counted.
+- Learn: [CalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-calcfields-method),
+  [SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setautocalcfields-method),
+  [FlowFields overview](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-flowfields).
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said
