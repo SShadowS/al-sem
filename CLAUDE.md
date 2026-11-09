@@ -77,7 +77,8 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   environment says. In a debug build they cost ~5 minutes per run
   (`abi_ingestion_integrity_cdo_gate` alone took 243 s). `scripts/cdo-gate` is the one
   runner for them, built with the `cdo` profile (warm, after an edit: 236 s, against
-  ~375 s on `release-fast`; measured 2026-10-07). **Do not run `cdo-gate` per commit**:
+  ~375 s on `release-fast`; measured 2026-10-07; the whole gate took 834-886 s on
+  2026-11-09, see below). **Do not run `cdo-gate` per commit**:
   while iterating, the CDO number you are moving comes straight from
   `target/cdo/aldump.exe --program-call-graph-stats` / `--dependency-bodies-stats`
   (~1 min build + seconds to run); `cdo-gate` is the branch gate. **Do not set `CDO_WS` globally** — it was
@@ -85,6 +86,19 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud` on the Windows machine and
   `/home/sshadows/Projects/DO-cdo-baseline/Cloud` on the Linux machine (the same `bc3ccb18`
   worktree, transferred with matching hashes); pass it to `cdo-gate`.
+- **How `cdo-gate` runs (since 2026-11-09).** It builds every target once, then runs
+  `cli output_cdo` in one lane while `program_resolve_harness`, `lsp`
+  (`program_graph::`, `snapshot_robustness::`), `l4_summary_differential` and the lib's
+  CDO tests (`--lib cdo`, not the whole lib) run one after another in the other, at
+  `nice 10`. Each phase has its own log under `target/cdo-gate-logs/<run>/`; the summary
+  lists each phase's result, seconds and test counts. `CDO_GATE_SERIAL=1` runs the phases
+  in a row. A test that reads `CDO_WS` must go through `cdo_ws_or_enforce`, which fails
+  the task gate when the calling test is outside the gate's filters (`on_the_cdo_gate`
+  in `tests/common/cdo.rs`; in the lib, put `cdo` in the test's name). Measured
+  2026-11-09 (Linux, 22 cores, `cdo` profile, warm, other agents loading the machine):
+  1,164-1,184 s before (output_cdo 780-808 s, whole lib 290-317 s), 834-886 s after,
+  peak memory 39.5 GB before, 55-58 GB after. The length is `output_cdo`'s impact
+  ratchets, whose one-shot `alsem impact` calls take 4-7 minutes each.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
   `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the

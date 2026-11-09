@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (engine limits wave 1, cdo-gate faster)
+
+- **`scripts/cdo-gate` builds once and runs in two lanes; the lib phase runs only the
+  CDO tests.** Measured first (2026-11-09, Linux, 22 cores, 93 GB, `cdo` profile, warm
+  build; other agents shared the machine, their load alone 10-30 and at times over 100,
+  so read each number as a range):
+  - Before: 1,184 s and 1,164 s in two runs, peak 39.5 GB. Phases in a row:
+    `program_resolve_harness` 41-45 s (210 tests), `lsp` 8 s (2), `l4_summary_differential`
+    17-18 s (25), `cli output_cdo` 780-808 s (24), `--lib` 290-317 s (3,214).
+  - Where the time went: `output_cdo`'s two impact ratchets. They ran their one-shot
+    `alsem impact` calls one after another, each building the CDO model and computing
+    the 699-routine change: measured alone, `impact --diff` JSON 275 s, human 263 s,
+    `--routine` 65 s (603 s in a row); `impact --base` JSON 428 s, then human 275 s (703 s).
+    Every other `output_cdo` test was done by 205-240 s; the impact tests ran on for
+    another ~550 s using about 5 of the 22 cores. Inside one `impact --diff` run (traced),
+    127 s of its 215 s is the main part, 120 s of that the digest's stream batches over
+    the 699 roots. The shared MCP server's 42 calls (`cdo_answers`) took ~205 s with the
+    model build; the engine child answers explain, prove and digest on one heavy worker,
+    so asking it concurrently would not help. Of the lib's 3,214 tests, 15 read `CDO_WS`;
+    alone (nextest `-j 1`) they take 594 s summed, the longest 137 s
+    (`cdo_crossing_census`), 118 s, 111 s.
+  - After: 834 s and 880 s in two runs of the two-lane version, peak 57-58 GB (each in
+    its own cgroup); the final tree (lib phase at 4 threads) 886 s, peak 55.4 GB. That is
+    25-29% shorter. In the final run `output_cdo` was the gate's length (886 s): its
+    other 22 tests ended by 404 s, `cdo_impact_ratchets` at 768 s,
+    `cdo_impact_base_ratchets` at 886 s; lane 2 took 736 s at `nice 10` (harness 159 s,
+    lsp 31 s, l4 46 s, lib 500 s). The gate is CPU-bound on this shared machine (11,000
+    CPU-seconds against 9,400 before, at load averages up to 150 in its first 5
+    minutes), so the impact calls run slower side by side than alone (275 s alone, up to
+    ~650 s here); on an idle machine the gain is larger. Test counts: `program_resolve_harness` 210, `lsp` 2,
+    `l4_summary_differential` 25, `output_cdo` 24 — unchanged; the lib phase 17 (the 15
+    CDO tests and the 2 new guard tests; 3 ignored wall-clock probes as before).
+  - What changed: (1) every phase's target is built once (`cargo test --no-run`), then
+    `output_cdo` runs in one lane while `program_resolve_harness`, `lsp`,
+    `l4_summary_differential` and the lib phase run one after another in the other, at
+    `nice -n 10`. Each phase logs to its own file (each line stamped with the gate's
+    clock); the summary gives each phase's result, wall time and `test result` counts and
+    prints a failed phase's failures; any failed phase or a failed build fails the gate.
+    `CDO_GATE_SERIAL=1` runs the phases in a row. (2) The impact ratchets run their
+    independent calls at once on scoped threads; the two `--base` calls now both build
+    the base (the cache's "two writers of one key" case) instead of the second reading
+    the first's entry; nothing asserted that hit, and `b6_the_cache_hits_misses_and_rebuilds`
+    pins the cache's hits. (3) The lib phase runs `--lib cdo` (4 threads) instead of the
+    whole lib: the 3,200 other lib tests read no `CDO_WS` and run in every task gate with
+    the same result (the grammar cache-key test that once moved the whole lib here
+    included).
+  - The coverage guard, so a CDO test cannot fall outside the filters:
+    `cdo_ws_or_enforce` (`tests/common/cdo.rs`) checks on EVERY call, with or without
+    `CDO_WS`, that the calling test is one the gate runs (`on_the_cdo_gate`: the lib by
+    the `cdo` substring, `cli` by `output_cdo::`, `lsp` by its two members, two whole
+    targets); the task gate runs every test without `CDO_WS`, so a new CDO test outside
+    the filters fails there. `cdo_ws_is_read_only_through_the_gate` refuses a test that
+    reads the env var itself (the lib's 11 direct readers, 3 of them ignored wall-clock
+    probes, moved onto the gate, which also makes them fail under `ENFORCE_CDO_WS=1`
+    instead of skipping; two renamed to
+    carry `cdo`: `parses_all_cdo_source_units_zero_panics`,
+    `cdo_workspace_is_not_its_own_dependency`), and `cdo_gate_run_set_matches_the_script`
+    keeps the predicate and the script's phases together. Discrimination: a lib test
+    `proof_dummy_reads_the_workspace_outside_the_filter` calling the gate failed the
+    task-gate run with "reads the CDO workspace, but scripts/cdo-gate does not run it";
+    renamed to carry `cdo` it passed; removed. A direct `var_os` read put back into
+    `builds_snapshot_over_cdo_workspace` failed the static check naming
+    `src/snapshot/snapshot.rs:1036`; restored, passed. Dropping `snapshot_robustness::`
+    from the script's lsp phase failed the sync check; restored, passed. The gate's exit
+    status, with a stand-in `cargo` that fails one phase: each of the five phases and the
+    build, broken alone, in both lanes and serial, gave exit 1 and named only that phase;
+    none broken gave exit 0.
+
 ### Fixed (engine limits wave 0, B1)
 
 - **`alsem_prove` with a filter no longer kills the resident engine.** `prove` with

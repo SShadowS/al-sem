@@ -25,16 +25,20 @@
 # prints the failures of a failed phase. Any failed phase (or a failed build)
 # fails the gate.
 #
-# Measured on Linux (22 cores, 93 GB), `cdo` profile, warm build, on a machine
-# other agents were also using (load average 10-110):
-#   before (phases in a row, whole --lib):  1184 s
-#     program_resolve_harness 45 s, lsp 8 s, l4_summary_differential 18 s,
-#     cli output_cdo 808 s, --lib 303 s (3,214 tests)
-#   after: see CHANGELOG ("engine limits wave 1, cdo-gate").
+# Measured 2026-11-09 on Linux (22 cores, 93 GB), `cdo` profile, warm build,
+# on a machine other agents were also using (their load alone 10-30, at times
+# over 100), so read the numbers as a range:
+#   before (phases in a row, whole --lib): 1184 s and 1164 s; peak 39.5 GB
+#     program_resolve_harness 41-45 s, lsp 8 s, l4_summary_differential 17-18 s,
+#     cli output_cdo 780-808 s, --lib 290-317 s (3,214 tests)
+#   after (two lanes): 834-886 s; peak 55-58 GB (the summed RSS of the gate's
+#     processes, its cgroup's memory.peak). The length is output_cdo's impact
+#     ratchets (768 s and 886 s in the last run); lane 2 ended at 736 s.
 # output_cdo was long because its impact ratchets ran their one-shot `alsem
-# impact` calls one after another (603 s and 703 s alone); they now run at
-# once. The lib's CDO tests are 15 of its 3,214: the rest read no CDO_WS and
-# run in every task gate (`scripts/ci-steps task`/`test`), identically.
+# impact` calls one after another (603 s and 703 s measured alone); they now
+# run at once. The lib phase runs the 17 lib tests whose path holds `cdo` (15
+# read CDO_WS); the rest read no CDO_WS and run in every task gate
+# (`scripts/ci-steps task`/`test`), with the same result.
 set -uo pipefail
 
 ws="${1:-${CDO_WS:-}}"
@@ -84,16 +88,25 @@ logs="$logs_root/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$logs" || exit 1
 echo "cdo-gate: logs in $logs"
 
-# A phase: its command's output goes to `<name>.log`; `<name>.status` holds
-# the exit status and the wall seconds when it ends. Never through a pipe, so
-# the status is the command's own.
+# Each output line prefixed with the gate's clock (seconds since it started),
+# so a log shows when each test ended.
+stamp() {
+    local line
+    while IFS= read -r line; do
+        printf '%5d %s\n' "$SECONDS" "$line"
+    done
+}
+
+# A phase: its command's output goes to `<name>.log`, each line stamped;
+# `<name>.status` holds the exit status and the wall seconds when it ends.
+# The status is the command's own (`PIPESTATUS[0]`), never the stamper's.
 run_phase() {
     local name="$1"
     shift
     local start=$SECONDS
     echo "cdo-gate: [$name] started"
-    "$@" > "$logs/$name.log" 2>&1
-    local rc=$?
+    "$@" 2>&1 | stamp > "$logs/$name.log"
+    local rc=${PIPESTATUS[0]}
     echo "$rc $((SECONDS - start))" > "$logs/$name.status"
     if [[ "$rc" -eq 0 ]]; then
         echo "cdo-gate: [$name] ok ($((SECONDS - start)) s)"
@@ -140,12 +153,13 @@ phase_output_cdo() {
 # whole capability snapshot of the cross-app CDO model (45.8 GB) to read only
 # its call-site rows; it calls `compose_callsite_resolutions` (3.1 GB) since.
 phase_harness() {
-    run_phase program_resolve_harness \
+    run_phase program_resolve_harness "${lane2_nice[@]}" \
         cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=4
 }
 
 phase_lsp() {
-    run_phase lsp cargo test "${profile[@]}" --test lsp -- program_graph:: snapshot_robustness::
+    run_phase lsp "${lane2_nice[@]}" \
+        cargo test "${profile[@]}" --test lsp -- program_graph:: snapshot_robustness::
 }
 
 # ⟨task-3 fix wave, review I-2⟩ The CDO whole-program L4 frozen digest
@@ -154,7 +168,8 @@ phase_lsp() {
 # the gate could not fail on it. The target's fixture members are cheap and run
 # alongside it.
 phase_l4() {
-    run_phase l4_summary_differential cargo test "${profile[@]}" --test l4_summary_differential
+    run_phase l4_summary_differential "${lane2_nice[@]}" \
+        cargo test "${profile[@]}" --test l4_summary_differential
 }
 
 # ⟨2026-09-14⟩ CDO-gated tests also live in `--lib`, and this script once ran
@@ -167,11 +182,13 @@ phase_l4() {
 # test outside that filter cannot hide: the shared gate (`crate::cdo::
 # cdo_ws_or_enforce`) panics in the task gate for any test the filter misses,
 # and `cdo_ws_is_read_only_through_the_gate` refuses a test that reads CDO_WS
-# around it. 6 threads: the CDO tests each build their own model (largest
-# alone ~4.2 GB); measured alone, cdo profile, each test by itself (nextest
-# -j 1): the longest 137 s (`cdo_crossing_census`), 594 s summed.
+# around it. 4 threads: the CDO tests each build their own model (largest
+# alone ~4.2 GB), and this phase runs beside output_cdo; measured alone, cdo
+# profile, each test by itself (nextest -j 1): the longest 137 s
+# (`cdo_crossing_census`), 594 s summed.
 phase_lib() {
-    run_phase lib_cdo cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads=6
+    run_phase lib_cdo "${lane2_nice[@]}" \
+        cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads=4
 }
 
 lane2() {
@@ -181,7 +198,13 @@ lane2() {
     phase_lib
 }
 
+# ⟨2026-11-09⟩ Lane 2 runs at a lower CPU priority (`nice -n 10`): the gate's
+# length is output_cdo's, whose impact ratchets run one-shot `alsem impact`
+# calls of 4-7 minutes that use only ~3 cores each. Starved at the start
+# (every other test busy) they ran longest; lane 2 now takes what they leave.
+lane2_nice=(nice -n 10)
 if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
+    lane2_nice=()
     lane2
     phase_output_cdo
 else
@@ -216,7 +239,8 @@ for name in "${phases[@]}"; do
         word="FAILED ($rc)"
         status=1
     fi
-    counts="$(grep -h '^test result:' "$logs/$name.log" 2>/dev/null | sed 's/^test result: //' | paste -sd '|' -)"
+    counts="$(grep -hE '^ *[0-9]+ test result:' "$logs/$name.log" 2>/dev/null |
+        sed -E 's/^ *[0-9]+ test result: //' | paste -sd '|' -)"
     printf 'cdo-gate:   %-26s %-12s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
 done
 
@@ -225,8 +249,8 @@ if [[ "$status" -ne 0 ]]; then
         read -r rc _ <<< "$(phase_result "$name")"
         [[ "$rc" == "0" ]] && continue
         echo "cdo-gate: ---- $name ($logs/$name.log) ----"
-        if grep -q '^failures:' "$logs/$name.log" 2>/dev/null; then
-            sed -n '/^failures:/,$p' "$logs/$name.log"
+        if grep -qE '^ *[0-9]+ failures:' "$logs/$name.log" 2>/dev/null; then
+            sed -En '/^ *[0-9]+ failures:/,$p' "$logs/$name.log"
         else
             tail -n 60 "$logs/$name.log" 2>/dev/null
         fi
