@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (engine limits wave 1, L14 review fixes)
+
+- **The speed gate now catches a change that loses parallelism.** The entry below said
+  wall time was judged so that "a change that loses parallelism still shows". It did not:
+  wall time was judged only in the rounds, whose calls run on about one thread, while the
+  parallel work (the model build, the test universe) is in the warm-up, which was judged
+  on CPU time only. `scripts/cdo-speed` now also judges the warm-up's wall time for those
+  two calls, at most x1.60 (the worst single sample against the same binary was x1.32).
+  Proof (2026-11-09, load 3-6): master `4129eb52` against itself with the head server
+  pinned to 2 of 22 cores (`taskset -c 0,1`): model build wall x2.03, test universe wall
+  x2.77, so the gate FAILS (exit 1) on exactly those two lines. Their CPU ratios were
+  x0.63 and x0.56 (a pinned run spends less CPU), and every round and memory passed, so
+  the earlier rule passed this run.
+- **The warm-up's side order flips per call**, not only per round: going second always cost
+  the test universe up to x1.13 CPU in three earlier runs, eating into its 1.30 limit.
+- **On master with no edits** the default base was the merge base, which is HEAD itself:
+  the phase timed the tree against itself (200-500 s for nothing; a scheduled run, or the
+  agentflow post-merge check). It now times HEAD against its first parent and says so in a
+  banner.
+- **A tool call that exits non-zero is timed, not a "cannot run" (exit 2).** Its exit code
+  is recorded with the answer's hash, so a changed verdict shows as `[outputs or exit codes
+  differ]`.
+- **Peak memory counts engine children that exit mid-run:** every process's VmHWM is read
+  after each call and its highest value kept, instead of read once at the end.
+- **`scripts/cdo-gate`:** `--no-speed` works in any position, and an unknown option or a
+  second workspace stops the gate (exit 2) instead of being ignored. On a test-build
+  failure it now stops the whole speed build (its own process group: cdo-speed and its
+  cargo builds), not just the subshell, so no orphaned base build holds the cache lock;
+  a Ctrl-C during the test build stops it too.
+- **Docs:** the speed phase is Linux only (it reads `/proc`); CLAUDE.md now says that on
+  Windows every `cdo-gate` run fails unless given `--no-speed`. The timing range is one
+  number everywhere (CLAUDE.md, the L14 row, the `cdo-gate` header): 178-301 s, with this
+  change's own run as the low end. The must-catch and must-pass proofs below were run with
+  an earlier warm-up rule; their round verdicts do not depend on it.
+- **The whole `cdo-gate` on this tree** (2026-11-09, Linux, 22 cores, test build already
+  fresh): PASS in ~935 s. `speed` 178 s against the merge base `4129eb52` (model build CPU
+  x1.003 and wall x0.998, test universe x0.999 and x0.989, prove x0.946, round total
+  x0.961, peak memory 9,530 → 9,545 MiB x1.002), then the lanes: output_cdo 756 s;
+  program_resolve_harness 143 s, lsp 19 s, l4_summary_differential 57 s, lib_cdo 391 s.
+
 ### Changed (engine limits wave 1, L14: a CDO speed and memory gate)
 
 - **`scripts/cdo-gate` now fails a branch that makes CDO answers slower or larger.** Its
@@ -33,8 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the slowdown they are to catch. Comparing two binaries interleaved cancels most
   load; CPU time (user + system of the server and its engine children, from `/proc`)
   cancels more, since a single-threaded answer's CPU time does not grow while it waits
-  for a core. Wall time is judged too, with a wider limit, so a change that loses
-  parallelism (more wall, same CPU) still shows. The base binary is built from
+  for a core. Wall time is judged too, with wider limits. The rounds' calls run on about
+  one thread (prove 12.56 s CPU in 12.63 s wall), so a change that loses parallelism
+  (same CPU, more wall) shows in the warm-up's wall time: the model build (~160 s CPU in
+  ~36 s wall) and the test universe (~135 s in ~18 s) are the parallel parts. The base binary is built from
   `git archive <sha>` once per commit and cached under `~/.cache/al-sem/cdo-speed/`
   (every worktree shares it), beside the test build.
 - **Measured noise: the same binary against itself** (master `4129eb52`, release-fast,
@@ -51,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The limits that follow** (head over base): the rounds' median CPU ratio at most 1.20
   and wall ratio at most 1.30, per call whose base CPU is at least 2 s (prove) and for the
   round total; the warm-up's model build and test universe (single samples, base CPU at
-  least 20 s) at most 1.30 in CPU; the 1-5 s calls are reported only (single samples
+  least 20 s) at most 1.30 in CPU and 1.60 in wall time; the 1-5 s calls are reported only (single samples
   of them swung to x1.19 under load), and count in the round total; peak memory (every
   server process's VmHWM, summed: ~9.1-9.8 GB, the base engine, the test universe and the
   front end) at most 1.10. When the rounds disagree about a call (some ratios over its
@@ -59,11 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The must-catch proof.** `1127e74e` (the c25 fix without `df5c8fe7`) against
   `58d0c94e` (with it), an earlier draft of the script that ran 5 rounds: prove x1.77
   (rounds 2.52, 2.25, 1.77, 1.45, 1.09; median 14.8 s → 33.3 s), round total x1.62, FAIL.
-  Against master `4129eb52` with the final routines and limits: prove x2.13 CPU and
+  Against master `4129eb52` with the final routines and round limits (the warm-up rule
+  was still an earlier one that judged the 4 s warm-up prove too; the round verdicts
+  below do not depend on it): prove x2.13 CPU and
   x2.12 wall (RunReportID 14.4 → 30.6 s, IssueReminder 13.7 → 32.8 s, DocEMailSend
   19.2 → 34.2 s), round total x1.88, exit 1, 301 s. Master against itself, same script:
   prove x1.06, round total x1.03, memory x0.98, PASS, 231 s.
-- **What it adds to the branch gate:** the timing, 219-301 s on a quiet machine; the
+- **What it adds to the branch gate:** the timing, 178-301 s on a quiet machine; the
   working tree's release-fast build (a cold one took 233 s; after an edit, the al-sem
   crates only); the base build, ~245 s once per master commit, beside the test build.
   Peak memory: two engines and two test universes, ~19 GB, before the test lanes start.

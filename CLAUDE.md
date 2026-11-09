@@ -105,14 +105,19 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   cached in `~/.cache/al-sem/cdo-speed/`): two resident `alsem mcp` servers on CDO, a
   warm-up, then 3 rounds of prove, explain, digest, query effects, tests and impact on a
   new routine each. It fails when the median CPU ratio passes 1.20 (wall 1.30), the
-  model build or test universe passes 1.30 in CPU, or peak memory passes 1.10. It runs
-  ALONE before the test lanes (their load is noise to it); never run two gates or a
-  build beside it if you can help it. `--no-speed` skips it and prints that speed was
-  not checked; a tree that lands without it must say why. Measured 2026-11-09 (Linux,
-  22 cores): the timing 219-301 s (505 s with every core busy elsewhere); round 4's
+  model build or test universe passes 1.30 in CPU or 1.60 in wall time (they are the
+  parallel parts, so a change that loses parallelism shows there), or peak memory passes
+  1.10. It runs ALONE before the test lanes (their load is noise to it); never run two
+  gates or a build beside it if you can help it. **It is Linux only (it reads `/proc`):
+  on the Windows machine every `cdo-gate` run FAILS unless given `--no-speed`.**
+  `--no-speed` skips it and prints that speed was not checked; a tree that lands without
+  it must say why. On master with no edits it times HEAD against HEAD's first parent
+  (the merge base would be HEAD itself). Measured 2026-11-09 (Linux,
+  22 cores): the timing 178-301 s (505 s with every core busy elsewhere); round 4's
   slowdown fails it at x2.1, master against itself passes at x0.94-1.06. The whole
   gate with it: ~1,300 s on 2026-11-09 (test build 243 s, speed 203 s, then the lanes
-  853 s), against 834-910 s without it.
+  853 s), and ~935 s on a second run the same day with the test build fresh (speed 178 s,
+  the lanes 756 s), against 834-910 s without it.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
   `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the

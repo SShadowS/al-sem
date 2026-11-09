@@ -20,7 +20,8 @@
 # merge base's (cached per commit), on a fixed set of resident CDO calls,
 # judged on CPU time, wall time and peak memory. It runs alone, before the
 # test lanes. `--no-speed` (or CDO_GATE_NO_SPEED=1) skips it and says so
-# loudly. Measured cost on 2026-11-09 (Linux, 22 cores): its timing 219-301 s
+# loudly. It reads /proc, so it is Linux only: on Windows the gate FAILS
+# unless given --no-speed. Measured cost on 2026-11-09 (Linux, 22 cores): its timing 178-301 s
 # (505 s with every core busy elsewhere), plus the working tree's release-fast
 # build (incremental) and, once per master commit, the base build (~245 s,
 # beside the test build).
@@ -57,17 +58,37 @@ set -uo pipefail
 # timing is impossible, and the gate then says so loudly at the start and in
 # its summary. Never skip it on a tree about to land without saying why.
 speed=1
-if [[ "${1:-}" == "--no-speed" ]]; then
-    speed=0
-    shift
-fi
+ws_arg=""
+usage() {
+    echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
+}
+# `--no-speed` in any position; anything else unknown stops the gate (a flag it
+# silently ignored would run a different gate than the caller asked for).
+for arg in "$@"; do
+    case "$arg" in
+        --no-speed) speed=0 ;;
+        -*)
+            echo "cdo-gate: error: unknown option: $arg" >&2
+            usage
+            exit 2
+            ;;
+        *)
+            if [[ -n "$ws_arg" ]]; then
+                echo "cdo-gate: error: more than one workspace given: $ws_arg, $arg" >&2
+                usage
+                exit 2
+            fi
+            ws_arg="$arg"
+            ;;
+    esac
+done
 [[ "${CDO_GATE_NO_SPEED:-}" == "1" ]] && speed=0
 
-ws="${1:-${CDO_WS:-}}"
+ws="${ws_arg:-${CDO_WS:-}}"
 
 if [[ -z "$ws" ]]; then
     echo "cdo-gate: error: no workspace given and CDO_WS is unset" >&2
-    echo "usage: scripts/cdo-gate <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
+    usage
     exit 2
 fi
 
@@ -155,16 +176,24 @@ else
     # base commit's from its cache) are built beside the test build. The
     # working tree's waits for the test build's lock on the target folder; the
     # base's has a folder of its own.
+    # In a process group of its own (`set -m` for this one job), so stopping it
+    # stops cdo-speed and its cargo builds too, not only the subshell: an
+    # orphaned base build would hold the cache lock for minutes.
+    set -m
     run_phase speed_build "$(dirname "$0")/cdo-speed" "$ws" --build-only \
         --out "$logs/speed" &
     speed_build=$!
+    set +m
+    stop_speed_build() { kill -- -"$speed_build" 2>/dev/null; }
+    # Its own group does not get the terminal's Ctrl-C: pass it on.
+    trap 'stop_speed_build; exit 130' INT TERM
 fi
 if ! run_phase build cargo test "${profile[@]}" --no-run \
     --test program_resolve_harness --test lsp --test l4_summary_differential \
     --test cli -p al-sem --lib; then
     tail -n 60 "$logs/build.log"
     echo "cdo-gate: FAIL (the build; full log: $logs/build.log)"
-    [[ "$speed" -eq 1 ]] && kill "$speed_build" 2>/dev/null
+    [[ "$speed" -eq 1 ]] && stop_speed_build
     exit 1
 fi
 

@@ -8,7 +8,10 @@ Usage:
 It compares two `alsem` binaries, both built with the `release-fast` profile, on
 a fixed set of CDO calls:
   head: the working tree (built in place, like every other gate), or `--head REV`;
-  base: `--base REV`, by default the merge base of HEAD and `master`.
+  base: `--base REV`, by default the merge base of HEAD and `master`. When that
+    is HEAD itself and the tree has no edits (a run on master), the default is
+    HEAD's first parent instead, and the log says so: timing a tree against
+    itself checks nothing.
 A base binary is built from `git archive REV` and cached by commit under
 `${ALSEM_SPEED_CACHE:-~/.cache/al-sem/cdo-speed}/bin/<sha>/`, so each master
 commit is built once per machine, whatever worktree asks for it.
@@ -22,29 +25,38 @@ alive for the whole run, asked the same calls in turn:
     (a resident answer is kept, so asking the same routine again measures
     nothing), asked prove may-commit, explain, digest, query effects, tests and
     impact. Round 1 is RunReportID, the routine of the round-4 slowdown.
-The side order flips every round, so neither side always goes first.
+The side order flips every round, and in the warm-up every call, so neither side
+always goes first.
 
 What is judged, per call, head over base:
   rounds: CPU time (user + system of the server and its engine children, from
     /proc) and wall time; the median of the per-round ratios must be at most
     CPU_LIMIT and WALL_LIMIT. The round total (every call of a round summed) is
-    judged the same way;
-  warm-up: one sample each, so CPU time only, at most WARM_CPU_LIMIT (wall time
-    of a single sample swings too far on a loaded machine), and only the calls
-    of at least WARM_MIN_SECONDS (the model build and the test universe);
-  peak memory: the sum of every server process's VmHWM at the end, at most
-    MEM_LIMIT.
+    judged the same way. These calls run on about one thread (CPU time is about
+    their wall time), so their wall limit says little about lost parallelism;
+  warm-up: one sample each, only the calls of at least WARM_MIN_SECONDS (the
+    model build and the test universe). CPU time at most WARM_CPU_LIMIT, and
+    wall time at most WARM_WALL_LIMIT: a wider limit, since a single sample's
+    wall time swings on a loaded machine (up to x1.32 measured). These are the
+    parallel parts (~160 s of CPU in ~36 s of wall for the model build, ~135 s
+    in ~18 s for the test universe), so their wall time is where a change that
+    loses parallelism (same CPU, more wall) shows;
+  peak memory: the sum of the peak RSS (VmHWM) of every server process, each
+    read after every call (an engine child that exits mid-run still counts if
+    it was alive at any read; one that lives and dies inside a single call does
+    not), at most MEM_LIMIT.
 A call whose base CPU time is under MIN_SECONDS is judged in the round total only
 (a ratio of two tiny times is mostly noise). The CHANGELOG's engine-limits wave 1,
 L14 entry gives the measured noise behind each limit. When the rounds disagree
 about a call (some ratios over its limit, some not), more rounds run, up to
 --max-rounds; then the median decides.
 
-Output equality is reported (a branch may change answers on purpose), never
-judged here: the CDO goldens do that.
+Output equality (the answer's hash and the tool's exit code) is reported (a
+branch may change answers on purpose), never judged here: the CDO goldens do
+that. A call that exits non-zero is still timed.
 
-Exit: 0 pass, 1 fail (slower or larger), 2 cannot run (usage, build, a call that
-failed). Linux only (/proc).
+Exit: 0 pass, 1 fail (slower or larger), 2 cannot run (usage, build, an MCP
+request that failed or timed out). Linux only (/proc).
 """
 import argparse
 import fcntl
@@ -62,8 +74,13 @@ import time
 # The limits, head over base. See the module doc.
 CPU_LIMIT = 1.20
 WALL_LIMIT = 1.30
-# The warm-up's calls have one sample each: CPU time only, a wider limit.
+# The warm-up's calls have one sample each: wider limits. Its wall limit is
+# above the worst single sample against the same binary (x1.32: the model build
+# beside a 22-core build; x1.31 beside 22 busy loops) and far below what losing
+# their parallelism costs (on one core, from their CPU over wall: the model
+# build about x4.4, the test universe about x7.5).
 WARM_CPU_LIMIT = 1.30
+WARM_WALL_LIMIT = 1.60
 MEM_LIMIT = 1.10
 MIN_SECONDS = 2.0
 # A warm-up call is judged when its base CPU time is at least this: the model
@@ -143,6 +160,24 @@ def build_working_tree(repo, logf):
         raise SystemExit(f"cdo-speed: the working tree's build failed (log: {logf.name})")
     log(f"  built in {time.monotonic() - t0:.0f} s")
     return os.path.join(target_dir(repo), "release-fast", "alsem")
+
+
+def default_base(repo, head_rev):
+    """The merge base of HEAD and master; on master itself with no edits (a
+    scheduled run, or the post-merge check at the merge commit) that is the tree
+    being timed, so HEAD's first parent instead."""
+    base = git(repo, "merge-base", "HEAD", "master")
+    if head_rev is not None or base != git(repo, "rev-parse", "HEAD"):
+        return base
+    if git(repo, "status", "--porcelain", "--untracked-files=no"):
+        log("the merge base is HEAD; timing the edits against HEAD")
+        return base
+    parent = git(repo, "rev-parse", "--verify", "HEAD^1")
+    log("****************************************************************")
+    log("**  HEAD is the merge base and the tree has no edits: timing    **")
+    log(f"**  HEAD against its first parent {parent[:10]} instead.       **")
+    log("****************************************************************")
+    return parent
 
 
 def cache_root():
@@ -258,6 +293,8 @@ class Server:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, env=child_env())
         self.buf = b""
         self.next_id = 0
+        # pid -> the highest VmHWM read for it (kept after the process exits).
+        self.hwm_kib = {}
         r = self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                         "clientInfo": {"name": "cdo-speed", "version": "1"}})
         if "result" not in r:
@@ -304,6 +341,7 @@ class Server:
         r = self.request("tools/call", {"name": tool, "arguments": args})
         wall = time.monotonic() - t0
         cpu = self.cpu() - c0
+        self.sample_hwm()
         if "error" in r:
             raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
         env = r["result"].get("structuredContent", {})
@@ -316,10 +354,19 @@ class Server:
             sha = hashlib.sha256(text.encode()).hexdigest()[:16]
         return wall, cpu, sha, env.get("exitCode", -1)
 
+    def sample_hwm(self):
+        """Read the VmHWM of the server and every live child. Called after each
+        call, so a child that exits later in the run still counts."""
+        for p in [self.p.pid, *descendants(self.p.pid)]:
+            kib = proc_status_kib(p, "VmHWM")
+            if kib > self.hwm_kib.get(p, 0):
+                self.hwm_kib[p] = kib
+
     def peak_mib(self):
-        """The server's and its children's peak RSS (VmHWM), summed."""
-        return sum(proc_status_kib(p, "VmHWM")
-                   for p in [self.p.pid, *descendants(self.p.pid)]) / 1024
+        """Every server process's peak RSS (VmHWM), summed, including the
+        processes that exited during the run."""
+        self.sample_hwm()
+        return sum(self.hwm_kib.values()) / 1024
 
     def close(self):
         try:
@@ -342,14 +389,19 @@ def run_round(rnd, servers, records):
     else:
         calls = calls_for(ROUND_ROUTINES[rnd - 1])
         log(f"round {rnd}: {ROUND_ROUTINES[rnd - 1]}")
-    for cid, tool, args in calls:
-        for side in order:
+    for i, (cid, tool, args) in enumerate(calls):
+        # The warm-up has one sample per call: flip the order per call there,
+        # so going second (measured: up to x1.13 on the test universe's CPU)
+        # does not always fall on the same side.
+        side_order = order if rnd != 0 or i % 2 == 0 else order[::-1]
+        for side in side_order:
             wall, cpu, sha, code = servers[side].call(tool, args)
-            if code != 0:
-                raise SystemExit(f"cdo-speed: {cid} on {side} (round {rnd}) exited {code}; "
-                                 f"its stderr is in the server's output folder")
-            records.append(dict(call=cid, side=side, round=rnd, wall=wall, cpu=cpu, sha=sha))
-            log(f"  r{rnd} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s")
+            # A non-zero exit is an answer like any other (a branch may change
+            # a verdict on purpose): recorded with the output, still timed.
+            records.append(dict(call=cid, side=side, round=rnd, wall=wall, cpu=cpu,
+                                sha=f"{sha}/exit{code}"))
+            exit_note = f"  exit {code}" if code != 0 else ""
+            log(f"  r{rnd} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s{exit_note}")
 
 
 def judge(records):
@@ -426,7 +478,7 @@ def main():
         if args.base_exe:
             base_rev, base_exe, base_sha = args.base_exe, args.base_exe, "given-binary"
         else:
-            base_rev = args.base or git(repo, "merge-base", "HEAD", "master")
+            base_rev = args.base or default_base(repo, args.head)
             base_exe, base_sha = cached_binary(repo, base_rev, logf)
         if args.head_exe:
             head_exe, head_label = args.head_exe, args.head_exe
@@ -482,7 +534,8 @@ def main():
     warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
     failed = []
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
-        f"median ratio, warm-up cpu {WARM_CPU_LIMIT}, memory {MEM_LIMIT}; a call is judged "
+        f"median ratio, warm-up cpu {WARM_CPU_LIMIT} and wall {WARM_WALL_LIMIT}, memory "
+        f"{MEM_LIMIT}; a call is judged "
         f"alone when its base CPU is at least {MIN_SECONDS} s):")
     for row in warm_rows:
         row["warm"] = True
@@ -495,7 +548,7 @@ def main():
         if row["call"] in noisy:
             note += "  (rounds disagree: the median decides)"
         if not row["same_output"] and row["call"] != "round-total":
-            note += "  [outputs differ]"
+            note += "  [outputs or exit codes differ]"
         log(f"  {row['call']:<14} cpu {c['base']:7.2f} -> {c['head']:7.2f} s x{c['ratio']:.3f}"
             f"   wall {w['base']:7.2f} -> {w['head']:7.2f} s x{w['ratio']:.3f}"
             f"   spread {c['spread']:.2f}/{w['spread']:.2f}{note}")
@@ -505,6 +558,9 @@ def main():
             if c["ratio"] > WARM_CPU_LIMIT:
                 failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} "
                               f"(limit {WARM_CPU_LIMIT}, one sample)")
+            if w["ratio"] > WARM_WALL_LIMIT:
+                failed.append(f"{row['call']}: wall time x{w['ratio']:.2f} "
+                              f"(limit {WARM_WALL_LIMIT}, one sample; lost parallelism?)")
             continue
         if c["ratio"] > CPU_LIMIT:
             failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} (limit {CPU_LIMIT})")
@@ -519,7 +575,8 @@ def main():
     with open(os.path.join(outdir, "speed.json"), "w") as f:
         json.dump(dict(base=base_sha, head=head_label, workspace=ws, rounds=rnd,
                        limits=dict(cpu=CPU_LIMIT, wall=WALL_LIMIT, mem=MEM_LIMIT,
-                                   warm_cpu=WARM_CPU_LIMIT, min_seconds=MIN_SECONDS),
+                                   warm_cpu=WARM_CPU_LIMIT, warm_wall=WARM_WALL_LIMIT,
+                                   min_seconds=MIN_SECONDS, warm_min_seconds=WARM_MIN_SECONDS),
                        build_s=t_built - t_start, timing_s=elapsed - (t_built - t_start),
                        peaks_mib=peaks, warm_rows=warm_rows, rows=rows, records=records,
                        failed=failed, loadavg_start=load0, loadavg_end=os.getloadavg()[0]),
