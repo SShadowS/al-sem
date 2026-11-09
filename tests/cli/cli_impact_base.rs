@@ -780,13 +780,26 @@ pub(crate) fn cdo_impact_base_ratchets() {
         return;
     };
     let cache = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
-        .arg("impact")
-        .arg(&ws)
-        .args(["--base", "bc3ccb18~5", "--no-tests", "--format", "json"])
-        .env("AL_SEM_IMPACT_BASE_CACHE", cache.path())
-        .output()
-        .unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("impact")
+            .arg(&ws)
+            .args(args)
+            .env("AL_SEM_IMPACT_BASE_CACHE", cache.path())
+            .output()
+            .unwrap()
+    };
+    // The two one-shot calls run at once (2026-11-09, cdo-gate's longest
+    // test; measured alone, cdo profile: the JSON 428 s, then the human
+    // answer 275 s reading the base the first wrote to the cache, 703 s in
+    // a row). Both now build the base and write the same cache entry (the
+    // cache's "two writers of one key" case); `b6_the_cache_hits_misses_and_
+    // rebuilds` pins the cache's hits. Nothing here asserted a hit.
+    let (out, human_out) = std::thread::scope(|s| {
+        let json = s.spawn(|| run(&["--base", "bc3ccb18~5", "--no-tests", "--format", "json"]));
+        let human = s.spawn(|| run(&["--base", "bc3ccb18~5"]));
+        (crate::joined(json), crate::joined(human))
+    });
     let v: Value = serde_json::from_slice(&out.stdout)
         .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
     assert!(v["base"]["notComputed"].is_null(), "{:#}", v["base"]);
@@ -874,13 +887,7 @@ pub(crate) fn cdo_impact_base_ratchets() {
     // The default human answer (tests on, as MCP's) fits the MCP tool's
     // 40 KiB inline cap, folded: the routines it hides counted.
     let roots = v["roots"].as_array().unwrap().len();
-    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
-        .arg("impact")
-        .arg(&ws)
-        .args(["--base", "bc3ccb18~5"])
-        .env("AL_SEM_IMPACT_BASE_CACHE", cache.path())
-        .output()
-        .unwrap();
+    let out = human_out;
     let human = String::from_utf8(out.stdout).unwrap();
     assert!(out.status.success(), "{human}");
     assert!(human.len() <= 40 * 1024, "{} bytes", human.len());

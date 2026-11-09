@@ -34,6 +34,10 @@ pub mod capped_io;
 #[cfg(test)]
 #[path = "../tests/common/cdo.rs"]
 pub(crate) mod cdo;
+/// `scripts/cdo-gate`'s coverage guard, the static half: every test reads
+/// the CDO workspace through [`cdo`] — see the module doc.
+#[cfg(test)]
+mod cdo_gate_coverage_tests;
 /// No-op phase marks for the out-of-tree byte-census probe — see the module doc.
 pub mod census_hook;
 pub mod config;

@@ -12,7 +12,29 @@
 #   CDO_WS=/path/to/workspace scripts/cdo-gate
 #
 # A positional argument takes precedence over the CDO_WS env var when both
-# are given.
+# are given. `CDO_GATE_SERIAL=1` runs the phases one after another (for a
+# machine short of memory, or to time one phase alone).
+#
+# ⟨2026-11-09, engine limits wave 1⟩ How it runs: every test target is built
+# ONCE (`cargo test --no-run`), then the phases run in two lanes at once:
+#   lane 1: cli output_cdo (the longest phase);
+#   lane 2: program_resolve_harness, lsp, l4_summary_differential, then the
+#           lib's CDO tests, one after another.
+# Each phase writes its own log (the folder is printed at the start and the
+# end); the summary names each phase's result, wall time and test counts, and
+# prints the failures of a failed phase. Any failed phase (or a failed build)
+# fails the gate.
+#
+# Measured on Linux (22 cores, 93 GB), `cdo` profile, warm build, on a machine
+# other agents were also using (load average 10-110):
+#   before (phases in a row, whole --lib):  1184 s
+#     program_resolve_harness 45 s, lsp 8 s, l4_summary_differential 18 s,
+#     cli output_cdo 808 s, --lib 303 s (3,214 tests)
+#   after: see CHANGELOG ("engine limits wave 1, cdo-gate").
+# output_cdo was long because its impact ratchets ran their one-shot `alsem
+# impact` calls one after another (603 s and 703 s alone); they now run at
+# once. The lib's CDO tests are 15 of its 3,214: the rest read no CDO_WS and
+# run in every task gate (`scripts/ci-steps task`/`test`), identically.
 set -uo pipefail
 
 ws="${1:-${CDO_WS:-}}"
@@ -38,108 +60,180 @@ unset $(git rev-parse --local-env-vars 2>/dev/null)
 
 echo "cdo-gate: CDO_WS=$CDO_WS ENFORCE_CDO_WS=1"
 
-# ⟨2026-10-04, test tiers⟩ Built with `release-fast` (thin LTO, 4 codegen units),
-# not full-LTO `release`. This gate checks BEHAVIOUR — counts, digests, zero
-# ratchets — and both profiles are optimized with debug assertions off, so they
-# run the same code paths; full LTO only bought a much slower link of every test
-# executable. Timing claims still need full `release` (`perf_bounds`, benches, the
-# SHA-pinned north-star measure — CLAUDE.md "Build Commands").
-# The `cdo` profile (no LTO, incremental) rebuilds the lib tests in ~46 s after an
-# edit, against ~133 s for `release-fast` (measured 2026-10-07).
+# ⟨2026-10-04, test tiers⟩ The `cdo` profile (no LTO, incremental): this gate
+# checks BEHAVIOUR — counts, digests, zero ratchets — and every optimized
+# profile runs the same code paths; full LTO only bought a much slower link of
+# every test executable. Timing claims still need full `release` (`perf_bounds`,
+# benches, the SHA-pinned north-star measure — CLAUDE.md "Build Commands").
 profile=(--profile cdo)
 # cargo test, not nextest: measured 2026-10-18, nextest took 97-112 s against
 # 72-84 s here (peak ~3.2 GB both). nextest runs one process per test, and
-# program_resolve_harness rebuilds its shared CDO context (`CDO_SHARED`) in each.
+# program_resolve_harness rebuilds its shared CDO context (`CDO_SHARED`) in each;
+# output_cdo's tests share one MCP server's answers per process the same way.
 
 # A zero RLIMIT_RTTIME makes the kernel SIGKILL test processes at random.
 "$(dirname "$0")/require-rttime" || exit 1
 
-status=0
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+logs_root="${CARGO_TARGET_DIR:-$repo/target}/cdo-gate-logs"
+mkdir -p "$logs_root" || exit 1
+# Runs older than a week go; each run has its own folder (two gates at once
+# in one checkout do not mix their logs).
+find "$logs_root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
+logs="$logs_root/$(date +%Y%m%d-%H%M%S)-$$"
+mkdir -p "$logs" || exit 1
+echo "cdo-gate: logs in $logs"
 
-# ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs each:
-# 35.7-37.5 s at 1 thread against 17.3-18.4 s at 4, 201 passed every time. The
-# harness shares ONE CDO context (`CDO_SHARED`, a `OnceLock`), calls no `set_var`, and
-# writes only in regen mode (one golden per test) or into its own tempdir; the `=1`
-# came with the script's first version (9d10a290) with no reason recorded.
-#
-# ⟨2026-10-31, memory⟩ Peak memory of each phase, measured on Linux (22 cores,
-# 93 GB), `cdo` profile, warm, as the summed RSS of the phase's processes
-# (a cgroup's `memory.peak` agreed within 1%), before -> after:
-#   program_resolve_harness   46.9 GB, 123 s -> 8.6 GB, 42 s
-#   lsp (2 tests)              2.6 GB,   7 s -> 2.6 GB,  6 s
-#   l4_summary_differential    1.9 GB,  19 s -> 1.8 GB, 16 s
-#   --lib                     10.4 GB, 131 s -> 9.9 GB, 121 s
-# One test made the 46.9 GB on its own: `cdo_i264_closed_interface_site_census`
-# composed a whole capability snapshot of the cross-app CDO model (45.8 GB, 83 s
-# alone) to read only its call-site rows. It now calls
-# `compose_callsite_resolutions` (3.1 GB, 19 s). The phases run one after
-# another, so the gate's peak is the largest phase: the lib's now, whose CDO
-# tests each build their own model (largest alone: capability_cone's
-# `derived_only_matches_raw_fold_on_cdo`, 4.2 GB, 82 s).
-echo "cdo-gate: running program_resolve_harness (--test-threads=4)..."
-if ! cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=4; then
-    status=1
+# A phase: its command's output goes to `<name>.log`; `<name>.status` holds
+# the exit status and the wall seconds when it ends. Never through a pipe, so
+# the status is the command's own.
+run_phase() {
+    local name="$1"
+    shift
+    local start=$SECONDS
+    echo "cdo-gate: [$name] started"
+    "$@" > "$logs/$name.log" 2>&1
+    local rc=$?
+    echo "$rc $((SECONDS - start))" > "$logs/$name.status"
+    if [[ "$rc" -eq 0 ]]; then
+        echo "cdo-gate: [$name] ok ($((SECONDS - start)) s)"
+    else
+        echo "cdo-gate: [$name] FAILED, exit $rc ($((SECONDS - start)) s)"
+    fi
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Build every phase's test target once. The phases' own `cargo test` calls
+# then only check freshness, so two of them can run at once.
+# ---------------------------------------------------------------------------
+if ! run_phase build cargo test "${profile[@]}" --no-run \
+    --test program_resolve_harness --test lsp --test l4_summary_differential \
+    --test cli -p al-sem --lib; then
+    tail -n 60 "$logs/build.log"
+    echo "cdo-gate: FAIL (the build; full log: $logs/build.log)"
+    exit 1
 fi
 
-echo "cdo-gate: running program_graph + snapshot_robustness..."
-if ! cargo test "${profile[@]}" --test lsp -- program_graph:: snapshot_robustness::; then
-    status=1
-fi
+# ---------------------------------------------------------------------------
+# The phases. tests/common/cdo.rs `on_the_cdo_gate` states the same targets
+# and filters: every test that reads CDO_WS (through the shared gate, the only
+# way: `cdo_gate_coverage_tests`) must be in one, or the task gate fails.
+# Change the two together.
+# ---------------------------------------------------------------------------
+
+# ⟨MCP output plan, item T⟩ The output invariants on three CDO routines and
+# the CDO ratchets of impact, tests, prove and the round-2 sizes:
+# `tests/cli/output_cdo.rs`, the CDO-gated member of the `cli` umbrella. Its
+# MCP answers come off ONE `alsem mcp` server per process (one resident
+# build), so its tests share a process: plain `cargo test`, filtered to the
+# member.
+phase_output_cdo() {
+    run_phase output_cdo cargo test "${profile[@]}" --test cli output_cdo::
+}
+
+# ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs
+# each: 35.7-37.5 s at 1 thread against 17.3-18.4 s at 4. The harness shares ONE
+# CDO context (`CDO_SHARED`, a `OnceLock`), calls no `set_var`, and writes only
+# in regen mode (one golden per test) or into its own tempdir.
+# ⟨2026-10-31, memory⟩ `cdo_i264_closed_interface_site_census` once composed a
+# whole capability snapshot of the cross-app CDO model (45.8 GB) to read only
+# its call-site rows; it calls `compose_callsite_resolutions` (3.1 GB) since.
+phase_harness() {
+    run_phase program_resolve_harness \
+        cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=4
+}
+
+phase_lsp() {
+    run_phase lsp cargo test "${profile[@]}" --test lsp -- program_graph:: snapshot_robustness::
+}
 
 # ⟨task-3 fix wave, review I-2⟩ The CDO whole-program L4 frozen digest
-# (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`) is a CDO-gated ratchet
-# exactly like the two above, but it was on NO runner: this script never listed
-# `--test l4_summary_differential`, so the review's prediction that "the next
-# cdo-gate run will fail on the frozen baseline" was wrong for a reason worse than
-# being wrong — the gate could not fail, because it never ran. It runs here now, so
-# ENFORCE_CDO_WS=1 applies to it too (a missing CDO_WS panics instead of skipping).
-# The fixture members of the same target are cheap and run alongside it.
-echo "cdo-gate: running l4_summary_differential (CDO whole-program frozen digest)..."
-if ! cargo test "${profile[@]}" --test l4_summary_differential; then
-    status=1
-fi
+# (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`) is a CDO-gated
+# ratchet; this script once never listed `--test l4_summary_differential`, so
+# the gate could not fail on it. The target's fixture members are cheap and run
+# alongside it.
+phase_l4() {
+    run_phase l4_summary_differential cargo test "${profile[@]}" --test l4_summary_differential
+}
 
-# ⟨MCP output plan, item T⟩ The output invariants on three CDO routines (anchor
-# source-check, `lineBase`, ...): `tests/cli/output_cdo.rs`, the one CDO-gated
-# member of the `cli` umbrella. It reads every answer off ONE `alsem mcp` server
-# (one resident build), so its tests share a process: plain `cargo test`, filtered
-# to the member.
-echo "cdo-gate: running cli output_cdo (output invariants on CDO)..."
-if ! cargo test "${profile[@]}" --test cli output_cdo::; then
-    status=1
-fi
+# ⟨2026-09-14⟩ CDO-gated tests also live in `--lib`, and this script once ran
+# only integration targets, so they were on NO runner (two real failures hid
+# there: a stale CDO dedup count, and a grammar cache key — the latter not
+# CDO-gated at all, which is why the whole lib ran here until 2026-11-09).
+# ⟨2026-11-09⟩ Since then the debug task gate (`scripts/ci-steps task`) runs the
+# WHOLE lib on every task, so the tests that read no CDO_WS run there with the
+# same result; this phase runs only the lib tests whose path holds `cdo`. A CDO
+# test outside that filter cannot hide: the shared gate (`crate::cdo::
+# cdo_ws_or_enforce`) panics in the task gate for any test the filter misses,
+# and `cdo_ws_is_read_only_through_the_gate` refuses a test that reads CDO_WS
+# around it. 6 threads: the CDO tests each build their own model (largest
+# alone ~4.2 GB); measured alone, cdo profile, each test by itself (nextest
+# -j 1): the longest 137 s (`cdo_crossing_census`), 594 s summed.
+phase_lib() {
+    run_phase lib_cdo cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads=6
+}
 
-# ⟨2026-09-14⟩ The SAME defect as the l4 digest above, found the same way and
-# twice in one day: CDO-gated tests also live in `--lib`, and this script ran
-# only integration targets, so they were on NO runner here either.
-#
-# Two real failures hid behind that gap on 2026-09-14:
-#   - `cache_version_grammar_tracks_the_linked_grammar` (src/engine/gate/
-#     cache_prune.rs) during the tree-sitter-al v4.4.0 bump — a stale cache key
-#     that would have let caches minted under the old grammar be reused under the
-#     new one;
-#   - `cdo_dedup_names_the_real_dropped_duplicates` (src/snapshot/snapshot.rs)
-#     during the CDO baseline pin — a duplicate-GUID count describing the OLD
-#     workspace's layout.
-# Both arcs ran cdo-gate AND check-goldens, both went green, both merged, and
-# both left `master` red for `cargo test` on any machine with CDO_WS set, while
-# GitHub CI stayed green because CI has no CDO_WS at all. Neither runner runs
-# `--lib`: `check-goldens` drives the nine golden-bearing integration targets,
-# and this script drove three more.
-#
-# The whole lib is run, not a `cdo_`-filtered subset: the grammar cache-key test
-# is not CDO-gated at all, and filtering to the tests we already know about is
-# how a gate ends up blind to the next one. ENFORCE_CDO_WS=1 applies here too,
-# so a CDO-gated lib test cannot silently skip.
-echo "cdo-gate: running the library test suite (--lib)..."
-if ! cargo test "${profile[@]}" -p al-sem --lib; then
-    status=1
-fi
+lane2() {
+    phase_harness
+    phase_lsp
+    phase_l4
+    phase_lib
+}
 
-if [[ "$status" -eq 0 ]]; then
-    echo "cdo-gate: PASS"
+if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
+    lane2
+    phase_output_cdo
 else
+    # A Ctrl-C or kill stops the background lane too.
+    trap 'kill 0' INT TERM
+    phase_output_cdo &
+    lane1=$!
+    lane2
+    wait "$lane1"
+fi
+
+# ---------------------------------------------------------------------------
+# The summary: every phase's result from its status file (a missing one is a
+# failure), its `test result:` lines, and a failed phase's failures.
+# ---------------------------------------------------------------------------
+phases=(program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo)
+# A phase's exit status and wall seconds; "missing -" when it never ended.
+phase_result() {
+    if [[ -f "$logs/$1.status" ]]; then
+        cat "$logs/$1.status"
+    else
+        echo "missing -"
+    fi
+}
+status=0
+echo "cdo-gate: summary (wall seconds; logs in $logs)"
+for name in "${phases[@]}"; do
+    read -r rc secs <<< "$(phase_result "$name")"
+    if [[ "$rc" == "0" ]]; then
+        word="ok"
+    else
+        word="FAILED ($rc)"
+        status=1
+    fi
+    counts="$(grep -h '^test result:' "$logs/$name.log" 2>/dev/null | sed 's/^test result: //' | paste -sd '|' -)"
+    printf 'cdo-gate:   %-26s %-12s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
+done
+
+if [[ "$status" -ne 0 ]]; then
+    for name in "${phases[@]}"; do
+        read -r rc _ <<< "$(phase_result "$name")"
+        [[ "$rc" == "0" ]] && continue
+        echo "cdo-gate: ---- $name ($logs/$name.log) ----"
+        if grep -q '^failures:' "$logs/$name.log" 2>/dev/null; then
+            sed -n '/^failures:/,$p' "$logs/$name.log"
+        else
+            tail -n 60 "$logs/$name.log" 2>/dev/null
+        fi
+    done
     echo "cdo-gate: FAIL"
+else
+    echo "cdo-gate: PASS"
 fi
 
 exit "$status"

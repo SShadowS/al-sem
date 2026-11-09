@@ -554,7 +554,27 @@ pub(crate) fn cdo_selection_ratchets() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
-    let (human, code) = tests(&ws, &["--routine", "CDO E-Mail Handler::RunReportID"]);
+    // The three one-shot calls run at once (2026-11-09; ~28 s each alone).
+    let ((human, code), ulu, both) = std::thread::scope(|s| {
+        let human = s.spawn(|| tests(&ws, &["--routine", "CDO E-Mail Handler::RunReportID"]));
+        let ulu = s.spawn(|| json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]));
+        let both = s.spawn(|| {
+            json(
+                &ws,
+                &[
+                    "--routine",
+                    "CDO E-Mail Handler::RunReportID",
+                    "--routine",
+                    "CDO Issue Document::IssueReminder",
+                ],
+            )
+        });
+        (
+            crate::joined(human),
+            crate::joined(ulu),
+            crate::joined(both),
+        )
+    });
     assert_eq!(code, 0, "{human}");
     assert!(
         human.lines().any(|l| l.starts_with("[via-dependency] 376 tests in ")
@@ -562,7 +582,7 @@ pub(crate) fn cdo_selection_ratchets() {
             && l.ends_with("; --tier dependency lists them")),
         "{human}"
     );
-    let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);
+    let v = ulu;
     let names: Vec<&str> = v["runFirst"]
         .as_array()
         .unwrap()
@@ -582,15 +602,7 @@ pub(crate) fn cdo_selection_ratchets() {
     ] {
         assert!(names.iter().any(|x| x.starts_with(n)), "{n}: {names:?}");
     }
-    let v = json(
-        &ws,
-        &[
-            "--routine",
-            "CDO E-Mail Handler::RunReportID",
-            "--routine",
-            "CDO Issue Document::IssueReminder",
-        ],
-    );
+    let v = both;
     let local: Vec<&Value> = v["runFirst"].as_array().unwrap().iter().collect();
     assert_eq!(local.len(), 68);
     let codeunits: std::collections::BTreeSet<&str> = local

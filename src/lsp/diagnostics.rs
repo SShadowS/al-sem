@@ -1511,10 +1511,7 @@ mod tests {
     fn rung1_diagnostics_wall_clock_on_cdo() {
         use crate::lsp::updater::{ChangeEvent, Updater};
 
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             eprintln!("rung1_diagnostics_wall_clock_on_cdo: CDO_WS unset or missing, skipping");
             return;
         };
