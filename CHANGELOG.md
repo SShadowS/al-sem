@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 0, B8 second half)
+
+- **An MCP answer that may be stale no longer says plainly `served: fresh`.** A file
+  rewritten with the same size and modification time is not seen by the default check
+  until a `verify` (the context-server spec's stated residual, §5.3), but the answer's
+  header said `served: fresh`; only `alsem_status` named the residual. The header's
+  `freshness` block is now `{requested, served, residual}`: `served` is
+  `fresh-by-size-and-time`, `verified` (every input hashed) or `latest-built` (stale),
+  and `residual` says what that check cannot see. `alsem_tests` and `alsem_impact`, which
+  run in parts, said `stale: false` and `served: fresh` whatever their parts said; they
+  now take `stale`, the changed paths and `served` from their parts.
+- **explain and digest no longer repeat the same dependency routine names once per
+  place.** A kind line (`errors at N places`, `background tasks at N places`, …) listed
+  each dependency call as `TYPE beyond <routines>`, so calls into the same routines from
+  many sites printed the same names many times, and never the sites. On CDO
+  `CDO Update Handled Sales::SetHandled` (an event with five subscribers, raised at 10
+  sites) that was about 5 KB. Calls into the same routines are now one item, named
+  once, with their place count and the call sites (`… beyond <routines> (10 places,
+  entered at …)`). Every place and every count is kept; a folded group counts all of
+  its places in `+N places`. CDO's `IssueReminder` explain golden is expected to move
+  (`HTTP beyond Codeunit "CSC Core"::IsAppActiveOrAskToActivate` appears twice there).
+- **Test-app discovery no longer stops at 64 `app.json` files for a workspace inside a
+  repository with fixture folders.** The walk from the git top level entered folders
+  marked as project collections (`.al-sem-projects`, such as this repository's
+  `tests/r0-corpus/`) and nested repositories, read 64 unrelated `app.json` files and
+  answered "test app discovery incomplete" (seen for workspaces under `target/tmp`).
+  It now does not enter a folder holding `.al-sem-projects` or its own `.git` unless the
+  workspace is inside it; a folder that is itself an app is still read first, so a
+  test app that is its own repository is still found. The 64 cap stays as a safety net.
+
 ### Fixed (performance: finding the keeps an assumption record needs)
 
 - **Naming every publisher a ruled-out row needs no longer reruns the whole search per

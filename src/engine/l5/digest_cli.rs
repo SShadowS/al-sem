@@ -6182,6 +6182,69 @@ mod tests {
         );
     }
 
+    /// Engine limits wave 0 (B8): crossings into the same dependency routines
+    /// print as one item with their places counted, and a folded group hides
+    /// all of its places. Hand-stated: eight crossings, each into its own
+    /// routine (`dep:B` … `dep:I`), and three into `dep:Z` (sorted last, so
+    /// the fold hides it). Expected by hand: 11 places; 9 items, 6 shown;
+    /// hidden `dep:H`, `dep:I` and the `dep:Z` group = 1 + 1 + 3 = 5 places.
+    /// With `detail` the group lists its three sites.
+    ///
+    /// DISCRIMINATION (2026-11-09): counting the hidden ITEMS (`hidden` as
+    /// `places.len() - shown`, the old `fold` count) prints `+3 places` and
+    /// fails at "a folded group hides all its places"; restored, passes.
+    #[test]
+    fn grouped_crossings_keep_every_place_and_count() {
+        use crate::engine::l5::routine_rollup::{RenderOpts, RollupCx, RoutineRollup, kind_lines};
+        let mut rows: Vec<DigestEffectFull> = ["B", "C", "D", "E", "F", "G", "H", "I"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                crossing_row(
+                    "BACKGROUND_TASK",
+                    &format!("cs:{t}"),
+                    &[&format!("dep:{t}")],
+                    ("ws:src/A.al", i as u32),
+                )
+            })
+            .collect();
+        for (i, id) in ["cs:z1", "cs:z2", "cs:z3"].iter().enumerate() {
+            rows.push(crossing_row(
+                "BACKGROUND_TASK",
+                id,
+                &["dep:Z"],
+                ("ws:src/Z.al", 10 + i as u32),
+            ));
+        }
+        let mut e = entry_with(vec![]);
+        e.effects = rows;
+        let model = ws_model();
+        let cx = RollupCx::new(&model, &[]);
+        let r = RoutineRollup::build(&e, &cx);
+        let line = kind_lines(&r, &e, RenderOpts::new(false, None)).join("\n");
+        assert!(
+            line.starts_with("background tasks at 11 places: "),
+            "{line}"
+        );
+        assert_eq!(
+            line.matches("dep:Z").count(),
+            0,
+            "the group is folded: {line}"
+        );
+        assert!(
+            line.ends_with("; … +5 places (--detail lists them)"),
+            "a folded group hides all its places: {line}"
+        );
+        let all = kind_lines(&r, &e, RenderOpts::new(true, None)).join("\n");
+        assert!(
+            all.ends_with(
+                "BACKGROUND_TASK beyond dep:Z (3 places, entered at ws:src/Z.al:11, \
+                 ws:src/Z.al:12, ws:src/Z.al:13)"
+            ),
+            "{all}"
+        );
+    }
+
     /// A model whose primary app is `ws`.
     fn ws_model() -> Model {
         let mut m = crate::engine::l5::test_support::empty_resolved();
