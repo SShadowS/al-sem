@@ -116,6 +116,7 @@ pub mod registry;
 // shape + the R4-F stable projection. Additive — no detector/gate depends on it.
 pub mod snapshot;
 pub mod snapshot_full;
+pub mod table_rights;
 
 // R4-F Stage-3b — the DIGEST witness + effects + occurrence-build path. Reads off
 // the Stage-2 CapabilitySnapshot (snapshot.rs) and produces per-root

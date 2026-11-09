@@ -708,7 +708,11 @@ fn single_app_flag_reaches_prove() {
         // anchor's `role: definition`, F78), then round-2 W4 (schema
         // 2.11.0: `volatile: []`; `objectDisplay` quoted as AL needs, G41),
         // then round-2 W5 (G31: no top-callees line that only repeats the
-        // blocker list; JSON `directCallersAnalyzed` is callers-only).
+        // blocker list; JSON `directCallersAnalyzed` is callers-only), then
+        // engine limits B8 (the call to `Lib.Outer`, which has no evidence in
+        // the snapshot, takes its model call site: the blocker is anchored at
+        // ws:src/Work.al:17, so it counts `1 in this workspace`, and the
+        // explain follow-up that lists workspace gaps is named).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

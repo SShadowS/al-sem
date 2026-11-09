@@ -21,11 +21,30 @@
           "kind": "coverage-incomplete"
         },
         {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/Work.al",
+            "line": 17,
+            "role": "callSite",
+            "sourceKind": "source"
+          },
           "detail": "Lib.Outer in CallChain",
           "kind": "unresolved-callsite"
         }
       ],
-      "followUps": [],
+      "followUps": [
+        {
+          "arguments": {
+            "routines": [
+              "Codeunit \"Ws Work\"::CallChain"
+            ],
+            "singleApp": true
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "lists the workspace ones under gaps"
+        }
+      ],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -39,7 +58,7 @@
         ],
         "unresolvedCallsites": 1,
         "unresolvedInWorkspace": {
-          "notResolved": 0,
+          "notResolved": 1,
           "openWorld": 0
         }
       },
@@ -50,7 +69,7 @@
         ],
         "limits": [],
         "reasons": [
-          "1 call not resolved (0 in this workspace)"
+          "1 call not resolved (1 in this workspace)"
         ],
         "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
         "universe": "single-app"

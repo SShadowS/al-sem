@@ -251,10 +251,37 @@ impl FollowUp {
     }
 
     /// An argument (a string, a bool, a number or an array).
+    ///
+    /// A follow-up that walks the callers' context runs cross-app only, so
+    /// it drops the single-app scope it would otherwise carry from a
+    /// single-app call ([`Self::cross_app_only`]): a follow-up must run as
+    /// printed (engine limits B8).
     #[must_use]
     pub fn arg(mut self, key: &str, value: impl Into<Value>) -> FollowUp {
         self.arguments.insert(key.to_string(), value.into());
+        if self.cross_app_only() {
+            self.arguments.remove("singleApp");
+        }
         self
+    }
+
+    /// Whether the call walks the cross-app program and so takes no
+    /// `--single-app`: `alsem prove` with a callers' context question
+    /// (`callers-intercept-errors`, …) and `alsem explain --callers-context`.
+    /// The CLI refuses both with `--single-app`.
+    #[must_use]
+    pub fn cross_app_only(&self) -> bool {
+        match self.tool {
+            Tool::Prove => self
+                .arguments
+                .get("question")
+                .and_then(Value::as_str)
+                .is_some_and(|q| {
+                    crate::engine::l5::callers_context::CallersQuestion::parse(q).is_some()
+                }),
+            Tool::Explain => self.arguments.get("callersContext") == Some(&Value::Bool(true)),
+            _ => false,
+        }
     }
 
     /// The follow-up as an assumption change.
@@ -459,6 +486,32 @@ mod tests {
         assert_eq!(
             c.text(Surface::Cli),
             "alsem prove A may-commit --closed-world"
+        );
+    }
+
+    /// A callers' context question runs cross-app only: its follow-up from a
+    /// single-app call carries no `singleApp`, on either surface; an
+    /// existing-effects question keeps it.
+    #[test]
+    fn a_callers_question_follow_up_is_cross_app() {
+        let cx = Cx::new(Surface::Cli, true);
+        let f = FollowUp::prove(cx, "A", "callers-intercept-errors", "x");
+        assert_eq!(
+            f.text(Surface::Cli),
+            "alsem prove A callers-intercept-errors"
+        );
+        assert!(f.json()["arguments"].get("singleApp").is_none());
+        let g = FollowUp::prove(cx, "A", "may-commit", "x");
+        assert_eq!(
+            g.text(Surface::Cli),
+            "alsem prove A may-commit --single-app"
+        );
+        let e = FollowUp::new(Tool::Explain, cx, "x")
+            .arg("routine", "A")
+            .arg("callersContext", true);
+        assert_eq!(
+            e.text(Surface::Cli),
+            "alsem explain --callers-context --routine A"
         );
     }
 

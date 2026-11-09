@@ -191,7 +191,7 @@
       ],
       "gapsInDependencies": {
         "dynamicTarget": 0,
-        "notPlaced": 2,
+        "notPlaced": 0,
         "polymorphic": 0,
         "topCallees": [],
         "total": 0
@@ -252,8 +252,8 @@
         },
         "gaps": {
           "dependency": 0,
-          "notPlaced": 2,
-          "workspace": 0
+          "notPlaced": 0,
+          "workspace": 2
         },
         "kinds": {
           "errors": 3,

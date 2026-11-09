@@ -5,7 +5,7 @@ Codeunit "D49 Sender"::ModifyThenMessage  [public-procedure]
   reads:      TableData "11111111-0000-0000-0000-0000000d4901/table/50100"
   ui:         "<unknown>"
   permissions:
-    TableData "11111111-0000-0000-0000-0000000d4901/table/50100" MR
+    TableData "11111111-0000-0000-0000-0000000d4901/table/50100" RM
 
   witnesses:
     error-implicit error — 1 path shown

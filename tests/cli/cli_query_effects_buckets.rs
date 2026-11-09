@@ -179,20 +179,19 @@ fn a_conditional_write_leads_the_summary() {
 /// Output validation V2 (§9.2, F57; §5.2, F61): `locks:` prints even at
 /// zero, with its scope, and the JSON states each operation family's depth
 /// and inventory. Wording and a structured echo of a fixed scope: no
-/// discrimination proof (CLAUDE.md "Scope of the proof").
+/// discrimination proof (CLAUDE.md "Scope of the proof"). The fixture's cone
+/// enters no dependency code, so the scope is the whole cone (engine limits
+/// B8; `cli_b8_output` pins the rule both ways, with its proof).
 #[test]
 fn locks_and_reads_always_print_with_their_scope() {
     let human = effects(&[]);
     assert!(
-        human.contains(
-            "locks: none observed (one dependency routine deep; deeper dependency locks are not \
-             inventoried)"
-        ),
+        human.contains("locks: none observed (searched: the whole cone)"),
         "{human}"
     );
     let v: Value = serde_json::from_str(&effects(&["--format", "json"])).expect("json");
     let f = &v["payload"]["result"]["scope"]["families"];
-    assert_eq!(f["locks"]["depth"], "oneDependencyRoutine", "{f:#}");
-    assert_eq!(f["locks"]["inventory"], "notExhaustive", "{f:#}");
+    assert_eq!(f["locks"]["depth"], "wholeCone", "{f:#}");
+    assert_eq!(f["locks"]["inventory"], "exhaustive", "{f:#}");
     assert_eq!(v["schemaVersion"], "5.0.0");
 }
