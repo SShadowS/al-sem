@@ -1,0 +1,160 @@
+# Engine limits (from output validation, rounds 1–4, and the limit probes)
+
+Written 2026-11-09, at master `58d0c94e`.
+
+- **L1–L14** were found by output validation, rounds 1–4.
+- **L15–L26** were suspected and then checked by probes on 2026-11-09. Their old ids, P1–P12,
+  are kept in brackets.
+- **L27–L34** are further limits the probes noticed along the way.
+- **B1–B8** are wrong answers or a crash that the probes found. A wrong answer is worse than a
+  limit: limits are stated in answers, these are not. They come first in the order.
+
+**Where the evidence is:**
+- The probes' full results are in `target/tmp/engine-limits/results.json`.
+- Probe inputs and outputs are in `target/tmp/engine-limits/<area>/`, one folder per area:
+  locks, values, errors, declarations, callers, server.
+- Call ids (c08, n10, m10, …) refer to `target/tmp/output-validation/round*/bundle.md`.
+
+**Sizes:** S is under 1 day, M is 1–3 days, L is more than 3 days. These are the probe agents'
+estimates from reading the code. Nothing has been measured.
+
+**Status:**
+- **confirmed:** a probe showed the limit is real.
+- **partial:** part of it is real; the row says which part.
+- **found:** seen in the recorded validation calls.
+
+## 1. Wrong answers and a crash (B1–B8)
+
+Each of these gives a definite answer that the source contradicts, or kills the engine. None is
+stated as a limit in the answer.
+
+**Fixed in wave 0** (`integrate/w0`, 2026-11-09): B1, B3 and B8. CHANGELOG has a section for
+each. B3 also decides the escape line of L7 for isolated events. What is still open:
+- B3: forward `throws-error` still counts an isolated subscriber's error as the publisher's own.
+  That is B7.
+- B8: the query `scope:` line still says "one dependency routine deep" when no dependency code is
+  entered.
+- B8: test-app discovery does not read `.gitignore`.
+
+| # | What is wrong | Probe evidence | Size |
+|---|---|---|---|
+| B1 | **`alsem_prove` with a filter (`match`, likely also `site`, `op`, `table`) crashes the resident engine** (signal 6). The resident revision is built for explain (`ViewNeeds::EXPLAIN`, `src/engine/resident/session.rs:52`, no site guards). `ProveJob::demands` asks for site guards when a filter is given (`prove.rs:3791-3801`). The function that would widen the needs, `pin_needs` (`session.rs:279`), has no production caller. Panic: `workspace.rs:907 'site guards not built'`. The one-shot CLI answers correctly. | server/ (MCP, 1-codeunit fixture, single-app and cross-app) | S |
+| B2 | **`#if` arms are run one after another.** An `exit` or `Error` inside one arm cuts off the code after the group in every configuration. So prove answers a wrong `no (every candidate decided)` and a wrong `unconditional` (`ir_walk.rs:1897`). A routine declared in two arms cites the second arm's line for the first arm's write. | values/probe-preproc.txt | M (step 1 of L22) |
+| B3 | **`callers-intercept-errors` answers a wrong `no` for a subscriber of an isolated event.** Isolated dispatch catches the error, but it is not treated as a trap. On CDO, `OnCompanyOpenCompleted`'s subscriber gets `unknown` where the answer is `yes`. | errors/iso.out, cdo-iso-intercept.out | S (part of L7) |
+| B4 | **`[CommitBehavior(Error)]` is ignored.** A `Commit()` under it raises an error, but `throws-error` says `no (every candidate decided)` and `commits-on-success-path` says `yes`. Under `Ignore`, the commit is still reported as a success-path commit. | locks/p2-pure-error.txt | M (L16) |
+| B5 | **`query touches --direction down` says a definite `no` for a table read only through a FlowField's `CalcFormula`.** On CDO: `CDO Customer Setup.Balance` and `Detailed Cust. Ledg. Entry`. | declarations/out | M (L19) |
+| B6 | **`prove writes-table` says a definite `no` for a table written only by an XmlPort's automatic insert.** | declarations/out | M (L20) |
+| B7 | **An error behind a trap is reported as escaping.** A trap is a checked `Codeunit.Run`, a `[TryFunction]` whose result is used, or an isolated event. `throws-error --site/--match` answers `yes`, and the condition reads `unconditional on success`, which describes the callee and not the route. | errors/p9.out, cdo-sendqueue-site.out | M (L23) |
+| B8 | **Small wrong output.** Each item is S. |  | S together |
+
+The B8 items:
+- The human fingerprint prints `W` for an insert right (`fingerprint_query.rs:303-311`); AL uses
+  `I` (`snapshot_full.rs:1145-1152` is right).
+- In single-app mode, throws-error suggests `prove … callers-intercept-errors --single-app`, which
+  the CLI rejects.
+- The help text of `mcp`/`engine-host --memory-budget` says the default is `6G`; it is 8 GiB
+  (`src/bin/alsem.rs:235-236, 267-269`).
+- `locks: none observed` always blames dependency depth, even with 0 dependencies, or when the real
+  cause is an UpdLock read.
+- An interface call with no implementer is counted as `(0 in this workspace)`, yet listed under
+  `gaps in workspace code`.
+- A stale answer is labelled `served: fresh`. The size-and-time residual shows only in status.
+- Explain repeats the same five dependency routine names once per place (about 5 KB on CDO
+  `SetHandled`).
+- Test-app discovery stops at 64 `app.json` files when the workspace sits under a folder with
+  many fixtures.
+
+## 2. All limits
+
+### Locks and transactions
+
+| # | Limit | Status | Size | Depends on |
+|---|---|---|---|---|
+| L1 | Reads, locks and validations listed one dependency routine deep. Deep reads and lock facts already ride the cone, so this is mostly output. Validations need a new cone fact. | found | M | — |
+| L3 | No lock state along call paths and no lock order. Answers must list held tables, never give a "safe" verdict. Lock escalation and SQL range locks are not modeled. | found | L | L1, L15 |
+| L15 (P1) | `ReadIsolation` UpdLock/RepeatableRead and `FindSet(true)` are plain reads, never locks. On CDO, `RunMigration :307-308` takes an update lock and the answer says `locks: none`. Approach: record isolation per read in the body walk, then emit a lock fact. | confirmed | M | — |
+| L16 (P2) | `[CommitBehavior]` is honoured only in the callers' question. See B4. A source object's `InherentCommitBehavior` is never parsed, but it has 0 uses today. | partial | M | — |
+| L27 | `callers-have-pending-writes` says `no` when a caller holds a `LockTable` but wrote nothing, so an agent about to add a lock gets no hint. | new | S | L3 |
+| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. Nothing models it. CDO avoids it by committing first (`CDOQueueManagement:46`). Not probed on BC. | new, untested | M | L23 |
+
+### Values (literal pruning)
+
+| # | Limit | Status | Size | Depends on |
+|---|---|---|---|---|
+| L4 | **Cause corrected:** literals are carried through any number of calls. m10 fails because **platform option types** (`TelemetryScope`, `Verbosity`, `DataClassification`, `ObjectType`, …) are not a value domain (`literal_values.rs:298 domain_of`). | partial | S | L14 |
+| L5 | Pruning gaps by design: globals, conversions, unresolved labels, values from data (91 of CDO's 323 `case` statements switch on a record field), and arithmetic. Each keeps both branches live. | confirmed | L | L4, L14, L21 |
+| L29 | **Text and Code literals are not a value domain:** `case T of 'A':` keeps every arm live. | new | S | L14 |
+| L6 | The company a write targets after `ChangeCompany` is unknown. All 12 CDO sites pass a variable, so it needs values from data. | confirmed | M | L5, L21 |
+| L22 (P8) | `#if`: no configuration is chosen; arms are flattened (see B2). Later steps: follow the app's `preprocessorSymbols`, and make routines that exist in only one arm agree with the resolver's filter. | confirmed | L | — |
+
+### Errors
+
+| # | Limit | Status | Size | Depends on |
+|---|---|---|---|---|
+| L7 | Whether a subscriber's error escapes its publisher. The answer is decidable locally: it escapes unless the event is isolated (see B3). Implicit errors (`Insert` failing because the record exists) name the operation, not the receiver or the reason. | partial | S | L10 |
+| L8 | Guards past an unanalyzed dependency entry. 0 CDO calls reach it, because every dependency ships its source. The answer should name the routine without a body. | confirmed | S | — |
+| L23 (P9) | Traps are not applied in the forward error answers (see B7). CDO: 34 TryFunctions and 8 checked runs; Base App: 327 and 30. The fix touches the literal reach, so measure speed. | confirmed | M | L7, L14 |
+| L30 | `ErrorBehavior::Collect` is modeled only in the callers' question, not in forward `throws-error`. 5 uses in CDO, 13 in Base App. | new | S | L23 |
+
+### Declarations and objects
+
+| # | Limit | Status | Size | Depends on |
+|---|---|---|---|---|
+| L2 | A rename misses consumers in declarations: CDO has 101 `CalcFormula`, 210 `TableRelation`, and about 1,750 page field controls. One sample field had 3 code consumers and 12 in declarations. Approach: one index of field names in declarations, used only by field answers. | confirmed | M | — |
+| L17 (P3) | Permission failures are not predicted. Object `Permissions` (32 CDO objects), permission sets (252 entries) and `InherentPermissions` are never read. Ship as advisory first. | confirmed | L | L19, L20, L1, L2 |
+| L19 (P5) | `CalcFields` and FlowField source tables are not read effects (see B5). CDO: 163 `CalcFields`, 55 FlowFields. Pages that show a FlowField calculate it too, which needs L2's page columns. | confirmed | M | L2, L1 |
+| L20 (P6) | The platform's own dataset operations are missing: report and query dataitem reads, and XmlPort import inserts (see B6). Trigger code is analyzed. CDO: 14 reports, 1 query, 0 XmlPorts. | partial | M | — |
+
+### Callers, targets and the program universe
+
+| # | Limit | Status | Size | Depends on |
+|---|---|---|---|---|
+| L10 | One bucket, `not resolved`, covers three cases: (1) literals passed by callers, which could be resolved (one CDO routine passes 15 literal tables into `RecRef.Open`); (2) truly run-time values (Job Queue `Object ID to Run`); (3) engine failure. Step 1 is labels; step 2 resolves case 1. | confirmed | L | L4, L5 |
+| L11 | The subscriber, caller and implementer universe is the loaded apps. CDO's own friend and dependent apps (Test, Demo, FR, OnPrem: 21 subscribers on CDO objects) sit on disk next to it and are never loaded. | confirmed | L | L12 |
+| L18 (P4) | Background sessions: literal targets are named, but their writes, commits and errors are not reported to the starter, even as "in another session". Job Queue entries written in code are invisible. | partial | M | L10, L4 |
+| L31 | **The `unresolved background target` blocker is global.** Two `TaskScheduler.CreateTask` calls in Continia Core block every `callers-may-run-noninteractive` question, so CDO can never get a `no` there (`callers_context.rs:750-781`). | new | S | L18 |
+| L24 (P7) | Published SOAP/OData objects count as entries only through `roots.config.json`. CDO publishes 2 codeunits in `WebServicePublish.xml`, which is not read. OData actions on non-API pages are not recognized. | partial | S | L11 |
+| L32 | `impact` does not apply the `roots.config.json` overlay, so configured entries differ between impact and prove/explain. | new | S | — |
+| L21 (P10) | Every write through a `var` record parameter is "caller-dependent", even for local procedures and internal ones without friends, whose caller set is closed. CDO: 180 local and 66 internal such procedures. | partial | M | L11 |
+| L25 (P11) | Three interface cases print the same "open world": implementers followed but others possible; no implementer loaded; an implementer whose body is not loaded. The data to separate them exists. | confirmed | S | L11 |
+| L33 | `query touches --all` lists a routine as touching a table when its only use is passing a temporary record to a `var` parameter. | new | S | — |
+
+### Server, tests and process
+
+| # | Limit | Status | Size | Depends on |
+|---|---|---|---|---|
+| L9 | Test-selection reach covers 128 changed routines. One CDO file, `CDOEvents.Codeunit.al` with 155 procedures, crosses it alone; about 7% of recent commits touch more. | confirmed | S | — |
+| L12 | Digest doesn't load the test app. The CDO workspace app has 0 tests and the test app has 1,844, so `digest --tests` is always empty on CDO. | confirmed | M | L9 |
+| L13 | Memory climbs to about 8 GB before it frees any. The dependency syntax trees (about 1 GB on CDO) are never freed while the child lives, and `--low-mem` can only be set at start. | confirmed | M | L14 |
+| L14 | No speed or memory gate on CDO. It must be a branch-gate step on release-fast and tolerate a loaded machine. Cost: 2–4 min. | confirmed | M | — |
+| L26 (P12) | Freshness: a rewrite that keeps size and time is served from the old revision. Unsaved editor text is never an input. Checking ctime too costs nothing. | confirmed | S | — |
+| L34 | **Baseline input gap, not engine:** 7 test-library apps are missing from `DO-cdo-baseline/Test/.alpackages`, which leaves 4,701 unresolved test calls. Every CDO `alsem tests` answer is incomplete because of it. The baseline is pinned, so changing it is an owner decision. | new | — | — |
+
+## 3. Proposed order
+
+The rule: wrong answers first, then the speed gate (most later items risk speed), then cheap
+precision, then the larger capabilities in an order where each builds on the last.
+
+| Wave | Items | Why here | Size |
+|---|---|---|---|
+| 0 | **B1** (crash), **B3** (isolated events), **B8** (small output fixes) | A crash and a wrong answer, each with a small, known fix | 1–2 days |
+| 1 | **L14** speed gate | Needed before B2, B7, L4, L5, L10 and L23, which all change the reach search; round 4 already lost 45% once | 1–3 days |
+| 2 | **B4/L16** CommitBehavior, **B7/L23** traps (+ L30), **B5/L19** FlowField reads, **B6/L20** dataset ops, **B2** `#if` arms as alternatives | The remaining wrong answers | 1–2 weeks |
+| 3 | **L4** platform option types, **L29** Text/Code, **L8**, **L9**, **L25**, **L24**, **L32**, **L33**, **L26**, **L31** | Small precision and wording wins, each S | about 1 week |
+| 4 | **L15** isolation as locks, then **L1** deep reads/locks/validations, then **L27**, then **L3** caller-held locks | One chain; L3 is the big one | 2–3 weeks |
+| 5 | **L2** declaration index, then **L17** permissions (advisory) | L17 needs L2, L19 and L20 | 1–2 weeks |
+| 6 | **L11** load sibling/dependent apps, then **L21**, **L12**, **L18** | They need a wider universe | 2 weeks |
+| 7 | **L13** memory eviction | Independent; after L14 so it can be measured | 1–3 days |
+| 8 | **L5** value domains (globals, data, arithmetic), **L10** step 2, **L6**, **L28**, **L22** later steps | Largest precision work, highest speed risk | open |
+
+L34 (the missing test libraries) is an owner decision on the pinned baseline, separate from these
+waves.
+
+## 4. Verification gaps (no limit suspected)
+
+astra named these cases as fixture-tested only. Add one real CDO call for each to the next
+sample:
+- touches with `opFamily: "write"`;
+- an assumption whose `subscribersConsidered` is not empty;
+- a digest in human format for an ambiguous name (the `differs in:` lines);
+- a test whose code path was not kept.
