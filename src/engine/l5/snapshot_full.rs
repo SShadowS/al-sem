@@ -2701,6 +2701,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             routine_order_frames: None,
             pd_solution: PdArena::default(),
             boundary: None,
+            commit_scopes: Default::default(),
         }
     }
 

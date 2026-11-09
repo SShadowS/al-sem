@@ -121,6 +121,9 @@ pub mod table_rights;
 // R4-F Stage-3b — the DIGEST witness + effects + occurrence-build path. Reads off
 // the Stage-2 CapabilitySnapshot (snapshot.rs) and produces per-root
 // DigestEffectResult[] each with a stable occurrenceId (= factId). Additive.
+// B4/L16 — `[CommitBehavior]` scope: the one rule for the callers' question
+// and the forward commit/error answers the digest gives.
+pub mod commit_scope;
 pub mod digest;
 
 // R4-F Stage-4 — the ORDERING ENGINE: per-effect scopedGuarantee derivation for

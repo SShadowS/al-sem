@@ -1636,25 +1636,36 @@ impl<'a, 'c> Visitor<'a, 'c> {
             return;
         }
         let g = self.cx.g;
+        // B4/L16: the one rule the forward answers apply too
+        // ([`crate::engine::l5::commit_scope::declared`]).
+        use crate::engine::l5::commit_scope::{DeclSource, declared};
         for r in self.ix.rows_of(g, n) {
-            if let Some(m) = attr_member(r, "CommitBehavior") {
-                self.commit_behavior.insert(format!(
-                    "{m} on {} (an added COMMIT below it is {})",
-                    self.ix.display(g, n),
-                    if m.eq_ignore_ascii_case("ignore") {
-                        "ignored"
-                    } else {
-                        "an error"
-                    }
-                ));
-            }
-            if let Some(o) = self.ix.objects.get(r.object_id.as_str())
-                && let Some(b) = &o.inherent_commit_behavior
-            {
-                self.commit_behavior.insert(format!(
-                    "InherentCommitBehavior {b} on {} {}",
-                    o.object_type, o.name
-                ));
+            let object = self.ix.objects.get(r.object_id.as_str()).copied();
+            let Some(d) = declared(r, object) else {
+                continue;
+            };
+            match (d.source, object) {
+                (DeclSource::Attribute, _) => {
+                    self.commit_behavior.insert(format!(
+                        "{} on {} (an added COMMIT below it is {})",
+                        d.word(),
+                        self.ix.display(g, n),
+                        if d.word() == "Ignore" {
+                            "ignored"
+                        } else {
+                            "an error"
+                        }
+                    ));
+                }
+                (DeclSource::ObjectProperty, Some(o)) => {
+                    self.commit_behavior.insert(format!(
+                        "InherentCommitBehavior {} on {} {}",
+                        o.inherent_commit_behavior.as_deref().unwrap_or_default(),
+                        o.object_type,
+                        o.name
+                    ));
+                }
+                (DeclSource::ObjectProperty, None) => {}
             }
         }
     }
