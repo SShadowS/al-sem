@@ -3281,6 +3281,18 @@ fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
             o.insert("literalAssumes".into(), assumes.into());
         }
     }
+    // B7/L23 + L30 (additive): the traps on an error row's routes, and the
+    // routines that collect it.
+    if let Some(o) = v.as_object_mut() {
+        if let Some(t) = crate::engine::l5::prove::trap_value(e) {
+            o.insert("trap".into(), t);
+        }
+        if let Some(n) = e.flow_notes.as_deref()
+            && !n.collected_by.is_empty()
+        {
+            o.insert("collectedBy".into(), n.collected_by.clone().into());
+        }
+    }
 }
 
 fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {

@@ -94,9 +94,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::engine::l4::cone_derived::ConeDerivedStore;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    ForwardSites, PendingCtx, PendingReport, is_checked_run, pending_before_report,
+    ForwardSites, PendingCtx, PendingReport, pending_before_report,
 };
 use crate::engine::l5::prove::{BlockerAnchor, ProveAnswer, ProveBlocker};
+use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, checked_run, is_try_function};
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::impact_graph::SitedGraph;
 use crate::program::impact_graph::reverse::{
@@ -920,6 +921,18 @@ struct Visitor<'a, 'c> {
 }
 
 impl<'a, 'c> Visitor<'a, 'c> {
+    /// What an edge into node `to` enters, for the trap rule: an object node
+    /// (an object run's target), else the node's routine row.
+    fn trap_callee(&self, to: NodeIx) -> TrapCallee<'a> {
+        let g = self.cx.g;
+        match g.object_node(to) {
+            Some(o) => TrapCallee::Object {
+                codeunit: o.kind == al_syntax::ir::ObjectKind::Codeunit,
+            },
+            None => TrapCallee::Routine(self.ix.row_for(g, to, None)),
+        }
+    }
+
     fn block(
         &mut self,
         kind: &'static str,
@@ -1172,28 +1185,13 @@ impl<'a, 'c> Visitor<'a, 'c> {
             );
             return SiteEval::default();
         };
-        if let BodySite::Call(cs) = &body {
-            let to_row = self.ix.row_for(g, st.to, None);
-            let to_object = g.object_node(st.to);
-            let checked = match &to_object {
-                Some(o) => {
-                    o.kind == al_syntax::ir::ObjectKind::Codeunit
-                        && match &cs.callee {
-                            PCallee::ObjectRun { .. } => cs.object_run_return_used == Some(true),
-                            PCallee::Member { method, .. } => {
-                                method.eq_ignore_ascii_case("run") && !cs.in_statement_position
-                            }
-                            _ => false,
-                        }
-                }
-                None => is_checked_run(cs, to_row),
+        if let BodySite::Call(cs) = &body
+            && checked_run(cs, self.trap_callee(st.to))
+        {
+            return SiteEval {
+                stop: Some("checked-run"),
+                bits: 0,
             };
-            if checked {
-                return SiteEval {
-                    stop: Some("checked-run"),
-                    bits: 0,
-                };
-            }
         }
         let mut bits = 0;
         // R runs inside a write's trigger.
@@ -1414,22 +1412,15 @@ impl<'a, 'c> Visitor<'a, 'c> {
         let BodySite::Call(cs) = body else {
             return SiteEval::default();
         };
-        let to_object = g.object_node(st.to);
-        let to_row = self.ix.row_for(g, st.to, None);
-        let checked = match &to_object {
-            Some(o) => {
-                o.kind == al_syntax::ir::ObjectKind::Codeunit
-                    && match &cs.callee {
-                        PCallee::ObjectRun { .. } => cs.object_run_return_used == Some(true),
-                        PCallee::Member { method, .. } => {
-                            method.eq_ignore_ascii_case("run") && !cs.in_statement_position
-                        }
-                        _ => false,
-                    }
-            }
-            None => is_checked_run(cs, to_row),
+        // The one trap rule ([`crate::engine::l5::traps`]), shared with the
+        // forward error answers. A TryFunction trap holds on a synchronous
+        // edge only.
+        let callee = self.trap_callee(st.to);
+        let trap = match call_trap(cs, callee) {
+            Some(TrapKind::TryFunction) if st.boundary != Boundary::Sync => None,
+            t => t,
         };
-        if checked {
+        if trap == Some(TrapKind::CheckedRun) {
             self.witness(
                 "catch-and-return-false",
                 c,
@@ -1449,9 +1440,9 @@ impl<'a, 'c> Visitor<'a, 'c> {
             };
         }
         // The edge enters a TryFunction.
-        let into_try = to_row.is_some_and(|t| has_attr(t, "TryFunction"));
+        let into_try = matches!(callee, TrapCallee::Routine(Some(t)) if is_try_function(t));
         if into_try && st.boundary == Boundary::Sync {
-            if cs.in_statement_position {
+            if trap != Some(TrapKind::TryFunction) {
                 self.not_intercepted.insert(format!(
                     "{} called as a statement at {}: its result is discarded, so it is an \
                      ordinary call",

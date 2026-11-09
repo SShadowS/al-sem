@@ -37,7 +37,7 @@ use crate::engine::l4::cone_derived::{ConeDerivedStore, fact_is_known_temp, writ
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::control_flow::{branch_termination, terminates};
-use crate::program::body::features::{PCFNNode, PCallee};
+use crate::program::body::features::PCFNNode;
 use crate::program::model::workspace::ModelRoutine;
 
 /// Every caller's out-edges as `(site, callee)`: the site is the edge's call site,
@@ -307,26 +307,10 @@ fn effects(
 }
 
 /// A checked run: `if Codeunit.Run(...)` or `if MyCodeunit.Run(...)` (the
-/// result used), which runs the codeunit in its OWN transaction. For a
-/// codeunit variable's `.Run`, the target must be the `OnRun` trigger (a user
-/// procedure named `Run` is an ordinary call).
-pub(crate) fn is_checked_run(
-    cs: &crate::program::body::features::PCallSite,
-    callee: Option<&ModelRoutine>,
-) -> bool {
-    match &cs.callee {
-        PCallee::ObjectRun { object_kind, .. } => {
-            object_kind == "Codeunit" && cs.object_run_return_used == Some(true)
-        }
-        PCallee::Member { method, .. } => {
-            method.eq_ignore_ascii_case("run")
-                && !cs.in_statement_position
-                && callee
-                    .is_some_and(|c| c.kind == "trigger" && c.name.eq_ignore_ascii_case("OnRun"))
-        }
-        _ => false,
-    }
-}
+/// result used), which runs the codeunit in its OWN transaction. The one
+/// rule lives in [`crate::engine::l5::traps`] (B7: the forward error answers
+/// read it too).
+pub(crate) use crate::engine::l5::traps::is_checked_run;
 
 fn is_site(n: &PCFNNode, t: &str) -> bool {
     n.operation_id.as_deref() == Some(t) || n.callsite_id.as_deref() == Some(t)

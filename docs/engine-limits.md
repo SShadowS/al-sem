@@ -31,7 +31,8 @@ stated as a limit in the answer.
 **Fixed in wave 0** (`integrate/w0`, 2026-11-09): B1, B3 and B8. CHANGELOG has a section for
 each. B3 also decides the escape line of L7 for isolated events. What is still open:
 - B3: forward `throws-error` still counts an isolated subscriber's error as the publisher's own.
-  That is B7.
+  That is B7. **Done in wave 2** (`fix/w2-b7-traps`): it stays a `yes` (a may-answer: the error
+  escapes when a write is pending), and the answer now says so.
 - B8: the query `scope:` line still says "one dependency routine deep" when no dependency code is
   entered.
 - B8: test-app discovery does not read `.gitignore`.
@@ -44,7 +45,7 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
 | B4 | **`[CommitBehavior(Error)]` is ignored.** A `Commit()` under it raises an error, but `throws-error` says `no (every candidate decided)` and `commits-on-success-path` says `yes`. Under `Ignore`, the commit is still reported as a success-path commit. | locks/p2-pure-error.txt | M (L16) |
 | B5 | **`query touches --direction down` says a definite `no` for a table read only through a FlowField's `CalcFormula`.** On CDO: `CDO Customer Setup.Balance` and `Detailed Cust. Ledg. Entry`. | declarations/out | M (L19) |
 | B6 | **`prove writes-table` says a definite `no` for a table written only by an XmlPort's automatic insert.** | declarations/out | M (L20) |
-| B7 | **An error behind a trap is reported as escaping.** A trap is a checked `Codeunit.Run`, a `[TryFunction]` whose result is used, or an isolated event. `throws-error --site/--match` answers `yes`, and the condition reads `unconditional on success`, which describes the callee and not the route. | errors/p9.out, cdo-sendqueue-site.out | M (L23) |
+| B7 | **An error behind a trap is reported as escaping.** A trap is a checked `Codeunit.Run`, a `[TryFunction]` whose result is used, or an isolated event. `throws-error --site/--match` answers `yes`, and the condition reads `unconditional on success`, which describes the callee and not the route. **Fixed in wave 2** (`fix/w2-b7-traps`, CHANGELOG): an error a definite trap catches on every route is no longer counted by prove (with or without a filter), explain or digest; an isolated event's error stays `yes` and states its condition; a route trapped on some paths says which. Left: see L23. | errors/p9.out, cdo-sendqueue-site.out | M (L23) |
 | B8 | **Small wrong output.** Each item is S. |  | S together |
 
 The B8 items:
@@ -93,8 +94,8 @@ The B8 items:
 |---|---|---|---|---|
 | L7 | Whether a subscriber's error escapes its publisher. The answer is decidable locally: it escapes unless the event is isolated (see B3). Implicit errors (`Insert` failing because the record exists) name the operation, not the receiver or the reason. | partial | S | L10 |
 | L8 | Guards past an unanalyzed dependency entry. 0 CDO calls reach it, because every dependency ships its source. The answer should name the routine without a body. | confirmed | S | — |
-| L23 (P9) | Traps are not applied in the forward error answers (see B7). CDO: 34 TryFunctions and 8 checked runs; Base App: 327 and 30. The fix touches the literal reach, so measure speed. | confirmed | M | L7, L14 |
-| L30 | `ErrorBehavior::Collect` is modeled only in the callers' question, not in forward `throws-error`. 5 uses in CDO, 13 in Base App. | new | S | L23 |
+| L23 (P9) | Traps are not applied in the forward error answers (see B7). CDO: 34 TryFunctions and 8 checked runs; Base App: 327 and 30. The fix touches the literal reach, so measure speed. **Fixed in wave 2** (one trap rule, `src/engine/l5/traps.rs`, read by both directions). **Left:** (1) a row that may stand for unseen sites (a site search stopped at its depth bound) is never ruled caught, and a dependency boundary group is ruled only by the route to its crossing (a crossing that is itself a trap, or an event crossing, keeps the group escaping); (1b) the cone's obligations (open-world and unresolved calls) are cone-wide, so a filtered answer whose only matching site is caught is `unknown`, not `no`, when an unresolved call sits anywhere in the cone, even inside the trapped part; (2) an interface call into a TryFunction implementer is not a trap; (3) the writes of a failed checked run are rolled back, but `writes-table` is a may-answer and says nothing about it, which stays correct; (4) a checked run inside an open write transaction raises its own error (L28), not modeled. | fixed (wave 2) | M | L7, L14 |
+| L30 | `ErrorBehavior::Collect` is modeled only in the callers' question, not in forward `throws-error`. 5 uses in CDO, 13 in Base App. **Wave 2:** a forward `Error` row whose route passes a collecting procedure says it may be collected and raised when that procedure ends (the error is kept: Learn says a collected error is still raised unless the code clears it). **Left:** whether the `Error` is collectible (an `ErrorInfo` with `Collectible = true`) is not read, and `ClearCollectedErrors` is not followed, so the answer never drops a collected error. | partial | S | L23 |
 
 ### Declarations and objects
 

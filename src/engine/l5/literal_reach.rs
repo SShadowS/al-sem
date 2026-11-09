@@ -59,6 +59,7 @@ use crate::engine::l5::recref_flow::{
 };
 use crate::engine::l5::snapshot::SnapshotGraphEdge;
 use crate::engine::l5::terminal_facts::TerminalFacts;
+use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, is_try_function};
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -350,6 +351,14 @@ pub(crate) struct FlowNotes {
     /// guards beyond the entry were not analyzed, and `guards` counts the
     /// analyzed part only.
     pub beyond_unanalyzed: bool,
+    /// B7/L23: an error row's traps ([`TrapVerdict`]); `None` off error
+    /// rows, and when no trap is on its routes or no search decided it.
+    pub trap: Option<TrapVerdict>,
+    /// L30: the routines with `[ErrorBehavior(ErrorBehavior::Collect)]` on
+    /// the row's listed route (the root first): a collectible error raised
+    /// under one is collected and raised when it ends, unless the code
+    /// clears it ([`crate::engine::l5::traps`]). Empty off error rows.
+    pub collected_by: Vec<String>,
 }
 
 /// r4 final (c05): a route's guards counted by population: (enclosing
@@ -1280,6 +1289,69 @@ fn keep_verdict(
     })
 }
 
+/// B7/L23: the trap edge `e` is, by the one rule
+/// ([`crate::engine::l5::traps`]): a synchronous call or object run whose
+/// call site traps ([`call_trap`]: under asserterror, a checked run, a used
+/// TryFunction), a record operation under asserterror (its triggers and
+/// table events), or the dispatch of an isolated event. An interface
+/// dispatch is never one (its target is not known to be a TryFunction for
+/// every implementer). A call site the caller's row does not hold is no
+/// trap: a trap is claimed only from facts.
+fn edge_trap(
+    e: &SnapshotGraphEdge,
+    by_stable: &HashMap<&str, &ModelRoutine>,
+    under_asserterror: &HashSet<&str>,
+    isolated_events: &HashSet<&str>,
+) -> Option<TrapKind> {
+    match e {
+        SnapshotGraphEdge::DirectCall {
+            from,
+            to,
+            callsite_id,
+            ..
+        }
+        | SnapshotGraphEdge::VariableTypedCall {
+            from,
+            to,
+            callsite_id,
+            ..
+        }
+        | SnapshotGraphEdge::ObjectRunResolved {
+            from,
+            to,
+            callsite_id,
+            ..
+        } => {
+            let callee = by_stable.get(to.as_str()).copied();
+            // Only an edge that can trap is looked up (the call site scan
+            // is per edge).
+            let may = under_asserterror.contains(callsite_id.as_str())
+                || matches!(e, SnapshotGraphEdge::ObjectRunResolved { .. })
+                || callee.is_some_and(|c| {
+                    is_try_function(c)
+                        || (c.kind == "trigger" && c.name.eq_ignore_ascii_case("OnRun"))
+                });
+            if !may {
+                return None;
+            }
+            let cs = by_stable
+                .get(from.as_str())?
+                .call_sites
+                .iter()
+                .find(|c| c.id == *callsite_id)?;
+            call_trap(cs, TrapCallee::Routine(callee))
+        }
+        SnapshotGraphEdge::ImplicitTrigger { operation_id, .. }
+        | SnapshotGraphEdge::TableEvent { operation_id, .. } => under_asserterror
+            .contains(operation_id.as_str())
+            .then_some(TrapKind::Asserterror),
+        SnapshotGraphEdge::EventDispatch { event_id, .. } => isolated_events
+            .contains(event_id.as_str())
+            .then_some(TrapKind::IsolatedEvent),
+        _ => None,
+    }
+}
+
 /// The edge's (from, to, site, binds-arguments) view.
 fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<EdgeSite<'_>>, bool)> {
     fn cs(s: &str) -> Option<EdgeSite<'_>> {
@@ -1482,6 +1554,80 @@ pub(crate) struct LiteralReach<'a> {
     /// Round-4 literal routes: the implementations interface calls on a
     /// known enum value may reach ([`EnumImpls`]).
     enum_impls: EnumImpls<'a>,
+    /// B7/L23: per routine (stable id), its out-edges that are traps (the
+    /// edge's position in `out`, and the trap's kind), by the one rule
+    /// [`crate::engine::l5::traps`] states. An error search
+    /// ([`Self::untrapped_tree`]) does not cross them.
+    traps: HashMap<&'a str, Vec<(u32, TrapKind)>>,
+    /// L30: the routines (stable ids) that collect errors
+    /// ([`crate::engine::l5::traps::collects_errors`]).
+    collectors: HashSet<&'a str>,
+}
+
+/// B7/L23: which traps an error search does not cross.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Untrap {
+    /// Cross every edge (the ordinary search).
+    Off,
+    /// Do not cross a definite trap ([`TrapKind::definite`]).
+    Definite,
+    /// Do not cross any trap, isolated events included.
+    All,
+}
+
+impl Untrap {
+    fn stops(self, k: TrapKind) -> bool {
+        match self {
+            Untrap::Off => false,
+            Untrap::Definite => k.definite(),
+            Untrap::All => true,
+        }
+    }
+}
+
+/// B7/L23: where a route is trapped: the trap's kind, the routine whose
+/// edge it is (stable id), and the place of its call site (or, for an
+/// isolated event, of the publisher), 0-based line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrapAt {
+    pub kind: TrapKind,
+    pub routine: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+}
+
+impl TrapAt {
+    /// `checked Codeunit.Run at file:line` (1-based).
+    pub(crate) fn words(&self) -> String {
+        match (&self.file, self.line) {
+            (Some(f), Some(l)) => format!(
+                "{} at {f}:{}",
+                self.kind.words(),
+                crate::engine::line_base::shown(l)
+            ),
+            (Some(f), None) => format!("{} in {f}", self.kind.words()),
+            _ => self.kind.words().to_string(),
+        }
+    }
+}
+
+/// B7/L23: how the traps on the routes from a root to an error site decide
+/// it (only a completed search decides; anything else leaves the row as
+/// it was).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TrapVerdict {
+    /// Every route crosses a definite trap: the error does not escape the
+    /// root. `at` is the trap on the root's first witness route.
+    Caught(TrapAt),
+    /// Every route crosses a trap, and some cross only an isolated event's:
+    /// the error escapes only when a write is pending as the event is
+    /// raised, or during an install or upgrade (Microsoft Learn,
+    /// "Isolated events in AL"). `at` is the isolated event on a route
+    /// that crosses no definite trap.
+    UnlessWritePending(TrapAt),
+    /// Some route crosses no trap (the error escapes), and the root's first
+    /// witness route crosses one: the listed route is not the escaping one.
+    SomeRoutes(TrapAt),
 }
 
 /// Round-4 literal routes: which codeunit an enum value's implementation of
@@ -1693,12 +1839,38 @@ impl<'a> LiteralReach<'a> {
             .iter()
             .map(|t| (t.id.as_str(), Arc::from(t.name.to_lowercase())))
             .collect();
+        // B7/L23: the sites under asserterror, and the isolated events.
+        let mut under_asserterror: HashSet<&str> = HashSet::new();
+        for r in routines {
+            for cs in &r.call_sites {
+                if cs.under_asserterror == Some(true) {
+                    under_asserterror.insert(cs.id.as_str());
+                }
+            }
+            for o in &r.operation_sites {
+                if o.under_asserterror == Some(true) {
+                    under_asserterror.insert(o.id.as_str());
+                }
+            }
+        }
+        let isolated_events: HashSet<&str> = model
+            .events
+            .graph
+            .events
+            .iter()
+            .filter(|s| s.isolated == Some(true))
+            .map(|s| s.id.as_str())
+            .collect();
         let mut out: HashMap<&str, Vec<OutEdge>> = HashMap::new();
+        let mut traps: HashMap<&str, Vec<(u32, TrapKind)>> = HashMap::new();
         for e in edges {
             if let Some((from, to, site, binds)) = edge_parts(e) {
-                out.entry(from)
-                    .or_default()
-                    .push((to, site, binds, e.edge_kind()));
+                let list = out.entry(from).or_default();
+                if let Some(k) = edge_trap(e, &by_stable, &under_asserterror, &isolated_events) {
+                    let j = u32::try_from(list.len()).expect("an edge position fits u32");
+                    traps.entry(from).or_default().push((j, k));
+                }
+                list.push((to, site, binds, e.edge_kind()));
             }
         }
         // G34: the exit guards, and what a search must carry to read them
@@ -1750,6 +1922,12 @@ impl<'a> LiteralReach<'a> {
             rel_globals,
             terminals,
             enum_impls: EnumImpls::new(model),
+            traps,
+            collectors: routines
+                .iter()
+                .filter(|r| crate::engine::l5::traps::collects_errors(r))
+                .map(|r| r.stable_routine_id.as_str())
+                .collect(),
         }
     }
 
@@ -2366,10 +2544,11 @@ impl<'a> LiteralReach<'a> {
         cancel: &dyn Fn() -> bool,
         rec: Option<&mut routes::Recorder<'a>>,
     ) -> Result<LiveTree<'a>, Stop> {
-        self.tree_recording_m(start, cap, cancel, rec, ALL)
+        self.tree_recording_m(start, cap, cancel, rec, ALL, Untrap::Off)
     }
 
-    /// [`Self::tree_recording`]; `keep` as in [`Self::dead_at_m`].
+    /// [`Self::tree_recording`]; `keep` as in [`Self::dead_at_m`]; `untrap`:
+    /// the trap edges it does not cross (B7/L23).
     fn tree_recording_m(
         &self,
         start: State<'a>,
@@ -2377,6 +2556,7 @@ impl<'a> LiteralReach<'a> {
         cancel: &dyn Fn() -> bool,
         mut rec: Option<&mut routes::Recorder<'a>>,
         keep: &Keeps,
+        untrap: Untrap,
     ) -> Result<LiveTree<'a>, Stop> {
         let mut parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>> =
             HashMap::from([(start.clone(), None)]);
@@ -2393,9 +2573,19 @@ impl<'a> LiteralReach<'a> {
             if let Some(r) = rec.as_deref_mut() {
                 r.open_state();
             }
+            let traps = match untrap {
+                Untrap::Off => &[][..],
+                _ => self.traps.get(f).map_or(&[][..], Vec::as_slice),
+            };
             for (j, &(to, edge_site, binds, kind)) in
                 self.out.get(f).into_iter().flatten().enumerate()
             {
+                if traps
+                    .iter()
+                    .any(|&(t, k)| t as usize == j && untrap.stops(k))
+                {
+                    continue;
+                }
                 let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
                     && self.edge_dead(f, s, to, kind, &b, keep)
@@ -2441,6 +2631,16 @@ impl<'a> LiteralReach<'a> {
         tree: &'t LiveTree<'a>,
         ops: &'t [String],
     ) -> Option<(&'t State<'a>, &'t str)> {
+        self.first_live_owner_m(tree, ops, ALL)
+    }
+
+    /// [`Self::first_live_owner`]; `keep` as in [`Self::dead_at_m`].
+    fn first_live_owner_m<'t>(
+        &self,
+        tree: &'t LiveTree<'a>,
+        ops: &'t [String],
+        keep: &Keeps,
+    ) -> Option<(&'t State<'a>, &'t str)> {
         // The earliest position over every op's owner states where the op can
         // run; at one position the first op in `ops` order (as a scan of the
         // tree in visit order would find).
@@ -2454,7 +2654,7 @@ impl<'a> LiteralReach<'a> {
                     break;
                 }
                 let (f, b) = &tree.order[i as usize];
-                if !self.dead_at(f, o, b) {
+                if !self.dead_at_m(f, o, b, keep) {
                     best = Some((i, o.as_str()));
                     break;
                 }
@@ -2474,6 +2674,148 @@ impl<'a> LiteralReach<'a> {
     ) -> Option<(Vec<Step<'a>>, &'t str)> {
         let (state, op) = self.first_live_owner(tree, ops)?;
         Some((tree.steps_to(state), op))
+    }
+
+    /// B7/L23: the guarded search from `root` that does not cross the traps
+    /// `untrap` stops, following no publisher keep verdict: a ruling that
+    /// an error is caught never rests on the loaded-subscriber assumption
+    /// (no keep followed reaches at least what any keep choice reaches).
+    /// `None` when it hits the cap, or for a root the model has no row for.
+    pub(crate) fn untrapped_tree(&self, root: &str, untrap: Untrap) -> Option<LiveTree<'a>> {
+        let (&root, _) = self.by_stable.get_key_value(root)?;
+        self.tree_recording_m(
+            (root, Bindings::default()),
+            STATE_CAP,
+            &|| false,
+            None,
+            NONE,
+            untrap,
+        )
+        .ok()
+    }
+
+    /// B7/L23: whether a definite trap, and whether an isolated event's,
+    /// leaves a routine `tree` reaches (a root with neither needs no error
+    /// search of its own).
+    pub(crate) fn traps_reached(&self, tree: &LiveTree<'a>) -> (bool, bool) {
+        let (mut definite, mut isolated) = (false, false);
+        for (f, list) in &self.traps {
+            if tree.states_of(f).is_empty() {
+                continue;
+            }
+            for &(_, k) in list {
+                if k.definite() {
+                    definite = true;
+                } else {
+                    isolated = true;
+                }
+            }
+        }
+        (definite, isolated)
+    }
+
+    /// L30: whether a routine that collects errors is in `tree`'s reach.
+    pub(crate) fn collectors_reached(&self, tree: &LiveTree<'a>) -> bool {
+        self.collectors
+            .iter()
+            .any(|c| !tree.states_of(c).is_empty())
+    }
+
+    /// L30: the routines that collect errors on the route from `root`
+    /// through `steps` (the root first), each once, in route order, as
+    /// `Name (file:line)` (1-based).
+    pub(crate) fn collectors_on(&self, root: &str, steps: &[Step<'a>]) -> Vec<String> {
+        let mut seen: Vec<&str> = Vec::new();
+        let on = std::iter::once(root).chain(steps.iter().map(|s| s.to));
+        for r in on {
+            if self.collectors.contains(r) && !seen.contains(&r) {
+                seen.push(r);
+            }
+        }
+        seen.into_iter()
+            .map(|r| match self.by_stable.get(r) {
+                Some(m) => format!(
+                    "{} ({}:{})",
+                    m.name,
+                    m.source_anchor.source_unit_id,
+                    crate::engine::line_base::shown(m.source_anchor.start_line)
+                ),
+                None => r.to_string(),
+            })
+            .collect()
+    }
+
+    /// B7/L23: the first edge of `steps` that is a trap `untrap` stops.
+    fn first_trap(&self, steps: &[Step<'a>], untrap: Untrap) -> Option<TrapAt> {
+        for s in steps {
+            let (Some(list), Some(out)) = (self.traps.get(s.from), self.out.get(s.from)) else {
+                continue;
+            };
+            for &(j, k) in list {
+                let (to, site, _, kind) = out[j as usize];
+                if untrap.stops(k) && to == s.to && site == s.site && kind == s.kind {
+                    return Some(self.trap_at(s, k));
+                }
+            }
+        }
+        None
+    }
+
+    /// The place of trap `k` on step `s`: its call site or operation in the
+    /// caller, or (an event) the publisher.
+    fn trap_at(&self, s: &Step<'a>, k: TrapKind) -> TrapAt {
+        let r = self.by_stable.get(s.from).copied();
+        let anchor = match s.site {
+            Some(EdgeSite::Guarded(id)) => r.and_then(|r| {
+                r.call_sites
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(|c| &c.source_anchor)
+                    .or_else(|| {
+                        r.operation_sites
+                            .iter()
+                            .find(|o| o.id == id)
+                            .map(|o| &o.source_anchor)
+                    })
+            }),
+            _ => r.map(|r| &r.source_anchor),
+        };
+        TrapAt {
+            kind: k,
+            routine: s.from.to_string(),
+            file: anchor.map(|a| a.source_unit_id.clone()),
+            line: anchor.map(|a| a.start_line),
+        }
+    }
+
+    /// B7/L23: how the traps decide an error site `ops` (its operation and
+    /// call-site ids) from the root of `full` (the ordinary search):
+    /// `definite` is the root's search that crosses no definite trap,
+    /// `all` (when an isolated event is in reach) the one that crosses no
+    /// trap. `None`: the site has no live route in `full` (nothing to
+    /// rule), or no route crosses a trap the ruling can name.
+    pub(crate) fn trap_verdict(
+        &self,
+        full: &LiveTree<'a>,
+        definite: &LiveTree<'a>,
+        all: Option<&LiveTree<'a>>,
+        ops: &[String],
+    ) -> Option<TrapVerdict> {
+        let (steps, _) = self.tree_witness(full, ops)?;
+        let Some((open, _)) = self.first_live_owner_m(definite, ops, NONE) else {
+            return self
+                .first_trap(&steps, Untrap::Definite)
+                .map(TrapVerdict::Caught);
+        };
+        if let Some(all) = all
+            && self.first_live_owner_m(all, ops, NONE).is_none()
+        {
+            return self
+                .first_trap(&definite.steps_to(open), Untrap::All)
+                .map(TrapVerdict::UnlessWritePending);
+        }
+        self.first_trap(&steps, Untrap::Definite)
+            .map(TrapVerdict::SomeRoutes)
     }
 
     /// Whether `tree` has a state of `routine` (stable id): the guarded
@@ -3359,6 +3701,7 @@ mod r7_tests {
             assumed: Vec::new(),
             guards,
             beyond_unanalyzed: beyond,
+            ..FlowNotes::default()
         };
         assert_eq!(
             route_condition_words(Some(&notes(Some(vec![guard(true), guard(false)]), true)))

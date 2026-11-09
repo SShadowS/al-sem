@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B7/L23 + L30)
+
+- **An error behind a trap is no longer reported as escaping.** `prove … throws-error` (with
+  and without `--match`, `--site`, `--op`, `--table`), explain's and digest's error lines
+  counted every error the root's cone can raise, even one that a trap on every route turns
+  into `false`. Fixture (`if not Codeunit.Run(Codeunit::Thrower)`): `yes — ERROR_THROW at
+  thrower.al:5 (unconditional on success)`; now `no` with `caught on every route by a trap: 1
+  error site (… by the checked Codeunit.Run at callers.al:6)`. A definite trap is:
+  - a checked run: `if [not] Codeunit.Run(…)`, `Ok := Codeunit.Run(…)`, `exit(Codeunit.Run(…))`,
+    `MyCodeunit.Run()` with its result used (Microsoft Learn, "Codeunit.Run(Integer [, var
+    Record]) Method": without the return value "a runtime error will occur"; with it, the run
+    returns false and its changes are not committed);
+  - a `[TryFunction]` call whose result is used (Learn, "Handling errors using try methods":
+    "If a try method call doesn't use the return value, the try method operates like an
+    ordinary method, and errors are exposed as usual"; Learn names `OK :=` and `if`, and any
+    other use of the value is read as a use too). A TryFunction does not roll back database
+    changes (same page), and nothing says it does;
+  - a call or record operation under `asserterror`.
+- **An isolated event's subscriber error stays `yes` and states its condition**: `escapes only
+  if a write is pending when the event is raised, or during an install or upgrade; otherwise
+  caught by the isolated event at …`. Learn ("Isolated events in AL"): a write transaction not
+  committed before the event makes it run as a normal event, and install/upgrade runs it
+  normally. prove's yes is a may-answer, so the error is kept.
+- **A route trapped on some paths and not others says which.** The row keeps escaping and says
+  `escapes on a route with no trap; caught on others (the checked Codeunit.Run at …)`; with a
+  filter, the printed route is one that crosses no trap.
+- **L30, `[ErrorBehavior(ErrorBehavior::Collect)]` forward:** an `Error` whose route passes a
+  collecting procedure says it may be collected and raised when that procedure ends, unless the
+  code clears it. The error is kept: Learn ("Collecting errors", "Collectible errors API") says
+  only a collectible `ErrorInfo` is collected and a collected error is still shown when the
+  procedure ends. Whether a given `Error` is collectible is not read (stated as left in
+  `docs/engine-limits.md`).
+- **One trap rule for both directions:** `src/engine/l5/traps.rs` holds it;
+  `callers-intercept-errors` (callers_context), the pending-writes walk and the forward answers
+  all read it (the checked-run test was in three copies before). The forward search
+  (`literal_reach`) marks trap edges once and runs a second guarded search that does not cross
+  them only for a root with a trap in its reach; only a completed search rules a row caught,
+  and that search follows no loaded-subscriber assumption, so `caught` never rests on one.
+- **The same applies to the error's dialog (`UI_ERROR`)**: `reaches-ui` no longer counts the
+  dialog of an error caught on every route.
+- **Output (outside consumers):** digest's per-effect `status` has a new value `caught`;
+  effects gain an additive `trap` object (`verdict`: `caught` / `escapes-if-write-pending` /
+  `trapped-on-some-routes`, `kind`, `routine`, `file`, `line`) and `collectedBy`; digest and
+  explain summaries gain `caughtErrors` (and an error caught on every route leaves `kinds`);
+  prove's slice JSON gains `caught`. Human text gains the `caught on every route by a trap`
+  lines and the trap words in the condition.
+- **Errors beyond a call into dependency code** (a boundary group) are caught when every route
+  to the crossing crosses a trap.
+- CDO (`SendQueue`, release-fast): `throws-error --site CDOQueueEntry.Table.al:249` answered
+  `yes`; the site sits behind `if not Codeunit.Run(…)` at `CDOQueueManagement.Codeunit.al:46`.
+  It now answers `unknown` (no matching site reachable; the cone's open-world and unresolved
+  calls still block a `no`), and 7,246 of the 7,249 error sites are named as caught. Unfiltered
+  `throws-error`: 317 evidence rows before, 3 now (`DOSetup.Get()` at :27 and the two
+  `Modify()` at :41 and :49, the only error sites outside the checked run), 314 caught.
+  `RunReportID`'s explain: `errors at 296 places` before, 271 and 37 caught now (TryFunctions);
+  `IssueReminder`: 289 before, 286 and 16 caught.
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said
