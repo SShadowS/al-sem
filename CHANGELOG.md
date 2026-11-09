@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers `unknown (blocked by: call not resolved)` and `query touches` `down: unknown`.
   On the call graph (`alsem graph`) a static report save is a resolved `run` edge to the
   report instead of an `Open` edge into the `h:run:report` hub.
+- **A report save or query save still keeps the RecordRef passed to it** (review
+  fix). Once those calls became object runs, the RecordRef flow (`l5::recref_flow`)
+  read them as calls that may rebind their arguments, so a `RecordRef` passed to
+  `Report.SaveAs(Id, …, RecRef)` lost its table and the literal pruning behind it.
+  On Continia DO, `explain` for `IssueReminder` grew from 147 to 418 tables written.
+  The flow now reads them as the platform methods they are (a run's triggers get their
+  own record): 198 tables, the rest of the growth being the report triggers the saves
+  now reach in dependency code.
 - **`Xmlport.Run(X, false, Import)` follows its `Import` argument** (review fix). With
   no request page (`RequestWindow` a literal `false`) and a literal `Import`, the run
   imports (`true`) or exports (`false`) only: "Specify true to run the XmlPort and

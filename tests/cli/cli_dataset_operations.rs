@@ -293,6 +293,33 @@ codeunit 50650 "DS Logic"
     begin
         Query.SaveAsCsv(Id, O);
     end;
+
+    procedure SaveFiltered(Id: Integer)
+    var
+        Line: Record "DS Line";
+    begin
+        SaveWithFilter(Line, Id);
+    end;
+
+    local procedure SaveWithFilter(V: Variant; Id: Integer)
+    var
+        RR: RecordRef;
+        OS: OutStream;
+    begin
+        RR.GetTable(V);
+        Report.SaveAs(Id, '', ReportFormat::Pdf, OS, RR);
+        OnlyForKept(RR);
+    end;
+
+    local procedure OnlyForKept(var R: RecordRef)
+    var
+        K: Record "DS Kept";
+    begin
+        if R.Number <> Database::"DS Kept" then
+            exit;
+        K.Init();
+        K.Insert();
+    end;
 }
 "#;
 
@@ -503,6 +530,16 @@ fn a_run_by_another_name_runs_the_triggers_and_a_dynamic_one_is_unknown() {
             "{routine}: {touches}"
         );
     }
+    // A report save is still a platform method for the RecordRef flow: it
+    // cannot rebind the RecordRef passed to it, so `R` still holds "DS Line"
+    // at `OnlyForKept`'s guard, which rules out its insert into "DS Kept".
+    // (Read as a call that may rebind it, the save cost Continia DO's
+    // `IssueReminder` most of its literal pruning: 418 tables, not 198.)
+    let text = alsem(ws, &["explain", "--routine", "DS Logic::SaveFiltered"]);
+    assert!(
+        text.contains("literal arguments rule out: 1 table (2 effect rows)"),
+        "{text}"
+    );
 }
 
 /// The reason reaches `explain` (a `platform:` line under the write's anchor)

@@ -105,6 +105,40 @@ pub fn is_report_output_method(method_lc: &str) -> bool {
     )
 }
 
+/// The object kind a call `receiver.method` (both folded) runs when the
+/// receiver is the object keyword itself (`Report.SaveAs(Id, …)`,
+/// `Codeunit.Run(…)`, `Xmlport.Import(…)`, `Query.SaveAsCsv(…)`): the
+/// platform's static run methods, which the resolver treats as object runs
+/// (`extract::classify_call`). `None` for anything else.
+///
+/// Such a call is a platform method: its Integer, Option and Enum arguments
+/// (object number, format, flags) are by value, and it cannot rebind a
+/// RecordRef or Variant passed to it. Its routes name the object's triggers,
+/// or nothing for a dynamic id, so the flow passes that read call targets
+/// would otherwise take it for an unknown call that may write its arguments;
+/// they ask this instead (`l5::literal_reach`, `l5::recref_flow`).
+#[must_use]
+pub fn keyword_run_kind(receiver_lc: &str, method_lc: &str) -> Option<ObjectKind> {
+    let (kind, runs) = match receiver_lc {
+        "codeunit" => (ObjectKind::Codeunit, method_lc == "run"),
+        "page" => (ObjectKind::Page, matches!(method_lc, "run" | "runmodal")),
+        "report" => (
+            ObjectKind::Report,
+            matches!(method_lc, "run" | "runmodal") || is_report_output_method(method_lc),
+        ),
+        "xmlport" => (
+            ObjectKind::XmlPort,
+            matches!(method_lc, "run" | "import" | "export"),
+        ),
+        "query" => (
+            ObjectKind::Query,
+            matches!(method_lc, "saveascsv" | "saveasjson" | "saveasxml"),
+        ),
+        _ => return None,
+    };
+    runs.then_some(kind)
+}
+
 /// The dataset mode of method `method_lc` (folded) on an object of `kind`: the
 /// calls that run the object's dataset (Learn: "Report data type", "XmlPort
 /// data type", "Query data type").
