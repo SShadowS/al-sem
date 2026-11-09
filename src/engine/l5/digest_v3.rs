@@ -747,7 +747,7 @@ pub fn entry_v3(
         json!({
             "status": entry.coverage_status,
             "reasons": entry.coverage_reasons,
-            "assumptions": ["loaded-program"],
+            "assumptions": crate::engine::l5::routine_rollup::coverage_assumption_labels(r),
             "limits": limit_values(r, entry),
         }),
     );

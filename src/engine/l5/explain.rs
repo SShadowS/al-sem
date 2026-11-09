@@ -2762,6 +2762,12 @@ fn explain_header(
                 limits.push(l.clone());
             }
         }
+        // B7 review round 2: what a card's caught errors rest on.
+        for a in &c.4.1.assumptions {
+            if !h.assumptions.contains(a) {
+                h.assumptions.push(a.clone());
+            }
+        }
     }
     if let Some(f) = &resolved.field
         && !f.search.1.is_empty()
@@ -5174,7 +5180,7 @@ impl Card {
         let coverage = json!({
             "status": full.coverage_status,
             "reasons": full.coverage_reasons,
-            "assumptions": ["loaded-program"],
+            "assumptions": crate::engine::l5::routine_rollup::coverage_assumption_labels(&rollup),
             "limits": counted,
             "notes": notes,
         });

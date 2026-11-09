@@ -371,8 +371,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Codeunit.Run at …: a checked Codeunit.Run inside a write transaction is itself a run-time
     error, raised there; with no write pending it catches the error`. Whether a write may be
     pending is read per root: a write of the run's own routine before the run (the
-    pending-writes walk's statement order, so a `Commit()` before the run clears it, and a
-    write to a known-temporary record is none), a call before the run into code that may leave
+    pending-writes walk's statement order, so a `Commit()` before the run clears it when it
+    runs normally on every route, see round 2 below, and a write to a known-temporary record
+    is none), a call before the run into code that may leave
     a write (a callee's write, a call no edge resolves, a callee with no row; not through a
     checked run), or a write pending where a caller in the root's reach called the routine
     (a least fixpoint over the reach). When the ruling may rest on a checked run with no write
@@ -380,17 +381,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     assumes the routine's callers have no write pending when they call it …` (prove JSON:
     `obligations.assumesNoPendingWriteAtEntry: true`), for the unfiltered and the filtered
     question alike.
-  - **A TryFunction traps only in the shapes Learn names.** `Use(TryIt())` answered `no`
+  - **A TryFunction traps only where its value is tested.** `Use(TryIt())` answered `no`
     (caught by the TryFunction); Learn names only `OK :=` and a condition, and its one argument
     example (`DoWork(DoInsert(Rec)); // Allowed as the DoWork return value isn't used so it's
     not a try function`) does not establish that a try call used as an argument traps. A new
-    call-site fact, `PCallSite::result_tested` (set by the body walk), marks the named shapes;
-    an argument, `exit(TryIt())` and `a and TryIt()` are now ordinary calls (the error is
+    call-site fact, `PCallSite::result_tested` (set by the body walk), marks the tested shapes:
+    `Ok := …` and the whole condition of `if`, `while` or `until`, through parentheses and
+    `not`. Learn names `OK :=` and `if-then`; reading `while`/`until` and `B := not TryIt()`
+    the same way goes slightly beyond what Learn names and was not checked on BC. An
+    argument, `exit(TryIt())` and `a and TryIt()` are now ordinary calls (the error is
     reported as escaping). `callers-intercept-errors` reads the same rule, and its "not
-    intercepted" line now says why for a used-but-unnamed shape. Not modeled, both on the safe
-    side and stated in `traps.rs`: on premises with `DisableWriteInsideTryFunctions` a write
-    inside a try method is itself a run-time error, and an error in a try call's arguments is
-    caught too ("Arguments for a try function are evaluated inside the try function").
+    intercepted" line now says why for a used-but-unnamed shape. Not modeled, stated in
+    `traps.rs`: an error in a try call's arguments is caught too ("Arguments for a try
+    function are evaluated inside the try function"), which the answers report as escaping
+    (safe); and on premises with `DisableWriteInsideTryFunctions` a write inside a try method
+    is itself a run-time error, which the answers do not add. Learn does not say whether the
+    try call catches that error, so this one is NOT known to be safe (left, L23).
   - **The pending-writes walk reads a `Commit()` inside a loop.** A target inside a loop counted
     the whole body (an earlier iteration) and stopped there, so a `Commit()` that runs before the
     target in the same iteration ended nothing. CDO's `SendQueue` is exactly that (`repeat …
@@ -419,6 +425,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     stopped at the cap, or literal arguments rule it out), the filtered answer no longer says
     `escapes on the route below (no trap on it)`; it says the escaping route could not be
     printed and the route below is a trapped one.
+- **Second review fixes (round 2, `fix/w2r2-b7`):**
+  - **A `Commit()` that `[CommitBehavior]` stops no longer ends the write before a checked
+    run.** Fixture: `[CommitBehavior(CommitBehavior::Ignore)] procedure IgnoredCommitRun …
+    R.ModifyAll(V, 1); Commit(); if Codeunit.Run(Codeunit::Thrower) then;` answered `no — no
+    error site escapes the routine; 1 error site caught … by the checked Codeunit.Run`, while
+    `prove may-commit` on the same routine said the commit is ignored. Microsoft Learn
+    ("CommitBehavior attribute",
+    https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/attributes/devenv-commitbehavior-attribute):
+    under `Ignore` "this commit is ignored", so the write stays pending and the checked run is
+    itself a run-time error; under `Error` "this commit causes an error", so it commits nothing
+    either. It now answers `yes` with the `escapes-if-write-pending` verdict, with and without
+    `--match`, and so does a scope the caller sets (`[CommitBehavior(Ignore)] IgnoreOuter`
+    calling the same shape) and `[CommitBehavior(Error)]`. The pending-writes search reads the
+    behavior from B4's rule rather than a copy of it: `commit_scope::CbGraph` gains
+    `commit_surely_runs(root, routine)`, which is true only when every route from the root runs
+    the routine's commits normally. For this question it reads a checked run as a run the
+    scope MAY follow into (B4 pins it to normal, which stands for the run's implicit commit;
+    whether a caller's scope reaches an explicit commit inside the run is not on Learn). No
+    current answer depends on that choice: an error inside a clean checked run is caught by the
+    run anyway. `pending_writes::sites_before_where` takes whether the commits end anything.
+  - **When a run is clean only because a `Commit()` before it ends the write, the answer
+    states a second assumption.** The root is read as entered with no behavior set; a caller
+    that calls it under `Ignore` or `Error` would stop that commit. prove's assumptions line
+    reads `assumes the routine's callers have no write pending when they call it and do not
+    call it under [CommitBehavior(Ignore)] or [CommitBehavior(Error)]: …`, and its JSON adds
+    `obligations.assumesNoCommitBehaviorAtEntry: true` (the search runs a second time with no
+    commit ending anything; the flag is set when that makes more runs unsafe). A ruling that
+    needs no commit (a helper that only runs) keeps the shorter sentence.
+  - **explain and digest state the assumption too.** They dropped a caught error with a
+    definite "they do not leave the routine" and only `assumptions: loaded program …`. Now
+    their header assumptions line carries the same sentence as prove
+    (`traps::entry_assumption`, one source), the caught line reads `errors caught on every
+    route by a trap (they do not leave the routine if its callers have no write pending when
+    they call it …)`, the JSON summary gains `assumesNoPendingWriteAtEntry` and
+    `assumesNoCommitBehaviorAtEntry` (present only when set, as prove's), and
+    `coverage.assumptions` gains `no-pending-write-at-entry` and `no-commit-behavior-at-entry`.
+    A caught dialog row (`UI_ERROR`) counts too, since it is left out on the same ruling. A
+    caught error behind no checked run (a used TryFunction) keeps the plain wording.
+  - `LiteralReach::new` now takes the snapshot (it needs the tree's `[CommitBehavior]`
+    scopes); every caller passed the snapshot's edges and facts already.
+  - Docs corrected: `traps.rs`, this entry and `docs/engine-limits.md` no longer call the
+    unmodeled `DisableWriteInsideTryFunctions` case safe (Learn does not say whether the try
+    catches that error), and no longer say the TryFunction rule keeps to "the shapes Learn
+    names" (`while`/`until` and `not` go slightly beyond them).
+  - **Discrimination proofs, round 2** (each break made with Edit, the narrowest test run,
+    then reverted and run green):
+    - R1, the B4 rule is read (`local_pending`'s `commit_surely_runs` replaced by `true`):
+      `a_commit_that_commitbehavior_stops_does_not_end_the_write` FAILED (IgnoredCommitRun
+      answered `no`). Reverted: PASS.
+    - R2, the route's scope, not only the routine's own declaration (`commit_surely_runs`
+      returns `decl == Normal`): the same test FAILED at IgnoreOuter (`no`), while
+      IgnoredCommitRun and ErrorCommitRun passed. Reverted: PASS.
+    - R3, the second assumption is detected (`by_commit` forced false): the same test FAILED
+      (CommitThenRun: no `assumesNoCommitBehaviorAtEntry`). Reverted: PASS.
+    - R4, the unfiltered prove obligation (`trap_assumes_normal_commit` forced false): the same
+      test FAILED at CommitThenRun. Reverted: PASS.
+    - R5, the filtered slice's flag (`caught_assumes_normal_commit` never set): the same test
+      FAILED at `CommitRunAndFail --match thrower` (its unfiltered answer is `yes` and states
+      nothing, so only the slice can set it). Reverted: PASS.
+    - R6, the rollup records what a caught row assumes (`note_caught_assumes` a no-op):
+      `explain_and_digest_state_what_a_caught_error_assumes` FAILED (explain header without
+      the sentence). Reverted: PASS.
+    - R7, digest's header merges it (the loop in `digest_cli` skipped): the same test FAILED at
+      the digest header, explain passing. Reverted: PASS.
+    - R8, explain's header merges it (the loop in `explain_header` skipped): the same test
+      FAILED at the explain header. Reverted: PASS.
+    - The cleaner reading of a checked run (not pinned) has no proof: no CLI answer can show
+      it (see above).
+  - **Discrimination proofs of the first review fixes**, run then (logs `b7/pA`..`pJ2` in the
+    session scratchpad) and recorded here, as the second review asked:
+    - A (TryFunction shape: `call_trap` back to `!in_statement_position`):
+      `a_tryfunction_traps_only_in_the_shapes_learn_names` FAILED. Reverted: PASS.
+    - B (the `not` look-through in `ir_walk::note_tested` removed): FAILED that test,
+      `an_error_behind_a_definite_trap_does_not_escape` (CheckedTry) and
+      `a_checked_run_with_a_write_pending_is_no_definite_trap`. Reverted: PASS.
+    - C (soft runs: `TrapScope::stops` ignores `soft`):
+      `a_checked_run_with_a_write_pending_is_no_definite_trap` FAILED. Reverted: PASS.
+    - D (own write before the run; `site_may_write`'s write check off): FAILED at
+      WriteThenRun (`no`). Reverted: PASS.
+    - E (a callee may leave a write; the `may_write` check off): FAILED at
+      CalleeWritesThenRun. Reverted: PASS.
+    - F (callers in the root's reach; the entry fixpoint never marks): FAILED at
+      WriteThenHelperRuns. Reverted: PASS.
+    - G (a temporary write is none; the `Known(true)` skip off): FAILED at TempWriteThenRun
+      (`yes`). Reverted: PASS.
+    - H (statement order and Commit; `sites_before` with `whole_body = true`): FAILED at
+      WriteCommitRun (`yes`). Reverted: PASS.
+    - I (unfiltered caller assumption forced off in `judge_traps`): FAILED at WriteCommitRun.
+      Reverted: PASS.
+    - J (filtered caller assumption off in the slice): first GREEN, because the unfiltered
+      path already set the flag; the RunAndFail case was added, and the break then FAILED.
+      Reverted: PASS.
+    - K (a Commit earlier in the same loop iteration; the new `walk_list` in
+      `pending_writes::walk_node` off): FAILED the pending-writes unit test, and LoopCommitRun
+      answered `yes`. Reverted: PASS.
+    - Not proven: the every-op-needs-an-owner guard (`trap_verdict`); no CLI fixture can build
+      a row with an ownerless operation.
+  - **Output (outside consumers), additive:** prove `obligations.assumesNoCommitBehaviorAtEntry`;
+    digest and explain `summary.assumesNoPendingWriteAtEntry` /
+    `summary.assumesNoCommitBehaviorAtEntry` and the two `coverage.assumptions` labels; the
+    longer prove assumption sentence; explain's and digest's header assumption sentence and
+    the longer caught line. Answers that flip from `no` to `yes`: a checked run after a
+    `Commit()` that a `[CommitBehavior(Ignore|Error)]` on the route stops.
 
 ### Changed (engine limits wave 1, L14 review fixes)
 

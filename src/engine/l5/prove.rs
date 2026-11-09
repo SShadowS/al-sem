@@ -213,6 +213,11 @@ pub struct ProveObligations {
     /// no write pending when they call it (a checked run inside a write
     /// transaction is itself a run-time error). Stated as an assumption.
     pub(crate) trap_assumes_clean_entry: bool,
+    /// B7 review round 2: as `trap_assumes_clean_entry`, where the clean run
+    /// may be clean only because a `Commit()` before it ends the write: it
+    /// also holds only if the callers do not call the root under
+    /// `[CommitBehavior(Ignore)]` or `(Error)`.
+    pub(crate) trap_assumes_normal_commit: bool,
 }
 
 /// r3 §7 R1: the events a cone raises that an unloaded subscriber could
@@ -467,6 +472,7 @@ fn compute_obligations(
         universe: String::new(),
         suppressed_commits: entry.suppressed_commits.clone(),
         trap_assumes_clean_entry: false,
+        trap_assumes_normal_commit: false,
     }
 }
 
@@ -933,13 +939,17 @@ fn evaluate_may_question(
     }
     // B7 review: an error left out as caught, where the trap may be a
     // checked run, holds only if the root's callers have no write pending.
-    oblg.trap_assumes_clean_entry = entry.effects.iter().any(|e| {
-        effect_matches(e, question)
-            && caught_at(e).is_some()
-            && e.flow_notes
-                .as_deref()
-                .is_some_and(|n| n.trap_assumes_clean_entry)
-    });
+    let caught_notes = || {
+        entry
+            .effects
+            .iter()
+            .filter(|e| effect_matches(e, question) && caught_at(e).is_some())
+            .filter_map(|e| e.flow_notes.as_deref())
+    };
+    oblg.trap_assumes_clean_entry = caught_notes().any(|n| n.trap_assumes_clean_entry);
+    // Round 2: ... and, when a `Commit()` before the run ends the write,
+    // that the callers set no `[CommitBehavior]` that stops it.
+    oblg.trap_assumes_normal_commit = caught_notes().any(|n| n.trap_assumes_normal_commit);
 
     // G17b: writes whose table is real only if the caller passes a persistent
     // record. They rule out `no`, but they are no `yes` either.
@@ -2026,6 +2036,11 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
     // checked run, which holds only if the callers have no write pending.
     if o.trap_assumes_clean_entry {
         m.insert("assumesNoPendingWriteAtEntry".into(), true.into());
+    }
+    // B7 review round 2 (additive): present only when such a ruling may
+    // also rest on a `Commit()` before the run ending the write.
+    if o.trap_assumes_normal_commit {
+        m.insert("assumesNoCommitBehaviorAtEntry".into(), true.into());
     }
     serde_json::Value::Object(m)
 }
@@ -3709,14 +3724,10 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
         ));
     }
     out.extend(crate::engine::l5::literal_reach::AssumptionRecord::sentences(&o.flow_assumed));
-    if o.trap_assumes_clean_entry {
-        out.push(
-            "assumes the routine's callers have no write pending when they call it: an error \
-             left out as caught may rest on a checked Codeunit.Run, and a checked run inside a \
-             write transaction is itself a run-time error"
-                .to_string(),
-        );
-    }
+    out.extend(crate::engine::l5::traps::entry_assumption(
+        o.trap_assumes_clean_entry,
+        o.trap_assumes_normal_commit,
+    ));
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
@@ -4183,6 +4194,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             universe: String::new(),
             suppressed_commits: Vec::new(),
             trap_assumes_clean_entry: false,
+            trap_assumes_normal_commit: false,
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -4662,6 +4674,7 @@ pub(crate) fn filtered_result(
     // B7 review: a site left out as caught, where the trap may be a checked
     // run, holds only if the root's callers have no write pending.
     oblg.trap_assumes_clean_entry |= slice.caught_assumes_clean_entry;
+    oblg.trap_assumes_normal_commit |= slice.caught_assumes_normal_commit;
     let mut blockers: Vec<ProveBlocker> = Vec::new();
     if !slice.complete {
         blockers.push(ProveBlocker {

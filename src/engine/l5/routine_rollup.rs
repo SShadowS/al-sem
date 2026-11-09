@@ -1433,6 +1433,9 @@ pub struct RollupTotals {
     /// B7/L23: error places a definite trap catches on every route (not in
     /// `kinds`).
     pub caught_errors: usize,
+    /// B7 review round 2: what leaving the caught rows out assumes
+    /// ([`RoutineRollup::caught_assumes`]).
+    pub caught_assumes: (bool, bool),
     pub gaps_workspace: usize,
     pub gaps_dependency: usize,
     pub gaps_not_placed: usize,
@@ -1599,6 +1602,14 @@ impl RollupTotals {
         // B7/L23 (additive): errors caught on every route by a trap.
         if self.caught_errors > 0 {
             v["caughtErrors"] = json!(self.caught_errors);
+        }
+        // B7 review round 2 (additive, as prove's `obligations`): present
+        // only when leaving a caught row out rests on the root's callers.
+        if self.caught_assumes.0 {
+            v["assumesNoPendingWriteAtEntry"] = json!(true);
+        }
+        if self.caught_assumes.1 {
+            v["assumesNoCommitBehaviorAtEntry"] = json!(true);
         }
         if self.entry_points_partial {
             v["entryPoints"]["atLeast"] = json!(true);
@@ -2064,6 +2075,11 @@ pub struct RoutineRollup {
     /// B7/L23: own error rows a definite trap catches on every route from
     /// the root (not in `kind_sites`, not counted as errors).
     pub caught_errors: Vec<usize>,
+    /// B7 review round 2: some caught error row rests on the assumption
+    /// that the root's callers have no write pending (and, second, that
+    /// they set no `[CommitBehavior]` that stops a `Commit()` the ruling
+    /// relies on): [`crate::engine::l5::traps::entry_assumption`].
+    pub caught_assumes: (bool, bool),
     /// Per kind family: crossing indices.
     pub kind_crossings: BTreeMap<&'static str, Vec<usize>>,
     pub gaps: GapCounts,
@@ -2094,6 +2110,15 @@ fn anchor_key(e: &DigestEffectFull) -> (String, u32) {
 }
 
 impl RoutineRollup {
+    /// B7 review round 2: records what a caught row's removal assumes
+    /// ([`Self::caught_assumes`]).
+    fn note_caught_assumes(&mut self, e: &DigestEffectFull) {
+        if let Some(n) = e.flow_notes.as_deref() {
+            self.caught_assumes.0 |= n.trap_assumes_clean_entry;
+            self.caught_assumes.1 |= n.trap_assumes_normal_commit;
+        }
+    }
+
     /// r3 E2: records what a literal-dead COMMIT row's removal assumes.
     fn note_dead_assumes(&mut self, i: usize, e: &DigestEffectFull) {
         if e.flow_notes.iter().any(|n| !n.assumed.is_empty()) {
@@ -2248,6 +2273,7 @@ impl RoutineRollup {
                     if family_of(ty) == Some("errors") {
                         r.caught_errors.push(i);
                     }
+                    r.note_caught_assumes(e);
                     continue;
                 }
                 match ty {
@@ -2368,6 +2394,8 @@ impl RoutineRollup {
                     if family_of(other) == Some("errors") {
                         r.caught_errors.push(i);
                     }
+                    // A caught dialog is left out on the same assumption.
+                    r.note_caught_assumes(e);
                 }
                 other => {
                     if let Some(f) = family_of(other) {
@@ -2559,6 +2587,7 @@ impl RoutineRollup {
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
             caught_errors: self.caught_errors.len(),
+            caught_assumes: self.caught_assumes,
             entry_points_partial: false,
             events: self.events_ws.len() + self.events_beyond.len(),
             events_in_workspace: self.events_ws.len(),
@@ -2900,6 +2929,8 @@ pub struct HeaderFacts {
     pub analysis: crate::engine::result_header::Analysis,
     /// Each cap with its count.
     pub limits: Vec<String>,
+    /// The assumptions beyond the loaded program ([`caught_assumptions`]).
+    pub assumptions: Vec<String>,
     /// The dependency depth that limits this card: `dependency code: none
     /// reached`, or what was followed with its counts.
     pub depth: String,
@@ -3015,8 +3046,32 @@ pub fn header_facts(
         summary: lines[0].clone(),
         analysis,
         limits,
+        assumptions: caught_assumptions(r).into_iter().collect(),
         depth,
     }
+}
+
+/// B7 review round 2: the assumptions leaving the caught rows out rests on
+/// ([`crate::engine::l5::traps::entry_assumption`]), beyond the loaded
+/// program: explain's and digest's header states them as prove does.
+#[must_use]
+pub fn caught_assumptions(r: &RoutineRollup) -> Option<String> {
+    let (clean, commit) = r.caught_assumes;
+    crate::engine::l5::traps::entry_assumption(clean, commit)
+}
+
+/// The JSON `coverage.assumptions` labels of one root: `loaded-program`,
+/// then (B7 review round 2) the ones [`caught_assumptions`] states.
+#[must_use]
+pub fn coverage_assumption_labels(r: &RoutineRollup) -> Vec<&'static str> {
+    let mut out = vec!["loaded-program"];
+    if r.caught_assumes.0 {
+        out.push("no-pending-write-at-entry");
+        if r.caught_assumes.1 {
+            out.push("no-commit-behavior-at-entry");
+        }
+    }
+    out
 }
 
 /// The coverage, assumptions, limits and scope lines (design §3.7, §3.8
@@ -3043,10 +3098,9 @@ fn header_lines(
         cov.push_str(&format!(" — {}", counts.join(", ")));
     }
     out.push(cov);
-    out.push(format!(
-        "assumptions: {}",
-        crate::engine::result_header::LOADED_PROGRAM
-    ));
+    let mut assumptions = vec![crate::engine::result_header::LOADED_PROGRAM.to_string()];
+    assumptions.extend(caught_assumptions(r));
+    out.push(format!("assumptions: {}", assumptions.join("; ")));
     let mut limits: Vec<String> = Vec::new();
     if !r.no_path.is_empty() {
         limits.push(format!(
@@ -4278,8 +4332,22 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
             .collect();
         let n = places.len();
         let f = fold(places, caps::KIND_PLACES, "places", detail);
+        // B7 review round 2: a ruling that rests on the root's callers says
+        // so here too, not only on the header's assumptions line.
+        let leave = match r.caught_assumes {
+            (false, _) => "they do not leave the routine",
+            (true, false) => {
+                "they do not leave the routine if its callers have no write pending when they \
+                 call it"
+            }
+            (true, true) => {
+                "they do not leave the routine if its callers have no write pending when they \
+                 call it and do not call it under [CommitBehavior(Ignore)] or \
+                 [CommitBehavior(Error)]"
+            }
+        };
         out.push(format!(
-            "errors caught on every route by a trap (they do not leave the routine): {}: {}",
+            "errors caught on every route by a trap ({leave}): {}: {}",
             plural(n, "place", "places"),
             f.joined()
         ));

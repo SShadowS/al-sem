@@ -159,13 +159,27 @@ pub(crate) struct Before {
 /// reaches any of `targets`. With no tree, a target the tree does not hold, or
 /// `whole_body`, every site of `r` counts.
 pub(crate) fn sites_before(r: &ModelRoutine, targets: &[&str], whole_body: bool) -> Before {
+    sites_before_where(r, targets, whole_body, true)
+}
+
+/// [`sites_before`], where `commits_end` says whether `r`'s `Commit()`
+/// statements end the open transaction at all. B7: a caller that knows a
+/// `[CommitBehavior]` may ignore them (or turn them into errors) passes
+/// `false`, and no commit then clears what ran before it
+/// ([`crate::engine::l5::commit_scope::CbGraph::commit_surely_runs`]).
+pub(crate) fn sites_before_where(
+    r: &ModelRoutine,
+    targets: &[&str],
+    whole_body: bool,
+    commits_end: bool,
+) -> Before {
     let mut sites: BTreeSet<String> = BTreeSet::new();
     let mut all = whole_body || r.statement_tree.is_none();
     let mut committed = !targets.is_empty();
     let commits: BTreeSet<&str> = r
         .operation_sites
         .iter()
-        .filter(|o| o.kind == "commit")
+        .filter(|o| commits_end && o.kind == "commit")
         .map(|o| o.id.as_str())
         .collect();
     if let Some(tree) = &r.statement_tree

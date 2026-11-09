@@ -503,6 +503,10 @@ pub struct SliceOut {
     /// pending within the root: it holds only if the root's own callers have
     /// no write pending when they call it (the answer states this).
     pub caught_assumes_clean_entry: bool,
+    /// B7 review round 2: ... and the clean run may be clean only because a
+    /// `Commit()` before it ends the write: it holds only if the callers do
+    /// not call the root under `[CommitBehavior(Ignore)]` or `(Error)`.
+    pub caught_assumes_normal_commit: bool,
 }
 
 impl SliceOut {
@@ -869,7 +873,7 @@ pub(crate) fn compute_slice(
         crate::engine::perf_trace::counter_delta("prove.site_guard_arms", arms);
         crate::engine::perf_trace::counter_delta("prove.site_guard_bytes", bytes);
     }
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(tree, model);
     let mut out = SliceOut {
         request: req.clone(),
         complete: false,
@@ -878,6 +882,7 @@ pub(crate) fn compute_slice(
         temporary: 0,
         caught: Vec::new(),
         caught_assumes_clean_entry: false,
+        caught_assumes_normal_commit: false,
     };
     // E2: above one route, the state-transition graph, whose tree is the
     // search tree E1 reads (the same search, every transition kept).
@@ -1020,6 +1025,7 @@ pub(crate) fn compute_slice(
             // B7 review: the ruling may rest on a checked run, which holds
             // only if the root's callers have no write pending.
             out.caught_assumes_clean_entry |= scope.as_ref().is_some_and(|s| s.clean_checked);
+            out.caught_assumes_normal_commit |= scope.as_ref().is_some_and(|s| s.clean_by_commit);
             out.caught.push(CaughtSite {
                 file: anchor.map(|a| a.source_unit_id.clone()),
                 line: anchor.map(|a| a.start_line),

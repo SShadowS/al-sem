@@ -1978,11 +1978,7 @@ impl<'t> LiteralPass<'t> {
     pub(crate) fn new(tree: &'t CapabilitySnapshot, model: &'t Model) -> LiteralPass<'t> {
         let reach = {
             let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
-            crate::engine::l5::literal_reach::LiteralReach::new(
-                &tree.typed_edges,
-                &tree.capability_facts,
-                model,
-            )
+            crate::engine::l5::literal_reach::LiteralReach::new(tree, model)
         };
         // G35: how each group resource is reached inside the dependency.
         let group_paths = {
@@ -2102,13 +2098,16 @@ fn judge_traps<'t>(
         };
         let trap = scope
             .as_ref()
-            .and_then(|s| reach.trap_verdict(full, s, &ops));
-        // B7 review: a caught ruling that may rest on a checked run assumes
+            .and_then(|s| reach.trap_verdict(full, s, &ops)); // B7 review: a caught ruling that may rest on a checked run assumes
         // the root's callers have no write pending.
-        let assumes_clean_entry = matches!(
+        let caught = matches!(
             trap,
             Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
-        ) && scope.as_ref().is_some_and(|s| s.clean_checked);
+        );
+        let assumes_clean_entry = caught && scope.as_ref().is_some_and(|s| s.clean_checked);
+        // Round 2: ... and, when a `Commit()` before the run ends the write,
+        // that the callers set no `[CommitBehavior]` that stops it.
+        let assumes_normal_commit = caught && scope.as_ref().is_some_and(|s| s.clean_by_commit);
         let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
             reach
                 .tree_witness(full, &ops)
@@ -2121,6 +2120,7 @@ fn judge_traps<'t>(
             let notes = e.flow_notes.get_or_insert_with(Default::default);
             notes.trap = trap;
             notes.trap_assumes_clean_entry = assumes_clean_entry;
+            notes.trap_assumes_normal_commit = assumes_normal_commit;
             notes.collected_by = collected_by;
         }
     }
@@ -3828,6 +3828,12 @@ fn digest_header(
         for l in &f.limits {
             if !h.limits.contains(l) {
                 h.limits.push(l.clone());
+            }
+        }
+        // B7 review round 2: what a root's caught errors rest on.
+        for a in &f.assumptions {
+            if !h.assumptions.contains(a) {
+                h.assumptions.push(a.clone());
             }
         }
     }

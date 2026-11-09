@@ -292,6 +292,61 @@ codeunit 50305 "B7 More"
         Error('other failed');
     end;
 }
+
+codeunit 50306 "B7 Commit Scopes"
+{
+    // B7 review round 2 (B4 x B7): under Ignore the Commit() is ignored, so
+    // the write is still pending at the checked run.
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoredCommitRun()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        Commit();
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    // Under Error the Commit() raises an error and commits nothing.
+    [CommitBehavior(CommitBehavior::Error)]
+    procedure ErrorCommitRun()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        Commit();
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    // The Ignore scope is set by the caller.
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreOuter()
+    begin
+        CommitThenRun();
+    end;
+
+    // Asked on its own: entered normally, its Commit() ends the write.
+    procedure CommitThenRun()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        Commit();
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    // As CommitThenRun, with an error that escapes beside the caught one:
+    // the unfiltered answer is `yes` and states nothing.
+    procedure CommitRunAndFail()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        Commit();
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+        Error('other failed');
+    end;
+}
 "#;
 
 fn run(cwd: &Path, args: &[&str]) -> Vec<u8> {
@@ -793,4 +848,168 @@ fn a_trap_free_route_through_deeper_callees_is_printed() {
         "{h}"
     );
     assert!(h.contains("Deeper"), "the route goes through Deeper: {h}");
+}
+
+#[test]
+fn a_commit_that_commitbehavior_stops_does_not_end_the_write() {
+    // B7 review round 2 (B4 x B7). Microsoft Learn, "CommitBehavior
+    // attribute": under `Ignore` "this commit is ignored", under `Error`
+    // "this commit causes an error"; either way the write before it is still
+    // pending at the checked run, which is then itself a run-time error
+    // ("Codeunit.Run", Transaction semantics). Precondition by source shape:
+    // each routine writes, commits, then runs the thrower checked.
+    let ws = Ws::new();
+    for routine in ["IgnoredCommitRun", "ErrorCommitRun", "IgnoreOuter"] {
+        for extra in [&[][..], &["--match", "thrower"][..]] {
+            let p = ws.prove(routine, extra);
+            assert_eq!(
+                p["result"]["answer"], "yes",
+                "{routine} {extra:?}: {}",
+                p["result"]
+            );
+        }
+        let p = ws.prove(routine, &[]);
+        assert!(
+            p["result"]["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["trap"]["verdict"] == "escapes-if-write-pending"
+                    && e["trap"]["kind"] == "checked-run"),
+            "{routine}: {}",
+            p["result"]
+        );
+        // explain and digest agree: the error is not listed as caught.
+        let id = ws.id(routine);
+        let d = json(
+            &ws.root,
+            &["digest", "ws", "--routine", id, "--format", "json"],
+        );
+        assert!(
+            d["payload"]["entries"][0]["summary"]["caughtErrors"].is_null(),
+            "{routine}: {}",
+            d["payload"]["entries"][0]["summary"]
+        );
+    }
+    // The control: the same shape entered normally. Its Commit() ends the
+    // write, so the error is caught, and the answer states that it rests on
+    // the callers calling it under no such behavior.
+    let p = ws.prove("CommitThenRun", &[]);
+    assert_eq!(p["result"]["answer"], "no", "{}", p["result"]);
+    let o = &p["result"]["obligations"];
+    assert_eq!(o["assumesNoPendingWriteAtEntry"], true, "{o}");
+    assert_eq!(o["assumesNoCommitBehaviorAtEntry"], true, "{o}");
+    let h = prove_human(&ws, "CommitThenRun", &["--match", "thrower"]);
+    assert!(
+        h.contains("do not call it under [CommitBehavior(Ignore)] or [CommitBehavior(Error)]"),
+        "{h}"
+    );
+    // The filtered question states it on its own: the unfiltered answer is
+    // a `yes` (another error escapes) and states nothing.
+    let p = ws.prove("CommitRunAndFail", &[]);
+    assert_eq!(
+        p["result"]["answer"], "yes",
+        "precondition: {}",
+        p["result"]
+    );
+    assert!(
+        p["result"]["obligations"]["assumesNoCommitBehaviorAtEntry"].is_null(),
+        "precondition: {}",
+        p["result"]
+    );
+    let p = ws.prove("CommitRunAndFail", &["--match", "thrower"]);
+    assert_eq!(p["result"]["answer"], "no", "{}", p["result"]);
+    assert_eq!(
+        p["result"]["obligations"]["assumesNoCommitBehaviorAtEntry"], true,
+        "{}",
+        p["result"]
+    );
+    // A ruling that needs no commit states only the pending-write part.
+    let p = ws.prove("HelperRuns", &[]);
+    assert_eq!(p["result"]["answer"], "no", "{}", p["result"]);
+    let o = &p["result"]["obligations"];
+    assert_eq!(o["assumesNoPendingWriteAtEntry"], true, "{o}");
+    assert!(o["assumesNoCommitBehaviorAtEntry"].is_null(), "{o}");
+}
+
+#[test]
+fn explain_and_digest_state_what_a_caught_error_assumes() {
+    // B7 review round 2: an error left out as caught behind a checked run
+    // leaves the routine when a caller has a write pending. prove stated
+    // that; explain and digest dropped the error with a definite "they do
+    // not leave the routine". Now every forward error answer states it.
+    let ws = Ws::new();
+    let sentence = "assumes the routine's callers have no write pending when they call it";
+    for (routine, commit) in [("HelperRuns", false), ("CommitThenRun", true)] {
+        let id = ws.id(routine);
+        for tool in ["explain", "digest"] {
+            let h = human(
+                &ws.root,
+                &[tool, "ws", "--routine", id, "--format", "human"],
+            );
+            let header = h
+                .lines()
+                .find(|l| l.contains("assumptions:"))
+                .unwrap_or_else(|| panic!("{routine} {tool}: a header: {h}"));
+            assert!(header.contains(sentence), "{routine} {tool}: {header}");
+            assert_eq!(
+                header.contains("[CommitBehavior(Ignore)]"),
+                commit,
+                "{routine} {tool}: {header}"
+            );
+            assert!(
+                h.contains(
+                    "errors caught on every route by a trap (they do not leave the routine if \
+                     its callers have no write pending when they call it"
+                ),
+                "{routine} {tool}: {h}"
+            );
+            let j = json(&ws.root, &[tool, "ws", "--routine", id, "--format", "json"]);
+            let s = j.to_string();
+            assert!(
+                s.contains("\"assumesNoPendingWriteAtEntry\":true"),
+                "{routine} {tool}: {s}"
+            );
+            assert_eq!(
+                s.contains("\"assumesNoCommitBehaviorAtEntry\":true"),
+                commit,
+                "{routine} {tool}: {s}"
+            );
+            assert!(
+                s.contains("\"no-pending-write-at-entry\""),
+                "{routine} {tool}: {s}"
+            );
+        }
+        let d = json(
+            &ws.root,
+            &["digest", "ws", "--routine", id, "--format", "json"],
+        );
+        let summary = &d["payload"]["entries"][0]["summary"];
+        assert_eq!(summary["caughtErrors"], 1, "{routine}: {summary}");
+        assert_eq!(
+            summary["assumesNoPendingWriteAtEntry"], true,
+            "{routine}: {summary}"
+        );
+    }
+    // A caught error behind no checked run (a used TryFunction) rests on no
+    // caller: the plain wording, no such field.
+    let id = ws.id("CheckedTry");
+    let h = human(
+        &ws.root,
+        &["digest", "ws", "--routine", id, "--format", "human"],
+    );
+    assert!(
+        h.contains("errors caught on every route by a trap (they do not leave the routine):"),
+        "{h}"
+    );
+    assert!(!h.contains(sentence), "{h}");
+    let d = json(
+        &ws.root,
+        &["digest", "ws", "--routine", id, "--format", "json"],
+    );
+    assert!(
+        d["payload"]["entries"][0]["summary"]["assumesNoPendingWriteAtEntry"].is_null(),
+        "{}",
+        d["payload"]["entries"][0]["summary"]
+    );
 }
