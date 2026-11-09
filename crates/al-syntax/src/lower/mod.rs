@@ -390,6 +390,13 @@ fn lower_object(
     if kind == ObjectKind::Query {
         collect_query_columns(node, "", source, &mut query_columns);
     }
+    let mut dataset_items = Vec::new();
+    if matches!(
+        kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort | ObjectKind::Query
+    ) {
+        collect_dataset_items(node, source, &mut dataset_items);
+    }
 
     // Extension `extends` target (the grammar's `base_object` field) — None for
     // non-extension objects (no such field).
@@ -472,6 +479,7 @@ fn lower_object(
         dataitems,
         temporary_dataitems,
         query_columns,
+        dataset_items,
         extends_target,
         implements,
         page_controls,
@@ -1063,6 +1071,143 @@ fn own_use_temporary(item: RawNode, source: &str) -> bool {
         }
         _ => own_use_temporary(c, source),
     })
+}
+
+/// The dataset items under `node` (see [`crate::ir::ObjectDecl::dataset_items`]):
+/// report and query dataitems and XmlPort table elements, nested ones and every `#if`
+/// arm's included, document order. An item with no name or no table is skipped.
+fn collect_dataset_items(node: RawNode, source: &str, out: &mut Vec<crate::ir::DatasetItemDecl>) {
+    use crate::ir::DatasetItemKind as K;
+    for child in node.named_children() {
+        let kind = match child.kind() {
+            RawKind::ReportDataitem => Some(K::ReportDataitem),
+            RawKind::QueryDataitem => Some(K::QueryDataitem),
+            RawKind::XmlportElement
+                if child
+                    .field(FieldName::ElementType)
+                    .is_some_and(|t| t.kind() == RawKind::TableelementKeyword) =>
+            {
+                Some(K::XmlPortTableElement)
+            }
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let name = child
+                .field(FieldName::Name)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            let table = match kind {
+                K::XmlPortTableElement => child
+                    .field(FieldName::Source)
+                    .map(|n| ident_text(n, source)),
+                _ => dataitem_table_name(child, source),
+            }
+            .unwrap_or_default();
+            if !name.is_empty() && !table.is_empty() {
+                let props = own_item_properties(child, source);
+                let xml = kind == K::XmlPortTableElement;
+                out.push(crate::ir::DatasetItemDecl {
+                    kind,
+                    name,
+                    table,
+                    // A query has no `UseTemporary`: it reads the database.
+                    use_temporary: if kind == K::QueryDataitem {
+                        Some(false)
+                    } else {
+                        bool_property(&props, "usetemporary", false)
+                    },
+                    auto_save: if xml {
+                        bool_property(&props, "autosave", true)
+                    } else {
+                        Some(false)
+                    },
+                    auto_update: if xml {
+                        bool_property(&props, "autoupdate", false)
+                    } else {
+                        Some(false)
+                    },
+                    auto_replace: if xml {
+                        bool_property(&props, "autoreplace", false)
+                    } else {
+                        Some(false)
+                    },
+                    origin: origin_of(child),
+                });
+            }
+        }
+        // Nested items live under an item's body; routine bodies hold none.
+        collect_dataset_items(child, source, out);
+    }
+}
+
+/// `item`'s OWN properties (not a nested item's, not a trigger's) as
+/// `(name lowercased, value, conditional)`: `conditional` when the property, or its
+/// whole value, sits in an `#if` arm.
+fn own_item_properties(item: RawNode, source: &str) -> Vec<(String, String, bool)> {
+    fn walk(n: RawNode, source: &str, conditional: bool, out: &mut Vec<(String, String, bool)>) {
+        for c in n.named_children() {
+            match c.kind() {
+                RawKind::ReportDataitem
+                | RawKind::QueryDataitem
+                | RawKind::XmlportElement
+                | RawKind::Procedure
+                | RawKind::TriggerDeclaration => {}
+                RawKind::Property => {
+                    let mut props = Vec::new();
+                    lower_property(c, source, &mut props);
+                    // A whole-value `#if` gives one entry per arm.
+                    let arms = props.len() > 1;
+                    out.extend(
+                        props
+                            .into_iter()
+                            .map(|p| (p.name, p.value, conditional || arms)),
+                    );
+                }
+                _ if is_preproc_wrapper(c) => walk(c, source, true, out),
+                _ => walk(c, source, conditional, out),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(item, source, false, &mut out);
+    out
+}
+
+/// A Boolean property's value in every build (see
+/// [`crate::ir::DatasetItemDecl`]): `default` when it is not written, the written
+/// value when it is written outside `#if`, and `None` when the builds disagree or a
+/// value is not `true`/`false`. A property written only inside `#if` arms keeps the
+/// default as a possible value: a build may take no arm. That is also assumed when
+/// an `#else` arm covers every build (`#if X AutoSave = false; #else AutoSave =
+/// false; #endif` reads as `None`), which is imprecise but never claims a value
+/// some build does not have.
+fn bool_property(props: &[(String, String, bool)], name: &str, default: bool) -> Option<bool> {
+    let entries: Vec<(&str, bool)> = props
+        .iter()
+        .filter(|(n, _, _)| n == name)
+        .map(|(_, v, c)| (v.trim(), *c))
+        .collect();
+    let mut values: Vec<Option<bool>> = entries
+        .iter()
+        .map(|(v, _)| {
+            if v.eq_ignore_ascii_case("true") {
+                Some(true)
+            } else if v.eq_ignore_ascii_case("false") {
+                Some(false)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if entries.iter().all(|(_, c)| *c) {
+        values.push(Some(default));
+    }
+    let first = values[0];
+    if values.iter().all(|v| *v == first) {
+        first
+    } else {
+        None
+    }
 }
 
 /// Lower a `property` node (`name = value`) into `out`. Name lowercased; value is the
@@ -4140,6 +4285,114 @@ table 50000 \"T Two\"
                 ("Elem".to_string(), "T".to_string()),
                 ("Inner Line".to_string(), "Sales Line".to_string())
             ]
+        );
+    }
+
+    /// B6: the dataset items keep each XmlPort table element's `AutoSave`,
+    /// `AutoUpdate`, `AutoReplace` and `UseTemporary` as the value every build
+    /// gives it: the AL default when not written, `None` when `#if` arms make
+    /// builds disagree (a property in one arm alone keeps the default in the
+    /// build that takes no arm). A nested element's properties are its own.
+    #[test]
+    fn dataset_items_keep_their_properties_per_build() {
+        let src = "xmlport 50003 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Plain; T)
+            {
+                tableelement(NoSave; U)
+                {
+                    AutoSave = false;
+                    AutoReplace = true;
+                }
+            }
+            tableelement(Armed; T)
+            {
+#if CLEAN
+                AutoSave = false;
+#endif
+                UseTemporary = true;
+            }
+        }
+    }
+}
+query 50004 Q
+{
+    elements
+    {
+        dataitem(QItem; T)
+        {
+            column(K; K) { }
+        }
+    }
+}
+";
+        let af = parse(src);
+        let items = |o: usize| -> Vec<_> {
+            af.objects[o]
+                .dataset_items
+                .iter()
+                .map(|d| {
+                    (
+                        d.kind,
+                        d.name.clone(),
+                        d.table.clone(),
+                        d.use_temporary,
+                        d.auto_save,
+                        d.auto_update,
+                        d.auto_replace,
+                    )
+                })
+                .collect()
+        };
+        use crate::ir::DatasetItemKind::{QueryDataitem, XmlPortTableElement};
+        let t = |s: &str| s.to_string();
+        assert_eq!(
+            items(0),
+            vec![
+                (
+                    XmlPortTableElement,
+                    t("Plain"),
+                    t("T"),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(false)
+                ),
+                (
+                    XmlPortTableElement,
+                    t("NoSave"),
+                    t("U"),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(true)
+                ),
+                (
+                    XmlPortTableElement,
+                    t("Armed"),
+                    t("T"),
+                    Some(true),
+                    None,
+                    Some(false),
+                    Some(false)
+                ),
+            ]
+        );
+        assert_eq!(
+            items(1),
+            vec![(
+                QueryDataitem,
+                t("QItem"),
+                t("T"),
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(false)
+            )]
         );
     }
 

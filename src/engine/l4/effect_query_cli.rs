@@ -1416,6 +1416,10 @@ pub struct OperationRef {
     pub file: String,
     pub line: u32,
     pub column: u32,
+    /// B6: for an operation the platform performs when the call at the anchor
+    /// runs a report, XmlPort or query, why
+    /// (`ModelRecordOperation::dataset_reason`); `None` for code's own.
+    pub platform: Option<String>,
 }
 
 /// `operation_id` -> the routine + record operation that produced it, read
@@ -1447,6 +1451,7 @@ impl<'a> OperationJoin<'a> {
             file: op.source_anchor.source_unit_id.clone(),
             line: op.source_anchor.start_line,
             column: op.source_anchor.start_column,
+            platform: op.dataset_reason.clone(),
         })
     }
 
@@ -1511,17 +1516,30 @@ fn unresolved_label(record_ref: bool) -> &'static str {
 fn origin_json(origin: Option<&OperationRef>) -> Value {
     match origin {
         None => Value::Null,
-        Some(o) => json!({
-            "routine": routine_ref_json(&o.owner),
-            "anchor": { "file": o.file, "line": shown(o.line), "column": o.column },
-        }),
+        Some(o) => {
+            let mut v = json!({
+                "routine": routine_ref_json(&o.owner),
+                "anchor": { "file": o.file, "line": shown(o.line), "column": o.column },
+            });
+            if let Some(p) = &o.platform {
+                v["platform"] = p.as_str().into();
+            }
+            v
+        }
     }
 }
 
-/// `Object::Routine at file:line` — the human rendering of an effect's origin.
+/// `Object::Routine at file:line` — the human rendering of an effect's origin,
+/// then (B6) `: <why>` for an operation the platform performs.
 fn origin_human(origin: Option<&OperationRef>, operation_id: &str) -> String {
     match origin {
-        Some(o) => format!("{} at {}:{}", o.owner.qualified(), o.file, shown(o.line)),
+        Some(o) => {
+            let at = format!("{} at {}:{}", o.owner.qualified(), o.file, shown(o.line));
+            match &o.platform {
+                Some(p) => format!("{at} (platform: {p})"),
+                None => at,
+            }
+        }
         None => format!("(outside the workspace: {operation_id})"),
     }
 }

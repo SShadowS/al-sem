@@ -2283,6 +2283,7 @@ mod issue21_predicate_tests {
             transfer_fields_source: None,
             flow_field_reads: Vec::new(),
             receiver_is_record_ref: false,
+            dataset_reason: None,
         }
     }
 

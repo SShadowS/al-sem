@@ -2369,6 +2369,7 @@ mod memo_tests {
             transfer_fields_source: None,
             receiver_is_record_ref: false,
             flow_field_reads: Vec::new(),
+            dataset_reason: None,
         };
 
         let c = routine("C", "procedure");

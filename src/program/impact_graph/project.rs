@@ -117,6 +117,7 @@ fn entry_trigger(kind: ObjectKind) -> &'static str {
         ObjectKind::Page => "onopenpage",
         ObjectKind::Report => "onprereport",
         ObjectKind::XmlPort => "onprexmlport",
+        ObjectKind::Query => "onbeforeopen",
         _ => "onrun",
     }
 }
@@ -1641,6 +1642,7 @@ pub(crate) mod tests {
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,

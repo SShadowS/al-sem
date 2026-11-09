@@ -440,6 +440,33 @@ pub struct ModelRecordOperation {
     /// operation. The record operation list itself is unchanged, so detectors
     /// do not see these reads. Never serialized.
     pub flow_field_reads: Vec<super::flow_fields::FlowFieldRead>,
+    /// B6 (engine limits L20): `Some(reason)` for an operation the PLATFORM
+    /// performs when the call at `source_anchor` runs a report, XmlPort or
+    /// query: a dataitem's read, an XmlPort import's insert or modify
+    /// (`program_calls::dataset_operations`). The reason names the object, the
+    /// item and the property (`XMLport "Imp" imports into table "Line"
+    /// (tableelement LineEl, AutoSave)`). No code writes it, so its record
+    /// variable is none; it is added after resolution, at the end of the
+    /// routine's list. `None` for every operation written in code.
+    pub dataset_reason: Option<String>,
+}
+
+impl ModelRecordOperation {
+    /// The operation as evidence shows it: `Var.Op` (`?.Op` with no variable),
+    /// or for a platform dataset operation its reason (B6), which names the
+    /// object, the item and the property, since no code at the site says it.
+    #[must_use]
+    pub fn evidence_text(&self) -> String {
+        if let Some(reason) = &self.dataset_reason {
+            return reason.clone();
+        }
+        let var = if self.record_variable_name.is_empty() {
+            "?"
+        } else {
+            self.record_variable_name.as_str()
+        };
+        format!("{var}.{}", self.op)
+    }
 }
 
 /// A lexical variable (params → locals → globals) carrying its declared type, for
@@ -1951,6 +1978,7 @@ fn project_ir(
                     run_trigger: op.run_trigger,
                     receiver_is_record_ref: op.receiver_is_record_ref,
                     flow_field_reads: Vec::new(),
+                    dataset_reason: None,
                 })
                 .collect();
             let field_accesses = std::mem::take(&mut features.field_accesses);

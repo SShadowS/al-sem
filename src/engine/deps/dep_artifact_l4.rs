@@ -423,7 +423,10 @@ fn artifact_from_model(
                     start_column: a.start_column,
                     end_line: a.end_line,
                     end_column: a.end_column,
-                    display_text: format!("{}.{}", ro.record_variable_name, ro.op),
+                    display_text: ro
+                        .dataset_reason
+                        .clone()
+                        .unwrap_or_else(|| format!("{}.{}", ro.record_variable_name, ro.op)),
                     control_context: matching_cc,
                 },
             );

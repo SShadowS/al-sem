@@ -11,6 +11,7 @@ pub mod builtins;
 pub mod closed_enum;
 pub mod compiler_golden;
 pub mod compiler_oracle;
+pub mod dataset;
 pub mod decl_surface;
 pub mod demand;
 pub mod differential;

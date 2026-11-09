@@ -703,6 +703,7 @@ mod tests {
             transfer_fields_source: None,
             receiver_is_record_ref: false,
             flow_field_reads: Vec::new(),
+            dataset_reason: None,
         };
         let temp = Some(ts_known(true));
         // (is_implicit_rec, expected: Rec row temp, Rec op temp, xRec op temp)

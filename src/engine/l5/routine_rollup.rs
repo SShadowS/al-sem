@@ -959,6 +959,24 @@ impl<'m> RollupCx<'m> {
         format!("{file}:{}", shown(line))
     }
 
+    /// B6: why the platform performs effect `e`'s operation, when no code
+    /// does (a report's dataitem read, an XmlPort import's insert):
+    /// `ModelRecordOperation::dataset_reason` of its first originating
+    /// operation that has one. `None` for an operation written in code.
+    #[must_use]
+    pub fn platform_reason(
+        &self,
+        e: &crate::engine::l5::digest_cli::DigestEffectFull,
+    ) -> Option<&'m str> {
+        e.origin_operation_ids.iter().find_map(|op| {
+            self.ops
+                .claims(op)
+                .first()
+                .and_then(|c| self.ops.record_operation(c))
+                .and_then(|o| o.dataset_reason.as_deref())
+        })
+    }
+
     /// The kind a witness's terminal operation prints as: its original
     /// record-operation kind, else the effect type.
     #[must_use]
@@ -2686,7 +2704,24 @@ fn path_lines(cx: &RollupCx<'_>, root: &str, e: &DigestEffectFull, cap: usize) -
 /// anchor only. Final CDO output review, item 2: before, a row whose listed
 /// paths the literal pass had all dropped printed its anchor and nothing
 /// else.
+/// B6: an operation the platform performs (no code at the anchor writes it)
+/// says why, on the line after its anchor: `platform: XMLport "X" imports
+/// into table "T" (tableelement E, AutoSave)`.
 pub fn own_witness_lines(
+    cx: &RollupCx<'_>,
+    root: &str,
+    e: &DigestEffectFull,
+    kind: &str,
+    path_cap: usize,
+) -> Vec<String> {
+    let mut out = own_witness_lines_of(cx, root, e, kind, path_cap);
+    if let Some(reason) = cx.platform_reason(e) {
+        out.insert(1.min(out.len()), format!("platform: {reason}"));
+    }
+    out
+}
+
+fn own_witness_lines_of(
     cx: &RollupCx<'_>,
     root: &str,
     e: &DigestEffectFull,

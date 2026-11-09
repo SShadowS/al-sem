@@ -38,6 +38,11 @@ pub struct ObjectDecl {
     /// field's type (alc 18.0.41.45789: assigning an Enum-field column to a `Date`
     /// fails AL0122 naming the enum); a `Method` column's type is not modelled.
     pub query_columns: Vec<(String, String, String)>,
+    /// The tables the platform reads or writes by itself when the object runs (B6):
+    /// every report `dataitem` (Report / ReportExtension), XmlPort `tableelement` and
+    /// query `dataitem`, nested ones included, `#if` arms included (every arm),
+    /// document order. Empty for every other object kind.
+    pub dataset_items: Vec<DatasetItemDecl>,
     /// The `extends <Target>` target name (unquoted) for an extension object
     /// (Table/Page/Report/Enum/PermissionSet extension), else `None`.
     pub extends_target: Option<String>,
@@ -68,6 +73,38 @@ pub struct ObjectDecl {
     /// blocks, in `#if` arms (every arm) and in a report's request page. A
     /// page-extension `modify(X)` block is not a declaration and gives no entry.
     pub actions: Vec<ActionDecl>,
+    pub origin: Origin,
+}
+
+/// What declares a [`DatasetItemDecl`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatasetItemKind {
+    /// A report or report-extension `dataitem(Name; Table)`.
+    ReportDataitem,
+    /// An XmlPort `tableelement(Name; Table)`.
+    XmlPortTableElement,
+    /// A query `dataitem(Name; Table)`.
+    QueryDataitem,
+}
+
+/// One table of an object's dataset (see [`ObjectDecl::dataset_items`]). Each
+/// property is `Some(value)` when every build gives it that value (the AL default
+/// when it is not written) and `None` when `#if` arms give it different values or
+/// the value is not `true`/`false`.
+pub struct DatasetItemDecl {
+    pub kind: DatasetItemKind,
+    /// The item name, unquoted, as written.
+    pub name: String,
+    /// The source table, unquoted, as written (a name or a number).
+    pub table: String,
+    /// `UseTemporary` (report dataitem, XmlPort table element; default `false`).
+    pub use_temporary: Option<bool>,
+    /// XmlPort table element `AutoSave` (default `true`); `Some(false)` otherwise.
+    pub auto_save: Option<bool>,
+    /// XmlPort table element `AutoUpdate` (default `false`).
+    pub auto_update: Option<bool>,
+    /// XmlPort table element `AutoReplace` (default `false`).
+    pub auto_replace: Option<bool>,
     pub origin: Origin,
 }
 

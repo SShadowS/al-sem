@@ -388,6 +388,7 @@ impl Classify for ObjectNode {
             lookup_pages,
             obsolete_gone,
             page_ui,
+            dataset,
         } = self;
         h.tag(b'O');
         id.classify(h);
@@ -411,6 +412,45 @@ impl Classify for ObjectNode {
         lookup_pages.classify(h);
         obsolete_gone.classify(h);
         page_ui.classify(h);
+        dataset.classify(h);
+    }
+}
+
+impl Classify for crate::program::node_extract::DatasetNode {
+    fn classify(&self, h: &mut ProjectionHasher) {
+        let crate::program::node_extract::DatasetNode {
+            known,
+            items,
+            may_import,
+            may_export,
+        } = self;
+        known.classify(h);
+        may_import.classify(h);
+        may_export.classify(h);
+        h.u64(items.len() as u64);
+        for item in items {
+            let crate::program::node_extract::DatasetItemNode {
+                kind,
+                name,
+                source_table,
+                use_temporary,
+                auto_save,
+                auto_update,
+                auto_replace,
+            } = item;
+            use crate::program::node_extract::DatasetItemKind as K;
+            h.tag(match kind {
+                K::ReportDataitem => 0,
+                K::XmlPortTableElement => 1,
+                K::QueryDataitem => 2,
+            });
+            name.classify(h);
+            source_table.classify(h);
+            use_temporary.classify(h);
+            auto_save.classify(h);
+            auto_update.classify(h);
+            auto_replace.classify(h);
+        }
     }
 }
 

@@ -3035,6 +3035,10 @@ pub fn format_prove_human(
                 }
             } else {
                 lines.push(format!("    [{}] {}", eff.effect_type, place_of(eff)));
+                // B6: an operation the platform performs says why.
+                if let Some(reason) = paths.and_then(|p| p.cx.platform_reason(eff)) {
+                    lines.push(format!("      platform: {reason}"));
+                }
                 // r3 E2: the route's guards, evaluated or not; r3 H2(d): the
                 // class label's `condition:` form only when no route was
                 // replayed.

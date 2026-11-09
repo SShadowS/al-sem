@@ -76,7 +76,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 12: `ObjectNode::obsolete_gone`.
 /// 13: `ObjectNode::page_ui`.
 /// 14: `RoutineNode::publisher_isolated`.
-pub const PACK_SCHEMA: u32 = 14;
+/// 15: `ObjectNode::dataset` (B6, the platform's dataset operations).
+pub const PACK_SCHEMA: u32 = 15;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -544,7 +545,7 @@ mod tests {
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 14);
+        assert_eq!(PACK_SCHEMA, 15);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         pack.files[0].routines[0].publisher_isolated = true;
@@ -562,6 +563,21 @@ mod tests {
             ..Default::default()
         };
         pack.files[0].objects[0].page_ui = page_ui.clone();
+        let dataset = crate::program::node_extract::DatasetNode {
+            known: true,
+            items: vec![crate::program::node_extract::DatasetItemNode {
+                kind: crate::program::node_extract::DatasetItemKind::XmlPortTableElement,
+                name: "LineEl".into(),
+                source_table: crate::program::node_extract::ObjectRef::Id(50101),
+                use_temporary: Some(false),
+                auto_save: Some(true),
+                auto_update: None,
+                auto_replace: Some(false),
+            }],
+            may_import: true,
+            may_export: false,
+        };
+        pack.files[0].objects[0].dataset = dataset.clone();
         pack.self_hash = compute_self_hash(&pack);
         let back = decode(&encode(&pack).expect("encode")).expect("decode");
         assert_eq!(back.files[0].routines[0].abi_method_id, Some(-42));
@@ -587,6 +603,10 @@ mod tests {
         assert!(
             back.files[0].routines[0].publisher_isolated,
             "schema 14: RoutineNode::publisher_isolated"
+        );
+        assert_eq!(
+            back.files[0].objects[0].dataset, dataset,
+            "schema 15: ObjectNode::dataset"
         );
     }
 
