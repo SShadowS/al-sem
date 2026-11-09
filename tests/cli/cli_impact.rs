@@ -566,7 +566,21 @@ pub(crate) fn cdo_impact_ratchets() {
     assert!(out.status.success(), "{out:?}");
     let diff = String::from_utf8(out.stdout).unwrap();
     let root = top.to_string_lossy().to_string();
-    let v = json(&ws, &["--diff", "-", "--diff-root", &root], Some(&diff));
+    // The three one-shot calls are independent: run at once (2026-11-09,
+    // cdo-gate's longest test; measured alone, cdo profile: the diff's JSON
+    // 275 s, its human answer 263 s, the routine 65 s, 603 s in a row).
+    let diff_args = ["--diff", "-", "--diff-root", root.as_str()];
+    let (v, (human, _, code), routine) = std::thread::scope(|s| {
+        let v = s.spawn(|| json(&ws, &diff_args, Some(&diff)));
+        let human = s.spawn(|| impact(&ws, &diff_args, Some(&diff)));
+        let routine =
+            s.spawn(|| json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None));
+        (
+            crate::joined(v),
+            crate::joined(human),
+            crate::joined(routine),
+        )
+    });
     let i = &v["input"];
     assert_eq!(i["rootsResolved"], 699);
     assert_eq!(i["accounting"]["changedLines"], 12395);
@@ -611,7 +625,6 @@ pub(crate) fn cdo_impact_ratchets() {
         "{}",
         i["mismatches"]
     );
-    let (human, _, code) = impact(&ws, &["--diff", "-", "--diff-root", &root], Some(&diff));
     assert_eq!(code, 0);
     assert!(human.len() <= 40 * 1024, "{} bytes", human.len());
     // +681 since 2026-11-06 (was +679): each `reached from` list now names
@@ -637,7 +650,7 @@ pub(crate) fn cdo_impact_ratchets() {
     // kind): each block is shorter, so four more fit.
     assert!(human.contains("  … +681 routines"), "{human}");
 
-    let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
+    let v = routine;
     let r = &v["roots"][0];
     assert_eq!(
         r["up"]["callers"]["first"][0]["display"], "Codeunit \"CDO Telemetry\"::QueueUpload",

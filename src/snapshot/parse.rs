@@ -196,13 +196,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_all_source_units_zero_panics() {
+    fn parses_all_cdo_source_units_zero_panics() {
         // Integration test: requires the CDO_WS env var pointing at a real
         // BC workspace with `.alpackages`; skipped (no-op) when unset.
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
         let snap = crate::snapshot::SnapshotBuilder {

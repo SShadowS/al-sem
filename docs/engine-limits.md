@@ -126,7 +126,7 @@ The B8 items:
 | L9 | Test-selection reach covers 128 changed routines. One CDO file, `CDOEvents.Codeunit.al` with 155 procedures, crosses it alone; about 7% of recent commits touch more. | confirmed | S | — |
 | L12 | Digest doesn't load the test app. The CDO workspace app has 0 tests and the test app has 1,844, so `digest --tests` is always empty on CDO. | confirmed | M | L9 |
 | L13 | Memory climbs to about 8 GB before it frees any. The dependency syntax trees (about 1 GB on CDO) are never freed while the child lives, and `--low-mem` can only be set at start. | confirmed | M | L14 |
-| L14 | No speed or memory gate on CDO. It must be a branch-gate step on release-fast and tolerate a loaded machine. Cost: 2–4 min. | confirmed | M | — |
+| L14 | No speed or memory gate on CDO. It must be a branch-gate step on release-fast and tolerate a loaded machine. Cost: 2–4 min. **Fixed in wave 1:** `cdo-gate`'s `speed` phase (`scripts/cdo-speed`), A/B against the merge base on resident CDO calls, CPU and wall time (lost parallelism shows in the warm-up's wall time); timing 178–301 s; round 4's slowdown fails it at x2.1 (CHANGELOG). Linux only. | confirmed | M | — |
 | L26 (P12) | Freshness: a rewrite that keeps size and time is served from the old revision. Unsaved editor text is never an input. Checking ctime too costs nothing. | confirmed | S | — |
 | L34 | **Baseline input gap, not engine:** 7 test-library apps are missing from `DO-cdo-baseline/Test/.alpackages`, which leaves 4,701 unresolved test calls. Every CDO `alsem tests` answer is incomplete because of it. The baseline is pinned, so changing it is an owner decision. | new | — | — |
 

@@ -113,6 +113,15 @@ pub(crate) fn process_scratch(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// A scoped thread's result, its panic carried on (with the thread's own
+/// message) instead of turned into an `Err` unwrap. The CDO ratchets run their
+/// independent one-shot `alsem` calls on scoped threads (`scripts/cdo-gate`'s
+/// longest tests, 2026-11-09): only the test's own thread may call
+/// `crate::cdo::cdo_ws_or_enforce`, whose coverage guard reads the thread name.
+pub(crate) fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
+}
+
 /// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
 /// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
 /// pipelines read their `WorkspaceInputs` with it.

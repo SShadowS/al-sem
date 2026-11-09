@@ -1608,10 +1608,7 @@ codeunit 50100 "Ws2 Cu"
 
     #[test]
     fn build_program_graph_over_cdo_workspace() {
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
 
@@ -1650,10 +1647,7 @@ codeunit 50100 "Ws2 Cu"
     /// one maximal run of adjacent marked entries sharing the SAME id.
     #[test]
     fn source_overload_alias_collision_guard_group_count_pinned_on_cdo() {
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
 

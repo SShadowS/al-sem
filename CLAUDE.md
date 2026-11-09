@@ -70,14 +70,15 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
 |------|------|---------|--------------|
 | 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::`; per agent task `scripts/ci-steps task-affected` | only what you touched (`task-affected`: fmt, dev clippy, gen-syntax, the lib tests and the test binaries the changed paths reach; an unmapped path runs the whole suite) |
 | 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, the WHOLE suite once — which already includes every `check-goldens` target |
-| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite |
+| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite and the CDO speed and memory check |
 
 - **The debug suites never run the CDO tests.** `ci-steps test`, `check-goldens` and
   the pre-commit hook unset `CDO_WS`, so the CDO-gated tests skip there whatever your
   environment says. In a debug build they cost ~5 minutes per run
   (`abi_ingestion_integrity_cdo_gate` alone took 243 s). `scripts/cdo-gate` is the one
   runner for them, built with the `cdo` profile (warm, after an edit: 236 s, against
-  ~375 s on `release-fast`; measured 2026-10-07). **Do not run `cdo-gate` per commit**:
+  ~375 s on `release-fast`; measured 2026-10-07; the whole gate took 834-910 s on
+  2026-11-09, see below). **Do not run `cdo-gate` per commit**:
   while iterating, the CDO number you are moving comes straight from
   `target/cdo/aldump.exe --program-call-graph-stats` / `--dependency-bodies-stats`
   (~1 min build + seconds to run); `cdo-gate` is the branch gate. **Do not set `CDO_WS` globally** — it was
@@ -85,6 +86,38 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud` on the Windows machine and
   `/home/sshadows/Projects/DO-cdo-baseline/Cloud` on the Linux machine (the same `bc3ccb18`
   worktree, transferred with matching hashes); pass it to `cdo-gate`.
+- **How `cdo-gate` runs (since 2026-11-09).** It builds every target once, then runs
+  `cli output_cdo` in one lane while `program_resolve_harness`, `lsp`
+  (`program_graph::`, `snapshot_robustness::`), `l4_summary_differential` and the lib's
+  CDO tests (`--lib cdo`, not the whole lib) run one after another in the other, at
+  `nice 10`. Each phase has its own log under `target/cdo-gate-logs/<run>/`; the summary
+  lists each phase's result, seconds and test counts. `CDO_GATE_SERIAL=1` runs the phases
+  in a row. A test that reads `CDO_WS` must go through `cdo_ws_or_enforce`, which fails
+  the task gate when the calling test is outside the gate's filters (`on_the_cdo_gate`
+  in `tests/common/cdo.rs`; in the lib, put `cdo` in the test's name). Measured
+  2026-11-09 (Linux, 22 cores, `cdo` profile, warm, other agents loading the machine):
+  1,164-1,184 s before (output_cdo 780-808 s, whole lib 290-317 s), 834-910 s after,
+  peak memory 39.5 GB before, 51-58 GB after. The length is `output_cdo`'s impact
+  ratchets, whose one-shot `alsem impact` calls take 4-7 minutes each.
+- **`cdo-gate` checks speed and memory first (since 2026-11-09, engine limits L14).**
+  Phase `speed` (`scripts/cdo-speed`, read its doc) builds the working tree's `alsem`
+  with `release-fast` and compares it with the merge base's (built once per commit,
+  cached in `~/.cache/al-sem/cdo-speed/`): two resident `alsem mcp` servers on CDO, a
+  warm-up, then 3 rounds of prove, explain, digest, query effects, tests and impact on a
+  new routine each. It fails when the median CPU ratio passes 1.20 (wall 1.30), the
+  model build or test universe passes 1.30 in CPU or 1.60 in wall time (they are the
+  parallel parts, so a change that loses parallelism shows there), or peak memory passes
+  1.10. It runs ALONE before the test lanes (their load is noise to it); never run two
+  gates or a build beside it if you can help it. **It is Linux only (it reads `/proc`):
+  on the Windows machine every `cdo-gate` run FAILS unless given `--no-speed`.**
+  `--no-speed` skips it and prints that speed was not checked; a tree that lands without
+  it must say why. On master with no edits it times HEAD against HEAD's first parent
+  (the merge base would be HEAD itself). Measured 2026-11-09 (Linux,
+  22 cores): the timing 178-301 s (505 s with every core busy elsewhere); round 4's
+  slowdown fails it at x2.1, master against itself passes at x0.94-1.06. The whole
+  gate with it: ~1,300 s on 2026-11-09 (test build 243 s, speed 203 s, then the lanes
+  853 s), and ~935 s on a second run the same day with the test build fresh (speed 178 s,
+  the lanes 756 s), against 834-910 s without it.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
   `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the

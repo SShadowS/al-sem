@@ -7,6 +7,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (engine limits wave 1, L14 review fixes)
+
+- **The speed gate now catches a change that loses parallelism.** The entry below said
+  wall time was judged so that "a change that loses parallelism still shows". It did not:
+  wall time was judged only in the rounds, whose calls run on about one thread, while the
+  parallel work (the model build, the test universe) is in the warm-up, which was judged
+  on CPU time only. `scripts/cdo-speed` now also judges the warm-up's wall time for those
+  two calls, at most x1.60 (the worst single sample against the same binary was x1.32).
+  Proof (2026-11-09, load 3-6): master `4129eb52` against itself with the head server
+  pinned to 2 of 22 cores (`taskset -c 0,1`): model build wall x2.03, test universe wall
+  x2.77, so the gate FAILS (exit 1) on exactly those two lines. Their CPU ratios were
+  x0.63 and x0.56 (a pinned run spends less CPU), and every round and memory passed, so
+  the earlier rule passed this run.
+- **The warm-up's side order flips per call**, not only per round: going second always cost
+  the test universe up to x1.13 CPU in three earlier runs, eating into its 1.30 limit.
+- **On master with no edits** the default base was the merge base, which is HEAD itself:
+  the phase timed the tree against itself (200-500 s for nothing; a scheduled run, or the
+  agentflow post-merge check). It now times HEAD against its first parent and says so in a
+  banner.
+- **A tool call that exits non-zero is timed, not a "cannot run" (exit 2).** Its exit code
+  is recorded with the answer's hash, so a changed verdict shows as `[outputs or exit codes
+  differ]`.
+- **Peak memory counts engine children that exit mid-run:** every process's VmHWM is read
+  after each call and its highest value kept, instead of read once at the end.
+- **`scripts/cdo-gate`:** `--no-speed` works in any position, and an unknown option or a
+  second workspace stops the gate (exit 2) instead of being ignored. On a test-build
+  failure it now stops the whole speed build (its own process group: cdo-speed and its
+  cargo builds), not just the subshell, so no orphaned base build holds the cache lock;
+  a Ctrl-C during the test build stops it too.
+- **Docs:** the speed phase is Linux only (it reads `/proc`); CLAUDE.md now says that on
+  Windows every `cdo-gate` run fails unless given `--no-speed`. The timing range is one
+  number everywhere (CLAUDE.md, the L14 row, the `cdo-gate` header): 178-301 s, with this
+  change's own run as the low end. The must-catch and must-pass proofs below were run with
+  an earlier warm-up rule; their round verdicts do not depend on it.
+- **The whole `cdo-gate` on this tree** (2026-11-09, Linux, 22 cores, test build already
+  fresh): PASS in ~935 s. `speed` 178 s against the merge base `4129eb52` (model build CPU
+  x1.003 and wall x0.998, test universe x0.999 and x0.989, prove x0.946, round total
+  x0.961, peak memory 9,530 → 9,545 MiB x1.002), then the lanes: output_cdo 756 s;
+  program_resolve_harness 143 s, lsp 19 s, l4_summary_differential 57 s, lib_cdo 391 s.
+
+### Changed (engine limits wave 1, L14: a CDO speed and memory gate)
+
+- **`scripts/cdo-gate` now fails a branch that makes CDO answers slower or larger.** Its
+  new first phase, `speed`, runs `scripts/cdo-speed`: the working tree's `alsem`
+  (`release-fast`) against the merge base's, on the CDO baseline. Before this nothing
+  timed anything on CDO; round 4's slowdown (the c25 assumption-records fix made prove
+  and explain ~45% slower, RunReportID `prove … may-commit` 28 s → 41 s, until
+  `df5c8fe7`) was noticed only because a golden run took three times as long.
+  `--no-speed` (or `CDO_GATE_NO_SPEED=1`) skips the phase for a machine where timing is
+  impossible; the gate then prints a banner at the start and in its summary, and its
+  last line says `PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)`.
+- **What it runs.** One `alsem mcp` server per side (the resident path agents use), both
+  alive for the whole run and asked the same calls in turn. Round 0 warms up: the first
+  ask builds the CDO model (`build`), then one call of each tool (on `CDO Telemetry::
+  UpdateLastUpload`) builds the per-revision artifacts and the test universe. Then
+  3 rounds, each on a new routine (RunReportID, IssueReminder, DocEMailSend; DocSave and
+  RunReport when more rounds are needed): prove `may-commit`, explain, digest, query
+  effects, tests and impact. A new routine each round, because the engine keeps answers:
+  asking RunReportID twice measured ~1 s the second time, nothing of the search that
+  regressed. The side order flips every round.
+- **Why A/B against the merge base, and why CPU time.** Measured first: on this shared
+  machine (other agents' load 10-70) one-shot `prove RunReportID` of ONE binary took
+  39.0 s and 66.3 s in two runs, so stored per-host budgets would need a margin wider
+  than the slowdown they are to catch. Comparing two binaries interleaved cancels most
+  load; CPU time (user + system of the server and its engine children, from `/proc`)
+  cancels more, since a single-threaded answer's CPU time does not grow while it waits
+  for a core. Wall time is judged too, with wider limits. The rounds' calls run on about
+  one thread (prove 12.56 s CPU in 12.63 s wall), so a change that loses parallelism
+  (same CPU, more wall) shows in the warm-up's wall time: the model build (~160 s CPU in
+  ~36 s wall) and the test universe (~135 s in ~18 s) are the parallel parts. The base binary is built from
+  `git archive <sha>` once per commit and cached under `~/.cache/al-sem/cdo-speed/`
+  (every worktree shares it), beside the test build.
+- **Measured noise: the same binary against itself** (master `4129eb52`, release-fast,
+  2026-11-09; the median of the per-round ratios of the rounds' prove, which is ~11-20 s
+  per routine; and the single-sample warm-up):
+  - quiet (load 7-9), two runs: prove CPU x0.94 and x1.06 (single rounds 0.92-1.19),
+    round total x1.01 and x1.03; model build CPU x1.01 and x0.96; test universe CPU x1.02 and x1.07;
+    peak memory x1.006 and x0.976.
+  - beside a release-fast build of master (all 22 cores; this run `58d0c94e` against
+    itself): prove x0.97 (single rounds 0.78-1.07); model build CPU x1.09 but its wall x1.32; a 4 s warm-up prove x1.19.
+  - beside 22 busy loops (load ~45 on 22 cores): prove x1.12 (5 rounds: 1.12, 1.12, 1.68,
+    1.25, 0.98), round total x1.07, model build CPU x0.95, test universe CPU x1.08,
+    wall x1.31; the timing took 505 s instead of 220-300 s.
+- **The limits that follow** (head over base): the rounds' median CPU ratio at most 1.20
+  and wall ratio at most 1.30, per call whose base CPU is at least 2 s (prove) and for the
+  round total; the warm-up's model build and test universe (single samples, base CPU at
+  least 20 s) at most 1.30 in CPU and 1.60 in wall time; the 1-5 s calls are reported only (single samples
+  of them swung to x1.19 under load), and count in the round total; peak memory (every
+  server process's VmHWM, summed: ~9.1-9.8 GB, the base engine, the test universe and the
+  front end) at most 1.10. When the rounds disagree about a call (some ratios over its
+  limit, some not), up to 5 rounds run and the median decides.
+- **The must-catch proof.** `1127e74e` (the c25 fix without `df5c8fe7`) against
+  `58d0c94e` (with it), an earlier draft of the script that ran 5 rounds: prove x1.77
+  (rounds 2.52, 2.25, 1.77, 1.45, 1.09; median 14.8 s → 33.3 s), round total x1.62, FAIL.
+  Against master `4129eb52` with the final routines and round limits (the warm-up rule
+  was still an earlier one that judged the 4 s warm-up prove too; the round verdicts
+  below do not depend on it): prove x2.13 CPU and
+  x2.12 wall (RunReportID 14.4 → 30.6 s, IssueReminder 13.7 → 32.8 s, DocEMailSend
+  19.2 → 34.2 s), round total x1.88, exit 1, 301 s. Master against itself, same script:
+  prove x1.06, round total x1.03, memory x0.98, PASS, 231 s.
+- **What it adds to the branch gate:** the timing, 178-301 s on a quiet machine; the
+  working tree's release-fast build (a cold one took 233 s; after an edit, the al-sem
+  crates only); the base build, ~245 s once per master commit, beside the test build.
+  Peak memory: two engines and two test universes, ~19 GB, before the test lanes start.
+  The whole `cdo-gate` on this branch's final tree: PASS in ~1,300 s (test build 243 s,
+  its release-fast build already fresh, `speed` 203 s with prove x0.96 and round total
+  x0.98 against master, then the lanes 853 s), against 834-910 s before.
+
+### Changed (engine limits wave 1, cdo-gate faster)
+
+- **`scripts/cdo-gate` builds once and runs in two lanes; the lib phase runs only the
+  CDO tests.** Measured first (2026-11-09, Linux, 22 cores, 93 GB, `cdo` profile, warm
+  build; other agents shared the machine, their load alone 10-30 and at times over 100,
+  so read each number as a range):
+  - Before: 1,184 s and 1,164 s in two runs, peak 39.5 GB. Phases in a row:
+    `program_resolve_harness` 41-45 s (210 tests), `lsp` 8 s (2), `l4_summary_differential`
+    17-18 s (25), `cli output_cdo` 780-808 s (24), `--lib` 290-317 s (3,214).
+  - Where the time went: `output_cdo`'s two impact ratchets. They ran their one-shot
+    `alsem impact` calls one after another, each building the CDO model and computing
+    the 699-routine change: measured alone, `impact --diff` JSON 275 s, human 263 s,
+    `--routine` 65 s (603 s in a row); `impact --base` JSON 428 s, then human 275 s (703 s).
+    Every other `output_cdo` test was done by 205-240 s; the impact tests ran on for
+    another ~550 s using about 5 of the 22 cores. Inside one `impact --diff` run (traced),
+    127 s of its 215 s is the main part, 120 s of that the digest's stream batches over
+    the 699 roots. The shared MCP server's 42 calls (`cdo_answers`) took ~205 s with the
+    model build; the engine child answers explain, prove and digest on one heavy worker,
+    so asking it concurrently would not help. Of the lib's 3,214 tests, 15 read `CDO_WS`;
+    alone (nextest `-j 1`) they take 594 s summed, the longest 137 s
+    (`cdo_crossing_census`), 118 s, 111 s.
+  - After: 834 s and 880 s in two runs of the two-lane version, peak 57-58 GB (each in
+    its own cgroup); the final tree (lib phase at 4 threads) 886 s, peak 55.4 GB, and
+    910 s, peak 50.6 GB, started at a load average of 178. That is 22-29% shorter. In the final run `output_cdo` was the gate's length (886 s): its
+    other 22 tests ended by 404 s, `cdo_impact_ratchets` at 768 s,
+    `cdo_impact_base_ratchets` at 886 s; lane 2 took 736 s at `nice 10` (harness 159 s,
+    lsp 31 s, l4 46 s, lib 500 s). The gate is CPU-bound on this shared machine (11,000
+    CPU-seconds against 9,400 before, at load averages up to 150 in its first 5
+    minutes), so the impact calls run slower side by side than alone (275 s alone, up to
+    ~650 s here); on an idle machine the gain is larger. Test counts: `program_resolve_harness` 210, `lsp` 2,
+    `l4_summary_differential` 25, `output_cdo` 24 — unchanged; the lib phase 17 (the 15
+    CDO tests and the 2 new guard tests; 3 ignored wall-clock probes as before).
+  - What changed: (1) every phase's target is built once (`cargo test --no-run`), then
+    `output_cdo` runs in one lane while `program_resolve_harness`, `lsp`,
+    `l4_summary_differential` and the lib phase run one after another in the other, at
+    `nice -n 10`. Each phase logs to its own file (each line stamped with the gate's
+    clock); the summary gives each phase's result, wall time and `test result` counts and
+    prints a failed phase's failures; any failed phase or a failed build fails the gate.
+    `CDO_GATE_SERIAL=1` runs the phases in a row. (2) The impact ratchets run their
+    independent calls at once on scoped threads; the two `--base` calls now both build
+    the base (the cache's "two writers of one key" case) instead of the second reading
+    the first's entry; nothing asserted that hit, and `b6_the_cache_hits_misses_and_rebuilds`
+    pins the cache's hits. (3) The lib phase runs `--lib cdo` (4 threads) instead of the
+    whole lib: the 3,200 other lib tests read no `CDO_WS` and run in every task gate with
+    the same result (the grammar cache-key test that once moved the whole lib here
+    included).
+  - The coverage guard, so a CDO test cannot fall outside the filters:
+    `cdo_ws_or_enforce` (`tests/common/cdo.rs`) checks on EVERY call, with or without
+    `CDO_WS`, that the calling test is one the gate runs (`on_the_cdo_gate`: the lib by
+    the `cdo` substring, `cli` by `output_cdo::`, `lsp` by its two members, two whole
+    targets); the task gate runs every test without `CDO_WS`, so a new CDO test outside
+    the filters fails there. `cdo_ws_is_read_only_through_the_gate` refuses a test that
+    reads the env var itself (the lib's 11 direct readers, 3 of them ignored wall-clock
+    probes, moved onto the gate, which also makes them fail under `ENFORCE_CDO_WS=1`
+    instead of skipping; two renamed to
+    carry `cdo`: `parses_all_cdo_source_units_zero_panics`,
+    `cdo_workspace_is_not_its_own_dependency`), and `cdo_gate_run_set_matches_the_script`
+    keeps the predicate and the script's phases together. Discrimination: a lib test
+    `proof_dummy_reads_the_workspace_outside_the_filter` calling the gate failed the
+    task-gate run with "reads the CDO workspace, but scripts/cdo-gate does not run it";
+    renamed to carry `cdo` it passed; removed. A direct `var_os` read put back into
+    `builds_snapshot_over_cdo_workspace` failed the static check naming
+    `src/snapshot/snapshot.rs:1036`; restored, passed. Dropping `snapshot_robustness::`
+    from the script's lsp phase failed the sync check; restored, passed. The gate's exit
+    status, with a stand-in `cargo` that fails one phase: each of the five phases and the
+    build, broken alone, in both lanes and serial, gave exit 1 and named only that phase;
+    none broken gave exit 0.
+
 ### Fixed (engine limits wave 0, B1)
 
 - **`alsem_prove` with a filter no longer kills the resident engine.** `prove` with

@@ -986,10 +986,7 @@ mod tests {
     /// exists for, confirmed on real data, not just a constructed fixture.
     #[test]
     fn cdo_dedup_names_the_real_dropped_duplicates() {
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
         let (_snap, dropped) = (SnapshotBuilder {
@@ -1036,10 +1033,7 @@ mod tests {
 
     #[test]
     fn builds_snapshot_over_cdo_workspace() {
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
         let snap = SnapshotBuilder {
@@ -1104,11 +1098,8 @@ mod tests {
     }
 
     #[test]
-    fn workspace_is_not_its_own_dependency() {
-        let Some(ws) = std::env::var_os("CDO_WS")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.exists())
-        else {
+    fn cdo_workspace_is_not_its_own_dependency() {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
             return;
         };
         let snap = SnapshotBuilder {

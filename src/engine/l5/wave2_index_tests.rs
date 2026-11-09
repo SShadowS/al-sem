@@ -1371,14 +1371,9 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
 /// them.
 #[test]
 fn cdo_crossing_census() {
-    let Some(ws) = std::env::var_os("CDO_WS") else {
-        assert!(
-            std::env::var_os("ENFORCE_CDO_WS").is_none(),
-            "ENFORCE_CDO_WS=1 but CDO_WS is unset"
-        );
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
-    let ws = std::path::PathBuf::from(ws);
     let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs)
         .unwrap_or_else(|_| panic!("cross-app base"));

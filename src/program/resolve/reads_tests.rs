@@ -156,11 +156,7 @@ fn the_counting_hook_counts_a_raw_read() {
 /// Skips without `CDO_WS`; fails without it under `ENFORCE_CDO_WS=1`.
 #[test]
 fn tripwire_no_read_bypasses_the_facade_on_cdo() {
-    let Some(ws) = std::env::var_os("CDO_WS") else {
-        assert!(
-            std::env::var_os("ENFORCE_CDO_WS").is_none(),
-            "ENFORCE_CDO_WS is set but CDO_WS is not"
-        );
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
     let ctx = build_context_res(Path::new(&ws)).expect("CDO context");
