@@ -335,7 +335,6 @@ fn graph_export_selects_the_tests_that_reach_each_change() {
         ("Sel Dynamic.RunById", "h:run:codeunit"),
         ("Sel Dynamic.CallVariant", "h:name:ping/0"),
         ("Sel Dynamic.InsertViaRef", "h:record:insert"),
-        ("Sel Dynamic.SaveReport", "h:run:report"),
     ] {
         let e = g.edges_between(site, hub);
         assert_eq!(e.len(), 1, "{site} -> {hub}");
@@ -351,10 +350,6 @@ fn graph_export_selects_the_tests_that_reach_each_change() {
             "Sel Ledger Hooks.Stamp",
             "Sel Dynamic Tests.RecordRefInsert",
         ),
-        (
-            "Sel Ledger Hooks.ReportHook",
-            "Sel Dynamic Tests.ReportSaved",
-        ),
     ] {
         assert_eq!(
             g.tests_reaching(change).0.get(test),
@@ -362,6 +357,18 @@ fn graph_export_selects_the_tests_that_reach_each_change() {
             "{change} <- {test}"
         );
     }
+    // B6: a static `Report.SaveAsXml(Report::X, …)` runs X's triggers by a
+    // resolved run edge, not through the open report hub.
+    assert!(
+        g.edges_between("Sel Dynamic.SaveReport", "h:run:report")
+            .is_empty()
+    );
+    assert_eq!(
+        g.tests_reaching("Sel Ledger Hooks.ReportHook")
+            .0
+            .get("Sel Dynamic Tests.ReportSaved"),
+        Some(&"event")
+    );
 }
 
 /// Every workspace routine node carries its location, and a hand-stated sample

@@ -84,17 +84,35 @@ pub struct DatasetEffect {
     pub table_events: Vec<Route>,
 }
 
+/// `true` for a report method (folded) that runs the report without its
+/// request page, as `Run` does: `Execute`, `Print` and the `SaveAs*` family
+/// (Learn, "Report data type"). Such a call runs the report's triggers and
+/// reads its dataset, so the resolver dispatches it like `Run`
+/// (`extract::classify_call` for `Report.X(Report::Y, …)`, the object-typed
+/// receiver arm of `resolver::resolve_member_with_args` for `Rep.X(…)`).
+#[must_use]
+pub fn is_report_output_method(method_lc: &str) -> bool {
+    matches!(
+        method_lc,
+        "execute"
+            | "print"
+            | "saveas"
+            | "saveasexcel"
+            | "saveashtml"
+            | "saveaspdf"
+            | "saveasword"
+            | "saveasxml"
+    )
+}
+
 /// The dataset mode of method `method_lc` (folded) on an object of `kind`: the
 /// calls that run the object's dataset (Learn: "Report data type", "XmlPort
 /// data type", "Query data type").
 #[must_use]
 pub fn dataset_mode(kind: ObjectKind, method_lc: &str) -> Option<DatasetMode> {
     match (kind, method_lc) {
-        (
-            ObjectKind::Report,
-            "run" | "runmodal" | "execute" | "print" | "saveas" | "saveasexcel" | "saveashtml"
-            | "saveaspdf" | "saveasword" | "saveasxml",
-        ) => Some(DatasetMode::Read),
+        (ObjectKind::Report, "run" | "runmodal") => Some(DatasetMode::Read),
+        (ObjectKind::Report, m) if is_report_output_method(m) => Some(DatasetMode::Read),
         (ObjectKind::XmlPort, "import") => Some(DatasetMode::Import),
         (ObjectKind::XmlPort, "export") => Some(DatasetMode::Export),
         (ObjectKind::XmlPort, "run") => Some(DatasetMode::XmlPortRun),

@@ -1172,7 +1172,10 @@ fn own_item_properties(item: RawNode, source: &str) -> Vec<(String, String, bool
 /// [`crate::ir::DatasetItemDecl`]): `default` when it is not written, the written
 /// value when it is written outside `#if`, and `None` when the builds disagree or a
 /// value is not `true`/`false`. A property written only inside `#if` arms keeps the
-/// default as a possible value (a build that takes no arm).
+/// default as a possible value: a build may take no arm. That is also assumed when
+/// an `#else` arm covers every build (`#if X AutoSave = false; #else AutoSave =
+/// false; #endif` reads as `None`), which is imprecise but never claims a value
+/// some build does not have.
 fn bool_property(props: &[(String, String, bool)], name: &str, default: bool) -> Option<bool> {
     let entries: Vec<(&str, bool)> = props
         .iter()

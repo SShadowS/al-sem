@@ -415,13 +415,15 @@ fn one_file_workspace(al: &str) -> tempfile::TempDir {
 }
 
 /// Round-2 r2 §2.1 step 1, the two `declaredRunnable` rules: a dispatching
-/// builtin on a receiver typed as one object (`R.SaveAsPdf`) is a call site
-/// and code; a `TestPage` declaration is a rule edge (`RULE`, no call
+/// builtin on a receiver typed as one object (`R.RunRequestPage`) is a call
+/// site and code; a `TestPage` declaration is a rule edge (`RULE`, no call
 /// site); a plain `Page` variable declaration yields no site at all.
+/// (`R.SaveAsPdf` was the example until B6 made it a run of the report's
+/// triggers, a `run` site; `RunRequestPage` is still a dispatching builtin.)
 ///
 /// DISCRIMINATION (2026-11-07): `site_bits` classifying every
 /// `declaredRunnable` site as `RULE` (the anchor test dropped) fails "the
-/// SaveAsPdf site is code".
+/// RunRequestPage site is code".
 #[test]
 fn the_two_declared_runnable_rules_are_code_and_a_rule_edge() {
     let t = one_file_workspace(
@@ -437,7 +439,7 @@ fn the_two_declared_runnable_rules_are_code_and_a_rule_edge() {
     var
         R: Report "My Rep";
     begin
-        R.SaveAsPdf('x.pdf');
+        R.RunRequestPage();
     end;
 }
 
@@ -489,9 +491,17 @@ report 50100 "My Rep"
             .collect()
     };
     let prints = declared(named(&g, "prints"));
-    assert_eq!(prints.len(), 1, "precondition: SaveAsPdf makes one site");
+    assert_eq!(
+        prints.len(),
+        1,
+        "precondition: RunRequestPage makes one site"
+    );
     assert!(g.sites()[prints[0] as usize].anchor.is_some());
-    assert_eq!(site_bits(&g, prints[0]), 0, "the SaveAsPdf site is code");
+    assert_eq!(
+        site_bits(&g, prints[0]),
+        0,
+        "the RunRequestPage site is code"
+    );
     let drives = declared(named(&g, "drivespage"));
     assert_eq!(
         drives.len(),

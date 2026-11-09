@@ -49,6 +49,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lists the read under `table not resolved`.
   - The trigger code inside the object was already followed through the run edge; the
     platform's operations are new rows, so nothing is counted twice.
+- **A report's `SaveAs*`, `Execute` and `Print`, and a query's `Open` and `SaveAs*`,
+  now run the object's triggers, as `Report.Run` does** (review fix). They used to
+  resolve as catalog builtins that reach no code, so `prove writes-table` said a
+  definite `no` for a table that only the report's `OnAfterGetRecord` writes, when the
+  report was saved or executed (`Report.SaveAsPdf(Report::X, …)`, `Rep.Execute(…)`).
+  The static forms (`Report.SaveAsPdf(Report::X, …)`, `Query.SaveAsCsv(Query::X, …)`)
+  are object runs now, like `Report.Run(Report::X)`; the variable forms
+  (`Rep.SaveAsPdf(…)`, `Q.Open()`) dispatch to the run's triggers like `Rep.Run()`. A
+  query's run trigger is `OnBeforeOpen`
+  ([OnBeforeOpen (Query) trigger](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/triggers-auto/query/devenv-onbeforeopen-query-trigger)).
+  A report or query that declares a procedure of that name takes a call with arguments
+  instead (the rule `Run` already had), and then runs no dataset.
+- **A dynamic object id no longer gives a definite `no`** (review fix).
+  `Report.SaveAsPdf(Id, …)`, `Report.Execute(Id, …)`, `Report.Print(Id, …)` and
+  `Query.SaveAsCsv(Id, …)` with a computed `Id` named no object, so they read no
+  dataset and ran no trigger, and `query touches` answered `down: no (every candidate
+  decided)` for every table. They are now dynamic runs, like `Report.Run(Id)`: `prove`
+  answers `unknown (blocked by: call not resolved)` and `query touches` `down: unknown`.
+  On the call graph (`alsem graph`) a static report save is a resolved `run` edge to the
+  report instead of an `Open` edge into the `h:run:report` hub.
+- **`Xmlport.Run(X, false, Import)` follows its `Import` argument** (review fix). With
+  no request page (`RequestWindow` a literal `false`) and a literal `Import`, the run
+  imports (`true`) or exports (`false`) only: "Specify true to run the XmlPort and
+  import data; specify false to export data"
+  ([Xmlport.Run](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/xmlport/xmlport-run-method)).
+  With a request page the user may choose either, so both stay possible.
 - **Plumbing:** the IR keeps `ObjectDecl::dataset_items` (report and query dataitems,
   XmlPort table elements, with `UseTemporary`/`AutoSave`/`AutoUpdate`/`AutoReplace` per
   build), the graph `ObjectNode::dataset` (pack schema 15), the resolver

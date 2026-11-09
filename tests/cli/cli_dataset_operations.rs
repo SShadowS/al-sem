@@ -109,6 +109,44 @@ report 50620 "DS Report"
         dataitem(TempItem; "DS Kept") { UseTemporary = true; }
     }
 }
+table 50606 "DS Side"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+table 50607 "DS QSide"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+report 50621 "DS Trig Report"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(TrigItem; "DS Read")
+        {
+            trigger OnAfterGetRecord()
+            var
+                S: Record "DS Side";
+            begin
+                S.Init();
+                S.Insert();
+            end;
+        }
+    }
+}
+report 50622 "DS Own Exec"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(OwnItem; "DS Read") { }
+    }
+    procedure Execute(N: Integer)
+    begin
+    end;
+}
 query 50630 "DS Query"
 {
     elements
@@ -118,6 +156,23 @@ query 50630 "DS Query"
             column(K; K) { }
         }
     }
+}
+query 50631 "DS Trig Query"
+{
+    elements
+    {
+        dataitem(TQ; "DS Read")
+        {
+            column(K; K) { }
+        }
+    }
+    trigger OnBeforeOpen()
+    var
+        S: Record "DS QSide";
+    begin
+        S.Init();
+        S.Insert();
+    end;
 }
 codeunit 50640 "DS Subscriber"
 {
@@ -176,6 +231,67 @@ codeunit 50650 "DS Logic"
         Q: Query "DS Query";
     begin
         Q.Open();
+    end;
+
+    procedure SaveTrig()
+    begin
+        Report.SaveAsPdf(Report::"DS Trig Report", 'x.pdf');
+    end;
+
+    procedure ExecTrig()
+    begin
+        Report.Execute(Report::"DS Trig Report", '');
+    end;
+
+    procedure SaveTrigVariable()
+    var
+        R: Report "DS Trig Report";
+    begin
+        R.SaveAsPdf('x.pdf');
+    end;
+
+    procedure ExecOwnProcedure()
+    var
+        R: Report "DS Own Exec";
+    begin
+        R.Execute(5);
+    end;
+
+    procedure OpenTrigQuery()
+    var
+        Q: Query "DS Trig Query";
+    begin
+        Q.Open();
+    end;
+
+    procedure SaveTrigQuery(var O: OutStream)
+    begin
+        Query.SaveAsCsv(Query::"DS Trig Query", O);
+    end;
+
+    procedure DynSave(Id: Integer)
+    begin
+        Report.SaveAsPdf(Id, 'x.pdf');
+    end;
+
+    procedure DynPrint(Id: Integer)
+    begin
+        Report.Print(Id, '');
+    end;
+
+    procedure RunExportByArgument()
+    begin
+        Xmlport.Run(Xmlport::"DS Import", false, false);
+    end;
+
+    procedure RunWithRequestPage()
+    begin
+        Xmlport.Run(Xmlport::"DS Import", true, false);
+    end;
+
+    procedure DynQuery(Id: Integer; var O: OutStream)
+    begin
+        Query.SaveAsCsv(Id, O);
     end;
 }
 "#;
@@ -281,6 +397,15 @@ fn an_xmlport_import_writes_its_table_elements() {
     assert!(a.starts_with("answer: no"), "{a}");
     let e = effects(ws, "RunExportOnly");
     assert!(e.contains("[FindSet] on DS Kept"), "{e}");
+    // `Xmlport.Run(X, false, false)`: no request page, `Import = false`
+    // exports (Learn, "Xmlport.Run method"), so DS Line is only read. With a
+    // request page the user may choose import: still a write.
+    let a = prove(ws, "RunExportByArgument", "writes-table:DS Line");
+    assert!(a.starts_with("answer: no"), "{a}");
+    let e = effects(ws, "RunExportByArgument");
+    assert!(e.contains("[FindSet] on DS Line"), "{e}");
+    let a = prove(ws, "RunWithRequestPage", "writes-table:DS Line");
+    assert!(a.starts_with("answer: yes"), "{a}");
 }
 
 #[test]
@@ -324,6 +449,90 @@ fn a_report_and_a_query_read_their_dataitems() {
         ],
     );
     assert!(touches.contains("FindSet"), "{touches}");
+}
+
+/// A report's `SaveAs*`/`Execute` (static or on a variable) and a query's
+/// `Open`/`SaveAs*` run the object as `Report.Run` does: its triggers too.
+/// Precondition: "DS Side" is written only by "DS Trig Report"'s
+/// `OnAfterGetRecord`, "DS QSide" only by "DS Trig Query"'s `OnBeforeOpen`.
+/// These calls used to resolve as catalog builtins that reach no trigger, so
+/// `prove` answered a definite `no`, and a dynamic object id
+/// (`Report.SaveAsPdf(Id, …)`) answered `no` for every table.
+#[test]
+fn a_run_by_another_name_runs_the_triggers_and_a_dynamic_one_is_unknown() {
+    let t = workspace();
+    let ws = t.path();
+    for routine in ["SaveTrig", "ExecTrig", "SaveTrigVariable"] {
+        let a = prove(ws, routine, "writes-table:DS Side");
+        assert!(a.starts_with("answer: yes"), "{routine}: {a}");
+    }
+    for routine in ["OpenTrigQuery", "SaveTrigQuery"] {
+        let a = prove(ws, routine, "writes-table:DS QSide");
+        assert!(a.starts_with("answer: yes"), "{routine}: {a}");
+    }
+    // A procedure the report declares with that name takes the call: no run.
+    let e = effects(ws, "ExecOwnProcedure");
+    assert!(
+        e.contains("every operation (0)") && !e.contains("platform:"),
+        "{e}"
+    );
+    // A dynamic id may name any report or query: never a definite `no`.
+    for routine in ["DynSave", "DynPrint"] {
+        let a = prove(ws, routine, "writes-table:DS Side");
+        assert!(
+            a.starts_with("answer: unknown (blocked by: call not resolved 1)"),
+            "{routine}: {a}"
+        );
+    }
+    for routine in ["DynSave", "DynPrint", "DynQuery"] {
+        let touches = alsem(
+            ws,
+            &[
+                "query",
+                "touches",
+                "--table",
+                "DS Read",
+                "--from",
+                &format!("DS Logic::{routine}"),
+                "--direction",
+                "down",
+            ],
+        );
+        assert!(
+            touches.contains("answer: down: unknown"),
+            "{routine}: {touches}"
+        );
+    }
+}
+
+/// The reason reaches `explain` (a `platform:` line under the write's anchor)
+/// and `prove --format json` (the evidence excerpt).
+#[test]
+fn the_platform_reason_is_in_explain_and_prove_json() {
+    let t = workspace();
+    let ws = t.path();
+    let reason =
+        "XMLport \"DS Import\" imports into table \"DS Line\" (tableelement LineEl, AutoSave)";
+    let text = alsem(ws, &["explain", "--routine", "DS Logic::ImportStatic"]);
+    assert!(text.contains(&format!("platform: {reason}")), "{text}");
+    let json = alsem(
+        ws,
+        &[
+            "prove",
+            "DS Logic::ImportStatic",
+            "writes-table:DS Line",
+            "--format",
+            "json",
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let excerpts: Vec<&str> = v["payload"]["result"]["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["evidence"]["excerpt"].as_str())
+        .collect();
+    assert!(excerpts.contains(&reason), "{excerpts:?}");
 }
 
 const DEP_GUID: &str = "62626262-0000-4000-8000-000000000062";

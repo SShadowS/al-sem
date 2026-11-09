@@ -2195,11 +2195,13 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
         ObjectKind::Report => "onprereport",
         // Like Report's `OnPreReport`: the trigger a run reaches after the init one.
         ObjectKind::XmlPort => "onprexmlport",
+        // A query's one trigger (Learn, "OnBeforeOpen (Query) Trigger").
+        ObjectKind::Query => "onbeforeopen",
         _ => "onrun",
     }
 }
 
-/// The triggers a run of a page, report or XMLport MAY reach with no user
+/// The triggers a run of a page, report, XMLport or query MAY reach with no user
 /// acting on a control, as (object-level names, member-level names), folded;
 /// `None` for a codeunit (its `OnRun` alone, [`entry_trigger_name`]).
 ///
@@ -2259,6 +2261,8 @@ pub(crate) fn run_triggers(
                 "onaftergetrecord",
             ],
         )),
+        // B6: a query's `Open` (or save) runs its one trigger.
+        ObjectKind::Query => Some((&["onbeforeopen"], &[])),
         _ => None,
     }
 }
@@ -2439,7 +2443,8 @@ pub(crate) fn object_receiver_target<'g>(
 
 /// Whether `target` declares a procedure named `method_lc` that hides the
 /// built-in entry-dispatch method of the same name (`Run`, `RunModal`,
-/// `Import`, `Export`) for a call WITH arguments. For a Page or Report, a
+/// `Import`, `Export`, and since B6 a report's `SaveAs*`/`Execute`/`Print`
+/// and a query's `Open`/`SaveAs*`) for a call WITH arguments. For a Page or Report, a
 /// procedure of a `PageExtension`/`ReportExtension` in `from_object`'s
 /// dependency closure counts too.
 ///
@@ -2457,7 +2462,7 @@ pub(crate) fn object_receiver_target<'g>(
 /// Microsoft's System Application has such procedures
 /// (`"Azure AD User Mgmt. Impl.".Run(ForUserSecurityId: Guid)`,
 /// `"Guided Experience".Run(…)`).
-fn declares_entry_method_overload(
+pub(crate) fn declares_entry_method_overload(
     target: &ObjectNode,
     method_lc: &str,
     from_object: &ObjectNode,
@@ -3204,13 +3209,27 @@ pub(crate) fn resolve_member_with_args(
                 ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
                 _ => false,
             };
+            // B6: `Rep.SaveAsPdf(…)`, `Rep.Execute(…)`, `Rep.Print(…)` run the
+            // report as `Run` does (its triggers and its dataset), and
+            // `Q.Open()`/`Q.SaveAsCsv(…)` open the query (its `OnBeforeOpen`
+            // and its dataset); they take other arguments than `Run`, so the
+            // arity bound does not apply.
+            let is_run_by_other_name = match *kind {
+                ObjectKind::Report => {
+                    crate::program::resolve::dataset::is_report_output_method(method_lc)
+                }
+                ObjectKind::Query => {
+                    crate::program::resolve::dataset::dataset_mode(ObjectKind::Query, method_lc)
+                        .is_some()
+                }
+                _ => false,
+            };
             // A call with arguments to an object that declares a procedure of
             // that name binds to the procedure, never to the built-in run
             // (`declares_entry_method_overload`); the general dispatch below
             // resolves it.
-            if is_entry_trigger_dispatch
-                && arity <= 1
-                && !(arity == 1
+            if ((is_entry_trigger_dispatch && arity <= 1) || is_run_by_other_name)
+                && !(arity >= 1
                     && declares_entry_method_overload(target, method_lc, from_object, graph, index))
             {
                 // ponytail: completeness is re-derived from the shape by the
@@ -9591,9 +9610,11 @@ codeunit 50611 "PageCaller"
         assert_eq!(rid.object.kind, ObjectKind::Page);
     }
 
-    // Test 2: Report Object receiver + `saveaspdf` → Catalog route ReportInstance::saveaspdf
+    // Test 2: Report Object receiver + `saveaspdf` → the report's run triggers
+    // (B6: a save runs the report as `Run` does; it was a catalog route that
+    // reached no code), with any number of arguments.
     #[test]
-    fn resolve_member_report_saveaspdf_emits_catalog_route() {
+    fn resolve_member_report_saveaspdf_runs_the_report_triggers() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let src_report: &'static str = r#"
@@ -9602,6 +9623,9 @@ report 50612 "MyReport"
     dataset
     {
     }
+    trigger OnPreReport()
+    begin
+    end;
 }
 "#;
         let src_caller: &'static str = r#"
@@ -9626,33 +9650,24 @@ codeunit 50613 "ReportCaller"
             name_lc: "myreport".into(),
             id: None,
         };
-        let (shape, routes) = resolve_member(
-            &receiver,
-            "saveaspdf",
-            0,
-            from_obj,
-            &graph,
-            &index,
-            &surface,
-        );
-
-        assert_eq!(shape, DispatchShape::Exact);
-        assert_eq!(routes.len(), 1);
-        assert!(
-            matches!(routes[0].target, RouteTarget::Builtin(_)),
-            "target must be Builtin; got {:?}",
-            routes[0].target
-        );
-        assert_eq!(routes[0].evidence, Evidence::Catalog);
-        assert!(
-            matches!(routes[0].witness, Witness::CatalogEntry { .. }),
-            "witness must be CatalogEntry; got {:?}",
-            routes[0].witness
-        );
-        let RouteTarget::Builtin(ref bid) = routes[0].target else {
-            unreachable!()
-        };
-        assert_eq!(bid.0, "ReportInstance::saveaspdf");
+        for arity in [1, 3] {
+            let (shape, routes) = resolve_member(
+                &receiver,
+                "saveaspdf",
+                arity,
+                from_obj,
+                &graph,
+                &index,
+                &surface,
+            );
+            assert_eq!(shape, DispatchShape::Multicast, "arity {arity}");
+            assert_eq!(routes.len(), 1, "arity {arity}");
+            assert_eq!(routes[0].evidence, Evidence::Source);
+            let RouteTarget::Routine(ref rid) = routes[0].target else {
+                panic!("expected the OnPreReport trigger, got {:?}", routes[0]);
+            };
+            assert_eq!(rid.name_lc, "onprereport");
+        }
     }
 
     // Test 3: EnumType receiver + `asinteger` → Catalog route Enum::asinteger
@@ -13057,15 +13072,10 @@ codeunit 62072 "RxMergeCaller8"
 
         // A genuine platform-intrinsic (ReportInstance catalog) member absent
         // from both base and extension still falls through to Catalog.
-        let (shape2, routes2) = resolve_member(
-            &receiver,
-            "saveaspdf",
-            0,
-            from_obj,
-            &graph,
-            &index,
-            &surface,
-        );
+        // (`SaveAsPdf` was the example until B6 made it a run of the report;
+        // `Preview` runs nothing.)
+        let (shape2, routes2) =
+            resolve_member(&receiver, "preview", 0, from_obj, &graph, &index, &surface);
         assert_eq!(shape2, DispatchShape::Exact);
         assert_eq!(routes2.len(), 1);
         assert_eq!(routes2[0].evidence, Evidence::Catalog);

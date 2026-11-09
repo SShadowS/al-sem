@@ -237,7 +237,7 @@ pub struct AbiIntegrityReport {
 /// exempting this shape changes no other outcome.
 ///
 /// Keep in sync with `resolver.rs::entry_trigger_name` (Page -> "onopenpage",
-/// Report -> "onprereport", everything else -> "onrun").
+/// Report -> "onprereport", Query -> "onbeforeopen", everything else -> "onrun").
 fn is_entry_trigger_boundary_key(key: &AbiRoutineKey) -> bool {
     if key.routine_kind != AbiRoutineKind::Procedure
         || key.event_kind != AbiEventKind::None
@@ -248,6 +248,7 @@ fn is_entry_trigger_boundary_key(key: &AbiRoutineKey) -> bool {
     let entry_trigger_name = match key.object_type.as_str() {
         "page" => "onopenpage",
         "report" => "onprereport",
+        "query" => "onbeforeopen",
         _ => "onrun",
     };
     key.routine_name_lc == entry_trigger_name

@@ -117,6 +117,7 @@ fn entry_trigger(kind: ObjectKind) -> &'static str {
         ObjectKind::Page => "onopenpage",
         ObjectKind::Report => "onprereport",
         ObjectKind::XmlPort => "onprexmlport",
+        ObjectKind::Query => "onbeforeopen",
         _ => "onrun",
     }
 }

@@ -51,7 +51,7 @@ use crate::program::resolve::abi_check::{
 };
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
 use crate::program::resolve::background;
-use crate::program::resolve::dataset::{DatasetRun, dataset_mode};
+use crate::program::resolve::dataset::{DatasetMode, DatasetRun, dataset_mode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
     CanonicalSpan, Condition, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram,
@@ -516,6 +516,7 @@ pub(crate) fn site_open_bounds(
                     "Page" => Some(ObjectKind::Page),
                     "Report" => Some(ObjectKind::Report),
                     "XmlPort" => Some(ObjectKind::XmlPort),
+                    "Query" => Some(ObjectKind::Query),
                     _ => None,
                 },
             }),
@@ -840,18 +841,8 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
-                facts_out.dataset_run = member_dataset_run(
-                    &recv,
-                    &receiver_lc,
-                    &method_lc,
-                    routine,
-                    obj,
-                    obj_node,
-                    file,
-                    call_args,
-                    graph,
-                    index,
-                );
+                facts_out.dataset_run =
+                    member_dataset_run(&recv, &method_lc, arity, obj_node, graph, index);
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
                 if s == DispatchShape::Multicast
@@ -961,6 +952,7 @@ fn resolve_call_site_obligation(
                 "Page" => Some(ObjectKind::Page),
                 "Report" => Some(ObjectKind::Report),
                 "XmlPort" => Some(ObjectKind::XmlPort),
+                "Query" => Some(ObjectKind::Query),
                 _ => None,
             };
             // `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the lookup page of
@@ -1015,6 +1007,7 @@ fn resolve_call_site_obligation(
                     .unwrap_or_default()
                     .fold_identifier();
                 if let (Some(mode), Some(t)) = (dataset_mode(okind, &method_lc), target_ref) {
+                    let mode = xmlport_run_direction(mode, call_args, file);
                     facts_out.dataset_run = crate::program::resolve::resolver::object_run_target(
                         caller_app,
                         okind,
@@ -1646,64 +1639,69 @@ fn zero_page_table(
     }
 }
 
-/// The [`ReceiverFact`] for a member call whose receiver typed as `recv`
-/// (engine-switch S6.0). An object's name is the declaration's as written when
-/// the receiver is a declared variable naming that object, else the folded name.
+/// B6: an `Xmlport.Run(X, RequestWindow, Import, …)` with a literal
+/// `RequestWindow = false` and a literal `Import` runs in that one direction
+/// (Learn, "Xmlport.Run method": "Specify true to run the XmlPort and import
+/// data; specify false to export data"). With a request page, or a value not
+/// written as a literal, the user or the value may choose either: `mode`
+/// stays as given ([`DatasetMode::XmlPortRun`] follows `Direction`).
+fn xmlport_run_direction(
+    mode: DatasetMode,
+    call_args: &[al_syntax::ir::ExprId],
+    file: &al_syntax::ir::AlFile,
+) -> DatasetMode {
+    use al_syntax::ir::{ExprKind, Literal};
+    let literal = |i: usize| match call_args.get(i).map(|&a| &file.ir.expr(a).kind) {
+        Some(ExprKind::Literal(Literal::Bool(b))) => Some(*b),
+        _ => None,
+    };
+    match (mode, literal(1), literal(2)) {
+        (DatasetMode::XmlPortRun, Some(false), Some(true)) => DatasetMode::Import,
+        (DatasetMode::XmlPortRun, Some(false), Some(false)) => DatasetMode::Export,
+        _ => mode,
+    }
+}
+
 /// B6: the dataset run of a member call ([`SiteFacts::dataset_run`]): a
 /// report, XmlPort or query variable's own method (`Rep.SaveAsPdf(…)`,
-/// `Xp.Import()`, `Q.Open()`), or a static `Report.SaveAsPdf(Report::X, …)` /
-/// `Query.SaveAsCsv(Query::X, …)` whose first argument names the object. A
-/// `CurrReport`/`CurrXmlPort` call names no other object: `None`.
-#[allow(clippy::too_many_arguments)]
+/// `Xp.Import()`, `Q.Open()`). A `CurrReport`/`CurrXmlPort` call names no
+/// other object: `None`. The keyword forms (`Report.SaveAsPdf(Report::X, …)`,
+/// `Query.SaveAsCsv(Query::X, …)`) are object runs
+/// (`extract::classify_call`), whose arm sets the fact; a variable receiver
+/// whose object is not in the graph resolves as unknown
+/// (`resolver::resolve_member_with_args`), never as a run of nothing.
 fn member_dataset_run(
     recv: &ReceiverType,
-    receiver_lc: &str,
     method_lc: &str,
-    routine: &al_syntax::ir::RoutineDecl,
-    obj: &al_syntax::ir::ObjectDecl,
+    arity: usize,
     from_object: &ObjectNode,
-    file: &al_syntax::ir::AlFile,
-    call_args: &[al_syntax::ir::ExprId],
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
 ) -> Option<DatasetRun> {
-    if let ReceiverType::Object { kind, name_lc, id } = recv {
-        let mode = dataset_mode(*kind, method_lc)?;
-        let target = crate::program::resolve::resolver::object_receiver_target(
-            kind,
-            name_lc,
-            id.as_ref(),
+    let ReceiverType::Object { kind, name_lc, id } = recv else {
+        return None;
+    };
+    let mode = dataset_mode(*kind, method_lc)?;
+    let target = crate::program::resolve::resolver::object_receiver_target(
+        kind,
+        name_lc,
+        id.as_ref(),
+        from_object,
+        graph,
+    )?;
+    // A call with arguments that binds to the object's own procedure of that
+    // name runs no dataset (the resolver's same rule).
+    if arity >= 1
+        && crate::program::resolve::resolver::declares_entry_method_overload(
+            target,
+            method_lc,
             from_object,
             graph,
-        )?;
-        return Some(DatasetRun {
-            object: target.id.clone(),
-            mode,
-            effects: Vec::new(),
-        });
-    }
-    // The keyword receivers: a variable of that name shadows the keyword.
-    let kind = match receiver_lc {
-        "report" => ObjectKind::Report,
-        "query" => ObjectKind::Query,
-        "xmlport" => ObjectKind::XmlPort,
-        _ => return None,
-    };
-    if crate::program::resolve::receiver::receiver_declared_type(receiver_lc, routine, &obj.globals)
-        .is_some()
+            index,
+        )
     {
         return None;
     }
-    let mode = dataset_mode(kind, method_lc)?;
-    let (target, is_name) = static_database_reference_target(file, call_args)?;
-    let target = crate::program::resolve::resolver::object_run_target(
-        from_object.id.app,
-        kind,
-        &target,
-        is_name,
-        graph,
-        index,
-    )?;
     Some(DatasetRun {
         object: target.id.clone(),
         mode,
@@ -1711,6 +1709,9 @@ fn member_dataset_run(
     })
 }
 
+/// The [`ReceiverFact`] for a member call whose receiver typed as `recv`
+/// (engine-switch S6.0). An object's name is the declaration's as written when
+/// the receiver is a declared variable naming that object, else the folded name.
 fn receiver_fact(
     recv: &ReceiverType,
     receiver_lc: &str,
