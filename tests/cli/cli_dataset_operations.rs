@@ -385,6 +385,65 @@ fn effects(ws: &Path, routine: &str) -> String {
     )
 }
 
+/// The rows of `alsem graph <ws>` (JSONL).
+fn graph_rows(ws: &Path) -> Vec<serde_json::Value> {
+    alsem(ws, &["graph"])
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// The id of the graph node of `object`'s `member`.
+fn graph_node(rows: &[serde_json::Value], object: &str, member: &str) -> String {
+    rows.iter()
+        .find(|r| {
+            r["t"] == "node" && r["v"]["objectName"] == object && r["v"]["memberName"] == member
+        })
+        .unwrap_or_else(|| panic!("no node {object}::{member}"))["v"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// B6 round 2 (the call graph bc-dev-mcp's test selection reads): an XmlPort
+/// import's own insert may run the table's `OnInsert` and raises its
+/// `OnAfterInsertEvent`, so `alsem graph` has those edges from the importing
+/// routine. Before, `ImportStatic` had no edge to either, and a test that
+/// imports into "DS Line" was not selected for a change to its `OnInsert` or
+/// to "DS Subscriber"'s `LogInsert`. "DS Line" is written by no code, so
+/// only the platform's insert can lead there.
+#[test]
+fn the_graph_follows_an_import_into_its_tables_trigger_and_events() {
+    let t = workspace();
+    let rows = graph_rows(t.path());
+    let caller = graph_node(&rows, "DS Logic", "ImportStatic");
+    let on_insert = graph_node(&rows, "DS Line", "OnInsert");
+    let event = graph_node(&rows, "DS Line", "OnAfterInsertEvent");
+    let out: Vec<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r["t"] == "edge" && r["v"]["caller"] == caller.as_str())
+        .map(|r| {
+            (
+                r["v"]["callee"].as_str().unwrap(),
+                r["v"]["via"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        out.contains(&(on_insert.as_str(), "implicitTrigger"))
+            && out.contains(&(event.as_str(), "tableEvent")),
+        "{out:?}"
+    );
+    // An import with AutoSave off inserts nothing: no trigger edge.
+    let no_save = graph_node(&rows, "DS Logic", "ImportNoSave");
+    assert!(
+        !rows.iter().any(|r| r["t"] == "edge"
+            && r["v"]["caller"] == no_save.as_str()
+            && r["v"]["via"] == "implicitTrigger"),
+        "ImportNoSave"
+    );
+}
+
 #[test]
 fn an_xmlport_import_writes_its_table_elements() {
     let t = workspace();
@@ -659,4 +718,473 @@ fn a_symbol_only_dataset_is_not_known_never_empty() {
             "single={single}: {text}"
         );
     }
+}
+
+/// B6 round 2. Every write below is the ONLY write of its table:
+/// - "BO Own" is written only by the objects' own procedures named like a
+///   built-in run (`Print()`, `Execute()`, `SaveAsPdf(Integer)`,
+///   `SaveAsWord(Code[250])`, the query's `Open(Integer)`);
+/// - "BO Pre" only by object-level triggers that every run reaches
+///   (`OnPreReport`, `OnBeforeOpen`, `OnPreXmlPort`, `OnOpenPage`);
+/// - "BO Row" only by per-record triggers (a report dataitem's and a page's
+///   `OnAfterGetRecord`, an XmlPort table element's `OnBeforeInsertRecord`),
+///   which also hold the fixture's one `Commit`;
+/// - "BO IfD" only by the automatic insert of an XmlPort whose `Direction =
+///   Export` sits in an `#if` arm alone;
+/// - "BO Out" only by `ViaPre`/`ViaRows`, right after a save of a report whose
+///   one trigger rejects a blocked record: `OnPreReport` in "BO GuardPre",
+///   a dataitem's `OnAfterGetRecord` in "BO GuardRows".
+///
+/// "BO Zero"'s `local procedure SaveAsHtml(Code[250])` cannot be called from
+/// "BO Logic", so `R.SaveAsHtml('x')` there can only be the built-in.
+///
+/// The fixture compiles with alc 18.0.43.1464 (target OnPrem, for `SaveAsPdf`).
+const ROUND2: &str = r#"table 50700 "BO Read" { fields { field(1; K; Integer) { } field(2; Blocked; Boolean) { } } keys { key(PK; K) { } } }
+table 50701 "BO Own" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50702 "BO Pre" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50703 "BO Row" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50704 "BO IfD" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50705 "BO Out" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+report 50722 "BO GuardPre"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(I; "BO Read") { } }
+    trigger OnPreReport()
+    var
+        C: Record "BO Read";
+    begin
+        C.Get(1);
+        if C.Blocked then
+            Error('blocked');
+    end;
+}
+report 50723 "BO GuardRows"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(I; "BO Read")
+        {
+            trigger OnAfterGetRecord()
+            begin
+                if I.Blocked then
+                    Error('blocked');
+            end;
+        }
+    }
+}
+report 50720 "BO Zero"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(I; "BO Read") { } }
+    trigger OnPreReport()
+    var
+        P: Record "BO Pre";
+    begin
+        P.Insert();
+    end;
+
+    procedure Print()
+    var
+        O: Record "BO Own";
+    begin
+        O.Insert();
+    end;
+
+    procedure Execute()
+    var
+        O: Record "BO Own";
+    begin
+        O.Insert();
+    end;
+
+    procedure SaveAsPdf(N: Integer)
+    var
+        O: Record "BO Own";
+    begin
+        O.Insert();
+    end;
+
+    procedure SaveAsWord(T: Code[250])
+    var
+        O: Record "BO Own";
+    begin
+        O.Insert();
+    end;
+
+    local procedure SaveAsHtml(T: Code[250])
+    var
+        O: Record "BO Own";
+    begin
+        O.Insert();
+    end;
+}
+report 50721 "BO Rows"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(I; "BO Read")
+        {
+            trigger OnAfterGetRecord()
+            var
+                W: Record "BO Row";
+            begin
+                W.Insert();
+                Commit();
+            end;
+        }
+    }
+    trigger OnPreReport()
+    var
+        P: Record "BO Pre";
+    begin
+        P.Insert();
+    end;
+}
+query 50730 "BO Query"
+{
+    elements { dataitem(Q; "BO Read") { column(K; K) { } } }
+    trigger OnBeforeOpen()
+    var
+        P: Record "BO Pre";
+    begin
+        P.Insert();
+    end;
+
+    procedure Open(N: Integer)
+    var
+        O: Record "BO Own";
+    begin
+        O.Insert();
+    end;
+}
+xmlport 50740 "BO Xml"
+{
+    Direction = Import;
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(RowEl; "BO Read")
+            {
+                AutoSave = false;
+                trigger OnBeforeInsertRecord()
+                var
+                    W: Record "BO Row";
+                begin
+                    W.Insert();
+                end;
+            }
+        }
+    }
+    trigger OnPreXmlPort()
+    var
+        P: Record "BO Pre";
+    begin
+        P.Insert();
+    end;
+}
+xmlport 50741 "BO IfDir"
+{
+#if CLEAN
+    Direction = Export;
+#endif
+    schema { textelement(Root) { tableelement(IfEl; "BO IfD") { } } }
+}
+page 50750 "BO Page"
+{
+    SourceTable = "BO Read";
+    trigger OnOpenPage()
+    var
+        P: Record "BO Pre";
+    begin
+        P.Insert();
+    end;
+
+    trigger OnAfterGetRecord()
+    var
+        W: Record "BO Row";
+    begin
+        W.Insert();
+    end;
+}
+codeunit 50760 "BO Logic"
+{
+    procedure CallPrint()
+    var
+        R: Report "BO Zero";
+    begin
+        R.Print();
+    end;
+
+    procedure CallExec()
+    var
+        R: Report "BO Zero";
+    begin
+        R.Execute();
+    end;
+
+    procedure CallBuiltinSave()
+    var
+        R: Report "BO Zero";
+    begin
+        R.SaveAsPdf('x.pdf');
+    end;
+
+    procedure CallOwnSave()
+    var
+        R: Report "BO Zero";
+    begin
+        R.SaveAsPdf(5);
+    end;
+
+    procedure CallUndecided()
+    var
+        R: Report "BO Zero";
+    begin
+        R.SaveAsWord('x.docx');
+    end;
+
+    procedure OpenBuiltin()
+    var
+        Q: Query "BO Query";
+    begin
+        Q.Open();
+    end;
+
+    procedure OpenOwn()
+    var
+        Q: Query "BO Query";
+    begin
+        Q.Open(5);
+    end;
+
+    procedure SaveRows()
+    begin
+        Report.SaveAsPdf(Report::"BO Rows", 'x.pdf');
+    end;
+
+    procedure SaveRowsVariable()
+    var
+        R: Report "BO Rows";
+    begin
+        R.SaveAsPdf('x.pdf');
+    end;
+
+    procedure RunRows()
+    begin
+        Report.Run(Report::"BO Rows", false);
+    end;
+
+    procedure ImportRows(var S: InStream)
+    begin
+        Xmlport.Import(Xmlport::"BO Xml", S);
+    end;
+
+    procedure ShowPage()
+    begin
+        Page.RunModal(Page::"BO Page");
+    end;
+
+    procedure RunIfDir()
+    begin
+        Xmlport.Run(Xmlport::"BO IfDir");
+    end;
+
+    procedure CallLocalHidden()
+    var
+        R: Report "BO Zero";
+    begin
+        R.SaveAsHtml('x.html');
+    end;
+
+    procedure ViaPre()
+    var
+        R: Report "BO GuardPre";
+        O: Record "BO Out";
+    begin
+        R.SaveAsPdf('x.pdf');
+        O.Insert();
+    end;
+
+    procedure ViaRows()
+    var
+        R: Report "BO GuardRows";
+        O: Record "BO Out";
+    begin
+        R.SaveAsPdf('x.pdf');
+        O.Insert();
+    end;
+}
+"#;
+
+fn round2_workspace() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"60606060-0000-4000-8000-000000000062","name":"BO","publisher":"t","version":"1.0.0.0","idRanges":[{"from":50700,"to":50799}]}"#,
+    )
+    .unwrap();
+    std::fs::write(t.path().join("src/Round2.al"), ROUND2).unwrap();
+    t
+}
+
+/// The `answer:` line of a human prove on "BO Logic".
+fn prove_bo(ws: &Path, routine: &str, question: &str) -> String {
+    let text = alsem(
+        ws,
+        &[
+            "prove",
+            &format!("BO Logic::{routine}"),
+            question,
+            "--format",
+            "human",
+        ],
+    );
+    text.lines()
+        .find(|l| l.starts_with("answer:"))
+        .unwrap_or_else(|| panic!("no answer line: {text}"))
+        .to_string()
+}
+
+/// A call binds to the object's own procedure when its arguments fit that
+/// procedure and no built-in, to the built-in run when they fit only a
+/// built-in, and is unknown when both fit and the types do not decide (alc
+/// binds the Text literal to the built-in `SaveAsWord(Text)` over the
+/// procedure's `Code[250]`; the engine's fail-closed pick does not claim it).
+#[test]
+fn a_call_binds_the_reports_own_procedure_when_its_arguments_fit_it() {
+    let t = round2_workspace();
+    let ws = t.path();
+    // The built-in `Print`/`Execute`/`SaveAsPdf`(Text) need an argument the
+    // procedure does not take, or of another type: the procedure runs, the
+    // report does not.
+    for routine in ["CallPrint", "CallExec", "CallOwnSave", "OpenOwn"] {
+        let own = prove_bo(ws, routine, "writes-table:BO Own");
+        assert!(own.starts_with("answer: yes"), "{routine}: {own}");
+        let pre = prove_bo(ws, routine, "writes-table:BO Pre");
+        assert!(pre.starts_with("answer: no"), "{routine}: {pre}");
+    }
+    // A Text argument fits only the built-in `SaveAsPdf(Text)`; no argument
+    // fits only the built-in `Query.Open()`; a `local` procedure the caller
+    // cannot see takes no part (AL leaves it out of overload resolution):
+    // the object runs.
+    for routine in ["CallBuiltinSave", "OpenBuiltin", "CallLocalHidden"] {
+        let own = prove_bo(ws, routine, "writes-table:BO Own");
+        assert!(own.starts_with("answer: no"), "{routine}: {own}");
+        let pre = prove_bo(ws, routine, "writes-table:BO Pre");
+        assert!(pre.starts_with("answer: yes"), "{routine}: {pre}");
+    }
+    for table in ["BO Own", "BO Pre"] {
+        let a = prove_bo(ws, "CallUndecided", &format!("writes-table:{table}"));
+        assert!(
+            a.starts_with("answer: unknown (blocked by: call not resolved 1)"),
+            "{table}: {a}"
+        );
+    }
+    // The report's dataset runs only with the built-in.
+    let effects_of = |routine: &str| {
+        alsem(
+            ws,
+            &[
+                "query",
+                "effects",
+                "--routine",
+                &format!("BO Logic::{routine}"),
+                "--all",
+            ],
+        )
+    };
+    let own = effects_of("CallPrint");
+    assert!(!own.contains("platform:"), "{own}");
+    let builtin = effects_of("CallBuiltinSave");
+    assert!(
+        builtin.contains("(platform: Report \"BO Zero\" reads table \"BO Read\""),
+        "{builtin}"
+    );
+    // The call graph bc-dev-mcp's test selection reads: `R.Print()` is a call
+    // of the procedure, so a change to it selects the tests reaching
+    // `CallPrint`; it is no run of the report.
+    let rows = graph_rows(ws);
+    let caller = graph_node(&rows, "BO Logic", "CallPrint");
+    let print = graph_node(&rows, "BO Zero", "Print");
+    let out: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|r| r["t"] == "edge" && r["v"]["caller"] == caller.as_str())
+        .collect();
+    assert!(
+        out.len() == 1 && out[0]["v"]["callee"] == print.as_str() && out[0]["v"]["via"] == "call",
+        "{out:?}"
+    );
+}
+
+/// A run may finish without running a per-record trigger (Learn, "Report
+/// Triggers and Runtime Operations": `OnAfterGetRecord` runs once per record
+/// retrieved), so what it does is conditional on the run, never
+/// `unconditional on success`; the object-level trigger every run reaches
+/// keeps its `unconditional`.
+#[test]
+fn a_per_record_trigger_is_conditional_on_the_run() {
+    let t = round2_workspace();
+    let ws = t.path();
+    for routine in ["SaveRows", "SaveRowsVariable", "RunRows"] {
+        let row = prove_bo(ws, routine, "writes-table:BO Row");
+        assert!(
+            row.starts_with("answer: yes") && row.ends_with("(conditional)"),
+            "{routine}: {row}"
+        );
+        let pre = prove_bo(ws, routine, "writes-table:BO Pre");
+        assert!(
+            pre.ends_with("(unconditional on success)"),
+            "{routine}: {pre}"
+        );
+        let commit = prove_bo(ws, routine, "commits-on-success-path");
+        assert!(
+            commit.starts_with("answer: unknown (blocked by: conditional effect exists 1)"),
+            "{routine}: {commit}"
+        );
+    }
+    for routine in ["ImportRows", "ShowPage"] {
+        let row = prove_bo(ws, routine, "writes-table:BO Row");
+        assert!(
+            row.starts_with("answer: yes") && row.ends_with("(conditional)"),
+            "{routine}: {row}"
+        );
+        let pre = prove_bo(ws, routine, "writes-table:BO Pre");
+        assert!(
+            pre.ends_with("(unconditional on success)"),
+            "{routine}: {pre}"
+        );
+    }
+    // explain's rules across calls: the rule in `OnPreReport` holds before
+    // `ViaPre`'s insert; the one in `OnAfterGetRecord` may never run, so it
+    // protects nothing.
+    let explain = |routine: &str| {
+        alsem(
+            ws,
+            &["explain", "--routine", &format!("BO Logic::{routine}")],
+        )
+    };
+    let pre = explain("ViaPre");
+    assert!(
+        pre.contains("inherits via OnPreReport: rejects when C.Blocked: \"blocked\""),
+        "{pre}"
+    );
+    let rows = explain("ViaRows");
+    assert!(
+        rows.contains("calls: Report \"BO GuardRows\".dataitem(I)::OnAfterGetRecord")
+            && !rows.contains("inherits via"),
+        "{rows}"
+    );
+}
+
+/// A `Direction` written in one `#if` arm alone: a build that takes no arm
+/// keeps the default `Both`, so `Xmlport.Run` may import.
+#[test]
+fn a_direction_in_an_if_arm_alone_may_still_import() {
+    let t = round2_workspace();
+    let a = prove_bo(t.path(), "RunIfDir", "writes-table:BO IfD");
+    assert!(a.starts_with("answer: yes"), "{a}");
 }

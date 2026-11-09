@@ -1225,15 +1225,26 @@ fn lower_property(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectPr
     };
     let name = name_node.text(source).trim().fold_identifier();
     let mut values = Vec::new();
-    match node.field(FieldName::Value) {
-        Some(v) => property_arm_values(v, source, &mut values),
-        None => values.push(String::new()),
-    }
+    let whole_value_if = match node.field(FieldName::Value) {
+        Some(v) => {
+            property_arm_values(v, source, &mut values);
+            matches!(
+                v.kind(),
+                RawKind::PreprocConditionalPropertyValue
+                    | RawKind::PreprocConditionalPropertyValueSequence
+            )
+        }
+        None => {
+            values.push(String::new());
+            false
+        }
+    };
     for value in values {
         out.push(crate::ir::ObjectProperty {
             name: name.clone(),
             value,
             origin: origin_of(node),
+            conditional: whole_value_if,
         });
     }
 }
@@ -1272,8 +1283,13 @@ fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::Obje
     match node.kind() {
         RawKind::Property => lower_property(node, source, out),
         _ if is_preproc_wrapper(node) => {
+            let start = out.len();
             for c in node.named_children() {
                 collect_properties(c, source, out);
+            }
+            // Inside an `#if` arm: a build may take no arm.
+            for p in &mut out[start..] {
+                p.conditional = true;
             }
         }
         _ => {}

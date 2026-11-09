@@ -1504,9 +1504,6 @@ fn writes_arguments(cs: &PCallSite) -> bool {
     }
 }
 
-/// An unresolved call that cannot rebind a RecordRef or Variant passed to it:
-/// a method of a platform value (a record, a RecordRef, a FieldRef…) or an
-/// object's static run/save (`Report.SaveAs(…, RecRef)`), or `Format`.
 /// B6: whether `cs` is a report's static save, print or execute, or a
 /// query's static save, through its keyword (`Report.SaveAs(Id, …, RecRef)`,
 /// `Report.Print(…)`, `Query.SaveAsCsv(…)`). They resolved as catalog
@@ -1537,6 +1534,9 @@ fn is_platform_run_site(cs: &PCallSite) -> bool {
     }
 }
 
+/// An unresolved call that cannot rebind a RecordRef or Variant passed to it:
+/// a method of a platform value (a record, a RecordRef, a FieldRef…) or an
+/// object's static run/save (`Report.SaveAs(…, RecRef)`), or `Format`.
 fn keeps_unresolved(r: &ModelRoutine, cs: &PCallSite) -> bool {
     match &cs.callee {
         PCallee::Member { receiver, method } => {

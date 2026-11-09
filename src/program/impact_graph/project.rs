@@ -501,6 +501,65 @@ impl<'a> Builder<'a> {
                     BTreeSet::new(),
                 );
             }
+            // B6 round 2: the platform's own dataset operations at a run (an
+            // XmlPort import's insert or modify) may run the table's
+            // `OnInsert`/`OnModify` and raise its table events: the edges the
+            // model's cone already follows (`program_calls`'s dataset
+            // operations), so a test that imports into a table is selected for
+            // a change to that table's trigger or to a table-event subscriber.
+            if let ObligationId::CallSite { .. } = ce.obligation_id
+                && let Some(run) = inp
+                    .edges
+                    .site_facts
+                    .get(&ce.obligation_id)
+                    .and_then(|f| f.dataset_run.as_ref())
+            {
+                for eff in &run.effects {
+                    let routes = eff
+                        .triggers
+                        .iter()
+                        .map(|r| (Kind::Trigger, "implicitTrigger", r))
+                        .chain(
+                            eff.table_events
+                                .iter()
+                                .map(|r| (Kind::Event, "tableEvent", r)),
+                        );
+                    for (kind, via, r) in routes {
+                        let to = match &r.target {
+                            RouteTarget::Routine(rid) => Key::Routine(rid.clone()),
+                            RouteTarget::AbiSymbol { key } => {
+                                let Some(oid) = self.abi_object(key) else {
+                                    continue;
+                                };
+                                let rid = RoutineNodeId {
+                                    object: oid.clone(),
+                                    name_lc: key.routine_name_lc.as_str().into(),
+                                    enclosing_member_lc: None,
+                                    params_count: key.params_count,
+                                    sig_fp: key.param_type_fp,
+                                };
+                                if self.rtn_by_id.contains_key(&rid) {
+                                    Key::Routine(rid)
+                                } else {
+                                    Key::Object(self.run_object(&oid))
+                                }
+                            }
+                            RouteTarget::Builtin(_) | RouteTarget::Unresolved => continue,
+                        };
+                        // Whether the platform's own insert runs `OnInsert` is
+                        // not documented (the operation's `Maybe` trigger edge).
+                        self.add(
+                            from.clone(),
+                            to,
+                            kind,
+                            Conf::OverApprox,
+                            via,
+                            line,
+                            BTreeSet::new(),
+                        );
+                    }
+                }
+            }
             // Rule 2: a dispatching builtin that runs an object, called on a
             // receiver typed as one object (`ReportVar.SaveAsPdf()`,
             // `QueryVar.Open()`), runs that object. The site's open bound

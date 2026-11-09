@@ -213,6 +213,9 @@ pub struct ObjectProperty {
     pub name: String,
     pub value: String,
     pub origin: Origin,
+    /// The property, or its whole value, sits in an `#if` arm: some build may
+    /// not have this value (B6 round 2, an XmlPort's `Direction`).
+    pub conditional: bool,
 }
 
 /// A parsed routine attribute (`[EventSubscriber(ObjectType::Codeunit, …)]`).

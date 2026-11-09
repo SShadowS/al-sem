@@ -764,6 +764,10 @@ pub enum SnapshotGraphEdge {
         to: String,
         #[serde(rename = "receiverType")]
         receiver_type: String,
+        /// B6 round 2: `maybe` when this call is a run into a trigger the run
+        /// may finish without running (`resolver::run_trigger_may_not_run`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
         #[serde(rename = "sourceAnchor")]
         source_anchor: SnapshotSourceAnchor,
         #[serde(rename = "edgeId")]
@@ -794,6 +798,10 @@ pub enum SnapshotGraphEdge {
         target_object: String,
         #[serde(rename = "objectType")]
         object_type: String,
+        /// B6 round 2: `maybe` when the run may finish without running `to`
+        /// (`resolver::run_trigger_may_not_run`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
         #[serde(rename = "sourceAnchor")]
         source_anchor: SnapshotSourceAnchor,
         #[serde(rename = "edgeId")]
@@ -2807,6 +2815,7 @@ fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeK
                     from: from_stable.clone(),
                     to: to_stable.clone().unwrap_or_default(),
                     receiver_type: e.receiver_type.clone().unwrap_or_default(),
+                    fires: e.fires,
                     source_anchor: match cs_anchor {
                         Some(a) => a,
                         None => break 'build None,
@@ -2833,6 +2842,7 @@ fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeK
                     to: to_stable.clone().unwrap_or_default(),
                     target_object: target_object_internal.clone().unwrap_or_default(),
                     object_type: e.object_type.clone().unwrap_or_default(),
+                    fires: e.fires,
                     source_anchor: match cs_anchor {
                         Some(a) => a,
                         None => break 'build None,

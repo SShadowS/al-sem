@@ -544,6 +544,10 @@ enum WitnessHop {
         source_file: Option<String>,
         line: Option<u32>,
         column: Option<u32>,
+        /// B6 round 2: `Maybe` when the run may finish without running
+        /// `routine_id` (a report's `OnAfterGetRecord`, …). Internal: read by
+        /// the conditionality arm only, not in the hop's JSON.
+        fires: Option<TriggerFires>,
     },
     EventDispatch {
         routine_id: String,
@@ -560,6 +564,9 @@ enum WitnessHop {
         source_file: Option<String>,
         line: Option<u32>,
         column: Option<u32>,
+        /// B6 round 2: as [`WitnessHop::ObjectRun`]'s, for a run through an
+        /// object variable (`Rep.SaveAsPdf(…)`).
+        fires: Option<TriggerFires>,
     },
     InterfaceDispatch {
         routine_id: String,
@@ -954,6 +961,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
             to,
             callsite_id,
             target_object,
+            fires,
             ..
         } => {
             let display = idx
@@ -971,6 +979,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 source_file: cs.map(|c| c.source_file.clone()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
+                fires: *fires,
             })
         }
         SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
@@ -999,6 +1008,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
             to,
             callsite_id,
             receiver_type,
+            fires,
             ..
         } => {
             let display = idx
@@ -1016,6 +1026,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 source_file: cs.map(|c| c.source_file.clone()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
+                fires: *fires,
             })
         }
         SnapshotGraphEdge::InterfaceDispatch {
@@ -3336,6 +3347,7 @@ fn project_hop(
             source_file,
             line,
             column,
+            ..
         } => Some(QueryWitnessHop {
             kind: "variable-typed-call",
             from_routine_id: from_id.to_string(),
@@ -3606,6 +3618,7 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             source_file,
             line,
             column,
+            ..
         } => {
             req_str(&mut s, &mut w, "kind", "object-run");
             req_str(&mut s, &mut w, "routineId", routine_id);
@@ -3640,6 +3653,7 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             source_file,
             line,
             column,
+            ..
         } => {
             req_str(&mut s, &mut w, "kind", "variable-typed-call");
             req_str(&mut s, &mut w, "routineId", routine_id);
@@ -4500,6 +4514,31 @@ fn compute_path_conditionality(
             } else {
                 op
             }
+        }
+        // B6 round 2: a run into a trigger the run may finish without running
+        // (a report's `OnAfterGetRecord` with no record): the call site's own
+        // context, plus the conditional floor.
+        WitnessHop::ObjectRun {
+            callsite_id,
+            fires: Some(TriggerFires::Maybe),
+            ..
+        } => {
+            let site = match callsite_id {
+                Some(csid) => {
+                    context_to_conditionality(cs_ctx.get(csid.as_str()).copied().flatten())
+                }
+                None => UNKNOWN,
+            };
+            path_conditionality(&[site, CONDITIONAL], UNCONDITIONAL)
+        }
+        WitnessHop::VariableTypedCall {
+            callsite_id,
+            fires: Some(TriggerFires::Maybe),
+            ..
+        } => {
+            let site =
+                context_to_conditionality(cs_ctx.get(callsite_id.as_str()).copied().flatten());
+            path_conditionality(&[site, CONDITIONAL], UNCONDITIONAL)
         }
         _ => match hop_nonterminal_callsite_id(hop) {
             Some(csid) => context_to_conditionality(cs_ctx.get(csid).copied().flatten()),
@@ -9672,6 +9711,7 @@ codeunit 50410 DupProducer
             to: to.to_string(),
             target_object: format!("obj-{to}"),
             object_type: "Codeunit".to_string(),
+            fires: None,
             source_anchor: anchor(from),
             edge_id: format!("e-{cs}"),
         }
