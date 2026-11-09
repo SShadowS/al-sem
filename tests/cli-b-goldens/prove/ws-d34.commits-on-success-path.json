@@ -41,6 +41,15 @@
             "COMMIT_REACHABLE"
           ],
           "provenance": "direct",
+          "routeGuards": [
+            {
+              "condition": "i := 1 to 10",
+              "evaluated": false,
+              "kind": "for",
+              "line": 8,
+              "routine": "DirectCommitInLoop"
+            }
+          ],
           "scopedGuarantees": [
             {
               "interveningBoundary": "none",

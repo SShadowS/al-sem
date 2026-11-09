@@ -15,7 +15,7 @@ computed: current effects of the 5 routines these files touches, in the working 
   transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
   other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (in a loop)
+  HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (1 guard on the route, 0 evaluated)
 
 --- Codeunit "D48 Loop Caller"::SendOne ---
   summary — writes: no (every candidate decided)
@@ -36,6 +36,6 @@ computed: current effects of the 5 routines these files touches, in the working 
   transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
   other effects: events: 0 (0 raised in workspace code); file at 1 place
   uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
-  file at 1 place: FILE at ws:src/D48Pos.Codeunit.al:73 (in a loop)
+  file at 1 place: FILE at ws:src/D48Pos.Codeunit.al:73 (1 guard on the route, 0 evaluated)
   gaps in workspace code (1 call the engine cannot follow):
     F.WriteAllText (unresolved-receiver-type) in ExportAll at ws:src/D48Pos.Codeunit.al:73

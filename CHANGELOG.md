@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (output validation round 4 final, c05: route guard counts)
+
+- **"N guards on the route" is the route's full count, the one `prove --site` uses.**
+  Explain printed `CDOTableFieldArrayMgt.Codeunit.al:278 (8 guards on the route, 0
+  evaluated)` where `prove --site …:278` lists "8 of 11 enclosing conditions". The 8 was
+  no display cap: it was a different population. The words counted the `if`/`case`/
+  `while` conditions plus the earlier `if … then exit` checks, but no `for`, `foreach`
+  or `repeat`, and they lost the guards of the effect's own site when that site is a
+  call (`Evaluate`, `Message`, `Commit`) or an `Error` statement. prove's listing counts
+  every enclosing `if`/`case`/loop and no exit. Now:
+  - The witness route's guards include the loops a site sits in (`for i := 1 to 10:
+    loop body`, `repeat … until X: continuation`), and the guards of the effect's own
+    site for a call-site effect (the evidence call site) and for an `Error` statement
+    (the call at the operation's position).
+  - `N guards on the route, k evaluated` counts the enclosing conditions only, the
+    population of prove's "of M enclosing conditions"; the earlier exits are counted
+    apart: `(11 guards on the route, 0 evaluated; 6 earlier exits, 0 evaluated)`. One
+    function (`literal_reach::route_guard_counts`) counts for explain, digest and prove.
+  - A `condition:` line that lists only some guards says how many, in prove's words:
+    `… shown (4 of 18 enclosing conditions and 10 earlier exits)` (was `… +21 guards
+    (25 guards in all)`). An exit reads `earlier exit if <condition>: must be false`.
+  - JSON `routeGuards`: a loop's `kind` is `for`, `foreach` or `repeat`; an earlier exit's
+    is `exit` (was `if` with `mustBe: false`).
+  - Rows whose route has only loops or exits now print the guard form instead of the
+    class label (`(in a loop)`, `(error-path)`, `(IsHandled pattern, not evaluated)`).
+
 ### Changed (output validation r3 §7: B1 completed, R2 lookup failures, R6 write order)
 
 - **Tests: a test's relation is a property of its path set, in every count and line

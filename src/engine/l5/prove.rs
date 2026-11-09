@@ -1584,6 +1584,12 @@ fn route_guard_text(g: &crate::engine::l5::literal_reach::RouteGuard) -> String 
         GuardKind::Must(b) => format!("{text}: must be {b}, {how} ({at})"),
         GuardKind::Arm(_) => format!("case {text}: this arm, {how} ({at})"),
         GuardKind::CaseElse => format!("case {text}: its else, {how} ({at})"),
+        GuardKind::Exit if g.evaluated => format!("earlier exit if {text}: false, {how} ({at})"),
+        GuardKind::Exit => format!("earlier exit if {text}: must be false, {how} ({at})"),
+        GuardKind::Loop(l) if *l == crate::engine::l5::literal_reach::LoopKind::Repeat => {
+            format!("repeat … until {text}: continuation, {how} ({at})")
+        }
+        GuardKind::Loop(l) => format!("{} {text}: loop body, {how} ({at})", l.construct()),
     }
 }
 
@@ -1726,13 +1732,28 @@ fn route_guards_text_of(
         .map(|&i| route_guard_text(&guards[i]))
         .collect();
     if guards.len() > shown.len() {
-        parts.push(format!(
-            "… +{} guards ({} guards in all)",
-            guards.len() - shown.len(),
-            guards.len()
-        ));
+        parts.push(shown_of_words(shown.len(), guards));
     }
     Some(parts.join("; "))
+}
+
+/// r4 final (c05): how many of a route's guards a `condition:` line shows,
+/// in `prove --site`'s words (`shown (k of M enclosing conditions)`): `M`
+/// is the route's full count of enclosing conditions
+/// (`literal_reach::route_guard_counts`, the count the row's `N guards on
+/// the route` prints), the earlier exits named apart.
+fn shown_of_words(shown: usize, guards: &[crate::engine::l5::literal_reach::RouteGuard]) -> String {
+    let (enclosing, _, exits, _) = crate::engine::l5::literal_reach::route_guard_counts(guards);
+    let conds = if enclosing == 1 {
+        "1 enclosing condition".to_string()
+    } else {
+        format!("{enclosing} enclosing conditions")
+    };
+    match exits {
+        0 => format!("… shown ({shown} of {conds})"),
+        1 => format!("… shown ({shown} of {conds} and 1 earlier exit)"),
+        e => format!("… shown ({shown} of {conds} and {e} earlier exits)"),
+    }
 }
 
 /// r3 E2 (additive): an effect's witness route guards as JSON
@@ -1766,6 +1787,16 @@ fn route_guards_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
                     }
                     GuardKind::CaseElse => {
                         m.insert("kind".into(), "case-else".into());
+                    }
+                    // r4 final (c05): a loop the site sits in (`for`,
+                    // `foreach`, `repeat`), and an earlier `if … then exit`
+                    // (not an enclosing condition).
+                    GuardKind::Loop(l) => {
+                        m.insert("kind".into(), l.construct().into());
+                    }
+                    GuardKind::Exit => {
+                        m.insert("kind".into(), "exit".into());
+                        m.insert("mustBe".into(), false.into());
                     }
                 }
                 m.insert("evaluated".into(), g.evaluated.into());

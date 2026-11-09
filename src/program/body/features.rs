@@ -778,10 +778,15 @@ pub enum FlowFact {
         value: FlowExpr,
         compound: bool,
     },
-    /// On an `if`, a `while`, a `repeat` (its `until`) and a `case` (its
-    /// scrutinee): the condition, and its source text (whitespace folded,
-    /// at most [`FLOW_TEXT_MAX`] characters) for a witness to name it.
+    /// On an `if`, a `while` and a `case` (its scrutinee): the condition,
+    /// and its source text (whitespace folded, at most [`FLOW_TEXT_MAX`]
+    /// characters) for a witness to name it.
     Cond { expr: FlowExpr, text: Box<str> },
+    /// On a `for`, a `foreach` and a `repeat`: the loop's condition as
+    /// written, for a witness to name it as a guard of the sites in its body
+    /// (`V := A to B`, `V in X`, the `until` condition; folded as
+    /// [`FlowFact::Cond`]'s text). The flow reads no value from it.
+    Loop { text: Box<str> },
     /// On a call leaf: its arguments, by position.
     Args(Vec<FlowExpr>),
     /// A `with` statement: inside it a bare name may be a field.

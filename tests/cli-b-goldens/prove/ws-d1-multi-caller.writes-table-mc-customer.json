@@ -29,6 +29,15 @@
           "factId": "9dc07ba4a609e78a",
           "guarantees": [],
           "provenance": "transitive",
+          "routeGuards": [
+            {
+              "condition": "i := 1 to 10",
+              "evaluated": false,
+              "kind": "for",
+              "line": 26,
+              "routine": "CallerA"
+            }
+          ],
           "scopedGuarantees": [],
           "transactionContext": "unknown",
           "type": "DB_MODIFY",

@@ -748,8 +748,13 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // replayed routes' guard counts in place of class labels on the
         // `COMMIT at` and kind-family places, and `starts by:` printing whole
         // statements: RunReportID 152 lines / 39,049 B (was 38,706).
+        // r4 final c05 (2026-11-09): a route's guard words count the
+        // enclosing conditions (loops included) and the earlier exits apart
+        // (`(14 guards on the route, 0 evaluated; 3 earlier exits, 1
+        // evaluated)`), so the tools agree with `prove --site`'s count:
+        // RunReportID 152 lines / 39,763 B.
         ("IssueReminder", "explain human") => (145, 34_500),
-        ("RunReportID", "explain human") => (160, 39_500),
+        ("RunReportID", "explain human") => (160, 40_200),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
         ("RunReportID", "query effects human") => (80, 27_000),
@@ -771,8 +776,11 @@ fn ratchet(label: &str, call: &str) -> Budget {
         (_, "query touches human") => (20, 3_300),
         // r3 E2 (2026-11-08): the witness's `condition:` line names the
         // route's guards (4 of 14 shown, with the full count) instead of a
-        // class label: RunReportID's may-commit 2,428 B.
-        ("RunReportID", "prove may-commit human") => (20, 2_500),
+        // class label: RunReportID's may-commit 2,428 B. r4 final c05
+        // (2026-11-09): the earlier exits counted apart and the shown count
+        // in prove's words (`… shown (4 of 9 enclosing conditions and 6
+        // earlier exits)`): 2,547 B.
+        ("RunReportID", "prove may-commit human") => (20, 2_600),
         (_, "prove may-commit human") => (20, 2_400),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
         (_, "prove writes-table human") => (20, 2_500),

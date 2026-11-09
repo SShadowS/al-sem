@@ -16,6 +16,6 @@ Codeunit "Rules Checks"::CheckOrder  defined at ws:src/checks.al:8
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false: (platform message)  [TestField ws:src/checks.al:21]
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order."Posting Date" = 0D: "Order %1 has no posting date."  [Error ws:src/checks.al:25]
   inherited rules: none
-  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (2 guards on the route, 0 evaluated); ERROR_IMPLICIT at ws:src/checks.al:21 (2 guards on the route, 0 evaluated); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:17 (error-path); ERROR_THROW at ws:src/checks.al:25 (error-path)
+  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (0 guards on the route, 0 evaluated; 2 earlier exits, 0 evaluated); ERROR_IMPLICIT at ws:src/checks.al:21 (0 guards on the route, 0 evaluated; 2 earlier exits, 0 evaluated); ERROR_THROW at ws:src/checks.al:15 (1 guard on the route, 0 evaluated); ERROR_THROW at ws:src/checks.al:17 (1 guard on the route, 0 evaluated; 1 earlier exit, 0 evaluated); ERROR_THROW at ws:src/checks.al:25 (1 guard on the route, 0 evaluated; 3 earlier exits, 0 evaluated)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
 

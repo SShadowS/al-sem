@@ -2161,7 +2161,16 @@ fn literal_reach_entries<'t>(
                     .min_by_key(|p| p.len())
                     .or_else(|| e.via_paths.first())
             {
-                let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
+                // The evidence site, by operation or (an implicit error of a
+                // call such as `Evaluate`, a COMMIT) by call site: without
+                // it the terminal site's own guards were lost (r4 final c05:
+                // `if EqualPos > 0` around the `Evaluate` at :278).
+                let mut ops: Vec<String> = e
+                    .evidence_operation_id
+                    .iter()
+                    .chain(&e.evidence_callsite_id)
+                    .cloned()
+                    .collect();
                 for op in &e.origin_operation_ids {
                     if !ops.contains(op) {
                         ops.push(op.clone());

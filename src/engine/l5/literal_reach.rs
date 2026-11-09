@@ -78,7 +78,7 @@ mod lflow;
 #[path = "literal_flow_tests.rs"]
 mod lflow_tests;
 
-pub(crate) use lflow::{GuardKind, RouteGuard};
+pub(crate) use lflow::{GuardKind, LoopKind, RouteGuard};
 use values::{VSet, ValueFrame, ValueReq};
 
 /// r3 E2: the most cached flow evaluations kept at once; past it the cache
@@ -277,31 +277,59 @@ pub(crate) struct FlowNotes {
     pub beyond_unanalyzed: bool,
 }
 
+/// r4 final (c05): a route's guards counted by population: (enclosing
+/// conditions, how many of them evaluated, earlier exits, how many of them
+/// evaluated). The enclosing count is the route's full count, the
+/// population `prove --site`'s "of M enclosing conditions" counts; every
+/// reader of a route's guards counts through this one function.
+pub(crate) fn route_guard_counts(g: &[RouteGuard]) -> (usize, usize, usize, usize) {
+    g.iter().fold((0, 0, 0, 0), |(n, k, e, j), x| {
+        let ev = usize::from(x.evaluated);
+        if x.kind.encloses() {
+            (n + 1, k + ev, e, j)
+        } else {
+            (n, k, e + 1, j + ev)
+        }
+    })
+}
+
 /// r3 §7 R5: the condition words of a row whose route was replayed
 /// (`N guards on the route, k evaluated`, or `on the analyzed route` with
 /// the boundary when the guards beyond the dependency entry were not
 /// analyzed); `None` when no route was replayed, or a fully analyzed route
 /// has no guard (the row's class label then says it). prove, explain and
 /// digest print this form alike.
+///
+/// r4 final (c05): `N` counts every enclosing condition of the route's
+/// sites (the population of `prove --site`'s "of M enclosing conditions",
+/// loops included), never a displayed subset, and `k` counts over the same
+/// guards; the earlier `if … then exit` checks the route passes are counted
+/// apart (`; E earlier exits, j evaluated`), as prove's listing does not
+/// count them among its enclosing conditions.
 pub(crate) fn route_condition_words(notes: Option<&FlowNotes>) -> Option<String> {
     let n = notes?;
     let g = n.guards.as_ref()?;
     if g.is_empty() && !n.beyond_unanalyzed {
         return None;
     }
-    let evaluated = g.iter().filter(|x| x.evaluated).count();
-    let count = if g.len() == 1 {
+    let (enclosing, evaluated, exits, exits_evaluated) = route_guard_counts(g);
+    let count = if enclosing == 1 {
         "1 guard".to_string()
     } else {
-        format!("{} guards", g.len())
+        format!("{enclosing} guards")
+    };
+    let exits = match exits {
+        0 => String::new(),
+        1 => format!("; 1 earlier exit, {exits_evaluated} evaluated"),
+        e => format!("; {e} earlier exits, {exits_evaluated} evaluated"),
     };
     Some(if n.beyond_unanalyzed {
         format!(
-            "{count} on the analyzed route, {evaluated} evaluated; guards beyond the dependency \
-             entry: not analyzed"
+            "{count} on the analyzed route, {evaluated} evaluated{exits}; guards beyond the \
+             dependency entry: not analyzed"
         )
     } else {
-        format!("{count} on the route, {evaluated} evaluated")
+        format!("{count} on the route, {evaluated} evaluated{exits}")
     })
 }
 
@@ -2593,7 +2621,19 @@ impl<'a> LiteralReach<'a> {
             (None, Some(t)) => t,
             (None, None) => return Vec::new(),
         };
-        let Some(guards) = lflow::guards_of(tree, site) else {
+        // An operation the tree holds as its call (an `Error(…)` statement's
+        // operation site, whose tree node carries the call site instead):
+        // found by the call site at the same source position (r4 final, c05:
+        // the `case` around `CDOXmlNode`'s `Error` at :18 was lost).
+        let Some(guards) = lflow::guards_of(tree, site).or_else(|| {
+            let op = r.operation_sites.iter().find(|o| o.id == site)?;
+            let a = &op.source_anchor;
+            let cs = r.call_sites.iter().find(|c| {
+                let s = &c.source_anchor;
+                (s.start_line, s.start_column) == (a.start_line, a.start_column)
+            })?;
+            lflow::guards_of(tree, &cs.id)
+        }) else {
             return Vec::new();
         };
         let resolve = |l: &crate::program::body::features::ValueLabel| {
@@ -2614,9 +2654,10 @@ impl<'a> LiteralReach<'a> {
                 routine: r.name.clone(),
                 line: node.source_range.map(|s| s.0 + 1),
                 text: match node.flow.as_deref() {
-                    Some(crate::program::body::features::FlowFact::Cond { text, .. }) => {
-                        text.to_string()
-                    }
+                    Some(
+                        crate::program::body::features::FlowFact::Cond { text, .. }
+                        | crate::program::body::features::FlowFact::Loop { text },
+                    ) => text.to_string(),
                     _ => String::new(),
                 },
                 evaluated: prog.is_some_and(|p| p.guard_evaluated(node, &kind, &conds, &resolve)),

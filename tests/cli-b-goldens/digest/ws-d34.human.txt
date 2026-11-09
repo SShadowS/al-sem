@@ -9,7 +9,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
-    COMMIT at ws:src/Codeunit.al:48 (in a loop)
+    COMMIT at ws:src/Codeunit.al:48 (1 guard on the route, 0 evaluated)
       path: TransitiveCommit → Persist
 
 --- Codeunit "D34 Demo"::DirectCommitInLoop ---
@@ -18,7 +18,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
-    COMMIT at ws:src/Codeunit.al:10 (in a loop)
+    COMMIT at ws:src/Codeunit.al:10 (1 guard on the route, 0 evaluated)
 
 --- Codeunit "D34 Demo"::Persist ---
   summary — writes: no (every candidate decided)
@@ -41,7 +41,7 @@ computed: current effects of the 6 routines these files touches, in the working 
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
-    COMMIT at ws:src/Codeunit.al:22 (in a loop)
+    COMMIT at ws:src/Codeunit.al:22 (2 guards on the route, 0 evaluated)
 
 --- Codeunit "D34 Demo"::CommitAfterLoop ---
   summary — writes: no (every candidate decided)
