@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   working tree's release-fast build (a cold one took 233 s; after an edit, the al-sem
   crates only); the base build, ~245 s once per master commit, beside the test build.
   Peak memory: two engines and two test universes, ~19 GB, before the test lanes start.
+  The whole `cdo-gate` on this branch's final tree: PASS in ~1,300 s (test build 243 s,
+  its release-fast build already fresh, `speed` 203 s with prove x0.96 and round total
+  x0.98 against master, then the lanes 853 s), against 834-910 s before.
 
 ### Changed (engine limits wave 1, cdo-gate faster)
 

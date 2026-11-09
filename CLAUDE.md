@@ -111,7 +111,8 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   not checked; a tree that lands without it must say why. Measured 2026-11-09 (Linux,
   22 cores): the timing 219-301 s (505 s with every core busy elsewhere); round 4's
   slowdown fails it at x2.1, master against itself passes at x0.94-1.06. The whole
-  gate with it: SEE_RUN.
+  gate with it: ~1,300 s on 2026-11-09 (test build 243 s, speed 203 s, then the lanes
+  853 s), against 834-910 s without it.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
   `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the
