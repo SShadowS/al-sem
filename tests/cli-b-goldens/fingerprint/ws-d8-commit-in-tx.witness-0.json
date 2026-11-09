@@ -283,7 +283,7 @@
         "requiredPermissions": [
           {
             "coverage": "complete",
-            "rights": "MR",
+            "rights": "RM",
             "targetDisplay": "11111111-0000-0000-0000-00000000d80a/table/36",
             "targetId": "11111111-0000-0000-0000-00000000d80a/table/36",
             "targetKind": "table"
@@ -297,7 +297,7 @@
           },
           {
             "coverage": "complete",
-            "rights": "W",
+            "rights": "I",
             "targetDisplay": "11111111-0000-0000-0000-00000000d80a/table/50100",
             "targetId": "11111111-0000-0000-0000-00000000d80a/table/50100",
             "targetKind": "table"
@@ -440,7 +440,7 @@
         "requiredPermissions": [
           {
             "coverage": "complete",
-            "rights": "W",
+            "rights": "I",
             "targetDisplay": "11111111-0000-0000-0000-00000000d80a/table/50100",
             "targetId": "11111111-0000-0000-0000-00000000d80a/table/50100",
             "targetKind": "table"

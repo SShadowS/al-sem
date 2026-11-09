@@ -46,7 +46,7 @@ use crate::engine::l5::unresolved_cone::{
 };
 use crate::engine::line_base::shown_opt;
 use crate::engine::session::{Cell, RunKey};
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 // ---------------------------------------------------------------------------
 // Shared envelope-diagnostics projection
@@ -1653,6 +1653,12 @@ pub(crate) struct FinishCx<'t> {
     gap_subjects: Vec<&'t str>,
     natives: std::collections::HashSet<&'t str>,
     fires: std::collections::HashSet<&'t str>,
+    /// The model the tree was built from: the call sites of the cone items
+    /// the tree holds no evidence for ([`FinishCx::site_of`]).
+    model: &'t Model,
+    /// The model's routine rows by stable id, built on the first item that
+    /// needs one.
+    rows_by_stable: std::sync::OnceLock<HashMap<&'t str, Vec<&'t ModelRoutine>>>,
 }
 
 impl<'t> FinishCx<'t> {
@@ -1707,7 +1713,30 @@ impl<'t> FinishCx<'t> {
             gap_subjects,
             natives,
             fires,
+            model,
+            rows_by_stable: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The anchor (`file`, line, column) of call site `callsite_id` in the
+    /// model rows of the stable routine `owning` (engine limits B8,
+    /// [`crate::engine::l5::unresolved_cone::place_items`]).
+    fn site_of(&self, owning: &str, callsite_id: &str) -> Option<(String, u32, u32)> {
+        let rows = self.rows_by_stable.get_or_init(|| {
+            let mut m: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
+            for r in &self.model.workspace.routines {
+                m.entry(r.stable_routine_id.as_str()).or_default().push(r);
+            }
+            m
+        });
+        rows.get(owning)?
+            .iter()
+            .flat_map(|r| &r.call_sites)
+            .find(|cs| cs.id == callsite_id)
+            .map(|cs| {
+                let a = &cs.source_anchor;
+                (a.source_unit_id.clone(), a.start_line, a.start_column)
+            })
     }
 
     /// `all_entries` (every reader's roots' entries, owned, sorted by
@@ -1759,6 +1788,11 @@ impl<'t> FinishCx<'t> {
                     .iter()
                     .map(|r| {
                         let mut c = unresolved_cone(tree, r);
+                        // Engine limits B8: an item the tree holds no
+                        // evidence for takes its model call site's anchor.
+                        crate::engine::l5::unresolved_cone::place_items(&mut c.items, |o, cs| {
+                            self.site_of(o, cs)
+                        });
                         // Round-4 literal routes: the sites the literal
                         // pass ruled out from this root leave the cone (as
                         // a gap and as a blocker); their count stays.

@@ -6,7 +6,7 @@ Codeunit "Install Handler"::OnInstallAppPerCompany  [install-codeunit]
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   commit:     yes
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d460/table/50000" RW
+    TableData "11111111-0000-0000-0000-00000000d460/table/50000" RI
 
   witnesses:
     commit transaction — 1 path shown
@@ -35,7 +35,7 @@ Codeunit "Upgrade Handler"::OnUpgradePerCompany  [upgrade-codeunit]
   reads:      TableData "11111111-0000-0000-0000-00000000d460/table/50000"
   commit:     yes
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d460/table/50000" MR
+    TableData "11111111-0000-0000-0000-00000000d460/table/50000" RM
 
   witnesses:
     commit transaction — 1 path shown

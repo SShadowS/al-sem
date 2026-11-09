@@ -13,9 +13,9 @@ Codeunit D8PostingChain::PostSalesDoc  [public-procedure]
   telemetry:  none
   ui:         none
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d80a/table/36" MR
+    TableData "11111111-0000-0000-0000-00000000d80a/table/36" RM
     TableData "11111111-0000-0000-0000-00000000d80a/table/37" M
-    TableData "11111111-0000-0000-0000-00000000d80a/table/50100" W
+    TableData "11111111-0000-0000-0000-00000000d80a/table/50100" I
 
   witnesses:
     commit transaction — 1 path shown
@@ -87,7 +87,7 @@ Codeunit D8BadSubscriber::HandlePosted  [event-subscriber]
   telemetry:  none
   ui:         none
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d80a/table/50100" W
+    TableData "11111111-0000-0000-0000-00000000d80a/table/50100" I
 
   witnesses:
     commit transaction — 1 path shown

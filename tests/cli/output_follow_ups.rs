@@ -164,3 +164,130 @@ fn every_follow_up_validates_against_its_tool_schema() {
     assert!(printed >= 4, "precondition: {printed} printed calls");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// `s` split into shell words: single quotes group (`'\''` is a quote, as
+/// `follow_up::shell_word` writes it), spaces separate.
+fn shell_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let (mut quoted, mut any) = (false, false);
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (true, '\'') => quoted = false,
+            (false, '\'') => {
+                quoted = true;
+                any = true;
+            }
+            (false, '\\') => {
+                if let Some(n) = chars.next() {
+                    cur.push(n);
+                    any = true;
+                }
+            }
+            (false, ' ') => {
+                if any {
+                    out.push(std::mem::take(&mut cur));
+                    any = false;
+                }
+            }
+            (_, c) => {
+                cur.push(c);
+                any = true;
+            }
+        }
+    }
+    if any {
+        out.push(cur);
+    }
+    out
+}
+
+/// Every `alsem <command> …` follow-up a CLI human answer prints: the
+/// command line up to its ` — why` tail, as argv after `alsem`, with
+/// `workspace` placed after the command words (a printed follow-up leaves it
+/// out). Templates (`<table>`, `N`) are skipped: they are not runnable as
+/// printed by design.
+fn printed_cli_follow_ups(text: &str, workspace: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some(i) = line.find("alsem ") else {
+            continue;
+        };
+        let cmd = &line[i + "alsem ".len()..];
+        let cmd = cmd.split(" — ").next().unwrap_or(cmd);
+        if cmd.contains('<') || cmd.split(' ').any(|w| w == "N") {
+            continue;
+        }
+        let words = shell_words(cmd);
+        let n = match words.first().map(String::as_str) {
+            Some("query") => 2,
+            Some("prove" | "explain" | "digest" | "tests" | "impact") => 1,
+            _ => continue,
+        };
+        let mut argv: Vec<String> = words[..n].to_vec();
+        argv.push(workspace.to_string());
+        argv.extend(words[n..].iter().cloned());
+        out.push(argv);
+    }
+    out
+}
+
+/// Engine limits B8: every follow-up a CLI answer prints runs as printed, in
+/// the mode the answer was given in. A single-app answer's follow-ups once
+/// carried `--single-app` onto `prove … callers-intercept-errors` and
+/// `explain --callers-context`, both of which the CLI refuses with it.
+#[test]
+fn every_cli_follow_up_runs_as_printed() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let answers: Vec<Vec<&str>> = vec![
+        vec!["prove", &ws, ISSUE_DOC, "throws-error", "--format", "human"],
+        vec![
+            "prove",
+            &ws,
+            ISSUE_DOC,
+            "throws-error",
+            "--format",
+            "human",
+            "--single-app",
+        ],
+        vec!["explain", &ws, "--routine", ISSUE_DOC],
+        vec!["explain", &ws, "--routine", ISSUE_DOC, "--single-app"],
+        vec![
+            "query",
+            "effects",
+            &ws,
+            "--routine",
+            ISSUE_DOC,
+            "--single-app",
+        ],
+    ];
+    let mut ran = Vec::new();
+    let mut failures = Vec::new();
+    for a in &answers {
+        let (out, err, code) = run_alsem(a);
+        assert_eq!(code, 0, "{a:?}: {err}");
+        for argv in printed_cli_follow_ups(&out, &ws) {
+            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+            let (_, err, code) = run_alsem(&args);
+            if code != 0 {
+                failures.push(format!("{a:?} printed {argv:?}: exit {code}: {err}"));
+            }
+            ran.push(argv.join(" "));
+        }
+    }
+    // Preconditions: the single-app answers print the two cross-app-only
+    // follow-ups (the regression's shapes), and a single-app follow-up that
+    // keeps its scope.
+    for want in ["callers-intercept-errors", "--callers-context"] {
+        assert!(
+            ran.iter().any(|r| r.contains(want)),
+            "precondition: a printed follow-up with {want}: {ran:#?}"
+        );
+    }
+    assert!(
+        ran.iter().any(|r| r.contains("--single-app")),
+        "precondition: a single-app follow-up: {ran:#?}"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

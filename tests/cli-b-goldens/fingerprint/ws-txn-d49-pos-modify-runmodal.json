@@ -142,7 +142,7 @@
         "requiredPermissions": [
           {
             "coverage": "partial",
-            "rights": "MR",
+            "rights": "RM",
             "targetDisplay": "11111111-0000-0000-0000-0000000d4902/table/50100",
             "targetId": "11111111-0000-0000-0000-0000000d4902/table/50100",
             "targetKind": "table"

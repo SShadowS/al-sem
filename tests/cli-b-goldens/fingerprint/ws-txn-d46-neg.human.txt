@@ -6,7 +6,7 @@ Codeunit "Normal Handler"::RunSetup  [public-procedure]
   reads:      TableData "11111111-0000-0000-0000-00000000d461/table/50000"
   commit:     yes
   permissions:
-    TableData "11111111-0000-0000-0000-00000000d461/table/50000" RW
+    TableData "11111111-0000-0000-0000-00000000d461/table/50000" RI
 
   witnesses:
     commit transaction — 1 path shown

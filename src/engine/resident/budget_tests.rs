@@ -223,3 +223,27 @@ fn sizes_parse_with_binary_units() {
     assert!(parse_bytes("lots").is_err());
     assert!(parse_bytes("0").is_err());
 }
+
+/// Engine limits B8: the `--memory-budget` help states the defaults
+/// `default_budget` applies, each in a size `--memory-budget` itself takes.
+#[test]
+fn the_help_text_states_the_real_defaults() {
+    let text = default_budget_text();
+    let sizes: Vec<u64> = text
+        .split(", ")
+        .map(|part| parse_bytes(part.split(' ').next().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        sizes,
+        [
+            default_budget(false, false),
+            default_budget(false, true),
+            default_budget(true, false),
+        ]
+    );
+    assert_eq!(
+        text,
+        "8G cross-app, 6G cross-app with --low-mem, 2G single-app"
+    );
+    assert_eq!(size_text(3 * GIB / 2), "1536M");
+}

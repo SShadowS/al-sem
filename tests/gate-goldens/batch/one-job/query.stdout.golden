@@ -71,32 +71,36 @@
               "callNotResolved": 0,
               "interfaceDispatchOpenWorld": 0
             },
-            "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive"
+            "depth": "wholeCone",
+            "inventory": "exhaustive",
+            "reasons": []
           },
           "reads": {
             "blockers": {
               "callNotResolved": 0,
               "interfaceDispatchOpenWorld": 0
             },
-            "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive"
+            "depth": "wholeCone",
+            "inventory": "exhaustive",
+            "reasons": []
           },
           "validate": {
             "blockers": {
               "callNotResolved": 0,
               "interfaceDispatchOpenWorld": 0
             },
-            "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive"
+            "depth": "wholeCone",
+            "inventory": "exhaustive",
+            "reasons": []
           },
           "writes": {
             "blockers": {
               "callNotResolved": 0,
               "interfaceDispatchOpenWorld": 0
             },
-            "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive"
+            "depth": "wholeCone",
+            "inventory": "exhaustive",
+            "reasons": []
           }
         },
         "limits": [],

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 0, B8 first half)
+
+Five small wrong outputs from `docs/engine-limits.md` §1, B8.
+
+- **`alsem fingerprint` prints AL's own TableData rights.** The human answer and the query
+  JSON (`--witness`) printed `W` for an insert; AL's rights are `R`, `I`, `M`, `D`. The full
+  snapshot's `permissionFacts` already said `I`. Both now read one mapping
+  (`src/engine/l5/table_rights.rs`), and a table's rights print in AL's order (`RM`, not
+  `MR`). Fingerprint goldens moved: `W` → `I`, `MR` → `RM`, `RW` → `RI`.
+- **A follow-up runs as printed in single-app mode.** A single-app `throws-error` answer
+  suggested `alsem prove … callers-intercept-errors --single-app`, and a single-app explain
+  card suggested `alsem explain --callers-context … --single-app`; the CLI refuses both
+  (they walk the cross-app program). The shared follow-up table
+  (`src/engine/follow_up.rs`, `FollowUp::cross_app_only`) now leaves `--single-app`
+  (`singleApp`) off them. A new test runs every follow-up that single-app and cross-app
+  answers print and checks that none is refused.
+- **The `--memory-budget` help of `alsem mcp` and `alsem engine-host` states the real
+  defaults** (`8G cross-app, 6G cross-app with --low-mem, 2G single-app`). It said `6G
+  cross-app`. The text is now built from the constants in `budget.rs`.
+- **`query effects` blames dependency depth only when the cone enters dependency code.**
+  `locks: none observed (one dependency routine deep; …)`, the same `reads:` line and the
+  header limit `reads, locks and validations one dependency routine deep` printed even
+  for a cone with no dependency code. When the cone enters none (the cone was read, not
+  cut short, visits no dependency routine, and no operation is dependency code's), the
+  lines say `none observed (searched: the whole cone)`, the header says `limits: none`,
+  and each operation family's JSON scope is `depth: wholeCone` (`exhaustive` unless a
+  call was not resolved).
+- **An interface call with no implementer is a gap in workspace code, in the count and
+  in the list alike.** The snapshot keeps no call-site evidence for a call with no target,
+  so its unresolved-cone item had no position: the explain card counted it `not placed`
+  while listing it under `gaps in workspace code`. Such an item now takes its model call
+  site's position (`unresolved_cone::place_items`), for every reader of the cone. The same
+  holds for a single-app call into a dependency that is not loaded: prove's blocker is now
+  placed at its call site and counted `1 in this workspace`.
+
 ### Fixed (performance: finding the keeps an assumption record needs)
 
 - **Naming every publisher a ruled-out row needs no longer reruns the whole search per

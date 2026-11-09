@@ -769,6 +769,26 @@ impl<'c> Beyond<'c> {
     }
 }
 
+/// Whether the root's cone enters dependency code (engine limits B8), so
+/// that `query effects`' one-dependency-routine-deep inventory is a limit of
+/// the answer: true when the cone was not read (not known), when its search
+/// was cut short, when it visits a dependency routine (the tree's boundary
+/// rule, as explain's `dependency code: none reached`), or when an operation
+/// is dependency code's (`in_dependency`).
+fn enters_dependency_code(
+    cone: Option<&Beyond<'_>>,
+    effects: &[TableTouch<'_>],
+    in_dependency: impl Fn(&str) -> bool,
+) -> bool {
+    let Some(b) = cone else {
+        return true;
+    };
+    let t = &b.entry.unresolved_traversal;
+    t.dependency_routines > 0
+        || t.truncated
+        || effects.iter().any(|e| in_dependency(e.operation_id))
+}
+
 /// Step 1b (astra top 5): how the root's cone, after the literal pass,
 /// judges one `query effects` row's route. The rows stay L4's (spec §12.2:
 /// never dropped, `via` unchanged); this only marks them, and only where the
@@ -5225,19 +5245,42 @@ fn render_query_effects_body(
             .count();
         (b.entry.unresolved.len() - open, open)
     });
-    let one_deep = |what: &str| {
-        json!({
-            "depth": "oneDependencyRoutine",
-            "inventory": "notExhaustive",
-            "reasons": [format!("dependency code deeper than one routine is not inventoried for {what}")],
-            "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
-        })
+    // Engine limits B8: the operations are inventoried one dependency
+    // routine deep, which limits them only when the cone enters dependency
+    // code. When it enters none (the cone was read, its search was not cut
+    // short, and no operation is dependency code's), every family is the
+    // whole cone, and only the calls not resolved and open-world dispatches
+    // block it.
+    let enters_dependency = enters_dependency_code(beyond.as_ref(), &effects, |op| {
+        ops.in_dependency(op, substrate.resolved())
+    });
+    let family_scope = |what: &str| {
+        if enters_dependency {
+            json!({
+                "depth": "oneDependencyRoutine",
+                "inventory": "notExhaustive",
+                "reasons": [format!("dependency code deeper than one routine is not inventoried for {what}")],
+                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
+            })
+        } else {
+            let blocked = call_not_resolved + open_world > 0;
+            json!({
+                "depth": "wholeCone",
+                "inventory": if blocked { "notExhaustive" } else { "exhaustive" },
+                "reasons": if blocked {
+                    json!([format!("calls not resolved and open-world interface dispatches may reach {what} the cone does not list")])
+                } else {
+                    json!([])
+                },
+                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
+            })
+        }
     };
     let mut families = serde_json::Map::new();
-    families.insert("reads".into(), one_deep("reads"));
-    families.insert("locks".into(), one_deep("locks"));
-    families.insert("validate".into(), one_deep("validations"));
-    families.insert("writes".into(), one_deep("writes"));
+    families.insert("reads".into(), family_scope("reads"));
+    families.insert("locks".into(), family_scope("locks"));
+    families.insert("validate".into(), family_scope("validations"));
+    families.insert("writes".into(), family_scope("writes"));
     if beyond.is_some() {
         families.insert(
             "beyondDependencyCalls".into(),
@@ -5347,7 +5390,19 @@ fn render_query_effects_body(
             )
         })
         .collect();
-    let write_search = if beyond.is_some() {
+    // Engine limits B8: a cone that enters no dependency code was searched
+    // whole; only the calls it could not follow are left out.
+    let whole_cone_search = crate::engine::vocab::none_observed(
+        "the whole cone",
+        if call_not_resolved + open_world > 0 {
+            "calls not resolved"
+        } else {
+            ""
+        },
+    );
+    let write_search = if !enters_dependency {
+        whole_cone_search.clone()
+    } else if beyond.is_some() {
         crate::engine::vocab::none_observed(
             "every operation one dependency routine deep, and the whole cone beyond dependency \
              calls",
@@ -5421,10 +5476,16 @@ fn render_query_effects_body(
     }
     for label in ["reads", "locks"] {
         if count(label) == 0 {
-            human.push_str(&format!(
-                "  {label}: none observed (one dependency routine deep; deeper dependency {label} \
-                 are not inventoried)\n"
-            ));
+            // Engine limits B8: the depth clause only when the cone enters
+            // dependency code.
+            if enters_dependency {
+                human.push_str(&format!(
+                    "  {label}: none observed (one dependency routine deep; deeper dependency \
+                     {label} are not inventoried)\n"
+                ));
+            } else {
+                human.push_str(&format!("  {label}: {whole_cone_search}\n"));
+            }
         }
     }
     if beyond.is_some() {

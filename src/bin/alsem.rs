@@ -232,9 +232,16 @@ struct McpCli {
     #[arg(long = "output-root")]
     output_root: Option<String>,
 
-    /// Each engine child's memory budget (bytes, or with K, M or G; default
-    /// 6G cross-app, 2G single-app), capped by what --total-budget leaves.
-    #[arg(long = "memory-budget")]
+    // The help names the defaults from `budget.rs`'s constants (engine
+    // limits B8: a hand-written copy said 6G after the default became 8 GiB).
+    #[arg(
+        long = "memory-budget",
+        help = format!(
+            "Each engine child's memory budget (bytes, or with K, M or G; default {}), \
+             capped by what --total-budget leaves",
+            al_sem::engine::resident::budget::default_budget_text()
+        )
+    )]
     memory_budget: Option<String>,
 
     /// Start each engine child with --low-mem: it keeps no dependency syntax
@@ -263,11 +270,17 @@ struct McpCli {
 /// design §7).
 #[derive(Parser)]
 struct EngineHostCli {
-    /// The memory budget (bytes, or with K, M or G): every build, fill and
-    /// request's trees reserve their estimated peak first, and evict or
-    /// refuse (`budget`) when it does not fit. Default 6G cross-app, 2G
-    /// single-app.
-    #[arg(long = "memory-budget")]
+    // The help names the defaults from `budget.rs`'s constants (engine
+    // limits B8: a hand-written copy said 6G after the default became 8 GiB).
+    #[arg(
+        long = "memory-budget",
+        help = format!(
+            "The memory budget (bytes, or with K, M or G): every build, fill and request's \
+             trees reserve their estimated peak first, and evict or refuse (`budget`) when it \
+             does not fit. Default {}",
+            al_sem::engine::resident::budget::default_budget_text()
+        )
+    )]
     memory_budget: Option<String>,
 
     /// Keep no dependency syntax trees between revisions: less memory, and a
