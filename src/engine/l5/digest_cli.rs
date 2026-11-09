@@ -2019,6 +2019,113 @@ impl<'t> LiteralPass<'t> {
     }
 }
 
+/// B7/L23: the effect types a trap acts on: an error (`Error`, an implicit
+/// error) and the error dialog it shows (`UI_ERROR`, the same site): a
+/// caught error shows no dialog.
+pub(crate) fn is_error_row_type(t: &str) -> bool {
+    matches!(t, "ERROR_THROW" | "ERROR_IMPLICIT" | "UI_ERROR")
+}
+
+/// B7/L23 + L30 (engine limits wave 2): rule each error row of `entry` (an
+/// `Error`, an implicit error, its dialog) against the traps on its routes
+/// ([`crate::engine::l5::traps`]), into the row's
+/// [`FlowNotes::trap`](crate::engine::l5::literal_reach::FlowNotes): caught
+/// on every route, escaping only with a write pending at an isolated event,
+/// or escaping while its first route is trapped. And name the routines on
+/// its route that collect errors (L30, `FlowNotes::collected_by`).
+///
+/// Only a row that is ONE site is ruled (its type's site search completed,
+/// not a boundary group): a row that may stand for unseen sites keeps
+/// escaping. Only completed searches rule: a capped one leaves every row as
+/// it was. A root with no trap and no collector in its reach pays one scan
+/// of the trap table and nothing more.
+fn judge_traps<'t>(
+    reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
+    root_tree: &mut Option<Option<crate::engine::l5::literal_reach::LiveTree<'t>>>,
+    entry: &mut DigestEntryResult,
+) {
+    let partial = |t: &str| entry.partial_site_types.iter().any(|p| p == t);
+    // A boundary group (errors beyond a call into dependency code) is ruled
+    // by its crossing's site: every error beyond it is caught when every
+    // route to the crossing crosses a trap. (A crossing edge that is itself
+    // a trap is not ruled here: such a group stays escaping.)
+    let rows: Vec<usize> = (0..entry.effects.len())
+        .filter(|&i| {
+            let e = &entry.effects[i];
+            !e.literal_unreachable
+                && is_error_row_type(&e.effect_type)
+                && (e.boundary_group || !partial(&e.effect_type))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let Some(full) = root_tree
+        .get_or_insert_with(|| reach.live_tree_of(&entry.routine_id))
+        .as_ref()
+    else {
+        return;
+    };
+    let scope = reach.trap_scope(&entry.routine_id, full);
+    let collectors = reach.collectors_reached(full);
+    if scope.is_none() && !collectors {
+        return;
+    }
+    for i in rows {
+        let e = &mut entry.effects[i];
+        let ops: Vec<String> = if e.boundary_group {
+            // The crossing's own site (an event crossing has none: not ruled).
+            let site = match &e.crossing {
+                Some(c) => c.site.guarded_id(),
+                None => e
+                    .evidence_callsite_id
+                    .as_deref()
+                    .or(e.evidence_operation_id.as_deref()),
+            };
+            match site {
+                Some(s) => vec![s.to_string()],
+                None => continue,
+            }
+        } else {
+            let mut ops: Vec<String> = e
+                .evidence_operation_id
+                .iter()
+                .chain(&e.evidence_callsite_id)
+                .cloned()
+                .collect();
+            for op in &e.origin_operation_ids {
+                if !ops.contains(op) {
+                    ops.push(op.clone());
+                }
+            }
+            ops
+        };
+        let trap = scope
+            .as_ref()
+            .and_then(|s| reach.trap_verdict(full, s, &ops));
+        // B7 review: a caught ruling that may rest on a checked run assumes
+        // the root's callers have no write pending.
+        let assumes_clean_entry = matches!(
+            trap,
+            Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
+        ) && scope.as_ref().is_some_and(|s| s.clean_checked);
+        let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
+            reach
+                .tree_witness(full, &ops)
+                .map(|(steps, _)| reach.collectors_on(&entry.routine_id, &steps))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if trap.is_some() || !collected_by.is_empty() {
+            let notes = e.flow_notes.get_or_insert_with(Default::default);
+            notes.trap = trap;
+            notes.trap_assumes_clean_entry = assumes_clean_entry;
+            notes.collected_by = collected_by;
+        }
+    }
+}
+
 fn literal_reach_entries<'t>(
     reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: &crate::engine::l5::group_path::GroupPaths<'t>,
@@ -2169,6 +2276,8 @@ fn literal_reach_entries<'t>(
                 .get_or_insert_with(Default::default)
                 .assumed = keeps;
         }
+        // B7/L23 + L30: error rows behind traps, and under error collection.
+        judge_traps(reach, &mut root_tree, entry);
         // G33: a group's resources reached only through code that cannot run.
         for (i, resources) in dead_resources {
             entry.effects[i].dead_group_resources = resources;

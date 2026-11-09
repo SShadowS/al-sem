@@ -290,6 +290,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `origin.platform` on such rows; the evidence `excerpt` of such an operation is its
   reason instead of `Var.Op`. No field was removed or renamed.
 
+### Fixed (engine limits wave 2, B7/L23 + L30)
+
+- **An error behind a trap is no longer reported as escaping.** `prove … throws-error` (with
+  and without `--match`, `--site`, `--op`, `--table`), explain's and digest's error lines
+  counted every error the root's cone can raise, even one that a trap on every route turns
+  into `false`. Fixture (`if not Codeunit.Run(Codeunit::Thrower)`): `yes — ERROR_THROW at
+  thrower.al:5 (unconditional on success)`; now `no` with `caught on every route by a trap: 1
+  error site (… by the checked Codeunit.Run at callers.al:6)`. A definite trap is:
+  - a checked run: `if [not] Codeunit.Run(…)`, `Ok := Codeunit.Run(…)`, `exit(Codeunit.Run(…))`,
+    `MyCodeunit.Run()` with its result used (Microsoft Learn, "Codeunit.Run(Integer [, var
+    Record]) Method",
+    https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/codeunit/codeunit-run-method:
+    without the return value "a runtime error will occur"; with it, the run returns false and
+    its changes are not committed), **but only where no write may be pending at it**. The same
+    page says "If you're already in a transaction you must commit first before calling
+    Codeunit.Run": a checked run inside an open write transaction is itself a run-time error,
+    raised at the run. So a write that may be pending at the run makes it no definite trap (see
+    the review fixes below);
+  - a `[TryFunction]` call whose value is the whole right-hand side of `Ok := …` or the whole
+    condition of an `if`, `while` or `until` (through parentheses and `not`). Learn ("Handling
+    errors using try methods",
+    https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-handling-errors-using-try-methods):
+    "If a try method call doesn't use the return value, the try method operates like an
+    ordinary method, and errors are exposed as usual"; "If a try method call uses the return
+    value in an `OK:=` statement or a conditional statement such as `if-then`, errors are
+    caught". Learn names no other shape (see the review fixes below). A TryFunction does not
+    roll back database changes (same page), and nothing says it does;
+  - a call or record operation under `asserterror`.
+- **An isolated event's subscriber error stays `yes` and states its condition**: `escapes only
+  if a write is pending when the event is raised, or during an install or upgrade; otherwise
+  caught by the isolated event at …`. Learn ("Isolated events in AL"): a write transaction not
+  committed before the event makes it run as a normal event, and install/upgrade runs it
+  normally. prove's yes is a may-answer, so the error is kept.
+- **A route trapped on some paths and not others says which.** The row keeps escaping and says
+  `escapes on a route with no trap; caught on others (the checked Codeunit.Run at …)`; with a
+  filter, the printed route is one that crosses no trap.
+- **L30, `[ErrorBehavior(ErrorBehavior::Collect)]` forward:** an `Error` whose route passes a
+  collecting procedure says it may be collected and raised when that procedure ends, unless the
+  code clears it. The error is kept: Learn ("Collecting errors", "Collectible errors API") says
+  only a collectible `ErrorInfo` is collected and a collected error is still shown when the
+  procedure ends. Whether a given `Error` is collectible is not read (stated as left in
+  `docs/engine-limits.md`).
+- **One trap rule for both directions:** `src/engine/l5/traps.rs` holds it;
+  `callers-intercept-errors` (callers_context), the pending-writes walk and the forward answers
+  all read it (the checked-run test was in three copies before). A fourth checked-run test, the
+  transaction spans' commit boundary (`transaction_spans::is_checked_codeunit_run`), stays
+  apart: it answers where a transaction ends, counts no codeunit variable's `.Run`, and moving
+  it would change the commit answers (left, in `docs/engine-limits.md`). The forward search
+  (`literal_reach`) marks trap edges once; for a root with a trap in its reach it walks the
+  edges again with guards ignored and trap edges not crossed. A site whose routine that walk
+  does not reach is caught: ignoring guards reaches at least what any literal arguments and
+  any loaded-subscriber assumption reach, so `caught` rests on neither. (A first version ran a
+  second guarded search instead; `scripts/cdo-speed` failed it at prove CPU x1.27.) A site
+  whose only trap-free route the literal arguments rule out stays escaping.
+- **The same applies to the error's dialog (`UI_ERROR`)**: `reaches-ui` no longer counts the
+  dialog of an error caught on every route.
+- **Output (outside consumers):** digest's per-effect `status` has a new value `caught`;
+  effects gain an additive `trap` object (`verdict`: `caught` / `escapes-if-write-pending` /
+  `trapped-on-some-routes`, `kind`, `routine`, `file`, `line`) and `collectedBy`; digest and
+  explain summaries gain `caughtErrors` (and an error caught on every route leaves `kinds`);
+  prove's slice JSON gains `caught`. Human text gains the `caught on every route by a trap`
+  lines and the trap words in the condition.
+- **Errors beyond a call into dependency code** (a boundary group) are caught when every route
+  to the crossing crosses a trap.
+- CDO (`SendQueue`, release-fast): `throws-error --site CDOQueueEntry.Table.al:249` answered
+  `yes`; the site sits behind `if not Codeunit.Run(…)` at `CDOQueueManagement.Codeunit.al:46`.
+  It now answers `unknown` (no matching site reachable; the cone's open-world and unresolved
+  calls still block a `no`), and 7,246 of the 7,249 error sites are named as caught. Unfiltered
+  `throws-error`: 317 evidence rows before, 3 now (`DOSetup.Get()` at :27 and the two
+  `Modify()` at :41 and :49, the only error sites outside the checked run), 314 caught.
+  `RunReportID`'s explain: `errors at 296 places` before, 271 and 26 caught now (TryFunctions);
+  `IssueReminder`: 289 before, 286 and 4 caught. `scripts/cdo-speed` (load 350-490): PASS,
+  prove CPU x0.88, round total x0.89, memory x1.02.
+- **Review fixes (two false `no` answers the first version gave):**
+  - **A checked run with a write pending is no definite trap.** Fixture `R.ModifyAll(V, 1); if
+    Codeunit.Run(Codeunit::Thrower) then;` answered `no … limits: none`; BC raises an error at
+    that run. It now answers `yes`, the row's trap verdict is `escapes-if-write-pending` with
+    kind `checked-run`, and the condition reads `a write may be pending at the checked
+    Codeunit.Run at …: a checked Codeunit.Run inside a write transaction is itself a run-time
+    error, raised there; with no write pending it catches the error`. Whether a write may be
+    pending is read per root: a write of the run's own routine before the run (the
+    pending-writes walk's statement order, so a `Commit()` before the run clears it, and a
+    write to a known-temporary record is none), a call before the run into code that may leave
+    a write (a callee's write, a call no edge resolves, a callee with no row; not through a
+    checked run), or a write pending where a caller in the root's reach called the routine
+    (a least fixpoint over the reach). When the ruling may rest on a checked run with no write
+    pending inside the root, the answer states the one thing it cannot see: `assumptions: …
+    assumes the routine's callers have no write pending when they call it …` (prove JSON:
+    `obligations.assumesNoPendingWriteAtEntry: true`), for the unfiltered and the filtered
+    question alike.
+  - **A TryFunction traps only in the shapes Learn names.** `Use(TryIt())` answered `no`
+    (caught by the TryFunction); Learn names only `OK :=` and a condition, and its one argument
+    example (`DoWork(DoInsert(Rec)); // Allowed as the DoWork return value isn't used so it's
+    not a try function`) does not establish that a try call used as an argument traps. A new
+    call-site fact, `PCallSite::result_tested` (set by the body walk), marks the named shapes;
+    an argument, `exit(TryIt())` and `a and TryIt()` are now ordinary calls (the error is
+    reported as escaping). `callers-intercept-errors` reads the same rule, and its "not
+    intercepted" line now says why for a used-but-unnamed shape. Not modeled, both on the safe
+    side and stated in `traps.rs`: on premises with `DisableWriteInsideTryFunctions` a write
+    inside a try method is itself a run-time error, and an error in a try call's arguments is
+    caught too ("Arguments for a try function are evaluated inside the try function").
+  - **The pending-writes walk reads a `Commit()` inside a loop.** A target inside a loop counted
+    the whole body (an earlier iteration) and stopped there, so a `Commit()` that runs before the
+    target in the same iteration ended nothing. CDO's `SendQueue` is exactly that (`repeat …
+    Modify(); Commit(); if not Codeunit.Run(…) … until`), and without this the checked run read
+    as having a write pending. The walk now also follows the iteration that holds the target, so
+    such a `Commit()` ends what came before, earlier iterations included. A `Commit()` after the
+    target in the body, or in a loop that does not hold it, still ends nothing. This walk also
+    serves the transaction spans and the callers' questions; on CDO `alsem analyze --preset
+    transaction-integrity` is byte-identical before and after, and no golden moved.
+  - CDO after the review fixes (release-fast): `SendQueue` is unchanged from the first version
+    (its run commits first), and its `no`/`unknown` answers now carry the callers' precondition.
+    `RunReportID`'s explain: `errors at 281 places; 16 error places caught` (26 caught in the
+    first version): the 10 sites behind `exit(TryMergePdf(…))` at
+    `CDOContniaOnlinePDFMgt.Codeunit.al:160` are reported as escaping again, since Learn does
+    not name `exit(…)` as a try call. `IssueReminder` and `UpdateLastUpload` are unchanged.
+  - `scripts/cdo-speed` on the review-fix tree (load average 9.2 at the start, 5.7 at the end):
+    PASS. prove CPU x1.06, round total x1.05, model build CPU x1.11 (wall x1.22), warm-tests
+    x0.96, peak memory x0.995.
+  - New additive JSON: `obligations.assumesNoPendingWriteAtEntry` on prove; the trap verdict
+    `escapes-if-write-pending` can now carry kind `checked-run`.
+  - A `no` that left errors out as caught says so in its headline: `no — no error site escapes
+    the routine; N error sites caught on every route by a trap`.
+  - A trap ruling needs a known owner for every operation of the row (before, one known owner
+    was enough).
+  - When no trap-free route can be printed for a site trapped on some routes (its search
+    stopped at the cap, or literal arguments rule it out), the filtered answer no longer says
+    `escapes on the route below (no trap on it)`; it says the escaping route could not be
+    printed and the route below is a trapped one.
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said

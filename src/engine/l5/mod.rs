@@ -109,7 +109,9 @@ pub mod path_temp_resolve;
 pub mod path_walker;
 // The writes pending at a Commit (engine-switch S8 gap 3): d8 / d9.
 pub(crate) mod pending_writes;
+// B7/L23: the one trap rule both error directions read.
 pub mod registry;
+pub(crate) mod traps;
 
 // R4-F Stage-2b — the CapabilitySnapshot CONSUMED-CORE port (composeSnapshot's
 // ordering-facts subset). Re-projects the R3a source-only base into the snapshot

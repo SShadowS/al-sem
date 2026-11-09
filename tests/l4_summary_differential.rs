@@ -1427,6 +1427,7 @@ mod fixtures {
             control_context: None,
             order: None,
             in_statement_position: false,
+            result_tested: false,
             receiver_temp_state: None,
         }
     }

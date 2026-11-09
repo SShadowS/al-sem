@@ -23,9 +23,14 @@
 //! not pending, and the routine's callers are not in the span either
 //! ([`Before::committed`], which `transaction_spans` reads as the span's start).
 //!
+//! A target inside a loop counts the whole body (an earlier iteration), but a
+//! `Commit()` that is an earlier statement of a block holding the target in
+//! the same iteration ends that too.
+//!
 //! Known over-approximations (a write that cannot be pending is counted): an
 //! earlier statement's branch that always exits, a Commit inside a branch or a
-//! loop (it may not run, so it ends nothing), and a callee that commits (its
+//! loop that does not hold the target (it may not run, so it ends nothing),
+//! and a callee that commits (its
 //! whole cone counts, also what its own Commit already ended). Known
 //! under-approximation: the other subscribers of an event a span member raises
 //! (they run in an unknown order around the one that reaches the Commit) are
@@ -37,7 +42,7 @@ use crate::engine::l4::cone_derived::{ConeDerivedStore, fact_is_known_temp, writ
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::control_flow::{branch_termination, terminates};
-use crate::program::body::features::{PCFNNode, PCallee};
+use crate::program::body::features::PCFNNode;
 use crate::program::model::workspace::ModelRoutine;
 
 /// Every caller's out-edges as `(site, callee)`: the site is the edge's call site,
@@ -307,26 +312,10 @@ fn effects(
 }
 
 /// A checked run: `if Codeunit.Run(...)` or `if MyCodeunit.Run(...)` (the
-/// result used), which runs the codeunit in its OWN transaction. For a
-/// codeunit variable's `.Run`, the target must be the `OnRun` trigger (a user
-/// procedure named `Run` is an ordinary call).
-pub(crate) fn is_checked_run(
-    cs: &crate::program::body::features::PCallSite,
-    callee: Option<&ModelRoutine>,
-) -> bool {
-    match &cs.callee {
-        PCallee::ObjectRun { object_kind, .. } => {
-            object_kind == "Codeunit" && cs.object_run_return_used == Some(true)
-        }
-        PCallee::Member { method, .. } => {
-            method.eq_ignore_ascii_case("run")
-                && !cs.in_statement_position
-                && callee
-                    .is_some_and(|c| c.kind == "trigger" && c.name.eq_ignore_ascii_case("OnRun"))
-        }
-        _ => false,
-    }
-}
+/// result used), which runs the codeunit in its OWN transaction. The one
+/// rule lives in [`crate::engine::l5::traps`] (B7: the forward error answers
+/// read it too).
+pub(crate) use crate::engine::l5::traps::is_checked_run;
 
 fn is_site(n: &PCFNNode, t: &str) -> bool {
     n.operation_id.as_deref() == Some(t) || n.callsite_id.as_deref() == Some(t)
@@ -433,10 +422,17 @@ fn walk_node(
         return;
     }
     match n.kind.as_str() {
-        // An earlier iteration ran the whole body.
+        // An earlier iteration ran the whole body. Then this iteration runs
+        // the body's statements before the one that holds `t`: a `Commit()`
+        // among them ends everything before it, earlier iterations included
+        // (B7 review: CDO's `SendQueue` commits before its checked
+        // `Codeunit.Run` inside a `repeat` loop).
         "for" | "foreach" | "while" | "repeat" => {
             for c in kids(&n.children).iter().chain(kids(&n.else_children)) {
                 collect_reaching(c, out);
+            }
+            if !walk_list(kids(&n.children), t, commits, out, cleared) {
+                walk_list(kids(&n.else_children), t, commits, out, cleared);
             }
         }
         // A `case` runs ONE branch: only the one that holds `t`.
@@ -567,8 +563,26 @@ mod tests {
             op("T"),
         ]);
         assert!(!before_committed(&in_branch, "T").1);
-        let in_loop = b(vec![op("a"), with("while", vec![op("C"), op("T")], None)]);
-        assert!(!before_committed(&in_loop, "T").1);
+        // A Commit in a loop on the way to T in the same iteration ends what
+        // ran before, earlier iterations included (B7 review: CDO's
+        // `SendQueue` commits before its checked run inside `repeat`).
+        let in_loop = b(vec![
+            op("a"),
+            with("while", vec![op("w"), op("C"), op("T"), op("z")], None),
+        ]);
+        assert_eq!(before_committed(&in_loop, "T"), (vec![], true));
+        // One after T in the loop body does not (the first iteration
+        // reaches T before it).
+        let loop_after = b(vec![
+            op("a"),
+            with("while", vec![op("w"), op("T"), op("C")], None),
+        ]);
+        let (sites, cleared) = before_committed(&loop_after, "T");
+        assert!(!cleared);
+        assert!(sites.contains(&"a".to_string()) && sites.contains(&"w".to_string()));
+        // One in a loop that does not hold T ends nothing.
+        let other_loop = b(vec![op("a"), with("while", vec![op("C")], None), op("T")]);
+        assert!(!before_committed(&other_loop, "T").1);
         let after = b(vec![op("a"), op("T"), op("C")]);
         assert_eq!(before_committed(&after, "T"), (vec!["a".into()], false));
     }

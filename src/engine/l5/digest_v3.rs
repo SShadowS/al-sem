@@ -17,7 +17,8 @@
 //!   lists every table as `{id, display}` and every event grouped by
 //!   publisher (`eventsByPublisher`); a may-persist group row carries one
 //!   representative terminal witness (`paths[0]`, `representative: true`);
-//! - `class` on table writes, `status` (`live` / `literal-dead`) on every row;
+//! - `class` on table writes, `status` (`live` / `literal-dead` / `caught`:
+//!   an error a definite trap catches on every route, B7/L23) on every row;
 //! - only non-trivial `scopedGuarantees` (`scopedGuaranteesFolded` counts the
 //!   rest), entry diagnostics as counts, dependency unresolved call sites as
 //!   counts and top callees;
@@ -236,6 +237,9 @@ fn more_site(e: &DigestEffectFull, crossings: &BTreeMap<String, String>) -> (Str
     }
     if e.literal_unreachable {
         s.push_str(" literal-dead");
+    } else if crate::engine::l5::prove::caught_at(e).is_some() {
+        // B7/L23: a definite trap catches it on every route.
+        s.push_str(" caught");
     }
     (place, s.trim_start().to_string())
 }
@@ -498,11 +502,23 @@ fn effect_v3(
         "status".into(),
         if e.literal_unreachable {
             "literal-dead"
+        } else if crate::engine::l5::prove::caught_at(e).is_some() {
+            // B7/L23: a definite trap catches it on every route.
+            "caught"
         } else {
             "live"
         }
         .into(),
     );
+    // B7/L23 + L30 (additive): the traps on the routes, error collection.
+    if let Some(t) = crate::engine::l5::prove::trap_value(e) {
+        m.insert("trap".into(), t);
+    }
+    if let Some(n) = e.flow_notes.as_deref()
+        && !n.collected_by.is_empty()
+    {
+        m.insert("collectedBy".into(), n.collected_by.clone().into());
+    }
     // r3 E2 (additive): a literal-dead row's loaded-subscriber assumption.
     if e.literal_unreachable {
         let assumes: Vec<String> = e

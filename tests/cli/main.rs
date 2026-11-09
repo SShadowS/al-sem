@@ -258,6 +258,7 @@ mod cli_prove_table_writes;
 mod cli_prove_temp_writes;
 mod cli_prove_throws_error;
 mod cli_prove_transpiled_guard;
+mod cli_prove_traps;
 mod cli_prove_unknown_write_anchor;
 mod cli_prove_value_guards;
 mod cli_query_differential;

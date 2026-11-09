@@ -1430,6 +1430,9 @@ pub struct RollupTotals {
     pub events_in_workspace: usize,
     /// Per kind family ([`FAMILIES`]): places (own sites + crossings).
     pub kinds: BTreeMap<&'static str, usize>,
+    /// B7/L23: error places a definite trap catches on every route (not in
+    /// `kinds`).
+    pub caught_errors: usize,
     pub gaps_workspace: usize,
     pub gaps_dependency: usize,
     pub gaps_not_placed: usize,
@@ -1593,6 +1596,10 @@ impl RollupTotals {
         if !self.kinds_partial.is_empty() {
             v["kindsAtLeast"] = json!(self.kinds_partial);
         }
+        // B7/L23 (additive): errors caught on every route by a trap.
+        if self.caught_errors > 0 {
+            v["caughtErrors"] = json!(self.caught_errors);
+        }
         if self.entry_points_partial {
             v["entryPoints"]["atLeast"] = json!(true);
         }
@@ -1714,8 +1721,18 @@ impl RollupTotals {
             .filter(|(k, _)| matches!(*k, "ui" | "errors"))
             .filter_map(|(k, l)| family(k, l))
             .collect();
+        // B7/L23: errors a trap catches on every route are no error places;
+        // their count is said apart.
+        let caught = if self.caught_errors > 0 {
+            format!(
+                "; {} caught on every route by a trap",
+                plural(self.caught_errors, "error place", "error places")
+            )
+        } else {
+            String::new()
+        };
         block.push(format!(
-            "transaction, UI and errors: {commits}; {}",
+            "transaction, UI and errors: {commits}; {}{caught}",
             if risky.is_empty() {
                 "UI and errors: none observed".to_string()
             } else {
@@ -2044,6 +2061,9 @@ pub struct RoutineRollup {
     pub events_beyond: BTreeSet<String>,
     /// Per kind family: own rows.
     pub kind_sites: BTreeMap<&'static str, Vec<usize>>,
+    /// B7/L23: own error rows a definite trap catches on every route from
+    /// the root (not in `kind_sites`, not counted as errors).
+    pub caught_errors: Vec<usize>,
     /// Per kind family: crossing indices.
     pub kind_crossings: BTreeMap<&'static str, Vec<usize>>,
     pub gaps: GapCounts,
@@ -2222,6 +2242,14 @@ impl RoutineRollup {
                     r.literal_dead_rows.push(i);
                     continue;
                 }
+                // B7/L23: errors beyond a crossing every route to which
+                // crosses a trap never leave the root.
+                if crate::engine::l5::prove::caught_at(e).is_some() {
+                    if family_of(ty) == Some("errors") {
+                        r.caught_errors.push(i);
+                    }
+                    continue;
+                }
                 match ty {
                     t if is_write(t) => {
                         let class = classify_detail(&e.detail);
@@ -2333,6 +2361,14 @@ impl RoutineRollup {
                     }
                 }
                 "DB_READ" => {}
+                // B7/L23: an error a definite trap catches on every route
+                // never leaves the root: counted apart, not an error place.
+                // (Its dialog, `UI_ERROR`, is no error place either way.)
+                other if crate::engine::l5::prove::caught_at(e).is_some() => {
+                    if family_of(other) == Some("errors") {
+                        r.caught_errors.push(i);
+                    }
+                }
                 other => {
                     if let Some(f) = family_of(other) {
                         r.kind_sites.entry(f).or_default().push(i);
@@ -2522,6 +2558,7 @@ impl RoutineRollup {
             commit_entries,
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
+            caught_errors: self.caught_errors.len(),
             entry_points_partial: false,
             events: self.events_ws.len() + self.events_beyond.len(),
             events_in_workspace: self.events_ws.len(),
@@ -4221,6 +4258,30 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
             } else {
                 String::new()
             }
+        ));
+    }
+    // B7/L23: errors a definite trap catches on every route, apart.
+    if !r.caught_errors.is_empty() {
+        let places: Vec<String> = r
+            .caught_errors
+            .iter()
+            .filter_map(|&i| {
+                let e = &entry.effects[i];
+                let at = crate::engine::l5::prove::caught_at(e)?;
+                Some(format!(
+                    "{} at {} (by the {})",
+                    e.effect_type,
+                    row_anchor(e),
+                    at.words()
+                ))
+            })
+            .collect();
+        let n = places.len();
+        let f = fold(places, caps::KIND_PLACES, "places", detail);
+        out.push(format!(
+            "errors caught on every route by a trap (they do not leave the routine): {}: {}",
+            plural(n, "place", "places"),
+            f.joined()
         ));
     }
     out

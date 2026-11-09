@@ -465,6 +465,11 @@ struct SpineCtx<'a> {
     /// drives object-run result_consumed/return_used (a bare statement does not
     /// consume the result; an expression-position call does).
     in_stmt_position: bool,
+    /// The call expressions whose value is tested in a shape Learn names for
+    /// a try method call (`PCallSite.result_tested`): the whole right-hand
+    /// side of a plain assignment or the whole condition of an `if`, `while`
+    /// or `until`, looking through parentheses and `not`.
+    tested_calls: HashSet<ExprId>,
     /// One-shot: the NEXT call walked is a chained-call RECEIVER (the object of a
     /// member call), so its bare function name is harvested as an identifier-ref
     /// (legacy `collect_identifiers_from` counts it — a non-root identifier in the
@@ -996,6 +1001,21 @@ impl<'a> SpineCtx<'a> {
         }
     }
 
+    /// Marks the call `eid` is, looking through parentheses and `not`, as
+    /// [`PCallSite::result_tested`] (`eid`: an assignment's right-hand side
+    /// or a loop's or `if`'s whole condition).
+    fn note_tested(&mut self, mut eid: ExprId) {
+        while let ExprKind::Parenthesized(x)
+        | ExprKind::Unary {
+            op: al_syntax::ir::UnaryOp::Not,
+            operand: x,
+        } = &self.file.ir.expr(eid).kind
+        {
+            eid = *x;
+        }
+        self.tested_calls.insert(eid);
+    }
+
     fn walk_stmt(&mut self, sid: al_syntax::ir::StmtId) {
         use StmtKind::*;
         let st = self.file.ir.stmt(sid);
@@ -1041,6 +1061,9 @@ impl<'a> SpineCtx<'a> {
                 self.assign_target = Some((*target, kind));
                 self.walk_expr(*target);
                 self.assign_target = None;
+                if !*compound {
+                    self.note_tested(*value);
+                }
                 self.walk_expr(*value);
             }
             Call(x) => {
@@ -1057,6 +1080,7 @@ impl<'a> SpineCtx<'a> {
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*cond, "if", &sa);
                 self.note_comparison_labels(*cond);
+                self.note_tested(*cond);
                 self.walk_expr(*cond);
                 self.walk_block(*then_block);
                 if let Some(b) = else_block {
@@ -1087,6 +1111,7 @@ impl<'a> SpineCtx<'a> {
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*cond, "while", &sa);
                 self.enter_loop("while", &st.origin);
+                self.note_tested(*cond);
                 self.walk_expr(*cond);
                 self.walk_block(*body);
                 self.cur_loops.pop();
@@ -1099,6 +1124,7 @@ impl<'a> SpineCtx<'a> {
                 self.enter_loop("repeat", &st.origin);
                 self.walk_block(*body);
                 self.in_until = true;
+                self.note_tested(*until);
                 self.walk_expr(*until);
                 self.in_until = false;
                 self.loops[loop_ix].exhausting_advance =
@@ -1380,6 +1406,7 @@ impl<'a> SpineCtx<'a> {
                     control_context: None,
                     order: None,
                     in_statement_position: self.in_stmt_position,
+                    result_tested: self.tested_calls.contains(&eid),
                     receiver_temp_state: None,
                 });
                 self.cs_arg_exprs.push(args.clone());
@@ -1578,6 +1605,7 @@ pub fn walk_spine(
         operation_sites: Vec::new(),
         assert_depth: 0,
         in_stmt_position: false,
+        tested_calls: HashSet::new(),
         count_next_call_fn: false,
         in_until: false,
         call_sites: Vec::new(),

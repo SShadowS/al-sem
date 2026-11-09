@@ -207,6 +207,12 @@ pub struct ProveObligations {
     /// ignores them or makes them an error), which a commit answer names
     /// with why. From the entry.
     pub(crate) suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
+    /// B7 review: a `no` or `unknown` that left out an error caught by a
+    /// trap, where a checked `Codeunit.Run` with no write pending within the
+    /// root may be the trap: it holds only if the root's own callers have
+    /// no write pending when they call it (a checked run inside a write
+    /// transaction is itself a run-time error). Stated as an assumption.
+    pub(crate) trap_assumes_clean_entry: bool,
 }
 
 /// r3 §7 R1: the events a cone raises that an unloaded subscriber could
@@ -460,6 +466,7 @@ fn compute_obligations(
         events_raised: None,
         universe: String::new(),
         suppressed_commits: entry.suppressed_commits.clone(),
+        trap_assumes_clean_entry: false,
     }
 }
 
@@ -889,7 +896,7 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
 
 fn evaluate_may_question(
     entry: &DigestEntryFull,
-    oblg: ProveObligations,
+    mut oblg: ProveObligations,
     question: &ProveQuestion,
     witness_truncated: bool,
     via_callers: &HashMap<usize, CallerRef>,
@@ -902,11 +909,16 @@ fn evaluate_may_question(
         .iter()
         .enumerate()
         // G23: an effect the root cannot reach under literal arguments does not.
+        // B7/L23: nor does an error a definite trap catches on every route
+        // (a checked Codeunit.Run, a TryFunction whose result is used,
+        // asserterror): it never leaves the root, and shows no error dialog
+        // (`UI_ERROR`, `reaches-ui`). Only error rows carry a trap verdict.
         .filter(|(i, e)| {
             (effect_matches(e, question)
                 || via_callers.contains_key(i)
                 || field_guarded.get(i) == Some(&true))
                 && !ruled_out(e, oblg.world)
+                && caught_at(e).is_none()
         })
         .map(|(i, _)| i)
         .collect();
@@ -919,6 +931,15 @@ fn evaluate_may_question(
             obligations: oblg,
         };
     }
+    // B7 review: an error left out as caught, where the trap may be a
+    // checked run, holds only if the root's callers have no write pending.
+    oblg.trap_assumes_clean_entry = entry.effects.iter().any(|e| {
+        effect_matches(e, question)
+            && caught_at(e).is_some()
+            && e.flow_notes
+                .as_deref()
+                .is_some_and(|n| n.trap_assumes_clean_entry)
+    });
 
     // G17b: writes whose table is real only if the caller passes a persistent
     // record. They rule out `no`, but they are no `yes` either.
@@ -1674,16 +1695,133 @@ fn condition_words_of(
     eff: &DigestEffectFull,
     notes: Option<&crate::engine::l5::literal_reach::FlowNotes>,
 ) -> String {
-    if let Some(w) = crate::engine::l5::literal_reach::route_condition_words(notes) {
-        return w;
+    let base = if let Some(w) = crate::engine::l5::literal_reach::route_condition_words(notes) {
+        w
+    } else {
+        // A replayed route with no guard: the class label, unless it says the
+        // condition was not resolved (the replay resolved it).
+        let replayed = notes.is_some_and(|n| n.guards.is_some());
+        if replayed && eff.conditionality == crate::engine::l5::conditionality::UNKNOWN {
+            "no guard on the route".to_string()
+        } else {
+            crate::engine::vocab::condition(eff.conditionality).to_string()
+        }
+    };
+    // B7/L23, L30: the traps and error collection on the routes.
+    match trap_words(notes) {
+        Some(t) => format!("{base}; {t}"),
+        None => base,
     }
-    // A replayed route with no guard: the class label, unless it says the
-    // condition was not resolved (the replay resolved it).
-    let replayed = notes.is_some_and(|n| n.guards.is_some());
-    if replayed && eff.conditionality == crate::engine::l5::conditionality::UNKNOWN {
-        return "no guard on the route".to_string();
+}
+
+/// B7/L23 + L30: an error row's route-level condition in words: an
+/// isolated event that catches it unless a write is pending, a trap on the
+/// first route found while another route escapes, and the routines that
+/// collect it when it is raised as a collectible ErrorInfo. `None` when
+/// none applies. (A row caught on every route is not printed as an effect;
+/// [`caught_at`] has it.)
+pub(crate) fn trap_words(
+    notes: Option<&crate::engine::l5::literal_reach::FlowNotes>,
+) -> Option<String> {
+    use crate::engine::l5::literal_reach::TrapVerdict;
+    let n = notes?;
+    let mut parts: Vec<String> = Vec::new();
+    match &n.trap {
+        Some(TrapVerdict::UnlessWritePending(at)) => parts.push(at.unless_pending_words()),
+        Some(TrapVerdict::SomeRoutes(at)) => parts.push(format!(
+            "escapes on a route with no trap; caught on others (the {})",
+            at.words()
+        )),
+        Some(TrapVerdict::Caught(_)) | None => {}
     }
-    crate::engine::vocab::condition(eff.conditionality).to_string()
+    if !n.collected_by.is_empty() {
+        parts.push(format!(
+            "if raised as a collectible ErrorInfo, collected under \
+             [ErrorBehavior(ErrorBehavior::Collect)] of {}: the code goes on and the error is \
+             raised when that procedure ends, unless the code clears it",
+            n.collected_by.join(", ")
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// B7/L23 (additive JSON): an error row's trap verdict, `{verdict, kind,
+/// routine, file, line}` (`line` 1-based); `None` when it has none.
+pub(crate) fn trap_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
+    use crate::engine::l5::literal_reach::TrapVerdict;
+    let (verdict, at) = match eff.flow_notes.as_deref()?.trap.as_ref()? {
+        TrapVerdict::Caught(at) => ("caught", at),
+        TrapVerdict::UnlessWritePending(at) => ("escapes-if-write-pending", at),
+        TrapVerdict::SomeRoutes(at) => ("trapped-on-some-routes", at),
+    };
+    let mut m = serde_json::Map::new();
+    m.insert("verdict".into(), verdict.into());
+    m.insert("kind".into(), at.kind.id().into());
+    m.insert("routine".into(), at.routine.clone().into());
+    if let Some(f) = &at.file {
+        m.insert("file".into(), f.clone().into());
+    }
+    if let Some(l) = at.line {
+        m.insert("line".into(), shown(l).into());
+    }
+    Some(serde_json::Value::Object(m))
+}
+
+/// B7/L23: the effect types of `question` a trap acts on (its errors, or
+/// the error dialogs of `reaches-ui`); empty for any other question.
+fn caught_types(question: &str) -> &'static [&'static str] {
+    match parse_question(question) {
+        Some(ProveQuestion::ThrowsError) => &["ERROR_THROW", "ERROR_IMPLICIT"],
+        Some(ProveQuestion::ReachesUi) => &["UI_ERROR"],
+        _ => &[],
+    }
+}
+
+/// B7/L23: the error rows of `effects` of `types` a definite trap catches
+/// on every route.
+fn caught_rows<'e>(
+    effects: &'e [DigestEffectFull],
+    types: &[&str],
+) -> impl Iterator<Item = &'e DigestEffectFull> {
+    effects.iter().filter(move |e| {
+        types.contains(&e.effect_type.as_str()) && !e.literal_unreachable && caught_at(e).is_some()
+    })
+}
+
+/// B7 review: how many [`caught_rows`] there are.
+fn caught_count(effects: &[DigestEffectFull], types: &[&str]) -> usize {
+    caught_rows(effects, types).count()
+}
+
+/// B7/L23: the one line naming the error rows of `effects` a definite trap
+/// catches on every route: their count, and the first one's site and trap.
+/// `None` when there is none.
+pub(crate) fn caught_line(effects: &[DigestEffectFull], types: &[&str]) -> Option<String> {
+    let caught: Vec<&DigestEffectFull> = caught_rows(effects, types).collect();
+    let first = caught.first()?;
+    let at = caught_at(first)?;
+    Some(format!(
+        "  caught on every route by a trap: {} (first: {} at {}, by the {}); not counted",
+        crate::engine::l5::routine_rollup::plural(caught.len(), "error site", "error sites"),
+        first.effect_type,
+        first
+            .site_text()
+            .unwrap_or_else(|| "no position kept".to_string()),
+        at.words()
+    ))
+}
+
+/// B7/L23: where an error row is caught, when a definite trap is on every
+/// route from the root to it ([`crate::engine::l5::literal_reach::TrapVerdict::Caught`]):
+/// the error does not escape the root, so no forward error answer counts
+/// it.
+pub(crate) fn caught_at(
+    eff: &DigestEffectFull,
+) -> Option<&crate::engine::l5::literal_reach::TrapAt> {
+    match eff.flow_notes.as_deref()?.trap.as_ref()? {
+        crate::engine::l5::literal_reach::TrapVerdict::Caught(at) => Some(at),
+        _ => None,
+    }
 }
 
 /// The witness prove prints for a group row: with a `writes-table`
@@ -1716,6 +1854,7 @@ fn witness_notes(
         assumed: Vec::new(),
         guards: Some(set.guards.clone()),
         beyond_unanalyzed: set.unanalyzed > 0,
+        ..Default::default()
     })
 }
 
@@ -1882,6 +2021,11 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
             "literalNarrowedSites".into(),
             (o.literal_narrowed_sites as u64).into(),
         );
+    }
+    // B7 review (additive): present only when a caught error may rest on a
+    // checked run, which holds only if the callers have no write pending.
+    if o.trap_assumes_clean_entry {
+        m.insert("assumesNoPendingWriteAtEntry".into(), true.into());
     }
     serde_json::Value::Object(m)
 }
@@ -2766,7 +2910,17 @@ pub fn format_prove_human(
             if paths.is_some()
                 && let Some(site) = effect_site_noun(question) =>
         {
-            negative_answer(&site)
+            // B7 review: a `no` that left errors out as caught says so in
+            // the headline, not only on the caught line below.
+            match caught_count(effects, caught_types(question)) {
+                0 => negative_answer(&site),
+                n => format!(
+                    "  answer:   no — no {site} escapes the routine; {} caught on every route \
+                     by a trap (every candidate decided; {})",
+                    crate::engine::l5::routine_rollup::plural(n, "error site", "error sites"),
+                    crate::engine::l5::prove_slice::STATIC_LABEL
+                ),
+            }
         }
         a => format!("  answer:   {}", a.as_str()),
     });
@@ -3050,6 +3204,11 @@ pub fn format_prove_human(
                         crate::engine::vocab::condition_line(eff.conditionality)
                     ));
                 }
+                // B7/L23 + L30: the route's traps and error collection (the
+                // class label above is the site's own condition).
+                if let Some(t) = trap_words(notes_of(eff).as_ref()) {
+                    lines.push(format!("      on the routes: {t}"));
+                }
             }
             let Some(p) = paths else {
                 continue;
@@ -3129,6 +3288,12 @@ pub fn format_prove_human(
     let evidence = lines.split_off(evidence_start);
     lines.extend(crate::engine::path_segments::segment(evidence));
 
+    // B7/L23: the errors a definite trap catches on every route, counted
+    // and the first one placed (they are no evidence).
+    if let Some(line) = caught_line(effects, caught_types(question)) {
+        lines.push(line);
+    }
+
     // Round 2 G17: on `throws-error`, the root's own TryFunction
     // declaration (printed only when it is one) and the follow-up that asks
     // whether a caller traps the error.
@@ -3157,8 +3322,8 @@ pub fn format_prove_human(
         // escapes the dispatch. An isolated event catches it (Microsoft
         // Learn, "Isolated events in AL"), except with a write pending in the
         // raising transaction or during an install or upgrade. For a normal
-        // event it is not established here: the forward answer does not yet
-        // apply the traps inside the subscriber (engine limits B7).
+        // event it is not established here: whether it escapes depends on
+        // the publisher's callers (callers-intercept-errors asks that).
         let publishers = subscribed_publishers(p.cx, p.root);
         let (isolated, normal): (Vec<_>, Vec<_>) = publishers.into_iter().partition(|(_, i)| *i);
         if !normal.is_empty() {
@@ -3544,6 +3709,14 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
         ));
     }
     out.extend(crate::engine::l5::literal_reach::AssumptionRecord::sentences(&o.flow_assumed));
+    if o.trap_assumes_clean_entry {
+        out.push(
+            "assumes the routine's callers have no write pending when they call it: an error \
+             left out as caught may rest on a checked Codeunit.Run, and a checked run inside a \
+             write transaction is itself a run-time error"
+                .to_string(),
+        );
+    }
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
@@ -3751,6 +3924,15 @@ pub(crate) fn evidence_value(eff: &DigestEffectFull) -> serde_json::Value {
     // r3 E2 (additive): the guards on the listed witness route.
     if let Some(g) = route_guards_value(eff) {
         m.insert("routeGuards".into(), g);
+    }
+    // B7/L23 + L30 (additive): the traps on the routes, and error collection.
+    if let Some(t) = trap_value(eff) {
+        m.insert("trap".into(), t);
+    }
+    if let Some(n) = eff.flow_notes.as_deref()
+        && !n.collected_by.is_empty()
+    {
+        m.insert("collectedBy".into(), n.collected_by.clone().into());
     }
     m.insert("transactionContext".into(), eff.transaction_context.into());
     let guarantees: Vec<serde_json::Value> =
@@ -4000,6 +4182,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             events_raised: None,
             universe: String::new(),
             suppressed_commits: Vec::new(),
+            trap_assumes_clean_entry: false,
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -4467,7 +4650,7 @@ pub(crate) fn filtered_result(
     unfiltered: &ProveResult,
     slice: &crate::engine::l5::prove_slice::SliceOut,
 ) -> ProveResult {
-    let oblg = unfiltered.obligations.clone();
+    let mut oblg = unfiltered.obligations.clone();
     if slice.matching().next().is_some() {
         return ProveResult {
             answer: ProveAnswer::Yes,
@@ -4476,6 +4659,9 @@ pub(crate) fn filtered_result(
             obligations: oblg,
         };
     }
+    // B7 review: a site left out as caught, where the trap may be a checked
+    // run, holds only if the root's callers have no write pending.
+    oblg.trap_assumes_clean_entry |= slice.caught_assumes_clean_entry;
     let mut blockers: Vec<ProveBlocker> = Vec::new();
     if !slice.complete {
         blockers.push(ProveBlocker {
