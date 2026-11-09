@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2)
+
+- **The arms of a statement `#if` are alternatives, not one sequence.** The lowerer spliced
+  every arm of an `#if`/`#elif`/`#else` chain inside a routine body into one statement list.
+  An `exit` or `Error` in one arm then cut off the code after the group in every build, so
+  `prove` answered a wrong `no (every candidate decided)` (`writes-table` on a write after
+  `#if not CLEAN99 exit; #endif`) and a wrong `unconditional on success` (an `Error` only
+  one build compiles). Microsoft Learn ("AL preprocessor directives overview",
+  https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/directives/devenv-directives-in-al):
+  `#if` includes its code only when its expression is true, `#elif` only when no earlier
+  branch was selected, `#else` only when no earlier branch is true; so one build compiles
+  at most one arm, and with no `#else` a build may compile none.
+  - The IR's `PreprocGroup` (`al_syntax::ir`) is now built: one group per chain, one block
+    per arm the routine's own build context leaves live, and `falls_through` for the build
+    that takes no arm. A chain whose single live arm every build takes is still spliced
+    in place. `chain_shape` reports the fall-through per chain.
+  - The statement tree (`ir_walk`) gives a group as a `case` with no scrutinee, one
+    `case-branch` per arm, the `#else` arm as the case's else when there is no
+    fall-through. Every walker of the tree (control context, reach, value flow, return
+    summary, the L4 CFG walk, detectors) already reads a `case` as alternatives.
+  - The unreachable-statement scan treats a group as one sibling: an `exit` in an arm no
+    longer marks the statement after the group.
+  - No configuration is chosen: `preprocessorSymbols` in `app.json` and `#define` are not
+    read (the later L22 steps). Each arm stays a possible build: "may" questions list
+    every arm's effects, and an effect in an arm is `conditional` (an `Error` alone in an
+    arm is `error-path`).
+- **Code after a construct that only MAY `exit` is no longer `unconditional on success`.**
+  The control-context walk (`program::body::control_context`) made the code after an `if`
+  or `case` conditional only when an arm ALWAYS ends; an arm that may `exit` on the way
+  (`if b then exit;` nested in it) left the code after the construct at the outer
+  context. Splicing used to hide this for `#if` arms, so the group above turned
+  `#if A if b then exit; #endif Commit();` into a wrong `commits-on-success-path: yes`
+  (its old answer was `unknown`), and nested groups (`#if A #if B exit; #endif … #endif
+  Insert();`) read the `Insert` as `unconditional on success`. The same gap was older in
+  plain AL: `if a then begin if b then exit; … end; Insert();`, an `exit` inside a loop
+  body, and an arm `begin if d then exit; Error(..) end` (counted as an `Error` only).
+  A new `control_flow::may_exit` ("some path through this node runs `exit`") now makes
+  the continuation of an `if`, a `case` (an `#if` group included) and a loop at least
+  `conditional`. Only `exit` counts: a raised `Error` ends the routine without success,
+  so it never takes code off a success path.
+- **A routine declared in two `#if` arms is `conditional` in each arm.** A build runs one
+  arm's body, so no arm's site runs on every success path; each arm's `Insert` read
+  `unconditional on success` through its callers. The model builder now lifts the
+  `top-level` sites of every row of a collided id to `conditional`
+  (`program::model::workspace::lift_arm_declarations`).
+- **Not fixed: a routine declared in two `#if` arms still cites one arm's line for the
+  other's write.** Both arms mint the same site ids (`{routine}/op0`), and readers resolve
+  an id to one row (#160 step 11b, class P: the last row). Giving each arm its own ids
+  (a site-number stride per arm) fixes the citation, and was tried twice and reverted:
+  it breaks 19 tests that build their collided-site precondition from two `#if` arms
+  (the 11b acceptance tests, `cli_11b_policy_collision`, d35's `i264_fo1`, the r4
+  dep-order test, the L4 host oracle `t1u`), and it changes real answers the 11b design
+  settled (two producers for one duplicated declaration, an interface call counted per
+  arm, d1 keeping one seed instead of both). That is a change to an accepted design, so
+  it needs the owner's decision. Recorded in `docs/engine-limits.md` (B2).
+- The #288 trust-gate tests G1/G2 state their dead marks by assignment: production no
+  longer marks the code after an arm's `exit` unreachable, which those tests relied on.
+- Leading-guard readers that stop at the first non-statement now stop at a group too
+  (`table_event_guard`'s entry exits, the temporary-record entry guard), where they used
+  to read an arm's guard as if every build ran it.
+- Tests: `tests/cli/cli_b2_preproc_arms.rs` (prove through the CLI: an arm's `exit`, an
+  arm's `Error`, an arm that may `exit` before a `Commit`, nested groups and the plain-AL
+  shapes with a no-exit control, a two-arm routine through its caller), lowerer
+  `statement_if_chains_are_groups_of_alternatives`, `ir_walk::preproc_group_tests`.
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said

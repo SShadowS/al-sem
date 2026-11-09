@@ -1756,6 +1756,12 @@ fn project_ir(
 
         // #288: whether the object's source is free of directives, scanned once.
         let mut object_clean: Option<bool> = None;
+        // Engine limits B2: how many declarations of each internal id this
+        // object has. A routine declared in two `#if` arms is two rows under one
+        // id (#160 step 11b); `lift_arm_declarations` reads the count once the
+        // object's rows are built.
+        let mut arms_by_id: HashMap<String, u32> = HashMap::new();
+        let first_row = workspace.routines.len();
         for (rix, ir_routine) in routine_ixs.iter().map(|&ri| (ri, &o.routines[ri])) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
@@ -1784,6 +1790,7 @@ fn project_ir(
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
                 );
+                *arms_by_id.entry(rid.clone()).or_insert(0) += 1;
                 let (feats, site_exprs, implicit) =
                     crate::program::body::ir_walk::project_routine_features_ir_with(
                         ir_file,
@@ -2292,8 +2299,35 @@ fn project_ir(
                 site_guards,
             });
         }
+        lift_arm_declarations(&mut workspace.routines[first_row..], &arms_by_id);
     }
     positions
+}
+
+/// Engine limits B2: a routine declared in several `#if` arms runs ONE arm's
+/// body per build, so no arm's site runs on every success path of the routine:
+/// a `top-level` site of such a row is only `conditional`. Without this, a
+/// caller of `#if X procedure P() Insert(A) #else procedure P() Insert(B)
+/// #endif` read BOTH inserts as unconditional. No configuration is chosen yet
+/// (later L22 steps), so every arm stays a possible build.
+fn lift_arm_declarations(rows: &mut [ModelRoutine], arms_by_id: &HashMap<String, u32>) {
+    const TOP: &str = "top-level";
+    const COND: &str = "conditional";
+    for r in rows
+        .iter_mut()
+        .filter(|r| arms_by_id.get(&r.id).is_some_and(|&n| n >= 2))
+    {
+        for c in r
+            .call_sites
+            .iter_mut()
+            .map(|s| &mut s.control_context)
+            .chain(r.operation_sites.iter_mut().map(|s| &mut s.control_context))
+        {
+            if c.as_deref() == Some(TOP) {
+                *c = Some(COND.to_string());
+            }
+        }
+    }
 }
 
 /// The evidence-card text of routine `rix` of object `o` (intent-evidence

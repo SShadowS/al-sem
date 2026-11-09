@@ -147,6 +147,7 @@ mod cli_analyze_program_calls;
 mod cli_analyze_test_quality;
 mod cli_array_param_overload;
 mod cli_attribute_trivia;
+mod cli_b2_preproc_arms;
 mod cli_b8_output;
 mod cli_b_diff_differential;
 mod cli_b_digest_differential;

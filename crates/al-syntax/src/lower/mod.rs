@@ -9,8 +9,8 @@
 use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
-    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, RoutineDecl, RoutineKind,
-    SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
+    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, PreprocGroup, RoutineDecl,
+    RoutineKind, SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -1420,7 +1420,7 @@ fn collect_routines<'t>(
                 }
                 pending.extend(incoming.into_iter().zip(chains).filter_map(|(e, c)| {
                     Some(PendingAttr {
-                        guard: consistent(&e.guard, &c.1?)?,
+                        guard: consistent(&e.guard, c.1.last()?.as_ref()?)?,
                         node: e.node,
                     })
                 }));
@@ -1797,21 +1797,21 @@ fn chain_parts<'t>(node: RawNode<'t>) -> (Vec<RawNode<'t>>, Vec<Vec<RawNode<'t>>
 
 /// The directive walk of [`preproc_branches`], over a wrapper's `directives` only
 /// ([`chain_parts`]), with no branch contents: per arm its `(symbols, live under
-/// the context `lookup` reads)`, plus the symbols of the build that takes no arm
-/// (every `#if`/`#elif` condition false): `Some` only when the chain has no `#else`
-/// and the context decides no arm true. The fall-through is read for the LAST chain
-/// of the wrapper (a single-chain wrapper has one). It costs the directives, not the
-/// wrapper's children, so it runs once per pending attribute.
+/// the context `lookup` reads)`, plus, per chain closed by an `#endif` (in order),
+/// the symbols of the build that takes none of its arms (every `#if`/`#elif`
+/// condition false): `Some` only when the chain has no `#else` and the context
+/// decides no arm true. It costs the directives, not the wrapper's children, so it
+/// runs once per pending attribute.
 fn chain_shape(
     directives: &[RawNode],
     source: &str,
     lookup: &dyn Fn(&str) -> Option<bool>,
-) -> (Vec<(Syms, bool)>, Option<Syms>) {
+) -> (Vec<(Syms, bool)>, Vec<Option<Syms>>) {
     let mut out = vec![(Vec::new(), true)];
     let mut earlier: Vec<RawNode> = Vec::new();
     let mut taken = false;
     let mut has_else = false;
-    let mut falls_through = None;
+    let mut falls_through = Vec::new();
     for &c in directives {
         match c.kind() {
             RawKind::PreprocIf | RawKind::PreprocElif => {
@@ -1838,13 +1838,13 @@ fn chain_shape(
                 out.push((syms, !taken));
             }
             RawKind::PreprocEndif => {
-                falls_through = (!has_else && !taken).then(|| {
+                falls_through.push((!has_else && !taken).then(|| {
                     let mut syms = Vec::new();
                     for e in &earlier {
                         assume_preproc(*e, false, source, &mut syms);
                     }
                     syms
-                });
+                }));
                 earlier.clear();
                 taken = false;
                 has_else = false;
@@ -2807,6 +2807,144 @@ fn lower_stmt_seq(
     ir.add_block(Block { items, origin })
 }
 
+/// An [`Origin`] from the start of `from` to `to` (a byte offset and its point).
+fn span_origin(from: RawNode, to: (usize, tree_sitter::Point)) -> Origin {
+    let s = from.start_position();
+    Origin {
+        kind_text: from.kind_str(),
+        byte: from.byte_range().start..to.0.max(from.byte_range().start),
+        start: Point {
+            row: s.row as u32,
+            column: s.column as u32,
+        },
+        end: Point {
+            row: to.1.row as u32,
+            column: to.1.column as u32,
+        },
+    }
+}
+
+/// One `#if` … `#endif` chain of a statement-position wrapper while it is read:
+/// its `#if` directive and its live arms (symbols, contents, origin).
+struct StmtChain<'t> {
+    open: RawNode<'t>,
+    arms: Vec<(Syms, Vec<RawNode<'t>>, Origin)>,
+}
+
+/// A statement-position `#if` wrapper (engine limits B2, step 1 of L22). Each chain
+/// (`#if` … `#endif`) becomes ONE [`PreprocGroup`]: its arms the build context
+/// leaves live, each lowered into its own block under its own branch's symbols
+/// (`BUILD_CONTEXT`). The arms are ALTERNATIVES, never a sequence: a build compiles
+/// at most one of them, so an `exit` or `Error` in one arm does not cut off the code
+/// after the group. `falls_through` is the build that takes no arm (no `#else`, and
+/// no arm the context decides true), the implicit empty arm. No configuration is
+/// chosen here (that is a later L22 step): every live arm is kept.
+///
+/// A chain whose only live arm is taken by every build (one live arm, no
+/// fall-through) is spliced in place, as a plain statement sequence; a chain with no
+/// live arm adds nothing. Content outside any chain (before the first `#if`, after an
+/// `#endif`) is lowered in place, in document order. A chain the parser left without
+/// its `#endif` is closed with a fall-through, the reading that never drops a build.
+fn lower_preproc_statements(
+    node: RawNode,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    items: &mut Vec<BlockItem>,
+    depth: u32,
+) {
+    let (directives, contents) = chain_parts(node);
+    let (shape, falls) = chain_shape(&directives, source, &in_syms(&build_context()));
+    let mut falls = falls.into_iter();
+    let wrapper_end = (node.byte_range().end, node.end_position());
+    let mut chain: Option<StmtChain> = None;
+    let emit = |chain: StmtChain,
+                end: (usize, tree_sitter::Point),
+                falls_through: bool,
+                ir: &mut Ir,
+                issues: &mut Vec<SyntaxIssue>,
+                items: &mut Vec<BlockItem>| {
+        if chain.arms.is_empty() {
+            return;
+        }
+        if chain.arms.len() == 1 && !falls_through {
+            let (syms, children, _) = chain.arms.into_iter().next().expect("one arm");
+            with_build_context(&syms, ir, |ir| {
+                for c in children {
+                    lower_block_child(c, ir, issues, source, items, depth);
+                }
+            });
+            return;
+        }
+        let branches = chain
+            .arms
+            .into_iter()
+            .map(|(syms, children, origin)| {
+                let mut arm_items = Vec::new();
+                with_build_context(&syms, ir, |ir| {
+                    for c in children {
+                        lower_block_child(c, ir, issues, source, &mut arm_items, depth);
+                    }
+                });
+                ir.add_block(Block {
+                    items: arm_items,
+                    origin,
+                })
+            })
+            .collect();
+        items.push(BlockItem::Preproc(PreprocGroup {
+            branches,
+            falls_through,
+            origin: span_origin(chain.open, end),
+        }));
+    };
+    for (k, ((syms, live), children)) in shape.into_iter().zip(contents).enumerate() {
+        let opener = k.checked_sub(1).map(|i| directives[i]);
+        // An arm runs from its directive to the next directive (or the wrapper's end).
+        let arm_end = directives
+            .get(k)
+            .map_or(wrapper_end, |d| (d.byte_range().start, d.start_position()));
+        match opener.map(RawNode::kind) {
+            Some(RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse) => {
+                let d = opener.expect("an opener");
+                // An `#if` before the last chain's `#endif` (a parser recovery):
+                // that chain is closed with a fall-through.
+                if d.kind() == RawKind::PreprocIf
+                    && let Some(open) = chain.take()
+                {
+                    let end = (d.byte_range().start, d.start_position());
+                    emit(open, end, true, ir, issues, items);
+                }
+                let c = chain.get_or_insert_with(|| StmtChain {
+                    open: d,
+                    arms: Vec::new(),
+                });
+                if live {
+                    c.arms.push((syms, children, span_origin(d, arm_end)));
+                }
+            }
+            _ => {
+                if let Some(d) = opener {
+                    // `#endif`: one fall-through flag per `#endif`, in order.
+                    let falls_through = falls.next().is_none_or(|f| f.is_some());
+                    if let Some(open) = chain.take() {
+                        let end = (d.byte_range().end, d.end_position());
+                        emit(open, end, falls_through, ir, issues, items);
+                    }
+                }
+                with_build_context(&syms, ir, |ir| {
+                    for c in children {
+                        lower_block_child(c, ir, issues, source, items, depth);
+                    }
+                });
+            }
+        }
+    }
+    if let Some(open) = chain.take() {
+        emit(open, wrapper_end, true, ir, issues, items);
+    }
+}
+
 fn lower_block_child(
     node: RawNode,
     ir: &mut Ir,
@@ -2816,17 +2954,7 @@ fn lower_block_child(
     depth: u32,
 ) {
     if is_preproc_wrapper(node) {
-        // Union-read every branch the build context leaves live, each under
-        // its own branch's symbols (`BUILD_CONTEXT`).
-        for (syms, live, children) in preproc_branches(node, source, &build_context()) {
-            if live {
-                with_build_context(&syms, ir, |ir| {
-                    for c in children {
-                        lower_block_child(c, ir, issues, source, items, depth);
-                    }
-                });
-            }
-        }
+        lower_preproc_statements(node, ir, issues, source, items, depth);
         return;
     }
     // Statement-position keyword tokens are named children that leak from certain
@@ -5564,7 +5692,10 @@ codeunit 50104 T
                     .then_some(*eid),
                     _ => None,
                 },
-                _ => None,
+                // A `#if` group's branches (B2: kept as a group, not spliced).
+                crate::ir::BlockItem::Preproc(g) => {
+                    g.branches.iter().find_map(|&br| find_call(af, br, name))
+                }
             })
         }
         let s = |v: &[(&str, bool)]| -> Vec<(String, bool)> {
@@ -8878,5 +9009,118 @@ page 50137 P
                 ("/* block */", true, true, 6),
             ]
         );
+    }
+
+    /// Engine limits B2: a statement-position `#if` chain is ONE group whose
+    /// branches are alternatives, never spliced into one statement sequence. The
+    /// group records whether some build takes no branch (no `#else`); a chain whose
+    /// one live branch every build takes (the routine's own `#if` decides it) is
+    /// spliced as plain statements; each branch's block starts at its directive.
+    #[test]
+    fn statement_if_chains_are_groups_of_alternatives() {
+        use crate::ir::{BlockItem, PreprocGroup};
+        let src = r#"
+codeunit 50139 G
+{
+    procedure IfElse()
+    begin
+#if A
+        exit;
+#else
+        Second();
+#endif
+        After();
+    end;
+
+    procedure NoElse()
+    begin
+#if not A
+        exit;
+#endif
+        After();
+    end;
+
+    procedure Elif()
+    begin
+#if A
+        First();
+#elif B
+        Second();
+#endif
+    end;
+
+#if A
+    procedure Decided()
+    begin
+#if A
+        exit;
+#endif
+#if not A
+        Dead();
+#endif
+        After();
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let items = |name: &str| -> &[BlockItem] {
+            let r = af.objects[0]
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("no routine {name}"));
+            &af.ir.block(r.body.expect("body")).items
+        };
+        let group = |item: &BlockItem| -> (usize, bool, Vec<u32>) {
+            let BlockItem::Preproc(PreprocGroup {
+                branches,
+                falls_through,
+                ..
+            }) = item
+            else {
+                panic!("expected a #if group");
+            };
+            let rows = branches
+                .iter()
+                .map(|&b| af.ir.block(b).origin.start.row)
+                .collect();
+            (branches.len(), *falls_through, rows)
+        };
+        let stmt_kinds = |items: &[BlockItem]| -> Vec<&'static str> {
+            items
+                .iter()
+                .map(|i| match i {
+                    BlockItem::Stmt(s) => match af.ir.stmt(*s).kind {
+                        StmtKind::Exit(_) => "exit",
+                        StmtKind::Call(_) => "call",
+                        _ => "other",
+                    },
+                    BlockItem::Preproc(_) => "group",
+                })
+                .collect()
+        };
+
+        // `#if … #else … #endif`: two branches, no build skips both; the call after
+        // the group is a sibling of the group, not of the `exit`.
+        let it = items("IfElse");
+        assert_eq!(stmt_kinds(it), ["group", "call"]);
+        assert_eq!(group(&it[0]), (2, false, vec![5, 7]));
+
+        // No `#else`: the implicit empty branch.
+        let it = items("NoElse");
+        assert_eq!(stmt_kinds(it), ["group", "call"]);
+        assert_eq!(group(&it[0]), (1, true, vec![15]));
+
+        // `#if … #elif … #endif`: two branches and the build that takes neither.
+        let it = items("Elif");
+        assert_eq!(stmt_kinds(it), ["group"]);
+        assert_eq!(group(&it[0]).0, 2);
+        assert!(group(&it[0]).1);
+
+        // Under the routine's own `#if A`, the inner `#if A` is taken by every build
+        // (spliced) and `#if not A` by none (dropped).
+        assert_eq!(stmt_kinds(items("Decided")), ["exit", "call"]);
     }
 }
