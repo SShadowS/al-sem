@@ -1462,13 +1462,19 @@ impl<'a> OperationJoin<'a> {
 
     /// Engine limits B5: the FlowField read of `table_id` the operation
     /// makes (`ModelRecordOperation::flow_field_reads`), read off the same
-    /// claiming row [`Self::get`] reads; `None` for the operation's own table
-    /// or an operation outside the model's routines.
+    /// claiming row [`Self::get`] reads. `None` for an effect row that is not a
+    /// FlowField read (its `effect_op` is the operation's own, such as the
+    /// `FindSet` row of a `SetAutoCalcFields` read), for a `CalcFields` on its
+    /// own table, and for an operation outside the model's routines.
     pub fn flow_field(
         &self,
         operation_id: &str,
+        effect_op: &str,
         table_id: &str,
     ) -> Option<&'a crate::program::model::flow_fields::FlowFieldRead> {
+        if effect_op != "CalcFields" {
+            return None;
+        }
         let (_, op) = self.index.last_record_operation(operation_id)?;
         if op.op == "CalcFields" && op.table_id.as_deref() == Some(table_id) {
             return None;
@@ -2572,7 +2578,7 @@ fn render_query_touches_body(
                     // FlowField at this operation is a `CalcFields` site of
                     // it, unless the operation is already one on this table.
                     for ffr in &o.flow_field_reads {
-                        if ffr.effect_table_id() != table.id || (hit && o.op == "CalcFields") {
+                        if ffr.effect_table_id() != table.id || ffr.repeats_host_read(o) {
                             continue;
                         }
                         if primary {
@@ -5849,7 +5855,7 @@ fn render_query_effects_body(
     for (e, lit) in effects.iter().zip(&literal).filter(|_| all) {
         // Engine limits B5: a read through a FlowField names the field (and,
         // when the table is not decided, why).
-        let flow_field = ops.flow_field(e.operation_id, e.table_id);
+        let flow_field = ops.flow_field(e.operation_id, e.op, e.table_id);
         let table = if let Some(ff) = flow_field
             && let crate::program::model::flow_fields::FlowFieldSource::Undecided(why) = &ff.source
         {

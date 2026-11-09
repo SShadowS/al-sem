@@ -333,6 +333,141 @@ codeunit 50101 "B5 Setup"
     );
 }
 
+/// More ways a `SetAutoCalcFields` reaches a retrieval: a bare call on a
+/// table's implicit `Rec`, and an object global set in one procedure and
+/// retrieved in another. In a separate workspace so the counts above stay.
+const AUTO_MORE: &str = r#"
+table 50103 "B5 Owner"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("B5 Line" where("Header No." = field("No.")));
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    procedure BareAuto(): Integer
+    begin
+        SetAutoCalcFields("Line Count");
+        if FindSet() then
+            exit("Line Count");
+    end;
+}
+
+codeunit 50104 "B5 Globals"
+{
+    var
+        G: Record "B5 Header";
+
+    procedure Prepare()
+    begin
+        G.SetAutoCalcFields("Line Count");
+    end;
+
+    procedure Fetch(): Integer
+    begin
+        if G.FindSet() then
+            exit(G."Line Count");
+    end;
+
+    procedure Shadowed(): Integer
+    var
+        G: Record "B5 Header";
+    begin
+        if G.FindSet() then
+            exit(G."Line Count");
+    end;
+}
+
+codeunit 50105 "B5 Self"
+{
+    procedure AutoSelf(): Integer
+    var
+        N: Record "B5 Node";
+    begin
+        N.SetAutoCalcFields("Child Count");
+        if N.FindSet() then
+            exit(N."Child Count");
+    end;
+}
+"#;
+
+/// Precondition stated in `AUTO_MORE`: `BareAuto` reads "B5 Line" only
+/// through the bare `SetAutoCalcFields` on its implicit `Rec`; `Fetch` only
+/// through the global `G` that `Prepare` set up; `Shadowed` retrieves a LOCAL
+/// `G` nothing set up.
+#[test]
+fn set_auto_calc_fields_on_implicit_rec_and_globals_is_a_read() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    workspace_only(&ws);
+    write(&ws.join("src/AutoMore.al"), AUTO_MORE);
+    let ws = ws.to_str().unwrap();
+
+    for from in ["BareAuto", "Fetch"] {
+        let out = touches_down(ws, "B5 Line", from);
+        assert!(
+            answer_line(&out).starts_with("answer: down: yes"),
+            "{from}: the FindSet calculates \"Line Count\": {out}"
+        );
+    }
+    let out = touches_down(ws, "B5 Line", "Shadowed");
+    assert!(
+        answer_line(&out).starts_with("answer: down: no"),
+        "a local G is not the global G: {out}"
+    );
+
+    // The `FindSet` row is the host read; only the derived row names the
+    // FlowField.
+    let out = alsem(&["query", "effects", ws, "--routine", "AutoSelf", "--all"]);
+    assert!(
+        out.contains("[CalcFields] on B5 Node through FlowField \"Child Count\" via direct"),
+        "{out}"
+    );
+    assert!(out.contains("[FindSet] on B5 Node via direct"), "{out}");
+}
+
+/// A formula naming a table that two loaded tables (different apps) are
+/// named: the model keeps no namespace, so the read is not decided, never a
+/// read of one of them chosen by load order.
+#[test]
+fn flowfield_over_an_ambiguous_table_name_is_not_decided() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    workspace_only(&ws);
+    app_json(
+        &ws,
+        &format!(
+            r#"{{"id":"{DEP_GUID}","name":"B5Base","publisher":"probe","version":"1.0.0.0"}}"#
+        ),
+    );
+    let line = r#"{"Id":60000,"Name":"B5 Line","Fields":[{"Id":1,"Name":"Header No.","TypeDefinition":{"Name":"Code"}}]}"#;
+    crate::symbol_app::write_symbol_app(
+        &ws.join(".alpackages/probe_B5Base_1.0.0.0.app"),
+        DEP_GUID,
+        "B5Base",
+        "1.0.0.0",
+        &format!(
+            r#"{{"RuntimeVersion":"13.0","Tables":[{line}],"AppId":"{DEP_GUID}","Name":"B5Base","Publisher":"probe","Version":"1.0.0.0"}}"#
+        ),
+    );
+    let ws = ws.to_str().unwrap();
+
+    let out = alsem(&["query", "effects", ws, "--routine", "ReadTotals", "--all"]);
+    assert!(
+        out.contains("[CalcFields] on table not decided (the CalcFormula's table name matches more than one loaded table) through FlowField \"Total Amount\""),
+        "{out}"
+    );
+    assert!(
+        !out.contains("on B5 Line through FlowField"),
+        "no B5 Line is chosen: {out}"
+    );
+}
+
 /// A FlowField over its own table (`count("B5 Node" ...)` on "B5 Node") is
 /// the same read as the `CalcFields` of the record: one row and one site, not
 /// two.

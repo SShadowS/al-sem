@@ -631,8 +631,12 @@ pub(crate) fn direct_facts_for_routine(
     for op in &record_ops {
         // Engine limits B5: a read of each FlowField destination table this
         // operation reads (`program::model::flow_fields`); an undecided one is
-        // an unresolved table read, never no read.
+        // an unresolved table read, never no read. A `CalcFields` of a
+        // FlowField over the record's own table is the host fact below.
         for ffr in &op.flow_field_reads {
+            if ffr.repeats_host_read(op) {
+                continue;
+            }
             let resource_id = match &ffr.source {
                 crate::program::model::flow_fields::FlowFieldSource::Table { table_id, .. } => {
                     Some(table_id.clone())
@@ -9497,5 +9501,55 @@ codeunit 50100 C
             .map(|f| f.witness_callsite_id)
             .collect();
         assert_eq!(sites, [None, Some(String::new())].into());
+    }
+}
+
+/// Engine limits B5: the table family's FlowField read facts.
+#[cfg(test)]
+mod flow_field_fact_tests {
+    use super::*;
+    use crate::program::body::features::PTempState;
+    use crate::program::model::flow_fields::{FlowFieldRead, FlowFieldSource};
+
+    fn table_read(table_id: &str) -> FlowFieldRead {
+        FlowFieldRead {
+            field: "F".to_string(),
+            source: FlowFieldSource::Table {
+                table_id: table_id.to_string(),
+                temporary: false,
+            },
+        }
+    }
+
+    /// Hand-stated: a persistent `CalcFields` on table 1 whose FlowFields
+    /// count table 1 itself and table 2. Table 1's read is the host fact,
+    /// once; table 2's is one derived fact.
+    #[test]
+    fn a_flowfield_over_its_own_table_is_one_read_fact() {
+        let mut r = crate::engine::l5::test_support::routine("R", "procedure");
+        let mut op = crate::engine::l5::test_support::record_op(
+            "R/op0",
+            "CalcFields",
+            "Rec",
+            Some("app/table/1"),
+            Vec::new(),
+            false,
+        );
+        op.temp_state = Some(PTempState {
+            kind: "known".to_string(),
+            value: Some(false),
+            parameter_index: None,
+        });
+        op.flow_field_reads = vec![table_read("app/table/1"), table_read("app/table/2")];
+        r.record_operations = vec![op];
+        let (facts, _, _) = direct_facts_for_routine(&r, &[]);
+        let reads = |t: &str| {
+            facts
+                .iter()
+                .filter(|f| f.op == "read" && f.resource_id.as_deref() == Some(t))
+                .count()
+        };
+        assert_eq!(reads("app/table/1"), 1, "{facts:?}");
+        assert_eq!(reads("app/table/2"), 1, "{facts:?}");
     }
 }

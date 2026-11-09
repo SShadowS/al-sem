@@ -17,17 +17,33 @@
 //!   filter on a FlowField makes BC compute it for the filtered read. The filter
 //!   itself issues no query, so this places the read one step early; it is a
 //!   may-read, never a definite one;
-//! - every `Get` / `Find*` / `Next` on a record variable the same routine calls
+//! - every `Get` / `Find*` / `Next` on a record the routine calls
 //!   `SetAutoCalcFields(F, ...)` on: Learn: the fields are "automatically
 //!   calculated when the record is retrieved from the database". The calls are
-//!   not ordered here: every read on that variable in the routine gets them.
+//!   not ordered here: every read on that record in the routine gets them. A
+//!   bare `SetAutoCalcFields(F)` is a call on the implicit record (`Rec`); as
+//!   an obsolete `with X do` can make it a call on `X`, it also applies to the
+//!   routine's other retrievals whose table has a FlowField of that name;
+//! - and, when that record is object-level (an object global, or the implicit
+//!   `Rec` a page or table keeps between triggers), every `Get` / `Find*` /
+//!   `Next` on it in every routine of the same object: `SetAutoCalcFields` in
+//!   `OnOpenPage` and `Rec.FindSet` in an action trigger is one record. A
+//!   routine that declares a local or parameter of that name is not touched.
+//!
+//! Not covered (engine limits L19): a record passed to another routine. A
+//! caller's `SetAutoCalcFields` or filter on a FlowField followed by a callee's
+//! `Find*` on the record it received gives no read in either routine, so the
+//! callee's own answer, and a caller's answer through a `SetAutoCalcFields` it
+//! makes, can still be a "no". A filter in the caller is placed at the filter
+//! (above), so the caller's answer is right in that case.
 //!
 //! Each entry is one destination table, or [`FlowFieldSource::Undecided`] with
 //! its reason when the engine cannot tell which table the field reads (no
 //! formula in the symbols, a formula that does not parse, a destination table
-//! that is not loaded, an argument that names no field of the table). An
-//! undecided entry becomes a read of the `unknown` table bucket, so a touches
-//! answer says "unknown", never "no".
+//! that is not loaded or whose name matches more than one loaded table, an
+//! argument that names no field of the table). An undecided entry becomes a
+//! read of the `unknown` table bucket, so a touches answer says "unknown",
+//! never "no".
 //!
 //! Not FlowField reads: `CalcSums` sums ordinary fields of the record's own
 //! table (already a read of that table); `CalcFields` on a Blob loads the
@@ -50,10 +66,7 @@
 
 use std::collections::HashMap;
 
-use super::workspace::{ModelEntities, ModelField, ModelTable};
-
-#[cfg(doc)]
-use super::workspace::ModelRecordOperation;
+use super::workspace::{ModelEntities, ModelField, ModelRecordOperation, ModelRoutine, ModelTable};
 use crate::program::body::features::PCallee;
 use crate::program::body::node_util::strip_quotes;
 
@@ -99,12 +112,30 @@ impl FlowFieldRead {
             }
         )
     }
+
+    /// True when this read is the same read `op` already makes on its own
+    /// record: a `CalcFields` of a FlowField over the record's own table, with
+    /// the same known temp state. An effect builder emits it once.
+    #[must_use]
+    pub fn repeats_host_read(&self, op: &ModelRecordOperation) -> bool {
+        let FlowFieldSource::Table { table_id, .. } = &self.source else {
+            return false;
+        };
+        op.op == "CalcFields"
+            && op.table_id.as_deref() == Some(table_id.as_str())
+            && op
+                .temp_state
+                .as_ref()
+                .is_some_and(|t| t.kind == "known" && t.value == Some(self.temporary()))
+    }
 }
 
 pub(crate) const NO_FORMULA: &str =
     "the FlowField's CalcFormula is not in the loaded source or symbols";
 pub(crate) const FORMULA_UNREADABLE: &str = "the FlowField's CalcFormula could not be read";
 pub(crate) const TABLE_NOT_LOADED: &str = "the CalcFormula's table is not loaded";
+pub(crate) const TABLE_AMBIGUOUS: &str =
+    "the CalcFormula's table name matches more than one loaded table";
 pub(crate) const FIELD_NOT_FOUND: &str = "the argument names no field of the record's table";
 
 /// The destination table NAME of a `CalcFormula` (logical: quotes stripped,
@@ -173,17 +204,22 @@ fn arg_field_name(arg: &str) -> String {
     strip_quotes(arg.trim()).replace("\"\"", "\"")
 }
 
-/// The tables of the model, by id (a real table wins over an extension stub)
-/// and by name (lowercased, same rule), as `SymbolTable` indexes them.
+/// The tables of the model, by id (a real table wins over an extension stub,
+/// as `SymbolTable` indexes them) and by name (lowercased). A name is looked up
+/// among real tables first, then among stubs; a name two tables with different
+/// ids share in the same group is `None`: the model keeps no namespace, so the
+/// engine cannot tell which of them a formula names.
 struct Tables<'a> {
     by_id: HashMap<&'a str, &'a ModelTable>,
-    by_name: HashMap<String, &'a ModelTable>,
+    real_by_name: HashMap<String, Option<&'a ModelTable>>,
+    stub_by_name: HashMap<String, Option<&'a ModelTable>>,
 }
 
 impl<'a> Tables<'a> {
     fn new(tables: &'a [ModelTable]) -> Self {
         let mut by_id: HashMap<&str, &ModelTable> = HashMap::new();
-        let mut by_name: HashMap<String, &ModelTable> = HashMap::new();
+        let mut real_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
+        let mut stub_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
         for t in tables {
             let keep_id = by_id
                 .get(t.id.as_str())
@@ -191,15 +227,39 @@ impl<'a> Tables<'a> {
             if !keep_id {
                 by_id.insert(t.id.as_str(), t);
             }
-            let name = t.name.to_lowercase();
-            let keep_name = by_name
-                .get(&name)
-                .is_some_and(|p| !p.is_extension_stub && t.is_extension_stub);
-            if !keep_name {
-                by_name.insert(name, t);
-            }
+            let by_name = if t.is_extension_stub {
+                &mut stub_by_name
+            } else {
+                &mut real_by_name
+            };
+            by_name
+                .entry(t.name.to_lowercase())
+                .and_modify(|seen| {
+                    if seen.is_some_and(|p| p.id != t.id) {
+                        *seen = None;
+                    }
+                })
+                .or_insert(Some(t));
         }
-        Tables { by_id, by_name }
+        Tables {
+            by_id,
+            real_by_name,
+            stub_by_name,
+        }
+    }
+
+    /// The table a formula names, or why it is not decided.
+    fn by_name(&self, name: &str) -> Result<&'a ModelTable, &'static str> {
+        let key = name.to_lowercase();
+        match self
+            .real_by_name
+            .get(&key)
+            .or_else(|| self.stub_by_name.get(&key))
+        {
+            Some(Some(t)) => Ok(t),
+            Some(None) => Err(TABLE_AMBIGUOUS),
+            None => Err(TABLE_NOT_LOADED),
+        }
     }
 
     /// What reading field `arg` of table `table_id` reads through a FlowField.
@@ -234,12 +294,12 @@ impl<'a> Tables<'a> {
         for formula in &field.calc_formula {
             let source = match calc_formula_table(formula) {
                 None => FlowFieldSource::Undecided(FORMULA_UNREADABLE),
-                Some(table) => match self.by_name.get(&table.to_lowercase()) {
-                    Some(t) => FlowFieldSource::Table {
+                Some(table) => match self.by_name(&table) {
+                    Ok(t) => FlowFieldSource::Table {
                         table_id: t.id.clone(),
                         temporary: t.is_temporary,
                     },
-                    None => FlowFieldSource::Undecided(TABLE_NOT_LOADED),
+                    Err(why) => FlowFieldSource::Undecided(why),
                 },
             };
             push(out, &field.name, source);
@@ -272,23 +332,74 @@ fn var_key(raw: &str) -> String {
         .to_lowercase()
 }
 
+/// The implicit record's key: a bare record call is a call on `Rec` (the
+/// L2 walk's root implicit frame).
+const IMPLICIT_REC: &str = "rec";
+
+/// One routine's `SetAutoCalcFields` calls: (record key, field argument,
+/// written bare). A bare call is keyed as [`IMPLICIT_REC`].
+fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
+    let mut out = Vec::new();
+    for cs in &routine.call_sites {
+        let (key, bare) = match &cs.callee {
+            PCallee::Member { receiver, method }
+                if method.eq_ignore_ascii_case("setautocalcfields") =>
+            {
+                (var_key(receiver), false)
+            }
+            PCallee::Bare { name } if name.eq_ignore_ascii_case("setautocalcfields") => {
+                (IMPLICIT_REC.to_string(), true)
+            }
+            _ => continue,
+        };
+        for arg in &cs.argument_texts {
+            out.push((key.clone(), arg.clone(), bare));
+        }
+    }
+    out
+}
+
+/// True when `key` names an object-level record in `routine`: an object
+/// global, or a name the routine does not declare (the implicit `Rec`). A
+/// parameter or local of that name is the routine's own record.
+fn is_object_level(routine: &ModelRoutine, key: &str) -> bool {
+    match routine.variables.iter().find(|v| v.name == key) {
+        Some(v) => v.scope.as_deref() == Some("global"),
+        None => true,
+    }
+}
+
 /// Write every record operation's [`ModelRecordOperation::flow_field_reads`]
 /// (module doc). Runs after record types are resolved and extension fields
 /// merged.
 pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
     let tables = Tables::new(&workspace.tables);
-    for routine in &mut workspace.routines {
-        // `SetAutoCalcFields` calls: receiver variable -> field arguments.
-        let mut auto: HashMap<String, Vec<&str>> = HashMap::new();
-        for cs in &routine.call_sites {
-            if let PCallee::Member { receiver, method } = &cs.callee
-                && method.eq_ignore_ascii_case("setautocalcfields")
-            {
-                auto.entry(var_key(receiver))
+    // `SetAutoCalcFields` on an object-level record: object id -> record key
+    // -> field arguments. Every routine of the object that retrieves that
+    // record gets them.
+    let mut object_auto: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+    for routine in &workspace.routines {
+        for (key, arg, _) in auto_calc_calls(routine) {
+            if is_object_level(routine, &key) {
+                object_auto
+                    .entry(routine.object_id.clone())
                     .or_default()
-                    .extend(cs.argument_texts.iter().map(String::as_str));
+                    .entry(key)
+                    .or_default()
+                    .push(arg);
             }
         }
+    }
+    for routine in &mut workspace.routines {
+        let auto = auto_calc_calls(routine);
+        let shared = object_auto.get(&routine.object_id);
+        // The object-level keys this routine's own scope does not shadow.
+        let shared: Vec<(&str, &[String])> = shared
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| is_object_level(routine, key))
+            .map(|(key, args)| (key.as_str(), args.as_slice()))
+            .collect();
         for op in &mut routine.record_operations {
             let Some(table_id) = op.table_id.as_deref() else {
                 continue;
@@ -306,9 +417,22 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
                     }
                 }
                 o if is_retrieval(o) => {
-                    if let Some(args) = auto.get(&var_key(&op.record_variable_name)) {
-                        for arg in args {
+                    let key = var_key(&op.record_variable_name);
+                    for (k, arg, bare) in &auto {
+                        if *k == key {
                             tables.reads_of(table_id, arg, true, &mut reads);
+                        } else if *bare {
+                            // A bare call under an obsolete `with X do` is a
+                            // call on X: a may-read where X's table has the
+                            // FlowField.
+                            tables.reads_of(table_id, arg, false, &mut reads);
+                        }
+                    }
+                    for (k, args) in &shared {
+                        if *k == key {
+                            for arg in *args {
+                                tables.reads_of(table_id, arg, true, &mut reads);
+                            }
                         }
                     }
                 }
