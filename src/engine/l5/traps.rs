@@ -17,16 +17,38 @@
 //!   semantics": changes are committed at the end of the codeunit unless an
 //!   error occurs). For a codeunit variable's `.Run`, the target must be the
 //!   `OnRun` trigger (a user procedure named `Run` is an ordinary call).
+//!   **A checked run needs a clean transaction**: the same page says "If
+//!   you're already in a transaction you must commit first before calling
+//!   Codeunit.Run"; a checked run inside an open write transaction is itself
+//!   a run-time error, raised at the run. So the forward answers count a
+//!   checked run as a definite trap only where no write may be pending at it
+//!   on any route from the root ([`crate::engine::l5::literal_reach`],
+//!   `LiteralReach::soft_checked_runs`); where one may, the error escapes
+//!   (`escapes-if-write-pending`), and a caught ruling states that it
+//!   assumes the root's own callers have no write pending.
 //! - **TryFunction with its result used** ([`TrapKind::TryFunction`]): a call
-//!   to a `[TryFunction]` routine that is not a statement of its own. Learn
-//!   ("Handling errors using try methods"): "If a try method call doesn't
-//!   use the return value, the try method operates like an ordinary method,
-//!   and errors are exposed as usual"; "If the return variable for a call to
-//!   a function, which is attributed with [TryFunction] isn't used, then the
-//!   call isn't considered a try function call". Learn names `OK :=` and
-//!   `if … then` as uses; any other use of the value (an argument, `exit(…)`)
-//!   is a use too. **A TryFunction does not roll back the database changes
-//!   made before the error** (same page); nothing here says it does.
+//!   to a `[TryFunction]` routine whose value is tested in a shape Learn
+//!   names ([`PCallSite::result_tested`]: the whole right-hand side of
+//!   `Ok := …`, or the whole condition of an `if`, `while` or `until`,
+//!   through parentheses and `not`). Learn ("Handling errors using try
+//!   methods"): "If a try method call doesn't use the return value, the try
+//!   method operates like an ordinary method, and errors are exposed as
+//!   usual"; "If a try method call uses the return value in an `OK:=`
+//!   statement or a conditional statement such as `if-then`, errors are
+//!   caught". Learn names no other shape, and its one argument example
+//!   (`DoWork(DoInsert(Rec)); // Allowed as the DoWork return value isn't
+//!   used so it's not a try function`) does not establish that a try call
+//!   used as an argument traps. So an argument, `exit(TryIt())` or a part of
+//!   `a and TryIt()` is counted as an ordinary call: an error there is
+//!   reported as escaping (it may be caught at run time; never a false
+//!   "no"). **A TryFunction does not roll back the database changes made
+//!   before the error** (same page); nothing here says it does. Not
+//!   modeled, both conservative: on premises with
+//!   `DisableWriteInsideTryFunctions` (the default there) a write inside a
+//!   try method is itself a run-time error, which the answers do not add;
+//!   and Learn says "Arguments for a try function are evaluated inside the
+//!   try function", so an error in such an argument is caught too, while
+//!   the answers report it as escaping.
 //! - **asserterror** ([`TrapKind::Asserterror`]): a call or record operation
 //!   under `asserterror` (a test expects the error).
 //! - **isolated event** ([`TrapKind::IsolatedEvent`]): the dispatch from the
@@ -42,6 +64,13 @@
 //!   this trap is CONDITIONAL ([`TrapKind::definite`] is false): it never
 //!   removes an error from a forward answer, it only states the condition
 //!   under which the error escapes.
+//!
+//! One more checked-run test stays apart: the transaction spans' commit
+//! boundary (`transaction_spans::is_checked_codeunit_run`) counts only
+//! `Codeunit.Run(…)` with its result used, not a codeunit variable's `.Run`.
+//! It answers a different question (where a transaction ends), and moving
+//! it onto this rule would change the commit answers; that is left to a
+//! change of its own (engine limits B7, what is left).
 //!
 //! Not a trap: **`[ErrorBehavior(ErrorBehavior::Collect)]`** (L30). Learn
 //! ("Collecting errors", "Collectible errors API"): only errors raised as a
@@ -141,8 +170,10 @@ pub(crate) fn is_try_function(r: &ModelRoutine) -> bool {
 }
 
 /// The trap a synchronous call `cs` into `callee` sets (module doc), the
-/// asserterror one first; `None` for an ordinary call. A TryFunction called
-/// as a statement is an ordinary call.
+/// asserterror one first; `None` for an ordinary call. A TryFunction call
+/// traps only in a shape Learn names ([`PCallSite::result_tested`]); called
+/// as a statement, or with its value used any other way (an argument,
+/// `exit(…)`), it is counted as an ordinary call.
 #[must_use]
 pub(crate) fn call_trap(cs: &PCallSite, callee: TrapCallee<'_>) -> Option<TrapKind> {
     if cs.under_asserterror == Some(true) {
@@ -152,7 +183,7 @@ pub(crate) fn call_trap(cs: &PCallSite, callee: TrapCallee<'_>) -> Option<TrapKi
         return Some(TrapKind::CheckedRun);
     }
     let into_try = matches!(callee, TrapCallee::Routine(Some(c)) if is_try_function(c));
-    (into_try && !cs.in_statement_position).then_some(TrapKind::TryFunction)
+    (into_try && cs.result_tested).then_some(TrapKind::TryFunction)
 }
 
 /// L30: whether `r` collects errors (`[ErrorBehavior(ErrorBehavior::Collect)]`):

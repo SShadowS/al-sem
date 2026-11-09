@@ -203,6 +203,12 @@ pub struct ProveObligations {
     /// r3 §7 R1: the universe whose subscribers the answer considered
     /// (`literal_reach::universe_words`); empty when not set.
     pub(crate) universe: String,
+    /// B7 review: a `no` or `unknown` that left out an error caught by a
+    /// trap, where a checked `Codeunit.Run` with no write pending within the
+    /// root may be the trap: it holds only if the root's own callers have
+    /// no write pending when they call it (a checked run inside a write
+    /// transaction is itself a run-time error). Stated as an assumption.
+    pub(crate) trap_assumes_clean_entry: bool,
 }
 
 /// r3 §7 R1: the events a cone raises that an unloaded subscriber could
@@ -455,6 +461,7 @@ fn compute_obligations(
         flow_assumed: Vec::new(),
         events_raised: None,
         universe: String::new(),
+        trap_assumes_clean_entry: false,
     }
 }
 
@@ -884,7 +891,7 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
 
 fn evaluate_may_question(
     entry: &DigestEntryFull,
-    oblg: ProveObligations,
+    mut oblg: ProveObligations,
     question: &ProveQuestion,
     witness_truncated: bool,
     via_callers: &HashMap<usize, CallerRef>,
@@ -919,6 +926,15 @@ fn evaluate_may_question(
             obligations: oblg,
         };
     }
+    // B7 review: an error left out as caught, where the trap may be a
+    // checked run, holds only if the root's callers have no write pending.
+    oblg.trap_assumes_clean_entry = entry.effects.iter().any(|e| {
+        effect_matches(e, question)
+            && caught_at(e).is_some()
+            && e.flow_notes
+                .as_deref()
+                .is_some_and(|n| n.trap_assumes_clean_entry)
+    });
 
     // G17b: writes whose table is real only if the caller passes a persistent
     // record. They rule out `no`, but they are no `yes` either.
@@ -1706,11 +1722,7 @@ pub(crate) fn trap_words(
     let n = notes?;
     let mut parts: Vec<String> = Vec::new();
     match &n.trap {
-        Some(TrapVerdict::UnlessWritePending(at)) => parts.push(format!(
-            "escapes only if a write is pending when the event is raised, or during an \
-             install or upgrade; otherwise caught by the {}",
-            at.words()
-        )),
+        Some(TrapVerdict::UnlessWritePending(at)) => parts.push(at.unless_pending_words()),
         Some(TrapVerdict::SomeRoutes(at)) => parts.push(format!(
             "escapes on a route with no trap; caught on others (the {})",
             at.words()
@@ -1750,18 +1762,37 @@ pub(crate) fn trap_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
     Some(serde_json::Value::Object(m))
 }
 
+/// B7/L23: the effect types of `question` a trap acts on (its errors, or
+/// the error dialogs of `reaches-ui`); empty for any other question.
+fn caught_types(question: &str) -> &'static [&'static str] {
+    match parse_question(question) {
+        Some(ProveQuestion::ThrowsError) => &["ERROR_THROW", "ERROR_IMPLICIT"],
+        Some(ProveQuestion::ReachesUi) => &["UI_ERROR"],
+        _ => &[],
+    }
+}
+
+/// B7/L23: the error rows of `effects` of `types` a definite trap catches
+/// on every route.
+fn caught_rows<'e>(
+    effects: &'e [DigestEffectFull],
+    types: &[&str],
+) -> impl Iterator<Item = &'e DigestEffectFull> {
+    effects.iter().filter(move |e| {
+        types.contains(&e.effect_type.as_str()) && !e.literal_unreachable && caught_at(e).is_some()
+    })
+}
+
+/// B7 review: how many [`caught_rows`] there are.
+fn caught_count(effects: &[DigestEffectFull], types: &[&str]) -> usize {
+    caught_rows(effects, types).count()
+}
+
 /// B7/L23: the one line naming the error rows of `effects` a definite trap
 /// catches on every route: their count, and the first one's site and trap.
 /// `None` when there is none.
 pub(crate) fn caught_line(effects: &[DigestEffectFull], types: &[&str]) -> Option<String> {
-    let caught: Vec<&DigestEffectFull> = effects
-        .iter()
-        .filter(|e| {
-            types.contains(&e.effect_type.as_str())
-                && !e.literal_unreachable
-                && caught_at(e).is_some()
-        })
-        .collect();
+    let caught: Vec<&DigestEffectFull> = caught_rows(effects, types).collect();
     let first = caught.first()?;
     let at = caught_at(first)?;
     Some(format!(
@@ -1985,6 +2016,11 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
             "literalNarrowedSites".into(),
             (o.literal_narrowed_sites as u64).into(),
         );
+    }
+    // B7 review (additive): present only when a caught error may rest on a
+    // checked run, which holds only if the callers have no write pending.
+    if o.trap_assumes_clean_entry {
+        m.insert("assumesNoPendingWriteAtEntry".into(), true.into());
     }
     serde_json::Value::Object(m)
 }
@@ -2854,7 +2890,17 @@ pub fn format_prove_human(
             if paths.is_some()
                 && let Some(site) = effect_site_noun(question) =>
         {
-            negative_answer(&site)
+            // B7 review: a `no` that left errors out as caught says so in
+            // the headline, not only on the caught line below.
+            match caught_count(effects, caught_types(question)) {
+                0 => negative_answer(&site),
+                n => format!(
+                    "  answer:   no — no {site} escapes the routine; {} caught on every route \
+                     by a trap (every candidate decided; {})",
+                    crate::engine::l5::routine_rollup::plural(n, "error site", "error sites"),
+                    crate::engine::l5::prove_slice::STATIC_LABEL
+                ),
+            }
         }
         a => format!("  answer:   {}", a.as_str()),
     });
@@ -3206,12 +3252,7 @@ pub fn format_prove_human(
 
     // B7/L23: the errors a definite trap catches on every route, counted
     // and the first one placed (they are no evidence).
-    let caught_types: &[&str] = match parse_question(question) {
-        Some(ProveQuestion::ThrowsError) => &["ERROR_THROW", "ERROR_IMPLICIT"],
-        Some(ProveQuestion::ReachesUi) => &["UI_ERROR"],
-        _ => &[],
-    };
-    if let Some(line) = caught_line(effects, caught_types) {
+    if let Some(line) = caught_line(effects, caught_types(question)) {
         lines.push(line);
     }
 
@@ -3620,6 +3661,14 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
         ));
     }
     out.extend(crate::engine::l5::literal_reach::AssumptionRecord::sentences(&o.flow_assumed));
+    if o.trap_assumes_clean_entry {
+        out.push(
+            "assumes the routine's callers have no write pending when they call it: an error \
+             left out as caught may rest on a checked Codeunit.Run, and a checked run inside a \
+             write transaction is itself a run-time error"
+                .to_string(),
+        );
+    }
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
@@ -4084,6 +4133,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             flow_assumed: Vec::new(),
             events_raised: None,
             universe: String::new(),
+            trap_assumes_clean_entry: false,
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -4551,7 +4601,7 @@ pub(crate) fn filtered_result(
     unfiltered: &ProveResult,
     slice: &crate::engine::l5::prove_slice::SliceOut,
 ) -> ProveResult {
-    let oblg = unfiltered.obligations.clone();
+    let mut oblg = unfiltered.obligations.clone();
     if slice.matching().next().is_some() {
         return ProveResult {
             answer: ProveAnswer::Yes,
@@ -4560,6 +4610,9 @@ pub(crate) fn filtered_result(
             obligations: oblg,
         };
     }
+    // B7 review: a site left out as caught, where the trap may be a checked
+    // run, holds only if the root's callers have no write pending.
+    oblg.trap_assumes_clean_entry |= slice.caught_assumes_clean_entry;
     let mut blockers: Vec<ProveBlocker> = Vec::new();
     if !slice.complete {
         blockers.push(ProveBlocker {

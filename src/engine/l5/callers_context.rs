@@ -1443,13 +1443,25 @@ impl<'a, 'c> Visitor<'a, 'c> {
         let into_try = matches!(callee, TrapCallee::Routine(Some(t)) if is_try_function(t));
         if into_try && st.boundary == Boundary::Sync {
             if trap != Some(TrapKind::TryFunction) {
-                self.not_intercepted.insert(format!(
-                    "{} called as a statement at {}: its result is discarded, so it is an \
-                     ordinary call",
-                    cs.callee_text,
-                    at.as_ref()
-                        .map_or(String::new(), |(f, l)| format!("{f}:{l}"))
-                ));
+                let place = at
+                    .as_ref()
+                    .map_or(String::new(), |(f, l)| format!("{f}:{l}"));
+                self.not_intercepted.insert(if cs.in_statement_position {
+                    format!(
+                        "{} called as a statement at {place}: its result is discarded, so it is \
+                         an ordinary call",
+                        cs.callee_text
+                    )
+                } else {
+                    // B7: Learn names only `Ok := …` and a condition as a try
+                    // call ([`crate::engine::l5::traps`]).
+                    format!(
+                        "{} at {place}: its result is used, but not as `Ok := …` or a whole \
+                         condition, the shapes Microsoft Learn names for a try call; counted as \
+                         an ordinary call",
+                        cs.callee_text
+                    )
+                });
                 return SiteEval::default();
             }
             self.witness(

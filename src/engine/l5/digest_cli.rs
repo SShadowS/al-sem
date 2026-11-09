@@ -2041,7 +2041,6 @@ fn judge_traps<'t>(
     root_tree: &mut Option<Option<crate::engine::l5::literal_reach::LiveTree<'t>>>,
     entry: &mut DigestEntryResult,
 ) {
-    use crate::engine::l5::literal_reach::Untrap;
     let partial = |t: &str| entry.partial_site_types.iter().any(|p| p == t);
     // A boundary group (errors beyond a call into dependency code) is ruled
     // by its crossing's site: every error beyond it is caught when every
@@ -2064,21 +2063,11 @@ fn judge_traps<'t>(
     else {
         return;
     };
-    let (definite, isolated) = reach.traps_reached(full);
+    let scope = reach.trap_scope(&entry.routine_id, full);
     let collectors = reach.collectors_reached(full);
-    if !definite && !isolated && !collectors {
+    if scope.is_none() && !collectors {
         return;
     }
-    let untrapped = if definite || isolated {
-        reach.open_reach(&entry.routine_id, Untrap::Definite)
-    } else {
-        None
-    };
-    let all = if isolated {
-        reach.open_reach(&entry.routine_id, Untrap::All)
-    } else {
-        None
-    };
     for i in rows {
         let e = &mut entry.effects[i];
         let ops: Vec<String> = if e.boundary_group {
@@ -2108,9 +2097,15 @@ fn judge_traps<'t>(
             }
             ops
         };
-        let trap = untrapped
+        let trap = scope
             .as_ref()
-            .and_then(|u| reach.trap_verdict(full, u, all.as_ref(), &ops));
+            .and_then(|s| reach.trap_verdict(full, s, &ops));
+        // B7 review: a caught ruling that may rest on a checked run assumes
+        // the root's callers have no write pending.
+        let assumes_clean_entry = matches!(
+            trap,
+            Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
+        ) && scope.as_ref().is_some_and(|s| s.clean_checked);
         let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
             reach
                 .tree_witness(full, &ops)
@@ -2122,6 +2117,7 @@ fn judge_traps<'t>(
         if trap.is_some() || !collected_by.is_empty() {
             let notes = e.flow_notes.get_or_insert_with(Default::default);
             notes.trap = trap;
+            notes.trap_assumes_clean_entry = assumes_clean_entry;
             notes.collected_by = collected_by;
         }
     }

@@ -147,6 +147,151 @@ codeunit 50304 "B7 Iso Subscriber"
         Error('iso failed');
     end;
 }
+
+table 50300 "B7 Rec"
+{
+    fields
+    {
+        field(1; "No."; Integer) { }
+        field(2; V; Integer) { }
+    }
+    keys
+    {
+        key(PK; "No.") { }
+    }
+}
+
+codeunit 50305 "B7 More"
+{
+    // B7 review: a TryFunction traps only in the shapes Learn names.
+    procedure TryAsArgument()
+    begin
+        Use(TryIt2());
+    end;
+
+    procedure TryInExit(): Boolean
+    begin
+        exit(TryIt2());
+    end;
+
+    procedure TryAssigned(): Boolean
+    var
+        Ok: Boolean;
+    begin
+        Ok := TryIt2();
+        exit(Ok);
+    end;
+
+    procedure TryInWhile()
+    begin
+        while not TryIt2() do
+            exit;
+    end;
+
+    local procedure Use(B: Boolean)
+    begin
+    end;
+
+    [TryFunction]
+    local procedure TryIt2()
+    begin
+        Error('try2 failed');
+    end;
+
+    // B7 review: a checked run inside an open write transaction is itself
+    // a run-time error.
+    procedure WriteThenRun()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    procedure WriteCommitRun()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        Commit();
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    procedure TempWriteThenRun()
+    var
+        R: Record "B7 Rec" temporary;
+    begin
+        R.ModifyAll(V, 1);
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    procedure CalleeWritesThenRun()
+    begin
+        DoWrite();
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    procedure WriteThenHelperRuns()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+        HelperRuns();
+    end;
+
+    procedure HelperRuns()
+    begin
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+    end;
+
+    local procedure DoWrite()
+    var
+        R: Record "B7 Rec";
+    begin
+        R.ModifyAll(V, 1);
+    end;
+
+    // B7 review: the trap-free route goes through deeper callees.
+    procedure DeepBoth()
+    begin
+        if not Codeunit.Run(Codeunit::"B7 Thrower") then
+            exit;
+        Middle();
+    end;
+
+    local procedure Middle()
+    begin
+        Deeper();
+    end;
+
+    local procedure Deeper()
+    var
+        T: Codeunit "B7 Thrower";
+    begin
+        T.Run();
+    end;
+
+    // B7 review: a Commit before the run in the same loop iteration ends
+    // the writes of earlier iterations too (CDO's SendQueue shape).
+    procedure LoopCommitRun()
+    var
+        R: Record "B7 Rec";
+        I: Integer;
+    begin
+        for I := 1 to 2 do begin
+            R.ModifyAll(V, I);
+            Commit();
+            if Codeunit.Run(Codeunit::"B7 Thrower") then;
+        end;
+    end;
+
+    // B7 review: a caught error beside one that escapes.
+    procedure RunAndFail()
+    begin
+        if Codeunit.Run(Codeunit::"B7 Thrower") then;
+        Error('other failed');
+    end;
+}
 "#;
 
 fn run(cwd: &Path, args: &[&str]) -> Vec<u8> {
@@ -498,4 +643,154 @@ fn explain_and_digest_do_not_list_a_caught_error_as_the_routines_own() {
         ],
     );
     assert!(explain.contains("errors at 1 place"), "{explain}");
+}
+
+fn prove_human(ws: &Ws, routine: &str, extra: &[&str]) -> String {
+    let mut args = vec![
+        "prove",
+        "ws",
+        ws.id(routine),
+        "throws-error",
+        "--format",
+        "human",
+    ];
+    args.extend_from_slice(extra);
+    human(&ws.root, &args)
+}
+
+#[test]
+fn a_tryfunction_traps_only_in_the_shapes_learn_names() {
+    // Microsoft Learn names `OK :=` and a condition (`if`) as a try call;
+    // its argument example (`DoWork(DoInsert(Rec))`) does not establish
+    // that a try call used as an argument traps. So an argument and
+    // `exit(…)` are ordinary calls: the error is reported as escaping.
+    let ws = Ws::new();
+    for routine in ["TryAsArgument", "TryInExit"] {
+        let p = ws.prove(routine, &[]);
+        assert_eq!(p["result"]["answer"], "yes", "{routine}: {}", p["result"]);
+        let rows = error_rows(&p["result"]);
+        assert!(
+            !rows.is_empty() && rows.iter().all(|(_, v)| v.is_none()),
+            "{routine}: escaping rows, no trap: {rows:?}"
+        );
+        let p = ws.prove(routine, &["--match", "try2"]);
+        assert_eq!(
+            p["result"]["answer"], "yes",
+            "{routine} --match: {}",
+            p["result"]
+        );
+    }
+    // The named shapes trap (assignment; a `while not …` condition).
+    for routine in ["TryAssigned", "TryInWhile"] {
+        let p = ws.prove(routine, &[]);
+        assert_eq!(p["result"]["answer"], "no", "{routine}: {}", p["result"]);
+    }
+}
+
+#[test]
+fn a_checked_run_with_a_write_pending_is_no_definite_trap() {
+    // Learn ("Codeunit.Run", Transaction semantics): "If you're already in
+    // a transaction you must commit first before calling Codeunit.Run"; a
+    // checked run inside a write transaction is itself a run-time error.
+    let ws = Ws::new();
+    for routine in ["WriteThenRun", "CalleeWritesThenRun", "WriteThenHelperRuns"] {
+        let p = ws.prove(routine, &[]);
+        assert_eq!(p["result"]["answer"], "yes", "{routine}: {}", p["result"]);
+        let ev = p["result"]["evidence"].as_array().unwrap();
+        assert!(
+            ev.iter()
+                .any(|e| e["trap"]["verdict"] == "escapes-if-write-pending"
+                    && e["trap"]["kind"] == "checked-run"),
+            "{routine}: {}",
+            p["result"]
+        );
+        let p = ws.prove(routine, &["--match", "thrower"]);
+        assert_eq!(
+            p["result"]["answer"], "yes",
+            "{routine} --match: {}",
+            p["result"]
+        );
+        let h = prove_human(&ws, routine, &[]);
+        assert!(
+            h.contains(
+                "a checked Codeunit.Run inside a write transaction is itself a run-time error"
+            ),
+            "{routine}: {h}"
+        );
+    }
+    // Controls: a Commit() before the run ends the transaction, a write to a
+    // temporary record is none, and the helper asked on its own has no write
+    // before its run. Each is `no`, and states the callers' precondition.
+    for routine in [
+        "WriteCommitRun",
+        "LoopCommitRun",
+        "TempWriteThenRun",
+        "HelperRuns",
+        "CheckedRun",
+    ] {
+        let p = ws.prove(routine, &[]);
+        assert_eq!(p["result"]["answer"], "no", "{routine}: {}", p["result"]);
+        assert_eq!(
+            p["result"]["obligations"]["assumesNoPendingWriteAtEntry"], true,
+            "{routine}: {}",
+            p["result"]
+        );
+        let h = prove_human(&ws, routine, &[]);
+        assert!(
+            h.contains("assumes the routine's callers have no write pending when they call it"),
+            "{routine}: {h}"
+        );
+        assert!(
+            h.contains("no error site escapes the routine; 1 error site caught on every route"),
+            "{routine}: {h}"
+        );
+        let h = prove_human(&ws, routine, &["--match", "thrower"]);
+        assert!(
+            h.contains("assumes the routine's callers have no write pending when they call it"),
+            "{routine} --match: {h}"
+        );
+    }
+    // The filtered question states it too when the unfiltered answer is a
+    // `yes` (another error escapes) and so states nothing.
+    let p = ws.prove("RunAndFail", &[]);
+    assert_eq!(
+        p["result"]["answer"], "yes",
+        "precondition: {}",
+        p["result"]
+    );
+    let p = ws.prove("RunAndFail", &["--match", "thrower"]);
+    assert_eq!(p["result"]["answer"], "no", "{}", p["result"]);
+    assert_eq!(
+        p["result"]["obligations"]["assumesNoPendingWriteAtEntry"], true,
+        "{}",
+        p["result"]
+    );
+    // A caught ruling that rests on no checked run states no such thing.
+    let p = ws.prove("CheckedTry", &[]);
+    assert_eq!(p["result"]["answer"], "no", "{}", p["result"]);
+    assert!(
+        p["result"]["obligations"]["assumesNoPendingWriteAtEntry"].is_null(),
+        "{}",
+        p["result"]
+    );
+}
+
+#[test]
+fn a_trap_free_route_through_deeper_callees_is_printed() {
+    let ws = Ws::new();
+    let p = ws.prove("DeepBoth", &[]);
+    assert_eq!(p["result"]["answer"], "yes", "{}", p["result"]);
+    assert!(
+        error_rows(&p["result"])
+            .iter()
+            .any(|(_, v)| v.as_deref() == Some("trapped-on-some-routes")),
+        "{}",
+        p["result"]
+    );
+    let h = prove_human(&ws, "DeepBoth", &["--match", "thrower"]);
+    assert!(
+        h.contains("escapes on the route below (no trap on it)"),
+        "{h}"
+    );
+    assert!(h.contains("Deeper"), "the route goes through Deeper: {h}");
 }

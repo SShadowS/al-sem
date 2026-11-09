@@ -45,7 +45,7 @@
 use crate::engine::l5::group_path::{GroupPath, GroupPaths};
 pub use crate::engine::l5::literal_reach::routes::{ROUTE_CAP, ROUTE_EDGE_BUDGET};
 use crate::engine::l5::literal_reach::routes::{RouteCounts, RouteLimit, StateGraph};
-use crate::engine::l5::literal_reach::{LiteralReach, LiveTree, TrapAt, TrapVerdict, Untrap};
+use crate::engine::l5::literal_reach::{LiteralReach, LiveTree, TrapAt, TrapVerdict};
 use crate::engine::l5::prove::{ProveQuestion, UI_TYPES, name_or_id_matches};
 use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
@@ -451,6 +451,10 @@ pub struct SliceSite {
     /// trapped; `None` otherwise (a site caught on every route is in
     /// [`SliceOut::caught`], not here).
     pub(crate) trap: Option<TrapVerdict>,
+    /// B7 review: `route` was found by the search that crosses no definite
+    /// trap (a [`TrapVerdict::SomeRoutes`] site's escaping route); `false`
+    /// when that search could not give one and `route` is a trapped one.
+    pub(crate) route_trap_free: bool,
 }
 
 /// B7/L23: an error site a definite trap catches on every route from the
@@ -495,6 +499,10 @@ pub struct SliceOut {
     /// B7/L23: error sites the root reaches only through a definite trap
     /// (they never leave the root): not listed, never a match.
     pub caught: Vec<CaughtSite>,
+    /// B7 review: a caught ruling may rest on a checked run with no write
+    /// pending within the root: it holds only if the root's own callers have
+    /// no write pending when they call it (the answer states this).
+    pub caught_assumes_clean_entry: bool,
 }
 
 impl SliceOut {
@@ -869,6 +877,7 @@ pub(crate) fn compute_slice(
         literal_dead: 0,
         temporary: 0,
         caught: Vec::new(),
+        caught_assumes_clean_entry: false,
     };
     // E2: above one route, the state-transition graph, whose tree is the
     // search tree E1 reads (the same search, every transition kept).
@@ -926,16 +935,10 @@ pub(crate) fn compute_slice(
     // errors question's sites, and the error dialogs, `UI_ERROR`, of the UI
     // question.)
     let trapped_question = matches!(req.question, SliceQuestion::Errors | SliceQuestion::Ui);
-    let (untrapped, untrapped_all) = match trapped_question.then(|| reach.traps_reached(live)) {
-        Some((definite, isolated)) if definite || isolated => (
-            reach.open_reach(root, Untrap::Definite),
-            if isolated {
-                reach.open_reach(root, Untrap::All)
-            } else {
-                None
-            },
-        ),
-        _ => (None, None),
+    let scope = if trapped_question {
+        reach.trap_scope(root, live)
+    } else {
+        None
     };
     // The guarded search that crosses no definite trap, built only for a
     // matching site that escapes on some routes (its printed route).
@@ -968,6 +971,7 @@ pub(crate) fn compute_slice(
                 route: None,
                 routes: None,
                 trap: None,
+                route_trap_free: false,
             };
             sites.push((site, None));
             continue;
@@ -981,12 +985,15 @@ pub(crate) fn compute_slice(
             out.temporary += 1;
             continue;
         }
-        let trap = untrapped
+        let trap = scope
             .as_ref()
             .filter(|_| crate::engine::l5::digest_cli::is_error_row_type(rec.effect_type))
-            .and_then(|u| reach.trap_verdict(live, u, untrapped_all.as_ref(), &ops));
+            .and_then(|s| reach.trap_verdict(live, s, &ops));
         if let Some(TrapVerdict::Caught(at)) = &trap {
             let anchor = r.and_then(|r| anchor_in(r, rec.terminal.id()));
+            // B7 review: the ruling may rest on a checked run, which holds
+            // only if the root's callers have no write pending.
+            out.caught_assumes_clean_entry |= scope.as_ref().is_some_and(|s| s.clean_checked);
             out.caught.push(CaughtSite {
                 file: anchor.map(|a| a.source_unit_id.clone()),
                 line: anchor.map(|a| a.start_line),
@@ -1031,6 +1038,7 @@ pub(crate) fn compute_slice(
             route: None,
             routes: None,
             trap,
+            route_trap_free: false,
         };
         site.outcome = outcome(req, &site, caller_dependent);
         sites.push((site, Some(ops)));
@@ -1064,13 +1072,14 @@ pub(crate) fn compute_slice(
         let anchor = reach.routine(&owner).and_then(|r| anchor_in(r, &ops[0]));
         // B7/L23: a site that escapes on some routes only prints a route
         // that crosses no trap (the first route found is trapped).
-        let open = match &sites[i].0.trap {
-            Some(TrapVerdict::SomeRoutes(_)) => open_tree
-                .get_or_insert_with(|| reach.untrapped_tree(root, Untrap::Definite))
+        let open = match (&sites[i].0.trap, &scope) {
+            (Some(TrapVerdict::SomeRoutes(_)), Some(sc)) => open_tree
+                .get_or_insert_with(|| reach.untrapped_tree(root, sc))
                 .as_ref()
                 .and_then(|u| group_paths.own_path(&reach, Some(u), &ops).ok()),
             _ => None,
         };
+        sites[i].0.route_trap_free = open.is_some();
         let route = match open.map_or_else(|| group_paths.own_path(&reach, Some(live), &ops), Ok) {
             Ok(path) => {
                 let rs = route_sites(&reach, root, &path, (&owner, anchor));
@@ -1398,13 +1407,19 @@ pub fn human_lines(
         lines.push(row);
         // B7/L23: the traps on its routes.
         match &s.trap {
-            Some(TrapVerdict::UnlessWritePending(at)) => lines.push(format!(
-                "    escapes only if a write is pending when the event is raised, or during an \
-                 install or upgrade; otherwise caught by the {}",
+            Some(TrapVerdict::UnlessWritePending(at)) => {
+                lines.push(format!("    {}", at.unless_pending_words()));
+            }
+            Some(TrapVerdict::SomeRoutes(at)) if s.route_trap_free => lines.push(format!(
+                "    escapes on the route below (no trap on it); other routes are caught by the {}",
                 at.words()
             )),
+            // No trap-free route could be printed (its search stopped at the
+            // cap, or the literal arguments rule it out): the route below is
+            // a trapped one.
             Some(TrapVerdict::SomeRoutes(at)) => lines.push(format!(
-                "    escapes on the route below (no trap on it); other routes are caught by the {}",
+                "    may escape on a route with no trap, which could not be printed; the route \
+                 below is caught by the {}",
                 at.words()
             )),
             _ => {}

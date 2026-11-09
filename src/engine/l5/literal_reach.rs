@@ -354,6 +354,11 @@ pub(crate) struct FlowNotes {
     /// B7/L23: an error row's traps ([`TrapVerdict`]); `None` off error
     /// rows, and when no trap is on its routes or no search decided it.
     pub trap: Option<TrapVerdict>,
+    /// B7 review: the row is [`TrapVerdict::Caught`] and a checked run with
+    /// no write pending within the root is in the root's reach, so the
+    /// ruling may rest on it: it holds only if the root's own callers have
+    /// no write pending when they call the root ([`TrapScope::clean_checked`]).
+    pub trap_assumes_clean_entry: bool,
     /// L30: the routines with `[ErrorBehavior(ErrorBehavior::Collect)]` on
     /// the row's listed route (the root first): a collectible error raised
     /// under one is collected and raised when it ends, unless the code
@@ -1562,24 +1567,70 @@ pub(crate) struct LiteralReach<'a> {
     /// L30: the routines (stable ids) that collect errors
     /// ([`crate::engine::l5::traps::collects_errors`]).
     collectors: HashSet<&'a str>,
+    /// B7 review: the call sites the resolver classified as platform methods
+    /// (no AL code runs behind them, so they leave no write pending).
+    builtin_sites: HashSet<&'a str>,
+    /// B7 review: the write facts a checked run's "is a write pending"
+    /// question reads ([`PendingWrites`]); `None` when the snapshot has no
+    /// checked run. (Built with the reach, not on first need: a cell would
+    /// make `LiteralReach` invariant in `'a`.)
+    pending: Option<PendingWrites<'a>>,
+}
+
+/// B7 review (a checked run inside an open write transaction): the write
+/// facts of the whole snapshot, for "may a write be pending here".
+struct PendingWrites<'a> {
+    /// The operation ids of writes that are not known temporary (a
+    /// parameter-dependent or unknown temp state counts as a write).
+    write_sites: HashSet<&'a str>,
+    /// The routines with such a write that has no site (it counts at entry).
+    siteless_writers: HashSet<&'a str>,
+    /// The routines that may leave a write pending when they return: a
+    /// write of their own, a call no edge resolves (unknown code), a callee
+    /// with no row, or a callee that may, except through a checked run (its
+    /// writes are committed or rolled back by the run).
+    may_write: HashSet<&'a str>,
+    /// Per routine, its in-edges as (caller, position in the caller's `out`).
+    rev: HashMap<&'a str, Vec<(&'a str, u32)>>,
 }
 
 /// B7/L23: which traps an error search does not cross.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Untrap {
-    /// Cross every edge (the ordinary search).
-    Off,
-    /// Do not cross a definite trap ([`TrapKind::definite`]).
+enum Untrap {
+    /// Do not cross a definite trap: a used TryFunction, asserterror, and a
+    /// checked run no write may be pending at ([`TrapScope::soft`]).
     Definite,
-    /// Do not cross any trap, isolated events included.
+    /// Do not cross any trap: isolated events and checked runs a write may
+    /// be pending at included.
     All,
 }
 
-impl Untrap {
-    fn stops(self, k: TrapKind) -> bool {
-        match self {
-            Untrap::Off => false,
-            Untrap::Definite => k.definite(),
+/// B7/L23: the traps one root's error rulings read, built once per root
+/// ([`LiteralReach::trap_scope`]).
+pub(crate) struct TrapScope<'a> {
+    /// The checked runs (caller, out-edge position) in the root's reach at
+    /// which a write may be pending on some route from the root (B7
+    /// review): such a run is itself a run-time error when the write is
+    /// pending (Microsoft Learn, "Codeunit.Run(Integer [, var Record])
+    /// Method", Transaction semantics), so it is no definite trap.
+    soft: HashSet<(&'a str, u32)>,
+    /// A checked run no write may be pending at (within the root) is in
+    /// reach: a ruling "caught" may rest on it, which holds only if the
+    /// root's own callers have no write pending when they call it.
+    pub clean_checked: bool,
+    /// The root's reach that crosses no definite trap.
+    definite: OpenReach<'a>,
+    /// The root's reach that crosses no trap; `None` when every trap in
+    /// reach is definite.
+    all: Option<OpenReach<'a>>,
+}
+
+impl TrapScope<'_> {
+    /// Whether the search `untrap` does not cross the trap edge `(f, j)` of
+    /// kind `k`.
+    fn stops(&self, untrap: Untrap, f: &str, j: u32, k: TrapKind) -> bool {
+        match untrap {
+            Untrap::Definite => k.definite() && !self.soft.contains(&(f, j)),
             Untrap::All => true,
         }
     }
@@ -1616,6 +1667,24 @@ impl TrapAt {
             _ => self.kind.words().to_string(),
         }
     }
+
+    /// The condition of a [`TrapVerdict::UnlessWritePending`] ruling at this
+    /// trap, in words.
+    pub(crate) fn unless_pending_words(&self) -> String {
+        match self.kind {
+            TrapKind::CheckedRun => format!(
+                "a write may be pending at the {}: a checked Codeunit.Run inside a write \
+                 transaction is itself a run-time error, raised there; with no write pending it \
+                 catches the error",
+                self.words()
+            ),
+            _ => format!(
+                "escapes only if a write is pending when the event is raised, or during an \
+                 install or upgrade; otherwise caught by the {}",
+                self.words()
+            ),
+        }
+    }
 }
 
 /// B7/L23: how the traps on the routes from a root to an error site decide
@@ -1626,11 +1695,12 @@ pub(crate) enum TrapVerdict {
     /// Every route crosses a definite trap: the error does not escape the
     /// root. `at` is the trap on the root's first witness route.
     Caught(TrapAt),
-    /// Every route crosses a trap, and some cross only an isolated event's:
-    /// the error escapes only when a write is pending as the event is
-    /// raised, or during an install or upgrade (Microsoft Learn,
-    /// "Isolated events in AL"). `at` is the isolated event on a route
-    /// that crosses no definite trap.
+    /// Every route crosses a trap, and some cross only traps that fail with
+    /// a write pending: an isolated event's (the error then escapes, and
+    /// during an install or upgrade too; Microsoft Learn, "Isolated events
+    /// in AL"), or a checked run a write may be pending at (the run is then
+    /// itself a run-time error; "Codeunit.Run(Integer [, var Record])
+    /// Method"). `at` is that trap on a route that crosses no definite trap.
     UnlessWritePending(TrapAt),
     /// Some route crosses no trap (the error escapes), and the root's first
     /// witness route crosses one: the listed route is not the escaping one.
@@ -1910,7 +1980,7 @@ impl<'a> LiteralReach<'a> {
         } else {
             flow.relevance(seeds)
         };
-        LiteralReach {
+        let mut reach = LiteralReach {
             out,
             by_stable,
             frames,
@@ -1935,7 +2005,19 @@ impl<'a> LiteralReach<'a> {
                 .filter(|r| crate::engine::l5::traps::collects_errors(r))
                 .map(|r| r.stable_routine_id.as_str())
                 .collect(),
+            builtin_sites,
+            pending: None,
+        };
+        // B7 review: the write facts, only when some checked run needs them.
+        if reach
+            .traps
+            .values()
+            .flatten()
+            .any(|&(_, k)| k == TrapKind::CheckedRun)
+        {
+            reach.pending = Some(reach.build_pending_writes());
         }
+        reach
     }
 
     /// Whether the out-edge of `f` to `to` (of edge kind `kind`) leaving at
@@ -2551,7 +2633,7 @@ impl<'a> LiteralReach<'a> {
         cancel: &dyn Fn() -> bool,
         rec: Option<&mut routes::Recorder<'a>>,
     ) -> Result<LiveTree<'a>, Stop> {
-        self.tree_recording_m(start, cap, cancel, rec, ALL, Untrap::Off)
+        self.tree_recording_m(start, cap, cancel, rec, ALL, None)
     }
 
     /// [`Self::tree_recording`]; `keep` as in [`Self::dead_at_m`]; `untrap`:
@@ -2563,7 +2645,7 @@ impl<'a> LiteralReach<'a> {
         cancel: &dyn Fn() -> bool,
         mut rec: Option<&mut routes::Recorder<'a>>,
         keep: &Keeps,
-        untrap: Untrap,
+        untrap: Option<&TrapScope<'a>>,
     ) -> Result<LiveTree<'a>, Stop> {
         let mut parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>> =
             HashMap::from([(start.clone(), None)]);
@@ -2581,15 +2663,16 @@ impl<'a> LiteralReach<'a> {
                 r.open_state();
             }
             let traps = match untrap {
-                Untrap::Off => &[][..],
-                _ => self.traps.get(f).map_or(&[][..], Vec::as_slice),
+                None => &[][..],
+                Some(_) => self.traps.get(f).map_or(&[][..], Vec::as_slice),
             };
             for (j, &(to, edge_site, binds, kind)) in
                 self.out.get(f).into_iter().flatten().enumerate()
             {
-                if traps
-                    .iter()
-                    .any(|&(t, k)| t as usize == j && untrap.stops(k))
+                if let Some(scope) = untrap
+                    && traps
+                        .iter()
+                        .any(|&(t, k)| t as usize == j && scope.stops(Untrap::Definite, f, t, k))
                 {
                     continue;
                 }
@@ -2683,12 +2766,11 @@ impl<'a> LiteralReach<'a> {
         Some((tree.steps_to(state), op))
     }
 
-    /// B7/L23: the guarded search from `root` that does not cross the traps
-    /// `untrap` stops, following no publisher keep verdict: a ruling that
-    /// an error is caught never rests on the loaded-subscriber assumption
-    /// (no keep followed reaches at least what any keep choice reaches).
-    /// `None` when it hits the cap, or for a root the model has no row for.
-    pub(crate) fn untrapped_tree(&self, root: &str, untrap: Untrap) -> Option<LiveTree<'a>> {
+    /// B7/L23: the guarded search from `root` that crosses no definite trap
+    /// of `scope`, following no publisher keep verdict: it finds a route
+    /// that escapes every definite trap, for printing. `None` when it hits
+    /// the cap, or for a root the model has no row for.
+    pub(crate) fn untrapped_tree(&self, root: &str, scope: &TrapScope<'a>) -> Option<LiveTree<'a>> {
         let (&root, _) = self.by_stable.get_key_value(root)?;
         self.tree_recording_m(
             (root, Bindings::default()),
@@ -2696,16 +2778,15 @@ impl<'a> LiteralReach<'a> {
             &|| false,
             None,
             NONE,
-            untrap,
+            Some(scope),
         )
         .ok()
     }
 
-    /// B7/L23: whether a definite trap, and whether an isolated event's,
-    /// leaves a routine `tree` reaches (a root with neither needs no error
-    /// search of its own).
-    pub(crate) fn traps_reached(&self, tree: &LiveTree<'a>) -> (bool, bool) {
-        let (mut definite, mut isolated) = (false, false);
+    /// B7/L23: whether a trap of a definite kind, an isolated event's, and
+    /// a checked run leave a routine `tree` reaches.
+    fn traps_reached(&self, tree: &LiveTree<'a>) -> (bool, bool, bool) {
+        let (mut definite, mut isolated, mut checked) = (false, false, false);
         for (f, list) in &self.traps {
             if tree.states_of(f).is_empty() {
                 continue;
@@ -2716,9 +2797,261 @@ impl<'a> LiteralReach<'a> {
                 } else {
                     isolated = true;
                 }
+                checked |= k == TrapKind::CheckedRun;
             }
         }
-        (definite, isolated)
+        (definite, isolated, checked)
+    }
+
+    /// B7/L23: the traps root's error rulings read ([`TrapScope`]), from its
+    /// ordinary search `tree`. `None` when no trap is in its reach (no
+    /// ruling to make), or for a root the model has no row for.
+    pub(crate) fn trap_scope(&self, root: &str, tree: &LiveTree<'a>) -> Option<TrapScope<'a>> {
+        let (definite, isolated, checked) = self.traps_reached(tree);
+        if !definite && !isolated {
+            return None;
+        }
+        let (soft, clean_checked) = if checked {
+            self.soft_checked_runs(root)?
+        } else {
+            (HashSet::new(), false)
+        };
+        let mut scope = TrapScope {
+            soft,
+            clean_checked,
+            definite: OpenReach {
+                parent: HashMap::new(),
+            },
+            all: None,
+        };
+        let definite = self.open_reach(root, &|f, j, k| scope.stops(Untrap::Definite, f, j, k))?;
+        scope.definite = definite;
+        if isolated || !scope.soft.is_empty() {
+            scope.all = Some(self.open_reach(root, &|_, _, _| true)?);
+        }
+        Some(scope)
+    }
+
+    /// Whether out-edge `j` of `f` is a checked run.
+    fn is_checked_run_edge(&self, f: &str, j: u32) -> bool {
+        self.traps
+            .get(f)
+            .is_some_and(|l| l.iter().any(|&(t, k)| t == j && k == TrapKind::CheckedRun))
+    }
+
+    /// B7 review: the snapshot's write facts ([`PendingWrites`]).
+    fn build_pending_writes(&self) -> PendingWrites<'a> {
+        use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
+        {
+            let mut write_sites = HashSet::new();
+            let mut siteless_writers = HashSet::new();
+            let mut seeds: HashSet<&'a str> = HashSet::new();
+            for rec in self.terminals.records() {
+                if !matches!(rec.effect_type, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE")
+                    || matches!(rec.temp, TerminalTemp::Known(true))
+                {
+                    continue;
+                }
+                seeds.insert(rec.owner);
+                match rec.terminal {
+                    TerminalSite::None => {
+                        siteless_writers.insert(rec.owner);
+                    }
+                    t => {
+                        write_sites.insert(t.id());
+                    }
+                }
+            }
+            let mut rev: HashMap<&'a str, Vec<(&'a str, u32)>> = HashMap::new();
+            for (&f, list) in &self.out {
+                for (j, &(to, _, _, _)) in list.iter().enumerate() {
+                    let j = u32::try_from(j).expect("an edge position fits u32");
+                    rev.entry(to).or_default().push((f, j));
+                    // A callee with no row: its code is not known.
+                    if !self.by_stable.contains_key(to) {
+                        seeds.insert(to);
+                    }
+                }
+            }
+            // A call no edge resolves (not a platform method): unknown code.
+            for (&id, r) in &self.by_stable {
+                let sited: HashSet<&str> = self
+                    .out
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|&(_, s, _, _)| s.and_then(EdgeSite::guarded))
+                    .collect();
+                if r.call_sites.iter().any(|c| {
+                    !sited.contains(c.id.as_str()) && !self.builtin_sites.contains(c.id.as_str())
+                }) {
+                    seeds.insert(id);
+                }
+            }
+            let mut may_write = seeds.clone();
+            let mut q: VecDeque<&'a str> = seeds.into_iter().collect();
+            while let Some(x) = q.pop_front() {
+                for &(p, j) in rev.get(x).map_or(&[][..], Vec::as_slice) {
+                    // A checked run's writes end with it (committed, or
+                    // rolled back on an error).
+                    if !self.is_checked_run_edge(p, j) && may_write.insert(p) {
+                        q.push_back(p);
+                    }
+                }
+            }
+            PendingWrites {
+                write_sites,
+                siteless_writers,
+                may_write,
+                rev,
+            }
+        }
+    }
+
+    /// B7 review: whether site `s` of `f` may leave a write pending when it
+    /// has run: a write that is not known temporary, a call into code that
+    /// may ([`PendingWrites::may_write`]), or a call no edge resolves.
+    fn site_may_write(&self, f: &'a str, s: &str, w: &PendingWrites<'a>) -> bool {
+        if w.write_sites.contains(s) {
+            return true;
+        }
+        let mut has_edge = false;
+        for (j, &(to, site, _, _)) in self.out.get(f).into_iter().flatten().enumerate() {
+            if site.and_then(EdgeSite::guarded) != Some(s) {
+                continue;
+            }
+            has_edge = true;
+            let j = u32::try_from(j).expect("an edge position fits u32");
+            if !self.is_checked_run_edge(f, j) && w.may_write.contains(to) {
+                return true;
+            }
+        }
+        !has_edge
+            && !self.builtin_sites.contains(s)
+            && self
+                .by_stable
+                .get(f)
+                .is_some_and(|r| r.call_sites.iter().any(|c| c.id == s))
+    }
+
+    /// B7 review: for out-edge `j` of `f`, whether a write `f` itself makes
+    /// (or a callee of its earlier sites leaves) may be pending when the
+    /// edge's site runs, and whether a `Commit()` on the way to the site
+    /// ended the transaction `f` was entered in. The order is read off `f`'s
+    /// control-flow tree by the pending-writes walk
+    /// ([`crate::engine::l5::pending_writes::sites_before`]); an edge with no
+    /// site (an event dispatch) counts every site of `f`.
+    fn local_pending(
+        &self,
+        f: &'a str,
+        j: u32,
+        w: &PendingWrites<'a>,
+        memo: &mut HashMap<(&'a str, u32), (bool, bool)>,
+    ) -> (bool, bool) {
+        if let Some(&v) = memo.get(&(f, j)) {
+            return v;
+        }
+        let v = match self.by_stable.get(f) {
+            None => (true, false),
+            Some(row) => {
+                let site = self.out[f][j as usize].1.and_then(EdgeSite::guarded);
+                let before = match site {
+                    Some(s) => crate::engine::l5::pending_writes::sites_before(row, &[s], false),
+                    None => crate::engine::l5::pending_writes::sites_before(row, &[], true),
+                };
+                let dirty = w.siteless_writers.contains(f)
+                    || before.sites.iter().any(|s| self.site_may_write(f, s, w));
+                (dirty, before.committed)
+            }
+        };
+        memo.insert((f, j), v);
+        v
+    }
+
+    /// B7 review (Microsoft Learn, "Codeunit.Run(Integer [, var Record])
+    /// Method", Transaction semantics: "If you're already in a transaction
+    /// you must commit first before calling Codeunit.Run"): the checked runs
+    /// in `root`'s reach at which a write may be pending on some route from
+    /// `root`, and whether a checked run at which none may is in reach.
+    /// The root's own entry is taken as clean (the answer states that as an
+    /// assumption). A routine is entered with a write pending when some
+    /// caller in reach calls it, not through a checked run, with a write
+    /// pending at that call: a write of its own before the call (or a callee
+    /// of an earlier site that may leave one), or one it was entered with
+    /// and no `Commit()` on the way ended (a least fixpoint over the reach,
+    /// so recursion is followed). `None` for a root the model has no row
+    /// for.
+    fn soft_checked_runs(&self, root: &str) -> Option<(HashSet<(&'a str, u32)>, bool)> {
+        let plain = self.open_reach(root, &|_, _, _| false)?;
+        let checked: Vec<(&'a str, u32)> = plain
+            .parent
+            .keys()
+            .flat_map(|&f| {
+                self.traps
+                    .get(f)
+                    .into_iter()
+                    .flatten()
+                    .filter(|&&(_, k)| k == TrapKind::CheckedRun)
+                    .map(move |&(j, _)| (f, j))
+            })
+            .collect();
+        if checked.is_empty() {
+            return Some((HashSet::new(), false));
+        }
+        let w = self
+            .pending
+            .as_ref()
+            .expect("the write facts are built whenever a checked run exists");
+        let none: &[(&'a str, u32)] = &[];
+        // The routines in reach that reach a checked run's caller.
+        let mut anc: HashSet<&'a str> = checked.iter().map(|&(f, _)| f).collect();
+        let mut q: VecDeque<&'a str> = anc.iter().copied().collect();
+        while let Some(x) = q.pop_front() {
+            for &(p, _) in w.rev.get(x).map_or(none, Vec::as_slice) {
+                if plain.parent.contains_key(p) && anc.insert(p) {
+                    q.push_back(p);
+                }
+            }
+        }
+        let mut memo: HashMap<(&'a str, u32), (bool, bool)> = HashMap::new();
+        let mut pending_at = |p: &'a str, j: u32, dirty: &HashSet<&'a str>| {
+            let (local, committed) = self.local_pending(p, j, w, &mut memo);
+            local || (dirty.contains(p) && !committed)
+        };
+        // Entered with a write pending (least fixpoint).
+        let mut dirty: HashSet<&'a str> = HashSet::new();
+        loop {
+            let mut changed = false;
+            for &x in &anc {
+                if dirty.contains(x) {
+                    continue;
+                }
+                let entered_dirty =
+                    w.rev
+                        .get(x)
+                        .map_or(none, Vec::as_slice)
+                        .iter()
+                        .any(|&(p, j)| {
+                            anc.contains(p)
+                                && !self.is_checked_run_edge(p, j)
+                                && pending_at(p, j, &dirty)
+                        });
+                if entered_dirty {
+                    dirty.insert(x);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let n = checked.len();
+        let soft: HashSet<(&'a str, u32)> = checked
+            .into_iter()
+            .filter(|&(f, j)| pending_at(f, j, &dirty))
+            .collect();
+        let clean = soft.len() < n;
+        Some((soft, clean))
     }
 
     /// L30: whether a routine that collects errors is in `tree`'s reach.
@@ -2752,15 +3085,25 @@ impl<'a> LiteralReach<'a> {
             .collect()
     }
 
-    /// B7/L23: the first edge of `steps` that is a trap `untrap` stops.
-    fn first_trap(&self, steps: &[Step<'a>], untrap: Untrap) -> Option<TrapAt> {
+    /// B7/L23: the first edge of `steps` that is a trap `untrap` stops
+    /// under `scope`.
+    fn first_trap(
+        &self,
+        steps: &[Step<'a>],
+        untrap: Untrap,
+        scope: &TrapScope<'a>,
+    ) -> Option<TrapAt> {
         for s in steps {
             let (Some(list), Some(out)) = (self.traps.get(s.from), self.out.get(s.from)) else {
                 continue;
             };
             for &(j, k) in list {
                 let (to, site, _, kind) = out[j as usize];
-                if untrap.stops(k) && to == s.to && site == s.site && kind == s.kind {
+                if scope.stops(untrap, s.from, j, k)
+                    && to == s.to
+                    && site == s.site
+                    && kind == s.kind
+                {
                     return Some(self.trap_at(s, k));
                 }
             }
@@ -2796,25 +3139,26 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// B7/L23: the routines `root` reaches over the snapshot's edges with
-    /// guards IGNORED and without crossing a trap `untrap` stops, each with
-    /// the edge it was first reached by. Guards ignored, it reaches at least
-    /// every routine any guarded search that crosses no such trap reaches,
-    /// so a routine it does not reach is reached only through a trap: the
-    /// ruling "caught" is sound under any literal arguments and any keep
-    /// verdict. (A guarded search here cost prove about x1.25 CPU on CDO;
-    /// this one is a plain walk over the edges.) `None` for a root the model
-    /// has no row for.
-    pub(crate) fn open_reach(&self, root: &str, untrap: Untrap) -> Option<OpenReach<'a>> {
+    /// guards IGNORED and without crossing a trap edge `stop` names (caller,
+    /// position, kind), each with the edge it was first reached by. Guards
+    /// ignored, it reaches at least every routine any guarded search that
+    /// crosses no such trap reaches, so a routine it does not reach is
+    /// reached only through a trap: the ruling "caught" is sound under any
+    /// literal arguments and any keep verdict. (A guarded search here cost
+    /// prove about x1.25 CPU on CDO; this one is a plain walk over the
+    /// edges.) `None` for a root the model has no row for.
+    fn open_reach(
+        &self,
+        root: &str,
+        stop: &dyn Fn(&str, u32, TrapKind) -> bool,
+    ) -> Option<OpenReach<'a>> {
         let (&root, _) = self.by_stable.get_key_value(root)?;
         let mut parent: HashMap<&'a str, Option<(&'a str, u32)>> = HashMap::from([(root, None)]);
         let mut q = VecDeque::from([root]);
         while let Some(f) = q.pop_front() {
             let traps = self.traps.get(f).map_or(&[][..], Vec::as_slice);
             for (j, &(to, _, _, _)) in self.out.get(f).into_iter().flatten().enumerate() {
-                if traps
-                    .iter()
-                    .any(|&(t, k)| t as usize == j && untrap.stops(k))
-                {
+                if traps.iter().any(|&(t, k)| t as usize == j && stop(f, t, k)) {
                     continue;
                 }
                 if let std::collections::hash_map::Entry::Vacant(v) = parent.entry(to) {
@@ -2848,42 +3192,43 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// B7/L23: how the traps decide an error site `ops` (its operation and
-    /// call-site ids) from the root of `full` (the ordinary search):
-    /// `definite` is the root's [`Self::open_reach`] that crosses no
-    /// definite trap, `all` (when an isolated event is in reach) the one that
-    /// crosses no trap. The site is caught when no routine owning one of
-    /// `ops` is in `definite` (and owners are known). `None`: the site has no
-    /// live route in `full` (nothing to rule), or no route crosses a trap the
-    /// ruling can name. A site whose only trap-free route the literal
-    /// arguments rule out stays escaping (`definite` ignores guards).
+    /// call-site ids) from the root of `full` (the ordinary search), under
+    /// the root's `scope` ([`Self::trap_scope`]). The site is caught when no
+    /// routine owning one of `ops` is in the walk that crosses no definite
+    /// trap. Every op must have a known owner, or nothing is ruled (a row
+    /// may sit where the walks cannot see). `None`: the site has no live
+    /// route in `full` (nothing to rule), an owner is unknown, or no route
+    /// crosses a trap the ruling can name. A site whose only trap-free route
+    /// the literal arguments rule out stays escaping (the walks ignore
+    /// guards).
     pub(crate) fn trap_verdict(
         &self,
         full: &LiveTree<'a>,
-        definite: &OpenReach<'a>,
-        all: Option<&OpenReach<'a>>,
+        scope: &TrapScope<'a>,
         ops: &[String],
     ) -> Option<TrapVerdict> {
         let (steps, _) = self.tree_witness(full, ops)?;
         let owners: Vec<&'a str> = ops
             .iter()
-            .filter_map(|o| self.op_owner.get(o.as_str()).copied())
-            .collect();
+            .map(|o| self.op_owner.get(o.as_str()).copied())
+            .collect::<Option<_>>()?;
         if owners.is_empty() {
             return None;
         }
+        let definite = &scope.definite;
         let Some(&open) = owners.iter().find(|o| definite.parent.contains_key(*o)) else {
             return self
-                .first_trap(&steps, Untrap::Definite)
+                .first_trap(&steps, Untrap::Definite, scope)
                 .map(TrapVerdict::Caught);
         };
-        if let Some(all) = all
+        if let Some(all) = &scope.all
             && owners.iter().all(|o| !all.parent.contains_key(o))
         {
             return self
-                .first_trap(&self.open_steps(definite, open), Untrap::All)
+                .first_trap(&self.open_steps(definite, open), Untrap::All, scope)
                 .map(TrapVerdict::UnlessWritePending);
         }
-        self.first_trap(&steps, Untrap::Definite)
+        self.first_trap(&steps, Untrap::Definite, scope)
             .map(TrapVerdict::SomeRoutes)
     }
 
