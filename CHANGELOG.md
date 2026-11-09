@@ -30,21 +30,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The unreachable-statement scan treats a group as one sibling: an `exit` in an arm no
     longer marks the statement after the group.
   - No configuration is chosen: `preprocessorSymbols` in `app.json` and `#define` are not
-    read (the later L22 steps). Each arm stays a possible build, so the answers stay
-    sound: "may" questions list every arm's effects, and an effect in an arm is
-    `conditional` (an `Error` alone in an arm is `error-path`).
+    read (the later L22 steps). Each arm stays a possible build: "may" questions list
+    every arm's effects, and an effect in an arm is `conditional` (an `Error` alone in an
+    arm is `error-path`).
+- **Code after a construct that only MAY `exit` is no longer `unconditional on success`.**
+  The control-context walk (`program::body::control_context`) made the code after an `if`
+  or `case` conditional only when an arm ALWAYS ends; an arm that may `exit` on the way
+  (`if b then exit;` nested in it) left the code after the construct at the outer
+  context. Splicing used to hide this for `#if` arms, so the group above turned
+  `#if A if b then exit; #endif Commit();` into a wrong `commits-on-success-path: yes`
+  (its old answer was `unknown`), and nested groups (`#if A #if B exit; #endif … #endif
+  Insert();`) read the `Insert` as `unconditional on success`. The same gap was older in
+  plain AL: `if a then begin if b then exit; … end; Insert();`, an `exit` inside a loop
+  body, and an arm `begin if d then exit; Error(..) end` (counted as an `Error` only).
+  A new `control_flow::may_exit` ("some path through this node runs `exit`") now makes
+  the continuation of an `if`, a `case` (an `#if` group included) and a loop at least
+  `conditional`. Only `exit` counts: a raised `Error` ends the routine without success,
+  so it never takes code off a success path.
+- **A routine declared in two `#if` arms is `conditional` in each arm.** A build runs one
+  arm's body, so no arm's site runs on every success path; each arm's `Insert` read
+  `unconditional on success` through its callers. The model builder now lifts the
+  `top-level` sites of every row of a collided id to `conditional`
+  (`program::model::workspace::lift_arm_declarations`).
 - **Not fixed: a routine declared in two `#if` arms still cites one arm's line for the
   other's write.** Both arms mint the same site ids (`{routine}/op0`), and readers resolve
-  an id to one row. Giving each arm its own ids was tried and reverted: it breaks the
-  collided-id contract of #160 step 11b (18 tests: one producer per duplicated
-  declaration, one edge per interface implementer, the last-row picks of `query` and
-  the guard frames), so it needs its own design. Recorded in `docs/engine-limits.md` (B2).
+  an id to one row (#160 step 11b, class P: the last row). Giving each arm its own ids
+  (a site-number stride per arm) fixes the citation, and was tried twice and reverted:
+  it breaks 19 tests that build their collided-site precondition from two `#if` arms
+  (the 11b acceptance tests, `cli_11b_policy_collision`, d35's `i264_fo1`, the r4
+  dep-order test, the L4 host oracle `t1u`), and it changes real answers the 11b design
+  settled (two producers for one duplicated declaration, an interface call counted per
+  arm, d1 keeping one seed instead of both). That is a change to an accepted design, so
+  it needs the owner's decision. Recorded in `docs/engine-limits.md` (B2).
 - The #288 trust-gate tests G1/G2 state their dead marks by assignment: production no
   longer marks the code after an arm's `exit` unreachable, which those tests relied on.
 - Leading-guard readers that stop at the first non-statement now stop at a group too
   (`table_event_guard`'s entry exits, the temporary-record entry guard), where they used
   to read an arm's guard as if every build ran it.
-- Tests: `tests/cli/cli_b2_preproc_arms.rs` (prove through the CLI), lowerer
+- Tests: `tests/cli/cli_b2_preproc_arms.rs` (prove through the CLI: an arm's `exit`, an
+  arm's `Error`, an arm that may `exit` before a `Commit`, nested groups and the plain-AL
+  shapes with a no-exit control, a two-arm routine through its caller), lowerer
   `statement_if_chains_are_groups_of_alternatives`, `ir_walk::preproc_group_tests`.
 
 ### Changed (engine limits wave 1, L14 review fixes)
