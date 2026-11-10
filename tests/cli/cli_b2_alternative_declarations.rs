@@ -1177,24 +1177,185 @@ fn an_unreadable_declaration_does_not_split_its_routine() {
 
 /// P1, a split that happens for other declarations: two readable declarations
 /// subscribe differently, so they split; the third cannot be read and commits.
-/// It stays reachable from both readable events.
+/// It stays reachable from each readable event its own readable parts allow:
+/// with its event not readable, from both; with `OnX` readable, from `OnX`
+/// only (its body is no route for `RaiseY`).
 #[test]
 fn an_unreadable_declaration_stays_reachable_when_the_others_split() {
     let on_x = format!("#if A\n{}#endif\n", sub_decl("AD Pub", "OnX", "", "", ""));
     let on_y = format!("#if B\n{}#endif\n", sub_decl("AD Pub", "OnY", "", "", ""));
-    let odd = format!(
-        "#if C\n{}#endif\n",
-        sub_with_attr(PARENS_ON_X, "        Commit();\n")
+    let any_event = "ObjectType::Codeunit, Codeunit::\"AD Pub\", 'On' + 'X', '', false, false";
+    for (attr, raise_y) in [(any_event, "yes"), (PARENS_ON_X, "no")] {
+        let odd = format!(
+            "#if C\n{}#endif\n",
+            sub_with_attr(attr, "        Commit();\n")
+        );
+        let t = workspace(&[
+            ("a.al", &on_x),
+            ("b.al", &on_y),
+            ("c.al", &odd),
+            ("p.al", PUB_XY),
+        ]);
+        let r = prove_with(t.path(), "AD Pub::RaiseX", "may-commit", &[]);
+        assert_eq!(r["answer"], "yes", "{attr}: {r:#}");
+        let r = prove_with(t.path(), "AD Pub::RaiseY", "may-commit", &[]);
+        assert_eq!(r["answer"], raise_y, "{attr}: {r:#}");
+    }
+}
+
+/// An unreadable declaration whose readable event (`OnX`) rules out the
+/// routine's readable subscription (`OnY`) is not a route for `OnY`: the
+/// routine splits, `RaiseY` stays `no`, and `RaiseX` is the gap.
+#[test]
+fn an_unreadable_declaration_ruled_out_by_its_own_event_is_no_route_for_the_others() {
+    let odd = sub_with_attr(PARENS_ON_X, "        Commit();\n");
+    let on_y = sub_decl("AD Pub", "OnY", "", "", "");
+    each_shape(&odd, &on_y, &[("p.al", PUB_XY)], |ws, extra, at| {
+        let y = prove_with(ws, "AD Pub::RaiseY", "may-commit", extra);
+        assert_eq!(y["answer"], "no", "{at}: {y:#}");
+        let x = prove_with(ws, "AD Pub::RaiseX", "may-commit", extra);
+        assert_eq!(x["answer"], "unknown", "{at}: {x:#}");
+    });
+}
+
+/// A table with a field `Amt` and a field `Name`, another table, and a writer.
+const VAL_TABLES: &str = r#"table 50495 "AD T"
+{
+    fields
+    {
+        field(1; "No."; Integer) { }
+        field(2; Amt; Integer) { }
+        field(3; Name; Integer) { }
+    }
+    keys { key(PK; "No.") { } }
+}
+
+table 50496 "AD Other"
+{
+    fields
+    {
+        field(1; "No."; Integer) { }
+        field(2; Amt; Integer) { }
+    }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50470 "AD W"
+{
+    procedure DoValidate()
+    var
+        R: Record "AD T";
+    begin
+        R.Validate(Amt, 1);
+    end;
+
+    procedure DoValidateName()
+    var
+        R: Record "AD T";
+    begin
+        R.Validate(Name, 1);
+    end;
+
+    procedure DoInsert()
+    var
+        R: Record "AD T";
+    begin
+        R.Insert();
+    end;
+
+    procedure DoOtherValidate()
+    var
+        R: Record "AD Other";
+    begin
+        R.Validate(Amt, 1);
+    end;
+
+    procedure DoOtherInsert()
+    var
+        R: Record "AD Other";
+    begin
+        R.Insert();
+    end;
+}
+"#;
+
+fn answers(ws: &Path, attr_and_expected: &[(&str, &str)]) {
+    for (routine, want) in attr_and_expected {
+        let r = prove_with(ws, routine, "may-commit", &["--single-app"]);
+        assert_eq!(r["answer"], *want, "{routine}: {r:#}");
+    }
+}
+
+/// R1 (probes t-val-el, t-val-int2, t-val-mem): a field in no readable form
+/// read as "no element", so the subscription listened to no field and
+/// `R.Validate(Amt, 1)` said a definite `no`. It is a gap for a validate on
+/// that table, any field. A different table and a different event stay
+/// definite. The control names the field and binds.
+#[test]
+fn an_unreadable_element_is_a_gap_on_validate() {
+    for element in ["(Amt)", "5", "Rec.Amt"] {
+        let sub = sub_with_attr(
+            &format!(
+                "ObjectType::Table, Database::\"AD T\", 'OnAfterValidateEvent', {element}, false, false"
+            ),
+            "        Commit();\n",
+        );
+        let t = workspace(&[("s.al", &sub), ("t.al", VAL_TABLES)]);
+        answers(
+            t.path(),
+            &[
+                ("AD W::DoValidate", "unknown"),
+                ("AD W::DoValidateName", "unknown"),
+                ("AD W::DoInsert", "no"),
+                ("AD W::DoOtherValidate", "no"),
+            ],
+        );
+    }
+    let read = sub_with_attr(
+        "ObjectType::Table, Database::\"AD T\", 'OnAfterValidateEvent', 'Amt', false, false",
+        "        Commit();\n",
     );
-    let t = workspace(&[
-        ("a.al", &on_x),
-        ("b.al", &on_y),
-        ("c.al", &odd),
-        ("p.al", PUB_XY),
-    ]);
-    for (raise, at) in [("AD Pub::RaiseX", "OnX"), ("AD Pub::RaiseY", "OnY")] {
-        let r = prove_with(t.path(), raise, "may-commit", &[]);
-        assert_eq!(r["answer"], "yes", "{at}: {r:#}");
+    let t = workspace(&[("s.al", &read), ("t.al", VAL_TABLES)]);
+    answers(
+        t.path(),
+        &[("AD W::DoValidate", "yes"), ("AD W::DoValidateName", "no")],
+    );
+}
+
+/// A readable element narrows the gap when another part is not readable:
+/// the publisher is hidden, so `Validate` of `Amt` on any table is the gap,
+/// and `Validate` of `Name` is not.
+#[test]
+fn a_readable_element_narrows_the_gap() {
+    let sub = sub_with_attr(
+        "ObjectType::Table, (Database::\"AD T\"), 'OnAfterValidateEvent', 'Amt', false, false",
+        "        Commit();\n",
+    );
+    let t = workspace(&[("s.al", &sub), ("t.al", VAL_TABLES)]);
+    answers(
+        t.path(),
+        &[
+            ("AD W::DoValidate", "unknown"),
+            ("AD W::DoOtherValidate", "unknown"),
+            ("AD W::DoValidateName", "no"),
+        ],
+    );
+}
+
+/// R2 (probe t-int): the publisher narrows a record operation's gap, by name
+/// and by number. An `Insert` on another table stays `no`.
+#[test]
+fn a_record_operation_gap_is_narrowed_by_the_publisher() {
+    for publisher in ["Database::\"AD T\"", "50495"] {
+        let sub = sub_with_attr(
+            &format!("5, {publisher}, 'OnAfterInsertEvent', '', false, false"),
+            "        Commit();\n",
+        );
+        let t = workspace(&[("s.al", &sub), ("t.al", VAL_TABLES)]);
+        answers(
+            t.path(),
+            &[("AD W::DoInsert", "unknown"), ("AD W::DoOtherInsert", "no")],
+        );
     }
 }
 

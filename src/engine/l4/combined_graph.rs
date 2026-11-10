@@ -604,6 +604,11 @@ fn unreadable_subscriber_gaps(
         .iter()
         .map(|o| (o.id.as_str(), o))
         .collect();
+    let tables: HashMap<&str, _> = workspace
+        .tables
+        .iter()
+        .map(|t| (t.id.as_str(), t))
+        .collect();
     let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     for sym in &event_graph.events {
         let (Some(publisher), Some(object)) = (
@@ -635,14 +640,21 @@ fn unreadable_subscriber_gaps(
     }
     for r in &workspace.routines {
         for op in &r.record_operations {
-            let table = op
-                .table_id
-                .as_deref()
-                .and_then(|t| objects.get(t))
-                .map(|o| o.name.as_str());
+            // Model table ids are `{guid}/table/{n}`, not object ids.
+            let table = op.table_id.as_deref().and_then(|t| tables.get(t)).map(|t| {
+                crate::program::model::events::OpTable {
+                    name: &t.name,
+                    number: t.table_number,
+                }
+            });
+            let field = op
+                .field_arguments
+                .as_ref()
+                .and_then(|a| a.first())
+                .map(String::as_str);
             if gaps
                 .iter()
-                .any(|(gap, _)| gap.may_match_table_op(&op.op, table))
+                .any(|(gap, _)| gap.may_match_table_op(&op.op, table, field))
                 && seen.insert((r.id.clone(), op.id.clone()))
             {
                 uncertainty_edges.push(UncertaintyEdge {

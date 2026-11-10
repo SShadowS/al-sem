@@ -95,12 +95,21 @@ pub fn read_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> ParsedSubscriber
         .unwrap_or_default();
 
     // Arg 3 (optional): element filter, in the same two forms — absent or empty
-    // → None.
-    let element = attr
-        .args
-        .get(3)
-        .and_then(|&id| name_arg_text(ir, id))
-        .filter(|v| !v.is_empty());
+    // → None. On a table's validate event the element says which field's event
+    // this is, so one present but not readable is unknown, not "no element":
+    // no other event's dispatch reads the element.
+    let element = arg(3).and_then(|id| match name_arg_text(ir, id) {
+        Some(v) => Some(v).filter(|v| !v.is_empty()),
+        None if matches!(publisher_object_type.as_str(), "table" | "tableextension")
+            && matches!(
+                event_name.as_str(),
+                "onbeforevalidateevent" | "onaftervalidateevent"
+            ) =>
+        {
+            Some(UNREADABLE_ELEMENT.to_string())
+        }
+        None => None,
+    });
 
     // Arg 4 (optional): skip_on_missing_license; absent → false.
     let skip_on_missing_license = attr
@@ -127,15 +136,37 @@ pub fn read_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> ParsedSubscriber
 
 impl ParsedSubscriberArgs {
     /// Whether this attribute has a part the engine cannot read: its object
-    /// type, publisher or event name is empty. Such an entry binds no
-    /// publisher; it is a gap for the events its readable parts allow.
+    /// type, publisher or event name is empty, or a table's validate event
+    /// names a field in no readable form. Such an entry binds no publisher; it
+    /// is a gap for the events its readable parts allow.
     #[must_use]
     pub fn is_unreadable(&self) -> bool {
         self.publisher_object_type.is_empty()
             || (self.publisher_name.is_empty() && self.publisher_id.is_none())
             || self.event_name.is_empty()
+            || self.element.as_deref() == Some(UNREADABLE_ELEMENT)
+    }
+
+    /// Whether this unreadable subscription may be the readable `other`: every
+    /// part it could read agrees with `other`.
+    #[must_use]
+    pub fn may_be(&self, other: &ParsedSubscriberArgs) -> bool {
+        let publisher_known = !self.publisher_name.is_empty() || self.publisher_id.is_some();
+        (self.publisher_object_type.is_empty()
+            || self.publisher_object_type == other.publisher_object_type)
+            && (!publisher_known
+                || (self.publisher_id.is_some() && self.publisher_id == other.publisher_id)
+                || (!self.publisher_name.is_empty()
+                    && self.publisher_name == other.publisher_name)
+                // One says a name, the other a number: they may be one object.
+                || (self.publisher_id.is_some() != other.publisher_id.is_some()))
+            && (self.event_name.is_empty() || self.event_name == other.event_name)
     }
 }
+
+/// `ParsedSubscriberArgs::element` of a table validate event whose field the
+/// engine could not read. Not a field name: AL names have no control character.
+pub const UNREADABLE_ELEMENT: &str = "\u{1}unreadable";
 
 /// The text of an event-name or element argument, unquoted and folded: a text
 /// literal (`'OnAfterX'`) or an identifier (`OnAfterX` / `"On After X"`).
