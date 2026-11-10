@@ -52,8 +52,11 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// per-arm ids): a routine declared in two `#if` arms of one file gives each
 /// arm its own site ids, so each arm's site carries its own line; a base
 /// cached before could cite the other arm's line for it, and a delta against
-/// it would report a moved site that did not move.
-pub const SUMMARY_SCHEMA: u32 = 3;
+/// it would report a moved site that did not move. 4 (engine limits B2, wave 2
+/// final review): one id declared in two FILES numbers its rows apart too
+/// (the second file's site ids move), and its rows are read as alternatives
+/// (an attribute or a property one declaration lacks is a "may").
+pub const SUMMARY_SCHEMA: u32 = 4;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

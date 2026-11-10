@@ -335,8 +335,11 @@ pub fn sites_of<'a>(
 /// and each arm numbers its own sites (`ir_walk::SiteIdBase`): arm A's
 /// `{id}/cs0` is in arm A's row only. A reader that looks a site up in the
 /// id's LAST row misses arm A's sites (it drops their facts, or falls back to
-/// the whole body, or cites the other arm's line). Rows that share their site
-/// ids (one id declared in two files) are found too: the owner of a shared
+/// the whole body, or cites the other arm's line). One id declared in two
+/// files is numbered apart the same way, by the model join
+/// (`workspace::join_alternative_declarations`). Rows that share their site
+/// ids anyway (a test states them by assignment,
+/// `workspace::share_collided_site_ids`) are found too: the owner of a shared
 /// site is its LAST holding row (class P, #160 step 11b §4.6).
 ///
 /// Transient like [`RowsOfId`] (R1-12): build it from the current rows. A

@@ -1692,6 +1692,12 @@ fn collect_routines<'t>(
 /// row has it on every build of that row. Readers take an attribute from whichever
 /// row has it, so it must be conditional on every row that has it.
 ///
+/// This compares the routines of ONE object declaration only (the IR's unit).
+/// The model compares every row of a routine id, across whole-object `#if` arms
+/// and across files (`al-sem`'s `workspace::join_alternative_declarations`); the
+/// model's readers rely on that join, and this pass keeps the IR's own reading
+/// (the L2 projection's attribute JSON) right inside one declaration.
+///
 /// The rows are grouped by the routine identity's parts as the IR has them (kind,
 /// name, enclosing member, parameter `var`-ness and types, return type), compared
 /// lowercased with whitespace removed: at least as coarse as

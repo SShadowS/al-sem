@@ -1615,11 +1615,23 @@ impl<'a> CollidedRows<'a> {
     }
 
     /// Row `ri`'s `order`, its frame id shifted into its id's table.
+    ///
+    /// Engine limits B2 (wave 2 final review): a collided id's rows are
+    /// alternative builds of one routine (`#if` arms, or two files), and a
+    /// build runs ONE row's body, so no row's site dominates the ROUTINE's
+    /// success return in every build (as no row's site is `top-level`,
+    /// `workspace::join_alternative_declarations`). Without this, a caller of
+    /// a two-arm routine got a root-scope `COMMIT_DOMINATES_RETURN`, valid for
+    /// refutation, on one arm's `Commit`, though the other arm may return
+    /// before its own.
     fn order(&self, ri: usize, order: Option<OperationOrder>) -> Option<OperationOrder> {
-        let off = self.frame_offset.get(&ri).copied().unwrap_or(0);
+        let off = self.frame_offset.get(&ri).copied();
         order.map(|mut o| {
-            if o.frame_id >= 0 {
-                o.frame_id += off;
+            if let Some(off) = off {
+                if o.frame_id >= 0 {
+                    o.frame_id += off;
+                }
+                o.dominates_success_return = false;
             }
             o
         })

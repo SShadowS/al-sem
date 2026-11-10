@@ -1015,17 +1015,22 @@ fn t1t_uncertainty_kind() {
     );
 }
 
-/// T1u (final r1 FX-6, `collided_site_callee` in R0's solve half alone):
-/// `K(var R)` is declared twice, in two files whose whole codeunit sits in
-/// `#if A` and `#if not A`; the rows call `V.Go(R)` on `V: Codeunit Foo` and
-/// `V: Codeunit Bar`. (Engine limits B2: two `#if` arms in ONE file now number
-/// their sites apart, so they share no site; declarations in two files still
-/// share `{id}/cs0`, the collision this test needs.) The site's callee
-/// is the LAST row's (`Bar.Go`, which does nothing; `Foo.Go` resets `R`).
-/// The edit swaps the two object names (headers only), so the last row now
-/// reaches the resetting `Go`. `K`'s rows, its out-edge union and both `Go`
-/// rows are unchanged. Break: `collided_site_callee` out of the solve-global
-/// digest seeds `K` with its old role.
+/// T1u (final r1 FX-6): `K(var R)` is declared twice, in two files whose
+/// whole codeunit sits in `#if A` and `#if not A`; the rows call `V.Go(R)`
+/// on `V: Codeunit Foo` and `V: Codeunit Bar`. The edit swaps the two
+/// object names (headers only). The refresh must equal the cold build.
+///
+/// This case was built for `collided_site_callee` in R0's solve half: the two
+/// files' rows shared `{id}/cs0`, and the site's callee was the LAST row's.
+/// Engine limits B2 (wave 2 final review) numbers two files' rows apart in
+/// the model-level join (`workspace::join_alternative_declarations`), as
+/// `#if` arms in one file already were, so no source can make two rows share
+/// a site any more: the precondition is now that `collided_site_callee` holds
+/// one site per row at r0 and r1. The class-P rules stay for rows that share ids by
+/// assignment (`workspace::share_collided_site_ids`, the 11b tests); this
+/// refresh oracle cannot state that, so the solve-global digest's
+/// `collided_site_callee` input has no discrimination proof here any more
+/// (a stated limit).
 #[test]
 fn t1u_collided_site_callee() {
     let go = |no: u32, path: &'static str, name: &str, body: &str| {
@@ -1058,33 +1063,17 @@ fn t1u_collided_site_callee() {
     let pre = |r0: &Fresh, r1: &Fresh| {
         assert_eq!(r0.rows("K", 1).len(), 2, "precondition: two rows of K");
         assert_eq!(r0.rows("Go", 1).len(), 2, "precondition: two Go rows");
-        for n in ["K", "Go"] {
+        // `collided_site_callee` holds every site of a collided id: one per
+        // row now (`K/cs0` in `K.al`, `K/cs1` in `K2.al`), where the shared
+        // ids gave one.
+        for f in [r0, r1] {
+            let sites: Vec<&String> = f.view.rel().primary().collided_site_callee.keys().collect();
             assert_eq!(
-                format!("{:?}", r0.rows(n, 1)),
-                format!("{:?}", r1.rows(n, 1)),
-                "precondition: every {n} row is equal at r0 and r1"
+                sites.len(),
+                2,
+                "precondition: the two files' rows of K share no site: {sites:?}"
             );
         }
-        assert_eq!(
-            r0.edges("K", 1),
-            r1.edges("K", 1),
-            "precondition: K's out-edges are equal"
-        );
-        let collided = |f: &Fresh| {
-            let c: std::collections::BTreeMap<_, _> =
-                f.view.rel().primary().collided_site_callee.iter().collect();
-            format!("{c:?}")
-        };
-        assert_ne!(
-            collided(r0),
-            collided(r1),
-            "precondition: the collided site's callee moves"
-        );
-        let role = |f: &Fresh| {
-            f.routine("K", 1).0.as_ref().unwrap().parameter_roles[0].resets_filters_on_param
-        };
-        assert_eq!(role(r0), EffectPresence::No, "precondition: K at r0");
-        assert_eq!(role(r1), EffectPresence::Yes, "precondition: K at r1");
     };
     case_pre(
         "t1u",
