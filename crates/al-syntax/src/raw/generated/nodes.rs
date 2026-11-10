@@ -172,6 +172,36 @@ impl<'t> FieldelementKeywordOrTableelementKeywordOrTextelementKeyword<'t> {
     }
 }
 
+/// One of: identifier, integer, qualified_name, quoted_identifier.
+#[derive(Copy, Clone)]
+pub enum IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t> {
+    Identifier(RawIdentifier<'t>),
+    Integer(RawInteger<'t>),
+    QualifiedName(RawQualifiedName<'t>),
+    QuotedIdentifier(RawQuotedIdentifier<'t>),
+}
+impl<'t> IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::Identifier => Some(Self::Identifier(RawIdentifier(n))),
+            RawKind::Integer => Some(Self::Integer(RawInteger(n))),
+            RawKind::QualifiedName => Some(Self::QualifiedName(RawQualifiedName(n))),
+            RawKind::QuotedIdentifier => Some(Self::QuotedIdentifier(RawQuotedIdentifier(n))),
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::Identifier(x) => x.node(),
+            Self::Integer(x) => x.node(),
+            Self::QualifiedName(x) => x.node(),
+            Self::QuotedIdentifier(x) => x.node(),
+        }
+    }
+}
+
 /// One of: identifier, integer, quoted_identifier.
 #[derive(Copy, Clone)]
 pub enum IdentifierOrIntegerOrQuotedIdentifier<'t> {
@@ -318,6 +348,33 @@ impl<'t> IdentifierOrPreprocAndExpressionOrPreprocNotExpressionOrPreprocOrExpres
     }
 }
 
+/// One of: identifier, qualified_name, quoted_identifier.
+#[derive(Copy, Clone)]
+pub enum IdentifierOrQualifiedNameOrQuotedIdentifier<'t> {
+    Identifier(RawIdentifier<'t>),
+    QualifiedName(RawQualifiedName<'t>),
+    QuotedIdentifier(RawQuotedIdentifier<'t>),
+}
+impl<'t> IdentifierOrQualifiedNameOrQuotedIdentifier<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::Identifier => Some(Self::Identifier(RawIdentifier(n))),
+            RawKind::QualifiedName => Some(Self::QualifiedName(RawQualifiedName(n))),
+            RawKind::QuotedIdentifier => Some(Self::QuotedIdentifier(RawQuotedIdentifier(n))),
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::Identifier(x) => x.node(),
+            Self::QualifiedName(x) => x.node(),
+            Self::QuotedIdentifier(x) => x.node(),
+        }
+    }
+}
+
 /// One of: identifier, quoted_identifier.
 #[derive(Copy, Clone)]
 pub enum IdentifierOrQuotedIdentifier<'t> {
@@ -417,6 +474,34 @@ impl<'t> PreprocConditionalOperandOrTypeSpecification<'t> {
         match self {
             Self::PreprocConditionalOperand(x) => x.node(),
             Self::TypeSpecification(x) => x.node(),
+        }
+    }
+}
+
+/// One of: preproc_conditional_table_relation, simple_table_relation.
+#[derive(Copy, Clone)]
+pub enum PreprocConditionalTableRelationOrSimpleTableRelation<'t> {
+    PreprocConditionalTableRelation(RawPreprocConditionalTableRelation<'t>),
+    SimpleTableRelation(RawSimpleTableRelation<'t>),
+}
+impl<'t> PreprocConditionalTableRelationOrSimpleTableRelation<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        match n.kind() {
+            RawKind::PreprocConditionalTableRelation => Some(
+                Self::PreprocConditionalTableRelation(RawPreprocConditionalTableRelation(n)),
+            ),
+            RawKind::SimpleTableRelation => {
+                Some(Self::SimpleTableRelation(RawSimpleTableRelation(n)))
+            }
+            _ => None,
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        match self {
+            Self::PreprocConditionalTableRelation(x) => x.node(),
+            Self::SimpleTableRelation(x) => x.node(),
         }
     }
 }
@@ -3315,10 +3400,10 @@ impl<'t> RawEnumextensionDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Option<IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .field(FieldName::BaseObject)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .and_then(IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0
@@ -4166,10 +4251,10 @@ impl<'t> RawIfTableRelation<'t> {
             .field(FieldName::ElseRelation)
             .and_then(RawTableRelationExpression::cast)
     }
-    pub fn then_relation(self) -> Option<RawSimpleTableRelation<'t>> {
+    pub fn then_relation(self) -> Option<PreprocConditionalTableRelationOrSimpleTableRelation<'t>> {
         self.0
             .field(FieldName::ThenRelation)
-            .and_then(RawSimpleTableRelation::cast)
+            .and_then(PreprocConditionalTableRelationOrSimpleTableRelation::cast)
     }
 }
 
@@ -4232,11 +4317,11 @@ impl<'t> RawImplementsClause<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn interface(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn interface(self) -> Vec<IdentifierOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .children_by_field(FieldName::Interface)
             .into_iter()
-            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .filter_map(IdentifierOrQualifiedNameOrQuotedIdentifier::cast)
             .collect()
     }
 }
@@ -5927,10 +6012,10 @@ impl<'t> RawPageextensionDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Option<IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .field(FieldName::BaseObject)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .and_then(IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0
@@ -6158,10 +6243,10 @@ impl<'t> RawPermissionsetextensionDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Option<IdentifierOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .field(FieldName::BaseObject)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .and_then(IdentifierOrQualifiedNameOrQuotedIdentifier::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0
@@ -6515,11 +6600,11 @@ impl<'t> RawPreprocConditionalImplements<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn interface(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn interface(self) -> Vec<IdentifierOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .children_by_field(FieldName::Interface)
             .into_iter()
-            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .filter_map(IdentifierOrQualifiedNameOrQuotedIdentifier::cast)
             .collect()
     }
 }
@@ -6742,6 +6827,23 @@ impl<'t> RawPreprocConditionalOrderByFields<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalParameters<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalParameters<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalParameters {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalPermissions<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalPermissions<'t> {
     #[inline]
@@ -6755,6 +6857,58 @@ impl<'t> RawPreprocConditionalPermissions<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalProcedureHeader<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalProcedureHeader<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalProcedureHeader {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn modifier(self) -> Vec<RawProcedureModifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Modifier)
+            .into_iter()
+            .filter_map(RawProcedureModifier::cast)
+            .collect()
+    }
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn parameters(self) -> Vec<RawParameterList<'t>> {
+        self.0
+            .children_by_field(FieldName::Parameters)
+            .into_iter()
+            .filter_map(RawParameterList::cast)
+            .collect()
+    }
+    pub fn return_type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnType)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
+    }
+    pub fn return_value(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnValue)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
@@ -6850,6 +7004,61 @@ impl<'t> RawPreprocConditionalReport<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalReturn<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalReturn<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalReturn {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn return_type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnType)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
+    }
+    pub fn return_value(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnValue)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalReturnType<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalReturnType<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalReturnType {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn return_type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnType)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
     }
 }
 
@@ -7570,11 +7779,11 @@ impl<'t> RawPreprocSplitDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Vec<IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .children_by_field(FieldName::BaseObject)
             .into_iter()
-            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .filter_map(IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier::cast)
             .collect()
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
@@ -8018,6 +8227,9 @@ impl<'t> RawPreprocSplitProcedurePreamble<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
+    pub fn body(self) -> Option<RawCodeBlock<'t>> {
+        self.0.field(FieldName::Body).and_then(RawCodeBlock::cast)
+    }
     pub fn modifier(self) -> Vec<RawProcedureModifier<'t>> {
         self.0
             .children_by_field(FieldName::Modifier)
@@ -8226,6 +8438,54 @@ impl<'t> RawPreprocSplitTableFieldOpen<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocSplitTriggerPreamble<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitTriggerPreamble<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitTriggerPreamble {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Option<RawCodeBlock<'t>> {
+        self.0.field(FieldName::Body).and_then(RawCodeBlock::cast)
+    }
+    pub fn name(self) -> Vec<IdentifierOrMemberTriggerNameOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrMemberTriggerNameOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn parameters(self) -> Vec<RawParameterList<'t>> {
+        self.0
+            .children_by_field(FieldName::Parameters)
+            .into_iter()
+            .filter_map(RawParameterList::cast)
+            .collect()
+    }
+    pub fn return_type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnType)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
+    }
+    pub fn return_value(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnValue)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocSplitVarSectionTail<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocSplitVarSectionTail<'t> {
     #[inline]
@@ -8421,10 +8681,10 @@ impl<'t> RawProfileextensionDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Option<IdentifierOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .field(FieldName::BaseObject)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .and_then(IdentifierOrQualifiedNameOrQuotedIdentifier::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0
@@ -9226,10 +9486,10 @@ impl<'t> RawReportextensionDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Option<IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .field(FieldName::BaseObject)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .and_then(IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0
@@ -9914,10 +10174,10 @@ impl<'t> RawTableextensionDeclaration<'t> {
     pub fn node(self) -> RawNode<'t> {
         self.0
     }
-    pub fn base_object(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn base_object(self) -> Option<IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
             .field(FieldName::BaseObject)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .and_then(IdentifierOrIntegerOrQualifiedNameOrQuotedIdentifier::cast)
     }
     pub fn body(self) -> Option<RawDeclarationBody<'t>> {
         self.0

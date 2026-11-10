@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Grammar: tree-sitter-al v5.0.0, `main` at `18c988e8`** (was v4.5.0, `91a5db62`). Five new
+  `RawKind`s, all `Structural`; `NAMED_KIND_COUNT` is 506. `CACHE_VERSION_GRAMMAR` is now
+  `tree-sitter-al-v5.0.0-18c988e8-native` (same length, so `dry-run.txt` did not move).
+  - **Breaking shape:** a `case`'s `else` is now the last child of `case_body`. The lowerer's
+    fallback that read a `case_else_branch` directly under `case_statement` is gone.
+  - `preproc_split_procedure_preamble` now has a `body` field, so its bare-child fallback is
+    gone too.
+  - On real code (the CDO baseline, DO-Next and BC.AL.Runner/BC-on-Linux, 963 files) every
+    tree is the old one with only the `else` moved, and there are no `ERROR` or `MISSING` nodes
+    on either side. The CDO unknown counts are unchanged.
+
+### Added
+
+- **`#if` shapes the new grammar parses (they were `ERROR` before).** A split trigger header
+  (`preproc_split_trigger_preamble`) and a nested header group in a split procedure
+  (`preproc_conditional_procedure_header`) yield one routine per arm, with that arm's build
+  context. An `#if` group in a parameter list (`preproc_conditional_parameters`) or a return
+  clause chosen per arm (`preproc_conditional_return`, `preproc_conditional_return_type`) reads
+  the first arm the routine's build does not rule out, with a `SyntaxIssue`, as `#if` in
+  attribute arguments does.
+- **`extends` and `implements` take a dotted name** (`Contoso.Sales."Base"`), read as its last
+  segment because objects carry no namespace. `extends 50101` is kept as the number's text and
+  raises a `SyntaxIssue`: targets are looked up by name, so a numeric base is not resolved.
+
 ### Outside consumers (wave 2)
 
 One list of every field and value wave 2 changed for a program that reads al-sem's output

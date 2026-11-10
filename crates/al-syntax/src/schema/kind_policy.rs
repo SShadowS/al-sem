@@ -245,6 +245,18 @@ pub fn class_of(k: RawKind) -> Class {
         // place of a whole operand, one `operand` per arm. Structure; the lowerer
         // reads one arm of it (`lower_expr`).
         | RawKind::PreprocConditionalOperand
+        // Grammar 5.0.0 (`main` 18c988e8): `#if` groups in a routine header. All are
+        // structure; the lowerer owns descent. `preproc_conditional_parameters` is
+        // an `#if` group in a parameter list and `preproc_conditional_return` /
+        // `preproc_conditional_return_type` a return clause chosen per arm (one arm
+        // read, with a `SyntaxIssue`); `preproc_conditional_procedure_header` is a
+        // nested group of headers in a `preproc_split_procedure` arm and
+        // `preproc_split_trigger_preamble` a split trigger header (one routine per arm).
+        | RawKind::PreprocConditionalParameters
+        | RawKind::PreprocConditionalProcedureHeader
+        | RawKind::PreprocConditionalReturn
+        | RawKind::PreprocConditionalReturnType
+        | RawKind::PreprocSplitTriggerPreamble
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration
