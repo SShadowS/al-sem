@@ -7,6 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Outside consumers (wave 2)
+
+One list of every field and value wave 2 changed for a program that reads al-sem's output
+(bc-dev-mcp, ConTinAI, saved baselines). The sections below describe each change as it was
+made; where they name an older value or mechanism, this list is the current one. Field names
+are as they appear in the JSON. "Additive" means the old shape still holds.
+
+- **Effect rows and error answers** (prove, explain, digest):
+  - Digest effect `status` has a new value, `caught` (a definite trap catches the error on
+    every route), next to `live` and `literal-dead`.
+  - `trap` (additive, on effect rows of prove, explain and digest, and on the rows of prove's
+    filtered slice): `verdict` (`caught`, `escapes-if-write-pending`,
+    `trapped-on-some-routes`), `kind` (`checked-run`, `try-function`, `asserterror`,
+    `isolated-event`), `routine`, and `file` and `line` when known.
+  - `collectedBy` (additive, same rows): the procedures whose
+    `[ErrorBehavior(ErrorBehavior::Collect)]` may collect the error.
+  - `caughtErrors` (digest and explain summaries). An error caught on every route leaves the
+    summary's `kinds`.
+  - prove's filtered slice JSON gains `caught`.
+  - `suppressedCommits` (prove `result.suppressedCommits` for a commit question; digest entry
+    `suppressedCommits`), present only when some commit is ignored or turned into an error by a
+    `[CommitBehavior]`. Each entry has `behavior` and `reason`, and `file` and `line` (1-based)
+    when known. `beyond` is the dependency routine for a commit past a call into dependency
+    code. It is a routine name, not a flag, and is left out when the commit is not beyond one.
+  - An `ERROR_IMPLICIT` row for a commit turned into an error carries `detail.commitBehavior`.
+- **Assumptions** (all only when set):
+  - prove `obligations.assumesNoPendingWriteAtEntry`, `obligations.assumesNoCommitBehaviorAtEntry`.
+  - digest and explain `summary.assumesNoPendingWriteAtEntry`,
+    `summary.assumesNoCommitBehaviorAtEntry`.
+  - digest and explain `coverage.assumptions` gain the labels `no-pending-write-at-entry`,
+    `no-commit-behavior-at-entry`.
+- **Platform operations:** `query effects` and `query touches` JSON gain `origin.platform` on a
+  row for a platform dataset operation (a report's or query's read, an XmlPort import's
+  insert or modify); human output adds `(platform: …)`; explain adds a `platform:` line; such a
+  row's evidence `excerpt` is the reason instead of `Var.Op`. No field was removed or renamed.
+- **Gaps:** coverage reason `unreadable-event-subscriber` (an `[EventSubscriber]` the engine
+  cannot read; prove `unknown`, explain and digest name it); `query touches` adds a count,
+  `unreadableEventSubscribers`, only when above 0, and then says `analysis partial`.
+- **Digest paths:** `paths[].terminal.operationId` now names the site whose line it prints,
+  for any callee with two sites of one kind (it used to name a representative fact's id).
+- **Attribute JSON** (the L2 projection's `attributesParsed`, and the model's `AttributeInfo`
+  wherever it is serialized): `conditional: true` when only some builds of THIS declaration have
+  the attribute, `anotherDeclarationLacks: true` when another declaration of the same routine
+  lacks it. Both are left out when false. `conditional` no longer appears for an attribute only
+  another declaration lacks.
+- **Human lines** (text outputs; each is new or reworded):
+  - prove and digest: `commit behavior:` (a commit that is ignored or raises an error, with
+    why); explain prints the same line.
+  - prove: `no — no error site escapes the routine; N error sites caught on every route by a
+    trap`, and the lines `caught on every route by a trap: …; not counted`.
+  - prove, explain, digest: the condition words `escapes on a route with no trap; caught on
+    others (…)`, `a write may be pending at the checked Codeunit.Run at …`, `escapes only if a
+    write is pending when the event is raised, …`; the filtered prove's `escapes on the route
+    below (no trap on it); other routes are caught by the …`.
+  - explain and digest: `errors caught on every route by a trap (they do not leave the routine
+    if its callers have no write pending when they call it …)`; the summary's `; N caught on
+    every route by a trap`.
+  - prove, explain, digest headers: the longer `assumptions:` sentence
+    (`traps::entry_assumption`).
+  - explain: the compact card's wording (section "compact explain card" below), including
+    `no table-event subscriber loaded` and `lines 351, 623 (…)`.
+  - query effects: `[CalcFields] on … through FlowField "…"`.
+- **`alsem graph`** (schema `al-sem.callgraph`, major version still 1):
+  - additive optional node field `otherDeclarations`, `[{sourcePath, line, endLine}]`: the other
+    places of a routine declared more than once with the same subscriptions;
+  - a subscriber whose declarations subscribe differently is one node per declaration, each with
+    its own lines and subscriptions;
+  - a static report save is a resolved `run` edge to the report (it was an `Open` edge into the
+    `h:run:report` hub); `Q.Open()` and `Query.SaveAs*` get an edge into the query's
+    `OnBeforeOpen` (`entry_trigger`);
+  - an importing routine gets `implicitTrigger` and `tableEvent` edges (confidence `OverApprox`)
+    to its tables' `OnInsert`/`OnModify` and table events;
+  - `hiddenCallers` value `unboundSubscriber` is set on a subscriber with an unreadable
+    `[EventSubscriber]` even when another of its subscriptions is bound (the value is not new);
+  - a subscriber declared only in a second file gains its subscription edges.
+- **Routine and site ids:**
+  - A split subscriber (whose declarations subscribe differently) has new routine ids, stable
+    ids `{stable}~{8 hex}` and site ids. A name or the routine's base id selects every
+    declaration (`prove`, `digest`, `tests`, `impact`); `~hex` selects one; the fingerprint
+    query lists them as candidates (`differs_in` says "the file or #if arm"). A change of
+    another file's subscription that starts or ends a split moves an unchanged file's ids once.
+  - A routine declared in two `#if` arms of one file: the second arm's site ids move (`…/opN`,
+    `…/csN`, `loop`, `u`, `rule`).
+  - A routine declared in two or more files: each file's site ids are in that file's own block,
+    `…/op{block * 100000 + n}`, with the block picked from a hash of the file's own source unit.
+    The format is the same; the numbers are large. A file's ids move when a second file starts
+    or stops declaring the routine, or when its own path changes.
+  - Everything built on site ids moves with them: digest `factId`, `evidenceOperationId`,
+    `callsiteId`, snapshot and `diff` operation ids, `explain`/`prove` lines. Fingerprints strip
+    site segments, so baselines do not move except where a split changes a routine's id.
+    `SNAPSHOT_SCHEMA_VERSION` is unchanged (the snapshot's shape did not change).
+  - `alsem query` no longer calls a routine declared in two `#if` arms ambiguous (one candidate
+    per stable id).
+- **Schema and cache values** (now):
+  - Impact JSON `summarySchema`, and the impact-base cache key: **9**
+    (`impact::keys::SUMMARY_SCHEMA`; 2 before wave 2). A base cached earlier is not read.
+  - `PACK_SCHEMA` **17** (14 before wave 2): dependency packs are rebuilt.
+  - `FACADE_VERSION` **2** (1 before; the session dependency recorder, internal).
+- **Answers that changed without a new field:** the record operations of a report's, query's or
+  XmlPort's platform dataset run; a report's `SaveAs*`/`Execute`/`Print` and a query's
+  `Open`/`SaveAs*` now run their triggers; FlowField reads (`query touches`, `query effects`,
+  `digest --include-reads`, `fingerprint`'s `R` right); `unknown` where a dynamic object id or an
+  unreadable subscriber gave `no`; `conditional` for `#if` arms and per-record triggers; errors
+  caught by a trap leave the error answers.
+
+Terms used in the wave-2 sections below:
+- **`N`, `I`, `E`, and sets like `N|I` or `N|E`:** the `[CommitBehavior]` value a commit may run
+  under (`N` normal, `I` ignored, `E` raises an error); `N|I` means "normal or ignored", because
+  the routes or builds differ. `P` and `X` are the same value on a route pinned by a checked
+  `Codeunit.Run` (a commit that runs, or an error that the run traps).
+- **#160 step 11b, "the 11b rules":** the rules issue #160 added for rows of one routine id that
+  share a site id: a reader that looks a site up in such a group must take the row that holds
+  it, not any row.
+- **Class P:** of the 11b rules, the case where such a reader keeps the LAST row that holds the
+  site.
+- **Least fixpoint:** the result of repeating a rule over the reachable routines until no
+  routine changes; used for "may a write be pending at this run".
+- **Per-value transfer function** (`commit_scope::Transfer`): one result per `[CommitBehavior]`
+  value a routine may be entered under, so a "may" deep in the graph combines exactly with a
+  declaration above it.
+
 ### Fixed (engine limits wave 2, B2 final review follow-up 5: the rest of the unreadable `[EventSubscriber]`)
 
 - **An unreadable field of a table's validate event is a gap too** (review of 1dbb302c).
@@ -28,7 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscription of the routine it does subscribe differently, so the routine splits (probe
   `cw`: `RaiseY` stays `no`, `RaiseX` is the gap). Names are compared with `fold_identifier`
   on both sides.
-- `PACK_SCHEMA` 17, `SUMMARY_SCHEMA` 9.
+- `PACK_SCHEMA` 17, `SUMMARY_SCHEMA` 9 (the current values).
 - Tests (`tests/cli/cli_b2_alternative_declarations.rs`) with proofs, break with Edit, red,
   revert with Edit, green:
   - Unreadable element left as "no element": `an_unreadable_element…` red (`no`).
@@ -57,7 +178,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Split:** a declaration with an unreadable subscription never counts as subscribing
   differently (only the readable copies are compared), so `u2` stays one routine and its
   body stays reachable. When the readable copies differ and it does split, the unreadable
-  copy also subscribes to every event its readable siblings do.
+  copy also subscribes to every event its readable siblings do. *(Follow-up 5 above changes
+  both halves: it does count as subscribing differently when its readable parts rule out
+  every readable subscription of its routine, and it borrows only the sibling subscriptions
+  its own parts allow.)*
 - **The gap:** `model::events` records one `unreadable` event edge per attribute of any
   app (`unknown/unreadable/…`), and `combined_graph` puts an uncertainty
   (`unreadable-event-subscriber`, a coverage reason) on every publisher routine and every
@@ -72,8 +196,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependencies are unreadable (`aldump --program-call-graph-stats`, every parsed attribute
   counted, 2026-11-10), so no answer on CDO moved; the guards are for shapes nothing has
   shown yet.
-- `PACK_SCHEMA` 16 (entries for unreadable attributes), `SUMMARY_SCHEMA` 8. `alsem graph`
-  schema unchanged.
+- `PACK_SCHEMA` 16 (entries for unreadable attributes), `SUMMARY_SCHEMA` 8 (at this round; the
+  current values are in "Outside consumers (wave 2)" above). `alsem graph` schema unchanged.
 - Dependency selectors are scoped to the workspace app (a name finds no dependency
   routine, a stable id does), for every routine, not only a split subscriber; unchanged.
 - Tests (`tests/cli/cli_b2_alternative_declarations.rs`) with proofs, break with Edit,
@@ -129,8 +253,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph's major version stays 1 (spec 2026-10-13 §4.2). bc-dev-mcp's join still falls
   back by name for a place it does not read; it should read this field (outside-consumers
   update).
-- **Ids:** `SUMMARY_SCHEMA` 7 (a split declaration's model id and `~hex` suffix derive
-  from the place hash, so they move once); the recorder's `FACADE_VERSION` 2 (a new
+- **Ids:** `SUMMARY_SCHEMA` 7 at this round (a split declaration's model id and `~hex` suffix
+  derive from the place hash, so they move once); the recorder's `FACADE_VERSION` 2 (a new
   query, `DeclarationsOf`, and `routines_of`/`routines_named` now hide the other
   declarations). A split declaration's id stays the declaration's own when other files
   change, but **a change of another file's subscription that starts or ends a split
@@ -140,7 +264,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suffixing every routine with a second declaration would stop that one case, at the
   price of splitting every `#if` procedure in real code (model rows, selectors, the
   join's "alternatives" reading) to save one rare, one-time move; not done.
-- Limits, as measured (engine-limits B2, updated): a subscription whose
+- *(Superseded by follow-ups 4 and 5 above: an unreadable `[EventSubscriber]` now stays on
+  its node as a coverage gap, and a copy with one is not compared.)* Limits, as measured
+  (engine-limits B2, updated): a subscription whose
   `[EventSubscriber]` attribute the engine cannot read is not on its declaration's node
   (as with any subscriber), and two copies count as subscribing alike or differently from
   the readable ones; no real code has shown one.
@@ -180,7 +306,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - N3: the L4 summary solver entered every declaration: `query touches --table "AD W"`
     listed `RaiseY` and `OnY` for the `OnX` declaration's insert, and `query effects
     --routine RaiseY` counted it.
-- **The fix, in the shared layer.** Every walker reaches a routine through its id, so a
+- **The fix, in the shared layer.** *(Superseded by follow-up 3 above: the split now happens
+  once in the program graph, `program::split_decls` and `build::split_declarations`, and the
+  model takes each row's ids from its node. `split_subscriber_declarations`,
+  `events::row_declares_subscription` and `program_calls::split_declaration_edges` no longer
+  exist. The id's internal hash below is also `sig_fp`-mixed now. The rest of this bullet
+  describes this round's first version.)* Every walker reaches a routine through its id, so a
   subscriber whose declarations (`#if` arms of a member list, whole-object arms, two
   files) carry different `[EventSubscriber]` sets is now one ROUTINE per declaration
   (`workspace::split_subscriber_declarations`, a step of the model join): a new internal
@@ -202,13 +333,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     search, the detectors and `alsem impact` (built on the model) all walk those edges,
     so all of them reach only the declaration that subscribes. The cone-only mechanism
     of follow-up 1 (`arm_subscriber_nodes`, `rows_declaring_subscription`) is removed.
-    `alsem graph` (`program::impact_graph`) is built from the program graph's nodes, one
-    per subscriber: it stays a may-execute graph that can list a declaration's callees
-    under a dispatch it does not subscribe to. Its contract is an over-approximation
-    (bc-dev-mcp selects MORE tests from it, never fewer), so it gives no wrong definite
-    answer.
+    *(Follow-up 3 above splits the program graph too, so `alsem graph` is one node per split
+    declaration and does not list a declaration's callees under a dispatch it does not
+    subscribe to.)* `alsem graph` (`program::impact_graph`) is built from the program
+    graph's nodes, one per subscriber: it stays a may-execute graph that can list a
+    declaration's callees under a dispatch it does not subscribe to. Its contract is an
+    over-approximation (bc-dev-mcp selects MORE tests from it, never fewer), so it gives no
+    wrong definite answer.
   Declarations that subscribe alike keep one id (the B2 per-arm reading, as before).
-- **What is still a limit, and why it gives no wrong definite answer.** A part of an
+- *(Superseded: follow-ups 3 to 5 above replace this. An unreadable `[EventSubscriber]` no
+  longer counts as a match that could widen a route: it is a coverage gap, narrowed by its
+  readable parts, and a selector names a split subscriber.)* **What is still a limit, and why
+  it gives no wrong definite answer.** A part of an
   `[EventSubscriber]` the engine cannot read (an argument in no readable form) matches,
   and a table-event edge whose event no declaration's attribute matches goes to every
   declaration: a declaration that MAY subscribe is kept, which only adds possible
@@ -221,10 +357,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is logged (it was a `debug_assert`).
 - **Wording:** follow-up 1's "Left (stated)" bullet below said the other walkers could
   not give a wrong answer; corrected there and in engine-limits B2.
-- **Outside consumers.** A split subscriber's declarations get new routine ids, stable
+- **Outside consumers** (the list at the top of the wave-2 sections is the current one). A
+  split subscriber's declarations get new routine ids, stable
   ids (`…#{hash}~{8 hex}`) and site ids; selectors, digests, snapshots, `diff`,
   `alsem graph` and fingerprints see one routine per declaration (each displayed by the
-  routine's name). The impact summary schema is 6. No golden moved.
+  routine's name). The impact summary schema was 6 at this round. No golden moved.
 - Tests: CLI `cli_b2_alternative_declarations` (each in one file `#if`/`#else` and in two
   files, both orders, single-app and cross-app): `a_subscription_is_matched_on_its_publisher_too`
   (N1), `a_dispatch_runs_under_its_own_declarations_commit_behavior` (N2, `Error` and
@@ -241,7 +378,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default and `--low-mem`: every step `equalToCold: true`.
 - Discrimination proofs (break with Edit, narrowest test RED, revert with Edit, GREEN;
   CLI = `cargo test --test cli cli_b2_alternative_declarations::`; three rounds, each
-  round's reverts seen green in the next, the last round's in a final run, 15/15):
+  round's reverts seen green in the next, the last round's in a final run, 15/15; proofs 1
+  and 3 to 6 broke this round's model-level split, which follow-up 3 replaced, and follow-up
+  3's own proofs are the current ones):
   1. The split off (`true ||` on the early return): RED N1, N2, N3, the B1 dispatch
      test and the table-event test.
   2. The overflow widening off (`true ||`): RED `site_blocks_widen_past_a_full_block`.
@@ -255,8 +394,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (engine limits wave 2, B2 final review follow-up: each declaration's own body)
 
-- **A dispatch reaches only the declarations that subscribe** (review blocking B1). The
-  fix below made `EventFacts::of_arms` union every copy's subscriptions onto the one
+- **A dispatch reaches only the declarations that subscribe** (review blocking B1).
+  *(Superseded by follow-ups 2 and 3 above: the mechanism here, the cone-only
+  `arm_subscriber_nodes` and `rows_declaring_subscription`, was removed; a subscriber whose
+  declarations subscribe differently is now one node per declaration, in the program graph,
+  and the node's union of subscriptions no longer tells a build apart for such a subscriber.)*
+  The fix below made `EventFacts::of_arms` union every copy's subscriptions onto the one
   routine node, so one copy's subscription reached ANOTHER copy's body: in `#if A [
   EventSubscriber(…'OnX'…)] H: Commit(); #else [EventSubscriber(…'OnY'…)] H: (empty)
   #endif`, `prove . "AD Pub::RaiseY" may-commit` said `yes`, citing the `OnX`
@@ -289,8 +432,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[CommitBehavior(Ignore)]` on the one declaration that commits: `may-commit` is `no`
   for it and its callers (probes c1 member arms, c2 two files, c3 whole objects; was
   `yes (conditional)`); the commit in the OTHER declaration stays `yes` (control).
-  `Two` with `Ignore` in one arm and `Error` in the other reads `I|E` (no build runs
-  it normally), not `N|I|E`.
+  `Two` with `Ignore` in one arm and `Error` in the other reads `I|E` (ignored or an error; no
+  build runs it normally), not `N|I|E` (any of the three).
 - **A file's site ids no longer move when another file changes** (non-blocking 2). The
   fix below numbered a later file's rows after the earlier files', so adding sites to
   `a.al` moved `b.al`'s (`op5` → `op7`) and a rename that changed the sort order moved
@@ -313,7 +456,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frames carries no order today (a TryFunction's walk and a bodiless row stamp none),
   but the rule no longer rests on that (`collided_row`).
 - **The join and the summary merge read every group alike** (non-blocking 4). The join
-  skipped symbol-only groups (`is_source`) while `merge_alternative_summaries` merged
+  skipped symbol-only groups (by an `is_source` test that no longer exists) while `merge_alternative_summaries` merged
   them. A symbol-only group is an ABI overload collapse: the overloads compile
   together, but a caller bound to the id cannot tell which it reaches, so an attribute
   one of them lacks is a "may" for that caller. The join now marks every group (lifting
@@ -329,7 +472,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attribute JSON (the L2 projection's `attributesParsed`, and the model's
   `AttributeInfo` wherever it is serialized) gains `anotherDeclarationLacks: true`
   where it applies, and `conditional` no longer appears for an attribute only another
-  declaration lacks. The impact summary schema is 5
+  declaration lacks. The impact summary schema was 5 at this round
   (`impact::keys::SUMMARY_SCHEMA`, the impact JSON field `summarySchema`). No golden
   moved.
 - **Left (stated here, and wrong):** "only the cone ties a subscription to its
@@ -358,7 +501,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Discrimination proofs (break with Edit, narrowest test RED, revert with Edit, GREEN;
   CLI = `cargo test --test cli cli_b2_alternative_declarations::`; breaks with
   independent tests were run together, five rounds, and each round's reverts were seen
-  green in the next):
+  green in the next; proofs 1 and 2 broke `arm_subscriber_nodes`, removed by follow-up 2):
   1. `arm_subscriber_nodes` off (`true ||` on the early return): RED
      `a_dispatch_reaches_only_…` (one file, `OnX` first: `RaiseY` `yes`).
   2. Its site filter off (every fact and edge kept): RED the same test.
@@ -427,8 +570,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `cs`, `loop`, `u`, `rule`), as `#if` arms in one file already did, so a site id
     names one site. The rewrite covers every field that holds a site id; a debug build
     asserts it (the row's `Debug` text after equals the rewrite of its text before).
-    Decided: distinct, not shared, so no reader needs the class-P "last owning row"
-    rule for real source any more. (The follow-up above replaces "continue after the
+    Decided: distinct, not shared, so no reader needs the class-P rule (the "last owning
+    row"; see the terms list above) for real source any more. (The follow-up above replaces "continue after the
     earlier files" with a block per file picked from its own path: the continuing
     numbers moved a file's ids when another file changed.)
   - A table declared more than once is temporary only when every declaration is.
@@ -474,8 +617,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a block of its own); fingerprints strip site segments, so baselines do not
   move. Digest: a caller's `paths[].terminal.operationId` now names the site whose line
   it prints (any callee with two sites of one kind). The impact-base cache's summary
-  schema is 4 (`impact::keys::SUMMARY_SCHEMA`; the impact JSON field `summarySchema`
-  reads `4`): a base cached before holds the old ids and readings. `alsem graph` may gain
+  schema was 4 at this round (`impact::keys::SUMMARY_SCHEMA`; the impact JSON field
+  `summarySchema` read `4`): a base cached before holds the old ids and readings. `alsem graph` may gain
   subscription edges (a subscriber declared in a second file). No snapshot schema bump
   (its shape did not change). No golden moved.
 - **CDO** (`bc3ccb18`, counted from source, not run): the workspace declares no object
@@ -650,7 +793,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reading the first row's commits → `no`.
   - `commit_scope::CommitScopes::of_model` (B4): an id's declaration is the union of
     every routine row's and every object row's (`Declared::union`), and a row that
-    declares nothing adds `Normal`; the last-wins maps kept one row. Tests
+    declares nothing adds `Normal`; the last-wins maps kept one row. (`N|I|E` below: normal,
+    ignored or an error.) Tests
     `cli_b2_arm_readers::a_declaration_one_files_row_lacks_only_may_apply` (one id in two
     files, only one declares `Ignore`: `may-commit yes`; it was a definite `no`) and
     `commit_scope::tests::every_arm_adds_its_declaration` (attribute and
@@ -680,7 +824,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A routine declared in two `#if` arms cites each arm's own line.** `#if A procedure
   P() … #else procedure P() … #endif` is two declarations under one routine id (#160
-  step 11b). Each declaration numbered its sites from 0, so both arms minted
+  step 11b: the rules for rows that share site ids; see the terms list above). Each
+  declaration numbered its sites from 0, so both arms minted
   `{id}/op0`, `{id}/cs0`, and every reader that resolves a site id to one row (the
   last) cited arm B's line for arm A's fact: `prove CallsOnlyInClean writes-table:"Log
   A"` on the values probe answered `:58` (arm B's `LogB.Insert`) where the write is at
@@ -717,7 +862,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `assemble_and_resolve_inline_program_shared_site_ids` /
     `assemble_and_resolve_workspace_program_shared_site_ids`; their assertions about
     collision handling are unchanged. `collided()` asserts the shared `cs0`/`op0`.
-    The L4 host oracle `t1u` takes its collision from two files.
+    The L4 host oracle `t1u` takes its collision from two files. (The final review above
+    changed that too: `t1u`'s precondition is now one site per row.)
   - The collision census line gains `groups_one_file` (groups whose rows come from
     one file: numbered apart now).
 - **Output and ids outside consumers read.** Only routines declared in two arms of one
@@ -734,8 +880,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `explain` (human and JSON), `digest` and `prove may-commit` for the three
   `output_cdo` routines (IssueReminder, RunReportID, UpdateLastUpload) are
   byte-identical but for the timestamp, so the CDO goldens are not expected to move.
-- **The impact-base cache's summary schema is 3** (`impact::keys::SUMMARY_SCHEMA`): a
-  base cached before could cite the other arm's line for a site, so it is not read.
+- **The impact-base cache's summary schema was 3 at this round**
+  (`impact::keys::SUMMARY_SCHEMA`): a base cached before could cite the other arm's line
+  for a site, so it is not read.
 
 ### Fixed (engine limits wave 2, B2)
 
@@ -802,7 +949,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arm that may fall through; `literal_flow::always_leaves` and `param_guard::is_exit_only`
   refine only when an arm always leaves); none reads "may return early".
 - **An attribute or property that only some builds have is a "may", never a definite
-  declaration** (second review, blocking 2 and 3). `#if CLEAN99 [CommitBehavior(
+  declaration** (second review, blocking 2 and 3; for the attributes and properties listed
+  here. `SingleInstance`, `Access`, `ObsoleteState`, a `temporary` marker on `SourceTable` and a
+  `temporary` on a `VarDecl` are not read this way yet: engine limits, "B2 in detail").
+  `#if CLEAN99 [CommitBehavior(
   CommitBehavior::Ignore)] #endif procedure P()` was read as declared in every build, so
   `prove P may-commit` (and its caller's) said a definite `no`, though a build without
   `CLEAN99` commits (master said `yes`). An XmlPort `Direction = Export;` in one arm
@@ -820,7 +970,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     have it"; a reader that decides a definite answer from presence uses the new
     `find_definite_attribute`/`has_definite_attribute`. Readers changed:
     `commit_scope::declared` (a conditional `[CommitBehavior]` adds its value to what a
-    build without it runs under: `N|I`, `N|E`, like the object property, reason `… in
+    build without it runs under: `N|I` (normal or ignored), `N|E` (normal or an error), like
+    the object property, reason `… in
     some builds only (may apply)`; new `DeclSource::ConditionalAttribute`, and its
     callers'-question row); `return_summary::parse_commit_behavior` (definite only; new
     value `"conditional"`, which `ordering_engine` grades `assumed_effective`, never
@@ -908,8 +1059,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the model-level join, `join_alternative_declarations`.)
 - **Not fixed here (fixed by "B2 per-arm ids" above): a routine declared in two `#if`
   arms still cited one arm's line for the other's write.** Both arms minted the same site
-  ids (`{routine}/op0`), and readers resolve an id to one row (#160 step 11b, class P:
-  the last row).
+  ids (`{routine}/op0`), and readers resolve an id to one row (#160 step 11b, class P: a
+  reader keeps the last row that holds the site).
 - The #288 trust-gate tests G1/G2 state their dead marks by assignment: production no
   longer marks the code after an arm's `exit` unreachable, which those tests relied on.
 - Leading-guard readers that stop at the first non-statement now stop at a group too
@@ -944,8 +1095,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3. The may-exit rule in `operation_order::walk_block` (`false &&`): RED
      `a_statement_that_may_exit_…`, every one of the six shapes regained
      `COMMIT_DOMINATES_RETURN` (and the five direct ones `WRITE_COMMITTED_BEFORE_RETURN`).
-  4. `lift_arm_declarations` call commented out (first fix-up guard, unproven until
-     now): RED `each_arm_of_a_two_arm_routine_is_conditional`.
+  4. *(`lift_arm_declarations` no longer exists: the final review replaced it with the model
+     join; its proof 2 is the current one.)* `lift_arm_declarations` call commented out (first
+     fix-up guard, unproven until now): RED `each_arm_of_a_two_arm_routine_is_conditional`.
   5. Lowerer: an attribute written in an arm is conditional (`false &&`): RED
      `a_commit_behavior_only_…`, `a_try_function_only_…`,
      `a_commit_under_a_conditional_declaration_…` and the lowerer unit test.
@@ -1053,7 +1205,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked run with no explicit `Commit()` answers `may-commit no`, before and after this
   change; engine limits L16). So a commit inside a checked run stands in for it: once a
   route crosses a checked run, a commit that runs normally or is ignored is the run's
-  commit, and no commit error escapes the run (the run traps it). Without this,
+  commit, and no commit error escapes the run (the run traps it). (That speaks of an error
+  raised inside a run that has started. With a write pending at the run, B7 says a checked
+  run is no definite trap, and BC raises an error at the run itself; there is no commit
+  error row in that case either. The run's own error is not modeled, so such a shape can
+  answer a wrong `throws-error: no`, engine limits L28.) Without this,
   `[CommitBehavior(Ignore)] procedure P() begin if Codeunit.Run(X) then; end` (X commits)
   answered a wrong `may-commit no` with a false "ignored" reason.
 - **A checked run under `Error` may commit, but not for certain.** Learn does not say
@@ -1062,7 +1218,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the run commits. So `may-commit` says `yes`, `commits-on-success-path` says `unknown`
   (before: `yes … unconditional on success`, a definite reading of something Learn does not
   state), and `throws-error` adds no commit error. Same for an `Error` declared inside the
-  run.
+  run. (A write pending at the run: see the previous entry's note and engine limits L28.)
 - **Learn does not say whether the scope follows into an object a call starts.** The
   engine reads it as *may* apply for every way of starting one: any `Run` or `RunModal`, a
   report's `SaveAs*`, `Execute` and `Print`, an XmlPort's `Import` and `Export`, a query's
@@ -1173,7 +1329,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7. `at_least_conditional` disabled → `every_way_…` FAILS (`ReportRun` answers
      `commits-on-success-path yes`) and `a_checked_run_…` FAILS.
   8. the all-routes prefix at a crossing dropped (`CbGraph::beyond`, the guard that
-     replaced round 1's `anc_primary` widening; redone in round 3 on the per-root walk:
+     replaced round 1's `anc_primary` widening, which no longer exists; redone in round 3 on the per-root walk:
      `at_root.get(f) & 0`) →
      `a_longer_normal_prefix_to_a_crossing_keeps_the_commit_beyond` FAILS (`Root` answers
      `no`).
@@ -1197,7 +1353,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all read it. An undecided binding keeps B6's unresolved `OverloadAmbiguous` route
   (`unknown`), and the commit scope reads its site as `Step::Run`, a "may", so no definite
   answer rests on it. B7's `CbGraph::commit_surely_runs` (a checked run read as
-  `Step::Run`) runs on B4's per-value transfer functions: `backward_states(origins, pin)`
+  `Step::Run`) runs on B4's per-value transfer functions (`commit_scope::Transfer`: one result
+  per behavior the routine may be entered under): `backward_states(origins, pin)`
   keeps B7's `pin` flag, and the root's own declaration is applied to its transfer.
   Tests: `cli_prove_commit_behavior::a_start_follows_the_overload_binding_and_an_undecided_one_gives_no_no`
   (`CallPrint` `no` with one suppressed commit; `CallUndecided` `unknown`; `CallBuiltin`
@@ -1579,7 +1736,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   With a request page the user may choose either, so both stay possible.
 - **Plumbing:** the IR keeps `ObjectDecl::dataset_items` (report and query dataitems,
   XmlPort table elements, with `UseTemporary`/`AutoSave`/`AutoUpdate`/`AutoReplace` per
-  build), the graph `ObjectNode::dataset` (pack schema 15), the resolver
+  build), the graph `ObjectNode::dataset` (pack schema 15 at this round), the resolver
   `SiteFacts::dataset_run` with each operation's trigger and table-event routes
   (`program::resolve::dataset`), and the model `ModelRecordOperation::dataset_reason`.
 - **Output that outside consumers read:** `query effects`/`touches` JSON gains
@@ -1797,7 +1954,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     is none), a call before the run into code that may leave
     a write (a callee's write, a call no edge resolves, a callee with no row; not through a
     checked run), or a write pending where a caller in the root's reach called the routine
-    (a least fixpoint over the reach). When the ruling may rest on a checked run with no write
+    (the rule repeated over the root's reach until no routine changes). When the ruling may rest on a checked run with no write
     pending inside the root, the answer states the one thing it cannot see: `assumptions: …
     assumes the routine's callers have no write pending when they call it …` (prove JSON:
     `obligations.assumesNoPendingWriteAtEntry: true`), for the unfiltered and the filtered
