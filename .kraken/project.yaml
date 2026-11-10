@@ -5,16 +5,29 @@ image: .kraken/Dockerfile
 ssh_port: 2210 # server1's sshPorts range 2210-2299
 mem_limit: 32g # with the bc sidecar (sql 4g, its tmpfs inside that limit; bc 6g) 42g: server1's maxMemory must be >= 42g
 agents:
-  # one agent: agentflow's issue leases live in this checkout's .agent/, so a second
-  # /orchestrate in another worktree would not see them
-  - name: main
+  # Lanes run on kraken coord. Do not run /orchestrate here: agentflow's issue leases live in one
+  # checkout's .agent/, so another worktree's /orchestrate would not see them.
+  - name: orchestrator
     branch: master
     model: opus
-    session_name: alsem-main
+    session_name: alsem-orchestrator
     start:
-      - "Run `kraken tentacle ack` and report its output in one line. Do nothing else."
-      # pi is on the ChatGPT subscription (openai-codex), which has no Gemini: the 2026-10-16 stand-ins
-      - "/loop /orchestrate Reviewers for this loop are the stand-ins: gpt-6.1-sol for gpt-6-astra and Opus for gemini-3.8-flash."
+      - /kraken:kraken-join
+      - "/loop You are alsem-orchestrator. Do one sweep: read docs/Handoff/kraken-move.md if you have not in this session, keep the coord board in step with it on lanes engine and tools, at most one task in progress per lane, one merge and one cdo-gate at a time. Its section 2 says start nothing without the owner's go-ahead: for those items file `kraken coord ask --to owner` once and keep the id, and at the start of each sweep check your ids with `kraken coord question <id>`."
+  # L4, L5, detectors, lowerer: anything that moves goldens
+  - name: lane-engine
+    branch: alsem/lane-engine
+    model: opus
+    session_name: alsem-engine
+    coord_lane: engine
+    start: [/kraken:kraken-join]
+  # digest, CLI, outside consumers, docs
+  - name: lane-tools
+    branch: alsem/lane-tools
+    model: opus
+    session_name: alsem-tools
+    coord_lane: tools
+    start: [/kraken:kraken-join]
 setup:
   - bash scripts/kraken-setup.sh
 env:
