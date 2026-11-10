@@ -195,6 +195,12 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 - **Start it** with `kraken siphon start bc --no-wait`, then `kraken siphon status bc` until
   ready. A cold BC takes about 3 minutes, longer than the Bash tool's 120 s default. It
   stops itself after a quiet spell.
+- **Ask the owner for what you cannot fix yourself** (a BC restart, memory, network, config,
+  access): `kraken coord ask --to owner --kind <bc-restart|resource|network|config|access|other>
+  [--target <x>] [--task <id>] "<what and why, at most 300 chars>"`. Keep the id it prints and
+  check it with `kraken coord question <id>` at the start of each sweep (`answer` is null while
+  open). Do not file it again. Nothing tells you when the owner answers: the answer is only
+  written to coord, and `coord questions` / `coord overview` simply stop listing it.
 
 ## Architecture
 
