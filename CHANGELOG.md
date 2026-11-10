@@ -257,8 +257,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Rep.SaveAsPdf(…)`, `Q.Open()`) dispatch to the run's triggers like `Rep.Run()`. A
   query's run trigger is `OnBeforeOpen`
   ([OnBeforeOpen (Query) trigger](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/triggers-auto/query/devenv-onbeforeopen-query-trigger)).
-  A report or query that declares a procedure of that name takes a call with arguments
-  instead (the rule `Run` already had), and then runs no dataset.
+  A call that binds to the report's or query's own procedure of that name runs neither
+  the triggers nor the dataset; which one a call binds to is decided by the overload
+  rule in the round-2 entry below.
 - **A dynamic object id no longer gives a definite `no`** (review fix).
   `Report.SaveAsPdf(Id, …)`, `Report.Execute(Id, …)`, `Report.Print(Id, …)` and
   `Query.SaveAsCsv(Id, …)` with a computed `Id` named no object, so they read no
@@ -289,6 +290,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Output that outside consumers read:** `query effects`/`touches` JSON gains
   `origin.platform` on such rows; the evidence `excerpt` of such an operation is its
   reason instead of `Var.Op`. No field was removed or renamed.
+- **A call to a report's or query's own procedure named `Print`, `Execute`, `SaveAs*`
+  or `Open` is a call of that procedure again** (round-2 review). The first fix-up
+  honoured such a procedure only for a call with arguments, so `R.Print()` against a
+  report that declares `procedure Print()` was read as a run of the report: `prove
+  writes-table` said `no` for the table the procedure writes and `yes` for one the
+  report's `OnPreReport` writes, and `alsem graph` had a `run` edge to the report and
+  no edge to `Print`, so bc-dev-mcp selected no test for a change to `Print`. These
+  methods take part in ordinary overload resolution with the object's procedures,
+  unlike `Codeunit.Run`, where any declared `Run(…)` hides the built-in for a call with
+  arguments. Probed with alc 18.0.43.1464 (a procedure returning `Guid` shows which one
+  bound): `R.Print()` and `R.Execute(5)` bind the procedures `Print()` and
+  `Execute(Integer)`; `R.Execute('')` binds the built-in `Execute(Text)` next to
+  `Execute(Integer)`; `R.SaveAsPdf('x')` binds the built-in `SaveAsPdf(Text)` over a
+  procedure `SaveAsPdf(Code[250])`; `Cu.Run(DateRec)` against `procedure Run(var R:
+  Record Integer)` is still AL0133. The rule now (`resolver::run_by_other_name_binding`,
+  used by the resolver and by the dataset run alike):
+  - a procedure that fits the argument count where no built-in signature does takes
+    the call; a built-in that fits where no procedure does takes it. The built-in
+    signatures are Learn's instance methods: `Report.Execute(Text [, RecordRef])`,
+    `Print(Text [, Text] [, RecordRef])`, `SaveAs(Text, ReportFormat, var OutStream
+    [, RecordRef])`, `SaveAsExcel/Html/Pdf/Word/Xml(Text)`; `Query.Open()`,
+    `SaveAsCsv(Text | OutStream [, Integer] [, Text])`, `SaveAsJson(OutStream)`,
+    `SaveAsXml(Text | OutStream)` ([Report data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/report/report-data-type),
+    [Query data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/query/query-data-type));
+  - when both fit, the argument types decide through the resolver's fail-closed pick
+    between overloads; when they do not decide (`R.SaveAsWord('x')` next to
+    `SaveAsWord(Code[250])`, which alc binds to the built-in), the call is
+    `unknown (blocked by: call not resolved)`, never `no`;
+  - a procedure the caller cannot see (`local`, another app's `internal`) takes no part,
+    as in AL.
+  This also fixes a `no` the reviewer found on master: a report declaring `procedure
+  SaveAsPdf(N: Integer)` no longer swallows the built-in call `R.SaveAsPdf('x.pdf')`, so
+  the report's triggers run again.
+- **What a report runs once per record is conditional on the run, never "unconditional
+  on success"** (round-2 review). A `Commit` or a write in a dataitem's
+  `OnAfterGetRecord` was reported as `unconditional on success` through `Report.Run`
+  (already on master) and, after the first fix-up, through `Report.SaveAs*`, `Execute`
+  and `Print`: `prove commits-on-success-path` said `yes` where the report may read no
+  record at all. Learn ([Report Triggers and Runtime Operations](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-report-triggers)):
+  `OnAfterGetRecord` is called "after a record is retrieved from the data item", and an
+  indented data item's records are processed once per record of the item above it. A
+  run edge into such a trigger now carries `fires: maybe` (`CallEdge::fires`, the typed
+  graph and the snapshot's `object-run-resolved`/`variable-typed-call` edges), and
+  digest's path conditionality puts the `conditional` floor on that hop, as it already
+  did for a table trigger that may not fire. Which triggers (`resolver::
+  run_trigger_may_not_run`):
+  - every dataitem trigger of a report or report extension (`OnPreDataItem`,
+    `OnAfterGetRecord`, `OnPostDataItem`): the model does not know which data items are
+    indented, so a top-level `OnPreDataItem` loses its `unconditional` too (imprecise,
+    never unsound);
+  - every table-element trigger of an XmlPort (they run per record exported or per
+    element found in the file);
+  - a page's `OnAfterGetRecord`, `OnAfterGetCurrRecord`, `OnNextRecord`, `OnNewRecord`
+    and the background-task triggers.
+  The object-level triggers (`OnPreReport`, `OnPreXmlPort`, `OnBeforeOpen`, a page's
+  `OnOpenPage`) keep `unconditional on success`. Now `prove commits-on-success-path`
+  answers `unknown (blocked by: conditional effect exists 1)` for the reviewer's probe,
+  and `prove writes-table` ends `(conditional)`. explain's rules across calls
+  (`cross_rules`) no longer let a rule in such a trigger protect the caller's later
+  write: a run edge with `fires` is not a definite step.
+- **A `Direction` written in one `#if` arm alone may still import** (round-2 review,
+  also on master). `#if CLEAN Direction = Export; #endif` was read as `Export` in every
+  build, so `Xmlport.Run` answered `no` for the table it imports into in a build without
+  `CLEAN` (where `Direction` is the default `Both`). Object properties now say whether
+  they sit in an `#if` arm (`ObjectProperty::conditional`); when every `Direction` entry
+  does, both directions stay possible.
+- **`alsem graph` follows an XmlPort import into its tables' trigger and events**
+  (round-2 review, the bc-dev-mcp test-selection gap). The import's own insert or modify
+  may run the table's `OnInsert`/`OnModify` and raises its table events; the model's
+  cone followed them, the call graph did not, so a test that imports into a table was
+  not selected for a change to that table's `OnInsert` or to an `OnAfterInsertEvent`
+  subscriber. The importing routine now has `implicitTrigger` and `tableEvent` edges
+  (confidence `OverApprox`: Learn does not say whether the platform's insert runs
+  `OnInsert`). The schema is unchanged.
+- **Round-2 discrimination proofs** (each break made with Edit, the narrowest test run,
+  then reverted; `cargo test --test cli cli_dataset_operations::` passed with every
+  break reverted):
+  - procedure fits, no built-in → procedure (`(true, false) => Builtin`): FAILED,
+    `CallPrint: answer: no` for "BO Own";
+  - the type pick's procedure arm (`Some(_) => Builtin`): FAILED, `CallOwnSave: answer:
+    no`;
+  - undecided → unknown (`Undecided => true`, a run): FAILED, `BO Own: answer: no` for
+    `CallUndecided`;
+  - only visible procedures compete (visibility filter off): FAILED, `CallLocalHidden:
+    answer: unknown (blocked by: call not resolved 1)`;
+  - the dataset run follows the binding (`!= Undecided` instead of `== Builtin`):
+    FAILED, `query effects` for `CallPrint` listed 2 operations (a `platform:` read);
+  - report dataitem triggers may not run (`Report` dropped from the rule): FAILED,
+    `SaveRows: … (unconditional on success)`;
+  - XmlPort element triggers (`XmlPort` dropped): FAILED, `ImportRows: … (unconditional
+    on success)`;
+  - page per-record triggers (`onaftergetrecord` misspelled): FAILED, `ShowPage: …
+    (unconditional on success)`;
+  - the `fires` source in the call adapter (`callee.kind == "triggerX"`): FAILED,
+    `SaveRows: … (unconditional on success)`;
+  - digest's object-run arm (matches `Always`): FAILED, `SaveRows: … (unconditional on
+    success)`; its variable-call arm: FAILED, `SaveRowsVariable: … (unconditional on
+    success)`;
+  - cross-rules skip a `fires` edge (`true || e.fires.is_none()`): FAILED, explain for
+    `ViaRows` showed `inherits via OnAfterGetRecord (I): rejects when I.Blocked`;
+  - `Direction` in `#if` only (`unconditional = true`): FAILED, `RunIfDir: answer: no`;
+  - the graph's dataset edges (effects filtered out): FAILED, `ImportStatic`'s only edge
+    was `run`.
+  Guards from the first fix-up whose proofs were not recorded, rerun now:
+  - variable report/query saves dispatch to the run (`is_run_by_other_name = false &&
+    …`): FAILED, `SaveTrigVariable: answer: no`;
+  - static `Report.SaveAs*/Execute/Print` are runs (`&& false` on the report clause in
+    `extract::classify_call`): FAILED, `SaveTrig: answer: no`;
+  - a dynamic report id is a dynamic run (the clause kept only for a static id):
+    FAILED, `DynSave: answer: no`;
+  - static `Query.SaveAs*` are runs (`&& false` on the query clause): FAILED,
+    `SaveTrigQuery: answer: unknown (blocked by: call not resolved 1)`;
+  - `xmlport_run_direction` (literal `(false, false)` kept as `XmlPortRun`): FAILED,
+    `RunExportByArgument: answer: yes`;
+  - `is_platform_run_site` (report arm `&& false`): FAILED, explain for `SaveFiltered`
+    lost `literal arguments rule out: 1 table`.
 
 ### Fixed (engine limits wave 2, B7/L23 + L30)
 

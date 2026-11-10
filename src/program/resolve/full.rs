@@ -841,8 +841,9 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
-                facts_out.dataset_run =
-                    member_dataset_run(&recv, &method_lc, arity, obj_node, graph, index);
+                facts_out.dataset_run = member_dataset_run(
+                    &recv, &method_lc, arity, &args_info, obj_node, graph, index, surface,
+                );
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
                 if s == DispatchShape::Multicast
@@ -1670,14 +1671,21 @@ fn xmlport_run_direction(
 /// (`extract::classify_call`), whose arm sets the fact; a variable receiver
 /// whose object is not in the graph resolves as unknown
 /// (`resolver::resolve_member_with_args`), never as a run of nothing.
+#[allow(clippy::too_many_arguments)] // the resolver's own inputs for the same binding decision.
 fn member_dataset_run(
     recv: &ReceiverType,
     method_lc: &str,
     arity: usize,
+    args: &[ArgDispatchInfo],
     from_object: &ObjectNode,
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> Option<DatasetRun> {
+    use crate::program::resolve::resolver::{
+        RunBinding, builtin_run_signatures, declares_entry_method_overload,
+        run_by_other_name_binding,
+    };
     let ReceiverType::Object { kind, name_lc, id } = recv else {
         return None;
     };
@@ -1689,17 +1697,26 @@ fn member_dataset_run(
         from_object,
         graph,
     )?;
-    // A call with arguments that binds to the object's own procedure of that
-    // name runs no dataset (the resolver's same rule).
-    if arity >= 1
-        && crate::program::resolve::resolver::declares_entry_method_overload(
+    // A call that binds to the object's own procedure of that name runs no
+    // dataset (the resolver's same rule, `resolve_member_with_args`). An
+    // undecided one resolves as unknown there, which already keeps `prove`
+    // from a `no`; its dataset is not claimed.
+    let runs = if builtin_run_signatures(*kind, method_lc).is_empty() {
+        !(arity >= 1
+            && declares_entry_method_overload(target, method_lc, from_object, graph, index))
+    } else {
+        run_by_other_name_binding(
             target,
             method_lc,
+            arity,
+            args,
             from_object,
             graph,
             index,
-        )
-    {
+            surface,
+        ) == RunBinding::Builtin
+    };
+    if !runs {
         return None;
     }
     Some(DatasetRun {

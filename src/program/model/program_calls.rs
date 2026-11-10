@@ -2092,6 +2092,18 @@ impl<'a> Converter<'a> {
                 let _ = upgrade_bindings(state, callee, &cs.id);
                 e.to = Some(callee.id.clone());
                 e.resolution = Resolution::Resolved;
+                // B6 round 2: a run reaches a per-record trigger (a report's
+                // `OnAfterGetRecord`, …) that may not run at all. A call site
+                // reaches a trigger only through a run.
+                if callee.kind == "trigger"
+                    && crate::program::resolve::resolver::run_trigger_may_not_run(
+                        id.object.kind,
+                        id.name_lc.as_str(),
+                        id.enclosing_member_lc.is_some(),
+                    )
+                {
+                    e.fires = Some(crate::engine::l4::combined_graph::TriggerFires::Maybe);
+                }
                 if let PCallee::Member { method, .. } = &cs.callee {
                     if method.fold_identifier() == "run"
                         && id.object.kind == al_syntax::ir::ObjectKind::Codeunit

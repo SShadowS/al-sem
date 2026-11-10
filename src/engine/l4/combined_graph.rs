@@ -96,8 +96,11 @@ pub struct TypedEdge {
     /// `implicit-trigger` only: the trigger routine's name (`OnValidate`,
     /// `OnInsert`, …). `None` on every other kind.
     pub trigger_kind: Option<String>,
-    /// `implicit-trigger` only: whether the trigger fires every time its record
-    /// operation executes ([`trigger_fires`]). `None` on every other kind.
+    /// `implicit-trigger`: whether the trigger fires every time its record
+    /// operation executes ([`trigger_fires`]). B6 round 2: on an
+    /// `object-run-resolved` or `variable-typed-call` edge, `Maybe` when the
+    /// run may finish without running the target trigger
+    /// (`resolver::run_trigger_may_not_run`). `None` on every other edge.
     pub fires: Option<TriggerFires>,
 }
 
@@ -799,7 +802,9 @@ fn build_typed_edges(
                     object_type: None,
                     target_id_source: None,
                     trigger_kind: None,
-                    fires: None,
+                    // B6 round 2: a run (`Rep.SaveAsPdf(…)`) into a trigger the
+                    // run may skip (`CallEdge::fires`).
+                    fires: ce.fires,
                 });
             } else if ce.dispatch_kind == DispatchKind::Interface
                 && ce.resolution == Resolution::Maybe
@@ -866,7 +871,8 @@ fn build_typed_edges(
                     object_type: Some(object_type.to_string()),
                     target_id_source: None,
                     trigger_kind: None,
-                    fires: None,
+                    // B6 round 2: a trigger the run may skip (`CallEdge::fires`).
+                    fires: ce.fires,
                 });
             }
             // method unresolved / interface non-maybe etc. — skip
