@@ -3430,7 +3430,7 @@ pub fn reduce_fresh_coverage(
 /// [`opaque_dependency_closure`], keeping every declaration, including one whose
 /// app is missing from the snapshot. A missing app's own dependencies are unknown,
 /// so the walk does not continue through it.
-fn dependency_ledger(
+pub(crate) fn dependency_ledger(
     snap: &AppSetSnapshot,
     graph: &ProgramGraph,
     unreadable: &[crate::dependencies::UnreadableDependency],
