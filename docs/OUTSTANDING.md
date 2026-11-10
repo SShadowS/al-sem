@@ -88,6 +88,33 @@ sizings marked pre-arc).
     `Codeunit.Run(.., Rec)` into the `OnRun` record), but only the `Init()` path:
     `Restart()` on an existing entry also needs foreign-key reasoning. Explains
     4 findings.
+    **Re-measured 2026-11-10 (ENG-01, master `71c56ee8`, CDO baseline, default cross-app
+    `analyze`):** the population is now these d44 findings on table 471 (Job Queue Category):
+    - **Confirmed, workspace (`--scope primary`): 1.** `2ff4764a478e59cf`: "CDO Telemetry"
+      and System Initialization both subscribe to `OnCompanyOpenCompleted`. `alsem explain
+      --writes-table 471` gives CDO Telemetry one piece of evidence: `QueueUpload` →
+      `Init()` → `Codeunit.Run("Job Queue - Enqueue", ..)` → `CheckAndCreateCategory`. The
+      engine already does not credit the `Restart()` branch with a 471 write. Dropping that
+      writer leaves one subscriber, so the finding goes.
+    - **Confirmed, Base App (`--scope all` only): 2.** `539db450524a0f9b` (O365 Sync.
+      Management `SetupContactSyncJobQueue`): the `Init()` is one call deeper, inside
+      `InitRecurringJob`. `58d2fd25e7b7a3cc` (OCR - Sync Master Data `OnAfterModifyVendor`):
+      `CreateNewJob` uses a fresh local record with no `Init()` at all. The other
+      subscriber of each (Graph Mgt `ApiSetup`; Workflow Event Handling) was not traced.
+    - **Not this cause: 2.** `8e19eb42226cfdc1` (IC Data Exchange API) sets a real category
+      code: a true positive. `2815117b8bb13e7f` (CDS/CRM `OnAfterUncoupleRecord`) writes 471
+      through `ScheduleUncoupling` with the category 'BCI INTEG', on a branch that the
+      literal `RemoveCoupling(.., false)` turns off. That is the constant-argument cause
+      above, not this one.
+    - **Unverifiable: the original 4.** `s86-triage.md` was never committed, and there is
+      no DO workspace in the kraken container.
+    No subscriber of `OnBeforeEnqueueJobQueueEntry` (a `var` record that could set the
+    category) exists in CDO, Base App or System App. A rule must cover three shapes: an
+    explicit `Init()`, an `Init()` inside a method on the record, and a fresh local
+    record.
+    **Wake:** build the rule when the confirmed population reaches 3 or more, or when a DO
+    workspace confirms the original 4. As of 2026-11-10 it is 3 (1 workspace + 2 Base App),
+    which meets the bar; only 1 of the 3 is a default (`--scope primary`) finding.
   - **d45 is OPT-IN since 2026-10-07** because of these causes. The first one
     (an argument read from a database row) explains 12 of its 16 S8.6 findings,
     and no sound static rule decides it. Wake: a data-model fact source, for
