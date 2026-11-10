@@ -59,8 +59,10 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// follow-up): each file's site numbers of such a routine sit in a block of
 /// its own (every file's ids move once), a declaration's own attribute is
 /// definite for its own body, and a dispatch reaches only the declarations
-/// that subscribe.
-pub const SUMMARY_SCHEMA: u32 = 5;
+/// that subscribe. 6 (follow-up 2): a subscriber whose declarations subscribe
+/// differently is one routine per declaration (new routine, stable and site
+/// ids).
+pub const SUMMARY_SCHEMA: u32 = 6;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
