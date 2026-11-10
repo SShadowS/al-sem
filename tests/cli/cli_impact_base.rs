@@ -933,6 +933,87 @@ fn the_base_cache_key_holds_the_workspaces_layout() {
     assert_eq!(delta_view(&warm_top), delta_view(&cold_top), "{warm_top:#}");
 }
 
+/// #363 (Opus code r1 M2). For a diff holding an absolute path the base cache
+/// key holds the anchors, at the call site: the same text and `rel` map
+/// differently under another set of anchors. The repo is also reached through
+/// a symlink `<t2>/link` -> the git top; the diff deletes the file spelled
+/// `<t2>/link/Cloud/src/B.al`. Run from the real path (anchors: the real path)
+/// that names no file, so nothing is deleted; run through the link (anchors:
+/// the link and the real path) it names `src/B.al`, so `Gone` is deleted.
+/// Warm, real path first: the link run must not reuse the first entry's
+/// mapping; its delta view equals its own cold run's.
+///
+/// Mutation: the call site passes no anchors to `base_diff_key` -> the link
+/// run is a cache `hit` on the real-path mapping: no `Gone` in `deleted`.
+#[cfg(unix)]
+#[test]
+fn the_base_cache_key_holds_the_anchors_of_an_absolute_diff() {
+    let r = Repo {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let (top, ws) = (r.ws(), r.ws().join("Cloud"));
+    r.write("Cloud/app.json", APP_JSON);
+    r.write("Cloud/src/Tables.al", TABLES);
+    r.write("Cloud/src/A.al", KEEP);
+    r.write("Cloud/src/B.al", GONE_FILE);
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "."]);
+    git(&top, &["commit", "-qm", "base"]);
+    r.write(
+        "Cloud/src/A.al",
+        &KEEP.replace(
+            "        Commit();\n",
+            "        Commit();\n        Commit();\n",
+        ),
+    );
+    std::fs::remove_file(ws.join("src/B.al")).unwrap();
+    let t2 = tempfile::tempdir().unwrap();
+    let link = t2.path().join("link");
+    std::os::unix::fs::symlink(&top, &link).unwrap();
+    let link_ws = link.join("Cloud");
+    let diff = respell(
+        &respell(
+            &respell(
+                &plain_diff(&top),
+                "--- a/Cloud/src/A.al\n",
+                "--- a/src/A.al\n",
+            ),
+            "+++ b/Cloud/src/A.al\n",
+            "+++ b/src/A.al\n",
+        ),
+        "--- a/Cloud/src/B.al\n",
+        &format!("--- {}/src/B.al\n", link_ws.to_str().unwrap()),
+    );
+
+    // The cold runs: each spelling's own answer.
+    let cold_real = impact_diff(&r, &ws, &diff, &["--no-base-cache"]);
+    let cold_link = impact_diff(&r, &link_ws, &diff, &["--no-base-cache"]);
+    assert_eq!(
+        cold_real["deleted"],
+        serde_json::json!([]),
+        "precondition: {cold_real:#}"
+    );
+    let deleted = cold_link["deleted"].as_array().unwrap();
+    assert_eq!(deleted.len(), 1, "precondition: {cold_link:#}");
+    assert_eq!(deleted[0]["display"], "Codeunit \"FX Gone\"::Gone");
+
+    // Warm, in that order, one cache folder.
+    let warm_real = impact_diff(&r, &ws, &diff, &[]);
+    assert_eq!(
+        delta_view(&warm_real),
+        delta_view(&cold_real),
+        "{warm_real:#}"
+    );
+    let warm_link = impact_diff(&r, &link_ws, &diff, &[]);
+    let cache = &warm_link["base"]["cache"];
+    assert_ne!(cache["status"], "hit", "{cache:#}");
+    assert_eq!(
+        delta_view(&warm_link),
+        delta_view(&cold_link),
+        "{warm_link:#}"
+    );
+}
+
 /// `(kind, normalizedStableId)` of the schema findings of a findings list.
 fn schema_findings(findings: &Value) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = findings

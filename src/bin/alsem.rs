@@ -384,11 +384,13 @@ struct TestsCli {
     #[arg(long = "file")]
     file: Vec<String>,
 
-    /// A unified diff (a file, or `-` for stdin): the routines it touches.
+    /// A unified diff (a file, or `-` for stdin): the routines it touches. An
+    /// absolute path below the workspace names that file.
     #[arg(long = "diff")]
     diff: Option<String>,
 
     /// The folder the diff's paths are relative to (as `digest --diff-root`).
+    /// An absolute path below the workspace names that file under any root.
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
@@ -475,11 +477,13 @@ struct ImpactCli {
     #[arg(long = "file")]
     file: Vec<String>,
 
-    /// A unified diff (a file, or `-` for stdin): every changed line.
+    /// A unified diff (a file, or `-` for stdin): every changed line. An
+    /// absolute path below the workspace names that file.
     #[arg(long = "diff")]
     diff: Option<String>,
 
     /// The folder the diff's paths are relative to (as `digest --diff-root`).
+    /// An absolute path below the workspace names that file under any root.
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
@@ -1255,11 +1259,13 @@ struct ExplainCli {
     routine: Vec<String>,
 
     /// A unified diff (a file, or `-` for stdin): one card per routine it
-    /// changes, the routines `digest --diff` resolves.
+    /// changes, the routines `digest --diff` resolves. An absolute path below
+    /// the workspace names that file.
     #[arg(long = "diff")]
     diff: Option<String>,
 
     /// The folder the diff's paths are relative to (as `digest --diff-root`).
+    /// An absolute path below the workspace names that file under any root.
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
@@ -1411,12 +1417,14 @@ struct DigestCli {
     routine: Vec<String>,
 
     /// Read a unified diff from a file (or `-` for stdin) to resolve changed roots.
+    /// An absolute path below the workspace names that file.
     #[arg(long = "diff")]
     diff: Option<String>,
 
     /// Convenience alias — auto-detect: comma-list with `.al` entries → read like
     /// --file paths; else an existing file path → --diff; else → --changed-routines.
-    /// A diff file named `*.al` needs --diff.
+    /// A diff file named `*.al` needs --diff. An absolute path below the
+    /// workspace names that file.
     #[arg(long = "changed")]
     changed: Option<String>,
 
@@ -2444,6 +2452,10 @@ fn part_json(out: &JobOutput) -> Result<serde_json::Value, String> {
 fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
     use al_sem::engine::impact::jobs::{MainAsk, MainJob, UpAsk, UpJob};
     use al_sem::engine::test_select::scope::ScopeRequest;
+    // Every part refuses it, not only the ones that read the decision (#363 §5).
+    if !(t.path_anchor.is_empty() || t.part.as_deref() == Some("main") && t.diff.is_some()) {
+        return failed(PATH_ANCHOR_SCOPE, exit::CONFIG_ERROR, 1);
+    }
     match t.part.as_deref() {
         Some("main") => {
             let modes = [!t.routine.is_empty(), !t.file.is_empty(), t.diff.is_some()]

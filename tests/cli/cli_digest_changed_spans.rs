@@ -4792,6 +4792,67 @@ fn impact_vetoes_by_every_key_a_malformed_record_names() {
     }
 }
 
+/// #363 §5 (sol code r1). `--path-anchor` is the base part's only: every other
+/// part refuses it with the usage error (exit 3), including the parts that
+/// never read the path decision (`--part up`, `--part main --file`).
+///
+/// Mutation: drop `plan_impact`'s refusal -> both parts run (exit 0).
+#[test]
+fn path_anchor_is_refused_outside_the_base_part() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let parts: [&[&str]; 2] = [
+        &["--part", "up", "--root-id=x"],
+        &["--part", "main", "--file", "src/posting.al"],
+    ];
+    for part in parts {
+        let mut args = vec!["impact"];
+        args.extend_from_slice(part);
+        args.extend(["--path-anchor=/bogus", "--", arg(&ws)]);
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(&args)
+            .output()
+            .expect("spawn alsem");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(3), "{args:?}: {text}");
+        assert!(
+            text.contains("--path-anchor is internal"),
+            "{args:?}: {text}"
+        );
+    }
+}
+
+/// #363 (sol code r1). A malformed record vetoes only the workspace files its
+/// path names, in impact's accounting as in digest: `<ws-abs>/Cloud/src/posting.al`
+/// reads (through the anchor) to `cloud/src/posting.al`, which names no file;
+/// the healthy `Cloud/src/posting.al` record reads to that same key AND (below
+/// the git top) to `src/posting.al`. Both keep `PostSalesDoc`, and impact
+/// accounts the two lines to its body.
+///
+/// Mutation: the accounting veto keeps readings that name no file -> impact's
+/// two lines are `diff-parse-error`.
+#[test]
+fn a_reading_that_names_no_file_vetoes_nothing() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let healthy = one_line_diff("Cloud/src/posting.al", 9, LINE9_TEXT);
+    let diff = format!(
+        "{}{healthy}",
+        malformed(arg(&ws.join("Cloud/src/posting.al")))
+    );
+    let (doc, _) = digest(&ws, &[], Some(&diff));
+    assert_eq!(roots(&doc).len(), 1, "digest: {doc}");
+    let (doc, _) = impact_json(&ws, &diff);
+    assert_eq!(impact_roots(&doc), vec!["PostSalesDoc"], "{doc}");
+    let totals = &doc["input"]["accounting"]["totals"];
+    assert_eq!(totals["routineBody"], 2, "{doc}");
+    assert_eq!(totals["unmapped"]["total"], 0, "{doc}");
+}
+
 /// `alsem <args>` -> (stdout as JSON, exit).
 fn alsem_json(args: &[&str]) -> (Value, i32) {
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))

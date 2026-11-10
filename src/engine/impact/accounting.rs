@@ -426,12 +426,14 @@ pub fn account(
         }
     };
     // A malformed record vetoes every record naming the same file, by spelling
-    // or by any key its path reads to (#363, as digest's veto, #76 T4).
+    // or by any workspace file its path reads to (#363, as digest's veto, #76
+    // T4): a reading that names no file vetoes nothing.
     let poisoned_raw: BTreeSet<&str> = diff.file_errors.iter().map(|e| e.path.as_str()).collect();
     let poisoned_keys: BTreeSet<String> = diff
         .file_errors
         .iter()
         .flat_map(|e| path_keys(root, &e.path))
+        .filter(|k| by_key.contains_key(k))
         .collect();
     let poisoned = |path: &str| {
         poisoned_raw.contains(path)

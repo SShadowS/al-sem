@@ -34,7 +34,8 @@ Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-appr
   vetoes both files. impact keeps its `old_path` veto, now also by file.
 - Limits: an absolute path with `..`, through a symlink that is neither the workspace's
   spelling nor its real path, or with a folder above the workspace in another case; `\\?\`
-  and `\\?\UNC\` inputs; `impact --file` and `tests --file` stay workspace-relative (#376);
+  and `\\?\UNC\` inputs; a Unix path starting with `//` (read as a network share); the MSYS
+  `/c/…` and WSL `/mnt/c/…` spellings of a Windows workspace; `impact --file` and `tests --file` stay workspace-relative (#376);
   `impact --base` still cannot map a record whose original old path lies outside the workspace,
   and drops it silently (#377); the in-process `run_digest_pipeline*` APIs (tests only) have
   no anchors.
