@@ -750,13 +750,7 @@ impl ResolveIndex {
         obj: &ObjectNodeId,
         name_lc: &str,
     ) -> impl ExactSizeIterator<Item = &'g RoutineNodeId> + Clone + use<'g> {
-        graph
-            .routines
-            .run_by(|r| {
-                r.id.object
-                    .cmp(obj)
-                    .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
-            })
+        crate::program::resolve::reads::GraphReads::routines_named(graph, obj, name_lc)
             .map(|r| &r.id)
     }
 

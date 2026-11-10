@@ -323,7 +323,16 @@ impl DeclSurface {
                 continue;
             };
             for pf in &unit.files {
-                for (r_id, meta) in file_routine_meta(app_ref, &pf.file, &pf.virtual_path) {
+                // A split subscriber's declarations have a node each
+                // (`split_decls`); the metas are in that same document order.
+                let nodes = crate::program::split_decls::file_declaration_nodes(
+                    graph,
+                    &pf.file,
+                    app_ref,
+                    &crate::program::split_decls::unit_of_parsed(pf),
+                );
+                let metas = file_routine_meta(app_ref, &pf.file, &pf.virtual_path);
+                for (r_id, (_, meta)) in nodes.into_iter().flatten().zip(metas) {
                     local.insert(r_id, meta);
                 }
             }

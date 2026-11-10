@@ -464,6 +464,8 @@ pub fn verify_event_subscriber_route(
     // same-name, same-arity overload has a different `sig_fp`.
     let mut name_found = false;
     for pf in &unit.files {
+        let source_unit = crate::program::split_decls::unit_of_parsed(pf);
+        let mut ordinals = crate::program::split_decls::Ordinals::default();
         for obj in &pf.file.objects {
             if obj.kind != sub_rid.object.kind {
                 continue;
@@ -477,7 +479,13 @@ pub fn verify_event_subscriber_route(
                     continue;
                 }
                 name_found = true;
-                if source_routine_node_id(sub_rid.object.clone(), r) != *sub_rid {
+                // The routine's id, or a split declaration's own (`split_decls`).
+                let base = source_routine_node_id(sub_rid.object.clone(), r);
+                let ordinal = ordinals.next(&base);
+                if base != *sub_rid
+                    && crate::program::split_decls::decl_id(&base, &source_unit, ordinal)
+                        != *sub_rid
+                {
                     continue;
                 }
                 // Routine found — re-parse its [EventSubscriber] attrs fresh

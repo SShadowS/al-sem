@@ -147,71 +147,6 @@ pub fn encode_event_id(publisher_object_id: &str, event_name: &str) -> String {
     format!("{publisher_object_id}/event/{}", event_name.to_lowercase())
 }
 
-/// The full identity of one subscription, as a subscriber's `[EventSubscriber]`
-/// names it: the publisher object's kind (lowercased, `codeunit`, `table`, …),
-/// the publisher object by name (unquoted, lowercased) and/or by number, the
-/// event (lowercased) and its element (a field, lowercased; `None` when the
-/// event has none).
-#[derive(Debug, Clone, Copy)]
-pub struct SubscriptionKey<'a> {
-    pub object_type_lc: &'a str,
-    pub publisher_name_lc: Option<&'a str>,
-    pub publisher_id: Option<i64>,
-    pub event_lc: &'a str,
-    pub element_lc: Option<&'a str>,
-}
-
-/// Engine limits B2 (wave 2 final review): whether model row `row` (ONE
-/// declaration of a subscriber routine) declares the subscription `key`: one
-/// of its `[EventSubscriber]` attributes names the same publisher object kind,
-/// the same publisher object (by name or by number, whichever both sides
-/// give), the same event and, when both name one, the same element. A part
-/// the attribute does not spell in a readable form matches (the cautious
-/// side: a declaration that MAY subscribe is kept). The join splits a
-/// subscriber whose declarations subscribe differently into one routine per
-/// declaration (`workspace::split_subscriber_declarations`); the event graph
-/// (`program_event_graph`) and the table-event edges (`program_calls`) send
-/// each subscription only to the declarations that declare it.
-#[must_use]
-pub fn row_declares_subscription(row: &ModelRoutine, key: &SubscriptionKey<'_>) -> bool {
-    use crate::program::attributes::{qualified_arg, string_arg};
-    let unquote = |s: &str| {
-        s.trim()
-            .trim_matches('"')
-            .replace("\"\"", "\"")
-            .to_lowercase()
-    };
-    row.attributes_parsed
-        .iter()
-        .filter(|a| a.name.eq_ignore_ascii_case("EventSubscriber"))
-        .any(|a| {
-            let kind_ok = qualified_arg(a, 0)
-                .is_none_or(|q| q.member.eq_ignore_ascii_case(key.object_type_lc));
-            let object_ok = match a.args.get(1) {
-                None => true,
-                Some(arg) => match (qualified_arg(a, 1), arg.kind.as_str()) {
-                    (Some(q), _) => key
-                        .publisher_name_lc
-                        .is_none_or(|n| unquote(&q.member) == n),
-                    (None, "integer") => match (arg.text.trim().parse::<i64>(), key.publisher_id) {
-                        (Ok(n), Some(want)) => n == want,
-                        _ => true,
-                    },
-                    (None, "quoted_identifier" | "identifier") => key
-                        .publisher_name_lc
-                        .is_none_or(|n| unquote(&arg.text) == n),
-                    _ => true,
-                },
-            };
-            let event_ok = string_arg(a, 2).is_none_or(|e| e.eq_ignore_ascii_case(key.event_lc));
-            let element_ok = match (key.element_lc, string_arg(a, 3)) {
-                (Some(want), Some(got)) if !got.is_empty() => got.eq_ignore_ascii_case(want),
-                _ => true,
-            };
-            kind_ok && object_ok && event_ok && element_ok
-        })
-}
-
 /// Build the EventSymbol for a real publisher routine.
 pub fn build_event_symbol(routine: &ModelRoutine) -> EventSymbol {
     let isolated = parse_isolated(&routine.attributes_parsed);
@@ -496,12 +431,6 @@ pub fn program_event_graph(
     // Unmapped rows, by id: counted after the loop, and only for an id no row
     // mapped. An unmapped row of an id another row mapped loses nothing.
     let mut unmapped: Vec<&str> = Vec::new();
-    // Engine limits B2 (wave 2 final review, follow-up 2): a node whose
-    // subscriber rows carry different ids is a subscriber the join split into
-    // one routine per declaration (`workspace::split_subscriber_declarations`);
-    // the node's subscriptions are every declaration's, so each row takes only
-    // those it declares (`row_declares_subscription`, the full identity).
-    let split = |r: &ModelRoutine| super::workspace::split_origin(&r.stable_routine_id).is_some();
     for (ri, r) in ws.routines.iter().enumerate() {
         if r.kind != "event-subscriber" {
             continue;
@@ -524,23 +453,7 @@ pub fn program_event_graph(
         if subs.is_empty() {
             c.subscribers_without_subscription += 1;
         }
-        let split_row = split(r);
         for s in subs {
-            if split_row
-                && !row_declares_subscription(
-                    r,
-                    &SubscriptionKey {
-                        object_type_lc: &s.publisher_object_type,
-                        publisher_name_lc: (!s.publisher_name.is_empty())
-                            .then_some(s.publisher_name.as_str()),
-                        publisher_id: s.publisher_id,
-                        event_lc: &s.event_name_lc,
-                        element_lc: s.element.as_deref(),
-                    },
-                )
-            {
-                continue;
-            }
             let (event_id, resolution) = match &s.outcome {
                 SubscriptionOutcome::Bound(pid) => {
                     let node = routine_by_id.get(pid);

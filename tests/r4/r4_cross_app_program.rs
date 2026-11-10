@@ -1906,9 +1906,11 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         .collect();
     assert_eq!(h.len(), 2, "precondition: two rows for H");
     let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+    // Engine limits B2: arms that subscribe differently are one node each
+    // (`split_decls`).
     assert!(
-        node(h[0]).is_some() && node(h[0]) == node(h[1]),
-        "precondition: both H rows map to one node"
+        node(h[0]).is_some() && node(h[1]).is_some() && node(h[0]) != node(h[1]),
+        "precondition: each H row maps to its own node"
     );
     let m = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE)
         .expect("model")

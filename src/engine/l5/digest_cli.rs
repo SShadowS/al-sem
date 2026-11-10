@@ -868,7 +868,9 @@ pub fn resolve_changed_roots(
                     selector,
                 ),
             });
-        } else if matches.len() >= 2 {
+        } else if matches.len() >= 2
+            && !crate::engine::l5::selector_index::declarations_of_one_routine(&matches)
+        {
             // candidates = `<owner>::<display>` (display falls back to the id).
             // Round-2 G40: ordered by where each is declared (file, line), so
             // every rendering lists an ambiguity in source order; the sort is
@@ -921,10 +923,13 @@ pub fn resolve_changed_roots(
                 candidates,
             });
         } else {
-            // Every declaration of the id is touched (a selector names no line).
-            let id = matches.into_iter().next().unwrap();
-            hits.extend_from_slice(spans.of_routine(&id));
-            roots.insert(id);
+            // Every declaration of the id is touched (a selector names no
+            // line), and so is every declaration of a split routine
+            // (`split_decls`): a name names the routine, not one build of it.
+            for id in matches {
+                hits.extend_from_slice(spans.of_routine(&id));
+                roots.insert(id);
+            }
         }
     }
 

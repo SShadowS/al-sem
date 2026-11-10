@@ -128,6 +128,9 @@ fn write_source(cx: &ClosedEnumCx, routine: &RoutineDecl, value: ExprId) -> Opti
     {
         let rid =
             crate::program::sig_fp::source_routine_node_id(cx.from_object.id.clone(), routine);
+        // A split subscriber's declarations carry their own nodes
+        // (`split_decls`), and this id names none: an unknown source.
+        cx.graph.routine(&rid)?;
         return Some(HolderSource::Param(rid, i));
     }
     codeunit_of(

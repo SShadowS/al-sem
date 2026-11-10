@@ -712,6 +712,32 @@ fn duplicate_ids_across_if_arms(mode: MemoryMode) {
     assert_eq!(r.class, ChangeClass::BodyOnly);
 }
 
+/// Engine limits B2 (`split_decls`): a change of one file's subscription
+/// starts a split (the other file's routine moves to its own node) and ends
+/// it again. An unchanged file's resolution and rows depend on the split only
+/// through what its reads recorded, so each refresh must equal a cold build.
+fn a_subscription_change_starts_and_ends_a_split(mode: MemoryMode) {
+    let publisher = "codeunit 50120 \"Pub\"\n{\n    procedure Raise()\n    begin\n        OnX();\n        OnY();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnX()\n    begin\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnY()\n    begin\n    end;\n}\n";
+    let a = "#if A\ncodeunit 50121 \"HSub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Pub\", 'OnX', '', false, false)]\n    procedure H()\n    begin\n    end;\n}\n#endif\n";
+    let b = "#if not A\ncodeunit 50121 \"HSub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Pub\", 'OnX', '', false, false)]\n    procedure H()\n    var\n        C: Codeunit \"Callee\";\n    begin\n        C.Q();\n    end;\n}\n#endif\n";
+    let caller = "codeunit 50122 \"HCaller\"\n{\n    procedure Go()\n    var\n        S: Codeunit \"HSub\";\n    begin\n        S.H();\n    end;\n}\n";
+    let ws = Ws::new(&[
+        ("Callee.Codeunit.al", CALLEE),
+        ("Pub.Codeunit.al", publisher),
+        ("HA.Codeunit.al", a),
+        ("HB.Codeunit.al", b),
+        ("HCaller.Codeunit.al", caller),
+    ]);
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold, one routine");
+    ws.edit("HB.Codeunit.al", "'OnX'", "'OnY'");
+    let r = refresh_and_compare(&mut s, &ws, "the split starts");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    ws.edit("HB.Codeunit.al", "'OnY'", "'OnX'");
+    let r = refresh_and_compare(&mut s, &ws, "the split ends");
+    assert_eq!(r.class, ChangeClass::Declaration);
+}
+
 const HOLDER: &str = "interface \"H Evaluator\"\n{\n    procedure Evaluate(): Text;\n}\ncodeunit 50311 \"H Real\" implements \"H Evaluator\"\n{\n    procedure Evaluate(): Text\n    begin\n        exit('x');\n    end;\n}\ncodeunit 50312 \"H Other\" implements \"H Evaluator\"\n{\n    procedure Evaluate(): Text\n    begin\n        exit('w');\n    end;\n}\ncodeunit 50313 \"H Holder\"\n{\n    Access = Internal;\n\n    var\n        Evaluator: Interface \"H Evaluator\";\n\n    internal procedure SetEvaluator(NewEvaluator: Interface \"H Evaluator\")\n    begin\n        Evaluator := NewEvaluator;\n    end;\n\n    internal procedure Lookup(): Text\n    begin\n        exit(Evaluator.Evaluate());\n    end;\n}\n";
 const HOLDER_CALLER: &str = "codeunit 50314 \"H Caller\"\n{\n    procedure Go(): Text\n    var\n        Real: Codeunit \"H Real\";\n        Other: Codeunit \"H Other\";\n        Any: Interface \"H Evaluator\";\n        Holder: Codeunit \"H Holder\";\n    begin\n        Holder.SetEvaluator(Real);\n        exit(Holder.Lookup());\n    end;\n}\n";
 
@@ -1523,6 +1549,7 @@ in_both_modes!(
     dependency_raiser_and_subscriber_edits,
     event_flow_edge_of_an_unchanged_publisher_moves_under_b,
     duplicate_ids_across_if_arms,
+    a_subscription_change_starts_and_ends_a_split,
     setter_argument_holder_refinement,
     temp_proof_revocation_in_an_unchanged_subscriber,
     method_id_change_through_a_synthesized_dispatch,

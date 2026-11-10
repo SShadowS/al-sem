@@ -73,7 +73,6 @@ use crate::program::resolve::resolver::{
     emit_event_flow_edges, resolve_bare, resolve_bare_with_args, resolve_implicit_trigger,
     resolve_member_with_args, resolve_object_run,
 };
-use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::{
     AppSetSnapshot, AppUnit, DependencySource, ParsedFile, ParsedUnit, SnapshotBuilder,
 };
@@ -1281,6 +1280,14 @@ pub(crate) fn resolve_file_obligations(
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
     let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
     let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
+    // Each declaration's own node (a split subscriber's declarations have
+    // one each, `program::split_decls`).
+    let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+        graph,
+        &pf.file,
+        caller_app,
+        &crate::program::split_decls::unit_of_parsed(pf),
+    );
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = ObjKey::from_source(obj);
@@ -1315,7 +1322,7 @@ pub(crate) fn resolve_file_obligations(
             .collect();
 
         for (routine_idx, routine) in obj.routines.iter().enumerate() {
-            let caller = source_routine_node_id(obj_node_id.clone(), routine);
+            let caller = decl_nodes[obj_idx][routine_idx].clone();
 
             let sites = extract_sites_for_routine(
                 &pf.file,
@@ -1494,7 +1501,9 @@ pub(crate) fn resolve_file_obligations(
                         kind,
                         shape,
                         completeness,
-                        routes,
+                        routes: crate::program::split_decls::expand_call_routes(
+                            graph, kind, routes,
+                        ),
                     },
                     // #160 §4.2, §4.4: the key, and whether a record op can fire
                     // a trigger (the extractor's own op name).

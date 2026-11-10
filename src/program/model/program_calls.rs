@@ -1749,7 +1749,6 @@ fn convert<'a>(
         }
     }
     edges.extend(dataset_edges);
-    let edges = split_declaration_edges(edges, ws);
     let upgraded_bindings = super::projection::last_per_key_pairs(bindings_per_site);
     (
         ResolvedCalls {
@@ -1762,100 +1761,6 @@ fn convert<'a>(
         c,
         dataset_ops,
     )
-}
-
-/// Engine limits B2 (wave 2 final review, follow-up 2): the edges to a
-/// subscriber the join split into one routine per declaration
-/// (`workspace::split_subscriber_declarations`). The program graph keeps one
-/// node for it, so the conversion names ONE of the declarations (J2's row).
-/// A table-event edge goes to every declaration that declares that table
-/// event (`events::row_declares_subscription`: the publisher table's kind,
-/// name or number, the event and the field), and only to those; any other
-/// edge (a direct call) goes to every declaration, each a possible build.
-/// Edges to any other routine are kept as they are, in their order.
-fn split_declaration_edges(edges: Vec<CallEdge>, ws: &ModelEntities) -> Vec<CallEdge> {
-    use crate::program::model::workspace::split_origin;
-    let mut groups: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
-    for r in &ws.routines {
-        if let Some(origin) = split_origin(&r.stable_routine_id) {
-            groups.entry(origin).or_default().push(r);
-        }
-    }
-    if groups.is_empty() {
-        return edges;
-    }
-    let group_of: HashMap<&str, &Vec<&ModelRoutine>> = groups
-        .values()
-        .flat_map(|g| g.iter().map(move |r| (r.id.as_str(), g)))
-        .collect();
-    let objects: HashMap<&str, &crate::program::model::workspace::ModelObject> =
-        ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
-    let mut out = Vec::with_capacity(edges.len());
-    for e in edges {
-        let Some(group) = e.to.as_deref().and_then(|t| group_of.get(t)) else {
-            out.push(e);
-            continue;
-        };
-        let targets: Vec<&ModelRoutine> = match &e.table_event {
-            Some(te) if e.dispatch_kind == DispatchKind::TableEvent => {
-                let key = te.event_id.rsplit_once("/event/").map(|(object, rest)| {
-                    let (event, element) = match rest.split_once('/') {
-                        Some((n, f)) => (n, Some(f)),
-                        None => (rest, None),
-                    };
-                    let o = objects.get(object);
-                    let kind = o.map_or_else(
-                        || {
-                            object
-                                .rsplit('/')
-                                .nth(1)
-                                .unwrap_or_default()
-                                .to_ascii_lowercase()
-                        },
-                        |o| o.object_type.to_ascii_lowercase(),
-                    );
-                    (
-                        kind,
-                        o.map(|o| o.name.to_lowercase()),
-                        o.map(|o| o.object_number).filter(|&n| n != 0),
-                        event,
-                        element,
-                    )
-                });
-                let declaring: Vec<&ModelRoutine> = match &key {
-                    Some((kind, name, number, event, element)) => group
-                        .iter()
-                        .copied()
-                        .filter(|r| {
-                            crate::program::model::events::row_declares_subscription(
-                                r,
-                                &crate::program::model::events::SubscriptionKey {
-                                    object_type_lc: kind,
-                                    publisher_name_lc: name.as_deref(),
-                                    publisher_id: *number,
-                                    event_lc: event,
-                                    element_lc: *element,
-                                },
-                            )
-                        })
-                        .collect(),
-                    None => Vec::new(),
-                };
-                if declaring.is_empty() {
-                    group.to_vec()
-                } else {
-                    declaring
-                }
-            }
-            _ => group.to_vec(),
-        };
-        for r in targets {
-            let mut x = e.clone();
-            x.to = Some(r.id.clone());
-            out.push(x);
-        }
-    }
-    out
 }
 
 /// B6: per row index, the platform's dataset operations of its call sites
@@ -2175,10 +2080,24 @@ impl<'a> Converter<'a> {
             }
             return Some((edges, state.bindings));
         }
+        // A direct call to a split subscriber: one edge per declaration
+        // (`split_decls`), each a possible build.
+        if edge.shape == DispatchShape::Exact
+            && edge.routes.len() > 1
+            && self.routes_are_declarations_of_one_routine(&edge.routes)
+        {
+            let mut edges = Vec::with_capacity(edge.routes.len());
+            for route in &edge.routes {
+                let mut one = e.clone();
+                self.route_into(&mut one, route, cs, ce, external, is_run, &mut state, c)?;
+                edges.push(one);
+            }
+            return Some((edges, state.bindings));
+        }
         // S3.6: no route is cut. A call edge with several routes outside an
-        // interface or a run (the resolver makes none today: `Exact` has one
-        // route) converts as the closed candidate set it is, never as its
-        // first route.
+        // interface or a run (the resolver makes none today but the split
+        // above: `Exact` has one route) converts as the closed candidate set
+        // it is, never as its first route.
         let shape = match edge.shape {
             DispatchShape::Exact if edge.routes.len() > 1 => {
                 c.adapter_multi_route_sites += 1;
@@ -2259,6 +2178,22 @@ impl<'a> Converter<'a> {
             }
         }
         Some((vec![e], state.bindings))
+    }
+
+    /// Whether every route is a declaration of one split routine.
+    fn routes_are_declarations_of_one_routine(
+        &self,
+        routes: &[crate::program::resolve::edge::Route],
+    ) -> bool {
+        let declarations = &self.graph.workspace_rows.declarations;
+        let base = |r: &crate::program::resolve::edge::Route| match &r.target {
+            RouteTarget::Routine(id) => declarations.base_of(id).map(|(b, _)| b.clone()),
+            _ => None,
+        };
+        let Some(first) = routes.first().and_then(base) else {
+            return false;
+        };
+        routes.iter().all(|r| base(r).as_ref() == Some(&first))
     }
 
     /// One route of a call site into `e`: its callee, resolution and kind.

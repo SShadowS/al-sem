@@ -56,7 +56,7 @@ use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::encoding::{ColOut, LineIndex, LineTable};
 use crate::program::dep_cache::DepCache;
 use crate::program::dep_cache::DepLspTier;
-use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
+use crate::program::node::{AppRef, AppRegistry, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::BuildProfile;
 use crate::program::resolve::decl_surface::{DeclSurface, DepMeta};
@@ -66,7 +66,6 @@ use crate::program::resolve::full::{
     ClassifiedEdge, ObligationId, ProgramContext, app_object_map, build_context_with,
 };
 use crate::program::resolve::index::ResolveIndex;
-use crate::program::sig_fp::source_routine_node_id;
 use crate::program::{DepLayer, ProgramGraph};
 use crate::snapshot::DependencySource;
 use crate::snapshot::{AppSetSnapshot, ParsedFile, ParsedUnit};
@@ -1179,15 +1178,14 @@ pub(crate) fn recompute_file(
     let def_surface = def_surface_fingerprint(pf);
 
     let mut decls: Vec<DeclEntry> = Vec::new();
-    for obj in &pf.file.objects {
-        let obj_key = ObjKey::from_source(obj);
-        let obj_node_id = ObjectNodeId {
-            app: primary_app_ref,
-            kind: obj.kind,
-            key: obj_key,
-        };
-        for routine in &obj.routines {
-            let id = source_routine_node_id(obj_node_id.clone(), routine);
+    let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+        graph,
+        &pf.file,
+        primary_app_ref,
+        &crate::program::split_decls::unit_of_parsed(pf),
+    );
+    for (obj, nodes) in pf.file.objects.iter().zip(decl_nodes) {
+        for (routine, id) in obj.routines.iter().zip(nodes) {
             decls.push(DeclEntry {
                 id,
                 name: routine.name.clone(),
