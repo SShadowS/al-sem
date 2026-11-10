@@ -347,8 +347,8 @@ fn lower_object(
     let mut routines = Vec::new();
     for (r, attr_items, di_table, member, in_dataset_modify_context, ctx) in routine_nodes {
         let (arms, shared_from) = header_arms(r);
-        let conds = split_conditions(r);
         for arm in arms {
+            let conds = arm_conditions(r, &arm);
             let a_syms = arm_symbols(r, &arm, source);
             routines.push(lower_routine(
                 r,
@@ -356,7 +356,7 @@ fn lower_object(
                     .iter()
                     .filter_map(|e| {
                         consistent(&e.guard, &a_syms)
-                            .filter(|_| arm_live(&conds, arm.start, source, &e.guard))
+                            .filter(|_| arm_live(&conds, source, &e.guard))
                             .map(|guard| PendingAttr {
                                 node: e.node,
                                 guard,
@@ -402,9 +402,24 @@ fn lower_object(
 
     // Extension `extends` target (the grammar's `base_object` field) — None for
     // non-extension objects (no such field).
+    //
+    // Grammar 5.0.0 also admits `extends Contoso.Sales."Base"` (`qualified_name`, read
+    // as its last segment: objects carry no namespace) and `extends 50101` (`integer`).
+    // The number is kept as the target's text, but every consumer looks the target up
+    // by name, so it finds nothing; the `SyntaxIssue` says so.
     let extends_target = node
         .field(FieldName::BaseObject)
-        .map(|n| ident_text(n, source))
+        .map(|n| {
+            if n.kind() == RawKind::Integer {
+                issues.push(SyntaxIssue {
+                    message: "`extends` names its base object by number — the base is \
+                              not resolved (targets are looked up by name)"
+                        .to_string(),
+                    origin: origin_of(n),
+                });
+            }
+            reference_name(n, source)
+        })
         .filter(|s| !s.is_empty());
 
     // `implements` interface names (Codeunit / Enum / Interface).
@@ -739,7 +754,9 @@ fn extract_implements_walk(
 fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>) {
     for sub in clause.named_children() {
         match sub.kind() {
-            RawKind::Identifier | RawKind::QuotedIdentifier => out.push(ident_text(sub, source)),
+            RawKind::Identifier | RawKind::QuotedIdentifier | RawKind::QualifiedName => {
+                out.push(reference_name(sub, source));
+            }
             RawKind::PreprocConditionalImplements => implements_clause_names(sub, source, out),
             _ => {}
         }
@@ -1395,11 +1412,12 @@ fn collect_routines<'t>(
             // body. Previously matched only the `_` catch-all below, which recurses without
             // ever emitting a `RoutineDecl` — the ENTIRE shared body (including calls that
             // compile into every build) had no routine, no edges, no diagnostics: the
-            // fleet-confirmed H-6 defect. `lower_routine`'s body extraction has a dedicated
-            // fallback for `preproc_split_procedure_preamble`, whose trailing `code_block` is
-            // a BARE child (no `body` field) — see that fallback's doc.
+            // fleet-confirmed H-6 defect. `preproc_split_trigger_preamble` (grammar 5.0.0)
+            // is the trigger sibling of the `_preamble` variant: each arm a trigger header
+            // and var region, one shared `body` after `#endif`.
             | RawKind::PreprocSplitProcedure
-            | RawKind::PreprocSplitProcedurePreamble => {
+            | RawKind::PreprocSplitProcedurePreamble
+            | RawKind::PreprocSplitTriggerPreamble => {
                 // `interface_procedure` (receiver-closure plan, Task 1): a SIGNATURE-ONLY
                 // procedure declaration — no body, no access modifier — used by BOTH
                 // `interface_body` and `controladdin_body` (the same grammar rule; a
@@ -1968,35 +1986,89 @@ fn collect_globals(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
 /// Reading only the first arm made a call written for the `#else` signature an
 /// `arityMismatch` (Base App `MfgCalculateBOMTree.CalcRoutingLineCosts`).
 /// Any other routine node is one arm covering the whole node.
+///
+/// An arm of a `preproc_split_procedure` may itself be a nested group of headers
+/// (`preproc_conditional_procedure_header`, grammar 5.0.0): each of its arms is a
+/// routine too, so the nested arms replace the arm that holds them.
 fn header_arms(node: RawNode) -> (Vec<std::ops::Range<usize>>, usize) {
-    if !matches!(
-        node.kind(),
-        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
-    ) {
+    if !is_split_routine(node.kind()) {
         let r = node.byte_range();
         return (vec![r.clone()], r.end);
     }
     let mut arms = Vec::new();
+    let shared_from = header_group_arms(node, &mut arms);
+    (arms, shared_from)
+}
+
+/// A routine node whose header is split across `#if` arms ([`header_arms`]).
+fn is_split_routine(k: RawKind) -> bool {
+    matches!(
+        k,
+        RawKind::PreprocSplitProcedure
+            | RawKind::PreprocSplitProcedurePreamble
+            | RawKind::PreprocSplitTriggerPreamble
+    )
+}
+
+/// The arms of one level of a split header, added to `arms`, nested groups expanded
+/// ([`header_arms`]). Returns where the tail after this level's `#endif` starts.
+fn header_group_arms(node: RawNode, arms: &mut Vec<std::ops::Range<usize>>) -> usize {
+    let kids = node.named_children();
+    let close_arm = |r: std::ops::Range<usize>, arms: &mut Vec<std::ops::Range<usize>>| {
+        let mut nested = kids
+            .iter()
+            .filter(|c| {
+                c.kind() == RawKind::PreprocConditionalProcedureHeader
+                    && r.contains(&c.byte_range().start)
+            })
+            .peekable();
+        if nested.peek().is_none() {
+            arms.push(r);
+        } else {
+            for group in nested {
+                header_group_arms(*group, arms);
+            }
+        }
+    };
     let mut open: Option<usize> = None;
     let mut shared_from = node.byte_range().end;
-    for c in node.named_children() {
+    for c in &kids {
         match c.kind() {
             RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse => {
                 if let Some(s) = open.take() {
-                    arms.push(s..c.byte_range().start);
+                    close_arm(s..c.byte_range().start, arms);
                 }
                 open = Some(c.byte_range().end);
             }
             RawKind::PreprocEndif => {
                 if let Some(s) = open.take() {
-                    arms.push(s..c.byte_range().start);
+                    close_arm(s..c.byte_range().start, arms);
                 }
                 shared_from = c.byte_range().end;
             }
             _ => {}
         }
     }
-    (arms, shared_from)
+    shared_from
+}
+
+/// A split routine's node and the nested header groups in it, which together carry
+/// its per-arm fields and attributes. Only the node itself for any other routine.
+fn header_levels(node: RawNode<'_>) -> Vec<RawNode<'_>> {
+    let mut out = vec![node];
+    if is_split_routine(node.kind()) {
+        let mut i = 0;
+        while i < out.len() {
+            let nested: Vec<_> = out[i]
+                .named_children()
+                .into_iter()
+                .filter(|c| c.kind() == RawKind::PreprocConditionalProcedureHeader)
+                .collect();
+            out.extend(nested);
+            i += 1;
+        }
+    }
+    out
 }
 
 thread_local! {
@@ -2342,58 +2414,66 @@ fn decide_preproc_by(
 /// condition true, every earlier arm's condition false.
 fn arm_symbols(node: RawNode, arm: &std::ops::Range<usize>, source: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
-    for c in node.named_children() {
-        let end = c.byte_range().end;
-        if end > arm.start {
-            break;
-        }
-        if matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
-            && let Some(cond) = c.field(FieldName::Condition)
-        {
-            assume_preproc(cond, end == arm.start, source, &mut out);
-        }
+    for (cond, value) in arm_conditions(node, arm) {
+        assume_preproc(cond, value, source, &mut out);
     }
     out
 }
 
-/// The `#if`/`#elif` conditions of a split routine header, each with the end byte
-/// of its directive, in order; empty for an unsplit routine (one arm, nothing to
-/// decide). Read once per routine, then by [`arm_live`] once per pending entry.
-fn split_conditions(node: RawNode) -> Vec<(RawNode, usize)> {
-    if !matches!(
-        node.kind(),
-        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
-    ) {
-        return Vec::new();
+/// The `#if`/`#elif` conditions that decide header arm `arm` of a split routine, each
+/// with the value it must have, in order: at every level of nested header group, the
+/// directive that opens the arm (or the group holding it) true and the earlier ones
+/// of its chain false. Empty for an unsplit routine (one arm, nothing to decide).
+fn arm_conditions<'t>(node: RawNode<'t>, arm: &std::ops::Range<usize>) -> Vec<(RawNode<'t>, bool)> {
+    let mut out = Vec::new();
+    if !is_split_routine(node.kind()) {
+        return out;
     }
-    node.named_children()
-        .into_iter()
-        .filter(|c| matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif))
-        .filter_map(|c| Some((c.field(FieldName::Condition)?, c.byte_range().end)))
-        .collect()
+    let mut level = Some(node);
+    while let Some(n) = level.take() {
+        let kids = n.named_children();
+        level = kids.iter().copied().find(|c| {
+            c.kind() == RawKind::PreprocConditionalProcedureHeader
+                && c.byte_range().contains(&arm.start)
+        });
+        let opens_by = level.map_or(arm.start, |g| g.byte_range().start);
+        let Some(open_end) = kids
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.kind(),
+                    RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse
+                ) && c.byte_range().end <= opens_by
+            })
+            .map(|c| c.byte_range().end)
+            .next_back()
+        else {
+            continue;
+        };
+        out.extend(
+            kids.iter()
+                .filter(|c| {
+                    matches!(c.kind(), RawKind::PreprocIf | RawKind::PreprocElif)
+                        && c.byte_range().end <= open_end
+                })
+                .filter_map(|c| {
+                    Some((
+                        c.field(FieldName::Condition)?,
+                        c.byte_range().end == open_end,
+                    ))
+                }),
+        );
+    }
+    out
 }
 
-/// The arm starting at byte `arm_start` of a split routine with header conditions
-/// `conds` ([`split_conditions`]) is reachable under `guard`: its own condition is
-/// not decided false, and no earlier condition of the chain is decided true (the
-/// rule [`chain_shape`] gives a wrapper arm's `live`).
-fn arm_live(
-    conds: &[(RawNode, usize)],
-    arm_start: usize,
-    source: &str,
-    guard: &[(String, bool)],
-) -> bool {
-    for &(cond, end) in conds {
-        if end > arm_start {
-            break;
-        }
-        let d = decide_preproc(cond, source, guard);
-        // The arm's own condition is dead when false, an earlier one when true.
-        if d == Some(end != arm_start) {
-            return false;
-        }
-    }
-    true
+/// A split-routine header arm with conditions `conds` ([`arm_conditions`]) is reachable
+/// under `guard`: no condition is decided against the value it must have (the rule
+/// [`chain_shape`] gives a wrapper arm's `live`).
+fn arm_live(conds: &[(RawNode, bool)], source: &str, guard: &[(String, bool)]) -> bool {
+    conds
+        .iter()
+        .all(|&(cond, value)| decide_preproc(cond, source, guard) != Some(!value))
 }
 
 /// One argument list of an attribute as one build reads it.
@@ -2517,20 +2597,27 @@ fn lower_routine<'t>(
             name_node.map(|n| (ident_text(n, source), origin_of(m)))
         })
         .filter(|(t, _)| !t.is_empty());
-    let kind = if node.kind() == RawKind::TriggerDeclaration {
+    let kind = if matches!(
+        node.kind(),
+        RawKind::TriggerDeclaration | RawKind::PreprocSplitTriggerPreamble
+    ) {
         RoutineKind::Trigger
     } else {
         RoutineKind::Procedure
     };
 
     // A header field of THIS arm (`header_arms`); for an unsplit routine the arm is the
-    // whole node, so this is the field's first child, as `field` returns.
+    // whole node, so this is the field's first child, as `field` returns. The fields of
+    // a nested header group's arm are on the group, not on `node` (`header_levels`).
     let in_arm = |n: RawNode| arm.contains(&n.byte_range().start);
-    let arm_field = |f: FieldName| node.children_by_field(f).into_iter().find(|c| in_arm(*c));
-    let split = matches!(
-        node.kind(),
-        RawKind::PreprocSplitProcedure | RawKind::PreprocSplitProcedurePreamble
-    );
+    let levels = header_levels(node);
+    let arm_field = |f: FieldName| {
+        levels
+            .iter()
+            .flat_map(|l| l.children_by_field(f))
+            .find(|c| in_arm(*c))
+    };
+    let split = is_split_routine(node.kind());
     // The builds this routine exists in: the object-level `#if` branches around
     // it, plus its own arm when its header is split.
     let mut preproc_context = object_ctx.to_vec();
@@ -2541,8 +2628,9 @@ fn lower_routine<'t>(
         // (an outer `#if X` around a `#if not X` arm) is no build: they attach nothing.
         if let Some(guard) = consistent(&preproc_context, &[]) {
             attr_items.extend(
-                node.named_children()
-                    .into_iter()
+                levels
+                    .iter()
+                    .flat_map(|l| l.named_children())
                     .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c))
                     .map(|c| PendingAttr {
                         node: c,
@@ -2640,13 +2728,60 @@ fn lower_routine<'t>(
         .map(origin_of)
         .unwrap_or_else(|| origin_of(node));
 
+    // An `#if` group in the signature (`preproc_conditional_parameters`, or a return
+    // clause per arm, grammar 5.0.0) gives the arm this routine's build reads; the other
+    // arms are not modelled, so each group gets a `SyntaxIssue` (the policy of `#if`
+    // inside attribute arguments). One running context per list, started from the
+    // routine's own build, as `attribute_arg_selection` does. A context that
+    // contradicts itself (`consistent` gives `None`) is no build: read as unconstrained.
+    let header_guard = consistent(&preproc_context, &[]).unwrap_or_default();
     let params = arm_field(FieldName::Parameters)
         .map(|pl| {
-            pl.named_children()
+            let mut run = Run::new(&header_guard);
+            let mut items = Vec::new();
+            for c in structural_children(pl) {
+                if c.kind() == RawKind::PreprocConditionalParameters {
+                    issues.push(SyntaxIssue {
+                        message: "`#if` inside a parameter list — the first arm this \
+                                  routine's build does not rule out is read (the other \
+                                  arms are not modelled)"
+                            .to_string(),
+                        origin: origin_of(c),
+                    });
+                    conditional_list_arm(c, source, &mut run, &mut items);
+                } else {
+                    items.push(c);
+                }
+            }
+            items
                 .into_iter()
                 .filter(|p| p.kind() == RawKind::Parameter)
                 .map(|p| lower_param(p, source))
                 .collect()
+        })
+        .unwrap_or_default();
+
+    // The nodes of a return clause chosen per `#if` arm: the read arm's content.
+    let conditional_return: Vec<RawNode> = node
+        .named_children()
+        .into_iter()
+        .find(|c| {
+            matches!(
+                c.kind(),
+                RawKind::PreprocConditionalReturn | RawKind::PreprocConditionalReturnType
+            ) && in_arm(*c)
+        })
+        .map(|group| {
+            issues.push(SyntaxIssue {
+                message: "`#if` inside a return clause — the first arm this routine's \
+                          build does not rule out is read (the other arms are not \
+                          modelled)"
+                    .to_string(),
+                origin: origin_of(group),
+            });
+            let mut items = Vec::new();
+            conditional_list_arm(group, source, &mut Run::new(&header_guard), &mut items);
+            items
         })
         .unwrap_or_default();
 
@@ -2665,6 +2800,12 @@ fn lower_routine<'t>(
                 .find(|c| c.kind() == RawKind::InterfaceProcedureSuffix)
                 .and_then(|suffix| suffix.field(FieldName::ReturnType))
         })
+        .or_else(|| {
+            conditional_return
+                .iter()
+                .copied()
+                .find(|c| c.kind() == RawKind::TypeSpecification)
+        })
         .map(|n| n.text(source).trim().to_string());
 
     // Named-return-value binding (T3, receiver-closure-and-arg-increments plan):
@@ -2679,6 +2820,12 @@ fn lower_routine<'t>(
     // reference a named return in anyway, so the fallback's extra reach is unneeded
     // here (a `None` there is correct: no binding to synthesize a scoped symbol from).
     let return_name = arm_field(FieldName::ReturnValue)
+        .or_else(|| {
+            conditional_return
+                .iter()
+                .copied()
+                .find(|c| matches!(c.kind(), RawKind::Identifier | RawKind::QuotedIdentifier))
+        })
         .map(|n| ident_text(n, source))
         .filter(|s| !s.is_empty());
 
@@ -2707,28 +2854,15 @@ fn lower_routine<'t>(
             .filter(|b| b.kind() == RawKind::CodeBlock)
         {
             Some(lower_code_block(cb, ir, issues, source, 0))
-        } else if node.kind() == RawKind::PreprocSplitProcedurePreamble {
-            // `preproc_split_procedure_preamble` (H-6): unlike `_routine_regular_body`'s
-            // `field('body', $.code_block)`, this shape's shared trailing `code_block` (the
-            // ONE body after `#endif`) is a BARE child with no field tag at all — VERIFIED
-            // against the pinned grammar (`tree-sitter parse`), so `.field(Body)` above always
-            // misses it for this one kind. Fall back to the last `CodeBlock`-kind child (there
-            // is exactly one, by construction).
-            node.named_children()
-                .into_iter()
-                .rev()
-                .find(|c| c.kind() == RawKind::CodeBlock)
-                .map(|cb| lower_code_block(cb, ir, issues, source, 0))
         } else {
             // `preproc_split_procedure_body` / `preproc_split_complete_body` (T1.4 review,
-            // sibling-gap fix): unlike `preproc_split_procedure_preamble` above, `node.kind()`
-            // is STILL plain `Procedure`/`TriggerDeclaration` for these two shapes — only the
-            // BODY position is a `#if`-guarded choice (grammar: `choice($._routine_regular_body,
-            // $.preproc_split_procedure_body, $.preproc_split_complete_body)`). Both wrapper
-            // rules are NAMED (non-inlined), so neither one's `field('body', ..)` flattens onto
-            // `node` itself — `node.field(Body)` above is unconditionally `None` for both,
-            // and the `_preamble` branch above does not apply (`node.kind()` never becomes
-            // one of these two). Recover directly from the wrapper child instead.
+            // sibling-gap fix): `node.kind()` is STILL plain `Procedure`/`TriggerDeclaration`
+            // for these two shapes — only the BODY position is a `#if`-guarded choice
+            // (grammar: `choice($._routine_regular_body, $.preproc_split_procedure_body,
+            // $.preproc_split_complete_body)`). Both wrapper rules are NAMED (non-inlined),
+            // so neither one's `field('body', ..)` flattens onto `node` itself —
+            // `node.field(Body)` above is unconditionally `None` for both. Recover directly
+            // from the wrapper child instead.
             node.named_children()
                 .into_iter()
                 .find(|c| {
@@ -3716,6 +3850,9 @@ fn lower_case_body(
     source: &str,
     depth: u32,
 ) -> (Vec<CaseBranch>, Option<BlockId>) {
+    // Grammar 5.0.0: every `case_else_branch`, conditional or not, is inside `case_body`,
+    // so one walk finds it (first-match-wins, mirroring `PreprocSplitDeclaration`'s
+    // established name/id policy).
     let mut branches = Vec::new();
     let mut else_block = None;
     if let Some(body) = case_node.field(FieldName::Body) {
@@ -3728,19 +3865,6 @@ fn lower_case_body(
             &mut else_block,
             depth,
         );
-    }
-    // The UNCONDITIONAL `case_else_branch` is a DIRECT child of `case_statement` itself
-    // (not `case_body`) — only consulted when no `#if`-nested else was already found by
-    // `collect_case_branches` (first-match-wins, mirroring `PreprocSplitDeclaration`'s
-    // established name/id policy; an unconditional else AND a conditional nested else
-    // together in the same `case` is legal AL but vanishingly rare).
-    if else_block.is_none()
-        && let Some(else_node) = case_node
-            .named_children()
-            .into_iter()
-            .find(|c| c.kind() == RawKind::CaseElseBranch)
-    {
-        else_block = Some(lower_case_else_branch(else_node, ir, issues, source, depth));
     }
     (branches, else_block)
 }
@@ -4311,6 +4435,16 @@ fn contains_kind(node: RawNode, k: RawKind) -> bool {
 }
 
 /// Strip one layer of surrounding double quotes from a (quoted) identifier.
+/// The name an object reference (`extends` / `implements` target) gives: the node's
+/// [`ident_text`], or for a dotted `qualified_name` its last segment, since objects
+/// carry no namespace (see `ResolveIndex::resolve_object_ref`'s doc).
+fn reference_name(n: RawNode, source: &str) -> String {
+    let segment = (n.kind() == RawKind::QualifiedName)
+        .then(|| structural_children(n).into_iter().next_back())
+        .flatten();
+    ident_text(segment.unwrap_or(n), source)
+}
+
 fn ident_text(n: RawNode, source: &str) -> String {
     let t = n.text(source);
     let bytes = t.as_bytes();
@@ -9761,5 +9895,245 @@ codeunit 50139 G
         // Under the routine's own `#if A`, the inner `#if A` is taken by every build
         // (spliced) and `#if not A` by none (dropped).
         assert_eq!(stmt_kinds(items("Decided")), ["exit", "call"]);
+    }
+
+    /// Grammar 5.0.0 #32: `preproc_split_trigger_preamble` — a trigger header and var
+    /// region per arm, one shared body. Each arm is a trigger holding the shared call.
+    #[test]
+    fn split_trigger_preamble_yields_one_trigger_per_arm() {
+        let src = "codeunit 50100 C
+{
+#if X
+    trigger OnRun()
+    var
+        A: Integer;
+#else
+    trigger OnRun()
+    var
+        B: Integer;
+#endif
+    begin
+        Foo();
+    end;
+}
+";
+        let af = parse(src);
+        let rs = &af.objects[0].routines;
+        assert_eq!(rs.len(), 2, "one trigger per arm");
+        for (r, local, sym) in [(&rs[0], "A", true), (&rs[1], "B", false)] {
+            assert_eq!(r.kind, crate::ir::RoutineKind::Trigger);
+            assert_eq!(r.name, "OnRun");
+            assert_eq!(r.locals.len(), 1);
+            assert_eq!(r.locals[0].name, local);
+            assert_eq!(r.preproc_context, [("X".to_string(), sym)]);
+            assert!(call_reachable(&af, r.body.expect("shared body"), "Foo"));
+        }
+    }
+
+    /// Grammar 5.0.0 item 77: an arm of a split procedure may be a nested group of
+    /// headers. Each nested arm is a routine, and its context holds both levels (the
+    /// outer `#if` true for the nested arms, its nesting condition per arm).
+    #[test]
+    fn nested_header_group_yields_one_routine_per_arm_with_both_levels_in_context() {
+        let src = "codeunit 50100 C
+{
+#if X
+#if Y
+    [Inner]
+    procedure Q()
+#else
+    procedure Q(I: Integer)
+#endif
+#else
+    procedure Q(J: Code[10])
+#endif
+    begin
+        Bar();
+    end;
+}
+";
+        let af = parse(src);
+        let rs = &af.objects[0].routines;
+        let t = |s: &str, v| (s.to_string(), v);
+        let shape: Vec<_> = rs
+            .iter()
+            .map(|r| {
+                (
+                    r.name.as_str(),
+                    r.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+                    r.preproc_context.clone(),
+                    r.attributes.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (
+                    "Q",
+                    vec![],
+                    vec![t("X", true), t("Y", true)],
+                    vec!["inner".to_string()],
+                ),
+                ("Q", vec!["I"], vec![t("X", true), t("Y", false)], vec![]),
+                ("Q", vec!["J"], vec![t("X", false)], vec![]),
+            ]
+        );
+        for r in rs {
+            assert!(call_reachable(&af, r.body.expect("shared body"), "Bar"));
+        }
+    }
+
+    /// Grammar 5.0.0 item 46b: an `#if` group in a parameter list. The list reads the
+    /// first arm the build does not rule out, nested groups included, and the group is
+    /// reported, because the routine's other arms are not modelled.
+    #[test]
+    fn conditional_parameters_read_one_arm_and_report_the_group() {
+        let src = "codeunit 50100 C
+{
+    procedure P(A: Integer
+#if X
+    ; B: Integer
+#else
+    ; C: Text
+#endif
+    )
+    begin
+    end;
+#if not X
+    procedure Q(A: Integer
+#if X
+    ; B: Integer
+#else
+    ; C: Text
+#endif
+    )
+    begin
+    end;
+#endif
+    procedure N(
+#if Y
+#if Z
+    A: Integer
+#endif
+#endif
+    )
+    begin
+    end;
+}
+";
+        let af = parse(src);
+        let names = |i: usize| -> Vec<String> {
+            af.objects[0].routines[i]
+                .params
+                .iter()
+                .map(|p| p.name.clone())
+                .collect()
+        };
+        assert_eq!(names(0), ["A", "B"], "first arm of an undecided group");
+        assert_eq!(names(1), ["A", "C"], "the `#else` arm under `#if not X`");
+        assert_eq!(names(2), ["A"], "a nested group's first arm");
+        assert_eq!(
+            af.issues
+                .iter()
+                .filter(|i| i.message.contains("parameter list"))
+                .count(),
+            3,
+            "issues: {:?}",
+            af.issues
+        );
+    }
+
+    /// Grammar 5.0.0 #35: a return clause chosen per `#if` arm. Both forms read one
+    /// arm's type (and, for the whole-clause form, its name) and report the group.
+    #[test]
+    fn conditional_return_clauses_read_one_arm_and_report_the_group() {
+        let src = "codeunit 50100 C
+{
+    procedure R1()
+#if X
+    Result: Integer
+#else
+    Result2: Boolean
+#endif
+    begin
+    end;
+
+    procedure R2() Result:
+#if X
+    Integer
+#else
+    Boolean
+#endif
+    begin
+    end;
+}
+";
+        let af = parse(src);
+        let rs = &af.objects[0].routines;
+        assert_eq!(rs[0].return_type.as_deref(), Some("Integer"));
+        assert_eq!(rs[0].return_name.as_deref(), Some("Result"));
+        assert_eq!(rs[1].return_type.as_deref(), Some("Integer"));
+        assert_eq!(rs[1].return_name.as_deref(), Some("Result"));
+        assert_eq!(
+            af.issues
+                .iter()
+                .filter(|i| i.message.contains("return clause"))
+                .count(),
+            2,
+            "issues: {:?}",
+            af.issues
+        );
+    }
+
+    /// Grammar 5.0.0 #34, #36: `extends` / `implements` naming a target by a dotted
+    /// `qualified_name` (its last segment is the object's name), and `extends` by number
+    /// (kept as text, reported because no consumer resolves it).
+    #[test]
+    fn extends_and_implements_read_qualified_and_numeric_targets() {
+        let src = r#"tableextension 50103 "Y" extends Contoso.Sales."Customer X" { }
+tableextension 50102 "X" extends 50101 { }
+codeunit 50104 I implements A.B."IFoo", IBar { }
+"#;
+        let af = parse(src);
+        assert_eq!(af.objects[0].extends_target.as_deref(), Some("Customer X"));
+        assert_eq!(af.objects[1].extends_target.as_deref(), Some("50101"));
+        assert_eq!(af.objects[2].implements, ["IFoo", "IBar"]);
+        assert_eq!(
+            af.issues
+                .iter()
+                .filter(|i| i.message.contains("by number"))
+                .count(),
+            1,
+            "issues: {:?}",
+            af.issues
+        );
+    }
+
+    /// Grammar 5.0.0 #33: a split preamble's shared block is a `body` field.
+    #[test]
+    fn split_procedure_preamble_body_is_lowered_from_its_field() {
+        let src = "codeunit 50100 C
+{
+#if X
+    procedure P()
+    var
+        A: Integer;
+#else
+    procedure P(I: Integer)
+    var
+        B: Integer;
+#endif
+    begin
+        Foo();
+    end;
+}
+";
+        let af = parse(src);
+        let rs = &af.objects[0].routines;
+        assert_eq!(rs.len(), 2);
+        for r in rs {
+            assert!(call_reachable(&af, r.body.expect("shared body"), "Foo"));
+        }
     }
 }

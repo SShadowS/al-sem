@@ -313,12 +313,16 @@ pub enum RawKind {
     PreprocConditionalOperand,
     PreprocConditionalOptionMembers,
     PreprocConditionalOrderByFields,
+    PreprocConditionalParameters,
     PreprocConditionalPermissions,
+    PreprocConditionalProcedureHeader,
     PreprocConditionalPropertyValue,
     PreprocConditionalPropertyValueSequence,
     PreprocConditionalQuery,
     PreprocConditionalRendering,
     PreprocConditionalReport,
+    PreprocConditionalReturn,
+    PreprocConditionalReturnType,
     PreprocConditionalSortingFields,
     PreprocConditionalStatement,
     PreprocConditionalTableRelation,
@@ -378,6 +382,7 @@ pub enum RawKind {
     PreprocSplitReportDataitemOpenOverEndif,
     PreprocSplitTableField,
     PreprocSplitTableFieldOpen,
+    PreprocSplitTriggerPreamble,
     PreprocSplitVarSectionTail,
     PreprocUndef,
     Procedure,
@@ -838,7 +843,11 @@ impl RawKind {
             "preproc_conditional_operand" => Some(RawKind::PreprocConditionalOperand),
             "preproc_conditional_option_members" => Some(RawKind::PreprocConditionalOptionMembers),
             "preproc_conditional_order_by_fields" => Some(RawKind::PreprocConditionalOrderByFields),
+            "preproc_conditional_parameters" => Some(RawKind::PreprocConditionalParameters),
             "preproc_conditional_permissions" => Some(RawKind::PreprocConditionalPermissions),
+            "preproc_conditional_procedure_header" => {
+                Some(RawKind::PreprocConditionalProcedureHeader)
+            }
             "preproc_conditional_property_value" => Some(RawKind::PreprocConditionalPropertyValue),
             "preproc_conditional_property_value_sequence" => {
                 Some(RawKind::PreprocConditionalPropertyValueSequence)
@@ -846,6 +855,8 @@ impl RawKind {
             "preproc_conditional_query" => Some(RawKind::PreprocConditionalQuery),
             "preproc_conditional_rendering" => Some(RawKind::PreprocConditionalRendering),
             "preproc_conditional_report" => Some(RawKind::PreprocConditionalReport),
+            "preproc_conditional_return" => Some(RawKind::PreprocConditionalReturn),
+            "preproc_conditional_return_type" => Some(RawKind::PreprocConditionalReturnType),
             "preproc_conditional_sorting_fields" => Some(RawKind::PreprocConditionalSortingFields),
             "preproc_conditional_statement" => Some(RawKind::PreprocConditionalStatement),
             "preproc_conditional_table_relation" => Some(RawKind::PreprocConditionalTableRelation),
@@ -913,6 +924,7 @@ impl RawKind {
             }
             "preproc_split_table_field" => Some(RawKind::PreprocSplitTableField),
             "preproc_split_table_field_open" => Some(RawKind::PreprocSplitTableFieldOpen),
+            "preproc_split_trigger_preamble" => Some(RawKind::PreprocSplitTriggerPreamble),
             "preproc_split_var_section_tail" => Some(RawKind::PreprocSplitVarSectionTail),
             "preproc_undef" => Some(RawKind::PreprocUndef),
             "procedure" => Some(RawKind::Procedure),
@@ -1372,7 +1384,9 @@ impl RawKind {
             RawKind::PreprocConditionalOperand => "preproc_conditional_operand",
             RawKind::PreprocConditionalOptionMembers => "preproc_conditional_option_members",
             RawKind::PreprocConditionalOrderByFields => "preproc_conditional_order_by_fields",
+            RawKind::PreprocConditionalParameters => "preproc_conditional_parameters",
             RawKind::PreprocConditionalPermissions => "preproc_conditional_permissions",
+            RawKind::PreprocConditionalProcedureHeader => "preproc_conditional_procedure_header",
             RawKind::PreprocConditionalPropertyValue => "preproc_conditional_property_value",
             RawKind::PreprocConditionalPropertyValueSequence => {
                 "preproc_conditional_property_value_sequence"
@@ -1380,6 +1394,8 @@ impl RawKind {
             RawKind::PreprocConditionalQuery => "preproc_conditional_query",
             RawKind::PreprocConditionalRendering => "preproc_conditional_rendering",
             RawKind::PreprocConditionalReport => "preproc_conditional_report",
+            RawKind::PreprocConditionalReturn => "preproc_conditional_return",
+            RawKind::PreprocConditionalReturnType => "preproc_conditional_return_type",
             RawKind::PreprocConditionalSortingFields => "preproc_conditional_sorting_fields",
             RawKind::PreprocConditionalStatement => "preproc_conditional_statement",
             RawKind::PreprocConditionalTableRelation => "preproc_conditional_table_relation",
@@ -1441,6 +1457,7 @@ impl RawKind {
             }
             RawKind::PreprocSplitTableField => "preproc_split_table_field",
             RawKind::PreprocSplitTableFieldOpen => "preproc_split_table_field_open",
+            RawKind::PreprocSplitTriggerPreamble => "preproc_split_trigger_preamble",
             RawKind::PreprocSplitVarSectionTail => "preproc_split_var_section_tail",
             RawKind::PreprocUndef => "preproc_undef",
             RawKind::Procedure => "procedure",
@@ -1892,12 +1909,16 @@ impl RawKind {
         RawKind::PreprocConditionalOperand,
         RawKind::PreprocConditionalOptionMembers,
         RawKind::PreprocConditionalOrderByFields,
+        RawKind::PreprocConditionalParameters,
         RawKind::PreprocConditionalPermissions,
+        RawKind::PreprocConditionalProcedureHeader,
         RawKind::PreprocConditionalPropertyValue,
         RawKind::PreprocConditionalPropertyValueSequence,
         RawKind::PreprocConditionalQuery,
         RawKind::PreprocConditionalRendering,
         RawKind::PreprocConditionalReport,
+        RawKind::PreprocConditionalReturn,
+        RawKind::PreprocConditionalReturnType,
         RawKind::PreprocConditionalSortingFields,
         RawKind::PreprocConditionalStatement,
         RawKind::PreprocConditionalTableRelation,
@@ -1957,6 +1978,7 @@ impl RawKind {
         RawKind::PreprocSplitReportDataitemOpenOverEndif,
         RawKind::PreprocSplitTableField,
         RawKind::PreprocSplitTableFieldOpen,
+        RawKind::PreprocSplitTriggerPreamble,
         RawKind::PreprocSplitVarSectionTail,
         RawKind::PreprocUndef,
         RawKind::Procedure,
@@ -2097,7 +2119,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "a13fd493d67c78c4d04593e89da2d8e0d6ab9622b21e8ccef5878a7a16133440";
+    "e9005d07a594f40bcd990c12809d5b6c77251a33579b64195ed5b8490ec87cb0";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 501;
+pub const NAMED_KIND_COUNT: usize = 506;
