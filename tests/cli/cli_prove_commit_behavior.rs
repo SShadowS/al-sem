@@ -406,9 +406,15 @@ fn a_checked_run_inside_an_ignore_scope_still_commits() {
         prove(&ws, "IgnoreCheckedRun", "may-commit")["answer"],
         "yes"
     );
-    // Under Error the checked run pins the route normal too: the commit
-    // stays a commit, and no commit error escapes the run.
+    // Under Error, Learn does not say whether the scope follows into the
+    // run. If it does, the commit raises an error, the run traps it (it
+    // returns false and rolls back) and nothing commits; if it does not, the
+    // run commits. So the commit stays possible (yes), is not certain on
+    // success (before this round's fix: "unconditional on success"), and no
+    // commit error escapes the run.
     assert_eq!(prove(&ws, "ErrorCheckedRun", "may-commit")["answer"], "yes");
+    let must = prove(&ws, "ErrorCheckedRun", "commits-on-success-path");
+    assert_eq!(must["answer"], "unknown", "{must}");
     let e = prove(&ws, "ErrorCheckedRun", "throws-error");
     assert!(
         evidence(&e).iter().all(|(_, cb)| cb.is_none()),
@@ -659,4 +665,595 @@ fn digest_and_explain_say_why() {
             "{cmd}: {text}"
         );
     }
+}
+
+/// One workspace (`ws/`, app `CB2`) of `source`, for the tests below.
+fn workspace_of(source: &str) -> Ws {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"20202020-0000-4000-8000-0000000002b4","name":"CB2","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Probe.al"), source).unwrap();
+    let root = t.path().to_path_buf();
+    Ws { _t: t, root }
+}
+
+/// Every way of starting an object, each inside an Ignore scope, each
+/// reaching a commit only through the started object. The objects' commits
+/// sit in their run triggers (a report's `OnPreReport`, a page's
+/// `OnOpenPage`, a query's `OnBeforeOpen`, a codeunit's `OnRun`) or, for an
+/// XmlPort import, in the `OnInsert` trigger of the table it imports into.
+const STARTS: &str = r#"table 50340 "ST"
+{
+    fields { field(1; K; Integer) { } }
+    trigger OnInsert()
+    begin
+        Commit();
+    end;
+}
+
+report 50340 "SR"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(D; "ST") { }
+    }
+    trigger OnPreReport()
+    begin
+        Commit();
+    end;
+}
+
+page 50340 "SP"
+{
+    SourceTable = "ST";
+    trigger OnOpenPage()
+    begin
+        Commit();
+    end;
+}
+
+query 50340 "SQ"
+{
+    elements
+    {
+        dataitem(D; "ST") { column(K; K) { } }
+    }
+    trigger OnBeforeOpen()
+    begin
+        Commit();
+    end;
+}
+
+xmlport 50340 "SX"
+{
+    Direction = Import;
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(T; "ST")
+            {
+                fieldelement(K; T.K) { }
+            }
+        }
+    }
+}
+
+codeunit 50341 "SC"
+{
+    trigger OnRun()
+    begin
+        Commit();
+    end;
+
+    procedure Plain()
+    begin
+        Commit();
+    end;
+}
+
+codeunit 50342 "Starts"
+{
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportRun()
+    begin
+        Report.Run(Report::"SR");
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportRunModal()
+    begin
+        Report.RunModal(Report::"SR");
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportSaveAsPdf()
+    begin
+        Report.SaveAsPdf(Report::"SR", 'x.pdf');
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportExecute()
+    begin
+        Report.Execute(Report::"SR", '');
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportVarRun()
+    var
+        Rep: Report "SR";
+    begin
+        Rep.Run();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportVarSaveAsPdf()
+    var
+        Rep: Report "SR";
+    begin
+        Rep.SaveAsPdf('x.pdf');
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ReportVarPrint()
+    var
+        Rep: Report "SR";
+    begin
+        Rep.Print('');
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure PageRun()
+    begin
+        Page.Run(Page::"SP");
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure PageVarRunModal()
+    var
+        P: Page "SP";
+    begin
+        P.RunModal();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure QueryOpen()
+    var
+        Q: Query "SQ";
+    begin
+        Q.Open();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure QuerySaveAsCsv(O: OutStream)
+    begin
+        Query.SaveAsCsv(Query::"SQ", O);
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure XmlportImport(S: InStream)
+    begin
+        Xmlport.Import(Xmlport::"SX", S);
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure CodeunitVarRun()
+    var
+        C: Codeunit "SC";
+    begin
+        C.Run();
+    end;
+
+    // Controls: a procedure call is no start, so the scope applies for
+    // certain; so does a table trigger reached by the routine's own insert.
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure PlainCall()
+    var
+        C: Codeunit "SC";
+    begin
+        C.Plain();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure OwnInsert()
+    var
+        R: Record "ST";
+    begin
+        R.Insert(true);
+    end;
+}
+"#;
+
+#[test]
+fn every_way_of_starting_an_object_lets_the_scope_only_may_apply() {
+    // B4 review, finding B: before the fix only `PCallee::ObjectRun` and a
+    // codeunit variable's `.Run` into `OnRun` were runs; a report variable's
+    // `.Run()`, the report saves and the query opens B6 routes into their
+    // triggers were plain calls, so Ignore gave a definite (wrong) `no`.
+    // Learn does not say whether the scope follows into a started object,
+    // so a commit there stays possible and is never certain on success.
+    let ws = workspace_of(STARTS);
+    let ask = |routine: &str, q: &str| prove(&ws, &format!("Codeunit \"Starts\"::{routine}"), q);
+    for routine in [
+        "ReportRun",
+        "ReportRunModal",
+        "ReportSaveAsPdf",
+        "ReportExecute",
+        "ReportVarRun",
+        "ReportVarSaveAsPdf",
+        "ReportVarPrint",
+        "PageRun",
+        "PageVarRunModal",
+        "QueryOpen",
+        "QuerySaveAsCsv",
+        "XmlportImport",
+        "CodeunitVarRun",
+    ] {
+        let may = ask(routine, "may-commit");
+        assert_eq!(may["answer"], "yes", "{routine}: {may}");
+        assert!(may.get("suppressedCommits").is_none(), "{routine}: {may}");
+        let must = ask(routine, "commits-on-success-path");
+        assert_ne!(must["answer"], "yes", "{routine}: {must}");
+    }
+    // Controls (the precondition that the scope is read at all).
+    for routine in ["PlainCall", "OwnInsert"] {
+        let r = ask(routine, "may-commit");
+        assert_eq!(r["answer"], "no", "{routine}: {r}");
+        assert_eq!(suppressed(&r).len(), 1, "{routine}: {r}");
+    }
+}
+
+/// The `XBase` dependency with a codeunit run: `Dep Runner` (12), whose
+/// `OnRun` inserts and commits.
+const DEP_RUNNER: &str = r#"codeunit 10 "Dep Lib"
+{
+    procedure Outer()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Insert();
+        Commit();
+    end;
+
+    procedure Outer2()
+    begin
+        Codeunit.Run(Codeunit::"Dep Runner");
+    end;
+
+    procedure Outer3()
+    begin
+        if Codeunit.Run(Codeunit::"Dep Runner") then;
+    end;
+
+    procedure Outer4()
+    var
+        R: Codeunit "Dep Runner";
+    begin
+        R.Run();
+    end;
+}
+
+codeunit 12 "Dep Runner"
+{
+    trigger OnRun()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Insert();
+        Commit();
+    end;
+}
+"#;
+
+const DEP_RUN_CALLERS: &str = r#"codeunit 50176 "Ws Runs"
+{
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreCheckedDepRun()
+    begin
+        if Codeunit.Run(Codeunit::"Dep Runner") then;
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreUncheckedDepRun()
+    begin
+        Codeunit.Run(Codeunit::"Dep Runner");
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreCheckedDepMember()
+    var
+        R: Codeunit "Dep Runner";
+    begin
+        if R.Run() then;
+    end;
+
+    [CommitBehavior(CommitBehavior::Error)]
+    procedure ErrorCheckedDepRun()
+    begin
+        if Codeunit.Run(Codeunit::"Dep Runner") then;
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnorePlainDep()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreNestedDepRun()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer2();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreNestedDepChecked()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer3();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreNestedDepMember()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer4();
+    end;
+}
+"#;
+
+/// The workspace `DEP_RUN_CALLERS` over a dependency app `XBase` built from
+/// source (`DEP_RUNNER`): the cross-app model loads the dependency's bodies.
+fn dep_run_workspace() -> tempfile::TempDir {
+    use crate::dep_dispatch_fixture as dd;
+    let dir = tempfile::tempdir().unwrap();
+    dd::write_workspace(dir.path(), DEP_RUN_CALLERS);
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":10,"Name":"Dep Lib","Methods":[{{"Name":"Outer","Parameters":[]}},{{"Name":"Outer2","Parameters":[]}},{{"Name":"Outer3","Parameters":[]}},{{"Name":"Outer4","Parameters":[]}}]}},{{"Id":12,"Name":"Dep Runner","Methods":[]}}],"AppId":"{}","Name":"XBase","Publisher":"probe","Version":"1.0.0.0"}}"#,
+        dd::DEP_GUID
+    );
+    let customer = "table 18 Customer\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n";
+    crate::symbol_app::write_source_app(
+        &dir.path().join(".alpackages").join(dd::DEP_APP_FILE),
+        dd::DEP_GUID,
+        "XBase",
+        "1.0.0.0",
+        &symbols,
+        &[("src/Customer.al", customer), ("src/Lib.al", DEP_RUNNER)],
+        "",
+    );
+    dir
+}
+
+/// `prove <Ws Runs::routine> <q>` over the workspace at `dir`: its result.
+fn ask_ws_runs(dir: &Path, routine: &str, q: &str) -> serde_json::Value {
+    json(
+        dir,
+        &[
+            "prove",
+            ".",
+            &format!("Codeunit \"Ws Runs\"::{routine}"),
+            q,
+            "--deterministic",
+        ],
+    )["payload"]["result"]
+        .clone()
+}
+
+#[test]
+fn an_object_run_into_a_dependency_keeps_its_commit() {
+    // B4 review, finding A: the crossing edge into a dependency was composed
+    // as a plain call whatever its step, so a run of a dependency codeunit
+    // under Ignore gave a definite (wrong) `no`. Learn ("Codeunit.Run"): a
+    // checked run commits at its end and that commit "isn't affected by
+    // CommitBehavior"; an unchecked run only MAY carry the scope.
+    let dir = dep_run_workspace();
+    let ask = |routine: &str, q: &str| ask_ws_runs(dir.path(), routine, q);
+    // Control: a plain call into the dependency is ignored for certain.
+    let plain = ask("IgnorePlainDep", "may-commit");
+    assert_eq!(plain["answer"], "no", "precondition: {plain}");
+    for routine in [
+        "IgnoreCheckedDepRun",
+        "IgnoreUncheckedDepRun",
+        "IgnoreCheckedDepMember",
+        "ErrorCheckedDepRun",
+    ] {
+        let r = ask(routine, "may-commit");
+        assert_eq!(r["answer"], "yes", "{routine}: {r}");
+        assert!(r.get("suppressedCommits").is_none(), "{routine}: {r}");
+    }
+    // A checked run traps the commit's error: no commit error row escapes.
+    let e = ask("ErrorCheckedDepRun", "throws-error");
+    assert!(
+        evidence(&e).iter().all(|(_, cb)| cb.is_none()),
+        "no commit error row past a checked run: {e}"
+    );
+}
+
+#[test]
+fn an_object_run_inside_dependency_code_keeps_its_commit() {
+    // B4 round-2 review: the run is INSIDE the dependency's own code
+    // (`Dep Lib::Outer2/3/4` start `Dep Runner`, which commits), reached by a
+    // plain call from an Ignore scope. The cross-app tree keeps the
+    // dependency code's calls apart from the model's (`dependency_calls`),
+    // and the run steps were read from the model's calls alone, so the run
+    // edge was a plain step and the commit beyond read as ignored: a definite
+    // (wrong) `no`. The scope only MAY follow into a started object (Learn
+    // does not say it does), and a checked run's commit is not affected by
+    // CommitBehavior (Learn, "Codeunit.Run"), so the commit stays possible.
+    let dir = dep_run_workspace();
+    let ask = |routine: &str, q: &str| ask_ws_runs(dir.path(), routine, q);
+    // Precondition (control): a plain call into the dependency, whose own
+    // commit is not behind a run, is ignored for certain.
+    let plain = ask("IgnorePlainDep", "may-commit");
+    assert_eq!(plain["answer"], "no", "precondition: {plain}");
+    for routine in [
+        "IgnoreNestedDepRun",
+        "IgnoreNestedDepChecked",
+        "IgnoreNestedDepMember",
+    ] {
+        let r = ask(routine, "may-commit");
+        assert_eq!(r["answer"], "yes", "{routine}: {r}");
+        assert!(r.get("suppressedCommits").is_none(), "{routine}: {r}");
+        // On one reading only: never a definite answer either way.
+        let s = ask(routine, "commits-on-success-path");
+        assert_eq!(s["answer"], "unknown", "{routine}: {s}");
+        // The digest reads the same rule.
+        let out = run(
+            dir.path(),
+            &[
+                "digest",
+                ".",
+                "--routine",
+                &format!("Codeunit \"Ws Runs\"::{routine}"),
+                "--format",
+                "human",
+            ],
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("commits: may"), "{routine}: {text}");
+        assert!(!text.contains("are ignored"), "{routine}: {text}");
+    }
+}
+
+const TRAPS: &str = r#"codeunit 50350 "CB Traps"
+{
+    [CommitBehavior(CommitBehavior::Error)]
+    procedure ErrorTry()
+    begin
+        if TryCommit() then;
+    end;
+
+    [TryFunction]
+    procedure TryCommit()
+    begin
+        Commit();
+    end;
+
+    procedure PlainTry()
+    begin
+        if TryError() then;
+    end;
+
+    [TryFunction]
+    procedure TryError()
+    begin
+        Error('boom');
+    end;
+}
+"#;
+
+#[test]
+fn the_filtered_slice_traps_a_commit_turned_into_an_error() {
+    // B4 review, finding C: the slice ruled the trap by the site's own row
+    // type (COMMIT), so a commit turned into an error inside a used
+    // TryFunction read `yes` with `--site`, `--match` and `--op`, while the
+    // unfiltered answer and the digest said `no` (caught).
+    let ws = workspace_of(TRAPS);
+    let ask = |routine: &str, extra: &[&str]| {
+        let selector = format!("Codeunit \"CB Traps\"::{routine}");
+        let mut args = vec!["prove", "ws", &selector, "throws-error", "--deterministic"];
+        args.extend_from_slice(extra);
+        json(&ws.root, &args)["payload"]["result"].clone()
+    };
+    let unfiltered = ask("ErrorTry", &[]);
+    assert_eq!(unfiltered["answer"], "no", "precondition: {unfiltered}");
+    for filter in [
+        &["--site", "ws:src/Probe.al:12"][..],
+        &["--match", "commit"][..],
+        &["--op", "Commit"][..],
+    ] {
+        let r = ask("ErrorTry", filter);
+        assert_eq!(r["answer"], "no", "{filter:?}: {r}");
+    }
+    // Control: a plain error in a used TryFunction, asked with --site.
+    let control = ask("PlainTry", &["--site", "ws:src/Probe.al:23"]);
+    assert_eq!(control["answer"], "no", "{control}");
+}
+
+/// A report whose run trigger and own `Print`/`SaveAsWord` procedures all
+/// commit, called from Ignore scopes by a report variable.
+const BINDINGS: &str = r#"table 50390 "BBT" { fields { field(1; K; Integer) { } } }
+
+report 50390 "BBR"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(D; "BBT") { } }
+    trigger OnPreReport()
+    begin
+        Commit();
+    end;
+
+    procedure Print()
+    begin
+        Commit();
+    end;
+
+    procedure SaveAsWord(T: Code[250])
+    begin
+        Commit();
+    end;
+}
+
+codeunit 50391 "BB Calls"
+{
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure CallPrint()
+    var
+        R: Report "BBR";
+    begin
+        R.Print();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure CallUndecided()
+    var
+        R: Report "BBR";
+    begin
+        R.SaveAsWord('x.docx');
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure CallBuiltin()
+    var
+        R: Report "BBR";
+    begin
+        R.SaveAsPdf('x.pdf');
+    end;
+}
+"#;
+
+#[test]
+fn a_start_follows_the_overload_binding_and_an_undecided_one_gives_no_no() {
+    // Integration of B4 (one rule for "this call starts its object", read by
+    // the resolver and the commit scope) with B6 (a report's Print/Execute/
+    // SaveAs* bind by AL's overload rule). `R.Print()` binds to the report's
+    // own `procedure Print()` (alc 18.0.43.1464, B6): a plain call, so the
+    // Ignore scope applies for certain. B4's earlier arity rule called it a
+    // start, and the scope only MAY have followed: a wrong `yes`. An
+    // undecided binding keeps its unresolved route: never a definite `no`.
+    let ws = workspace_of(BINDINGS);
+    let ask = |routine: &str, q: &str| prove(&ws, &format!("Codeunit \"BB Calls\"::{routine}"), q);
+    let print = ask("CallPrint", "may-commit");
+    assert_eq!(print["answer"], "no", "CallPrint: {print}");
+    assert_eq!(suppressed(&print).len(), 1, "CallPrint: {print}");
+    // The undecided call stays unresolved (B6's OverloadAmbiguous route):
+    // `unknown`, neither the procedure's plain call (`no`) nor a start.
+    let undecided = ask("CallUndecided", "may-commit");
+    assert_eq!(undecided["answer"], "unknown", "CallUndecided: {undecided}");
+    let builtin = ask("CallBuiltin", "may-commit");
+    assert_eq!(builtin["answer"], "yes", "CallBuiltin: {builtin}");
+    let must = ask("CallBuiltin", "commits-on-success-path");
+    assert_ne!(must["answer"], "yes", "CallBuiltin: {must}");
 }

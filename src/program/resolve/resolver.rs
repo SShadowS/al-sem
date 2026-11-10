@@ -73,6 +73,7 @@ use crate::program::resolve::arg_dispatch::{
     pick_candidate,
 };
 use crate::program::resolve::builtins::{catalog_version, global_builtin_id};
+use crate::program::resolve::dataset::ObjectStart;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
     AbiEventKind, AbiRoutineKey, AbiRoutineKind, BuiltinId, CanonicalSpan, Condition,
@@ -2719,6 +2720,66 @@ pub(crate) fn run_by_other_name_binding(
     }
 }
 
+/// B4 + B6: THE rule for whether the member call `method_lc` (folded) with
+/// `arity` arguments (`args`) on a variable of the object `target` (of
+/// `kind`) starts the object, running its entry triggers
+/// ([`dispatch_entry_trigger`]) and its dataset, instead of calling one of
+/// its procedures. Read by the member arm of [`resolve_member_with_args`],
+/// by the resolver's site facts (`full::SiteFacts::starts_object` and
+/// `dataset_run`), so the route, the model's start flag and the dataset run
+/// agree by construction.
+///
+/// - The method must be one of [`crate::program::resolve::dataset::
+///   starts_object`]'s.
+/// - A report's `SaveAs*`/`Execute`/`Print` and a query's `Open`/`SaveAs*`
+///   bind by AL's overload rule between the built-in and the object's own
+///   procedures ([`run_by_other_name_binding`]); a call whose argument types
+///   do not decide is [`ObjectStart::Undecided`], never a definite answer.
+/// - `Run`, `RunModal`, `Import` and `Export` take at most one argument (a
+///   codeunit's record), and a call with arguments to an object that
+///   declares a procedure of that name binds to the procedure
+///   ([`declares_entry_method_overload`]).
+#[allow(clippy::too_many_arguments)] // the resolver's lookup inputs, plus the call's arity and typed arguments.
+pub(crate) fn member_starts_object(
+    kind: ObjectKind,
+    method_lc: &str,
+    arity: usize,
+    args: &[ArgDispatchInfo],
+    target: &ObjectNode,
+    from_object: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+) -> ObjectStart {
+    if !crate::program::resolve::dataset::starts_object(kind, method_lc) {
+        return ObjectStart::No;
+    }
+    if !builtin_run_signatures(kind, method_lc).is_empty() {
+        return match run_by_other_name_binding(
+            target,
+            method_lc,
+            arity,
+            args,
+            from_object,
+            graph,
+            index,
+            surface,
+        ) {
+            RunBinding::Builtin => ObjectStart::Yes,
+            RunBinding::Procedure => ObjectStart::No,
+            RunBinding::Undecided => ObjectStart::Undecided,
+        };
+    }
+    if arity <= 1
+        && !(arity >= 1
+            && declares_entry_method_overload(target, method_lc, from_object, graph, index))
+    {
+        ObjectStart::Yes
+    } else {
+        ObjectStart::No
+    }
+}
+
 /// The Opaque boundary for a symbol-only object's entry trigger: the trigger
 /// may exist, and the ABI does not say.
 fn opaque_entry_route(target_id: &ObjectNodeId, trigger_name: &str) -> Route {
@@ -3432,60 +3493,34 @@ pub(crate) fn resolve_member_with_args(
             // ENTRY_DISPATCH_BUILTIN_IDS`). Codeunit has no RunModal member
             // (MS Learn documents RunModal only on Page/Report), so "runmodal"
             // is only an entry dispatch for Page/Report.
-            let is_entry_trigger_dispatch = match *kind {
-                ObjectKind::Codeunit => method_lc == "run",
-                ObjectKind::Page | ObjectKind::Report => {
-                    method_lc == "run" || method_lc == "runmodal"
-                }
-                // An XmlPort runs its own triggers on Run, Import and Export.
-                ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
-                _ => false,
-            };
-            // B6: `Rep.SaveAsPdf(…)`, `Rep.Execute(…)`, `Rep.Print(…)` run the
+            // An XmlPort runs its own triggers on Run, Import and Export; B6:
+            // `Rep.SaveAsPdf(…)`, `Rep.Execute(…)`, `Rep.Print(…)` run the
             // report as `Run` does (its triggers and its dataset), and
             // `Q.Open()`/`Q.SaveAsCsv(…)` open the query (its `OnBeforeOpen`
             // and its dataset), when the call binds to the built-in and not
-            // to the object's own procedure of that name
-            // (`run_by_other_name_binding`); the general dispatch below
-            // resolves a procedure.
-            let is_run_by_other_name = !builtin_run_signatures(*kind, method_lc).is_empty();
-            let binds_run = if is_run_by_other_name {
-                match run_by_other_name_binding(
-                    target,
-                    method_lc,
-                    arity,
-                    args,
-                    from_object,
-                    graph,
-                    index,
-                    surface,
-                ) {
-                    RunBinding::Builtin => true,
-                    RunBinding::Procedure => false,
-                    // The run or the procedure: the engine cannot name which.
-                    RunBinding::Undecided => {
-                        return (
-                            DispatchShape::Exact,
-                            vec![unresolved_route(UnknownReason::OverloadAmbiguous)],
-                        );
-                    }
-                }
-            } else {
-                // A call with arguments to an object that declares a procedure
-                // of that name binds to the procedure, never to the built-in
-                // run (`declares_entry_method_overload`).
-                is_entry_trigger_dispatch
-                    && arity <= 1
-                    && !(arity >= 1
-                        && declares_entry_method_overload(
-                            target,
-                            method_lc,
-                            from_object,
-                            graph,
-                            index,
-                        ))
-            };
-            if binds_run {
+            // to the object's own procedure of that name. The rule is
+            // [`member_starts_object`] (B4 + B6), which the resolver's site
+            // facts read too; the general dispatch below resolves a
+            // procedure.
+            let start = member_starts_object(
+                *kind,
+                method_lc,
+                arity,
+                args,
+                target,
+                from_object,
+                graph,
+                index,
+                surface,
+            );
+            if start == ObjectStart::Undecided {
+                // The run or the procedure: the engine cannot name which.
+                return (
+                    DispatchShape::Exact,
+                    vec![unresolved_route(UnknownReason::OverloadAmbiguous)],
+                );
+            }
+            if start == ObjectStart::Yes {
                 // ponytail: completeness is re-derived from the shape by the
                 // caller (`full.rs`), so a closed empty codeunit/XmlPort run reads
                 // `Partial` there; both classify as honest-empty.

@@ -225,6 +225,19 @@ pub struct SiteFacts {
     /// ([`crate::program::resolve::dataset`]). `None` for any other call, and
     /// for a run whose target is not static.
     pub dataset_run: Option<DatasetRun>,
+    /// B4: the call starts an object (runs its entry triggers) rather than
+    /// calling one of its procedures: every keyword run (`Codeunit.Run(…)`,
+    /// `Report.SaveAsPdf(Report::X, …)`, `Xmlport.Import(…)`, …,
+    /// `extract::classify_call`) and every variable form the resolver
+    /// dispatches to the run triggers (`Rep.Run()`, `Rep.SaveAsPdf(…)`,
+    /// `Q.Open()`, …, [`crate::program::resolve::resolver::member_starts_object`]).
+    /// Both read one list of methods,
+    /// [`crate::program::resolve::dataset::starts_object`]. A variable form
+    /// whose binding (B6) the argument types do not decide is
+    /// [`ObjectStart::Undecided`](crate::program::resolve::dataset::ObjectStart),
+    /// never a definite answer. The model carries it on the call's edges
+    /// (`CallEdge::starts_object`).
+    pub starts_object: crate::program::resolve::dataset::ObjectStart,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -841,9 +854,27 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
-                facts_out.dataset_run = member_dataset_run(
-                    &recv, &method_lc, arity, &args_info, obj_node, graph, index, surface,
-                );
+                // B4 + B6: whether the call starts its object, by the member
+                // arm's own rule (`resolver::member_starts_object`), and the
+                // dataset that start runs.
+                if let ReceiverType::Object { kind, name_lc, id } = &recv
+                    && crate::program::resolve::dataset::starts_object(*kind, &method_lc)
+                    && let Some(target) = crate::program::resolve::resolver::object_receiver_target(
+                        kind,
+                        name_lc,
+                        id.as_ref(),
+                        obj_node,
+                        graph,
+                    )
+                {
+                    facts_out.starts_object =
+                        crate::program::resolve::resolver::member_starts_object(
+                            *kind, &method_lc, arity, &args_info, target, obj_node, graph, index,
+                            surface,
+                        );
+                    facts_out.dataset_run =
+                        member_dataset_run(*kind, &method_lc, target, facts_out.starts_object);
+                }
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
                 if s == DispatchShape::Multicast
@@ -948,6 +979,9 @@ fn resolve_call_site_obligation(
             target_ref,
             target_is_name,
         } => {
+            // A keyword run starts its object (`extract::classify_call` made
+            // it an `ObjectRun` by `dataset::starts_object`).
+            facts_out.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
             let okind_opt = match object_kind.as_str() {
                 "Codeunit" => Some(ObjectKind::Codeunit),
                 "Page" => Some(ObjectKind::Page),
@@ -1671,52 +1705,20 @@ fn xmlport_run_direction(
 /// (`extract::classify_call`), whose arm sets the fact; a variable receiver
 /// whose object is not in the graph resolves as unknown
 /// (`resolver::resolve_member_with_args`), never as a run of nothing.
-#[allow(clippy::too_many_arguments)] // the resolver's own inputs for the same binding decision.
+///
+/// `start` is the call's [`SiteFacts::starts_object`], the resolver's one
+/// rule (`resolver::member_starts_object`): a call that binds to the
+/// object's own procedure of that name runs no dataset. An undecided one
+/// resolves as unknown, which already keeps `prove` from a `no`; its dataset
+/// is not claimed.
 fn member_dataset_run(
-    recv: &ReceiverType,
+    kind: ObjectKind,
     method_lc: &str,
-    arity: usize,
-    args: &[ArgDispatchInfo],
-    from_object: &ObjectNode,
-    graph: &dyn GraphReads,
-    index: &dyn IndexReads,
-    surface: &dyn SurfaceReads,
+    target: &ObjectNode,
+    start: crate::program::resolve::dataset::ObjectStart,
 ) -> Option<DatasetRun> {
-    use crate::program::resolve::resolver::{
-        RunBinding, builtin_run_signatures, declares_entry_method_overload,
-        run_by_other_name_binding,
-    };
-    let ReceiverType::Object { kind, name_lc, id } = recv else {
-        return None;
-    };
-    let mode = dataset_mode(*kind, method_lc)?;
-    let target = crate::program::resolve::resolver::object_receiver_target(
-        kind,
-        name_lc,
-        id.as_ref(),
-        from_object,
-        graph,
-    )?;
-    // A call that binds to the object's own procedure of that name runs no
-    // dataset (the resolver's same rule, `resolve_member_with_args`). An
-    // undecided one resolves as unknown there, which already keeps `prove`
-    // from a `no`; its dataset is not claimed.
-    let runs = if builtin_run_signatures(*kind, method_lc).is_empty() {
-        !(arity >= 1
-            && declares_entry_method_overload(target, method_lc, from_object, graph, index))
-    } else {
-        run_by_other_name_binding(
-            target,
-            method_lc,
-            arity,
-            args,
-            from_object,
-            graph,
-            index,
-            surface,
-        ) == RunBinding::Builtin
-    };
-    if !runs {
+    let mode = dataset_mode(kind, method_lc)?;
+    if start != crate::program::resolve::dataset::ObjectStart::Yes {
         return None;
     }
     Some(DatasetRun {

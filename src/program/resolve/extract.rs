@@ -418,19 +418,17 @@ fn classify_call(
             // `target_ref = None` (dynamic dispatch).
             if obj.origin.kind_text == "keyword_identifier" {
                 let obj_text = &src[obj.origin.byte.clone()];
+                // The one list of the methods that start an object
+                // (`dataset::starts_object`, through its keyword form): a
+                // codeunit's `Run`, a page's or report's `Run`/`RunModal`, a
+                // report's `SaveAs*`/`Execute`/`Print` (B6), an XmlPort's
+                // `Run`/`Import`/`Export`, a query's `SaveAs*` (B6).
                 if let Some(okind) = object_run_kind(obj_text)
-                    && ((method_lc == "run" && okind != "Query")
-                    || (method_lc == "runmodal" && matches!(okind, "Page" | "Report"))
-                    // B6: the static `Query.SaveAsCsv/Json/Xml(Query::X, …)`
-                    // open X: its `OnBeforeOpen` and its dataset.
-                    || (okind == "Query"
-                        && matches!(method_lc.as_str(), "saveascsv" | "saveasjson" | "saveasxml"))
-                    // B6: `Report.SaveAs*/Execute/Print(Report::X, …)` run X
-                    // as `Report.Run` does: its triggers and its dataset.
-                    || (okind == "Report"
-                        && crate::program::resolve::dataset::is_report_output_method(&method_lc))
-                    // Static `XmlPort.Import/Export(XmlPort::X, ...)` run X too.
-                    || (okind == "XmlPort" && matches!(method_lc.as_str(), "import" | "export")))
+                    && crate::program::resolve::dataset::keyword_run_kind(
+                        &okind.to_ascii_lowercase(),
+                        &method_lc,
+                    )
+                    .is_some()
                 {
                     let (target_ref, target_is_name) =
                         match static_database_reference_target(file, args) {

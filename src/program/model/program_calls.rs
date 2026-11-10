@@ -332,6 +332,18 @@ impl SiteCensus {
     }
 }
 
+/// The separator of a dataset operation's id: `<call site id>/dataset<n>`
+/// (B6, `Converter::dataset_operations`).
+const DATASET_OP: &str = "/dataset";
+
+/// The call site whose object run performs the dataset operation `op_id`;
+/// `None` for any other record operation.
+#[must_use]
+pub(crate) fn dataset_op_callsite(op_id: &str) -> Option<&str> {
+    let (site, n) = op_id.rsplit_once(DATASET_OP)?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(site)
+}
+
 /// The span of a model anchor, its unit spelled as the model spells it (the
 /// `ws:` prefix dropped): an unmatched site's location, and the model side of
 /// the span debug assertion.
@@ -1917,6 +1929,11 @@ impl<'a> Converter<'a> {
             PCallee::ObjectRun { object_kind, .. } => object_run_dispatch_kind(object_kind),
             PCallee::Unknown => DispatchKind::Unresolved,
         };
+        // B4: the resolver's one rule for a call that starts an object.
+        e.starts_object = self
+            .site_facts
+            .get(&ce.obligation_id)
+            .map_or_else(Default::default, |f| f.starts_object);
         let external = if is_run {
             Resolution::Opaque
         } else {
@@ -2609,7 +2626,8 @@ impl<'a> Converter<'a> {
                 },
             };
             let op = ModelRecordOperation {
-                id: format!("{}/dataset{n}", cs.id),
+                // Read back by [`dataset_op_callsite`].
+                id: format!("{}{DATASET_OP}{n}", cs.id),
                 op: e.op.to_string(),
                 // Names the item, never a variable of the routine: no code
                 // declares it (a quote and a dot keep it from matching one).

@@ -315,16 +315,16 @@ fn run_into_workspace() {
     let target = "codeunit 50102 \"Target\"\n{\n    trigger OnRun()\n    begin\n    end;\n}\n";
     let a = adapt(&[("src/w.al", cu), ("src/r.al", target)], None);
     let cs = a.site("Caller", "Codeunit.Run");
-    assert_eq!(
-        a.edges(&cs.id),
-        vec![edge(
-            a.routine("Caller"),
-            cs,
-            Some(a.routine("OnRun")),
-            DispatchKind::CodeunitRun,
-            Resolution::Resolved
-        )]
+    let mut want = edge(
+        a.routine("Caller"),
+        cs,
+        Some(a.routine("OnRun")),
+        DispatchKind::CodeunitRun,
+        Resolution::Resolved,
     );
+    // B4: a run starts its object (`SiteFacts::starts_object`).
+    want.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
+    assert_eq!(a.edges(&cs.id), vec![want]);
     assert_eq!(a.bindings(&cs.id), vec![b(0, false, "non-record-arg")]);
 }
 
@@ -342,16 +342,16 @@ fn member_spelled_page_run_into_workspace() {
         "{:?}",
         cs.callee
     );
-    assert_eq!(
-        a.edges(&cs.id),
-        vec![edge(
-            a.routine("Caller"),
-            cs,
-            Some(a.routine("OnOpenPage")),
-            DispatchKind::PageRun,
-            Resolution::Resolved
-        )]
+    let mut want = edge(
+        a.routine("Caller"),
+        cs,
+        Some(a.routine("OnOpenPage")),
+        DispatchKind::PageRun,
+        Resolution::Resolved,
     );
+    // B4: a run starts its object (`SiteFacts::starts_object`).
+    want.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
+    assert_eq!(a.edges(&cs.id), vec![want]);
 }
 
 /// Row "any other Unknown": a bare call to no routine at all → to-less
@@ -502,6 +502,8 @@ fn assert_builtin_run(a: &Adapted, cs: &PCallSite, kind: DispatchKind, name: &st
     assert_eq!(ext.name, name, "{got:?}");
     let mut want = edge(a.routine("Caller"), cs, None, kind, Resolution::Builtin);
     want.external_type_ref = got[0].external_type_ref.clone();
+    // B4: every run starts its object (`SiteFacts::starts_object`).
+    want.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
     assert_eq!(got, vec![want]);
 }
 
@@ -668,16 +670,16 @@ fn dynamic_run_target() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        Id: Integer;\n    begin\n        Codeunit.Run(Id);\n    end;\n}\n";
     let a = adapt(&[("src/w.al", cu)], None);
     let cs = a.site("Caller", "Codeunit.Run");
-    assert_eq!(
-        a.edges(&cs.id),
-        vec![edge(
-            a.routine("Caller"),
-            cs,
-            None,
-            DispatchKind::Dynamic,
-            Resolution::Unknown(ModelReason::DynamicObjectRunTarget)
-        )]
+    let mut want = edge(
+        a.routine("Caller"),
+        cs,
+        None,
+        DispatchKind::Dynamic,
+        Resolution::Unknown(ModelReason::DynamicObjectRunTarget),
     );
+    // B4: a dynamic run still starts an object (`SiteFacts::starts_object`).
+    want.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
+    assert_eq!(a.edges(&cs.id), vec![want]);
     assert_eq!(a.bindings(&cs.id), vec![b(0, false, "non-record-arg")]);
 }
 
@@ -1141,6 +1143,8 @@ fn object_not_in_graph_is_external_target() {
         Resolution::Opaque,
     );
     want.external_type_ref = nowhere();
+    // B4: a keyword run starts its object even when the object is unknown.
+    want.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
     assert_eq!(a.edges(&run.id), vec![want]);
 }
 

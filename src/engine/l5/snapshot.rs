@@ -1746,7 +1746,11 @@ pub fn compose_snapshot_from_base(
         routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         pd_solution,
         boundary: None,
-        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(resolved).into(),
+        // The cut graph is built over `resolved.calls` alone (no dependency
+        // calls apart, `dependency_calls: &[]` above), so its object runs are
+        // all there.
+        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(resolved, &[])
+            .into(),
     })
 }
 
@@ -2178,7 +2182,13 @@ pub(crate) fn compose_tree_over(
         routine_order_frames,
         pd_solution,
         boundary: Some(boundary),
-        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(model).into(),
+        // The cone's typed edges include the dependency code's own calls
+        // (`typed` = `rel.cone()`): their object runs need their step too.
+        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(
+            model,
+            dependency_calls,
+        )
+        .into(),
     })
 }
 

@@ -119,24 +119,64 @@ pub fn is_report_output_method(method_lc: &str) -> bool {
 /// RecordRef flow asks this instead (`l5::recref_flow`).
 #[must_use]
 pub fn keyword_run_kind(receiver_lc: &str, method_lc: &str) -> Option<ObjectKind> {
-    let (kind, runs) = match receiver_lc {
-        "codeunit" => (ObjectKind::Codeunit, method_lc == "run"),
-        "page" => (ObjectKind::Page, matches!(method_lc, "run" | "runmodal")),
-        "report" => (
-            ObjectKind::Report,
-            matches!(method_lc, "run" | "runmodal") || is_report_output_method(method_lc),
-        ),
-        "xmlport" => (
-            ObjectKind::XmlPort,
-            matches!(method_lc, "run" | "import" | "export"),
-        ),
-        "query" => (
-            ObjectKind::Query,
-            matches!(method_lc, "saveascsv" | "saveasjson" | "saveasxml"),
-        ),
+    let kind = match receiver_lc {
+        "codeunit" => ObjectKind::Codeunit,
+        "page" => ObjectKind::Page,
+        "report" => ObjectKind::Report,
+        "xmlport" => ObjectKind::XmlPort,
+        "query" => ObjectKind::Query,
         _ => return None,
     };
-    runs.then_some(kind)
+    // A query has no static `Open`: only an instance opens.
+    let static_form = !(kind == ObjectKind::Query && method_lc == "open");
+    (static_form && starts_object(kind, method_lc)).then_some(kind)
+}
+
+/// THE list of the methods that start an object of `kind` (`method_lc`
+/// folded): the call runs the object's entry triggers (and its dataset)
+/// instead of a procedure of it. Learn, the "Codeunit", "Page", "Report",
+/// "XmlPort" and "Query" data types: a codeunit's `Run`; a page's `Run` and
+/// `RunModal`; a report's `Run`, `RunModal`, `Execute`, `Print` and
+/// `SaveAs*`; an XmlPort's `Run`, `Import` and `Export`; a query's `Open` and
+/// `SaveAsCsv`/`SaveAsJson`/`SaveAsXml`. The keyword forms
+/// ([`keyword_run_kind`], `extract::classify_call`) and the variable forms
+/// (`resolver::member_starts_object`) both read it, and the resolver's
+/// `SiteFacts::starts_object` tells every consumer (B4's commit scope). A
+/// variable form of one of these methods may still bind to the object's own
+/// procedure; `resolver::member_starts_object` decides that ([`ObjectStart`]).
+#[must_use]
+pub fn starts_object(kind: ObjectKind, method_lc: &str) -> bool {
+    match kind {
+        ObjectKind::Codeunit => method_lc == "run",
+        ObjectKind::Page => matches!(method_lc, "run" | "runmodal"),
+        ObjectKind::Report => {
+            matches!(method_lc, "run" | "runmodal") || is_report_output_method(method_lc)
+        }
+        ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
+        ObjectKind::Query => dataset_mode(ObjectKind::Query, method_lc).is_some(),
+        _ => false,
+    }
+}
+
+/// Whether one call starts its object (B4), as decided where the call
+/// resolves (`full::SiteFacts::starts_object`, carried on the model's
+/// `CallEdge::starts_object`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ObjectStart {
+    /// The call starts no object: no method of [`starts_object`], or a call
+    /// that binds to the object's own procedure of that name.
+    #[default]
+    No,
+    /// The call starts its object: a keyword run, or a variable's start
+    /// method that binds to the platform's method.
+    Yes,
+    /// A variable's start method that binds to the platform's method or to
+    /// the object's own procedure of that name, and the argument types do
+    /// not tell which (B6, `resolver::RunBinding::Undecided`). Its route is
+    /// unresolved (`OverloadAmbiguous`); no reader may take it as a definite
+    /// start or as a definite procedure call (B4's commit scope reads it as
+    /// a run whose scope MAY follow).
+    Undecided,
 }
 
 /// The dataset mode of method `method_lc` (folded) on an object of `kind`: the
