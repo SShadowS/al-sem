@@ -98,8 +98,9 @@ mod os_keys {
 pub struct WorkerJob {
     pub argv: Vec<String>,
     pub streams: JobStreams,
-    /// `digest --changed`: whether the parent took the value for an existing
-    /// diff file (`None`: the job has no `--changed`).
+    /// `digest --changed`: whether the parent found the value as an existing
+    /// path (`None`: the job has no `--changed`). A `.al` value is file inputs
+    /// whatever this says (#362).
     pub changed_is_file: Option<bool>,
     /// `digest`: the parent's diff-root decision, failure included (#77);
     /// `None` for every other command.

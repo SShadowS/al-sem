@@ -157,21 +157,21 @@ fn clean_segments(path: &str) -> String {
 /// The category a `--changed <value>` resolves to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangedAutoDetect {
-    /// Existing file path → treat as --diff.
+    /// An existing path with no `.al` entry → treat as --diff.
     Diff(String),
-    /// Comma-list with any `.al` entry → treat as --changed-files.
+    /// Comma-list with any `.al` entry → treat as --changed-files, whether or
+    /// not the path exists (#362).
     Files(Vec<String>),
     /// Else → treat as --changed-routines.
     Routines(Vec<String>),
 }
 
-/// `autoDetectChanged` (cli/digest.ts). A non-existent path that is not a `.al`
-/// comma-list falls through to a routine selector (graceful miscategorization,
-/// NOT an OS error). `exists` is injected so this stays a pure, testable function.
+/// `autoDetectChanged` (cli/digest.ts). A `.al` entry makes the value file inputs
+/// before existence is asked: a `.al` path is AL source wherever the command
+/// runs, never diff text (#362). Else an existing path is a diff file, and else a
+/// routine selector (graceful miscategorization, NOT an OS error). `exists` is
+/// injected so this stays a pure, testable function.
 pub fn auto_detect_changed_with(value: &str, exists: impl Fn(&str) -> bool) -> ChangedAutoDetect {
-    if exists(value) {
-        return ChangedAutoDetect::Diff(value.to_string());
-    }
     let parts: Vec<String> = value
         .split(',')
         .map(|s| s.trim().to_string())
@@ -179,6 +179,8 @@ pub fn auto_detect_changed_with(value: &str, exists: impl Fn(&str) -> bool) -> C
         .collect();
     if parts.iter().any(|p| p.to_lowercase().ends_with(".al")) {
         ChangedAutoDetect::Files(parts)
+    } else if exists(value) {
+        ChangedAutoDetect::Diff(value.to_string())
     } else {
         ChangedAutoDetect::Routines(parts)
     }
@@ -5576,6 +5578,26 @@ mod tests {
         // selector ["bad.patch"] (graceful miscategorization, not an OS error) (#12).
         let r = auto_detect_changed_with("bad.patch", |_| false);
         assert_eq!(r, ChangedAutoDetect::Routines(vec!["bad.patch".into()]));
+    }
+
+    /// #362: a `.al` entry makes file inputs before existence is asked, so an
+    /// existing `.al` path is never read as diff text. Any part counts, in any
+    /// case; the closure panics to prove existence is not consulted.
+    #[test]
+    fn auto_detect_al_entry_is_files_before_existence() {
+        let never = |p: &str| -> bool { panic!("existence asked for {p}") };
+        assert_eq!(
+            auto_detect_changed_with("Cloud/src/posting.al", never),
+            ChangedAutoDetect::Files(vec!["Cloud/src/posting.al".into()])
+        );
+        assert_eq!(
+            auto_detect_changed_with("SRC/X.AL", never),
+            ChangedAutoDetect::Files(vec!["SRC/X.AL".into()])
+        );
+        assert_eq!(
+            auto_detect_changed_with("fix.patch, src/a.al", never),
+            ChangedAutoDetect::Files(vec!["fix.patch".into(), "src/a.al".into()])
+        );
     }
 
     #[test]

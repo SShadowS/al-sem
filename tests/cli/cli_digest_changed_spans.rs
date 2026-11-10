@@ -3549,7 +3549,7 @@ fn batch_workers_decide_the_diff_root_as_standalone() {
         vec![d(&ws, &["--diff", arg(&rel)])],
     ];
     assert_eq!(
-        batches_as_standalone(t.path(), &batches),
+        batches_as_standalone(t.path(), &batches, None),
         vec![Some(0), Some(2), Some(3), Some(0), Some(0)],
     );
 }
@@ -3564,8 +3564,12 @@ fn digest_argv(ws: &Path, rest: &[&str]) -> Vec<String> {
 
 /// Runs `batches` as one manifest (every batch but the last in a worker),
 /// asserts each job's exit, stdout and stderr equal its standalone run's, and
-/// returns the exits.
-fn batches_as_standalone(t: &Path, batches: &[Vec<Vec<String>>]) -> Vec<Option<i64>> {
+/// returns the exits. Both runs start in `cwd` (the test's own when `None`).
+fn batches_as_standalone(
+    t: &Path,
+    batches: &[Vec<Vec<String>>],
+    cwd: Option<&Path>,
+) -> Vec<Option<i64>> {
     use crate::cli_batch_plan::standalone_in;
     use crate::cli_batch_writes::{job, lines, run_manifest_doc};
     let mut streams = Vec::new();
@@ -3592,12 +3596,12 @@ fn batches_as_standalone(t: &Path, batches: &[Vec<Vec<String>>]) -> Vec<Option<i
             })
             .collect::<Vec<_>>(),
     });
-    let (out, _) = run_manifest_doc(t, &doc, None, &[], None);
+    let (out, _) = run_manifest_doc(t, &doc, cwd, &[], None);
     let lines = lines(&out);
     let jobs: Vec<&Vec<String>> = batches.iter().flatten().collect();
     assert_eq!(lines.len(), jobs.len(), "{out:?}");
     for ((line, job), (o, e)) in lines.iter().zip(&jobs).zip(&streams) {
-        let (stdout, stderr, exit) = standalone_in(job, None);
+        let (stdout, stderr, exit) = standalone_in(job, cwd);
         let what = format!("{job:?}");
         assert_eq!(line["exit"].as_i64(), exit.map(i64::from), "{what}");
         assert_eq!(std::fs::read(o).unwrap(), stdout, "{what}: stdout");
@@ -4296,7 +4300,98 @@ fn batch_decides_the_root_for_file_only_jobs() {
     );
     let routine = digest_argv(&ws, &["--routine", "HandlePosted"]);
     assert_eq!(
-        batches_as_standalone(t.path(), &[vec![file_only, explicit], vec![routine]]),
+        batches_as_standalone(t.path(), &[vec![file_only, explicit], vec![routine]], None),
         vec![Some(0), Some(0), Some(0)],
+    );
+}
+
+// #362: a `--changed` value with a `.al` entry is a file input wherever the
+// command runs; only a value with no `.al` entry is asked whether it exists.
+
+/// [`digest`] run from `cwd`.
+fn digest_in(cwd: &Path, ws: &Path, args: &[&str]) -> (Value, i32) {
+    let (stdout, stderr, code) = digest_raw_in(Some(cwd), ws, args, None, "json");
+    let doc: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("{e}: stdout={stdout} stderr={stderr}"));
+    (doc, code)
+}
+
+/// #362 T1 (and probe R4). `--changed Cloud/src/posting.al` run from the git
+/// top, where that path exists, resolves like `--file`; so does `--changed
+/// src/posting.al` run from the workspace itself.
+///
+/// Mutation: test `exists` before the `.al` entry -> both read the source as
+/// diff text: no roots, no diagnostic, exit 2.
+#[test]
+fn changed_al_path_is_a_file_wherever_run() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let repo = t.path().join("repo");
+    assert!(repo.join("Cloud/src/posting.al").is_file(), "precondition");
+    let (base, code) = digest_in(&repo, &ws, &["--file", "Cloud/src/posting.al"]);
+    assert_posting_file(&base, code, "--file from the git top");
+    let (doc, code) = digest_in(&repo, &ws, &["--changed", "Cloud/src/posting.al"]);
+    assert_posting_file(&doc, code, "--changed from the git top");
+    assert_eq!(entries(&doc), entries(&base), "--changed from the git top");
+
+    assert!(ws.join("src/posting.al").is_file(), "precondition");
+    let (doc, code) = digest_in(&ws, &ws, &["--changed", "src/posting.al"]);
+    assert_posting_file(&doc, code, "--changed from the workspace");
+    assert_eq!(
+        entries(&doc),
+        entries(&base),
+        "--changed from the workspace"
+    );
+}
+
+/// #362 T2. An existing `.diff` or `.patch` path is still a diff: given
+/// absolute, and given relative from its own folder.
+///
+/// Mutation: read every existing path as file inputs -> `file-unmatched`.
+#[test]
+fn changed_diff_path_is_still_a_diff() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let dir = t.path().join("diffs");
+    write(&dir.join("change.diff"), &git_line9("src/posting.al"));
+    write(&dir.join("change.patch"), &git_line9("src/posting.al"));
+    let abs = dir.join("change.diff");
+    let (doc, code) = digest(&ws, &["--changed", arg(&abs)], None);
+    assert_posting_root(&doc, code, "absolute .diff");
+    let (doc, code) = digest_in(&dir, &ws, &["--changed", "change.patch"]);
+    assert_posting_root(&doc, code, "relative .patch");
+}
+
+/// #362 T3. An existing `.al` file that is no workspace file is
+/// `file-unmatched`, not silently empty.
+///
+/// Mutation: test `exists` first -> no diagnostic at all.
+#[test]
+fn changed_existing_non_workspace_al_is_unmatched() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    write(&t.path().join("other.al"), "codeunit 50999 Other {}\n");
+    let (doc, code) = digest_in(t.path(), &ws, &["--changed", "other.al"]);
+    assert_eq!(diags(&doc), file_unmatched("other.al"), "{doc}");
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
+}
+
+/// #362 T8. A batch run from the git top reads `--changed
+/// Cloud/src/posting.al` as standalone does, in the parent (the last batch)
+/// and in a worker (the first), and both resolve.
+///
+/// Mutation: let the pinned existence decide first -> every run exits 2 (the
+/// standalone runs too, so the exits catch it, not the equality).
+#[test]
+fn batch_reads_a_changed_al_path_as_standalone() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let repo = t.path().join("repo");
+    assert!(repo.join("Cloud/src/posting.al").is_file(), "precondition");
+    let job = || digest_argv(&ws, &["--changed", "Cloud/src/posting.al"]);
+    assert_eq!(
+        batches_as_standalone(t.path(), &[vec![job()], vec![job()]], Some(&repo)),
+        vec![Some(0), Some(0)],
     );
 }

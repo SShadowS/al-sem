@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (#362: `digest --changed path.al` is a file input wherever you run it)
+
+- **A `--changed` value with a `.al` entry is now always read like `--file`.** Before,
+  `--changed` first asked whether the value existed as a path relative to the current
+  folder, and if it did, parsed the AL source as diff text: no roots, no diagnostic, exit
+  2. That happened from the git top (`--changed Cloud/src/posting.al`) and from the
+  workspace itself (`--changed src/posting.al`). Now the `.al` test comes first; a value
+  with no `.al` entry is still a diff when it exists and routine selectors when it does
+  not. An existing `.al` file that is no workspace file is now `file-unmatched`. A batch
+  reads it the same way (its pinned existence decision is consulted only for a value
+  with no `.al` entry). Limit: a diff file whose name ends in `.al` needs `--diff`.
+
 ### Changed
 
 - **Grammar: tree-sitter-al v5.0.0, `main` at `18c988e8`** (was v4.5.0, `91a5db62`). Five new
@@ -10029,10 +10041,8 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   `file-unmatched`). A `ws:` id that names no workspace file is read as a path, so a
   workspace folder literally named `ws:Cloud` still resolves under `--diff-root`, as a
   diff path does. `app:<guid>:` inputs are paths, as before. A batch decides the root
-  for a file-only job as a standalone run does. Limits: `--changed X` is still read as
-  a diff when `X` exists relative to the current folder, so `--changed
-  Cloud/src/posting.al` run from the git top is parsed as diff text; absolute paths
-  stay `file-unmatched`; prefix folders compare exactly, case included
+  for a file-only job as a standalone run does. Limits: absolute paths stay
+  `file-unmatched` (#363); prefix folders compare exactly, case included
   (`cloud/src/posting.al` under `Cloud` stays `file-unmatched`).
 
 - **d39 no longer reports a record that a later helper saves on every path** (#343).

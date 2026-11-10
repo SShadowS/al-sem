@@ -1399,8 +1399,9 @@ struct DigestCli {
     #[arg(long = "diff")]
     diff: Option<String>,
 
-    /// Convenience alias — auto-detect: existing file path → --diff; comma-list with
-    /// `.al` entries → read like --file paths; else → --changed-routines.
+    /// Convenience alias — auto-detect: comma-list with `.al` entries → read like
+    /// --file paths; else an existing file path → --diff; else → --changed-routines.
+    /// A diff file named `*.al` needs --diff.
     #[arg(long = "changed")]
     changed: Option<String>,
 
@@ -1496,9 +1497,10 @@ struct DigestCli {
     #[arg(long = "include-reads", default_value_t = false)]
     include_reads: bool,
 
-    /// Whether `--changed` names an existing diff file, decided once by the
+    /// Whether the `--changed` value exists as a path, decided once by the
     /// caller before planning ([`pin_changed`]; a batch's parent, and its
-    /// worker gets the decision). Planning never asks the file system.
+    /// worker gets the decision). Planning never asks the file system. A value
+    /// with a `.al` entry is file inputs whatever this says (#362).
     #[arg(skip)]
     changed_is_file: Option<bool>,
 }
@@ -2953,9 +2955,10 @@ const ORDER_REJECTION: &str = "al-sem: digest --order is not supported by the Ru
 // for stdin gave every later request of one process the first request's diff
 // (context-server design r2 §4.3; review r1 #3, r2 #16).
 
-/// Decide once whether `digest --changed` names an existing diff file
+/// Decide once whether `digest --changed`'s value exists as a path
 /// (#277 final r1 FR-3): `decided` when a batch's parent decided it, else
-/// the request's file system now.
+/// the request's file system now. Only a value with no `.al` entry consults it
+/// (#362).
 fn pin_changed(command: &mut Commands, decided: Option<bool>, cx: &PlanCx) {
     if let Commands::Digest(d) = command
         && let Some(value) = &d.changed
@@ -2972,8 +2975,9 @@ fn changed_is_file(command: &Commands) -> Option<bool> {
     }
 }
 
-/// What `--changed <value>` names: a diff file as decided by the caller
-/// ([`pin_changed`]); planning never asks the file system.
+/// What `--changed <value>` names: file inputs for a `.al` entry, else a diff
+/// file when the caller found the path ([`pin_changed`]); planning never asks
+/// the file system.
 fn detect_changed(d: &DigestCli, value: &str) -> ChangedAutoDetect {
     auto_detect_changed_with(value, |_| {
         d.changed_is_file
