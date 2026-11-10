@@ -362,14 +362,21 @@ pub fn parse_has_error_behavior_collect(
 /// Routine-level `[CommitBehavior]` WINS: only apply the object property when the
 /// routine has no explicit override (i.e., routineCB == "normal"). Mirrors
 /// `mergeInherentCommitBehavior`.
+///
+/// Engine limits B2: `object_conditional` (`ModelObject::
+/// inherent_commit_behavior_conditional`) says only some builds declare the
+/// property, so a build without it runs its commits normally: an `ignore` or
+/// `error` reading is then only `"conditional"`, which proves nothing either way.
 pub fn merge_inherent_commit_behavior(
     routine_commit_behavior: &'static str,
     object_behavior: Option<&str>,
+    object_conditional: bool,
 ) -> &'static str {
     if routine_commit_behavior != "normal" {
         return routine_commit_behavior;
     }
     match object_behavior {
+        Some("ignore" | "error") if object_conditional => "conditional",
         Some("ignore") => "ignore",
         Some("error") => "error",
         // "allow" or None → no override; stays "normal".
@@ -477,6 +484,7 @@ pub fn compute_return_summaries(
             let merged_cb = merge_inherent_commit_behavior(
                 summary.commit_behavior,
                 obj.inherent_commit_behavior.as_deref(),
+                obj.inherent_commit_behavior_conditional,
             );
             if merged_cb != summary.commit_behavior {
                 RoutineReturnSummary {
@@ -802,7 +810,29 @@ mod tests {
     fn merge_icb_routine_normal_object_ignore() {
         // routine "normal" + object "ignore" → "ignore"
         assert_eq!(
-            merge_inherent_commit_behavior("normal", Some("ignore")),
+            merge_inherent_commit_behavior("normal", Some("ignore"), false),
+            "ignore"
+        );
+    }
+
+    /// Engine limits B2: a property only some builds declare proves nothing
+    /// either way; a routine's own declaration still wins.
+    #[test]
+    fn merge_icb_conditional_object_is_conditional() {
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", Some("ignore"), true),
+            "conditional"
+        );
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", Some("error"), true),
+            "conditional"
+        );
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", Some("allow"), true),
+            "normal"
+        );
+        assert_eq!(
+            merge_inherent_commit_behavior("ignore", Some("error"), true),
             "ignore"
         );
     }
@@ -811,7 +841,7 @@ mod tests {
     fn merge_icb_routine_error_object_ignore() {
         // routine "error" + object "ignore" → "error" (routine wins)
         assert_eq!(
-            merge_inherent_commit_behavior("error", Some("ignore")),
+            merge_inherent_commit_behavior("error", Some("ignore"), false),
             "error"
         );
     }
@@ -820,7 +850,7 @@ mod tests {
     fn merge_icb_routine_ignore_object_error() {
         // routine "ignore" + object "error" → "ignore" (routine wins)
         assert_eq!(
-            merge_inherent_commit_behavior("ignore", Some("error")),
+            merge_inherent_commit_behavior("ignore", Some("error"), false),
             "ignore"
         );
     }
@@ -828,14 +858,17 @@ mod tests {
     #[test]
     fn merge_icb_object_allow_stays_normal() {
         assert_eq!(
-            merge_inherent_commit_behavior("normal", Some("allow")),
+            merge_inherent_commit_behavior("normal", Some("allow"), false),
             "normal"
         );
     }
 
     #[test]
     fn merge_icb_object_none_stays_normal() {
-        assert_eq!(merge_inherent_commit_behavior("normal", None), "normal");
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", None, false),
+            "normal"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1033,6 +1066,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: inherent_commit_behavior.map(str::to_string),
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,

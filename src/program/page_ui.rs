@@ -33,7 +33,11 @@
 //!   stays, and its relation is not established
 //!   ([`crate::engine::impact::up::site_bits`]).
 //! - A property with a `#if` arm that is not literal `false` (or any other
-//!   value) blocks nothing.
+//!   value) blocks nothing. Neither does a property that only some builds
+//!   write (every entry in a `#if` arm or under a whole-value `#if`, engine
+//!   limits B2): a build without it has the default, `true`. Imprecise in one
+//!   direction only: `#if X DeleteAllowed = false; #else DeleteAllowed =
+//!   false; #endif` covers every build and still blocks nothing.
 //! - `SourceTableTemporary = true` is not here: a user's work in such a page
 //!   still runs the table's own triggers (they run on temporary records), and
 //!   its table events come with the record temporary, which the existing
@@ -112,19 +116,26 @@ pub struct PageUiDecl {
 impl PageUiDecl {
     /// The four properties of a source Page (a page extension cannot declare
     /// them), from its lowered properties: `true` only when the property is
-    /// present and every value (one per `#if` arm) is literally `false`.
+    /// present, at least one entry is in every build (not conditional), and
+    /// every value (one per `#if` arm) is literally `false`.
     #[must_use]
     pub fn from_properties(obj: &ObjectDecl) -> PageUiDecl {
         if obj.kind != ObjectKind::Page {
             return PageUiDecl::default();
         }
+        // Engine limits B2: an entry only some builds have (`#if X DeleteAllowed
+        // = false; #endif`) leaves the default (`true`) possible in the others,
+        // so a block needs one entry every build has.
         let all_false = |name: &str| {
-            let mut values = obj
+            let values: Vec<_> = obj
                 .properties
                 .iter()
                 .filter(|p| p.name.eq_ignore_ascii_case(name))
-                .peekable();
-            values.peek().is_some() && values.all(|p| p.value.trim().eq_ignore_ascii_case("false"))
+                .collect();
+            values.iter().any(|p| !p.conditional)
+                && values
+                    .iter()
+                    .all(|p| p.value.trim().eq_ignore_ascii_case("false"))
         };
         PageUiDecl {
             editable_false: all_false("editable"),

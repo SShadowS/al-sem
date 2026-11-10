@@ -534,6 +534,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: icb.map(|s| s.to_string()),
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,

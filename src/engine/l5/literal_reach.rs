@@ -1930,12 +1930,17 @@ impl<'a> LiteralReach<'a> {
                 }
             }
         }
+        // Engine limits B2: an event isolated in some builds only is no trap: a
+        // build that does not isolate it lets the error escape with no
+        // condition, and the trap's words would say otherwise.
+        let some_builds =
+            crate::program::model::events::isolated_in_some_builds_only(&model.workspace.routines);
         let isolated_events: HashSet<&str> = model
             .events
             .graph
             .events
             .iter()
-            .filter(|s| s.isolated == Some(true))
+            .filter(|s| s.isolated == Some(true) && !some_builds.contains(&s.id))
             .map(|s| s.id.as_str())
             .collect();
         let mut out: HashMap<&str, Vec<OutEdge>> = HashMap::new();

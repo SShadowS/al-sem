@@ -117,8 +117,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     opaque; `cross_rules`' must-error steps and the callers' question treat a possible
     try as a try (fewer definite claims); `[EventSubscriber]` makes a subscription
     (every forward answer already reads an event dispatch as conditional: a plain
-    subscriber's commit gives `commits-on-success-path: unknown`); isolated events are
-    a conditional trap already; `[ErrorBehavior(Collect)]` never removes an error.
+    subscriber's commit gives `commits-on-success-path: unknown`);
+    `[ErrorBehavior(Collect)]` never removes an error. (An isolated event's trap was
+    on this list too; the third review below changes it for an event isolated in some
+    builds only.)
+- **Third review of B2: an attribute only one arm of a routine declares is
+  conditional.** A routine declared in two `#if` arms (two whole declarations, or one
+  `#if`-split header) is one model row per arm under one id, and a build runs one of
+  them. The lowerer marked an attribute in a row's own arm as present in every build,
+  which holds for that row only; the readers take an attribute from whichever row has
+  it. So `#if CLEAN99 procedure P() #else [CommitBehavior(CommitBehavior::Ignore)]
+  procedure P() #endif begin Commit(); end;` made `may-commit` say a definite `no` for
+  `P` and its callers, and a `[TryFunction]` on one arm made `throws-error` say `no`
+  for a caller (the pre-B2 master said `yes`). The lowerer now groups an object's
+  routine rows by routine identity (kind, name, enclosing member, parameters, return
+  type; lowercased, no whitespace, so at least as coarse as `compute_routine_id`) and
+  marks an attribute conditional on every row when another row of the same routine does
+  not carry the same attribute text (`mark_attributes_some_arm_lacks`). The same
+  attribute on both arms stays definite.
+- **Third review of B2: an `#if`-only page permission blocks nothing.** `page_ui`'s
+  block needed every entry of `Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`
+  to be `false`, so `#if CLEAN99 DeleteAllowed = false; #endif` blocked deletes in every
+  build and `explain` dropped the page from the table's `OnDelete` UI surfaces. A build
+  without the property has the default, `true` (Microsoft Learn, "DeleteAllowed
+  property": "The default value is true"). A block now also needs one entry that every
+  build has. The model's four page fields (read by d39's `page_may_modify` and d64) are
+  `None` when an entry is conditional, as `source_table_temporary` already was.
+- **Third review of B2: a conditional `InherentCommitBehavior` is `conditional` in the
+  return summary.** `ModelObject::inherent_commit_behavior_conditional` is set when the
+  property sits in an `#if` arm or has an `#if` value, and
+  `return_summary::merge_inherent_commit_behavior` then gives `conditional` instead of
+  `ignore`/`error`, so the ordering engine grades `assumed_effective`, not
+  `proven_suppressed`. (`commit_scope` already read the property as "may".) No CLI
+  probe showed a different answer; a model test pins it.
+- **Third review of B2: an event isolated in some builds only is no trap.**
+  `EventSymbol::isolated` means isolated in some build (#104). When the isolating
+  attribute is conditional (`#if X [IntegrationEvent(false, false, true)] #else
+  [IntegrationEvent(false, false, false)] #endif`, or an `#if` in its arguments), a
+  build that does not isolate the event lets a subscriber's error escape. The
+  literal-reach trap list leaves such an event out (the raiser's route said "otherwise
+  caught by the isolated event"), and `prove throws-error` on the subscriber says
+  "not established (the event is isolated in some builds only; …)" instead of "no,
+  unless …". One rule for both: `events::isolated_in_some_builds_only`.
+- Tests, third review: `tests/cli/cli_b2_preproc_arms.rs` gains a third fixture
+  (`ARMS_SOURCE`): `an_attribute_only_one_arm_of_a_routine_declares_is_conditional`
+  (the reviewer's split-header, two-declaration and `[TryFunction]` shapes, with
+  both-arm controls), `a_page_permission_only_some_builds_write_blocks_nothing`,
+  `an_event_isolated_in_some_builds_only_is_no_trap` (arm and argument shapes, with an
+  always-isolated control). Lowerer `an_attribute_one_arm_of_a_routine_lacks_is_conditional`
+  (with an overload control); model `a_property_only_some_builds_write_is_not_definite`;
+  `return_summary` `merge_icb_conditional_object_is_conditional`.
 - **A routine declared in two `#if` arms is `conditional` in each arm.** A build runs one
   arm's body, so no arm's site runs on every success path; each arm's `Insert` read
   `unconditional on success` through its callers. The model builder now lifts the
@@ -211,6 +259,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   22. `TableType` definite (`true ||`): RED `a_property_only_…` (WritesTempMaybe `no`).
   23. `try_function_conditional` (`false &&`): RED
       `a_conditional_declaration_is_may_not_definite`.
+- Discrimination proofs, third review (same method; after every revert the B2 CLI
+  module was 16/16, the lowerer attribute tests 28/28, the model and merge tests 7/7):
+  24. The `mark_attributes_some_arm_lacks` call removed: RED the lowerer test (the
+      `[TryFunction]` stayed `false`) and
+      `an_attribute_only_one_arm_of_a_routine_declares_is_conditional` (ElseIgn,
+      TwoBodies, CallTwo, CallTry all `no`, the reviewer's wrong answers).
+  25. Its per-attribute check (`true ||`, every attribute of a multi-row id
+      conditional): RED the same two tests on the both-arm controls (BothIgn,
+      CallBothTry `yes`).
+  26. `page_ui`'s "one entry every build has" (`p.conditional || !p.conditional`): RED
+      `a_page_permission_…` (no UI surface).
+  27. The model's definite page fields (`false &&`): RED
+      `a_property_only_some_builds_write_is_not_definite` (`modify_allowed` `Some(false)`).
+  28. `inherent_commit_behavior_conditional` never set (`false &&`): RED the same model
+      test.
+  29. `merge_inherent_commit_behavior`'s conditional arm (`&& false`): RED
+      `merge_icb_conditional_object_is_conditional` and the model test (`ignore`).
+  30. The literal-reach trap list keeps a some-builds event (`true ||`): RED
+      `an_event_isolated_…` (RaiseArm carried the `isolated-event` trap).
+  31. `prove`'s every-build split (`true ||`): RED `an_event_isolated_…` (SubArm lost
+      the "isolated in some builds only" line).
+  32. `isolated_in_some_builds_only` reads conditional attributes as definite
+      (`a.conditional || !a.conditional`): RED `an_event_isolated_…` (RaiseArm trapped).
 
 ### Fixed (engine limits wave 2, B4/L16)
 

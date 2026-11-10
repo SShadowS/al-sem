@@ -252,6 +252,42 @@ pub fn isolated_event_ids(routines: &[ModelRoutine]) -> std::collections::HashSe
     ids
 }
 
+/// Engine limits B2: the ids of the events [`isolated_event_ids`] holds that
+/// are isolated in SOME builds only. Their isolating attribute is
+/// conditional (`#if X [IntegrationEvent(false, false, true)] #else
+/// [IntegrationEvent(false, false, false)] #endif`, an `#if` in its
+/// arguments, or one publisher row of an `#if`-split routine), so a build
+/// that does not isolate the event runs its subscribers in the raising
+/// transaction. A reader that would call the dispatch a trap, or word it as
+/// one, must not for these. A publisher known only from symbols is one
+/// compiled build and is never here.
+pub fn isolated_in_some_builds_only(
+    routines: &[ModelRoutine],
+) -> std::collections::HashSet<String> {
+    // Per event id: (isolated in some build, isolated in every build).
+    let mut by_id: std::collections::HashMap<String, (bool, bool)> =
+        std::collections::HashMap::new();
+    for routine in routines.iter().filter(|r| r.kind == "event-publisher") {
+        let symbol = build_event_symbol(routine);
+        let any = symbol.isolated == Some(true);
+        let definite: Vec<AttributeInfo> = routine
+            .attributes_parsed
+            .iter()
+            .filter(|a| !a.conditional)
+            .cloned()
+            .collect();
+        let every = parse_isolated(&definite) == Some(true);
+        let e = by_id.entry(symbol.id).or_insert((false, true));
+        e.0 |= any;
+        e.1 &= every;
+    }
+    by_id
+        .into_iter()
+        .filter(|(_, (any, every))| *any && !*every)
+        .map(|(id, _)| id)
+        .collect()
+}
+
 /// The guids of the apps whose routines `ws` holds, lowercased.
 fn model_guids(ws: &super::workspace::ModelEntities) -> std::collections::HashSet<String> {
     ws.routines

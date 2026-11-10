@@ -503,6 +503,182 @@ report 50185 "B2 Rep Temp"
 }
 "#;
 
+/// Third review of B2: one routine declared in two `#if` arms, an attribute
+/// in one arm only; an `#if`-only page permission; an event isolated in some
+/// builds only. Each has a control written in every build.
+const ARMS_SOURCE: &str = r#"codeunit 50193 "B2 Split"
+{
+    // A split header: a build without CLEAN99 takes the attribute.
+#if CLEAN99
+    procedure ElseIgn(a: Integer)
+#else
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure ElseIgn(a: Integer)
+#endif
+    begin
+        Commit();
+    end;
+
+    // The same attribute in both arms: every build has it.
+#if CLEAN99
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure BothIgn(a: Integer)
+#else
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure BothIgn(a: Integer)
+#endif
+    begin
+        Commit();
+    end;
+
+    // Two whole declarations; only the CLEAN99 one ignores its commit.
+#if CLEAN99
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure TwoBodies()
+    begin
+        Commit();
+    end;
+#else
+    procedure TwoBodies()
+    begin
+        Commit();
+    end;
+#endif
+
+    procedure CallTwo()
+    begin
+        TwoBodies();
+    end;
+
+#if CLEAN99
+    [TryFunction]
+    procedure SplitTry()
+#else
+    procedure SplitTry()
+#endif
+    begin
+        Error('x');
+    end;
+
+    procedure CallTry()
+    begin
+        if SplitTry() then;
+    end;
+
+#if CLEAN99
+    [TryFunction]
+    procedure BothTry()
+#else
+    [TryFunction]
+    procedure BothTry()
+#endif
+    begin
+        Error('x');
+    end;
+
+    procedure CallBothTry()
+    begin
+        if BothTry() then;
+    end;
+}
+
+table 50194 "B2 UI T"
+{
+    fields { field(1; "No."; Integer) { } }
+    trigger OnDelete()
+    begin
+        Error('no delete');
+    end;
+}
+
+page 50195 "B2 UI Armed"
+{
+    SourceTable = "B2 UI T";
+#if CLEAN99
+    DeleteAllowed = false;
+#endif
+}
+
+page 50196 "B2 UI Closed"
+{
+    SourceTable = "B2 UI T";
+    DeleteAllowed = false;
+}
+
+codeunit 50197 "B2 Iso Pub"
+{
+#if CLEAN99
+    [IntegrationEvent(false, false, true)]
+#else
+    [IntegrationEvent(false, false, false)]
+#endif
+    procedure OnArmIso()
+    begin
+    end;
+
+    [IntegrationEvent(false, false,
+#if CLEAN99
+    true
+#else
+    false
+#endif
+    )]
+    procedure OnArgIso()
+    begin
+    end;
+
+    [IntegrationEvent(false, false, true)]
+    procedure OnIso()
+    begin
+    end;
+}
+
+codeunit 50198 "B2 Iso Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"B2 Iso Pub", 'OnArmIso', '', false, false)]
+    local procedure SubArm()
+    begin
+        Error('arm');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"B2 Iso Pub", 'OnArgIso', '', false, false)]
+    local procedure SubArg()
+    begin
+        Error('arg');
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"B2 Iso Pub", 'OnIso', '', false, false)]
+    local procedure SubIso()
+    begin
+        Error('iso');
+    end;
+}
+
+codeunit 50199 "B2 Iso Raise"
+{
+    procedure RaiseArm()
+    var
+        Pub: Codeunit "B2 Iso Pub";
+    begin
+        Pub.OnArmIso();
+    end;
+
+    procedure RaiseArg()
+    var
+        Pub: Codeunit "B2 Iso Pub";
+    begin
+        Pub.OnArgIso();
+    end;
+
+    procedure RaiseIso()
+    var
+        Pub: Codeunit "B2 Iso Pub";
+    begin
+        Pub.OnIso();
+    end;
+}
+"#;
+
 fn workspace() -> tempfile::TempDir {
     let t = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(t.path().join("src")).unwrap();
@@ -513,6 +689,7 @@ fn workspace() -> tempfile::TempDir {
     .unwrap();
     std::fs::write(t.path().join("src/b2.al"), SOURCE).unwrap();
     std::fs::write(t.path().join("src/b2decl.al"), DECL_SOURCE).unwrap();
+    std::fs::write(t.path().join("src/b2arms.al"), ARMS_SOURCE).unwrap();
     t
 }
 
@@ -946,4 +1123,125 @@ fn a_property_only_some_builds_write_leaves_its_default_possible() {
         .map(|&(routine, _, answer)| (routine, answer.to_string()))
         .collect();
     assert_eq!(got, want);
+}
+
+/// Third review of B2, blocking A: a routine declared in two `#if` arms is one
+/// row per arm, and an attribute in ONE arm's row was read as present in every
+/// build (its own row has it in every build of that row). `may-commit` said a
+/// definite `no` for `ElseIgn`, `TwoBodies` and its caller, and `throws-error`
+/// said `no` for `CallTry`, though the build that takes the other arm commits
+/// or lets the error escape (the pre-B2 master said `yes`). The same attribute
+/// in BOTH arms is in every build: the controls keep their `no`.
+#[test]
+fn an_attribute_only_one_arm_of_a_routine_declares_is_conditional() {
+    let t = workspace();
+    let ws = t.path().to_string_lossy().into_owned();
+    let cases = [
+        ("B2 Split::ElseIgn", "may-commit", "yes"),
+        ("B2 Split::TwoBodies", "may-commit", "yes"),
+        ("B2 Split::CallTwo", "may-commit", "yes"),
+        ("B2 Split::CallTry", "throws-error", "yes"),
+        ("B2 Split::BothIgn", "may-commit", "no"),
+        ("B2 Split::CallBothTry", "throws-error", "no"),
+    ];
+    let got: Vec<(&str, String)> = cases
+        .iter()
+        .map(|&(routine, question, _)| {
+            let r = prove(&ws, routine, question);
+            (
+                routine,
+                r["answer"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    let want: Vec<(&str, String)> = cases
+        .iter()
+        .map(|&(routine, _, answer)| (routine, answer.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// Third review of B2, blocking B: an `#if`-only `DeleteAllowed = false`
+/// blocked deletes through the page in every build, so `explain` dropped the
+/// page from the table's `OnDelete` UI surfaces. A build without `CLEAN99` has
+/// the default, `true` (Microsoft Learn, "DeleteAllowed property": "The
+/// default value is true"). The control, written in every build, still blocks.
+#[test]
+fn a_page_permission_only_some_builds_write_blocks_nothing() {
+    let t = workspace();
+    let ws = t.path().to_string_lossy().into_owned();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "explain",
+            &ws,
+            "--routine",
+            "\"B2 UI T\"::OnDelete",
+            "--single-app",
+            "--format",
+            "json",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+    let surfaces: Vec<&str> = v["cards"][0]["runBy"]["potentialUiSurfaces"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no surfaces: {v:#}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(surfaces, ["Page \"B2 UI Armed\""], "{v:#}");
+}
+
+/// Third review of B2, non-blocking: an event isolated in some builds only
+/// (its isolating attribute in one arm, or an `#if` in its arguments) was a
+/// trap on the raiser's route, worded "otherwise caught by the isolated
+/// event", and the subscriber's `throws-error` said the error does not
+/// escape the event unless a write is pending. A build that does not isolate
+/// the event lets it escape. The control, isolated in every build, keeps both.
+#[test]
+fn an_event_isolated_in_some_builds_only_is_no_trap() {
+    let t = workspace();
+    let ws = t.path().to_string_lossy().into_owned();
+    for (routine, trapped) in [
+        ("B2 Iso Raise::RaiseArm", false),
+        ("B2 Iso Raise::RaiseArg", false),
+        ("B2 Iso Raise::RaiseIso", true),
+    ] {
+        let r = prove(&ws, routine, "throws-error");
+        assert_eq!(r["answer"], "yes", "{routine}: {r:#}");
+        assert_eq!(
+            r["evidence"][0]["trap"]["kind"] == "isolated-event",
+            trapped,
+            "{routine}: {r:#}"
+        );
+    }
+    let human = |routine: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args([
+                "prove",
+                &ws,
+                routine,
+                "throws-error",
+                "--single-app",
+                "--format",
+                "human",
+            ])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("spawn alsem");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for routine in ["B2 Iso Sub::SubArm", "B2 Iso Sub::SubArg"] {
+        let text = human(routine);
+        assert!(
+            text.contains("not established (the event is isolated in some builds only"),
+            "{routine}: {text}"
+        );
+    }
+    let text = human("B2 Iso Sub::SubIso");
+    assert!(
+        text.contains("OnIso: no, unless the raising transaction has a write pending"),
+        "{text}"
+    );
 }

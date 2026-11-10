@@ -1633,20 +1633,28 @@ fn route_guard_text(g: &crate::engine::l5::literal_reach::RouteGuard) -> String 
 /// r3 §7 R5: the event publishers `root` (a stable routine id) subscribes
 /// to, each `Codeunit "X"::OnSomething` with whether the event is isolated
 /// (`EventSymbol::isolated`, for workspace and dependency publishers alike),
-/// sorted and distinct; empty for a routine that subscribes to none.
+/// and whether it is isolated in every build, sorted and distinct; empty for
+/// a routine that subscribes to none.
+///
+/// Engine limits B2: `EventSymbol::isolated` is "isolated in some build"
+/// (#104); an event isolated in some builds only
+/// (`events::isolated_in_some_builds_only`) has `false` as its third field.
 fn subscribed_publishers(
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     root: &str,
-) -> Vec<(String, bool)> {
+) -> Vec<(String, bool, bool)> {
     use crate::engine::l5::routine_rollup::format_object;
     let graph = &cx.model.events.graph;
-    let mut out: Vec<(String, bool)> = graph
+    let some_builds =
+        crate::program::model::events::isolated_in_some_builds_only(&cx.model.workspace.routines);
+    let mut out: Vec<(String, bool, bool)> = graph
         .edges
         .iter()
         .filter(|e| e.subscriber_stable_routine_id == root)
         .map(|e| {
             let ev = graph.events.iter().find(|s| s.id == e.event_id);
             let isolated = ev.is_some_and(|s| s.isolated == Some(true));
+            let every_build = isolated && !some_builds.contains(&e.event_id);
             let routine = ev
                 .and_then(|s| s.publisher_stable_routine_id.as_deref())
                 .and_then(|s| cx.names.display_with(s, false));
@@ -1674,7 +1682,7 @@ fn subscribed_publishers(
                 }
                 format!("{shown}::{name}")
             });
-            (name, isolated)
+            (name, isolated, every_build)
         })
         .collect();
     out.sort();
@@ -3325,16 +3333,28 @@ pub fn format_prove_human(
         // event it is not established here: whether it escapes depends on
         // the publisher's callers (callers-intercept-errors asks that).
         let publishers = subscribed_publishers(p.cx, p.root);
-        let (isolated, normal): (Vec<_>, Vec<_>) = publishers.into_iter().partition(|(_, i)| *i);
+        let (isolated, normal): (Vec<_>, Vec<_>) = publishers.into_iter().partition(|(_, i, _)| *i);
+        let (isolated, some_builds): (Vec<_>, Vec<_>) =
+            isolated.into_iter().partition(|(_, _, every)| *every);
         if !normal.is_empty() {
-            let names: Vec<String> = normal.into_iter().map(|(n, _)| n).collect();
+            let names: Vec<String> = normal.into_iter().map(|(n, _, _)| n).collect();
             lines.push(format!(
                 "  whether it escapes {}: not established",
                 names.join(", ")
             ));
         }
+        // Engine limits B2: an event isolated in some builds only.
+        if !some_builds.is_empty() {
+            let names: Vec<String> = some_builds.into_iter().map(|(n, _, _)| n).collect();
+            lines.push(format!(
+                "  whether it escapes {}: not established (the event is isolated in some \
+                 builds only; where it is, an error escapes only with a write pending in the \
+                 raising transaction or during an install or upgrade)",
+                names.join(", ")
+            ));
+        }
         if !isolated.is_empty() {
-            let names: Vec<String> = isolated.into_iter().map(|(n, _)| n).collect();
+            let names: Vec<String> = isolated.into_iter().map(|(n, _, _)| n).collect();
             lines.push(format!(
                 "  whether it escapes {}: no, unless the raising transaction has a write \
                  pending or an extension is being installed or upgraded (an isolated event \

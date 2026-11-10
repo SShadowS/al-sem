@@ -375,6 +375,7 @@ fn lower_object(
             ));
         }
     }
+    mark_attributes_some_arm_lacks(&mut routines);
 
     // Report dataitems and XmlPort table elements (name, source-table) — the name is
     // in scope as a record var across all the object's routines. Empty otherwise.
@@ -1679,6 +1680,66 @@ fn collect_routines<'t>(
         }
     }
     pending
+}
+
+/// Engine limits B2: a routine declared in several `#if` arms (two object-level
+/// arms, or one `#if`-split header) is one row per arm under ONE routine identity,
+/// and a build runs exactly one of them. An attribute that one row carries and
+/// another does not (`#if X [TryFunction] procedure P() #else procedure P()
+/// #endif`) is therefore missing from some build of the routine, though its own
+/// row has it on every build of that row. Readers take an attribute from whichever
+/// row has it, so it must be conditional on every row that has it.
+///
+/// The rows are grouped by the routine identity's parts as the IR has them (kind,
+/// name, enclosing member, parameter `var`-ness and types, return type), compared
+/// lowercased with whitespace removed: at least as coarse as
+/// `compute_routine_id`'s lowercased, trimmed signature, so rows the engine counts
+/// as one routine are always in one group. A coarser group only marks more
+/// attributes conditional (the "may" direction). Attributes compare by their
+/// whole text, normalized the same way, so two arms that write the same attribute
+/// with different arguments each make the other conditional.
+fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
+    fn norm(s: &str) -> String {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    let key = |r: &RoutineDecl| {
+        (
+            r.kind == RoutineKind::Trigger,
+            norm(&r.name),
+            r.enclosing_member.as_ref().map(|(m, _)| norm(m)),
+            r.params
+                .iter()
+                .map(|p| (p.by_ref, norm(p.ty.as_deref().unwrap_or_default())))
+                .collect::<Vec<_>>(),
+            norm(r.return_type.as_deref().unwrap_or_default()),
+        )
+    };
+    let mut groups: std::collections::HashMap<_, Vec<usize>> = std::collections::HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        groups.entry(key(r)).or_default().push(i);
+    }
+    for rows in groups.values().filter(|rows| rows.len() >= 2) {
+        let texts: Vec<Vec<String>> = rows
+            .iter()
+            .map(|&i| {
+                routines[i]
+                    .attributes_parsed
+                    .iter()
+                    .map(|a| norm(&a.raw))
+                    .collect()
+            })
+            .collect();
+        for (&i, own) in rows.iter().zip(&texts) {
+            for (a, text) in routines[i].attributes_parsed.iter_mut().zip(own) {
+                if !texts.iter().all(|t| t.contains(text)) {
+                    a.conditional = true;
+                }
+            }
+        }
+    }
 }
 
 /// One attribute waiting for its routine (`collect_routines`), and its guard: the
@@ -7562,6 +7623,56 @@ pageextension 50117 PE extends P
                 "codeunit 1 C\n{\n    [Obsolete('r',\n#if X\n    '1.0'\n#else\n    '2.0'\n#endif\n    )]\n    procedure P()\n    begin\n    end;\n}\n"
             ),
             vec![("P".to_string(), vec![t("Obsolete", true)])]
+        );
+    }
+
+    /// Engine limits B2 (third review): one routine declared in two `#if` arms
+    /// is one row per arm; an attribute that one row carries and another does
+    /// not is missing from the builds of the other arm, so it is conditional
+    /// on every row. The same attribute on every row is not. An overload (other
+    /// parameters) is another routine and is not compared.
+    #[test]
+    fn an_attribute_one_arm_of_a_routine_lacks_is_conditional() {
+        let t = |name: &str, c: bool| (name.to_string(), c);
+        // Two whole declarations.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n#else\n    procedure P()\n    begin\n    end;\n#endif\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", true)]),
+                ("P".to_string(), vec![]),
+            ]
+        );
+        // A split header, the attribute in the `#else` arm.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    procedure P(a: Integer)\n#else\n    [TryFunction]\n    procedure P(a: Integer)\n#endif\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![]),
+                ("P".to_string(), vec![t("TryFunction", true)]),
+            ]
+        );
+        // The same attribute in both arms: every build has it.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n#else\n    [TryFunction]\n    procedure P()\n#endif\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", false)]),
+                ("P".to_string(), vec![t("TryFunction", false)]),
+            ]
+        );
+        // Overloads in no `#if` are two routines.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n    procedure P(a: Integer)\n    begin\n    end;\n\n    procedure P(a: Text)\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", false)]),
+                ("P".to_string(), vec![]),
+            ]
         );
     }
 

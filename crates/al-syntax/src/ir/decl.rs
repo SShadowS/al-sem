@@ -236,7 +236,9 @@ pub struct AttributeIr {
     /// attribute with these arguments (engine limits B2): it sits in an `#if`
     /// arm the routine is not in (`#if CLEAN99 [CommitBehavior(…)] #endif
     /// procedure P()`), it reached the routine past a `#if` wrapper by a path
-    /// not every build takes, or its arguments hold an `#if` group. No
+    /// not every build takes, its arguments hold an `#if` group, or the
+    /// routine is declared in several `#if` arms (one row per arm) and another
+    /// arm's row does not carry the same attribute. No
     /// configuration is chosen, so every such build stays possible: a reader
     /// that decides a definite answer from the attribute's presence must read
     /// a conditional one as "may" (`program::attributes::find_definite_attribute`).
