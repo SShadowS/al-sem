@@ -6463,8 +6463,8 @@ mod tests {
         let all = kind_lines(&r, &e, RenderOpts::new(true, None)).join("\n");
         assert!(
             all.ends_with(
-                "BACKGROUND_TASK beyond dep:Z (3 places, entered at ws:src/Z.al:11, \
-                 ws:src/Z.al:12, ws:src/Z.al:13)"
+                "BACKGROUND_TASK beyond dep:Z (3 places, entered at ws:src/Z.al lines 11, 12, \
+                 13)"
             ),
             "{all}"
         );

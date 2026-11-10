@@ -399,8 +399,9 @@ pub(crate) fn route_guard_counts(g: &[RouteGuard]) -> (usize, usize, usize, usiz
 /// sites (the population of `prove --site`'s "of M enclosing conditions",
 /// loops included), never a displayed subset, and `k` counts over the same
 /// guards; the earlier `if … then exit` checks the route passes are counted
-/// apart (`; E earlier exits, j evaluated`), as prove's listing does not
-/// count them among its enclosing conditions.
+/// apart, as prove's listing does not count them among its enclosing
+/// conditions: `N guards, E earlier exits on the route; none evaluated`
+/// (or `k guards and j exits evaluated`).
 pub(crate) fn route_condition_words(notes: Option<&FlowNotes>) -> Option<String> {
     let n = notes?;
     let g = n.guards.as_ref()?;
@@ -413,18 +414,48 @@ pub(crate) fn route_condition_words(notes: Option<&FlowNotes>) -> Option<String>
     } else {
         format!("{enclosing} guards")
     };
-    let exits = match exits {
-        0 => String::new(),
-        1 => format!("; 1 earlier exit, {exits_evaluated} evaluated"),
-        e => format!("; {e} earlier exits, {exits_evaluated} evaluated"),
+    let route = if n.beyond_unanalyzed {
+        "the analyzed route"
+    } else {
+        "the route"
+    };
+    // Engine limits wave 2 (compact card): with earlier exits, both counts
+    // first and the evaluated ones after (`9 guards, 3 earlier exits on the
+    // route; none evaluated`), so the common all-zero case is short.
+    let words = if exits == 0 {
+        format!("{count} on {route}, {evaluated} evaluated")
+    } else {
+        let exits_word = if exits == 1 {
+            "1 earlier exit".to_string()
+        } else {
+            format!("{exits} earlier exits")
+        };
+        let guards_ev = |k: usize| {
+            if k == 1 {
+                "1 guard".to_string()
+            } else {
+                format!("{k} guards")
+            }
+        };
+        let exits_ev = |k: usize| {
+            if k == 1 {
+                "1 exit".to_string()
+            } else {
+                format!("{k} exits")
+            }
+        };
+        let ev = match (evaluated, exits_evaluated) {
+            (0, 0) => "none evaluated".to_string(),
+            (k, 0) => format!("{} evaluated", guards_ev(k)),
+            (0, j) => format!("{} evaluated", exits_ev(j)),
+            (k, j) => format!("{} and {} evaluated", guards_ev(k), exits_ev(j)),
+        };
+        format!("{count}, {exits_word} on {route}; {ev}")
     };
     Some(if n.beyond_unanalyzed {
-        format!(
-            "{count} on the analyzed route, {evaluated} evaluated{exits}; guards beyond the \
-             dependency entry: not analyzed"
-        )
+        format!("{words}; guards beyond the dependency entry: not analyzed")
     } else {
-        format!("{count} on the route, {evaluated} evaluated{exits}")
+        words
     })
 }
 
@@ -1712,6 +1743,19 @@ impl TrapAt {
             ),
             (Some(f), None) => format!("{} in {f}", self.kind.words()),
             _ => self.kind.words().to_string(),
+        }
+    }
+
+    /// [`Self::words`] printed next to a place in file `here`: a trap in
+    /// that same file is named by its line (`… at line 234`).
+    pub(crate) fn words_from(&self, here: Option<&str>) -> String {
+        match (&self.file, self.line) {
+            (Some(f), Some(l)) if here == Some(f.as_str()) => format!(
+                "{} at line {}",
+                self.kind.words(),
+                crate::engine::line_base::shown(l)
+            ),
+            _ => self.words(),
         }
     }
 

@@ -7,7 +7,7 @@ more: --detail lists every list in full; --format json for every effect row
   other effects: events: 0 (0 raised in workspace code)
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Out Log: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
+    Out Log: Insert 1 — known persistent; runs: no OnInsert trigger run; no table-event subscriber loaded
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: WriteLog (in the routine itself)
   temporary records (writes to them do not directly persist): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond dependency calls; only temporary: 0 tables

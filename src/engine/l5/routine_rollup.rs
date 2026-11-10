@@ -1043,8 +1043,8 @@ impl<'m> RollupCx<'m> {
     /// when the operation does: `Validate`, `Rename`, or a `RunTrigger` that
     /// is not literally false), and the subscribers of the platform table
     /// events it raises (raised whatever the `RunTrigger`), which the cone
-    /// follows. `runs: no OnModify trigger run; table-event subscribers:
-    /// none in the loaded program`.
+    /// follows. `runs: no OnModify trigger run; no table-event subscriber
+    /// loaded`.
     #[must_use]
     pub fn table_events_line<'a>(
         &self,
@@ -1108,15 +1108,17 @@ impl<'m> RollupCx<'m> {
                 }
             )
         };
+        // Engine limits wave 2 (compact card): the common empty case in
+        // fewer words, the same fact.
         let subs = if subscribers.is_empty() {
-            "none in the loaded program".to_string()
+            "no table-event subscriber loaded".to_string()
         } else {
             format!(
-                "{} (followed: their effects are in this cone)",
+                "table-event subscribers: {} (followed: their effects are in this cone)",
                 thousands(subscribers.len())
             )
         };
-        format!("runs: {trigger}; table-event subscribers: {subs}")
+        format!("runs: {trigger}; {subs}")
     }
 
     /// Who owns `op` (design §3.5).
@@ -2549,7 +2551,7 @@ impl RoutineRollup {
             .iter()
             .map(|p| {
                 let n = p.tables.keys().filter(|t| live.contains_key(**t)).count();
-                (n, p.name.to_string(), p.sites.join("; "))
+                (n, p.name.to_string(), sites_words(&p.sites))
             })
             .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
             .filter(|(n, _, _)| live.len() >= 10 && *n * 2 > live.len())
@@ -2738,6 +2740,139 @@ impl RenderOpts {
     pub fn detail_input(&self) -> &'static str {
         crate::engine::follow_up::input(self.surface, crate::engine::follow_up::Input::Detail)
     }
+}
+
+/// One place a card's list prints (engine limits wave 2, compact card):
+/// what happens there (`lead`, an effect type), where (`file`, `line`,
+/// 1-based), and the note printed after it (` (…)`, may be empty). A place
+/// with no file and line is printed as `lead` alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub lead: String,
+    pub file: Option<String>,
+    pub line: Option<usize>,
+    pub note: String,
+}
+
+impl Place {
+    /// A row's place: its effect type at its evidence's file and line.
+    fn of_row(e: &DigestEffectFull, note: String) -> Place {
+        match (&e.evidence.file, e.evidence.line) {
+            (Some(f), Some(l)) => Place {
+                lead: e.effect_type.clone(),
+                file: Some(f.clone()),
+                line: Some(shown(l) as usize),
+                note,
+            },
+            _ => Place {
+                lead: format!("{} at {}", e.effect_type, row_anchor(e)),
+                file: None,
+                line: None,
+                note,
+            },
+        }
+    }
+
+    /// A place with no file of its own (`… beyond <routine>`).
+    fn text(text: String) -> Place {
+        Place {
+            lead: text,
+            file: None,
+            line: None,
+            note: String::new(),
+        }
+    }
+}
+
+/// Places in one string, every fact kept but a file printed once per run
+/// (engine limits wave 2, compact card): consecutive places of the same
+/// `lead` in the same file share the file (`ERROR_IMPLICIT at ws:a.al:29
+/// (…), line 43 (…)`), and consecutive ones with the same note share it too
+/// (`ERROR_IMPLICIT at ws:a.al lines 351, 623 (…)`). Runs are joined with
+/// `; `.
+#[must_use]
+pub fn places_words(places: &[Place]) -> String {
+    // Each run: (lead, file, sub-runs of (lines, note)).
+    struct Run<'p> {
+        place: &'p Place,
+        subs: Vec<(Vec<usize>, &'p str)>,
+    }
+    let mut runs: Vec<Run<'_>> = Vec::new();
+    for p in places {
+        if let (Some(file), Some(line)) = (&p.file, p.line)
+            && let Some(last) = runs.last_mut()
+            && last.place.lead == p.lead
+            && last.place.file.as_deref() == Some(file.as_str())
+        {
+            match last.subs.last_mut() {
+                Some((lines, note)) if *note == p.note => lines.push(line),
+                _ => last.subs.push((vec![line], p.note.as_str())),
+            }
+            continue;
+        }
+        runs.push(Run {
+            place: p,
+            subs: p
+                .line
+                .filter(|_| p.file.is_some())
+                .map(|l| vec![(vec![l], p.note.as_str())])
+                .unwrap_or_default(),
+        });
+    }
+    let lines_of = |ls: &[usize]| {
+        ls.iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    runs.iter()
+        .map(|r| {
+            let (Some(file), false) = (&r.place.file, r.subs.is_empty()) else {
+                return format!("{}{}", r.place.lead, r.place.note);
+            };
+            // A bare site list has no lead: the file starts the run.
+            let at = if r.place.lead.is_empty() {
+                String::new()
+            } else {
+                format!("{} at ", r.place.lead)
+            };
+            r.subs
+                .iter()
+                .enumerate()
+                .map(|(k, (ls, note))| match (k, ls.len()) {
+                    (0, 1) => format!("{at}{file}:{}{note}", ls[0]),
+                    (0, _) => format!("{at}{file} lines {}{note}", lines_of(ls)),
+                    (_, 1) => format!("line {}{note}", ls[0]),
+                    _ => format!("lines {}{note}", lines_of(ls)),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Call sites (`file:line` each) in one string, a file printed once per run
+/// of sites in it (`ws:a.al lines 204, 228, 308`); a site that is not
+/// `file:line` prints as it is.
+#[must_use]
+pub fn sites_words<S: AsRef<str>>(sites: &[S]) -> String {
+    let places: Vec<Place> = sites
+        .iter()
+        .map(|s| {
+            let s = s.as_ref();
+            match s.rsplit_once(':').map(|(f, l)| (f, l.parse::<usize>())) {
+                Some((f, Ok(line))) if !f.is_empty() => Place {
+                    lead: String::new(),
+                    file: Some(f.to_string()),
+                    line: Some(line),
+                    note: String::new(),
+                },
+                _ => Place::text(s.to_string()),
+            }
+        })
+        .collect();
+    places_words(&places)
 }
 
 /// `file:line` of a row's evidence (1-based), or why there is none.
@@ -3282,7 +3417,7 @@ fn commit_site_lines(
         }
     }
     for (k, c) in bearing.into_iter().enumerate() {
-        let row = format!("{}, entered at {}", crossing_name(c), c.sites.join("; "));
+        let row = format!("{}, entered at {}", crossing_name(c), sites_words(&c.sites));
         if !pathed(k) {
             rest.push(row);
             continue;
@@ -3867,7 +4002,9 @@ pub fn beyond_lines(
         at_least(r.totals.entry_points_partial),
         plural(counts.writing.sites, "dependency call", "dependency calls")
     )];
-    let line = |p: &EntryPoint<'_>| -> String {
+    // `prev_also`: the effect types the entry point printed above lists,
+    // which a line with the same list names by its count instead.
+    let line = |p: &EntryPoint<'_>, prev_also: &mut Option<Vec<String>>| -> String {
         let kinds: Vec<String> = p
             .by_type
             .iter()
@@ -3893,7 +4030,7 @@ pub fn beyond_lines(
         let mut s = format!(
             "  {}, entered at {} — {}",
             p.name,
-            p.sites.join("; "),
+            sites_words(&p.sites),
             plural(p.tables.len(), "table", "tables")
         );
         if !kinds.is_empty() {
@@ -3913,14 +4050,25 @@ pub fn beyond_lines(
             also.push("COMMIT");
         }
         also.extend(p.kinds.iter().copied());
+        // Engine limits wave 2 (compact card): a list of types the line
+        // above printed is not printed again when saying so is shorter.
+        let also: Vec<String> = also.into_iter().map(str::to_string).collect();
         if !also.is_empty() {
-            s.push_str(&format!("; also {}", also.join(", ")));
+            let listed = also.join(", ");
+            let same = format!("the same {} effect types as the routine above", also.len());
+            if prev_also.as_ref() == Some(&also) && same.len() < listed.len() {
+                s.push_str(&format!("; also {same}"));
+            } else {
+                s.push_str(&format!("; also {listed}"));
+            }
         }
+        *prev_also = Some(also);
         if !p.events.is_empty() {
             s.push_str(&format!("; {}", plural(p.events.len(), "event", "events")));
         }
         s
     };
+    let mut prev_also: Option<Vec<String>> = None;
     let shown = fold(
         writing.clone(),
         caps::ENTRY_POINTS,
@@ -3931,7 +4079,7 @@ pub fn beyond_lines(
         .hop_parts(&entry.routine_id)
         .map_or_else(|| entry.routine_id.clone(), |(_, n)| n);
     for p in &shown.shown {
-        out.push(line(p));
+        out.push(line(p, &mut prev_also));
         if o.path_cap == 0 {
             continue;
         }
@@ -4034,8 +4182,9 @@ pub fn beyond_lines(
                 ),
                 plural(counts.other.sites, "dependency call", "dependency calls")
             ));
+            let mut prev_also = None;
             for p in others {
-                out.push(format!("  {}", line(p).trim_start()));
+                out.push(format!("  {}", line(p, &mut prev_also).trim_start()));
             }
         } else {
             out.push(format!(
@@ -4267,7 +4416,7 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
             continue;
         }
         // Each item: its text and how many places it stands for.
-        let mut places: Vec<(String, usize)> = r
+        let mut places: Vec<(Place, usize)> = r
             .kind_sites
             .get(key)
             .into_iter()
@@ -4287,26 +4436,28 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
                 };
                 // r3 §7 R5: the route's guards when one was replayed, as
                 // prove; the class label otherwise.
-                let text = format!(
-                    "{} at {} ({}){starts}",
-                    e.effect_type,
-                    row_anchor(e),
+                let note = format!(
+                    " ({}){starts}",
                     crate::engine::l5::prove::condition_words(e)
                 );
-                (text, 1)
+                (Place::of_row(e, note), 1)
             })
             .collect();
-        places.extend(crossing_places(r, key, detail));
+        places.extend(
+            crossing_places(r, key, detail)
+                .into_iter()
+                .map(|(t, k)| (Place::text(t), k)),
+        );
         // MCP output step 2: the first places, the rest counted (a grouped
         // item hides all of its places).
         let shown = fold_len(places.len(), caps::KIND_PLACES, detail);
         let hidden: usize = places[shown..].iter().map(|(_, k)| k).sum();
-        let shown: Vec<String> = places.into_iter().take(shown).map(|(t, _)| t).collect();
+        let shown: Vec<Place> = places.into_iter().take(shown).map(|(t, _)| t).collect();
         out.push(format!(
             "{label} at {}{}: {}{}",
             at_least(r.totals.kinds_partial.contains(key)),
             plural(n, "place", "places"),
-            shown.join("; "),
+            places_words(&shown),
             if hidden > 0 {
                 format!("; … +{hidden} places ({} lists them)", o.detail_input())
             } else {
@@ -4316,22 +4467,25 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
     }
     // B7/L23: errors a definite trap catches on every route, apart.
     if !r.caught_errors.is_empty() {
-        let places: Vec<String> = r
+        // Engine limits wave 2 (compact card): a trap in the error's own
+        // file is named by its line, and places in one file share it.
+        let places: Vec<Place> = r
             .caught_errors
             .iter()
             .filter_map(|&i| {
                 let e = &entry.effects[i];
                 let at = crate::engine::l5::prove::caught_at(e)?;
-                Some(format!(
-                    "{} at {} (by the {})",
-                    e.effect_type,
-                    row_anchor(e),
-                    at.words()
-                ))
+                let note = format!(" (by the {})", at.words_from(e.evidence.file.as_deref()));
+                Some(Place::of_row(e, note))
             })
             .collect();
         let n = places.len();
         let f = fold(places, caps::KIND_PLACES, "places", detail);
+        let more = if f.hidden > 0 {
+            format!("; … +{} places ({} lists them)", f.hidden, o.detail_input())
+        } else {
+            String::new()
+        };
         // B7 review round 2: a ruling that rests on the root's callers says
         // so here too, not only on the header's assumptions line.
         let leave = match r.caught_assumes {
@@ -4347,9 +4501,9 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
             }
         };
         out.push(format!(
-            "errors caught on every route by a trap ({leave}): {}: {}",
+            "errors caught on every route by a trap ({leave}): {}: {}{more}",
             plural(n, "place", "places"),
-            f.joined()
+            places_words(&f.shown)
         ));
     }
     out
@@ -4397,7 +4551,7 @@ fn crossing_places(r: &RoutineRollup, key: &str, detail: bool) -> Vec<(String, u
                 text.push_str(&format!(" ({k} places"));
                 if !sites.is_empty() {
                     let f = fold(sites, caps::KIND_PLACES, "sites", detail);
-                    text.push_str(&format!(", entered at {}", f.shown.join(", ")));
+                    text.push_str(&format!(", entered at {}", sites_words(&f.shown)));
                     if f.hidden > 0 {
                         text.push_str(&format!(", … +{} more", f.hidden));
                     }
@@ -4771,5 +4925,43 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(7435), "7,435");
         assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    /// Engine limits wave 2 (compact card): every place is still printed,
+    /// with its line and note; only a file (and a note) repeated by the
+    /// place before it is not. Formatting only: no discrimination proof.
+    #[test]
+    fn places_share_a_file_and_a_note_and_keep_every_line() {
+        let p = |lead: &str, file: &str, line: usize, note: &str| Place {
+            lead: lead.to_string(),
+            file: Some(file.to_string()),
+            line: Some(line),
+            note: note.to_string(),
+        };
+        let places = [
+            p("ERROR_IMPLICIT", "ws:a.al", 29, " (x)"),
+            p("ERROR_IMPLICIT", "ws:a.al", 43, " (y)"),
+            p("ERROR_IMPLICIT", "ws:a.al", 50, " (y)"),
+            p("ERROR_THROW", "ws:a.al", 60, " (y)"),
+            p("ERROR_THROW", "ws:b.al", 7, ""),
+            p("ERROR_THROW", "ws:b.al", 9, ""),
+            Place::text("ERROR_THROW beyond X".to_string()),
+            p("ERROR_THROW", "ws:b.al", 11, ""),
+        ];
+        assert_eq!(
+            places_words(&places),
+            "ERROR_IMPLICIT at ws:a.al:29 (x), lines 43, 50 (y); ERROR_THROW at ws:a.al:60 (y); \
+             ERROR_THROW at ws:b.al lines 7, 9; ERROR_THROW beyond X; ERROR_THROW at ws:b.al:11"
+        );
+        assert_eq!(
+            sites_words(&[
+                "ws:a.al:204",
+                "ws:a.al:228",
+                "ws:b.al:3",
+                "no position kept"
+            ]),
+            "ws:a.al lines 204, 228; ws:b.al:3; no position kept"
+        );
+        assert_eq!(sites_words(&["dep:Base App:x.al:5"]), "dep:Base App:x.al:5");
     }
 }

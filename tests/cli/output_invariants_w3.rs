@@ -1379,6 +1379,22 @@ fn entered_routines(head: &str) -> Vec<String> {
     out
 }
 
+/// A printed site list back into one `file:line` per site: runs are joined
+/// with `; `, and a run of sites in one file prints the file once
+/// (`ws:a.al lines 204, 228, 308`, `routine_rollup::sites_words`).
+pub(crate) fn expand_sites(sites: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for run in sites.split("; ") {
+        match run.split_once(" lines ") {
+            Some((file, lines)) => {
+                out.extend(lines.split(", ").map(|l| format!("{file}:{l}")));
+            }
+            None => out.push(run.to_string()),
+        }
+    }
+    out
+}
+
 /// One `--detail` entry-point line: its sites (`entered at a; b — …`, an
 /// anchorless one as its whole line, so it still counts once) and the
 /// routines it enters.
@@ -1417,7 +1433,7 @@ pub(crate) fn detail_entry_points(text: &str) -> (Vec<DetailEntryPoint>, Vec<Det
         let sites: Vec<String> = if sites.is_empty() {
             vec![t.to_string()]
         } else {
-            sites.split("; ").map(str::to_string).collect()
+            expand_sites(sites)
         };
         let point = (sites, entered_routines(head));
         if in_other {

@@ -1245,7 +1245,7 @@ fn route_guard_counts_are_the_full_enclosing_count() {
     let (v, human) = prove(tmp.path(), "GcRoot", "throws-error", None, None, None, None);
     assert_eq!(answer(&v), "yes", "{human}");
     assert!(
-        human.contains("(8 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated)"),
+        human.contains("(8 guards, 2 earlier exits on the route; 1 exit evaluated)"),
         "the answer line's words: {human}"
     );
     assert!(

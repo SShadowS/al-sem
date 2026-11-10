@@ -15,7 +15,7 @@ Codeunit "Calls Post"::ForwardPost  defined at ws:src/post.al:28
   inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:15]
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:33): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:33; runs: OnModify trigger; table-event subscribers: none in the loaded program
-  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:8 (1 guard on the route, 0 evaluated; 1 earlier exit, 0 evaluated); ERROR_IMPLICIT at ws:src/post.al:33 (unconditional on success); ERROR_THROW at ws:src/checks.al:6 (1 guard on the route, 0 evaluated); ERROR_THROW at ws:src/checks.al:15 (1 guard on the route, 0 evaluated; 1 earlier exit, 0 evaluated); ERROR_THROW at ws:src/order.al:25 (1 guard on the route, 0 evaluated)
+    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:33; runs: OnModify trigger; no table-event subscriber loaded
+  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:8 (1 guard, 1 earlier exit on the route; none evaluated); ERROR_IMPLICIT at ws:src/post.al:33 (unconditional on success); ERROR_THROW at ws:src/checks.al:6 (1 guard on the route, 0 evaluated), line 15 (1 guard, 1 earlier exit on the route; none evaluated); ERROR_THROW at ws:src/order.al:25 (1 guard on the route, 0 evaluated)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
 

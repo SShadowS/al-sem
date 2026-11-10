@@ -10,11 +10,11 @@ more: --detail lists every list in full; --format json for every effect row
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
       path: IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    Out Log: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
+    Out Log: Insert 1 — known persistent; runs: no OnInsert trigger run; no table-event subscriber loaded
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: IssueDoc → Codeunit "Out Log Mgt"::WriteLog
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
+    Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14; runs: no OnModify trigger run; no table-event subscriber loaded
   writes beyond dependency calls (15 tables through 2 dependency routines entered at 2 dependency calls):
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event
       representative path (Base Doc Line, the nearest of 14 tables): IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
@@ -24,7 +24,7 @@ more: --detail lists every list in full; --format json for every effect row
   events raised (1 in workspace code, downstream): Codeunit "Out Issue Document": OnAfterIssueDoc; 1 more only beyond dependency calls
   HTTP at 1 place: HTTP at ws:src/OutIssueDocument.Codeunit.al:72 (unconditional on success)
   background tasks at 1 place: BACKGROUND_TASK at ws:src/OutIssueDocument.Codeunit.al:19 (unconditional on success), starts Codeunit Out Job
-  errors at 5 places: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:14 (unconditional on success); ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional on success); ERROR_IMPLICIT beyond Codeunit "Base Poster" (70100)::OnRun; ERROR_IMPLICIT beyond Codeunit "Base Calc" (70101)::OnRun
+  errors at 5 places: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al lines 12, 14, 61 (unconditional on success); ERROR_IMPLICIT beyond Codeunit "Base Poster" (70100)::OnRun; ERROR_IMPLICIT beyond Codeunit "Base Calc" (70101)::OnRun
   gaps in workspace code (2 calls the engine cannot follow):
     Codeunit.Run(<dynamic>) (dynamic-target) in IssueDoc at ws:src/OutIssueDocument.Codeunit.al:21
     Handler.Handle (polymorphic) in IssueDoc at ws:src/OutIssueDocument.Codeunit.al:23
