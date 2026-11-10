@@ -53,7 +53,48 @@ use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 
 /// Bumped whenever a trait method, a [`Query`] variant or `session::dep_record::eval`'s answer
 /// changes meaning: a kept log of another version is never trusted.
-pub const FACADE_VERSION: u32 = 1;
+pub const FACADE_VERSION: u32 = 2;
+
+/// A run of routines as resolution reads it: one candidate per routine. The
+/// declarations of a split subscriber (`program::split_decls`) are one routine
+/// to a name lookup, so only the first of them shows; the resolver routes a
+/// call that lands on it to every declaration
+/// (`split_decls::expand_call_routes`). Nothing is copied unless the run holds
+/// a hidden declaration.
+#[derive(Clone)]
+pub enum RoutineRun<'g> {
+    Whole(NodeSetIter<'g, RoutineNode>),
+    Filtered(std::vec::IntoIter<&'g RoutineNode>),
+}
+
+impl<'g> RoutineRun<'g> {
+    fn of(run: NodeSetIter<'g, RoutineNode>, graph: &ProgramGraph) -> Self {
+        let d = &graph.workspace_rows.declarations;
+        if d.is_empty() || !run.clone().any(|r| d.is_hidden(&r.id)) {
+            return RoutineRun::Whole(run);
+        }
+        let kept: Vec<&'g RoutineNode> = run.filter(|r| !d.is_hidden(&r.id)).collect();
+        RoutineRun::Filtered(kept.into_iter())
+    }
+}
+
+impl<'g> Iterator for RoutineRun<'g> {
+    type Item = &'g RoutineNode;
+    fn next(&mut self) -> Option<&'g RoutineNode> {
+        match self {
+            RoutineRun::Whole(i) => i.next(),
+            RoutineRun::Filtered(i) => i.next(),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            RoutineRun::Whole(i) => i.size_hint(),
+            RoutineRun::Filtered(i) => i.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for RoutineRun<'_> {}
 
 /// The capability to read the raw state behind a trait object. Only this
 /// module can make one, so resolution code cannot reach the concrete graph
@@ -62,8 +103,7 @@ pub struct Token(());
 
 /// The routine ids of a run of routines (what
 /// [`IndexReads::routines_in_object`] yields).
-pub type RidIter<'g> =
-    std::iter::Map<NodeSetIter<'g, RoutineNode>, fn(&'g RoutineNode) -> &'g RoutineNodeId>;
+pub type RidIter<'g> = std::iter::Map<RoutineRun<'g>, fn(&'g RoutineNode) -> &'g RoutineNodeId>;
 
 fn rid_of(r: &RoutineNode) -> &RoutineNodeId {
     &r.id
@@ -81,10 +121,16 @@ pub trait GraphReads {
     fn routine(&self, rid: &RoutineNodeId) -> Option<&RoutineNode>;
     /// Every routine with exactly this id, in merged order.
     fn routines_with_id(&self, rid: &RoutineNodeId) -> NodeSetIter<'_, RoutineNode>;
-    /// Every routine of `object`, in merged order.
-    fn routines_of(&self, object: &ObjectNodeId) -> NodeSetIter<'_, RoutineNode>;
-    /// Every routine of `object` named `name_lc`, in merged order.
-    fn routines_named(&self, object: &ObjectNodeId, name_lc: &str) -> NodeSetIter<'_, RoutineNode>;
+    /// Every routine of `object`, in merged order, one per routine
+    /// ([`RoutineRun`]).
+    fn routines_of(&self, object: &ObjectNodeId) -> RoutineRun<'_>;
+    /// Every routine of `object` named `name_lc`, in merged order, one per
+    /// routine ([`RoutineRun`]).
+    fn routines_named(&self, object: &ObjectNodeId, name_lc: &str) -> RoutineRun<'_>;
+    /// Every declaration node of the split subscriber that `rid` is one
+    /// declaration of (`program::split_decls`), `rid` included; empty for any
+    /// other routine.
+    fn declarations_of(&self, rid: &RoutineNodeId) -> &[RoutineNodeId];
     /// [`ProgramGraph::resolve_object`].
     fn resolve_object(&self, from: AppRef, kind: ObjectKind, name: &str) -> Option<&ObjectNode>;
     /// [`ProgramGraph::resolve_object_by_number`].
@@ -220,15 +266,21 @@ impl GraphReads for ProgramGraph {
     fn routines_with_id(&self, rid: &RoutineNodeId) -> NodeSetIter<'_, RoutineNode> {
         self.routines.run_by(|r| r.id.cmp(rid))
     }
-    fn routines_of(&self, object: &ObjectNodeId) -> NodeSetIter<'_, RoutineNode> {
-        self.routines.run_by(|r| r.id.object.cmp(object))
+    fn routines_of(&self, object: &ObjectNodeId) -> RoutineRun<'_> {
+        RoutineRun::of(self.routines.run_by(|r| r.id.object.cmp(object)), self)
     }
-    fn routines_named(&self, object: &ObjectNodeId, name_lc: &str) -> NodeSetIter<'_, RoutineNode> {
-        self.routines.run_by(|r| {
-            r.id.object
-                .cmp(object)
-                .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
-        })
+    fn routines_named(&self, object: &ObjectNodeId, name_lc: &str) -> RoutineRun<'_> {
+        RoutineRun::of(
+            self.routines.run_by(|r| {
+                r.id.object
+                    .cmp(object)
+                    .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
+            }),
+            self,
+        )
+    }
+    fn declarations_of(&self, rid: &RoutineNodeId) -> &[RoutineNodeId] {
+        self.workspace_rows.declarations.siblings(rid)
     }
     fn resolve_object(&self, from: AppRef, kind: ObjectKind, name: &str) -> Option<&ObjectNode> {
         ProgramGraph::resolve_object(self, from, kind, name)
@@ -452,6 +504,7 @@ pub enum Query {
     RoutinesWithId(RoutineNodeId),
     RoutinesOf(ObjectNodeId),
     RoutinesNamed(ObjectNodeId, String),
+    DeclarationsOf(RoutineNodeId),
     ResolveObject(AppRef, ObjectKind, String),
     ResolveObjectByNumber(AppRef, ObjectKind, i64),
     Closure(AppRef),
@@ -527,13 +580,22 @@ impl GraphReads for Recorder<'_> {
         let _g = self.note(Query::RoutinesWithId(rid.clone()));
         GraphReads::routines_with_id(self.graph, rid)
     }
-    fn routines_of(&self, object: &ObjectNodeId) -> NodeSetIter<'_, RoutineNode> {
+    fn routines_of(&self, object: &ObjectNodeId) -> RoutineRun<'_> {
         let _g = self.note(Query::RoutinesOf(object.clone()));
         GraphReads::routines_of(self.graph, object)
     }
-    fn routines_named(&self, object: &ObjectNodeId, name_lc: &str) -> NodeSetIter<'_, RoutineNode> {
+    fn routines_named(&self, object: &ObjectNodeId, name_lc: &str) -> RoutineRun<'_> {
         let _g = self.note(Query::RoutinesNamed(object.clone(), name_lc.to_string()));
         GraphReads::routines_named(self.graph, object, name_lc)
+    }
+    fn declarations_of(&self, rid: &RoutineNodeId) -> &[RoutineNodeId] {
+        let out = GraphReads::declarations_of(self.graph, rid);
+        // Logged only when `rid` IS split. A routine that later splits has
+        // lost its id, which the run or lookup that found it reports.
+        if !out.is_empty() {
+            let _g = self.note(Query::DeclarationsOf(rid.clone()));
+        }
+        out
     }
     fn resolve_object(&self, from: AppRef, kind: ObjectKind, name: &str) -> Option<&ObjectNode> {
         let _g = self.note(Query::ResolveObject(from, kind, name.to_string()));

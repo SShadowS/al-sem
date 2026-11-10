@@ -61,8 +61,9 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// definite for its own body, and a dispatch reaches only the declarations
 /// that subscribe. 6 (follow-up 2): a subscriber whose declarations subscribe
 /// differently is one routine per declaration (new routine, stable and site
-/// ids).
-pub const SUMMARY_SCHEMA: u32 = 6;
+/// ids). 7 (follow-up 3): the program graph splits it too, and the model's
+/// ids of a split declaration derive from the graph's (they all move once).
+pub const SUMMARY_SCHEMA: u32 = 7;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

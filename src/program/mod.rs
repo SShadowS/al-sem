@@ -28,6 +28,7 @@ pub mod session;
 pub mod sig_fp;
 pub mod site_key;
 pub mod source_deps;
+pub mod split_decls;
 pub mod str_pool;
 pub mod table_event_guard;
 pub mod topology;

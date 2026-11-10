@@ -500,6 +500,7 @@ arrives with Stage C.
 | `arity` | number | parameter count |
 | `sourcePath` | string | relative to the node's own app source root; omitted for symbol-only nodes, objects and hubs |
 | `line`, `endLine` | number | 1-based (`meta.lineBase: 1`, added 2026-10-28); `line` = declaration keyword or access modifier row, attributes excluded |
+| `otherDeclarations` | object[] | (added 2026-11-10, optional) a routine declared more than once with the same event subscriptions is one node; this lists its other places as `{sourcePath,line,endLine}`, so a change at any declaration maps to the node (omitted when empty; a routine whose declarations subscribe differently is one node per declaration instead) |
 | `dependency` | bool | app is not the workspace app |
 | `symbolOnly` | bool | no source (its body is opaque) |
 | `test` | bool | present and `true` on `[Test]` methods |

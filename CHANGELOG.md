@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 final review follow-up 3: the program graph splits too)
+
+- **The program graph has one routine node per declaration of a subscriber whose
+  declarations subscribe differently** (`program::split_decls`, decided once in
+  `build::split_declarations`, before the dedup). Follow-up 2 below split only the MODEL,
+  so the walkers that read the program graph still saw one node holding every
+  declaration's subscriptions (review of 53d143ef):
+  - M1 (a wrong definite answer): `prove . "AD Q::C" callers-intercept-errors
+    --no-dependents` said `yes` through a `[TryFunction]` that raises `OnY`, reaching
+    `H` from the `a.al` declaration, which subscribes `OnX` and calls `C`. No build has
+    that path. Now `no`; and `callers-have-pending-writes`, the same walker.
+  - M2: `alsem tests` and `alsem impact` did not find a split subscriber (`"not in
+    projection"`, run the whole suite), and the callers' questions could not name one at
+    all (`~` id: "not in the call graph"; base id: no routine; name: ambiguous).
+  Each declaration node has the routine's id with its `sig_fp` mixed with a hash of its
+  place (its source unit and ordinal in the file, as the model's `~hex` suffix now is:
+  `split_decls::stable_suffix`), its own subscriptions, its own table-event and out
+  edges, its own source lines. Name lookup shows one declaration per routine, so
+  overload logic is unchanged (`resolve::reads::RoutineRun`), and the resolver sends a
+  direct call to every declaration (`split_decls::expand_call_routes`, one route per
+  declaration, each a possible build). The callers' walker, the sited graph, `alsem
+  graph`, the LSP call hierarchy and the model agree by construction, and the model's
+  own split (`split_subscriber_declarations`, `events::row_declares_subscription`,
+  `program_calls::split_declaration_edges`) is gone: its rows take their declaration's
+  ids from `node_of` (`workspace::adopt_declaration_ids`), so a demanded dependency
+  declaration splits even when it is the only row of its routine.
+- **A selector resolves a split subscriber.** A name or the routine's base id names every
+  declaration (form 1b of the selector cascade; `prove`/`digest`/`tests`/`impact`, the
+  one exception being the fingerprint query, which lists them as candidates, and
+  `differs_in` now says "the file or #if arm"); the `~hex` id names one declaration
+  (`SitedGraph::nodes_with_stable_id`, which also takes the base id for a split routine).
+- **`alsem graph`: every declaration's lines are there.** Split: a node per declaration.
+  Not split (an `#if` routine declared twice with no differing subscription): the node's
+  `sourcePath`/`line`/`endLine` are one declaration's, and the new optional node field
+  `otherDeclarations` (`[{sourcePath,line,endLine}]`) lists the others. Additive: the
+  graph's major version stays 1 (spec 2026-10-13 §4.2). bc-dev-mcp's join still falls
+  back by name for a place it does not read; it should read this field (outside-consumers
+  update).
+- **Ids:** `SUMMARY_SCHEMA` 7 (a split declaration's model id and `~hex` suffix derive
+  from the place hash, so they move once); the recorder's `FACADE_VERSION` 2 (a new
+  query, `DeclarationsOf`, and `routines_of`/`routines_named` now hide the other
+  declarations). A split declaration's id stays the declaration's own when other files
+  change, but **a change of another file's subscription that starts or ends a split
+  does move an unchanged file's ids** (`H` in `a.al` moves between `…~9f0631d4` and its
+  base id, since its node is split only while a declaration elsewhere subscribes
+  differently), so fingerprints, baselines and diffs move for that routine. Always
+  suffixing every routine with a second declaration would stop that one case, at the
+  price of splitting every `#if` procedure in real code (model rows, selectors, the
+  join's "alternatives" reading) to save one rare, one-time move; not done.
+- Limits, as measured (engine-limits B2, updated): a subscription whose
+  `[EventSubscriber]` attribute the engine cannot read is not on its declaration's node
+  (as with any subscriber), and two copies count as subscribing alike or differently from
+  the readable ones; no real code has shown one.
+- Tests (`tests/cli/cli_b2_alternative_declarations.rs`, every shape and both file
+  orders; session refresh-equals-cold through a split starting and ending, both memory
+  modes, `program::session::workspace::tests`), with proofs (break with Edit, red, revert
+  with Edit, green):
+  - No split in `build::split_declarations` (`ixs.len() >= 9999`): the two callers'
+    tests red, `callers-intercept-errors` and `callers-have-pending-writes` said `yes`.
+  - `expand_call_routes` keeps its routes: `a_direct_call_…` red (`no`: the call reached
+    only the empty declaration).
+  - No `~suffix` in the sited graph's stable id: tests/impact red with `not in
+    projection`, the callers' question "not in the call graph", and the M1 tests unknown.
+  - Name and base id not resolved to declarations: tests/impact/callers red; base id
+    alone: the base-id step of the tests test red.
+  - `otherDeclarations` never filled (`p.len() >= 99`): the graph-lines test red.
+  - A name lookup shows every declaration (`is_hidden` false): `a_direct_call_…` red
+    (`unknown`: overload logic saw two candidates).
+  - Dependency rows not mapped to declarations (`file_declaration_ids` returns `None`):
+    the r4 cross-app dependency test red (no rows for the demanded declarations).
+  - `aldump --session-refresh <copy of probe s1> --verify`: every step `equalToCold:
+    true`.
+
 ### Fixed (engine limits wave 2, B2 final review follow-up 2: one routine per subscriber declaration)
 
 - **Every walker reaches only the declaration that subscribes.** Follow-up 1 below tied a

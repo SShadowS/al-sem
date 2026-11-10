@@ -78,6 +78,10 @@ impl WeakSource {
 /// (its AppRefs are 1..n in `snap.apps` order; the root's own app is always
 /// AppRef(0) and never appears here).
 pub struct DepNodes {
+    /// The tier's split routines (`program::split_decls`): each declaration of
+    /// a dependency subscriber whose declarations subscribe differently is a
+    /// node of its own.
+    pub declarations: crate::program::split_decls::SplitDecls,
     pub objects: Arc<Vec<ObjectNode>>,
     pub routines: Arc<Vec<RoutineNode>>,
     pub abi_ingest_errors: Vec<AbiIngestError>,

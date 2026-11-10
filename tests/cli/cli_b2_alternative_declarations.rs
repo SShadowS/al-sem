@@ -1025,3 +1025,347 @@ fn a_direct_call_reaches_every_declaration_of_a_split_subscriber() {
         },
     );
 }
+
+// ---------------------------------------------------------------------------
+// The program graph splits too: one node per subscriber declaration
+// ---------------------------------------------------------------------------
+
+const Q_ERRORS: &str = r#"codeunit 50490 "AD Q"
+{
+    procedure C()
+    begin
+        Error('boom');
+    end;
+}
+"#;
+
+/// The `OnX` declaration, which calls `AD Q::C` (and only it does).
+fn calls_q_on_x() -> String {
+    sub_decl(
+        "AD Pub",
+        "OnX",
+        "",
+        "    var\n        Q: Codeunit \"AD Q\";\n",
+        "        Q.C();\n",
+    )
+}
+
+/// A `[TryFunction]` around raising event `raise` (`RaiseX` or `RaiseY`).
+fn trap(raise: &str) -> String {
+    format!(
+        "codeunit 50491 \"AD Wrap\"\n{{\n    [TryFunction]\n    procedure TryIt()\n    var\n        P: Codeunit \"AD Pub\";\n    begin\n        P.{raise}();\n    end;\n\n    procedure Go()\n    begin\n        if TryIt() then;\n    end;\n}}\n"
+    )
+}
+
+/// M1 (probe s5): `AD Q::C` runs only under the `OnX` declaration, and the
+/// `[TryFunction]` raises `OnY`, which the other declaration subscribes to.
+/// No build has a route from the trap to `C`, so nothing intercepts it. The
+/// callers' walker reads the program graph, which had one node per subscriber
+/// holding both subscriptions, so it found Go → TryIt → RaiseY → OnY → H → C
+/// and said `yes`. The control: raising `OnX` under the trap IS an
+/// interception, so the walker did not just stop walking.
+#[test]
+fn callers_intercept_errors_follows_only_the_declaration_that_subscribes() {
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    let calls_q = calls_q_on_x();
+    // A callers' question always walks the cross-app program.
+    let question = |ws: &Path, _: &[&str]| {
+        prove_with(
+            ws,
+            "AD Q::C",
+            "callers-intercept-errors",
+            &["--no-dependents"],
+        )
+    };
+    let wrong = trap("RaiseY");
+    each_shape(
+        &calls_q,
+        &empty,
+        &[("p.al", PUB_XY), ("q.al", Q_ERRORS), ("w.al", &wrong)],
+        |ws, extra, at| {
+            let r = question(ws, extra);
+            assert_eq!(r["answer"], "no", "{at}: {r:#}");
+        },
+    );
+    let right = trap("RaiseX");
+    each_shape(
+        &calls_q,
+        &empty,
+        &[("p.al", PUB_XY), ("q.al", Q_ERRORS), ("w.al", &right)],
+        |ws, extra, at| {
+            let r = question(ws, extra);
+            assert_eq!(r["answer"], "yes", "control, {at}: {r:#}");
+        },
+    );
+}
+
+/// Inserts into `AD W`, then raises `raise`.
+fn writes_then_raises(raise: &str) -> String {
+    format!(
+        "codeunit 50492 \"AD Writer\"\n{{\n    procedure Go()\n    var\n        W: Record \"AD W\";\n        P: Codeunit \"AD Pub\";\n    begin\n        W.Insert();\n        P.{raise}();\n    end;\n}}\n"
+    )
+}
+
+/// M1's sibling: `callers-have-pending-writes` uses the same walker. The
+/// write happens before raising `OnY`; `C` runs only under `OnX`.
+#[test]
+fn callers_have_pending_writes_follows_only_the_declaration_that_subscribes() {
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    let calls_q = calls_q_on_x();
+    let question = |ws: &Path, _: &[&str]| {
+        prove_with(
+            ws,
+            "AD Q::C",
+            "callers-have-pending-writes",
+            &["--no-dependents"],
+        )
+    };
+    let wrong = writes_then_raises("RaiseY");
+    each_shape(
+        &calls_q,
+        &empty,
+        &[
+            ("p.al", PUB_XY),
+            ("q.al", Q_ERRORS),
+            ("w.al", W_TABLE),
+            ("v.al", &wrong),
+        ],
+        |ws, extra, at| {
+            let r = question(ws, extra);
+            assert_eq!(r["answer"], "no", "{at}: {r:#}");
+        },
+    );
+    let right = writes_then_raises("RaiseX");
+    each_shape(
+        &calls_q,
+        &empty,
+        &[
+            ("p.al", PUB_XY),
+            ("q.al", Q_ERRORS),
+            ("w.al", W_TABLE),
+            ("v.al", &right),
+        ],
+        |ws, extra, at| {
+            let r = question(ws, extra);
+            assert_eq!(r["answer"], "yes", "control, {at}: {r:#}");
+        },
+    );
+}
+
+const SPLIT_TESTS: &str = r#"codeunit 50470 "AD Top"
+{
+    procedure Root()
+    var
+        S: Codeunit "AD Sub";
+    begin
+        S.H();
+    end;
+}
+
+codeunit 50471 "AD Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure TestRoot()
+    var
+        T: Codeunit "AD Top";
+    begin
+        T.Root();
+    end;
+}
+"#;
+
+/// The two split declarations' stable ids, read from `alsem graph`.
+fn split_ids(ws: &Path) -> Vec<String> {
+    let out = String::from_utf8(run(ws, &["graph", "."])).unwrap();
+    let mut ids: Vec<String> = out
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|v| v["t"] == "node" && v["v"]["objectName"] == "AD Sub")
+        .filter_map(|v| v["v"]["stableRoutineId"].as_str().map(str::to_string))
+        .collect();
+    ids.sort();
+    assert_eq!(ids.len(), 2, "precondition: two declaration nodes: {ids:?}");
+    assert!(ids.iter().all(|i| i.contains('~')), "{ids:?}");
+    ids
+}
+
+/// M2 (probe s1): `alsem tests` could not find a split subscriber. Its `~hex`
+/// id had no node in the sited graph, so the run reported "not in projection"
+/// and fell back to the whole suite; a name was ambiguous and resolved
+/// nothing. By name, by a declaration's id and by the routine's base id it
+/// now resolves, and each declaration has its modeled test path. Both file
+/// orders by the shapes.
+#[test]
+fn alsem_tests_finds_a_split_subscriber_by_name_and_by_id() {
+    let commits = sub_decl("AD Pub", "OnX", "", "", "        Commit();\n");
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    each_shape(
+        &commits,
+        &empty,
+        &[("p.al", PUB_XY), ("t.al", SPLIT_TESTS)],
+        |ws, extra, at| {
+            let tests = |selector: &str| -> Value {
+                let mut args = vec!["tests", ".", "--routine", selector, "--format", "json"];
+                args.extend_from_slice(extra);
+                serde_json::from_slice(&run(ws, &args)).expect("json")
+            };
+            let check = |v: &Value, n: usize, what: &str| {
+                let changed = v["changed"].as_array().expect("changed");
+                assert_eq!(changed.len(), n, "{at}, {what}: {v:#}");
+                for c in changed {
+                    assert_eq!(
+                        c["testStatus"], "tests with a modeled path",
+                        "{at}, {what}: {c:#}"
+                    );
+                    assert_eq!(c["nearest"]["test"], "Codeunit \"AD Tests\"::TestRoot");
+                }
+            };
+            check(&tests("AD Sub::H"), 2, "by name");
+            let ids = split_ids(ws);
+            check(&tests(&ids[0]), 1, "by id");
+            let base = ids[0].rsplit_once('~').unwrap().0.to_string();
+            check(&tests(&base), 2, "by the routine's id");
+        },
+    );
+}
+
+/// M2: `alsem impact` too. A selector naming a split subscriber resolves its
+/// declarations (`rootsResolved`).
+#[test]
+fn alsem_impact_finds_a_split_subscriber_by_name_and_by_id() {
+    let commits = sub_decl("AD Pub", "OnX", "", "", "        Commit();\n");
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    each_shape(
+        &commits,
+        &empty,
+        &[("p.al", PUB_XY), ("t.al", SPLIT_TESTS)],
+        |ws, extra, at| {
+            let impact = |selector: &str| -> Value {
+                let mut args = vec!["impact", ".", "--routine", selector, "--format", "json"];
+                args.extend_from_slice(extra);
+                serde_json::from_slice(&run(ws, &args)).expect("json")
+            };
+            let by_name = impact("AD Sub::H");
+            assert_eq!(by_name["input"]["rootsResolved"], 2, "{at}: {by_name:#}");
+            let ids = split_ids(ws);
+            let by_id = impact(&ids[1]);
+            assert_eq!(by_id["input"]["rootsResolved"], 1, "{at}: {by_id:#}");
+        },
+    );
+}
+
+/// M2: the callers' questions can name a split subscriber, by name and by a
+/// declaration's id. `Holder::Go` writes, then calls `H` directly: both
+/// declarations are callees of that call, so `H` has a caller with a pending
+/// write either way.
+#[test]
+fn the_callers_questions_can_name_a_split_subscriber() {
+    let commits = sub_decl("AD Pub", "OnX", "", "", "        Commit();\n");
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    let holder = "codeunit 50493 \"AD Holder\"\n{\n    procedure Go()\n    var\n        W: Record \"AD W\";\n        S: Codeunit \"AD Sub\";\n    begin\n        W.Insert();\n        S.H();\n    end;\n}\n";
+    each_shape(
+        &commits,
+        &empty,
+        &[("p.al", PUB_XY), ("w.al", W_TABLE), ("h.al", holder)],
+        |ws, _, at| {
+            let args = ["--no-dependents"];
+            let by_name = prove_with(ws, "AD Sub::H", "callers-have-pending-writes", &args);
+            assert_eq!(by_name["answer"], "yes", "{at}: {by_name:#}");
+            let ids = split_ids(ws);
+            for id in &ids {
+                let r = prove_with(ws, id, "callers-have-pending-writes", &args);
+                assert_eq!(r["answer"], "yes", "{at}, {id}: {r:#}");
+            }
+        },
+    );
+}
+
+/// The callgraph contract (spec 2026-10-13, the join): a change at a
+/// declaration's lines maps to a node. A split subscriber's declarations are
+/// a node each, each with its own lines. An unsplit routine declared twice
+/// keeps one node, which now also lists the other declaration's place
+/// (`otherDeclarations`, an additive field): before, a change at the place the
+/// node did not carry matched no node.
+#[test]
+fn the_call_graph_carries_every_declarations_lines() {
+    let graph_nodes = |files: &[(&str, &str)]| -> Vec<Value> {
+        let t = workspace(files);
+        let out = String::from_utf8(run(t.path(), &["graph", "."])).unwrap();
+        let mut nodes: Vec<Value> = out
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|v| v["t"] == "node" && v["v"]["objectName"] == "AD Sub")
+            .map(|v| v["v"].clone())
+            .collect();
+        nodes.sort_by_key(|v| v["sourcePath"].as_str().unwrap().to_string());
+        nodes
+    };
+    let a_split = format!(
+        "#if A\n{}#endif\n",
+        sub_decl("AD Pub", "OnX", "", "", "        Commit();\n")
+    );
+    let b_split = format!(
+        "#if not A\n{}#endif\n",
+        sub_decl("AD Pub", "OnY", "", "", "")
+    );
+    for (first, second) in [("a.al", "b.al"), ("b.al", "a.al")] {
+        let nodes = graph_nodes(&[(first, &a_split), (second, &b_split), ("p.al", PUB_XY)]);
+        assert_eq!(nodes.len(), 2, "one node per declaration: {nodes:#?}");
+        let want: Vec<(String, u64, u64)> = [("a.al", 5, 8), ("b.al", 5, 7)]
+            .iter()
+            .map(|(f, l, e)| {
+                let f = if *f == "a.al" { first } else { second };
+                (format!("src/{f}"), *l, *e)
+            })
+            .collect();
+        let mut got: Vec<(String, u64, u64)> = nodes
+            .iter()
+            .map(|n| {
+                (
+                    n["sourcePath"].as_str().unwrap().to_string(),
+                    n["line"].as_u64().unwrap(),
+                    n["endLine"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        got.sort();
+        let mut want = want;
+        want.sort();
+        assert_eq!(got, want, "each node is one declaration's own place");
+        assert!(
+            nodes.iter().all(|n| n.get("otherDeclarations").is_none()),
+            "{nodes:#?}"
+        );
+    }
+    // The same two declarations subscribing alike stay one node.
+    let a_alike = format!(
+        "#if A\n{}#endif\n",
+        sub_decl("AD Pub", "OnX", "", "", "        Commit();\n")
+    );
+    let b_alike = format!(
+        "#if not A\n{}#endif\n",
+        sub_decl("AD Pub", "OnX", "", "", "")
+    );
+    let nodes = graph_nodes(&[("a.al", &a_alike), ("b.al", &b_alike), ("p.al", PUB_XY)]);
+    assert_eq!(nodes.len(), 1, "precondition: one node: {nodes:#?}");
+    let n = &nodes[0];
+    let mut places = vec![(
+        n["sourcePath"].as_str().unwrap().to_string(),
+        n["line"].as_u64().unwrap(),
+    )];
+    let others = n["otherDeclarations"]
+        .as_array()
+        .expect("otherDeclarations");
+    assert_eq!(others.len(), 1, "{n:#}");
+    places.push((
+        others[0]["sourcePath"].as_str().unwrap().to_string(),
+        others[0]["line"].as_u64().unwrap(),
+    ));
+    places.sort();
+    assert_eq!(
+        places,
+        [("src/a.al".to_string(), 5), ("src/b.al".to_string(), 5)]
+    );
+}

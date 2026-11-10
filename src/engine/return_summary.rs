@@ -807,7 +807,11 @@ mod tests {
             ws.routines[0].attributes_parsed[0].in_every_build(),
             "precondition: a symbol attribute, definite before the join"
         );
-        crate::program::model::workspace::join_alternative_declarations(&mut ws);
+        crate::program::model::workspace::join_alternative_declarations(
+            &mut ws,
+            &[],
+            &Default::default(),
+        );
         let a = &ws.routines[0].attributes_parsed[0];
         assert!(a.another_declaration_lacks && !a.conditional);
         let summaries = compute_return_summaries(&ws.routines, None);

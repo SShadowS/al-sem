@@ -35,7 +35,6 @@ use crate::engine::perf_trace as pt;
 use crate::program::graph::ProgramGraph;
 use crate::program::node::AppRef;
 use crate::program::node_extract::{ObjectNode, RoutineNode};
-use crate::program::node_set::NodeSetIter;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::full::{
     ClassifiedEdge, DependencyBodyResolution, FileResolution, ObligationId, ParenlessCalls,
@@ -111,7 +110,11 @@ fn routine(h: &mut ProjectionHasher, s: &EvalState, r: Option<&RoutineNode>) {
     }
 }
 
-fn run(h: &mut ProjectionHasher, s: &EvalState, it: NodeSetIter<'_, RoutineNode>) {
+fn run<'g>(
+    h: &mut ProjectionHasher,
+    s: &EvalState,
+    it: impl ExactSizeIterator<Item = &'g RoutineNode>,
+) {
     h.u64(it.len() as u64);
     for r in it {
         routine(h, s, Some(r));
@@ -143,6 +146,7 @@ pub(crate) fn eval(q: &Query, s: &EvalState) -> Digest {
         Query::RoutinesWithId(rid) => run(&mut h, s, g.routines_with_id(rid)),
         Query::RoutinesOf(id) => run(&mut h, s, g.routines_of(id)),
         Query::RoutinesNamed(id, name) => run(&mut h, s, g.routines_named(id, name)),
+        Query::DeclarationsOf(rid) => g.declarations_of(rid).to_vec().classify(&mut h),
         Query::ResolveObject(app, kind, name) => {
             object(&mut h, s, g.resolve_object(*app, *kind, name));
         }

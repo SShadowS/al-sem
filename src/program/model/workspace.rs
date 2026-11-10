@@ -2499,8 +2499,16 @@ fn project_ir(
 /// resolution and the attach, in every assembly entry. It reads other files'
 /// rows, so it never runs in `project_ir`: a file's cached raw rows
 /// (`row_cache`) stay a function of that file alone.
-pub(crate) fn join_alternative_declarations(ws: &mut ModelEntities) {
-    join_routine_declarations(&mut ws.routines);
+///
+/// `node_of` is each row's program node and `declarations` the graph's split
+/// routines (`program::split_decls`): a row whose node is a split
+/// declaration takes that declaration's own ids.
+pub(crate) fn join_alternative_declarations(
+    ws: &mut ModelEntities,
+    node_of: &[Option<crate::program::node::RoutineNodeId>],
+    declarations: &crate::program::split_decls::SplitDecls,
+) {
+    join_routine_declarations(&mut ws.routines, node_of, declarations);
     join_table_declarations(&mut ws.tables);
 }
 
@@ -2522,7 +2530,16 @@ fn attribute_text_key(raw: &str) -> String {
 /// reading `return_summary::compute_return_summaries` gives every group
 /// (`merge_alternative_summaries`). Steps 2 and 3 touch sites, which a
 /// symbol-only row has none of.
-fn join_routine_declarations(rows: &mut [ModelRoutine]) {
+fn join_routine_declarations(
+    rows: &mut [ModelRoutine],
+    node_of: &[Option<crate::program::node::RoutineNodeId>],
+    declarations: &crate::program::split_decls::SplitDecls,
+) {
+    // The declaration suffix of row `i` when the graph split its routine.
+    let suffix_of = |i: usize| -> Option<&str> {
+        let node = node_of.get(i)?.as_ref()?;
+        declarations.base_of(node).map(|(_, s)| s)
+    };
     const TOP: &str = "top-level";
     const COND: &str = "conditional";
     let groups: Vec<Vec<usize>> = {
@@ -2575,10 +2592,9 @@ fn join_routine_declarations(rows: &mut [ModelRoutine]) {
                 }
             }
         }
-        // 3. A subscriber whose declarations subscribe differently: one
-        // routine per declaration (`split_subscriber_declarations`), so a
-        // dispatch reaches only the declaration that subscribes.
-        if split_subscriber_declarations(rows, &group) {
+        // 3. The rows of a split routine take their own ids below, which
+        // leaves no site id shared.
+        if group.iter().any(|&i| suffix_of(i).is_some()) {
             continue;
         }
         // 4. Rows from several files: each file's numbering (from 0, its
@@ -2625,6 +2641,15 @@ fn join_routine_declarations(rows: &mut [ModelRoutine]) {
                 "join_alternative_declarations: a field of {id} holds a site id the \
                  rewrite missed"
             );
+        }
+    }
+    // Every row of a split routine, also one with no other row here (a
+    // dependency's declaration that alone was demanded).
+    if !declarations.is_empty() {
+        for (i, row) in rows.iter_mut().enumerate() {
+            if let Some(suffix) = suffix_of(i) {
+                adopt_declaration_ids(row, suffix);
+            }
         }
     }
 }
@@ -2681,35 +2706,9 @@ fn file_site_blocks<'u>(units: &[&'u str], max: u32) -> Option<HashMap<&'u str, 
     Some(out)
 }
 
-/// Engine limits B2 (wave 2 final review, follow-up 2): split a subscriber
-/// routine whose declarations (`group`, the rows of one id) subscribe
-/// differently into one routine per declaration, and say whether it did.
-///
-/// The program graph keeps one node per subscriber and gives it every
-/// declaration's subscriptions (`EventFacts::of_arms`), and every walker
-/// reaches a routine's rows by its id; so as long as the declarations share
-/// an id, a dispatch to one declaration's subscription reached the bodies of
-/// all of them (`#if A [EventSubscriber(…'OnX'…)] H: Commit #else
-/// [EventSubscriber(…'OnY'…)] H #endif`: raising `OnY` "may commit"). Here
-/// each declaration gets an id of its own, derived from the routine's id and
-/// the declaration's place in ITS OWN file (its source unit and its ordinal
-/// among the routine's declarations in that file), so it depends on no other
-/// file; its stable id is the routine's with `~` and 8 hex digits of the same
-/// hash, and its site ids move to the new id (`{new id}/op0`). Every walker
-/// then reaches only that declaration through a dispatch: the event graph
-/// sends each subscription only to the declarations that declare it
-/// (`events::row_declares_subscription`, the full identity), and so do the
-/// table-event edges; a direct call reaches every declaration
-/// (`program_calls`: one edge per declaration, each a possible build). The
-/// steps before this one (attribute marks, the `top-level` lift) still read
-/// the declarations as alternatives.
-///
-/// Splits only when at least one row has an `[EventSubscriber]` and the rows'
-/// sets of `[EventSubscriber]` texts differ. [`split_origin`] tells a split
-/// declaration and its routine's stable id.
-/// The stable id of the routine a split declaration
-/// ([`split_subscriber_declarations`]) belongs to: its own stable id without
-/// the `~` and 8 hex digits the split adds; `None` for any other routine.
+/// The stable id of the routine a split declaration (`program::split_decls`)
+/// belongs to: its own stable id without the `~` and 8 hex digits the split
+/// adds; `None` for any other routine.
 #[must_use]
 pub fn split_origin(stable: &str) -> Option<&str> {
     let (origin, tag) = stable.rsplit_once('~')?;
@@ -2717,46 +2716,34 @@ pub fn split_origin(stable: &str) -> Option<&str> {
         .then_some(origin)
 }
 
-fn split_subscriber_declarations(rows: &mut [ModelRoutine], group: &[usize]) -> bool {
-    let subs = |r: &ModelRoutine| -> Vec<String> {
-        let mut v: Vec<String> = r
-            .attributes_parsed
-            .iter()
-            .filter(|a| a.name.eq_ignore_ascii_case("EventSubscriber"))
-            .map(|a| attribute_text_key(&a.raw))
-            .collect();
-        v.sort();
-        v
-    };
-    let sets: Vec<Vec<String>> = group.iter().map(|&i| subs(&rows[i])).collect();
-    if sets.iter().all(Vec::is_empty) || sets.iter().all(|s| *s == sets[0]) {
-        return false;
-    }
-    let old = rows[group[0]].id.clone();
-    let scope = old.rsplit_once('/').map_or("", |(s, _)| s).to_string();
-    let mut ordinal: HashMap<String, u32> = HashMap::new();
-    for &i in group {
-        let unit = rows[i].source_anchor.source_unit_id.clone();
-        let k = ordinal.entry(unit.clone()).or_insert(0);
-        let hex = crate::engine::ids::sha256_hex(&format!("{old}\u{1f}{unit}\u{1f}{k}"));
-        *k += 1;
-        let new = format!("{scope}/{hex}");
-        let (from, to) = (format!("{old}/"), format!("{new}/"));
-        let f = |s: &str| s.replace(&from, &to);
-        #[cfg(debug_assertions)]
-        let before = format!("{:?}", rows[i]);
-        rewrite_routine_site_ids(&mut rows[i], &f);
-        #[cfg(debug_assertions)]
-        assert_eq!(
-            format!("{:?}", rows[i]),
-            f(&before),
-            "split_subscriber_declarations: a field of {old} holds a site id the rewrite missed"
-        );
-        let r = &mut rows[i];
-        r.id = new;
-        r.stable_routine_id = format!("{}~{}", r.stable_routine_id, &hex[..8]);
-    }
-    true
+/// Engine limits B2: row `r`'s ids once the graph has split its routine, one
+/// node per declaration (`program::split_decls`, the one place that decides a
+/// split). Its id derives from the routine's id and the declaration's suffix,
+/// its stable id is the routine's with `~` and the suffix, and its site ids
+/// move to the new id (`{new id}/op0`). The suffix depends only on the
+/// declaration's own file, so these ids depend on no other file except when
+/// another file starts or ends the split. The node's own subscriptions and
+/// routes then give each declaration its own dispatches and its share of a
+/// direct call; the join's steps before this one still read the declarations
+/// as alternatives.
+fn adopt_declaration_ids(r: &mut ModelRoutine, suffix: &str) {
+    let old = r.id.clone();
+    let scope = old.rsplit_once('/').map_or("", |(s, _)| s);
+    let hex = crate::engine::ids::sha256_hex(&format!("{old}\u{1f}{suffix}"));
+    let new = format!("{scope}/{hex}");
+    let (from, to) = (format!("{old}/"), format!("{new}/"));
+    let f = |s: &str| s.replace(&from, &to);
+    #[cfg(debug_assertions)]
+    let before = format!("{r:?}");
+    rewrite_routine_site_ids(r, &f);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        format!("{r:?}"),
+        f(&before),
+        "adopt_declaration_ids: a field of {old} holds a site id the rewrite missed"
+    );
+    r.id = new;
+    r.stable_routine_id = format!("{}~{suffix}", r.stable_routine_id);
 }
 
 /// The table half of [`join_alternative_declarations`]: a table declared more
@@ -2858,7 +2845,7 @@ pub fn assemble_and_resolve_workspace_from_program(
 ) -> Option<ModelRows> {
     let (mut ws, node_of) =
         assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
-    join_alternative_declarations(&mut ws);
+    join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
@@ -2915,7 +2902,7 @@ pub fn assemble_and_resolve_workspace_from_program_edited(
 ) -> Option<ModelRows> {
     let (mut ws, mut node_of) =
         assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
-    join_alternative_declarations(&mut ws);
+    join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     edit(&mut ws, &mut node_of);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
@@ -3156,7 +3143,7 @@ pub(crate) fn assemble_and_resolve_cross_app_from_program_cached(
         let _s = pt::span("l3", "l3.dependency_rows");
         append_dependency_rows(&mut ws, &mut node_of, ctx, demand, parenless, needs, cache)
     };
-    join_alternative_declarations(&mut ws);
+    join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
@@ -3410,17 +3397,34 @@ fn append_dependency_rows(
             // A session keeps each dependency file's routine ids (a pure
             // function of the app and the parse), so the demanded slice and
             // the rows' nodes are looked up, not hashed again.
-            let ids = match (cache.as_deref_mut(), app) {
-                (Some(c), Some(app)) => {
-                    Some(c.dependency_ids(app, pf.virtual_path, pf.text, || {
-                        dependency_routine_ids(tree(), app)
-                    }))
+            let ids: Option<std::sync::Arc<Vec<Vec<crate::program::node::RoutineNodeId>>>> =
+                match (cache.as_deref_mut(), app) {
+                    (Some(c), Some(app)) => {
+                        Some(c.dependency_ids(app, pf.virtual_path, pf.text, || {
+                            dependency_routine_ids(tree(), app)
+                        }))
+                    }
+                    (None, Some(app)) => {
+                        Some(std::sync::Arc::new(dependency_routine_ids(tree(), app)))
+                    }
+                    _ => None,
+                };
+            // A split subscriber's declarations (`split_decls`) are nodes of
+            // their own; the kept ids stay a function of this file alone.
+            let ids = ids.map(|ids| {
+                let unit = crate::program::split_decls::unit_id(guid, pf.virtual_path);
+                match ctx
+                    .graph()
+                    .workspace_rows
+                    .declarations
+                    .file_declaration_ids(&ids, &unit)
+                {
+                    Some(mapped) => std::sync::Arc::new(mapped),
+                    None => ids,
                 }
-                _ => None,
-            };
-            let population = match (demand, app, &ids) {
-                (Some(d), Some(_), Some(ids)) => demanded_population_from_ids(ids, d),
-                (Some(d), Some(app), None) => demanded_population(tree(), app, d),
+            });
+            let population = match (demand, &ids) {
+                (Some(d), Some(ids)) => demanded_population_from_ids(ids, d),
                 _ => whole_file_population(tree()),
             };
             let no_calls = std::collections::HashSet::new();
@@ -3506,16 +3510,11 @@ fn append_dependency_rows(
                     }
                 }
             };
-            node_of.extend(positions.into_iter().map(|(oi, ri)| match &ids {
-                Some(ids) => Some(ids[oi][ri].clone()),
-                None => app.map(|app| {
-                    let o = &tree().objects[oi];
-                    crate::program::sig_fp::source_routine_node_id(
-                        dep_object_node_id(app, o),
-                        &o.routines[ri],
-                    )
-                }),
-            }));
+            node_of.extend(
+                positions
+                    .into_iter()
+                    .map(|(oi, ri)| ids.as_ref().map(|ids| ids[oi][ri].clone())),
+            );
         }
     }
     if let Some(c) = cache {
@@ -3598,8 +3597,10 @@ fn append_abi_rows(
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
 }
 
-/// Each routine's program id in dependency file `ir_file` of `app`, per
-/// object, as [`demanded_population`] builds them.
+/// Each routine's id in dependency file `ir_file` of `app`, per object, as the
+/// source spells it and the resolver builds a caller's (the owning app, the
+/// object's number or folded name): a function of this file alone, before any
+/// split (`split_decls::SplitDecls::file_declaration_ids`).
 pub(crate) fn dependency_routine_ids(
     ir_file: &al_syntax::ir::AlFile,
     app: crate::program::node::AppRef,
@@ -3617,8 +3618,9 @@ pub(crate) fn dependency_routine_ids(
         .collect()
 }
 
-/// [`demanded_population`] from the file's routine ids
-/// ([`dependency_routine_ids`]).
+/// Every object of a dependency file, with only its demanded routines (S8.2),
+/// from the file's routine ids ([`dependency_routine_ids`], each split
+/// declaration's own, so a demanded declaration brings only itself).
 fn demanded_population_from_ids(
     ids: &[Vec<crate::program::node::RoutineNodeId>],
     demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
@@ -3633,37 +3635,6 @@ fn demanded_population_from_ids(
                 .map(|(ri, _)| ri)
                 .collect();
             (oi, kept)
-        })
-        .collect()
-}
-
-/// Every object of a dependency file, with only its demanded routines (S8.2). The
-/// routine ids are built as the resolver builds a caller's
-/// (`resolve_file_obligations`): the owning app, the object's number or folded name.
-fn demanded_population(
-    ir_file: &al_syntax::ir::AlFile,
-    app: crate::program::node::AppRef,
-    demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
-) -> FilePopulation {
-    ir_file
-        .objects
-        .iter()
-        .enumerate()
-        .map(|(oi, o)| {
-            let object = dep_object_node_id(app, o);
-            let routines = o
-                .routines
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| {
-                    demand.contains(&crate::program::sig_fp::source_routine_node_id(
-                        object.clone(),
-                        r,
-                    ))
-                })
-                .map(|(ri, _)| ri)
-                .collect();
-            (oi, routines)
         })
         .collect()
 }

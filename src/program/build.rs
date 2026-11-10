@@ -269,6 +269,11 @@ fn build_dep_nodes(
     // across all apps (one app read twice is two units). The step 4 dedup
     // unions the event facts of every stamped copy (`EventFacts::of_arms`).
     let mut source_unit = 1u32..;
+    // Per routine (push order) its source unit (`""`: not a source
+    // routine), and per `dep_meta` entry the routine it belongs to
+    // (`split_declarations`, engine limits B2 follow-up 3).
+    let mut unit_of: Vec<String> = Vec::new();
+    let mut meta_routine: Vec<Option<usize>> = Vec::new();
     // The summaries' consumption into the layer (context-server design r4
     // §6.7: the work a declaration pack would remove, with `deps.extract`).
     let consume_span = crate::engine::perf_trace::span("deps", "deps.layer_consume");
@@ -285,6 +290,16 @@ fn build_dep_nodes(
             file.objects.share_strings(&mut pool);
             file.routines.share_strings(&mut pool);
             objects.extend(file.objects);
+            // Each routine's source unit, and (when the file's metadata is one entry per routine, in the same order) the
+            // routine each metadata entry belongs to (`split_declarations`).
+            let unit_id = crate::program::split_decls::unit_id(&unit.app.guid, &file.virtual_path);
+            unit_of.resize(routines.len(), String::new());
+            if file.routine_meta.len() == file.routines.len() {
+                meta_routine.extend((0..file.routines.len()).map(|k| Some(routines.len() + k)));
+            } else {
+                meta_routine.extend(std::iter::repeat_n(None, file.routine_meta.len()));
+            }
+            unit_of.extend(std::iter::repeat_n(unit_id, file.routines.len()));
             routines.extend(file.routines);
             dep_meta.extend(file.routine_meta.into_iter().map(|(mut id, mut meta)| {
                 id.share_strings(&mut pool);
@@ -358,6 +373,20 @@ fn build_dep_nodes(
     // with identical ids. Dedup after sort keeps the first occurrence
     // (arbitrary but stable) — see `dedup_routines_preserving_genuine_overloads`'s
     // doc for why routines need content-aware, not blanket, dedup.
+    // Engine limits B2 (wave 2 final review, follow-up 3): one node per
+    // declaration of a subscriber whose declarations subscribe differently,
+    // its metadata entry renamed with it.
+    unit_of.resize(routines.len(), String::new());
+    let declarations = split_declarations(&mut routines, &unit_of);
+    if !declarations.is_empty() {
+        for (entry, ri) in dep_meta.iter_mut().zip(&meta_routine) {
+            if let Some(ri) = ri
+                && declarations.base_of(&routines[*ri].id).is_some()
+            {
+                entry.0 = routines[*ri].id.clone();
+            }
+        }
+    }
     objects.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
@@ -365,6 +394,7 @@ fn build_dep_nodes(
     let routines = Arc::new(routines);
 
     DepNodes {
+        declarations,
         objects: Arc::new(objects),
         dep_meta: Arc::new(DepMeta::build(Arc::clone(&routines), dep_meta)),
         routines,
@@ -447,6 +477,8 @@ pub fn assemble_program_graph(
 
     use crate::engine::perf_trace as pt;
     let extract_span = pt::span("graph", "graph.extract");
+    // Each routine's source unit (`split_decls::unit_id`).
+    let mut units: Vec<String> = Vec::new();
     for (unit, pf) in (1u32..).zip(&ws_unit.files) {
         let (o0, r0) = (objects.len(), routines.len());
         extract_nodes(
@@ -460,9 +492,22 @@ pub fn assemble_program_graph(
         for r in &mut routines[r0..] {
             r.source_unit = std::num::NonZeroU32::new(unit);
         }
+        units.extend(std::iter::repeat_n(
+            crate::program::split_decls::unit_of_parsed(pf),
+            routines.len() - r0,
+        ));
         // Before the sort + dedup below: one row per occurrence (S2b.3).
         workspace_rows.record_file(&pf.virtual_path, &pf.file, &objects[o0..], &routines[r0..]);
     }
+    // Engine limits B2 (wave 2 final review, follow-up 3): a subscriber whose
+    // declarations subscribe differently is one node per declaration; the
+    // rows (one per occurrence, in push order) name those nodes.
+    let mut declarations = split_declarations(&mut routines, &units);
+    for (row, r) in workspace_rows.routines.iter_mut().zip(&routines) {
+        row.node = r.id.clone();
+    }
+    declarations.extend(&dep.dep_nodes.declarations);
+    workspace_rows.declarations = declarations;
 
     objects.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_objects(&mut objects);
@@ -1144,6 +1189,72 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
         true
     });
     routines.shrink_to(pre_len);
+}
+
+/// Engine limits B2 (wave 2 final review, follow-up 3): give each declaration
+/// of a source subscriber whose declarations subscribe differently a node id
+/// of its own (`split_decls`), BEFORE the sort and dedup, so they stay apart.
+/// `routines` are in push order (files in build order, then document order),
+/// `units` each routine's source unit (`split_decls::unit_id`). A routine is
+/// split when it has two or more copies and their `[EventSubscriber]` lists
+/// differ as sets; copies that subscribe alike stay one node (and keep the
+/// #103 union of their event facts).
+fn split_declarations(
+    routines: &mut [RoutineNode],
+    units: &[String],
+) -> crate::program::split_decls::SplitDecls {
+    use crate::program::split_decls::{Ordinals, SplitDecls, decl_id};
+    debug_assert_eq!(routines.len(), units.len(), "one unit per routine");
+    let mut by_id: HashMap<&RoutineNodeId, Vec<usize>> = HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        if r.tier != TrustTier::SymbolOnly {
+            by_id.entry(&r.id).or_default().push(i);
+        }
+    }
+    let same = |a: &[crate::program::resolve::event::ParsedSubscriberArgs],
+                b: &[crate::program::resolve::event::ParsedSubscriberArgs]| {
+        a.iter().all(|x| b.contains(x)) && b.iter().all(|x| a.contains(x))
+    };
+    let mut split: Vec<usize> = by_id
+        .into_values()
+        .filter(|ixs| {
+            ixs.len() >= 2
+                && ixs
+                    .iter()
+                    .any(|&i| !routines[i].event_subscribers.is_empty())
+                && ixs.iter().any(|&i| {
+                    !same(
+                        &routines[i].event_subscribers,
+                        &routines[ixs[0]].event_subscribers,
+                    )
+                })
+        })
+        .flatten()
+        .collect();
+    let mut out = SplitDecls::default();
+    if split.is_empty() {
+        return out;
+    }
+    split.sort_unstable();
+    // Ordinals per (unit, routine), in push (document) order.
+    let mut ordinals: HashMap<&str, Ordinals> = HashMap::new();
+    let mut decls: std::collections::BTreeMap<RoutineNodeId, Vec<(RoutineNodeId, String, u32)>> =
+        std::collections::BTreeMap::new();
+    for i in split {
+        let base = routines[i].id.clone();
+        let unit = units[i].as_str();
+        let k = ordinals.entry(unit).or_default().next(&base);
+        let id = decl_id(&base, unit, k);
+        decls
+            .entry(base)
+            .or_default()
+            .push((id.clone(), unit.to_string(), k));
+        routines[i].id = id;
+    }
+    for (base, d) in decls {
+        out.insert(base, d);
+    }
+    out
 }
 
 /// The event facts a same-signature duplicate's survivor takes from ALL its

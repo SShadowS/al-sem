@@ -34,9 +34,8 @@ use al_syntax::ir::{AlFile, BlockId, BlockItem, ExprId, ExprKind, ObjectKind, St
 use serde_json::{Value, json};
 
 use crate::program::graph::ProgramGraph;
-use crate::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
+use crate::program::node::RoutineNodeId;
 use crate::program::resolve::receiver::unquote_identifier;
-use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::ParsedUnit;
 
 /// The catalog's version: bumped whenever an entry is added, removed or
@@ -467,7 +466,13 @@ pub fn extract(
                 .get_or_insert_with(|| (unit.app.name.clone(), unit.app.version.clone()));
         }
         for pf in &unit.files {
-            for obj in &pf.file.objects {
+            let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+                graph,
+                &pf.file,
+                app,
+                &crate::program::split_decls::unit_of_parsed(pf),
+            );
+            for (obj_ix, obj) in pf.file.objects.iter().enumerate() {
                 for &i in &entries {
                     let e = &catalog[i];
                     if obj.kind != e.object_kind
@@ -476,12 +481,7 @@ pub fn extract(
                         continue;
                     }
                     found[i].object = true;
-                    let obj_id = ObjectNodeId {
-                        app,
-                        kind: obj.kind,
-                        key: ObjKey::from_source(obj),
-                    };
-                    for r in &obj.routines {
+                    for (routine_ix, r) in obj.routines.iter().enumerate() {
                         if r.name.fold_identifier() != e.routine || r.enclosing_member.is_some() {
                             continue;
                         }
@@ -495,7 +495,7 @@ pub fn extract(
                         let region = region_in(i as u16, e, &pf.file, &pf.text, r.body);
                         found[i]
                             .routines
-                            .push((source_routine_node_id(obj_id.clone(), r), region));
+                            .push((decl_nodes[obj_ix][routine_ix].clone(), region));
                     }
                 }
             }
@@ -590,16 +590,16 @@ pub fn candidates(
             continue;
         }
         for pf in &unit.files {
-            for obj in &pf.file.objects {
-                let obj_id = ObjectNodeId {
-                    app,
-                    kind: obj.kind,
-                    key: ObjKey::from_source(obj),
-                };
-                for r in &obj.routines {
+            let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+                graph,
+                &pf.file,
+                app,
+                &crate::program::split_decls::unit_of_parsed(pf),
+            );
+            for (obj_ix, obj) in pf.file.objects.iter().enumerate() {
+                for (routine_ix, r) in obj.routines.iter().enumerate() {
                     let Some(body) = r.body else { continue };
-                    let Some(node) = g.routine_node(&source_routine_node_id(obj_id.clone(), r))
-                    else {
+                    let Some(node) = g.routine_node(&decl_nodes[obj_ix][routine_ix]) else {
                         continue;
                     };
                     let sites = out_sites.get(&node).map(Vec::as_slice).unwrap_or(&[]);
