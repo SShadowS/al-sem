@@ -223,6 +223,9 @@ Reading:
 
 Every batch runs only on an idle machine (`uptime` load under 2, no other cargo or rustc
 process), announced to the orchestrator first, which holds lane tools' builds and `cdo-gate`.
+server1 is shared with other kraken projects that nobody here can hold, so `timeit.py` records
+`uptime` before every run, waits up to 10 minutes for a 1-minute load under 2, and marks a run
+that started above it `noisy`. Such a run is reported as noisy, never silently mixed into a median.
 Each timing is the median of 3, in its own target folder (`CARGO_TARGET_DIR=/work/eng04-target/<name>`)
 so no peer's folder is touched. Peak memory comes from a Python wrapper reading
 `resource.getrusage(RUSAGE_CHILDREN).ru_maxrss` (there is no `/usr/bin/time`). rustc invocation
@@ -238,7 +241,7 @@ counts come from `cargo … -v`. Every build passes `--timings` and the HTML rep
 
 `output_cdo` runtime and the full `cdo-gate` time are taken from the orchestrator's next real
 `cdo-gate` run (its phase logs), not from an extra run: the gate needs the whole machine and its
-memory question is open. CLAUDE.md's figures from 2026-11-09 (lanes 756–910 s, ~1,300 s with the
-speed phase) stand until then.
+memory question is open. **Open: no such run yet.** CLAUDE.md's figures from 2026-11-09 (lanes
+756–910 s, ~1,300 s with the speed phase) are the only ones until then.
 
 Total machine time for T1–T5: about 2–2.5 hours of an idle machine.
