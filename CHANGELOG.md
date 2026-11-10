@@ -57,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   segments (`fingerprint::ROUTINE_SITE_TAGS`), so baselines do not move; `alsem graph`
   takes its sites from the program graph, not these ids, so it does not move. Routine
   ids and stable ids do not change. No golden moved.
+- **CDO** (`bc3ccb18`, release-fast, measured 2026-11-10): the cross-app model has 2
+  collision groups, both in one file of a dependency (Base App `PageManagement`:
+  `GetSalesHeaderPageID`, `GetPurchaseHeaderPageID`; census `groups_one_file=2`); the
+  workspace has none. Against an `integrate/w2` build, `alsem analyze` (cross-app JSON)
+  and `explain` (human and JSON), `digest` and `prove may-commit` for the three
+  `output_cdo` routines (IssueReminder, RunReportID, UpdateLastUpload) are
+  byte-identical but for the timestamp, so the CDO goldens are not expected to move.
 - **The impact-base cache's summary schema is 3** (`impact::keys::SUMMARY_SCHEMA`): a
   base cached before could cite the other arm's line for a site, so it is not read.
 
