@@ -3677,7 +3677,13 @@ pub fn ir_attributes(
             .iter()
             .map(|&arg| ir_attr_arg(file, arg, source))
             .collect();
-        parsed.push(json!({ "name": a.name, "args": args, "raw": a.raw }));
+        let mut one = json!({ "name": a.name, "args": args, "raw": a.raw });
+        // Engine limits B2: only some builds have it (`AttributeInfo::conditional`).
+        // Absent when false, so every unconditional attribute keeps its shape.
+        if a.conditional {
+            one["conditional"] = serde_json::Value::Bool(true);
+        }
+        parsed.push(one);
     }
     (raw, parsed)
 }
@@ -3751,19 +3757,32 @@ pub fn ir_object_metadata(
         page_type = prop("pagetype");
         source_table_name = prop("sourcetable").map(|s| s.trim().trim_matches('"').to_string());
     }
-    if (object_type == "Codeunit" || object_type == "Table" || object_type == "TableExtension")
-        && let Some(icb_raw) = prop("inherentcommitbehavior")
-    {
-        let member = match icb_raw.rfind("::") {
-            Some(sep) => icb_raw[sep + 2..].to_lowercase(),
-            None => icb_raw.to_lowercase(),
+    if object_type == "Codeunit" || object_type == "Table" || object_type == "TableExtension" {
+        // One entry per `#if` arm (engine limits B2): the strictest value any
+        // build declares (`error` > `ignore` > `allow`). Its reader
+        // (`commit_scope::declared`) reads the property as MAY apply and keeps
+        // a normal commit possible, so no build's value is lost by this.
+        let rank = |v: &str| match v {
+            "error" => 3,
+            "ignore" => 2,
+            "allow" => 1,
+            _ => 0,
         };
-        inherent_commit_behavior = match member.as_str() {
-            "ignore" => Some("ignore".to_string()),
-            "error" => Some("error".to_string()),
-            "allow" => Some("allow".to_string()),
-            _ => None,
-        };
+        for p in o
+            .properties
+            .iter()
+            .filter(|p| p.name == "inherentcommitbehavior")
+        {
+            let icb_raw = &p.value;
+            let member = match icb_raw.rfind("::") {
+                Some(sep) => icb_raw[sep + 2..].to_lowercase(),
+                None => icb_raw.to_lowercase(),
+            };
+            let current = inherent_commit_behavior.as_deref().map_or(0, rank);
+            if rank(&member) > current {
+                inherent_commit_behavior = Some(member);
+            }
+        }
     }
     (
         object_subtype,

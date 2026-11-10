@@ -260,6 +260,11 @@ pub enum DeclSource {
     Attribute,
     /// Its object's `InherentCommitBehavior` (the routine has no attribute).
     ObjectProperty,
+    /// A `[CommitBehavior(…)]` only some builds of the routine have (it sits
+    /// in an `#if` arm the routine is not in, engine limits B2). No build
+    /// configuration is chosen, so it MAY apply: the states keep what a build
+    /// without it runs under (the object property's, else normal).
+    ConditionalAttribute,
 }
 
 /// A routine's commit-behavior declaration.
@@ -290,6 +295,10 @@ impl Declared {
                 "InherentCommitBehavior {} on the object of {routine_display} (may apply)",
                 self.word()
             ),
+            DeclSource::ConditionalAttribute => format!(
+                "CommitBehavior {} on {routine_display} in some builds only (may apply)",
+                self.word()
+            ),
         }
     }
 }
@@ -297,9 +306,27 @@ impl Declared {
 /// THE rule for one routine: its own `[CommitBehavior(Ignore|Error)]`, else
 /// its object's `InherentCommitBehavior` as a possibility; `None` when it
 /// declares nothing (it runs its callees under its caller's behavior).
+///
+/// Engine limits B2: an attribute only some builds have
+/// (`AttributeInfo::conditional`) is a possibility too, never a definite
+/// declaration. Its values join what a build without it runs under (the
+/// object property's reading, else [`N`]), so a commit stays possible and no
+/// definite "no" rests on a build nobody chose.
 #[must_use]
 pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declared> {
-    match crate::engine::return_summary::parse_commit_behavior(&r.attributes_parsed) {
+    use crate::engine::return_summary::{commit_behavior_value, parse_commit_behavior};
+    let without_attribute = match object.and_then(|o| o.inherent_commit_behavior.as_deref()) {
+        Some("ignore") => Some(Declared {
+            states: N | I,
+            source: DeclSource::ObjectProperty,
+        }),
+        Some("error") => Some(Declared {
+            states: N | E,
+            source: DeclSource::ObjectProperty,
+        }),
+        _ => None,
+    };
+    match parse_commit_behavior(&r.attributes_parsed) {
         "ignore" => Some(Declared {
             states: I,
             source: DeclSource::Attribute,
@@ -308,17 +335,26 @@ pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declar
             states: E,
             source: DeclSource::Attribute,
         }),
-        _ => match object.and_then(|o| o.inherent_commit_behavior.as_deref()) {
-            Some("ignore") => Some(Declared {
-                states: N | I,
-                source: DeclSource::ObjectProperty,
-            }),
-            Some("error") => Some(Declared {
-                states: N | E,
-                source: DeclSource::ObjectProperty,
-            }),
-            _ => None,
-        },
+        _ => {
+            let may = r
+                .attributes_parsed
+                .iter()
+                .filter(|a| a.conditional && a.name.eq_ignore_ascii_case("CommitBehavior"))
+                .fold(0, |s, a| {
+                    s | match commit_behavior_value(a) {
+                        "ignore" => I,
+                        "error" => E,
+                        _ => 0,
+                    }
+                });
+            if may == 0 {
+                return without_attribute;
+            }
+            Some(Declared {
+                states: may | without_attribute.map_or(N, |d| d.states),
+                source: DeclSource::ConditionalAttribute,
+            })
+        }
     }
 }
 

@@ -4236,9 +4236,13 @@ struct CommitSplit {
     commit_ix: Vec<usize>,
     commit_extra: Option<WitnessPath>,
     commit_twins: Vec<usize>,
-    /// The commit routes that commit on one reading only.
+    /// The commit routes that commit on one reading only (B4), or on which a
+    /// declaration only MAY apply (an `#if`-only attribute, engine limits
+    /// B2): the route's behaviors hold `N` and also `I` or `E`.
     uncertain: Uncertain,
-    /// The error routes that error on one reading only.
+    /// The error routes that error on one reading only: a route whose
+    /// behaviors hold `E` and more raises the error only where the may-apply
+    /// declaration does.
     error_uncertain: Uncertain,
     error_ix: Vec<usize>,
     error_extra: Option<WitnessPath>,
@@ -4262,10 +4266,11 @@ struct PartOffer {
 }
 
 /// B4: the routes of a commit row that commit on one reading only (a
-/// `[CommitBehavior]` that MAY follow into a started object, or a checked
-/// run that may trap the commit): listed paths (by index), the found route,
-/// the twins (by index). Each counts as at least `conditional`, so such a
-/// route never makes the commit `unconditional on success`.
+/// `[CommitBehavior]` that MAY follow into a started object, a checked run
+/// that may trap the commit, or a declaration only some builds have, engine
+/// limits B2): listed paths (by index), the found route, the twins (by
+/// index). Each counts as at least `conditional`, so such a route never
+/// makes the commit `unconditional on success`.
 #[derive(Default)]
 struct Uncertain {
     ix: Vec<usize>,
@@ -4418,8 +4423,10 @@ fn split_commit_part(
     let commit_ix = pick(N);
     let error_ix = pick(E);
     // A listed path that commits on one reading only (a scope that MAY
-    // follow into a started object, a checked run that may trap the commit):
-    // it does not make the commit unconditional.
+    // follow into a started object, a checked run that may trap the commit,
+    // a declaration only some builds have, engine limits B2): it does not
+    // make the commit unconditional. The error routes below follow the same
+    // rule: one that errors on one reading only is at least conditional.
     let commit_uncertain: Vec<usize> = ix
         .iter()
         .zip(&states)

@@ -213,8 +213,13 @@ pub struct ObjectProperty {
     pub name: String,
     pub value: String,
     pub origin: Origin,
-    /// The property, or its whole value, sits in an `#if` arm: some build may
-    /// not have this value (B6 round 2, an XmlPort's `Direction`).
+    /// `true` when only some builds have this entry (engine limits B2; B6
+    /// round 2 added the same flag for an XmlPort's `Direction`): the
+    /// property sits in an `#if` arm, or its whole value is an `#if`
+    /// (`TableNo = #if X Customer; #endif`). A build that takes another arm, or
+    /// none, has another value or the property's default. No configuration is
+    /// chosen, so a reader that decides a definite answer from the value must
+    /// treat a conditional entry as "may": the default stays possible.
     pub conditional: bool,
 }
 
@@ -228,6 +233,19 @@ pub struct AttributeIr {
     /// The `attribute_item` node's origin (#71: the routine's declaration span starts
     /// at its first attribute).
     pub origin: super::Origin,
+    /// `true` when some build in which the routine exists does not have this
+    /// attribute with these arguments (engine limits B2): it sits in an `#if`
+    /// arm the routine is not in (`#if CLEAN99 [CommitBehavior(…)] #endif
+    /// procedure P()`), it reached the routine past a `#if` wrapper by a path
+    /// not every build takes, its arguments hold an `#if` group, or the
+    /// routine is declared in several `#if` arms (one row per arm) and another
+    /// arm's row does not carry the same attribute. No
+    /// configuration is chosen, so every such build stays possible: a reader
+    /// that decides a definite answer from the attribute's presence must read
+    /// a conditional one as "may" (`program::attributes::find_definite_attribute`).
+    /// Imprecise in one direction only: an attribute whose arms together cover
+    /// every build (`#if X [A] #else [A] #endif`) is still conditional.
+    pub conditional: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]

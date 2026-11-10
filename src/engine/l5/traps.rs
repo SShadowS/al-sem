@@ -177,10 +177,12 @@ pub(crate) fn checked_run(cs: &PCallSite, callee: TrapCallee<'_>) -> bool {
     }
 }
 
-/// Whether `r` is declared `[TryFunction]`.
+/// Whether every build of `r` declares it `[TryFunction]`. A `[TryFunction]`
+/// only some `#if` arms give it (engine limits B2) traps nothing for certain:
+/// a build without it lets the error escape, so the call is an ordinary one.
 #[must_use]
 pub(crate) fn is_try_function(r: &ModelRoutine) -> bool {
-    crate::program::attributes::has_attribute(&r.attributes_parsed, "TryFunction")
+    crate::program::attributes::has_definite_attribute(&r.attributes_parsed, "TryFunction")
 }
 
 /// The trap a synchronous call `cs` into `callee` sets (module doc), the

@@ -360,6 +360,7 @@ fn lower_object(
                             .map(|guard| PendingAttr {
                                 node: e.node,
                                 guard,
+                                conditional: e.conditional,
                             })
                     })
                     .collect(),
@@ -374,6 +375,7 @@ fn lower_object(
             ));
         }
     }
+    mark_attributes_some_arm_lacks(&mut routines);
 
     // Report dataitems and XmlPort table elements (name, source-table) — the name is
     // in scope as a record var across all the object's routines. Empty otherwise.
@@ -443,7 +445,7 @@ fn lower_object(
         for member in body.named_children() {
             collect_globals(member, source, &mut globals);
             collect_protected_names(member, source, &mut protected_globals);
-            collect_properties(member, source, &mut properties);
+            collect_properties(member, source, false, &mut properties);
             if matches!(kind, ObjectKind::Enum | ObjectKind::EnumExtension) {
                 collect_enum_values(member, source, &mut enum_values);
             }
@@ -528,7 +530,7 @@ fn lower_action(node: RawNode, source: &str) -> crate::ir::ActionDecl {
     let mut props = Vec::new();
     for body in node.children_by_field(FieldName::Body) {
         for member in body.named_children() {
-            collect_properties(member, source, &mut props);
+            collect_properties(member, source, false, &mut props);
         }
     }
     let kind_str = node.kind_str();
@@ -621,7 +623,7 @@ fn collect_enum_values(node: RawNode, source: &str, out: &mut Vec<crate::ir::Enu
             let mut properties = Vec::new();
             if let Some(body) = node.field(FieldName::Body) {
                 for member in body.named_children() {
-                    collect_properties(member, source, &mut properties);
+                    collect_properties(member, source, false, &mut properties);
                 }
             }
             out.push(crate::ir::EnumValueDecl {
@@ -652,7 +654,7 @@ fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
             RawKind::CodeBlock => {}
             RawKind::Property => {
                 let mut props = Vec::new();
-                lower_property(child, source, &mut props);
+                lower_property(child, source, false, &mut props);
                 out.extend(
                     props
                         .into_iter()
@@ -856,7 +858,7 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
     let mut props = Vec::new();
     for body in node.children_by_field(FieldName::Body) {
         for member in body.named_children() {
-            collect_properties(member, source, &mut props);
+            collect_properties(member, source, false, &mut props);
         }
     }
     let values_of = |name: &str| -> Vec<String> {
@@ -937,7 +939,7 @@ fn collect_xmlport_text_nodes(node: RawNode, source: &str, out: &mut Vec<VarDecl
             let mut props = Vec::new();
             if let Some(body) = child.field(FieldName::Body) {
                 for p in body.named_children() {
-                    collect_properties(p, source, &mut props);
+                    collect_properties(p, source, false, &mut props);
                 }
             }
             let big = props
@@ -981,7 +983,7 @@ fn collect_query_columns(
                 let mut props = Vec::new();
                 if let Some(body) = child.field(FieldName::Body) {
                     for p in body.named_children() {
-                        collect_properties(p, source, &mut props);
+                        collect_properties(p, source, false, &mut props);
                     }
                 }
                 if let (Some(name), Some(field)) = (name, field)
@@ -1055,22 +1057,12 @@ fn collect_temporary_dataitems(node: RawNode, source: &str, out: &mut Vec<String
 }
 
 /// Whether `item`'s OWN properties (not a nested dataitem's or element's, not
-/// a trigger's) include `UseTemporary = true`.
+/// a trigger's) set `UseTemporary = true` in every build. A `UseTemporary =
+/// true` only some `#if` arm writes leaves the default (`false`) possible, so the
+/// item is not known temporary (engine limits B2): reading it as temporary drops
+/// its record's writes in a build that writes the database.
 fn own_use_temporary(item: RawNode, source: &str) -> bool {
-    item.named_children().into_iter().any(|c| match c.kind() {
-        RawKind::ReportDataitem
-        | RawKind::XmlportElement
-        | RawKind::Procedure
-        | RawKind::TriggerDeclaration => false,
-        RawKind::Property => {
-            let mut props = Vec::new();
-            lower_property(c, source, &mut props);
-            props
-                .iter()
-                .any(|p| p.name == "usetemporary" && p.value.trim().eq_ignore_ascii_case("true"))
-        }
-        _ => own_use_temporary(c, source),
-    })
+    bool_property(&own_item_properties(item, source), "usetemporary", false) == Some(true)
 }
 
 /// The dataset items under `node` (see [`crate::ir::ObjectDecl::dataset_items`]):
@@ -1154,14 +1146,9 @@ fn own_item_properties(item: RawNode, source: &str) -> Vec<(String, String, bool
                 | RawKind::TriggerDeclaration => {}
                 RawKind::Property => {
                     let mut props = Vec::new();
-                    lower_property(c, source, &mut props);
-                    // A whole-value `#if` gives one entry per arm.
-                    let arms = props.len() > 1;
-                    out.extend(
-                        props
-                            .into_iter()
-                            .map(|p| (p.name, p.value, conditional || arms)),
-                    );
+                    lower_property(c, source, conditional, &mut props);
+                    // A whole-value `#if` (even with one arm) is conditional.
+                    out.extend(props.into_iter().map(|p| (p.name, p.value, p.conditional)));
                 }
                 _ if is_preproc_wrapper(c) => walk(c, source, true, out),
                 _ => walk(c, source, conditional, out),
@@ -1219,32 +1206,38 @@ fn bool_property(props: &[(String, String, bool)], name: &str, default: bool) ->
 /// one-per-branch contract of [`collect_properties`]. Its raw text, directives and
 /// all, is not a value: as one entry it reached `singular_property_value` as a
 /// confident single table name.
-fn lower_property(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectProperty>) {
+///
+/// `in_arm`: the property sits in an `#if` arm. It, or a whole-value `#if`, makes
+/// every entry [`crate::ir::ObjectProperty::conditional`] (engine limits B2).
+fn lower_property(
+    node: RawNode,
+    source: &str,
+    in_arm: bool,
+    out: &mut Vec<crate::ir::ObjectProperty>,
+) {
     let Some(name_node) = node.field(FieldName::Name) else {
         return;
     };
     let name = name_node.text(source).trim().fold_identifier();
     let mut values = Vec::new();
-    let whole_value_if = match node.field(FieldName::Value) {
-        Some(v) => {
-            property_arm_values(v, source, &mut values);
-            matches!(
-                v.kind(),
-                RawKind::PreprocConditionalPropertyValue
-                    | RawKind::PreprocConditionalPropertyValueSequence
-            )
-        }
-        None => {
-            values.push(String::new());
-            false
-        }
-    };
+    let value = node.field(FieldName::Value);
+    match value {
+        Some(v) => property_arm_values(v, source, &mut values),
+        None => values.push(String::new()),
+    }
+    let whole_value_if = value.is_some_and(|v| {
+        matches!(
+            v.kind(),
+            RawKind::PreprocConditionalPropertyValue
+                | RawKind::PreprocConditionalPropertyValueSequence
+        )
+    });
     for value in values {
         out.push(crate::ir::ObjectProperty {
             name: name.clone(),
             value,
             origin: origin_of(node),
-            conditional: whole_value_if,
+            conditional: in_arm || whole_value_if,
         });
     }
 }
@@ -1279,17 +1272,24 @@ fn property_arm_values(v: RawNode, source: &str, out: &mut Vec<String>) {
 /// for degrading such a conflict rather than silently picking one (first/
 /// last-wins is the cardinal sin this fix exists to prevent) — see
 /// `node_extract::singular_property_value`.
-fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectProperty>) {
+///
+/// `in_arm`: `node` sits in an `#if` arm, so each entry it gives is
+/// [`crate::ir::ObjectProperty::conditional`] (engine limits B2). Imprecise in one
+/// direction only: an arm every build takes, or arms that together cover every
+/// build, still mark their entries conditional.
+fn collect_properties(
+    node: RawNode,
+    source: &str,
+    in_arm: bool,
+    out: &mut Vec<crate::ir::ObjectProperty>,
+) {
     match node.kind() {
-        RawKind::Property => lower_property(node, source, out),
+        RawKind::Property => lower_property(node, source, in_arm, out),
         _ if is_preproc_wrapper(node) => {
-            let start = out.len();
+            // Inside an `#if` arm: a build may take no arm (B2; B6 round 2
+            // set the same flag here for an XmlPort's `Direction`).
             for c in node.named_children() {
-                collect_properties(c, source, out);
-            }
-            // Inside an `#if` arm: a build may take no arm.
-            for p in &mut out[start..] {
-                p.conditional = true;
+                collect_properties(c, source, true, out);
             }
         }
         _ => {}
@@ -1363,7 +1363,11 @@ fn collect_routines<'t>(
         match child.kind() {
             RawKind::AttributeItem => {
                 if let Some(guard) = consistent(&[], ctx) {
-                    pending.push(PendingAttr { node: child, guard });
+                    pending.push(PendingAttr {
+                        node: child,
+                        guard,
+                        conditional: false,
+                    });
                 }
             }
             // The grammar's `extras` (`grammar.js:539-547`) may sit anywhere and can
@@ -1549,8 +1553,20 @@ fn collect_routines<'t>(
                     .iter()
                     .map(|e| chain_shape(&directives, source, &in_syms(&e.guard)))
                     .collect();
-                let (shape, _) = chain_shape(&directives, source, &in_syms(ctx));
+                let (shape, ctx_falls) = chain_shape(&directives, source, &in_syms(ctx));
                 let last = shape.len() - 1;
+                // Engine limits B2: how many build paths through this chain the
+                // context leaves open (live arms, plus taking none). An attribute
+                // written inside an arm is in every build only when its arm is the
+                // one path.
+                // (A wrapper with no directive has no arm: `shape` is one entry.)
+                let arms = shape.get(1..last).unwrap_or_default();
+                let ctx_paths = arms.iter().filter(|(_, live)| *live).count()
+                    + usize::from(matches!(ctx_falls.last(), Some(Some(_))));
+                // Per incoming attribute node: the arms some entry of it entered,
+                // and the arms it came out of (not taken by a routine there).
+                let mut entered: Vec<(usize, usize)> = Vec::new();
+                let mut emerged: Vec<(usize, usize)> = Vec::new();
                 for (k, ((syms, live), branch)) in shape.into_iter().zip(contents).enumerate() {
                     if !live {
                         continue;
@@ -1558,7 +1574,7 @@ fn collect_routines<'t>(
                     // Entry 0 (before `#if`) and the last group (after `#endif`) are
                     // no arm; for a single chain both are empty (ledger P16).
                     let arm = single && k != 0 && k != last;
-                    let admitted = if arm {
+                    let admitted: Vec<PendingAttr> = if arm {
                         incoming
                             .iter()
                             .zip(&chains)
@@ -1567,6 +1583,7 @@ fn collect_routines<'t>(
                     } else {
                         Vec::new()
                     };
+                    entered.extend(admitted.iter().map(|e| (e.node.id(), k)));
                     let inner: Vec<(String, bool)> = ctx.iter().cloned().chain(syms).collect();
                     let left = collect_routines(
                         branch,
@@ -1581,15 +1598,58 @@ fn collect_routines<'t>(
                         out,
                     );
                     if arm {
-                        pending.extend(left);
+                        for mut e in left {
+                            if incoming.iter().any(|i| i.node.id() == e.node.id()) {
+                                emerged.push((e.node.id(), k));
+                            } else if ctx_paths != 1 {
+                                // Written inside this arm: a build that takes
+                                // another path (or none) does not have it.
+                                e.conditional = true;
+                            }
+                            pending.push(e);
+                        }
                     }
                 }
-                pending.extend(incoming.into_iter().zip(chains).filter_map(|(e, c)| {
+                let mut falls: Vec<usize> = Vec::new();
+                pending.extend(incoming.iter().zip(chains).filter_map(|(e, c)| {
+                    let guard = consistent(&e.guard, c.1.last()?.as_ref()?)?;
+                    falls.push(e.node.id());
                     Some(PendingAttr {
-                        guard: consistent(&e.guard, c.1.last()?.as_ref()?)?,
+                        guard,
                         node: e.node,
+                        conditional: e.conditional,
                     })
                 }));
+                // An attribute from before the chain is still in every build
+                // after it only when it came out of every path it went into: an
+                // arm whose routine took it, or the no-arm path it did not
+                // have, leaves it out of the builds of that path.
+                // One answer per node: its copies (one per path) are one
+                // attribute, conditional when any copy is.
+                let mut conditional_nodes: Vec<usize> = Vec::new();
+                for e in &pending {
+                    let id = e.node.id();
+                    if !incoming.iter().any(|i| i.node.id() == id)
+                        || conditional_nodes.contains(&id)
+                    {
+                        continue;
+                    }
+                    let arms_in = entered.iter().filter(|(n, _)| *n == id).map(|(_, k)| *k);
+                    let every_arm = arms_in
+                        .clone()
+                        .all(|k| emerged.iter().any(|&(n, j)| n == id && j == k));
+                    let paths = arms_in.count() + usize::from(falls.contains(&id));
+                    let was = incoming.iter().any(|i| i.node.id() == id && i.conditional)
+                        || pending.iter().any(|p| p.node.id() == id && p.conditional);
+                    if was || !every_arm || paths == 0 {
+                        conditional_nodes.push(id);
+                    }
+                }
+                for e in pending.iter_mut() {
+                    if conditional_nodes.contains(&e.node.id()) {
+                        e.conditional = true;
+                    }
+                }
                 settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);
             }
             _ => {
@@ -1624,12 +1684,78 @@ fn collect_routines<'t>(
     pending
 }
 
+/// Engine limits B2: a routine declared in several `#if` arms (two object-level
+/// arms, or one `#if`-split header) is one row per arm under ONE routine identity,
+/// and a build runs exactly one of them. An attribute that one row carries and
+/// another does not (`#if X [TryFunction] procedure P() #else procedure P()
+/// #endif`) is therefore missing from some build of the routine, though its own
+/// row has it on every build of that row. Readers take an attribute from whichever
+/// row has it, so it must be conditional on every row that has it.
+///
+/// The rows are grouped by the routine identity's parts as the IR has them (kind,
+/// name, enclosing member, parameter `var`-ness and types, return type), compared
+/// lowercased with whitespace removed: at least as coarse as
+/// `compute_routine_id`'s lowercased, trimmed signature, so rows the engine counts
+/// as one routine are always in one group. A coarser group only marks more
+/// attributes conditional (the "may" direction). Attributes compare by their
+/// whole text, normalized the same way, so two arms that write the same attribute
+/// with different arguments each make the other conditional.
+fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
+    fn norm(s: &str) -> String {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    let key = |r: &RoutineDecl| {
+        (
+            r.kind == RoutineKind::Trigger,
+            norm(&r.name),
+            r.enclosing_member.as_ref().map(|(m, _)| norm(m)),
+            r.params
+                .iter()
+                .map(|p| (p.by_ref, norm(p.ty.as_deref().unwrap_or_default())))
+                .collect::<Vec<_>>(),
+            norm(r.return_type.as_deref().unwrap_or_default()),
+        )
+    };
+    let mut groups: std::collections::HashMap<_, Vec<usize>> = std::collections::HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        groups.entry(key(r)).or_default().push(i);
+    }
+    for rows in groups.values().filter(|rows| rows.len() >= 2) {
+        let texts: Vec<Vec<String>> = rows
+            .iter()
+            .map(|&i| {
+                routines[i]
+                    .attributes_parsed
+                    .iter()
+                    .map(|a| norm(&a.raw))
+                    .collect()
+            })
+            .collect();
+        for (&i, own) in rows.iter().zip(&texts) {
+            for (a, text) in routines[i].attributes_parsed.iter_mut().zip(own) {
+                if !texts.iter().all(|t| t.contains(text)) {
+                    a.conditional = true;
+                }
+            }
+        }
+    }
+}
+
 /// One attribute waiting for its routine (`collect_routines`), and its guard: the
 /// build context, projected by [`settle_pending`], under which it still waits.
 #[derive(Clone)]
 struct PendingAttr<'t> {
     node: RawNode<'t>,
     guard: Syms,
+    /// Some build in which the attribute's routine exists may not have it
+    /// (engine limits B2): it crossed a `#if` wrapper by a path that not
+    /// every build takes and not every path carried it on. `false` promises
+    /// that every build reaching this point still has it pending. See
+    /// [`crate::ir::AttributeIr::conditional`].
+    conditional: bool,
 }
 
 /// More distinct guards than this for one attribute in one `pending` list being
@@ -1652,6 +1778,7 @@ fn admit<'t>(e: &PendingAttr<'t>, (syms, live): &(Syms, bool)) -> Option<Pending
     Some(PendingAttr {
         node: e.node,
         guard: consistent(&e.guard, syms)?,
+        conditional: e.conditional,
     })
 }
 
@@ -2413,6 +2540,9 @@ fn lower_routine<'t>(
                     .map(|c| PendingAttr {
                         node: c,
                         guard: guard.clone(),
+                        // In the routine's own header arm: every build of
+                        // this routine has it.
+                        conditional: false,
                     }),
             );
         }
@@ -2424,8 +2554,13 @@ fn lower_routine<'t>(
     // build (union-read). Selecting before `lower_expr` leaves no dead `ExprId`. The
     // `#if`-in-arguments `SyntaxIssue` is deduplicated apart from this, by group node
     // (`reported`), so it is raised once per group however many selections keep it.
-    let mut seen: std::collections::HashSet<(usize, Vec<Vec<usize>>)> =
-        std::collections::HashSet::new();
+    //
+    // Engine limits B2: the kept entry is conditional when any path that
+    // brought it is (`collect_routines` gives every path of one node the same
+    // answer, so this only joins equal flags), or when its arguments hold an
+    // `#if` group (one build's arguments are read, another build's differ).
+    let mut seen: std::collections::HashMap<(usize, Vec<Vec<usize>>), usize> =
+        std::collections::HashMap::new();
     let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut selected = Vec::new();
     for e in &attr_items {
@@ -2437,8 +2572,15 @@ fn lower_routine<'t>(
                 .map(|l| l.items.iter().map(|n| n.id()).collect())
                 .collect(),
         );
-        if seen.insert(key) {
-            selected.push((e.node, lists));
+        match seen.entry(key) {
+            std::collections::hash_map::Entry::Occupied(at) => {
+                let kept: &mut (_, _, bool) = &mut selected[*at.get()];
+                kept.2 |= e.conditional;
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(selected.len());
+                selected.push((e.node, lists, e.conditional));
+            }
         }
     }
 
@@ -2446,10 +2588,11 @@ fn lower_routine<'t>(
     // the full parsed form (name + raw text + lowered argument exprs).
     let mut attributes: Vec<String> = Vec::new();
     let mut attributes_parsed: Vec<crate::ir::AttributeIr> = Vec::new();
-    for (item, lists) in selected {
+    for (item, lists, path_conditional) in selected {
         let Some(content) = item.field(FieldName::Attribute) else {
             continue;
         };
+        let conditional = path_conditional || lists.iter().any(|l| !l.groups.is_empty());
         let Some(name_node) = content.field(FieldName::Name) else {
             continue;
         };
@@ -2477,6 +2620,7 @@ fn lower_routine<'t>(
             raw: item.text(source).to_string(),
             args,
             origin: origin_of(item),
+            conditional,
         });
     }
     let name = arm_field(FieldName::Name)
@@ -7410,6 +7554,151 @@ pageextension 50117 PE extends P
         assert_eq!(
             r.origin.start.row, 4,
             "the routine node starts at the keyword"
+        );
+    }
+
+    /// `(routine name, [(attribute name, conditional)])` of every routine.
+    fn attr_conditionality(src: &str) -> Vec<(String, Vec<(String, bool)>)> {
+        let af = parse(src);
+        af.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    r.attributes_parsed
+                        .iter()
+                        .map(|a| (a.name.clone(), a.conditional))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Engine limits B2: an attribute is conditional when some build in which
+    /// its routine exists does not have it. Each shape states its builds.
+    #[test]
+    fn an_attribute_only_some_builds_of_its_routine_have_is_conditional() {
+        let t = |name: &str, c: bool| (name.to_string(), c);
+        // In an arm the routine is not in: a build without X has no attribute.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n#endif\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", true)])]
+        );
+        // In the routine's own arm: every build of P has it.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n#endif\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", false)])]
+        );
+        // Before a wrapper whose arm holds R1: R1 (only in X builds) always
+        // takes it; R2 takes it only in the builds without X.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n#if X\n    procedure R1()\n    begin\n    end;\n#endif\n    procedure R2()\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("R1".to_string(), vec![t("TryFunction", false)]),
+                ("R2".to_string(), vec![t("TryFunction", true)]),
+            ]
+        );
+        // Past a wrapper whose arms hold no routine: every build carries it on.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n#if X\n    // nothing\n#endif\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", false)])]
+        );
+        // No `#if` at all.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", false)])]
+        );
+        // An `#if` inside the arguments: one build's arguments are read.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [Obsolete('r',\n#if X\n    '1.0'\n#else\n    '2.0'\n#endif\n    )]\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("Obsolete", true)])]
+        );
+    }
+
+    /// Engine limits B2 (third review): one routine declared in two `#if` arms
+    /// is one row per arm; an attribute that one row carries and another does
+    /// not is missing from the builds of the other arm, so it is conditional
+    /// on every row. The same attribute on every row is not. An overload (other
+    /// parameters) is another routine and is not compared.
+    #[test]
+    fn an_attribute_one_arm_of_a_routine_lacks_is_conditional() {
+        let t = |name: &str, c: bool| (name.to_string(), c);
+        // Two whole declarations.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n#else\n    procedure P()\n    begin\n    end;\n#endif\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", true)]),
+                ("P".to_string(), vec![]),
+            ]
+        );
+        // A split header, the attribute in the `#else` arm.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    procedure P(a: Integer)\n#else\n    [TryFunction]\n    procedure P(a: Integer)\n#endif\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![]),
+                ("P".to_string(), vec![t("TryFunction", true)]),
+            ]
+        );
+        // The same attribute in both arms: every build has it.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n#else\n    [TryFunction]\n    procedure P()\n#endif\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", false)]),
+                ("P".to_string(), vec![t("TryFunction", false)]),
+            ]
+        );
+        // Overloads in no `#if` are two routines.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n    procedure P(a: Integer)\n    begin\n    end;\n\n    procedure P(a: Text)\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", false)]),
+                ("P".to_string(), vec![]),
+            ]
+        );
+    }
+
+    /// Engine limits B2: an object property in an `#if` arm, or with a
+    /// whole-value `#if`, is conditional; one outside every `#if` is not.
+    #[test]
+    fn an_object_property_only_some_builds_have_is_conditional() {
+        let af = parse(
+            "codeunit 1 C\n{\n    Subtype = Normal;\n#if X\n    SingleInstance = true;\n#endif\n    TableNo =\n#if Y\n        Customer\n#else\n        Vendor\n#endif\n        ;\n}\n",
+        );
+        let got: Vec<(String, String, bool)> = af.objects[0]
+            .properties
+            .iter()
+            .map(|p| (p.name.clone(), p.value.clone(), p.conditional))
+            .collect();
+        let t = |n: &str, v: &str, c: bool| (n.to_string(), v.to_string(), c);
+        assert_eq!(
+            got,
+            vec![
+                t("subtype", "Normal", false),
+                t("singleinstance", "true", true),
+                t("tableno", "Customer", true),
+                t("tableno", "Vendor", true),
+            ]
         );
     }
 

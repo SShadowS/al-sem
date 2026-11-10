@@ -463,6 +463,7 @@ mod tests {
                 member: Some(member.to_string()),
             }],
             raw: format!("[CommitBehavior(CommitBehavior::{member})]"),
+            conditional: false,
         }
     }
 
@@ -478,6 +479,7 @@ mod tests {
                 member: None,
             }],
             raw: format!("[CommitBehavior({value})]"),
+            conditional: false,
         }
     }
 
@@ -487,6 +489,7 @@ mod tests {
             name: "CommitBehavior".to_string(),
             args: vec![],
             raw: "[CommitBehavior]".to_string(),
+            conditional: false,
         }
     }
 
@@ -502,6 +505,7 @@ mod tests {
                 member: Some("Ignore".to_string()),
             }],
             raw: "[Commitbehavior(CommitBehavior::Ignore)]".to_string(),
+            conditional: false,
         }
     }
 
@@ -511,6 +515,7 @@ mod tests {
             name: "TryFunction".to_string(),
             args: vec![],
             raw: "[TryFunction]".to_string(),
+            conditional: false,
         }
     }
 
@@ -529,6 +534,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: icb.map(|s| s.to_string()),
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,

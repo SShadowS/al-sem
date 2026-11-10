@@ -17,7 +17,7 @@
 //! Never panics.
 
 use super::control_flow::{
-    Termination, branch_termination, else_termination, has_explicit_else, may_exit,
+    Termination, branch_termination, else_termination, has_explicit_else, may_exit, terminates,
 };
 use super::features::{PCFNNode, PCallSite, PFeatures, POperationSite};
 use super::scope::ParameterSymbol;
@@ -196,15 +196,30 @@ fn walk_block(
             }
             "while" | "for" | "foreach" | "repeat" => {
                 walk_loop_node(stmt, continuation_ctx, result);
-                // An `exit` inside the body leaves the routine on some runs.
-                if may_exit(stmt) {
-                    continuation_ctx = max_ctx(continuation_ctx, ControlContext::Conditional);
+            }
+            "block" => {
+                // A bare `begin … end`: one sequence with the statements around
+                // it, so its own continuation (and whether it always leaves)
+                // carries on after it.
+                continuation_ctx = walk_block(stmt, continuation_ctx, result);
+                if terminates(branch_termination(stmt)) {
+                    reachable = false;
                 }
             }
             _ => {
                 // call / op / other / try → collect at current context.
                 collect_node(stmt, continuation_ctx, result);
             }
+        }
+
+        // THE one may-exit rule (engine limits B2): a statement that MAY
+        // `exit` on some path (an `exit` at any depth: an `if` or `case` arm, a
+        // `#if` arm, a loop body, a bare block, a `with` body) returns before the
+        // code after it on some successful runs, even when it falls through as a
+        // whole. That code is at least conditional. `branch_termination` answers
+        // only "always leaves", which the arms above already used.
+        if reachable && may_exit(stmt) {
+            continuation_ctx = max_ctx(continuation_ctx, ControlContext::Conditional);
         }
     }
 
@@ -239,21 +254,12 @@ fn walk_if_node(
     });
     let guarded_ctx = max_ctx(ambient, ControlContext::IsHandledGuarded);
 
-    // An arm that MAY `exit` (a nested `if b then exit`, an `exit` in a `#if`
-    // arm or a loop) returns before the continuation on some successful runs,
-    // even when the arm as a whole falls through. Such a continuation is at
-    // least conditional (engine limits B2): `branch_termination` answers only
-    // "always exits" and alone left it at the ambient context.
-    let may_leave_early = then_body.is_some_and(may_exit) || else_body.is_some_and(may_exit);
-
     // Special case: single-arm error-only guard → body error-path, cont unchanged
-    // (a raised error is no successful run) unless the arm may also `exit`.
+    // (a raised error is no successful run). An arm that may also `exit` on the
+    // way is the caller's one may-exit rule (`walk_block`).
     if !has_explicit_else(node) && then_term == Termination::Error {
         if let Some(then_body) = then_body {
             collect_node(then_body, ControlContext::ErrorPath, result);
-        }
-        if may_leave_early {
-            return Some(max_ctx(ambient, ControlContext::Conditional));
         }
         return Some(ambient);
     }
@@ -296,11 +302,9 @@ fn walk_if_node(
         };
         return Some(narrowed);
     }
-    if may_leave_early {
-        // Both arms fall through, but one may `exit` on the way.
-        return Some(max_ctx(ambient, ControlContext::Conditional));
-    }
-    Some(ambient) // both arms fall through and neither may exit → no narrowing
+    // Both arms fall through: no narrowing here. An arm that may `exit` on the
+    // way is the caller's one may-exit rule (`walk_block`).
+    Some(ambient)
 }
 
 /// Walk a `case` node, returning the continuation context for siblings after it.
@@ -318,10 +322,10 @@ fn walk_case_node(
         let term: Termination = body
             .map(branch_termination)
             .unwrap_or(Termination::Fallthrough);
-        // An arm that always leaves, or only MAY `exit` (`#if A if b then exit;
-        // #endif`, engine limits B2), keeps some successful runs from reaching
-        // the code after the case.
-        if term != Termination::Fallthrough || may_exit(branch) {
+        // An arm that always leaves keeps some runs from reaching the code after
+        // the case. An arm that only MAY `exit` (`#if A if b then exit; #endif`)
+        // is the caller's one may-exit rule (`walk_block`).
+        if term != Termination::Fallthrough {
             any_terminates = true;
         }
         let arm_ctx = if term == Termination::Error {

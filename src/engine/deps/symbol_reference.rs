@@ -867,7 +867,13 @@ fn abi_attribute_info(a: &RawAttr) -> AttributeInfo {
         let joined: Vec<String> = args.iter().map(|x| x.text.clone()).collect();
         format!("[{}({})]", name, joined.join(", "))
     };
-    AttributeInfo { name, args, raw }
+    AttributeInfo {
+        name,
+        args,
+        raw,
+        // A compiled symbol has no `#if` left.
+        conditional: false,
+    }
 }
 
 /// Reconstruct AL SOURCE-SHAPED return-type text from a parsed `RawTypeDef`

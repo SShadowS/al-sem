@@ -81,6 +81,12 @@ pub struct ModelObject {
     /// lower-case form). Consumed by R4-F `return_summary` to merge the
     /// object-level commit behavior into each routine's `commitBehavior`.
     pub inherent_commit_behavior: Option<String>,
+    /// Engine limits B2: `true` when some build may not have
+    /// [`Self::inherent_commit_behavior`] (the property sits in a `#if` arm, or
+    /// its value is an `#if`). A reader that decides a definite answer from it
+    /// reads it as "may" (`return_summary::merge_inherent_commit_behavior`).
+    /// Always `false` for a dependency object (its symbols carry one build).
+    pub inherent_commit_behavior_conditional: bool,
     /// Page / PageExtension declared `SourceTableTemporary` property: `Some(true)`
     /// when written `true`, `Some(false)` for any other written value, `None` when
     /// absent (native path). A dependency page known only from its symbols carries
@@ -1028,11 +1034,13 @@ fn index_table_ir(
             declared_by: None,
         })
         .collect();
+    // Engine limits B2: only a `TableType = Temporary` every build has makes
+    // the table temporary; an `#if`-only one leaves `Normal` possible.
     let is_temporary = o
         .properties
         .iter()
         .find(|p| p.name == "tabletype")
-        .map(|p| p.value.trim().to_lowercase() == "temporary")
+        .map(|p| !p.conditional && p.value.trim().to_lowercase() == "temporary")
         .unwrap_or(false)
         || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     ModelTable {
@@ -1607,31 +1615,29 @@ fn project_ir(
             None
         };
         // Object `InherentCommitBehavior` — Codeunit / Table / TableExtension only
-        // (object-indexer.ts parity). The raw value is a qualified_enum_value like
-        // "InherentCommitBehavior::Ignore"; extract the member after "::", then
-        // lower-case. Unrecognised values → None (conservative).
-        let inherent_commit_behavior = if object_type == "Codeunit"
-            || object_type == "Table"
-            || object_type == "TableExtension"
-        {
-            ir_prop("inherentcommitbehavior").and_then(|raw| {
-                let sep = raw.rfind("::").map(|i| i + 2).unwrap_or(0);
-                let member = raw[sep..].to_lowercase();
-                match member.as_str() {
-                    "ignore" => Some("ignore".to_string()),
-                    "error" => Some("error".to_string()),
-                    "allow" => Some("allow".to_string()),
-                    _ => None,
-                }
-            })
-        } else {
-            None
-        };
+        // (object-indexer.ts parity): the L2 reading, one rule for both
+        // (`ir_object_metadata`: the member after "::", lower-cased; with one
+        // value per `#if` arm, the strictest, engine limits B2).
+        let inherent_commit_behavior =
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type).3;
+        // Engine limits B2: some build may lack the value read above.
+        let inherent_commit_behavior_conditional = inherent_commit_behavior.is_some()
+            && o.properties
+                .iter()
+                .any(|p| p.name == "inherentcommitbehavior" && p.conditional);
         // Object `SourceTableTemporary` — Page / PageExtension only (Task 5 / G4).
         // Structural boolean property: `SourceTableTemporary = true;` means the
         // page's implicit `Rec` and `xRec` are always temporary. EXACT case-insensitive
         // match against "true" — anything else present → Some(false); absent → None.
-        let source_table_temporary = if object_type == "Page" || object_type == "PageExtension" {
+        // Engine limits B2: a value only some `#if` arms write is not known
+        // (`None`): `Some(true)` makes the page's `Rec` temporary, which drops
+        // its database writes in a build that has no such arm.
+        let source_table_temporary = if (object_type == "Page" || object_type == "PageExtension")
+            && !o
+                .properties
+                .iter()
+                .any(|p| p.name == "sourcetabletemporary" && p.conditional)
+        {
             ir_prop("sourcetabletemporary").map(|v| v.trim().to_lowercase() == "true")
         } else {
             None
@@ -1646,12 +1652,22 @@ fn project_ir(
         } else {
             None
         };
+        // Engine limits B2: a page property only some builds write is not known
+        // (`None`, as `source_table_temporary` above): `Some(false)` tells d39
+        // the page cannot modify, while a build without it has the default `true`.
+        let definite_bool_prop = |name: &str| {
+            if o.properties.iter().any(|p| p.name == name && p.conditional) {
+                None
+            } else {
+                bool_prop(name)
+            }
+        };
         let (editable, insert_allowed, modify_allowed, delete_allowed) = if object_type == "Page" {
             (
-                bool_prop("editable"),
-                bool_prop("insertallowed"),
-                bool_prop("modifyallowed"),
-                bool_prop("deleteallowed"),
+                definite_bool_prop("editable"),
+                definite_bool_prop("insertallowed"),
+                definite_bool_prop("modifyallowed"),
+                definite_bool_prop("deleteallowed"),
             )
         } else {
             (None, None, None, None)
@@ -1727,6 +1743,7 @@ fn project_ir(
             object_subtype,
             page_type,
             inherent_commit_behavior,
+            inherent_commit_behavior_conditional,
             source_table_temporary,
             page_controls,
             single_instance,
@@ -4156,6 +4173,65 @@ codeunit 50816 "T5 F3 Dedup"
             pg.source_anchor.is_some(),
             "native objects carry their decl anchor"
         );
+    }
+
+    /// Engine limits B2 (third review): an object property only some builds
+    /// write is not read as definite. A page permission in one `#if` arm is
+    /// not known (`None`: d39/d64 read `Some(false)` as "cannot modify"), and
+    /// an `InherentCommitBehavior` in one arm is marked conditional, so a
+    /// routine's return summary reads it as `conditional`, never a definite
+    /// `ignore`. Each control is written in every build.
+    #[test]
+    fn a_property_only_some_builds_write_is_not_definite() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("src")).unwrap();
+        std::fs::write(
+            t.path().join("app.json"),
+            r#"{"id":"b2b2b2b2-0000-4000-8000-0000000000c3","name":"B2P","publisher":"t","version":"1.0.0.0","dependencies":[],"preprocessorSymbols":["CLEAN99"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            t.path().join("src/p.al"),
+            "table 50100 T { fields { field(1; \"No.\"; Integer) { } } }\n\
+             page 50101 Armed\n{\n    SourceTable = T;\n#if CLEAN99\n    ModifyAllowed = false;\n#endif\n    Editable = false;\n}\n\
+             codeunit 50102 IcbArm\n{\n#if CLEAN99\n    InherentCommitBehavior = Ignore;\n#endif\n    procedure P()\n    begin\n        Commit();\n    end;\n}\n\
+             codeunit 50103 IcbAll\n{\n    InherentCommitBehavior = Ignore;\n    procedure P()\n    begin\n        Commit();\n    end;\n}\n",
+        )
+        .unwrap();
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(
+                t.path(),
+            )
+            .expect("assemble");
+        let obj = |name: &str| {
+            resolved
+                .workspace
+                .objects
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap()
+        };
+        let pg = obj("Armed");
+        assert_eq!(pg.modify_allowed, None);
+        assert_eq!(pg.editable, Some(false));
+        assert!(obj("IcbArm").inherent_commit_behavior_conditional);
+        assert!(!obj("IcbAll").inherent_commit_behavior_conditional);
+        let summaries = crate::engine::return_summary::compute_return_summaries(
+            &resolved.workspace.routines,
+            Some(resolved.workspace.objects.as_slice()),
+        );
+        let cb = |object: &str| {
+            let o = obj(object);
+            let r = resolved
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.object_id == o.id)
+                .unwrap();
+            summaries[&r.id].commit_behavior
+        };
+        assert_eq!(cb("IcbArm"), "conditional");
+        assert_eq!(cb("IcbAll"), "ignore");
     }
 
     // Task 3 (BCQuality wave): `PVariableSymbol.scope` forwards onto `ModelVariable` —

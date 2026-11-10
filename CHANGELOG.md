@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in place. `chain_shape` reports the fall-through per chain.
   - The statement tree (`ir_walk`) gives a group as a `case` with no scrutinee, one
     `case-branch` per arm, the `#else` arm as the case's else when there is no
-    fall-through. Every walker of the tree (control context, reach, value flow, return
-    summary, the L4 CFG walk, detectors) already reads a `case` as alternatives.
+    fall-through. The walkers that follow paths (control context, reach, value flow,
+    return summary, the L4 CFG walk, detector path walks) read a `case` as alternatives.
+    The ordering walk did not, for an arm that only may exit (see the next entry).
   - The unreachable-statement scan treats a group as one sibling: an `exit` in an arm no
     longer marks the statement after the group.
   - No configuration is chosen: `preprocessorSymbols` in `app.json` and `#define` are not
@@ -43,10 +44,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Insert();`) read the `Insert` as `unconditional on success`. The same gap was older in
   plain AL: `if a then begin if b then exit; … end; Insert();`, an `exit` inside a loop
   body, and an arm `begin if d then exit; Error(..) end` (counted as an `Error` only).
-  A new `control_flow::may_exit` ("some path through this node runs `exit`") now makes
-  the continuation of an `if`, a `case` (an `#if` group included) and a loop at least
-  `conditional`. Only `exit` counts: a raised `Error` ends the routine without success,
-  so it never takes code off a success path.
+  A new `control_flow::may_exit` ("some path through this node runs `exit`") is now THE
+  one rule for "can this statement return early". Second review: it is applied once, in
+  each statement walker's block loop, to every statement whatever its kind (an `if`, a
+  `case` or `#if` group, a loop, a bare `begin … end`, a `with` body), instead of once
+  per construct:
+  - `control_context`: the code after such a statement is at least `conditional`. A bare
+    `begin if b then exit; end; Insert();` read `unconditional on success` (the block
+    went through the generic arm, which dropped its continuation); it is `conditional`
+    now, and a bare block that always leaves (`begin exit; end;`) ends the block like a
+    plain `exit`.
+  - `operation_order` (the ordering facts): no op after such a statement dominates the
+    success return. Its own rule (`canNormalReturnBeforeAfter`, ported from al-sem)
+    looked one arm deep and skipped loops. So since the group change, an `#if` arm that
+    only MAY exit (`L.Insert(); #if not CLEAN99 if b then exit; #endif Commit();`) gave
+    digest a false `COMMIT_DOMINATES_RETURN` (scope root, valid for refutation) and
+    `WRITE_COMMITTED_BEFORE_RETURN`; master spliced the arm and made no such claim. The
+    plain-AL shapes (`if a then begin if b then exit; end;`, `while b do exit;`, a bare
+    block) had the same false labels on master too. Through a call, `ordering_inter`'s
+    `exactly_once_on_success` reads the same flag, so a commit in a callee called after
+    such a statement no longer dominates the root's return either.
+  Only `exit` counts: a raised `Error` ends the routine without success, so it never
+  takes code off a success path. (The control-context lattice still marks the code after
+  a `case` arm or a two-arm `if` arm that always raises `conditional`: an older,
+  conservative al-sem rule, left as it is.) The other readers of `branch_termination`
+  answer "always leaves" and use it only in the safe direction (`pending_writes` keeps an
+  arm that may fall through; `literal_flow::always_leaves` and `param_guard::is_exit_only`
+  refine only when an arm always leaves); none reads "may return early".
+- **An attribute or property that only some builds have is a "may", never a definite
+  declaration** (second review, blocking 2 and 3). `#if CLEAN99 [CommitBehavior(
+  CommitBehavior::Ignore)] #endif procedure P()` was read as declared in every build, so
+  `prove P may-commit` (and its caller's) said a definite `no`, though a build without
+  `CLEAN99` commits (master said `yes`). An XmlPort `Direction = Export;` in one arm
+  likewise dropped the import a build without the arm runs (default `Both`), so
+  `writes-table` said `no`. One rule, at the right layer:
+  - The lowerer marks it. `AttributeIr::conditional` (projected as `AttributeInfo::
+    conditional`, JSON `"conditional": true` only when set) is true when some build in
+    which the routine exists lacks the attribute with these arguments: it sits in an arm
+    the routine is not in, it reached the routine past a `#if` wrapper by a path not
+    every build takes (`[A] #if X procedure R1 … #endif procedure R2`: R1 always has it,
+    R2 only without `X`), or its arguments hold an `#if`. `ObjectProperty::conditional`
+    is true for a property in an `#if` arm or with a whole-value `#if`. Imprecise in one
+    direction only: arms that together cover every build still mark their entries.
+  - `program::attributes` states the rule: `find_attribute`/`has_attribute` answer "may
+    have it"; a reader that decides a definite answer from presence uses the new
+    `find_definite_attribute`/`has_definite_attribute`. Readers changed:
+    `commit_scope::declared` (a conditional `[CommitBehavior]` adds its value to what a
+    build without it runs under: `N|I`, `N|E`, like the object property, reason `… in
+    some builds only (may apply)`; new `DeclSource::ConditionalAttribute`, and its
+    callers'-question row); `return_summary::parse_commit_behavior` (definite only; new
+    value `"conditional"`, which `ordering_engine` grades `assumed_effective`, never
+    `proven_suppressed`/`proven_errors`/`proven_effective`; the dependency summary uses
+    the same function now); `RoutineReturnSummary::try_function_conditional` (the body
+    stays opaque, but `ordering_engine`'s proven-errors rule needs a definite
+    `[TryFunction]`); `traps::is_try_function` (a conditional `[TryFunction]` traps
+    nothing for certain: `throws-error` said `no`, now `yes`).
+  - The digest weakens a commit route whose behaviors hold more than `N` (a may-apply
+    declaration: a conditional attribute, the object's `InherentCommitBehavior`, an
+    unchecked object run), and an error route whose behaviors hold more than `E`, to
+    `conditional`: such a commit or commit-error does not happen on every success path.
+    So `commits-on-success-path` for the routine above is `unknown`, not `yes`.
+  - Properties: an `#if`-only `Direction` leaves `Both` possible (`node_extract`); an
+    `#if`-only `TableType = Temporary` (`ModelTable::is_temporary`), `SourceTableTemporary
+    = true` (`page_source_table_temporary` and the model's `source_table_temporary`) or
+    `UseTemporary = true` (the lowerer's temporary dataitems, now through
+    `bool_property`) no longer makes a record temporary, which dropped its database
+    writes (`writes-table: no`). `InherentCommitBehavior` with one value per arm takes
+    the strictest (`Error` > `Ignore` > `Allow`), read through one function
+    (`ir_object_metadata`) by the L2 index and the model; it was the first arm's.
+  - Readers left on "may" because presence is the cautious reading there: a
+    `[TryFunction]` makes control context, operation order and the return summary
+    opaque; `cross_rules`' must-error steps and the callers' question treat a possible
+    try as a try (fewer definite claims); `[EventSubscriber]` makes a subscription
+    (every forward answer already reads an event dispatch as conditional: a plain
+    subscriber's commit gives `commits-on-success-path: unknown`);
+    `[ErrorBehavior(Collect)]` never removes an error. (An isolated event's trap was
+    on this list too; the third review below changes it for an event isolated in some
+    builds only.)
+- **Third review of B2: an attribute only one arm of a routine declares is
+  conditional.** A routine declared in two `#if` arms (two whole declarations, or one
+  `#if`-split header) is one model row per arm under one id, and a build runs one of
+  them. The lowerer marked an attribute in a row's own arm as present in every build,
+  which holds for that row only; the readers take an attribute from whichever row has
+  it. So `#if CLEAN99 procedure P() #else [CommitBehavior(CommitBehavior::Ignore)]
+  procedure P() #endif begin Commit(); end;` made `may-commit` say a definite `no` for
+  `P` and its callers, and a `[TryFunction]` on one arm made `throws-error` say `no`
+  for a caller (the pre-B2 master said `yes`). The lowerer now groups an object's
+  routine rows by routine identity (kind, name, enclosing member, parameters, return
+  type; lowercased, no whitespace, so at least as coarse as `compute_routine_id`) and
+  marks an attribute conditional on every row when another row of the same routine does
+  not carry the same attribute text (`mark_attributes_some_arm_lacks`). The same
+  attribute on both arms stays definite.
+- **Third review of B2: an `#if`-only page permission blocks nothing.** `page_ui`'s
+  block needed every entry of `Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`
+  to be `false`, so `#if CLEAN99 DeleteAllowed = false; #endif` blocked deletes in every
+  build and `explain` dropped the page from the table's `OnDelete` UI surfaces. A build
+  without the property has the default, `true` (Microsoft Learn, "DeleteAllowed
+  property": "The default value is true"). A block now also needs one entry that every
+  build has. The model's four page fields (read by d39's `page_may_modify` and d64) are
+  `None` when an entry is conditional, as `source_table_temporary` already was.
+- **Third review of B2: a conditional `InherentCommitBehavior` is `conditional` in the
+  return summary.** `ModelObject::inherent_commit_behavior_conditional` is set when the
+  property sits in an `#if` arm or has an `#if` value, and
+  `return_summary::merge_inherent_commit_behavior` then gives `conditional` instead of
+  `ignore`/`error`, so the ordering engine grades `assumed_effective`, not
+  `proven_suppressed`. (`commit_scope` already read the property as "may".) No CLI
+  probe showed a different answer; a model test pins it.
+- **Third review of B2: an event isolated in some builds only is no trap.**
+  `EventSymbol::isolated` means isolated in some build (#104). When the isolating
+  attribute is conditional (`#if X [IntegrationEvent(false, false, true)] #else
+  [IntegrationEvent(false, false, false)] #endif`, or an `#if` in its arguments), a
+  build that does not isolate the event lets a subscriber's error escape. The
+  literal-reach trap list leaves such an event out (the raiser's route said "otherwise
+  caught by the isolated event"), and `prove throws-error` on the subscriber says
+  "not established (the event is isolated in some builds only; …)" instead of "no,
+  unless …". One rule for both: `events::isolated_in_some_builds_only`.
+- Tests, third review: `tests/cli/cli_b2_preproc_arms.rs` gains a third fixture
+  (`ARMS_SOURCE`): `an_attribute_only_one_arm_of_a_routine_declares_is_conditional`
+  (the reviewer's split-header, two-declaration and `[TryFunction]` shapes, with
+  both-arm controls), `a_page_permission_only_some_builds_write_blocks_nothing`,
+  `an_event_isolated_in_some_builds_only_is_no_trap` (arm and argument shapes, with an
+  always-isolated control). Lowerer `an_attribute_one_arm_of_a_routine_lacks_is_conditional`
+  (with an overload control); model `a_property_only_some_builds_write_is_not_definite`;
+  `return_summary` `merge_icb_conditional_object_is_conditional`.
 - **A routine declared in two `#if` arms is `conditional` in each arm.** A build runs one
   arm's body, so no arm's site runs on every success path; each arm's `Insert` read
   `unconditional on success` through its callers. The model builder now lifts the
@@ -71,6 +191,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arm's `Error`, an arm that may `exit` before a `Commit`, nested groups and the plain-AL
   shapes with a no-exit control, a two-arm routine through its caller), lowerer
   `statement_if_chains_are_groups_of_alternatives`, `ir_walk::preproc_group_tests`.
+  Second review: the same file adds digest's ordering labels for six may-exit shapes
+  with two controls, a bare block that always exits, and a second fixture
+  (`DECL_SOURCE`) with each `#if`-only declaration next to a control that declares it in
+  every build (`[CommitBehavior(Ignore|Error)]`, an attribute taken by a routine in an
+  arm, `[TryFunction]`, `InherentCommitBehavior` per arm, `Direction`, `TableType`,
+  `SourceTableTemporary` (direct write and a table-event subscriber that exits for a
+  temporary record), `UseTemporary`, the ordering grade). Lowerer
+  `an_attribute_only_some_builds_of_its_routine_have_is_conditional`,
+  `an_object_property_only_some_builds_have_is_conditional`; `return_summary`
+  `a_conditional_declaration_is_may_not_definite`; `ordering_engine`
+  `grade_commit_rules_priority` gains the new rule.
+- Discrimination proofs, second review (each: break with Edit, narrowest test RED,
+  revert, GREEN; the B2 CLI module was 13/13 after every revert):
+  1. The one may-exit rule in `control_context::walk_block` (`false &&`): RED
+     `a_nested_exit_…` (NestedArmExit, NestedIfExit, LoopExit, ExitOrError all read
+     `unconditional-on-success`) and `an_arm_that_may_exit_…`. This one guard replaces
+     the first fix-up's four (`walk_if_node` both-fall-through and error-guard cases,
+     `walk_case_node`, after loops), which no longer exist. BareBlockExit stayed
+     `conditional`: the bare-block arm carries the block's own continuation, a second
+     path (a stated limit: that carry has no proof of its own).
+  2. A bare block that always leaves ends the block (`false &&`): RED
+     `a_block_that_always_exits_ends_the_routine` (answer `yes`).
+  3. The may-exit rule in `operation_order::walk_block` (`false &&`): RED
+     `a_statement_that_may_exit_…`, every one of the six shapes regained
+     `COMMIT_DOMINATES_RETURN` (and the five direct ones `WRITE_COMMITTED_BEFORE_RETURN`).
+  4. `lift_arm_declarations` call commented out (first fix-up guard, unproven until
+     now): RED `each_arm_of_a_two_arm_routine_is_conditional`.
+  5. Lowerer: an attribute written in an arm is conditional (`false &&`): RED
+     `a_commit_behavior_only_…`, `a_try_function_only_…`,
+     `a_commit_under_a_conditional_declaration_…` and the lowerer unit test.
+  6. Lowerer: an attribute that did not come out of every path it went into is
+     conditional (`was` alone): RED `an_attribute_a_routine_in_an_arm_takes_…` (and
+     the lowerer unit test).
+  7. Lowerer: `#if` in the arguments makes it conditional: RED the lowerer unit test.
+  8. Lowerer: a property in an `#if` arm is conditional (pass `in_arm` instead of
+     `true`): RED `a_property_only_…` (Direction, TableType and SourceTableTemporary
+     cases) and the lowerer property test.
+  9. Lowerer: a whole-value `#if` is conditional: RED the lowerer property test.
+  10. `UseTemporary` read through `bool_property` (back to "any entry is true"): RED
+      `a_property_only_…` (`B2 Rep Maybe` said `no`).
+  11. `ir_attributes` projects `conditional` (never emitted): RED four CLI tests.
+  12. `commit_scope::declared` keeps the build without the attribute (states `may`
+      only): RED `a_commit_behavior_only_…`, `an_attribute_a_routine_…`,
+      `a_commit_under_a_conditional_declaration_…`.
+  13. `parse_commit_behavior` definite only (`find_attribute`): RED the same three.
+  14. `grade_commit_rules`' new rule (`false &&`): RED `grade_commit_rules_priority`
+      (`proven_suppressed`). Breaking instead the `maybe_declared` computation in the
+      engine stayed GREEN on the CLI: on the fixture the chain is not proven anyway,
+      so the CLI test pins `parse_commit_behavior`, not this rule (a stated limit).
+  15. Digest: a commit route under a may-apply declaration is conditional (`false &&`):
+      RED `a_commit_behavior_only_…` (`unconditional on success`) and
+      `an_attribute_a_routine_…`.
+  16. Digest: the same for an error route: RED `a_commit_behavior_only_…` (ArmError's
+      error row `unconditional on success`); B4's 16 CLI tests stayed GREEN.
+  17. `traps::is_try_function` definite (back to `has_attribute`): RED
+      `a_try_function_only_…` (`no`).
+  18. `InherentCommitBehavior` strictest (back to the first value): RED
+      `an_inherent_commit_behavior_per_arm_…` (`no`).
+  19. `Direction` conditional (`true ||`): RED `a_property_only_…` (RunsArmExport
+      `no`).
+  20. `page_source_table_temporary` definite (`true ||`): GREEN at first (the direct
+      write is decided by the model's field); the subscriber case was added, then RED
+      (`B2 Page Maybe` → `B2 Sub Log` `no`).
+  21. The model's `source_table_temporary` (`false &&`): RED `a_property_only_…`
+      (direct write `no`).
+  22. `TableType` definite (`true ||`): RED `a_property_only_…` (WritesTempMaybe `no`).
+  23. `try_function_conditional` (`false &&`): RED
+      `a_conditional_declaration_is_may_not_definite`.
+- Discrimination proofs, third review (same method; after every revert the B2 CLI
+  module was 16/16, the lowerer attribute tests 28/28, the model and merge tests 7/7):
+  24. The `mark_attributes_some_arm_lacks` call removed: RED the lowerer test (the
+      `[TryFunction]` stayed `false`) and
+      `an_attribute_only_one_arm_of_a_routine_declares_is_conditional` (ElseIgn,
+      TwoBodies, CallTwo, CallTry all `no`, the reviewer's wrong answers).
+  25. Its per-attribute check (`true ||`, every attribute of a multi-row id
+      conditional): RED the same two tests on the both-arm controls (BothIgn,
+      CallBothTry `yes`).
+  26. `page_ui`'s "one entry every build has" (`p.conditional || !p.conditional`): RED
+      `a_page_permission_…` (no UI surface).
+  27. The model's definite page fields (`false &&`): RED
+      `a_property_only_some_builds_write_is_not_definite` (`modify_allowed` `Some(false)`).
+  28. `inherent_commit_behavior_conditional` never set (`false &&`): RED the same model
+      test.
+  29. `merge_inherent_commit_behavior`'s conditional arm (`&& false`): RED
+      `merge_icb_conditional_object_is_conditional` and the model test (`ignore`).
+  30. The literal-reach trap list keeps a some-builds event (`true ||`): RED
+      `an_event_isolated_…` (RaiseArm carried the `isolated-event` trap).
+  31. `prove`'s every-build split (`true ||`): RED `an_event_isolated_…` (SubArm lost
+      the "isolated in some builds only" line).
+  32. `isolated_in_some_builds_only` reads conditional attributes as definite
+      (`a.conditional || !a.conditional`): RED `an_event_isolated_…` (RaiseArm trapped).
+- **Integration with B4 and B6 (merge into `integrate/w2`).** B2's digest rule (a commit
+  or error route under a may-apply declaration is at most `conditional`, `MaySkip`) and
+  B4 round 2's (`Uncertain`, `at_least_conditional`) were the same rule over the same
+  normalized route behaviors; the merge keeps B4's one copy, whose predicate
+  (`commit_scope::uncertain`, and "holds `E` and more" for an error route) covers B2's
+  case. B2 and B6 round 2 had each added `ObjectProperty::conditional`; the merge keeps
+  B2's lowering (`in_arm` passed down through every `#if` wrapper), which already marks
+  what B6's post-pass marked. Proofs redone on the merged code (same method): 15' the
+  commit routes' `uncertain` filter forced off (`false &&`) → RED
+  `a_commit_behavior_only_…` (`ArmIgnore` `unconditional`) and `an_attribute_a_routine_…`;
+  16' `errs_maybe` forced off → RED `a_commit_behavior_only_…` (ArmError's error row);
+  8' the wrapper passing `in_arm` instead of `true` → RED B6's
+  `cli_dataset_operations::a_direction_in_an_if_arm_alone_may_still_import` (`no`) and
+  `a_property_only_…`. Each GREEN once reverted.
 
 ### Fixed (engine limits wave 2, B4/L16)
 
