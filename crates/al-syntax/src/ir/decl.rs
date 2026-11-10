@@ -233,19 +233,29 @@ pub struct AttributeIr {
     /// The `attribute_item` node's origin (#71: the routine's declaration span starts
     /// at its first attribute).
     pub origin: super::Origin,
-    /// `true` when some build in which the routine exists does not have this
-    /// attribute with these arguments (engine limits B2): it sits in an `#if`
-    /// arm the routine is not in (`#if CLEAN99 [CommitBehavior(…)] #endif
-    /// procedure P()`), it reached the routine past a `#if` wrapper by a path
-    /// not every build takes, its arguments hold an `#if` group, or the
-    /// routine is declared in several `#if` arms (one row per arm) and another
-    /// arm's row does not carry the same attribute. No
-    /// configuration is chosen, so every such build stays possible: a reader
-    /// that decides a definite answer from the attribute's presence must read
-    /// a conditional one as "may" (`program::attributes::find_definite_attribute`).
-    /// Imprecise in one direction only: an attribute whose arms together cover
-    /// every build (`#if X [A] #else [A] #endif`) is still conditional.
+    /// `true` when some build in which THIS declaration of the routine exists
+    /// does not have this attribute with these arguments (engine limits B2):
+    /// it sits in an `#if` arm the declaration is not in (`#if CLEAN99
+    /// [CommitBehavior(…)] #endif procedure P()`), it reached the routine past a
+    /// `#if` wrapper by a path not every build takes, or its arguments hold an
+    /// `#if` group. No configuration is chosen, so every such build stays
+    /// possible: a reader that decides a definite answer from the attribute's
+    /// presence must read a conditional one as "may"
+    /// (`program::attributes::find_definite_attribute`). Imprecise in one
+    /// direction only: an attribute whose arms together cover every build
+    /// (`#if X [A] #else [A] #endif`) is still conditional.
     pub conditional: bool,
+    /// `true` when the routine is declared more than once (two `#if` arms of a
+    /// member list, of a whole object, or two files) and ANOTHER declaration
+    /// does not carry the same attribute (engine limits B2, wave 2 final
+    /// review). It says nothing about this declaration's own builds: in every
+    /// build in which this declaration exists the attribute holds (unless
+    /// [`Self::conditional`]). So a reader judging this declaration's own body
+    /// reads it as definite, and a reader judging the routine from outside (a
+    /// caller asking "is this a TryFunction") reads it as "may". Set here for
+    /// the declarations of one object declaration; the model sets it across
+    /// object declarations and files.
+    pub another_declaration_lacks: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]

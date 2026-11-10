@@ -327,9 +327,16 @@ impl Declared {
 /// declaration. Its values join what a build without it runs under (the
 /// object property's reading, else [`N`]), so a commit stays possible and no
 /// definite "no" rests on a build nobody chose.
+///
+/// `r` is ONE declaration (row) of the routine, and this is that row's own
+/// declaration: an attribute another declaration lacks
+/// (`AttributeInfo::another_declaration_lacks`) still holds in every build in
+/// which this row exists, so it is definite here (wave 2 final review). The
+/// routine's other rows are joined by the readers that need the routine as a
+/// whole ([`CommitScopes`]' per-id union for the routine graph's hub node).
 #[must_use]
 pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declared> {
-    use crate::engine::return_summary::{commit_behavior_value, parse_commit_behavior};
+    use crate::engine::return_summary::commit_behavior_value;
     let without_attribute = match object.and_then(|o| o.inherent_commit_behavior.as_deref()) {
         Some("ignore") => Some(Declared {
             states: N | I,
@@ -341,7 +348,12 @@ pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declar
         }),
         _ => None,
     };
-    match parse_commit_behavior(&r.attributes_parsed) {
+    let own = crate::program::attributes::find_own_definite_attribute(
+        &r.attributes_parsed,
+        "CommitBehavior",
+    )
+    .map_or("normal", commit_behavior_value);
+    match own {
         "ignore" => Some(Declared {
             states: I,
             source: DeclSource::Attribute,
@@ -378,11 +390,24 @@ pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declar
 /// runs.
 #[derive(Debug, Clone, Default)]
 pub struct CommitScopes {
+    /// Per routine id: every row's declaration together (a union, with
+    /// [`N`] for a row that declares nothing). What a reader of the routine
+    /// as a whole sees.
     by_routine: HashMap<String, Declared>,
     /// The object-run call sites (by call-site id): [`Step::CheckedRun`]
     /// for a checked `Codeunit.Run`, else [`Step::Run`]. Filled only when
     /// some routine declares a behavior.
     runs: HashMap<String, Step>,
+    /// Engine limits B2 (wave 2 final review): a routine declared more than
+    /// once (`#if` arms, two files) whose rows declare different behaviors.
+    /// A build runs ONE row's body, so a commit in a row (or below one of its
+    /// call sites) runs under THAT row's own declaration, definite for it.
+    /// Per such id (stable id): each row's own declaration bits ([`N`] when
+    /// it declares nothing). [`CbGraph`] gives each row its own node.
+    arms: HashMap<String, Vec<u8>>,
+    /// The row ([`Self::arms`] index) that holds each site of those ids,
+    /// with its routine id (internal site id → (stable id, row)).
+    site_arm: HashMap<String, (String, usize)>,
 }
 
 impl CommitScopes {
@@ -410,19 +435,27 @@ impl CommitScopes {
         }
         let mut by_routine: HashMap<String, Declared> = HashMap::new();
         // The ids with a row that declares nothing: that row's build runs
-        // its commits normally. (The model join marks an attribute one row
-        // of an id lacks as conditional, in one file or across files,
-        // `workspace::join_alternative_declarations`; this rule keeps the
-        // reading right on rows built without it, e.g. a test's.)
+        // its commits normally.
         let mut plain_row: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // Each row's own declaration bits, by stable id, in model order.
+        let mut per_row: HashMap<&str, Vec<(&ModelRoutine, u8)>> = HashMap::new();
+        // A row reads its OWN declaring object (#279: an object declared in
+        // two `#if` arms is two object rows); one it cannot place reads every
+        // object row of its id.
+        let declaring = crate::program::model::declaring::DeclaringObjects::new(&ws.objects);
         for r in &ws.routines {
-            let d = match objects.get(r.object_id.as_str()) {
-                None => declared(r, None),
-                Some(rows) => rows
+            let d = match (declaring.of(r), objects.get(r.object_id.as_str())) {
+                (_, None) => declared(r, None),
+                (Some(o), Some(_)) => declared(r, Some(o)),
+                (None, Some(rows)) => rows
                     .iter()
                     .filter_map(|o| declared(r, Some(o)))
                     .reduce(Declared::union),
             };
+            per_row
+                .entry(r.stable_routine_id.as_str())
+                .or_default()
+                .push((r, d.map_or(N, |d| d.states)));
             match d {
                 None => {
                     plain_row.insert(r.stable_routine_id.as_str());
@@ -441,10 +474,53 @@ impl CommitScopes {
         if by_routine.is_empty() {
             return CommitScopes::default();
         }
+        // The rows of a declaring id declared more than once, when they
+        // disagree: each its own node in the graph.
+        let mut arms: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut site_arm: HashMap<String, (String, usize)> = HashMap::new();
+        for (id, rows) in per_row {
+            if rows.len() < 2 || rows.iter().all(|(_, s)| *s == rows[0].1) {
+                continue;
+            }
+            for (k, (r, _)) in rows.iter().enumerate() {
+                let sites = r
+                    .call_sites
+                    .iter()
+                    .flat_map(|c| [c.id.as_str(), c.operation_id.as_str()])
+                    .chain(r.operation_sites.iter().map(|o| o.id.as_str()))
+                    .chain(r.record_operations.iter().map(|o| o.id.as_str()))
+                    .chain(r.field_ref_operations.iter().map(|o| o.id.as_str()));
+                for s in sites {
+                    site_arm.insert(s.to_string(), (id.to_string(), k));
+                }
+            }
+            arms.insert(id.to_string(), rows.iter().map(|(_, s)| *s).collect());
+        }
         CommitScopes {
             by_routine,
             runs: object_runs(model, dependency_calls),
+            arms,
+            site_arm,
         }
+    }
+
+    /// The row of routine `routine` that holds `site`, when the routine is
+    /// one of [`Self::arms`]'.
+    fn arm_of(&self, routine: &str, site: Option<&str>) -> Option<usize> {
+        let (id, k) = self.site_arm.get(site?)?;
+        (id == routine).then_some(*k)
+    }
+
+    /// The declaration bits a route through `routine` runs under when it
+    /// leaves the routine at `site` (its next call site, or the commit
+    /// itself): that row's own for a routine of [`Self::arms`] whose row
+    /// holds the site, else the routine's (every row's together).
+    #[must_use]
+    pub fn states_leaving(&self, routine: &str, site: Option<&str>) -> u8 {
+        if let (Some(rows), Some(k)) = (self.arms.get(routine), self.arm_of(routine, site)) {
+            return rows[k];
+        }
+        self.get(routine).map_or(N, |d| d.states)
     }
 
     /// How the edge at `site` passes the behavior on: a call site, or the
@@ -555,9 +631,14 @@ fn object_runs(
 /// table events), a superset of what the cone follows: an extra route can
 /// only keep a commit or add a possible error, never drop one.
 pub(crate) struct CbGraph<'a> {
-    ix: HashMap<&'a str, u32>,
-    names: Vec<&'a str>,
-    succ: Vec<Vec<(u32, &'a SnapshotGraphEdge, Step)>>,
+    ix: HashMap<String, u32>,
+    names: Vec<String>,
+    /// `None`: a hub edge (a routine of [`CommitScopes::arms`] to one of its
+    /// row nodes), which no route lists.
+    succ: Vec<Vec<(u32, Option<&'a SnapshotGraphEdge>, Step)>>,
+    /// A routine of [`CommitScopes::arms`] (its hub node) → its row nodes
+    /// and its catch-all node (an edge or a commit no row's site names).
+    arm_nodes: HashMap<String, (Vec<u32>, u32)>,
     pred: Vec<Vec<(u32, Step)>>,
     /// Each node's declaration bits ([`N`] when it declares nothing).
     decl: Vec<u8>,
@@ -606,28 +687,55 @@ impl<'a> CbGraph<'a> {
             tree.capability_facts
                 .iter()
                 .filter(|f| f.op() == "commit" && f.provenance() == "direct")
-                .map(|f| f.subject()),
+                .map(|f| (f.subject(), f.witness_operation_id())),
         )
     }
 
     /// `None` when no routine declares a behavior (the common case: nothing
     /// to do). `edges` is the snapshot's typed edges (each routine's in
-    /// source order), `carriers` the routines with a commit of their own.
+    /// source order), `carriers` the routines with a commit of their own,
+    /// each with the commit's operation id (which names its row).
+    ///
+    /// Engine limits B2 (wave 2 final review): a routine of
+    /// [`CommitScopes::arms`] (declared more than once, its rows declaring
+    /// different behaviors) is a HUB node that declares nothing, with an edge
+    /// to one node per row (that row's own declaration) and to a catch-all
+    /// node (every row's declarations together). A row node holds the
+    /// out-edges whose site the row holds and the commits it holds; the
+    /// catch-all holds an edge or a commit no row's site names. So a commit
+    /// in a row runs under that row's declaration, never under another
+    /// row's: `[CommitBehavior(Ignore)]` on the one declaration that commits
+    /// ignores that commit in every build that has it.
     pub(crate) fn build(
         scopes: &'a CommitScopes,
         edges: impl IntoIterator<Item = &'a SnapshotGraphEdge>,
-        carriers: impl IntoIterator<Item = &'a str>,
+        carriers: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     ) -> Option<CbGraph<'a>> {
         if scopes.is_empty() {
             return None;
         }
-        let mut ix: HashMap<&'a str, u32> = HashMap::new();
-        let mut names: Vec<&'a str> = Vec::new();
-        let mut intern = |s: &'a str, ix: &mut HashMap<&'a str, u32>| -> u32 {
-            *ix.entry(s).or_insert_with(|| {
-                names.push(s);
-                (names.len() - 1) as u32
-            })
+        let mut ix: HashMap<String, u32> = HashMap::new();
+        let mut names: Vec<String> = Vec::new();
+        let mut intern = |s: &str, ix: &mut HashMap<String, u32>| -> u32 {
+            if let Some(&i) = ix.get(s) {
+                return i;
+            }
+            names.push(s.to_string());
+            let i = (names.len() - 1) as u32;
+            ix.insert(s.to_string(), i);
+            i
+        };
+        let arm_key = |id: &str, k: usize| format!("{id}\u{1f}{k}");
+        let mixed_key = |id: &str| format!("{id}\u{1f}*");
+        // The node a route through `routine` leaving it at `site` is in.
+        let leaving = |routine: &str, site: Option<&str>| -> String {
+            if !scopes.arms.contains_key(routine) {
+                return routine.to_string();
+            }
+            match scopes.arm_of(routine, site) {
+                Some(k) => arm_key(routine, k),
+                None => mixed_key(routine),
+            }
         };
         // By source routine in id order (a deterministic search order),
         // each routine's edges in their own order.
@@ -640,20 +748,39 @@ impl<'a> CbGraph<'a> {
                 outgoing.entry(e.edge_from()).or_default().push((to, e));
             }
         }
-        let mut raw: Vec<(u32, u32, &'a SnapshotGraphEdge)> = Vec::new();
+        let mut raw: Vec<(u32, u32, Option<&'a SnapshotGraphEdge>)> = Vec::new();
         for (from, out) in outgoing {
-            let f = intern(from, &mut ix);
             for (to, e) in out {
+                let site = e.edge_callsite_id().or_else(|| e.edge_operation_id());
+                let f = intern(&leaving(from, site), &mut ix);
                 let t = intern(to, &mut ix);
-                raw.push((f, t, e));
+                raw.push((f, t, Some(e)));
             }
         }
-        let carriers: Vec<u32> = carriers.into_iter().map(|c| intern(c, &mut ix)).collect();
+        let carriers: Vec<u32> = carriers
+            .into_iter()
+            .map(|(c, op)| intern(&leaving(c, op), &mut ix))
+            .collect();
+        // Every hub: its row nodes and catch-all, in id order.
+        let mut arm_ids: Vec<&String> = scopes.arms.keys().collect();
+        arm_ids.sort();
+        let mut arm_nodes: HashMap<String, (Vec<u32>, u32)> = HashMap::new();
+        for id in arm_ids {
+            let hub = intern(id, &mut ix);
+            let rows: Vec<u32> = (0..scopes.arms[id].len())
+                .map(|k| intern(&arm_key(id, k), &mut ix))
+                .collect();
+            let mixed = intern(&mixed_key(id), &mut ix);
+            for &x in rows.iter().chain(std::iter::once(&mixed)) {
+                raw.push((hub, x, None));
+            }
+            arm_nodes.insert(id.clone(), (rows, mixed));
+        }
         let n = names.len();
-        let mut succ: Vec<Vec<(u32, &'a SnapshotGraphEdge, Step)>> = vec![Vec::new(); n];
+        let mut succ: Vec<Vec<(u32, Option<&'a SnapshotGraphEdge>, Step)>> = vec![Vec::new(); n];
         let mut pred: Vec<Vec<(u32, Step)>> = vec![Vec::new(); n];
         for (f, t, e) in raw {
-            let step = scopes.step_of(e);
+            let step = e.map_or(Step::Plain, |e| scopes.step_of(e));
             succ[f as usize].push((t, e, step));
             pred[t as usize].push((f, step));
         }
@@ -661,10 +788,17 @@ impl<'a> CbGraph<'a> {
             p.sort_unstable();
             p.dedup();
         }
-        let decl: Vec<u8> = names
+        let mut decl: Vec<u8> = names
             .iter()
             .map(|s| scopes.get(s).map_or(N, |d| d.states))
             .collect();
+        for (id, (rows, mixed)) in &arm_nodes {
+            decl[ix[id.as_str()] as usize] = N;
+            for (k, &x) in rows.iter().enumerate() {
+                decl[x as usize] = scopes.arms[id][k];
+            }
+            decl[*mixed as usize] = scopes.get(id).map_or(N, |d| d.states);
+        }
         let declaring: Vec<u32> = (0..n as u32).filter(|&i| decl[i as usize] != N).collect();
         // Forward: the zone.
         let mut zone = vec![false; n];
@@ -708,6 +842,7 @@ impl<'a> CbGraph<'a> {
             ix,
             names,
             succ,
+            arm_nodes,
             pred,
             decl,
             zone,
@@ -777,17 +912,39 @@ impl<'a> CbGraph<'a> {
         self.node(root).is_none_or(|r| self.anc[r as usize] == 0)
     }
 
+    /// The nodes that hold the commits of routine `origin`, and the node that
+    /// names it (the cache key): the routine's own node, or for a routine of
+    /// [`CommitScopes::arms`] its row nodes (and catch-all) that hold a commit
+    /// (every one when none does).
+    fn origin_nodes(&self, origin: &str) -> Option<(u32, Vec<u32>)> {
+        let key = self.node(origin)?;
+        let Some((rows, mixed)) = self.arm_nodes.get(origin) else {
+            return Some((key, vec![key]));
+        };
+        let all: Vec<u32> = rows.iter().copied().chain([*mixed]).collect();
+        let carrying: Vec<u32> = all
+            .iter()
+            .copied()
+            .filter(|&x| self.carrier[x as usize])
+            .collect();
+        Some((key, if carrying.is_empty() { all } else { carrying }))
+    }
+
     /// Whether a commit in `origin` can run under a declared behavior from
     /// any root.
     pub(crate) fn in_zone(&self, origin: &str) -> bool {
-        self.node(origin).is_some_and(|o| self.zone[o as usize])
+        self.origin_nodes(origin)
+            .is_some_and(|(_, os)| os.iter().any(|&o| self.zone[o as usize]))
     }
 
     fn toward(&self, o: u32) -> Arc<Vec<Transfer>> {
         if let Some(t) = self.toward.lock().expect("toward cache").get(&o) {
             return Arc::clone(t);
         }
-        let t = Arc::new(self.backward_states(&[o], true));
+        let origins = self
+            .origin_nodes(&self.names[o as usize])
+            .map_or_else(|| vec![o], |(_, os)| os);
+        let t = Arc::new(self.backward_states(&origins, true));
         self.toward
             .lock()
             .expect("toward cache")
@@ -809,11 +966,11 @@ impl<'a> CbGraph<'a> {
     /// commit inside the run is not on Microsoft Learn. `false` when the
     /// graph has no route from `root` to `origin` (a graph mismatch).
     pub(crate) fn commit_surely_runs(&self, root: &str, origin: &str) -> bool {
-        let Some(o) = self.node(origin) else {
+        let Some((o, origins)) = self.origin_nodes(origin) else {
             // No edge and no commit fact: only its own declaration applies.
             return self.scopes.get(origin).is_none();
         };
-        if !self.zone[o as usize] {
+        if !origins.iter().any(|&x| self.zone[x as usize]) {
             return true;
         }
         let Some(r) = self.node(root) else {
@@ -825,7 +982,7 @@ impl<'a> CbGraph<'a> {
         if let Some(t) = self.toward_explicit.lock().expect("toward cache").get(&o) {
             return at_root(t);
         }
-        let t: Arc<Vec<Transfer>> = Arc::new(self.backward_states(&[o], false));
+        let t: Arc<Vec<Transfer>> = Arc::new(self.backward_states(&origins, false));
         let ok = at_root(&t);
         self.toward_explicit
             .lock()
@@ -859,14 +1016,30 @@ impl<'a> CbGraph<'a> {
     /// The behaviors of a listed route, [`P`]/[`X`] kept (read them through
     /// [`norm`], or pass them to [`Self::beyond`]): the root's declaration,
     /// then each hop `(routine, call site)` entered by its edge's [`Step`].
+    /// `terminal` is the route's last site (the commit's operation id; `None`
+    /// for a route that ends at a crossing). A routine declared more than
+    /// once ([`CommitScopes::arms`]) runs under the declaration of the row the
+    /// route leaves it through (the next hop's call site, or `terminal`),
+    /// else every row's together.
     pub(crate) fn route_states<'s>(
         &self,
         root: &str,
         hops: impl Iterator<Item = (&'s str, Option<&'s str>)>,
+        terminal: Option<&str>,
     ) -> u8 {
-        hops.fold(self.decl_of(root), |s, (h, cs)| {
-            self.scopes.step(cs).enter(s, self.decl_of(h))
-        })
+        let hops: Vec<(&str, Option<&str>)> = hops.collect();
+        let leaving = |i: usize| -> Option<&str> {
+            match hops.get(i) {
+                Some(&(_, cs)) => cs,
+                None => terminal,
+            }
+        };
+        let decl = |id: &str, i: usize| self.scopes.states_leaving(id, leaving(i));
+        hops.iter()
+            .enumerate()
+            .fold(decl(root, 0), |s, (i, &(h, cs))| {
+                self.scopes.step(cs).enter(s, decl(h, i + 1))
+            })
     }
 
     /// The behaviors `entry` runs under (its own declaration applied) when
@@ -933,9 +1106,12 @@ impl<'a> CbGraph<'a> {
     /// `target` (a single bit of [`norm`]), shortest first; `None` when there
     /// is none.
     pub(crate) fn route_to(&self, root: &str, origin: &str, target: u8) -> Option<Route<'a>> {
-        let (r, o) = (self.node(root)?, self.node(origin)?);
+        let r = self.node(root)?;
+        let (o, origins) = self.origin_nodes(origin)?;
         let guide = self.toward(o);
-        self.guided_from(r, self.decl[r as usize], &guide, target, |x| x == o)
+        self.guided_from(r, self.decl[r as usize], &guide, target, |x| {
+            origins.contains(&x)
+        })
     }
 
     /// One route from `entry` to some commit it reaches that runs under
@@ -963,7 +1139,8 @@ impl<'a> CbGraph<'a> {
         let admissible = |x: u32, cur: u8| norm(guide[x as usize][vix(cur)]) & target != 0;
         // A search state: a node and the behavior it runs under.
         type State = (u32, u8);
-        let mut parent: HashMap<State, Option<(State, &'a SnapshotGraphEdge)>> = HashMap::new();
+        let mut parent: HashMap<State, Option<(State, Option<&'a SnapshotGraphEdge>)>> =
+            HashMap::new();
         let mut queue = std::collections::VecDeque::new();
         for a in VALUES {
             if start & a != 0 && admissible(s, a) {
@@ -976,7 +1153,8 @@ impl<'a> CbGraph<'a> {
                 let mut route = Vec::new();
                 let mut at = (x, cur);
                 while let Some(Some((prev, e))) = parent.get(&at) {
-                    route.push(*e);
+                    // A hub edge (to a row node) is no edge of the route.
+                    route.extend(*e);
                     at = *prev;
                 }
                 route.reverse();
@@ -1088,15 +1266,20 @@ mod tests {
         );
         let mut runs = HashMap::new();
         runs.insert("run".to_string(), Step::Run);
-        let scopes = CommitScopes { by_routine, runs };
+        let scopes = CommitScopes {
+            by_routine,
+            runs,
+            ..CommitScopes::default()
+        };
         let edges = [edge("Root", "A", "call"), edge("A", "B", "run")];
-        let g = CbGraph::build(&scopes, edges.iter(), ["B"]).expect("a declaration");
+        let g = CbGraph::build(&scopes, edges.iter(), [("B", None)]).expect("a declaration");
         assert_eq!(g.states_at("Root", "B"), Some(N | I));
         assert_eq!(g.states_at("A", "B"), Some(N));
         // The listed route reads the same.
         let listed = g.route_states(
             "Root",
             [("A", Some("call")), ("B", Some("run"))].into_iter(),
+            None,
         );
         assert_eq!(norm(listed), N | I);
         // A route that commits normally is found (it is the may-not-follow
@@ -1113,9 +1296,9 @@ mod tests {
         // Control: the same call as a plain call is ignored for certain.
         let plain = CommitScopes {
             by_routine: scopes.by_routine.clone(),
-            runs: HashMap::new(),
+            ..CommitScopes::default()
         };
-        let g = CbGraph::build(&plain, edges.iter(), ["B"]).expect("a declaration");
+        let g = CbGraph::build(&plain, edges.iter(), [("B", None)]).expect("a declaration");
         assert_eq!(g.states_at("Root", "B"), Some(I));
     }
 
@@ -1238,9 +1421,11 @@ codeunit 50381 "BC"
 
     /// Engine limits B2 (per-arm ids) x B4: an id declared in two `#if` arms
     /// is one row per arm, and its declaration is every row's possibilities
-    /// together. `Two` declares Ignore in arm A and Error in arm B (each is
-    /// conditional: the other arm lacks it), so it may run normally, ignored
-    /// or as an error. `Obj` is a whole object in two arms, Ignore in one and
+    /// together. `Two` declares Ignore in arm A and Error in arm B: each arm's
+    /// own builds all have its attribute (wave 2 final review: another
+    /// declaration lacking it does not make it a "may" for the row itself),
+    /// so every build runs `Two` ignored or as an error, never normally:
+    /// `I|E`, and each row its own (`arms`). `Obj` is a whole object in two arms, Ignore in one and
     /// Error in the other (`InherentCommitBehavior`). The last-wins map kept
     /// arm B's `N|E` for both. Break: keep the last row's declaration -> `Two`
     /// and `Obj::Q` read `N|E`. (No CLI answer moves: every row here already
@@ -1289,7 +1474,7 @@ codeunit 50397 "Obj"
             "33333333-0000-0000-0000-0000000000b7",
         );
         let scopes = CommitScopes::of_model(&m, &[]);
-        for name in ["Two", "Q"] {
+        for (name, whole, per_row) in [("Two", I | E, [I, E]), ("Q", N | I | E, [N | I, N | E])] {
             let rows: Vec<&ModelRoutine> = m
                 .workspace
                 .routines
@@ -1300,7 +1485,12 @@ codeunit 50397 "Obj"
             let d = scopes
                 .get(&rows[0].stable_routine_id)
                 .unwrap_or_else(|| panic!("{name} declares"));
-            assert_eq!(d.states, N | I | E, "{name}");
+            assert_eq!(d.states, whole, "{name}");
+            assert_eq!(
+                scopes.arms.get(rows[0].stable_routine_id.as_str()),
+                Some(&per_row.to_vec()),
+                "{name}"
+            );
         }
     }
 }

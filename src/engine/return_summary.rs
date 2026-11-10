@@ -302,7 +302,7 @@ pub fn parse_commit_behavior(attrs: &[crate::program::attributes::AttributeInfo]
         return commit_behavior_value(attr);
     }
     let conditional = attrs.iter().any(|a| {
-        a.conditional
+        !a.in_every_build()
             && a.name.eq_ignore_ascii_case("CommitBehavior")
             && commit_behavior_value(a) != "normal"
     });
@@ -632,6 +632,7 @@ mod tests {
             }],
             raw: format!("[{name}({qualifier}::{member})]"),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -648,6 +649,7 @@ mod tests {
             }],
             raw: format!("[{name}({value})]"),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -758,6 +760,7 @@ mod tests {
             args: vec![],
             raw: "[TryFunction]".to_string(),
             conditional: false,
+            another_declaration_lacks: false,
         }];
         // Simulate body_available = true, statement_tree = Some(block with error)
         // but TryFunction should short-circuit to unknown/partial.
@@ -775,6 +778,41 @@ mod tests {
         assert_eq!(summary.coverage, "partial");
         assert!(summary.has_try_function_boundary);
         assert!(!summary.try_function_conditional);
+    }
+
+    /// Engine limits B2 (wave 2 final review, item 4): the model join and the
+    /// summary merge read EVERY group of rows that share an id alike, a
+    /// symbol-only group (an ABI overload collapse) included. Stated by
+    /// assignment: two symbol-only rows (`abi:` unit) of one id, one carrying
+    /// `[TryFunction]` with no `#if` at all; a caller bound to the id cannot
+    /// tell which overload it reaches. After the join the attribute is
+    /// "another declaration lacks it" (a "may" for the id), the summary says
+    /// the boundary is conditional, and the row's own reading is still
+    /// definite.
+    #[test]
+    fn a_symbol_only_group_is_joined_like_every_group() {
+        let mut try_fn = attr_abi_bare("TryFunction", "x");
+        try_fn.args.clear();
+        let row = |attrs: Vec<AttributeInfo>| {
+            let mut r = make_routine_with_attrs(attrs, false, None);
+            r.source_anchor.source_unit_id = "abi:test".to_string();
+            r
+        };
+        let mut ws = crate::program::model::workspace::ModelEntities {
+            objects: Vec::new(),
+            tables: Vec::new(),
+            routines: vec![row(vec![try_fn]), row(vec![])],
+        };
+        assert!(
+            ws.routines[0].attributes_parsed[0].in_every_build(),
+            "precondition: a symbol attribute, definite before the join"
+        );
+        crate::program::model::workspace::join_alternative_declarations(&mut ws);
+        let a = &ws.routines[0].attributes_parsed[0];
+        assert!(a.another_declaration_lacks && !a.conditional);
+        let summaries = compute_return_summaries(&ws.routines, None);
+        let s = &summaries[&ws.routines[0].id];
+        assert!(s.has_try_function_boundary && s.try_function_conditional);
     }
 
     /// Engine limits B2: a `[TryFunction]` / `[CommitBehavior]` only some

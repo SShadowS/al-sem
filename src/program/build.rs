@@ -1171,8 +1171,13 @@ impl EventFacts {
     /// file declared was lost in every build, a wrong "no" for a "may"
     /// question). A copy that is the same app read twice (`Al/` plus
     /// `.dependencies/`) says the same, or, when stale, adds its facts as
-    /// possible ones: the cautious side, never a lost subscription. A copy with
-    /// no source unit (never stamped by a build) is merged with nothing.
+    /// possible subscriptions. The union is what the node subscribes to in
+    /// SOME build; it does not say which declaration's body a subscription
+    /// runs. That is decided where the bodies are read: the cone sends a
+    /// dispatch only into the declarations that subscribe
+    /// (`capability_cone::arm_subscriber_nodes`), else one declaration's
+    /// subscription reached another's body (a wrong definite `yes`). A copy
+    /// with no source unit (never stamped by a build) is merged with nothing.
     fn of_arms(copies: &[&RoutineNode]) -> Option<Self> {
         let (survivor, rest) = copies.split_first()?;
         survivor.source_unit?;

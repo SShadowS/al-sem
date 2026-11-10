@@ -3793,6 +3793,11 @@ pub fn ir_attributes(
         if a.conditional {
             one["conditional"] = serde_json::Value::Bool(true);
         }
+        // Another declaration of the routine lacks it (`AttributeInfo::
+        // another_declaration_lacks`). Absent when false.
+        if a.another_declaration_lacks {
+            one["anotherDeclarationLacks"] = serde_json::Value::Bool(true);
+        }
         parsed.push(one);
     }
     (raw, parsed)

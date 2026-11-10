@@ -4085,6 +4085,142 @@ pub(crate) fn pd_input_digests(
 /// [`compose_cone_over_graph`], keeping (and reusing) the producer solve's
 /// inputs as `pd` says. The outcome equals a plain composition's in every
 /// other field.
+/// Engine limits B2 (wave 2 final review, B1): the cone inputs with one
+/// node per subscription that only SOME declarations of its subscriber
+/// declare.
+///
+/// A subscriber routine declared more than once (two `#if` arms, two
+/// whole-object arms, two files) is one routine id, and the program graph
+/// gives it every declaration's subscriptions (`EventFacts::of_arms`). A
+/// dispatch edge to the id reached the facts of EVERY declaration: in `#if A
+/// … [EventSubscriber(…'OnX'…)] H: Commit; #else … [EventSubscriber(…'OnY'…)]
+/// H: (nothing)`, raising `OnY` "may commit" through the `#if A` body, a path
+/// no build has. So a dispatch edge whose event only some declarations
+/// subscribe to (`events::rows_declaring_subscription`) goes to a node of its
+/// own (`{id}\u{1f}rows:{row indexes}`) that holds only those declarations'
+/// direct facts and out-edges (a fact or an edge whose site no row of the id
+/// holds stays, the cautious side), with the id's coverage, its row and its
+/// guard frame. The node is internal to the cone: its facts keep their
+/// subject (the routine), a fact inherited through the dispatch names its
+/// hop (the event), never the node, and [`compose_cone_over_graph_retained`]
+/// drops the node from what it returns. `None` when no such edge exists (the
+/// common case: the inputs are used as they are).
+struct ArmSubscriberNodes {
+    typed: Vec<TypedEdge>,
+    nodes: Vec<String>,
+    direct: HashMap<String, Vec<CapabilityFact>>,
+    coverage: HashMap<String, (String, Vec<String>)>,
+    /// Each node and the routine id it stands for.
+    alias: Vec<(String, String)>,
+}
+
+fn arm_subscriber_nodes(
+    typed: &[TypedEdge],
+    nodes: &[String],
+    direct_in: &HashMap<String, Vec<CapabilityFact>>,
+    coverage_in: &HashMap<String, (String, Vec<String>)>,
+    routines: &[ModelRoutine],
+) -> Option<ArmSubscriberNodes> {
+    use crate::program::model::projection::{ArmRows, row_holds_site};
+    let arms = ArmRows::build(routines);
+    // The restricted dispatch edges: edge index → node key.
+    let mut target: HashMap<usize, String> = HashMap::new();
+    // Node key → (routine id, the rows it stands for).
+    let mut made: BTreeMap<String, (String, Vec<bool>)> = BTreeMap::new();
+    for (i, e) in typed.iter().enumerate() {
+        if e.kind != "event-dispatch" && e.kind != "table-event" {
+            continue;
+        }
+        let (Some(to), Some(event)) = (&e.to, &e.event_id) else {
+            continue;
+        };
+        let Some(rows) = arms.rows(to) else {
+            continue;
+        };
+        let Some(declaring) =
+            crate::program::model::events::rows_declaring_subscription(rows, event)
+        else {
+            continue;
+        };
+        let ixs: Vec<String> = declaring
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d)
+            .map(|(k, _)| k.to_string())
+            .collect();
+        let key = format!("{to}\u{1f}rows:{}", ixs.join(","));
+        made.entry(key.clone())
+            .or_insert_with(|| (to.clone(), declaring));
+        target.insert(i, key);
+    }
+    if made.is_empty() {
+        return None;
+    }
+    let dead = DeadSites::of(routines);
+    // A site the node keeps: one its rows hold, or one no row of the id holds.
+    let keeps = |id: &str, declaring: &[bool], site: Option<&str>| -> bool {
+        let Some(site) = site else {
+            return true;
+        };
+        let rows = arms.rows(id).unwrap_or(&[]);
+        let held: Vec<bool> = rows.iter().map(|r| row_holds_site(r, site)).collect();
+        !held.iter().any(|&h| h) || held.iter().zip(declaring).any(|(&h, &d)| h && d)
+    };
+    let mut out_typed: Vec<TypedEdge> = typed
+        .iter()
+        .enumerate()
+        .map(|(i, e)| match target.get(&i) {
+            Some(key) => TypedEdge {
+                to: Some(key.clone()),
+                ..e.clone()
+            },
+            None => e.clone(),
+        })
+        .collect();
+    let mut out_nodes = nodes.to_vec();
+    let mut direct = direct_in.clone();
+    let mut coverage = coverage_in.clone();
+    let mut alias = Vec::new();
+    for (key, (id, declaring)) in &made {
+        for e in typed.iter().filter(|e| &e.from == id) {
+            let site = site_of(&e.callsite_id, &e.operation_id);
+            if dead.contains(id, site) || !keeps(id, declaring, site) {
+                continue;
+            }
+            out_typed.push(TypedEdge {
+                from: key.clone(),
+                ..e.clone()
+            });
+        }
+        let facts: Vec<CapabilityFact> = direct_in
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(|f| {
+                let site = f
+                    .witness_operation_id
+                    .as_deref()
+                    .or(f.witness_callsite_id.as_deref());
+                keeps(id, declaring, site)
+            })
+            .cloned()
+            .collect();
+        direct.insert(key.clone(), facts);
+        if let Some(c) = coverage_in.get(id) {
+            coverage.insert(key.clone(), c.clone());
+        }
+        out_nodes.push(key.clone());
+        alias.push((key.clone(), id.clone()));
+    }
+    Some(ArmSubscriberNodes {
+        typed: out_typed,
+        nodes: out_nodes,
+        direct,
+        coverage,
+        alias,
+    })
+}
+
 pub fn compose_cone_over_graph_retained(
     typed: &[TypedEdge],
     nodes: &[String],
@@ -4095,6 +4231,13 @@ pub fn compose_cone_over_graph_retained(
     pd: PdRetain<'_>,
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
+    // Engine limits B2 (wave 2 final review, B1): a dispatch only some
+    // declarations of its subscriber subscribe to reaches only theirs.
+    let arm_nodes = arm_subscriber_nodes(typed, nodes, direct_in, coverage_in, routines);
+    let (typed, nodes, direct_in, coverage_in) = match &arm_nodes {
+        Some(a) => (&a.typed[..], &a.nodes[..], &a.direct, &a.coverage),
+        None => (typed, nodes, direct_in, coverage_in),
+    };
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
     let s_graph = crate::engine::perf_trace::span("cone", "cone.graph");
     let g = build_typed_edge_graph(typed, nodes, &DeadSites::of(routines));
@@ -4160,8 +4303,14 @@ pub fn compose_cone_over_graph_retained(
     // Engine limits B2: a collided id's row holds every arm's sites, for the
     // PD substitution's bindings and the guard carry.
     let unions = crate::program::model::projection::merged_site_rows(routines);
-    let routines_by_id =
+    let mut routines_by_id =
         crate::program::model::projection::by_id_with_site_unions(routines, &unions);
+    // An arm subscriber node reads its routine's row (every arm's sites).
+    for (key, id) in arm_nodes.iter().flat_map(|a| &a.alias) {
+        if let Some(&r) = routines_by_id.get(id.as_str()) {
+            routines_by_id.insert(key.as_str(), r);
+        }
+    }
     let frames = guard_frames(&g, routines, &routines_by_id);
     drop(s_frames);
     let (pd_digests, seed, keep_cones) = match pd {
@@ -4275,6 +4424,14 @@ pub fn compose_cone_over_graph_retained(
     drop(direct);
     drop(cov);
     drop(routine_ids);
+
+    // The arm subscriber nodes are the cone's own: no reader asks for them.
+    let (mut coverage, mut raw, mut derived) = (coverage, raw, derived);
+    for (key, _) in arm_nodes.iter().flat_map(|a| &a.alias) {
+        coverage.remove(key);
+        raw.remove_subject(key);
+        derived.remove_row(key);
+    }
 
     ConeOutcome {
         coverage,

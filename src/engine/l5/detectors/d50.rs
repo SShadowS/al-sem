@@ -464,6 +464,7 @@ mod tests {
             }],
             raw: format!("[CommitBehavior(CommitBehavior::{member})]"),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -480,6 +481,7 @@ mod tests {
             }],
             raw: format!("[CommitBehavior({value})]"),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -490,6 +492,7 @@ mod tests {
             args: vec![],
             raw: "[CommitBehavior]".to_string(),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -506,6 +509,7 @@ mod tests {
             }],
             raw: "[Commitbehavior(CommitBehavior::Ignore)]".to_string(),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -516,6 +520,7 @@ mod tests {
             args: vec![],
             raw: "[TryFunction]".to_string(),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 

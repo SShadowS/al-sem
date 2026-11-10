@@ -3882,6 +3882,19 @@ fn find_terminal(hops: &[Rc<WitnessHop>]) -> Option<&WitnessHop> {
         .find(|h| matches!(h, WitnessHop::Terminal { .. }))
 }
 
+/// The operation id of `p`'s terminal (the commit a COMMIT route ends at):
+/// the site that names the row of a routine declared more than once
+/// (`CbGraph::route_states`).
+fn path_terminal_op(p: &WitnessPath) -> Option<&str> {
+    match find_terminal(&p.hops) {
+        Some(WitnessHop::Terminal {
+            operation_id: Some(op),
+            ..
+        }) => Some(op.as_str()),
+        _ => None,
+    }
+}
+
 /// SourceAnchorContract — the evidence form. `unavailable` when no citable anchor.
 #[derive(Debug, Clone)]
 struct SourceAnchorContract {
@@ -4380,7 +4393,12 @@ fn split_commit_part(
             }
             origin = Some(last);
             for &i in ix {
-                states.push(norm(cb.route_states(rid, path_steps(&outcome.paths[i]))));
+                let p = &outcome.paths[i];
+                states.push(norm(cb.route_states(
+                    rid,
+                    path_steps(p),
+                    path_terminal_op(p),
+                )));
             }
         }
         Some(b) => {
@@ -4389,7 +4407,7 @@ fn split_commit_part(
             for &i in ix {
                 let p = &outcome.paths[i];
                 let from = path_routines(p).last().unwrap_or(rid);
-                let prefix = cb.route_states(rid, path_steps(p));
+                let prefix = cb.route_states(rid, path_steps(p), None);
                 // Each crossing edge enters by its own step: a checked run
                 // pins the commits beyond, an object run lets the scope only
                 // MAY follow (B4 review, finding A).
@@ -4445,7 +4463,7 @@ fn split_commit_part(
     let commit_extra = found(N, &commit_ix);
     let extra_uncertain = commit_extra
         .as_ref()
-        .is_some_and(|p| uncertain(cb.route_states(rid, path_steps(p))));
+        .is_some_and(|p| uncertain(cb.route_states(rid, path_steps(p), path_terminal_op(p))));
     let error_extra = found(E, &error_ix);
     // An error route that errors on one reading only.
     let errs_maybe = |s: u8| s & E != 0 && s != E;
@@ -4459,9 +4477,13 @@ fn split_commit_part(
             .filter(|(_, s)| errs_maybe(**s))
             .map(|(&i, _)| i)
             .collect(),
-        extra: error_extra
-            .as_ref()
-            .is_some_and(|p| errs_maybe(norm(cb.route_states(rid, path_steps(p))))),
+        extra: error_extra.as_ref().is_some_and(|p| {
+            errs_maybe(norm(cb.route_states(
+                rid,
+                path_steps(p),
+                path_terminal_op(p),
+            )))
+        }),
         twins: Vec::new(),
     };
     // Twins (equal projection: the same hops, so the same steps; only the
@@ -4469,7 +4491,7 @@ fn split_commit_part(
     let twin_states: Vec<u8> = outcome
         .twins
         .iter()
-        .map(|t| norm(cb.route_states(rid, path_steps(t))))
+        .map(|t| norm(cb.route_states(rid, path_steps(t), path_terminal_op(t))))
         .collect();
     let commit_twins: Vec<usize> = (0..outcome.twins.len())
         .filter(|&t| twin_states[t] & N != 0)
@@ -4505,7 +4527,7 @@ fn split_commit_part(
         // Beyond a crossing: a route from the routine it enters.
         let crossing = bnd.and_then(|b| idx.crossings.get(&b.id))?;
         let from = *nodes.last()?;
-        let prefix = cb.route_states(rid, path_steps(p));
+        let prefix = cb.route_states(rid, path_steps(p), None);
         for e in crossing.edges.iter().filter(|e| e.from == from) {
             let start = cb.entered(prefix, cb.step_at(e.site.guarded_id()), &e.to);
             if let Some(route) = cb.route_beyond(&e.to, start, bit) {

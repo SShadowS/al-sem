@@ -7,6 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 final review follow-up: each declaration's own body)
+
+- **A dispatch reaches only the declarations that subscribe** (review blocking B1). The
+  fix below made `EventFacts::of_arms` union every copy's subscriptions onto the one
+  routine node, so one copy's subscription reached ANOTHER copy's body: in `#if A [
+  EventSubscriber(…'OnX'…)] H: Commit(); #else [EventSubscriber(…'OnY'…)] H: (empty)
+  #endif`, `prove . "AD Pub::RaiseY" may-commit` said `yes`, citing the `OnX`
+  declaration's `Commit`, a path no build has (the same shape in one file had been wrong
+  since #103; master said `no` for two files). Now the cone ties each subscription to
+  the declarations that declare it: a dispatch edge whose event only some declarations
+  of the subscriber subscribe to (`model::events::rows_declaring_subscription`: a row
+  with no `[EventSubscriber]` naming that event, and element, cannot) goes to a cone
+  node of its own (`capability_cone::arm_subscriber_nodes`) that holds only those
+  declarations' direct facts and out-edges (a fact or an edge whose site no row of the
+  routine holds stays: the cautious side), with the routine's coverage, row and guard
+  frame. The node is internal to the cone: facts keep their subject, an inherited fact
+  names its hop (the event), and the node is dropped from what the cone returns. Both
+  the one-file whole-object `#if`/`#else` form and two files, both orders, single-app
+  and cross-app. The union on the node stays (what the routine subscribes to in some
+  build); which body a subscription runs is decided where the bodies are read.
+- **A declaration's own `[CommitBehavior]` is definite for its own body** (non-blocking
+  1). An attribute another declaration lacks is now marked
+  `AttributeInfo::another_declaration_lacks` (`AttributeIr::another_declaration_lacks`
+  in the lowerer, `anotherDeclarationLacks` in the attribute JSON), not `conditional`
+  (which stays "some build of THIS declaration lacks it"). `has_definite_attribute`
+  (a reader of the routine from outside: a caller's trap, the return summary) reads
+  both flags; the new `find_own_definite_attribute` reads `conditional` only, and
+  `commit_scope::declared` uses it, with the row's OWN declaring object (#279). The
+  commit-scope graph gives each row of a routine whose rows declare different behaviors
+  its own node (`CommitScopes::arms`, `CbGraph`: a hub that declares nothing, a node per
+  row with that row's declaration, a catch-all with every row's); a commit runs under
+  the row that holds it, a route through the routine under the row whose call site it
+  leaves by (`route_states` takes the route's terminal operation). So
+  `[CommitBehavior(Ignore)]` on the one declaration that commits: `may-commit` is `no`
+  for it and its callers (probes c1 member arms, c2 two files, c3 whole objects; was
+  `yes (conditional)`); the commit in the OTHER declaration stays `yes` (control).
+  `Two` with `Ignore` in one arm and `Error` in the other reads `I|E` (no build runs
+  it normally), not `N|I|E`.
+- **A file's site ids no longer move when another file changes** (non-blocking 2). The
+  fix below numbered a later file's rows after the earlier files', so adding sites to
+  `a.al` moved `b.al`'s (`op5` → `op7`) and a rename that changed the sort order moved
+  them too; persisted ids (digest `factId`s, snapshot and `diff` operation ids) drifted
+  on unrelated edits. Now each file keeps its own numbering (from 0, its own `#if` arms
+  apart) and, only for a routine declared in two or more files, moves it into a block
+  of its own: `block * 100000`, the block (1..=9999) picked from a hash of the file's
+  OWN source unit (`workspace::file_site_blocks`). Trade-offs, stated: the ids keep
+  their format (`{id}/op{n}`, so fingerprint stripping and every parser are unchanged)
+  but get large numbers (`op523400003`); a file's ids for such a routine move when a
+  second file starts or stops declaring it, and when its own path changes; two files
+  whose hashes pick one block take the next free one in source-unit order (the one case
+  where another file, by its path, never its content, moves a file's ids); a file with
+  100,000 sites in one routine would overflow its block (debug-asserted). Deterministic,
+  so a session refresh equals a cold build (checked below). The rejected option, a path
+  text in the id (`…/op0@b.al`), would have changed the id format for every reader.
+- **`CollidedRows::order` covers every row of a collided id** (non-blocking 3): it
+  cleared `dominates_success_return` only on rows with scope frames. A row without
+  frames carries no order today (a TryFunction's walk and a bodiless row stamp none),
+  but the rule no longer rests on that (`collided_row`).
+- **The join and the summary merge read every group alike** (non-blocking 4). The join
+  skipped symbol-only groups (`is_source`) while `merge_alternative_summaries` merged
+  them. A symbol-only group is an ABI overload collapse: the overloads compile
+  together, but a caller bound to the id cannot tell which it reaches, so an attribute
+  one of them lacks is a "may" for that caller. The join now marks every group (lifting
+  and renumbering touch sites, which symbol-only rows have none of).
+- **Wording** (non-blocking 5): the fix below said the union of subscriptions was "the
+  cautious side, never a lost subscription"; it also let a subscription reach a body
+  that does not subscribe (B1 above). Corrected in `EventFacts::of_arms` and below.
+- **Outside consumers.** Persisted ids: a routine declared in two or more files has
+  every file's site ids in that file's block (`…/op{block*100000+n}`), and so the
+  digest `factId`s, `evidenceOperationId`/`callsiteId`s and snapshot/`diff` operation
+  ids built on them; fingerprints strip site segments, so baselines do not move. A
+  routine declared in one file, or in `#if` arms of one file only, keeps its ids. The
+  attribute JSON (the L2 projection's `attributesParsed`, and the model's
+  `AttributeInfo` wherever it is serialized) gains `anotherDeclarationLacks: true`
+  where it applies, and `conditional` no longer appears for an attribute only another
+  declaration lacks. The impact summary schema is 5
+  (`impact::keys::SUMMARY_SCHEMA`, the impact JSON field `summarySchema`). No golden
+  moved.
+- **Left (stated):** only the cone ties a subscription to its declarations; the other
+  walkers of a dispatch edge (the digest's witness search, the commit-scope graph, the
+  L4 summary solver and the advisory detectors on it) still enter every declaration of
+  the subscriber, so a witness route or an advisory finding may pass through a
+  declaration that does not subscribe; the facts and the answers come from the cone.
+- Tests: CLI `cli_b2_alternative_declarations`:
+  `a_dispatch_reaches_only_the_declarations_that_subscribe` (one file and two files,
+  the `OnX` declaration first and second, single-app and cross-app; `RaiseX` stays
+  `yes`), `an_own_commit_behavior_is_definite_for_its_own_commit` (c1, c2, c3 and the
+  control with the commit in the other declaration), `a_files_site_ids_do_not_move_when_another_file_changes`
+  (`b.al` byte-identical; `a.al` gains sites; `a.al` renamed to `z.al`). Unit:
+  `snapshot::collided_rows_order_tests::a_collided_row_without_frames_does_not_dominate`,
+  `return_summary::a_symbol_only_group_is_joined_like_every_group`,
+  `commit_scope::every_arm_adds_its_declaration` (now `I|E` for `Two`, and each row's
+  own bits), the lowerer's `an_attribute_one_arm_of_a_routine_lacks_is_conditional`
+  (now `another_declaration_lacks`, never `conditional`), the model's
+  `declarations_in_two_files_are_alternatives`.
+- Session: `program::session::workspace::tests::{default_mode,low_mem}` green;
+  `aldump --session-refresh <copy> --verify` on a copy holding the review's e2 and c2
+  probes (two files each), with `--file` on each split file and on the caller, default
+  and `--low-mem`: every step `equalToCold: true`.
+- Discrimination proofs (break with Edit, narrowest test RED, revert with Edit, GREEN;
+  CLI = `cargo test --test cli cli_b2_alternative_declarations::`; breaks with
+  independent tests were run together, five rounds, and each round's reverts were seen
+  green in the next):
+  1. `arm_subscriber_nodes` off (`true ||` on the early return): RED
+     `a_dispatch_reaches_only_…` (one file, `OnX` first: `RaiseY` `yes`).
+  2. Its site filter off (every fact and edge kept): RED the same test.
+  3. `declared` back to `find_definite_attribute`: RED `an_own_commit_…` (c1 `yes`)
+     and `every_arm_adds_its_declaration`.
+  4. `CommitScopes::arms` never filled: RED `an_own_commit_…` (c1 `yes`) and
+     `every_arm_adds_its_declaration` (`Two`: no arms).
+  5. `route_states` without the terminal (`terminal.filter(|_| false)`): RED
+     `an_own_commit_…` (c1 `yes`).
+  6. The join's attribute mark off (`false &&`): RED `a_try_function_…` (`no`).
+  7. `find_definite_attribute` back to `!conditional`: RED `a_try_function_…` (`no`).
+  8. `file_site_blocks` by sorted position instead of the path's hash: RED
+     `a_files_site_ids_…` (the rename moved `b.al`'s ids). The "a.al gains sites" half
+     is not separately broken (it held under this break too: a stated limit; it failed
+     under the fix below's sequential numbering, which the review reported).
+  9. `CollidedRows::order` by `frame_offset` again: RED
+     `a_collided_row_without_frames_does_not_dominate`.
+  10. The join's source-only filter back (`ws:` rows only): RED
+      `a_symbol_only_group_is_joined_like_every_group`.
+  11. The lowerer marking `conditional` instead: RED the lowerer test, `an_own_commit_…`
+      (c1 `yes`) and `every_arm_adds_its_declaration` (`Two` `N|I|E`).
+  12. `CommitScopes::of_model` reading every object row instead of the row's own: RED
+      `every_arm_adds_its_declaration` (`Q`: no arms).
+
 ### Fixed (engine limits wave 2, B2 final review: one id declared in several places)
 
 - **Two declarations of one id that never compile together are alternatives, wherever
@@ -39,19 +166,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it never runs in `project_ir`, and a file's cached raw rows (`row_cache`) stay a
   function of that file alone. For the source rows of one routine id (any object
   declaration, any file):
-  - an attribute not every row carries (same text, whitespace removed, lowercased) is
-    conditional on every row. So `has_definite_attribute` on ANY row is "every row has
-    it", and every reader that takes one row of an id (`traps::is_try_function` in
-    `LiteralReach::new` and `callers_context`, `return_summary::parse_commit_behavior`,
-    `commit_scope::declared`, `model::events::isolated_in_some_builds_only`) reads the
-    definite answer only when every declaration agrees;
+  - an attribute not every row carries (same text, whitespace removed, lowercased) was
+    marked conditional on every row. So `has_definite_attribute` on ANY row is "every
+    row has it", and every reader that takes one row of an id (`traps::is_try_function`
+    in `LiteralReach::new` and `callers_context`, `return_summary::parse_commit_behavior`)
+    reads the definite answer only when every declaration agrees. (The follow-up above
+    marks it `another_declaration_lacks` instead, so a row's own body still reads its
+    own attribute as definite.)
   - a `top-level` site is `conditional` (it replaces `lift_arm_declarations`);
-  - the rows of a later file continue the site numbering of the earlier files' (`op`,
+  - the rows of a later file continued the site numbering of the earlier files' (`op`,
     `cs`, `loop`, `u`, `rule`), as `#if` arms in one file already did, so a site id
     names one site. The rewrite covers every field that holds a site id; a debug build
     asserts it (the row's `Debug` text after equals the rewrite of its text before).
     Decided: distinct, not shared, so no reader needs the class-P "last owning row"
-    rule for real source any more.
+    rule for real source any more. (The follow-up above replaces "continue after the
+    earlier files" with a block per file picked from its own path: the continuing
+    numbers moved a file's ids when another file changed.)
   - A table declared more than once is temporary only when every declaration is.
   - **Objects are not joined.** A `ModelObject` row is read by the routines it declares
     (#279: `SingleInstance`, page permissions, `SourceTableTemporary`,
@@ -67,8 +197,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EventFacts::of_arms` unions the event facts of every stamped copy, not only the
   survivor's own file's. The #103 tests that pinned first-wins across files are decided
   again: `copies_from_a_second_file_add_their_subscriptions`,
-  `opposite_arms_in_two_files_are_merged` (a stale second read of one app adds possible
-  subscriptions; first-wins could lose the current file's).
+  `opposite_arms_in_two_files_are_merged` (first-wins could lose the current file's
+  subscriptions). The union alone was not safe: it let one declaration's subscription
+  reach another declaration's body, a wrong definite `yes` (the follow-up above ties
+  each subscription to the declarations that declare it).
 - **The return summaries merge the rows of an id** (`compute_return_summaries`, new
   `merge_alternative_summaries`): a value the rows disagree on is `unknown` (normal
   return, all paths error) or `conditional` (commit behavior), a "may" flag holds when
@@ -89,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callee with two `Commit`s printed one id at both lines. Now the site's own id.
 - **Outside consumers.** Persisted ids: a routine declared in two files has its second
   file's site ids moved (`…/opN`, `…/csN` and the digest `factId`s, snapshot and `diff`
-  operation ids built on them); fingerprints strip site segments, so baselines do not
+  operation ids built on them; the follow-up above moves every file's of such a routine
+  into a block of its own); fingerprints strip site segments, so baselines do not
   move. Digest: a caller's `paths[].terminal.operationId` now names the site whose line
   it prints (any callee with two sites of one kind). The impact-base cache's summary
   schema is 4 (`impact::keys::SUMMARY_SCHEMA`; the impact JSON field `summarySchema`

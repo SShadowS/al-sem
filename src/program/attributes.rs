@@ -57,6 +57,27 @@ pub struct AttributeInfo {
     /// when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conditional: bool,
+    /// The routine is declared more than once (`#if` arms, whole-object arms,
+    /// two files) and ANOTHER declaration lacks this attribute
+    /// (`al_syntax::ir::AttributeIr::another_declaration_lacks`; the model
+    /// join sets it across object declarations and files). This row's own
+    /// builds all have it. JSON `anotherDeclarationLacks`, absent when `false`.
+    #[serde(
+        default,
+        rename = "anotherDeclarationLacks",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub another_declaration_lacks: bool,
+}
+
+impl AttributeInfo {
+    /// Whether every build of the ROUTINE (any of its declarations) has this
+    /// attribute: the reading for a reader that judges the routine from
+    /// outside (a caller's trap, the routine's return summary).
+    #[must_use]
+    pub fn in_every_build(&self) -> bool {
+        !self.conditional && !self.another_declaration_lacks
+    }
 }
 
 // ── The definite / may rule (engine limits B2) ──────────────────────────────
@@ -67,12 +88,27 @@ pub struct AttributeInfo {
 // attribute's presence (a trap that removes an error, a commit that is
 // suppressed, a commit that errors) must use [`find_definite_attribute`] /
 // [`has_definite_attribute`] instead, which see only an attribute every build
-// of the routine has. A reader for whom presence is the cautious reading
-// (a TryFunction body read as opaque) keeps the "may" accessors.
+// of the routine has. A reader that judges a site INSIDE one declaration (its
+// own commits under its own `[CommitBehavior]`) uses
+// [`find_own_definite_attribute`]: every build in which that declaration
+// exists has it. A reader for whom presence is the cautious reading (a
+// TryFunction body read as opaque) keeps the "may" accessors.
 
 /// [`find_attribute`] over the attributes every build of the routine has
-/// (not [`AttributeInfo::conditional`]).
+/// ([`AttributeInfo::in_every_build`]).
 pub fn find_definite_attribute<'a>(
+    attrs: &'a [AttributeInfo],
+    name: &str,
+) -> Option<&'a AttributeInfo> {
+    attrs
+        .iter()
+        .find(|a| a.in_every_build() && a.name.eq_ignore_ascii_case(name))
+}
+
+/// [`find_attribute`] over the attributes every build of THIS declaration
+/// (row) has (not [`AttributeInfo::conditional`]); another declaration of the
+/// routine may lack them.
+pub fn find_own_definite_attribute<'a>(
     attrs: &'a [AttributeInfo],
     name: &str,
 ) -> Option<&'a AttributeInfo> {
