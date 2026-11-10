@@ -53,11 +53,12 @@
 //! [`param_guard`]: crate::engine::l4::param_guard
 
 use crate::engine::l4::param_guard::{FrameGuards, Req, frame_guards_over};
+use crate::engine::l5::commit_scope::CbGraph;
 use crate::engine::l5::digest::{Crossing, CrossingSite, DigestEffectResult};
 use crate::engine::l5::recref_flow::{
     Atom, Atoms, RecRefFlow, RelevantGlobals, RelevantParams, TSet, eval,
 };
-use crate::engine::l5::snapshot::SnapshotGraphEdge;
+use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapshotGraphEdge};
 use crate::engine::l5::terminal_facts::TerminalFacts;
 use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, is_try_function};
 use crate::program::body::features::{PCFNNode, TableCase};
@@ -359,6 +360,11 @@ pub(crate) struct FlowNotes {
     /// ruling may rest on it: it holds only if the root's own callers have
     /// no write pending when they call the root ([`TrapScope::clean_checked`]).
     pub trap_assumes_clean_entry: bool,
+    /// B7 review round 2: as `trap_assumes_clean_entry`, and the clean run
+    /// is clean only because a `Commit()` before it ends the write: the
+    /// ruling also assumes the root's callers do not call it under
+    /// `[CommitBehavior(Ignore)]` or `(Error)` ([`TrapScope::clean_by_commit`]).
+    pub trap_assumes_normal_commit: bool,
     /// L30: the routines with `[ErrorBehavior(ErrorBehavior::Collect)]` on
     /// the row's listed route (the root first): a collectible error raised
     /// under one is collected and raised when it ends, unless the code
@@ -1575,6 +1581,12 @@ pub(crate) struct LiteralReach<'a> {
     /// checked run. (Built with the reach, not on first need: a cell would
     /// make `LiteralReach` invariant in `'a`.)
     pending: Option<PendingWrites<'a>>,
+    /// B7 review round 2 (B4 x B7): the tree's `[CommitBehavior]` graph,
+    /// which says whether a `Commit()` before a checked run surely ends the
+    /// write ([`CbGraph::commit_surely_runs`]). `None` when no routine
+    /// declares a behavior (every commit runs normally) or no checked run
+    /// exists.
+    commit_graph: Option<CbGraph<'a>>,
 }
 
 /// B7 review (a checked run inside an open write transaction): the write
@@ -1592,6 +1604,23 @@ struct PendingWrites<'a> {
     may_write: HashSet<&'a str>,
     /// Per routine, its in-edges as (caller, position in the caller's `out`).
     rev: HashMap<&'a str, Vec<(&'a str, u32)>>,
+}
+
+/// [`LiteralReach::soft_checked_runs`]: the soft runs (caller, out-edge
+/// position), whether a clean run is in reach, and whether one is clean only
+/// because a `Commit()` ends the write.
+type SoftRuns<'a> = (HashSet<(&'a str, u32)>, bool, bool);
+
+/// B7 review round 2: how the "is a write pending at this checked run"
+/// search reads a `Commit()` ([`LiteralReach::local_pending`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Commits {
+    /// A commit ends the write before it when it runs normally on every
+    /// route from the root (the B4 rule).
+    End,
+    /// No commit ends anything: the reading when the root's own callers
+    /// may call it under `[CommitBehavior(Ignore)]` or `(Error)`.
+    Never,
 }
 
 /// B7/L23: which traps an error search does not cross.
@@ -1618,6 +1647,13 @@ pub(crate) struct TrapScope<'a> {
     /// reach: a ruling "caught" may rest on it, which holds only if the
     /// root's own callers have no write pending when they call it.
     pub clean_checked: bool,
+    /// B7 review round 2: some checked run counts as clean only because a
+    /// `Commit()` before it ends the write. That commit runs normally on
+    /// every route from the root as the root is entered normally
+    /// ([`CbGraph::commit_surely_runs`]); a caller that calls the root under
+    /// `[CommitBehavior(Ignore)]` or `(Error)` would make it commit nothing,
+    /// so the ruling also assumes the callers set no such behavior.
+    pub clean_by_commit: bool,
     /// The root's reach that crosses no definite trap.
     definite: OpenReach<'a>,
     /// The root's reach that crosses no trap; `None` when every trap in
@@ -1841,11 +1877,10 @@ impl<'a> EnumImpls<'a> {
 }
 
 impl<'a> LiteralReach<'a> {
-    pub(crate) fn new(
-        edges: &'a [SnapshotGraphEdge],
-        facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact],
-        model: &'a Model,
-    ) -> Self {
+    pub(crate) fn new(tree: &'a CapabilitySnapshot, model: &'a Model) -> Self {
+        let edges: &'a [SnapshotGraphEdge] = &tree.typed_edges;
+        let facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact] =
+            &tree.capability_facts;
         // The strings are borrowed from the rows' tables, which the rows of
         // `facts` keep alive for `'a`.
         let terminals = TerminalFacts::new(facts);
@@ -2007,6 +2042,7 @@ impl<'a> LiteralReach<'a> {
                 .collect(),
             builtin_sites,
             pending: None,
+            commit_graph: None,
         };
         // B7 review: the write facts, only when some checked run needs them.
         if reach
@@ -2016,6 +2052,7 @@ impl<'a> LiteralReach<'a> {
             .any(|&(_, k)| k == TrapKind::CheckedRun)
         {
             reach.pending = Some(reach.build_pending_writes());
+            reach.commit_graph = CbGraph::of_tree(tree);
         }
         reach
     }
@@ -2811,14 +2848,15 @@ impl<'a> LiteralReach<'a> {
         if !definite && !isolated {
             return None;
         }
-        let (soft, clean_checked) = if checked {
+        let (soft, clean_checked, clean_by_commit) = if checked {
             self.soft_checked_runs(root)?
         } else {
-            (HashSet::new(), false)
+            (HashSet::new(), false, false)
         };
         let mut scope = TrapScope {
             soft,
             clean_checked,
+            clean_by_commit,
             definite: OpenReach {
                 parent: HashMap::new(),
             },
@@ -2941,11 +2979,20 @@ impl<'a> LiteralReach<'a> {
     /// control-flow tree by the pending-writes walk
     /// ([`crate::engine::l5::pending_writes::sites_before`]); an edge with no
     /// site (an event dispatch) counts every site of `f`.
+    ///
+    /// B7 review round 2 (B4 x B7): a `Commit()` of `f` ends the write only
+    /// when `commits` is [`Commits::End`] and it runs normally on every
+    /// route from `root` ([`CbGraph::commit_surely_runs`], the B4 rule).
+    /// Microsoft Learn, "CommitBehavior attribute": under `Ignore` "this
+    /// commit is ignored" (the write stays pending), under `Error` "this
+    /// commit causes an error" (it commits nothing).
     fn local_pending(
         &self,
+        root: &str,
         f: &'a str,
         j: u32,
         w: &PendingWrites<'a>,
+        commits: Commits,
         memo: &mut HashMap<(&'a str, u32), (bool, bool)>,
     ) -> (bool, bool) {
         if let Some(&v) = memo.get(&(f, j)) {
@@ -2955,8 +3002,19 @@ impl<'a> LiteralReach<'a> {
             None => (true, false),
             Some(row) => {
                 let site = self.out[f][j as usize].1.and_then(EdgeSite::guarded);
+                let commits_end = commits == Commits::End
+                    && (!row.operation_sites.iter().any(|o| o.kind == "commit")
+                        || self
+                            .commit_graph
+                            .as_ref()
+                            .is_none_or(|g| g.commit_surely_runs(root, f)));
                 let before = match site {
-                    Some(s) => crate::engine::l5::pending_writes::sites_before(row, &[s], false),
+                    Some(s) => crate::engine::l5::pending_writes::sites_before_where(
+                        row,
+                        &[s],
+                        false,
+                        commits_end,
+                    ),
                     None => crate::engine::l5::pending_writes::sites_before(row, &[], true),
                 };
                 let dirty = w.siteless_writers.contains(f)
@@ -2981,7 +3039,11 @@ impl<'a> LiteralReach<'a> {
     /// and no `Commit()` on the way ended (a least fixpoint over the reach,
     /// so recursion is followed). `None` for a root the model has no row
     /// for.
-    fn soft_checked_runs(&self, root: &str) -> Option<(HashSet<(&'a str, u32)>, bool)> {
+    ///
+    /// Also returns whether some checked run counts as clean only because a
+    /// `Commit()` before it ends the write ([`TrapScope::clean_by_commit`]):
+    /// the search is run a second time with no commit ending anything.
+    fn soft_checked_runs(&self, root: &str) -> Option<SoftRuns<'a>> {
         let plain = self.open_reach(root, &|_, _, _| false)?;
         let checked: Vec<(&'a str, u32)> = plain
             .parent
@@ -2996,7 +3058,7 @@ impl<'a> LiteralReach<'a> {
             })
             .collect();
         if checked.is_empty() {
-            return Some((HashSet::new(), false));
+            return Some((HashSet::new(), false, false));
         }
         let w = self
             .pending
@@ -3013,45 +3075,55 @@ impl<'a> LiteralReach<'a> {
                 }
             }
         }
-        let mut memo: HashMap<(&'a str, u32), (bool, bool)> = HashMap::new();
-        let mut pending_at = |p: &'a str, j: u32, dirty: &HashSet<&'a str>| {
-            let (local, committed) = self.local_pending(p, j, w, &mut memo);
-            local || (dirty.contains(p) && !committed)
+        // The soft runs under one reading of `Commit()`, and whether some
+        // commit ended a write on the way to a site.
+        let soft_under = |commits: Commits| {
+            let mut memo: HashMap<(&'a str, u32), (bool, bool)> = HashMap::new();
+            let mut pending_at = |p: &'a str, j: u32, dirty: &HashSet<&'a str>| {
+                let (local, committed) = self.local_pending(root, p, j, w, commits, &mut memo);
+                local || (dirty.contains(p) && !committed)
+            };
+            // Entered with a write pending (least fixpoint).
+            let mut dirty: HashSet<&'a str> = HashSet::new();
+            loop {
+                let mut changed = false;
+                for &x in &anc {
+                    if dirty.contains(x) {
+                        continue;
+                    }
+                    let entered_dirty =
+                        w.rev
+                            .get(x)
+                            .map_or(none, Vec::as_slice)
+                            .iter()
+                            .any(|&(p, j)| {
+                                anc.contains(p)
+                                    && !self.is_checked_run_edge(p, j)
+                                    && pending_at(p, j, &dirty)
+                            });
+                    if entered_dirty {
+                        dirty.insert(x);
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            let soft: HashSet<(&'a str, u32)> = checked
+                .iter()
+                .copied()
+                .filter(|&(f, j)| pending_at(f, j, &dirty))
+                .collect();
+            let cleared = memo.values().any(|&(_, committed)| committed);
+            (soft, cleared)
         };
-        // Entered with a write pending (least fixpoint).
-        let mut dirty: HashSet<&'a str> = HashSet::new();
-        loop {
-            let mut changed = false;
-            for &x in &anc {
-                if dirty.contains(x) {
-                    continue;
-                }
-                let entered_dirty =
-                    w.rev
-                        .get(x)
-                        .map_or(none, Vec::as_slice)
-                        .iter()
-                        .any(|&(p, j)| {
-                            anc.contains(p)
-                                && !self.is_checked_run_edge(p, j)
-                                && pending_at(p, j, &dirty)
-                        });
-                if entered_dirty {
-                    dirty.insert(x);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let n = checked.len();
-        let soft: HashSet<(&'a str, u32)> = checked
-            .into_iter()
-            .filter(|&(f, j)| pending_at(f, j, &dirty))
-            .collect();
-        let clean = soft.len() < n;
-        Some((soft, clean))
+        let (soft, cleared) = soft_under(Commits::End);
+        let clean = soft.len() < checked.len();
+        // A run clean only because a commit ended the write: with no
+        // commit ending anything, more runs are soft (a superset).
+        let by_commit = clean && cleared && soft_under(Commits::Never).0.len() > soft.len();
+        Some((soft, clean, by_commit))
     }
 
     /// L30: whether a routine that collects errors is in `tree`'s reach.

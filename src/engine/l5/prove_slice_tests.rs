@@ -1097,7 +1097,7 @@ fn a_cancelled_enumeration_stops_with_its_limit() {
         crate::engine::l4::cone_derived::WitnessScope::All,
     );
     let model = &base.resolved;
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let id = |name: &str| {
         model
             .workspace

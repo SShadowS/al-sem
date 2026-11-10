@@ -25,30 +25,44 @@
 //!   on any route from the root ([`crate::engine::l5::literal_reach`],
 //!   `LiteralReach::soft_checked_runs`); where one may, the error escapes
 //!   (`escapes-if-write-pending`), and a caught ruling states that it
-//!   assumes the root's own callers have no write pending.
+//!   assumes the root's own callers have no write pending
+//!   ([`entry_assumption`], in prove, explain and digest alike).
+//!   A `Commit()` before the run ends the write only when it runs normally
+//!   on every route from the root (B4's `[CommitBehavior]` rule,
+//!   [`crate::engine::l5::commit_scope::CbGraph::commit_surely_runs`]).
+//!   Learn ("CommitBehavior attribute"): under `Ignore` "this commit is
+//!   ignored", so the write stays pending; under `Error` "this commit causes
+//!   an error", so it commits nothing either. When a run counts as clean
+//!   only because such a commit ends the write, the ruling also assumes the
+//!   root's callers do not call it under either behavior.
 //! - **TryFunction with its result used** ([`TrapKind::TryFunction`]): a call
-//!   to a `[TryFunction]` routine whose value is tested in a shape Learn
-//!   names ([`PCallSite::result_tested`]: the whole right-hand side of
-//!   `Ok := …`, or the whole condition of an `if`, `while` or `until`,
-//!   through parentheses and `not`). Learn ("Handling errors using try
-//!   methods"): "If a try method call doesn't use the return value, the try
-//!   method operates like an ordinary method, and errors are exposed as
-//!   usual"; "If a try method call uses the return value in an `OK:=`
-//!   statement or a conditional statement such as `if-then`, errors are
-//!   caught". Learn names no other shape, and its one argument example
+//!   to a `[TryFunction]` routine whose value is tested
+//!   ([`PCallSite::result_tested`]: the whole right-hand side of `Ok := …`,
+//!   or the whole condition of an `if`, `while` or `until`, through
+//!   parentheses and `not`). Learn ("Handling errors using try methods"):
+//!   "If a try method call doesn't use the return value, the try method
+//!   operates like an ordinary method, and errors are exposed as usual";
+//!   "If a try method call uses the return value in an `OK:=` statement or
+//!   a conditional statement such as `if-then`, errors are caught". Learn
+//!   names `OK :=` and `if-then`; reading a `while` or `until` condition as
+//!   "a conditional statement such as `if-then`", and `B := not TryIt()` as
+//!   an assignment of the value, goes slightly beyond the named shapes and
+//!   was not checked on BC. Learn names no other shape, and its one argument example
 //!   (`DoWork(DoInsert(Rec)); // Allowed as the DoWork return value isn't
 //!   used so it's not a try function`) does not establish that a try call
 //!   used as an argument traps. So an argument, `exit(TryIt())` or a part of
 //!   `a and TryIt()` is counted as an ordinary call: an error there is
 //!   reported as escaping (it may be caught at run time; never a false
 //!   "no"). **A TryFunction does not roll back the database changes made
-//!   before the error** (same page); nothing here says it does. Not
-//!   modeled, both conservative: on premises with
-//!   `DisableWriteInsideTryFunctions` (the default there) a write inside a
-//!   try method is itself a run-time error, which the answers do not add;
-//!   and Learn says "Arguments for a try function are evaluated inside the
-//!   try function", so an error in such an argument is caught too, while
-//!   the answers report it as escaping.
+//!   before the error** (same page); nothing here says it does. Two points
+//!   are not modeled. (1) On premises with `DisableWriteInsideTryFunctions`
+//!   (the default there) a write inside a try method is itself a run-time
+//!   error. The answers do not add it, and Learn does not say whether the
+//!   try call catches it; if it does not, `throws-error` under-reports it,
+//!   so this is NOT known to be safe (engine limits L23, left). (2) Learn
+//!   says "Arguments for a try function are evaluated inside the try
+//!   function", so an error in such an argument is caught too, while the
+//!   answers report it as escaping (safe: an over-report).
 //! - **asserterror** ([`TrapKind::Asserterror`]): a call or record operation
 //!   under `asserterror` (a test expects the error).
 //! - **isolated event** ([`TrapKind::IsolatedEvent`]): the dispatch from the
@@ -184,6 +198,30 @@ pub(crate) fn call_trap(cs: &PCallSite, callee: TrapCallee<'_>) -> Option<TrapKi
     }
     let into_try = matches!(callee, TrapCallee::Routine(Some(c)) if is_try_function(c));
     (into_try && cs.result_tested).then_some(TrapKind::TryFunction)
+}
+
+/// The assumption a caught ruling rests on when a checked run may be its
+/// trap (module doc), as every forward error answer states it: prove's
+/// assumptions, explain's and digest's header and caught line. `None` when
+/// no caught ruling needs it. `normal_commit`: the run is clean only because
+/// a `Commit()` before it ends the write.
+#[must_use]
+pub(crate) fn entry_assumption(clean_entry: bool, normal_commit: bool) -> Option<String> {
+    if !clean_entry {
+        return None;
+    }
+    Some(if normal_commit {
+        "assumes the routine's callers have no write pending when they call it and do not call \
+         it under [CommitBehavior(Ignore)] or [CommitBehavior(Error)]: an error left out as \
+         caught may rest on a checked Codeunit.Run, which is itself a run-time error inside a \
+         write transaction, and on a Commit() before it that ends the write"
+            .to_string()
+    } else {
+        "assumes the routine's callers have no write pending when they call it: an error left \
+         out as caught may rest on a checked Codeunit.Run, and a checked run inside a write \
+         transaction is itself a run-time error"
+            .to_string()
+    })
 }
 
 /// L30: whether `r` collects errors (`[ErrorBehavior(ErrorBehavior::Collect)]`):

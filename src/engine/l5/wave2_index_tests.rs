@@ -568,7 +568,7 @@ fn an_event_crossing_is_one_per_event_with_every_publish_site() {
         c.sites
     );
 
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let mut from_a = reach.event_edges_from(&pub_a);
     from_a.sort_unstable();
     let mut want = vec![
@@ -608,7 +608,7 @@ fn terminal_records_keep_class_producer_and_original_kind() {
     let ledger = format!("{DEP_GUID}/table/19");
     // The literal search's own index (the production holder), and a fresh
     // one over the same facts: equal record for record.
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let terms = reach.terminals();
     assert_eq!(
         terms.records(),
@@ -872,11 +872,7 @@ impl G1 {
     }
 
     fn reach(&self) -> LiteralReach<'_> {
-        LiteralReach::new(
-            &self.tree.typed_edges,
-            &self.tree.capability_facts,
-            &self.base.resolved,
-        )
+        LiteralReach::new(&self.tree, &self.base.resolved)
     }
 }
 
@@ -1198,7 +1194,7 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
         "precondition"
     );
     // Root-level liveness alone keeps it.
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let (_, g33) = reach.unreachable_effects(&root, &effects, &[]);
     assert!(
         g33.values().all(|d| !d.contains(&ledger)),
@@ -1250,7 +1246,7 @@ fn a_mixed_dispatch_is_entered_only_by_its_dependency_edge() {
     assert_eq!(cs.len(), 1, "precondition");
     let idx = build_fingerprint_indexes(&tree);
     let c = &idx.crossings[&format!("cs:{}", cs[0])];
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let root_tree = reach.live_tree(&root).expect("the root's search");
     assert_eq!(
         reach.crossing_entries(&root_tree, c).len(),
@@ -1332,7 +1328,7 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
         hop(&root, Some(&post), Some(&false_site), None),
         hop(&post, None, None, Some(&guarded_insert)),
     ]];
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     assert!(
         !reach.path_live(&row.via_paths[0]),
         "precondition: the listed path cannot run"
@@ -1426,7 +1422,7 @@ fn cdo_crossing_census() {
 
     // W2-0b's suffix cache on every group resource of both roots: its
     // outcomes and cost.
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
     let mut cache = crate::engine::l5::literal_reach::SuffixCache::default();
     let started = std::time::Instant::now();

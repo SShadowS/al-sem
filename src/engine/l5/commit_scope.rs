@@ -359,6 +359,9 @@ pub(crate) struct CbGraph<'a> {
     /// Per commit origin, the behaviors its commit can run under when a
     /// node is entered normally (0 = the node cannot reach it).
     toward: Mutex<HashMap<u32, Arc<Vec<u8>>>>,
+    /// As `toward`, with a checked run read as an object run whose scope MAY
+    /// follow ([`Self::commit_surely_runs`]).
+    toward_explicit: Mutex<HashMap<u32, Arc<Vec<u8>>>>,
     scopes: &'a CommitScopes,
 }
 
@@ -498,16 +501,18 @@ impl<'a> CbGraph<'a> {
             carrier,
             any_commit: Vec::new(),
             toward: Mutex::new(HashMap::new()),
+            toward_explicit: Mutex::new(HashMap::new()),
             scopes,
         };
-        g.any_commit = g.backward_states(&carriers);
+        g.any_commit = g.backward_states(&carriers, true);
         Some(g)
     }
 
     /// The backward fixpoint from `origins`: per node, the behaviors a commit
     /// at one of them can run under when the node is entered normally
-    /// ([`P`] kept: read it through [`norm`]).
-    fn backward_states(&self, origins: &[u32]) -> Vec<u8> {
+    /// ([`P`] kept: read it through [`norm`]). With `pin` false a checked
+    /// run is read as [`Step::Run`] (see [`Self::commit_surely_runs`]).
+    fn backward_states(&self, origins: &[u32], pin: bool) -> Vec<u8> {
         let n = self.names.len();
         let mut t = vec![0u8; n];
         let mut stack: Vec<u32> = Vec::new();
@@ -518,6 +523,11 @@ impl<'a> CbGraph<'a> {
         while let Some(x) = stack.pop() {
             let tx = t[x as usize];
             for &(p, step) in &self.pred[x as usize] {
+                let step = if !pin && step == Step::CheckedRun {
+                    Step::Run
+                } else {
+                    step
+                };
                 let new = t[p as usize] | step.back(self.decl[p as usize], tx);
                 if new != t[p as usize] {
                     t[p as usize] = new;
@@ -553,13 +563,49 @@ impl<'a> CbGraph<'a> {
         if let Some(t) = self.toward.lock().expect("toward cache").get(&o) {
             return Arc::clone(t);
         }
-        let t = Arc::new(self.backward_states(&[o]));
+        let t = Arc::new(self.backward_states(&[o], true));
         self.toward
             .lock()
             .expect("toward cache")
             .entry(o)
             .or_insert(t)
             .clone()
+    }
+
+    /// Whether an explicit `Commit()` in `origin` runs normally on EVERY
+    /// route from `root` (entered normally): a question that relies on the
+    /// commit HAPPENING (B7: a `Commit()` that ends the write a checked
+    /// `Codeunit.Run` after it would otherwise run inside). Under `Ignore`
+    /// the write stays pending; under `Error` the commit raises an error
+    /// and commits nothing. The rule is the one above ([`Step`], [`lift`]),
+    /// with one difference in the safe direction for this question: a
+    /// checked run is read as [`Step::Run`] (the scope MAY follow into it),
+    /// not pinned. The pin stands for the run's IMPLICIT commit, which no
+    /// declaration changes; whether a caller's scope reaches an EXPLICIT
+    /// commit inside the run is not on Microsoft Learn. `false` when the
+    /// graph has no route from `root` to `origin` (a graph mismatch).
+    pub(crate) fn commit_surely_runs(&self, root: &str, origin: &str) -> bool {
+        let Some(o) = self.node(origin) else {
+            // No edge and no commit fact: only its own declaration applies.
+            return self.scopes.get(origin).is_none();
+        };
+        if !self.zone[o as usize] {
+            return true;
+        }
+        let Some(r) = self.node(root) else {
+            return false;
+        };
+        if let Some(t) = self.toward_explicit.lock().expect("toward cache").get(&o) {
+            return t[r as usize] == N;
+        }
+        let t: Arc<Vec<u8>> = Arc::new(self.backward_states(&[o], false));
+        let ok = t[r as usize] == N;
+        self.toward_explicit
+            .lock()
+            .expect("toward cache")
+            .entry(o)
+            .or_insert(t);
+        ok
     }
 
     /// The behaviors the commit at `origin` can run under on any route from
