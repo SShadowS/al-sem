@@ -1219,9 +1219,17 @@ fn collided_src(arm_b: &str) -> String {
 }
 
 /// The collided `Work`'s two rows (preconditions: one id, both trusted, the
-/// first row's `cs` site dead) and its detector-context coverage.
+/// first row's `cs` site dead) and its detector-context coverage. The rows
+/// share their site ids BY ASSIGNMENT (engine limits B2: production gives each
+/// `#if` arm its own ids; M6 is about one site id dead in one row and live in
+/// the other, so it states the shared id).
 fn collided_work(arm_b: &str) -> (Vec<ModelRoutine>, CoverageRecordOwned) {
-    let m = build(&collided_src(arm_b));
+    let m =
+        crate::program::model::program_calls::assemble_and_resolve_inline_program_shared_site_ids(
+            &[("src/T288.al".to_string(), collided_src(arm_b))],
+            APP,
+            false,
+        );
     let rows: Vec<ModelRoutine> = m
         .workspace
         .routines
@@ -1289,12 +1297,47 @@ fn m7_collided_dead_and_absent_drops_the_gap() {
 // G1-G12: the trust gate
 // ---------------------------------------------------------------------------
 
+/// Engine limits B2: the lowerer keeps a `#if` chain's arms as alternatives, so
+/// an `exit` in one arm no longer marks the code after the group (or another
+/// arm) `unreachable`; production cannot make G1's dead marks any more. The
+/// trust gate still guards any other wrong mark in a row with a directive, so
+/// the precondition is stated by assignment: after checking that production
+/// leaves `name`'s calls to `callees` live, they are marked `unreachable`.
+fn b2_live_then_mark_dead(m: &mut Model, name: &str, callees: &[&str]) {
+    let i = m
+        .workspace
+        .routines
+        .iter()
+        .position(|r| r.name == name)
+        .unwrap_or_else(|| panic!("precondition: a routine {name}"));
+    let r = &mut m.workspace.routines[i];
+    let mut marked = 0;
+    for cs in &mut r.call_sites {
+        if callees.iter().any(|c| cs.callee_text.contains(c)) {
+            assert_ne!(
+                cs.control_context.as_deref(),
+                Some("unreachable"),
+                "B2: {name}'s call to {} is live in some build",
+                cs.callee_text
+            );
+            cs.control_context = Some("unreachable".to_string());
+            marked += 1;
+        }
+    }
+    assert!(marked > 0, "precondition: {name} calls {callees:?}");
+    assert!(
+        !r.dead_marks_trusted,
+        "precondition: {name}'s row has a directive, so its marks are not trusted"
+    );
+}
+
 /// G1: a preprocessor directive in the routine keeps the dead-marked gap AND
 /// the dead-marked edge to the committing `DoCommitP`, in each shape the
-/// lowerer splices.
+/// lowerer used to splice (the marks are stated by assignment since B2,
+/// [`b2_live_then_mark_dead`]).
 #[test]
 fn g1_directive_in_the_routine_keeps_gap_and_edge() {
-    let m = build(SRC);
+    let mut m = build(SRC);
     let names = [
         "OnIfExitThenCall",
         "OnIfExitElseCall",
@@ -1303,6 +1346,7 @@ fn g1_directive_in_the_routine_keeps_gap_and_edge() {
         "OnNestedExit",
     ];
     for name in names {
+        b2_live_then_mark_dead(&mut m, name, &["NextKm", "DoCommitP"]);
         assert_dead_site(&m, name, "DoCommitP");
     }
     let mut failures = Vec::new();
@@ -1334,7 +1378,8 @@ fn g2_spaced_directives_are_detected() {
         !has_preproc_directive("#pragma warning disable AL0432\n#region R\n"),
         "#pragma and #region are not conditional directives"
     );
-    let m = build(SRC);
+    let mut m = build(SRC);
+    b2_live_then_mark_dead(&mut m, "OnSpacedDirective", &["NextKm"]);
     assert_dead_site(&m, "OnSpacedDirective", "NextKm");
     assert_keeps_gap(&seen1(&m, "OnSpacedDirective"), "OnSpacedDirective");
 }

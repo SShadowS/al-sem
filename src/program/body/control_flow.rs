@@ -102,6 +102,36 @@ fn statement_termination(node: &PCFNNode) -> Termination {
     }
 }
 
+/// True when SOME path through `node` may return from the routine with `exit`:
+/// any `exit` anywhere inside it, at any depth (an `if` arm, a `case` arm, a
+/// `#if` arm, a loop body). An `exit` inside a loop leaves the routine, not just
+/// the loop, so loops count too.
+///
+/// This is the "may" counterpart of [`branch_termination`], which answers
+/// "always". A construct that only MAY exit still decides whether the code after
+/// it runs: `if a then begin if b then exit; end; Insert();` returns before the
+/// `Insert` when `a` and `b` hold, so the `Insert` is not on every success path.
+/// Over-reporting is the safe direction here: a stray `true` only turns an
+/// `unconditional` into a `conditional`, never the reverse.
+///
+/// Only `exit` counts. An `Error` that may fire ends the routine WITHOUT success,
+/// so every successful run still reaches the code after it. (The control
+/// context lattice still marks the code after a `case` arm or a two-arm `if`
+/// arm that always raises `conditional`, a conservative al-sem rule this
+/// function does not change.)
+///
+/// This is THE one "can this statement return early" rule. Both statement
+/// walkers apply it to every statement of a block, whatever its kind:
+/// `control_context::walk_block` (the code after it is at least
+/// `conditional`) and `operation_order::walk_block` (no later op dominates the
+/// success return). A new reader of the question must call it too, never
+/// re-derive it from [`branch_termination`].
+pub fn may_exit(node: &PCFNNode) -> bool {
+    node.kind == "exit"
+        || children_of(node).iter().any(may_exit)
+        || else_children_of(node).iter().any(may_exit)
+}
+
 /// The else-arm termination of an `if` node, accounting for an IMPLICIT (absent)
 /// else — which always falls through into the continuation.
 pub fn else_termination(node: &PCFNNode) -> Termination {

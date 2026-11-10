@@ -7,6 +7,2112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Outside consumers (wave 2)
+
+One list of every field and value wave 2 changed for a program that reads al-sem's output
+(bc-dev-mcp, ConTinAI, saved baselines). The sections below describe each change as it was
+made; where they name an older value or mechanism, this list is the current one. Field names
+are as they appear in the JSON. "Additive" means the old shape still holds.
+
+- **Effect rows and error answers** (prove, explain, digest):
+  - Digest effect `status` has a new value, `caught` (a definite trap catches the error on
+    every route), next to `live` and `literal-dead`.
+  - `trap` (additive, on effect rows of prove, explain and digest, and on the rows of prove's
+    filtered slice): `verdict` (`caught`, `escapes-if-write-pending`,
+    `trapped-on-some-routes`), `kind` (`checked-run`, `try-function`, `asserterror`,
+    `isolated-event`), `routine`, and `file` and `line` when known.
+  - `collectedBy` (additive, same rows): the procedures whose
+    `[ErrorBehavior(ErrorBehavior::Collect)]` may collect the error.
+  - `caughtErrors` (digest and explain summaries). An error caught on every route leaves the
+    summary's `kinds`.
+  - prove's filtered slice JSON gains `caught`.
+  - `suppressedCommits` (prove `result.suppressedCommits` for a commit question; digest entry
+    `suppressedCommits`), present only when some commit is ignored or turned into an error by a
+    `[CommitBehavior]`. Each entry has `behavior` and `reason`, and `file` and `line` (1-based)
+    when known. `beyond` is the dependency routine for a commit past a call into dependency
+    code. It is a routine name, not a flag, and is left out when the commit is not beyond one.
+  - An `ERROR_IMPLICIT` row for a commit turned into an error carries `detail.commitBehavior`.
+- **Assumptions** (all only when set):
+  - prove `obligations.assumesNoPendingWriteAtEntry`, `obligations.assumesNoCommitBehaviorAtEntry`.
+  - digest and explain `summary.assumesNoPendingWriteAtEntry`,
+    `summary.assumesNoCommitBehaviorAtEntry`.
+  - digest and explain `coverage.assumptions` gain the labels `no-pending-write-at-entry`,
+    `no-commit-behavior-at-entry`.
+- **Platform operations:** `query effects` and `query touches` JSON gain `origin.platform` on a
+  row for a platform dataset operation (a report's or query's read, an XmlPort import's
+  insert or modify); human output adds `(platform: …)`; explain adds a `platform:` line; such a
+  row's evidence `excerpt` is the reason instead of `Var.Op`. No field was removed or renamed.
+- **Gaps:** coverage reason `unreadable-event-subscriber` (an `[EventSubscriber]` the engine
+  cannot read; prove `unknown`, explain and digest name it); `query touches` adds a count,
+  `unreadableEventSubscribers`, only when above 0, and then says `analysis partial`.
+- **Digest paths:** `paths[].terminal.operationId` now names the site whose line it prints,
+  for any callee with two sites of one kind (it used to name a representative fact's id).
+- **Attribute JSON** (the L2 projection's `attributesParsed`, and the model's `AttributeInfo`
+  wherever it is serialized): `conditional: true` when only some builds of THIS declaration have
+  the attribute, `anotherDeclarationLacks: true` when another declaration of the same routine
+  lacks it. Both are left out when false. `conditional` no longer appears for an attribute only
+  another declaration lacks.
+- **Human lines** (text outputs; each is new or reworded):
+  - prove and digest: `commit behavior:` (a commit that is ignored or raises an error, with
+    why); explain prints the same line.
+  - prove: `no — no error site escapes the routine; N error sites caught on every route by a
+    trap`, and the lines `caught on every route by a trap: …; not counted`.
+  - prove, explain, digest: the condition words `escapes on a route with no trap; caught on
+    others (…)`, `a write may be pending at the checked Codeunit.Run at …`, `escapes only if a
+    write is pending when the event is raised, …`; the filtered prove's `escapes on the route
+    below (no trap on it); other routes are caught by the …`.
+  - explain and digest: `errors caught on every route by a trap (they do not leave the routine
+    if its callers have no write pending when they call it …)`; the summary's `; N caught on
+    every route by a trap`.
+  - prove, explain, digest headers: the longer `assumptions:` sentence
+    (`traps::entry_assumption`).
+  - explain: the compact card's wording (section "compact explain card" below), including
+    `no table-event subscriber loaded` and `lines 351, 623 (…)`.
+  - query effects: `[CalcFields] on … through FlowField "…"`.
+- **`alsem graph`** (schema `al-sem.callgraph`, major version still 1):
+  - additive optional node field `otherDeclarations`, `[{sourcePath, line, endLine}]`: the other
+    places of a routine declared more than once with the same subscriptions;
+  - a subscriber whose declarations subscribe differently is one node per declaration, each with
+    its own lines and subscriptions;
+  - a static report save is a resolved `run` edge to the report (it was an `Open` edge into the
+    `h:run:report` hub); `Q.Open()` and `Query.SaveAs*` get an edge into the query's
+    `OnBeforeOpen` (`entry_trigger`);
+  - an importing routine gets `implicitTrigger` and `tableEvent` edges (confidence `OverApprox`)
+    to its tables' `OnInsert`/`OnModify` and table events;
+  - `hiddenCallers` value `unboundSubscriber` is set on a subscriber with an unreadable
+    `[EventSubscriber]` even when another of its subscriptions is bound (the value is not new);
+  - a subscriber declared only in a second file gains its subscription edges.
+- **Routine and site ids:**
+  - A split subscriber (whose declarations subscribe differently) has new routine ids, stable
+    ids `{stable}~{8 hex}` and site ids. A name or the routine's base id selects every
+    declaration (`prove`, `digest`, `tests`, `impact`); `~hex` selects one; the fingerprint
+    query lists them as candidates (`differs_in` says "the file or #if arm"). A change of
+    another file's subscription that starts or ends a split moves an unchanged file's ids once.
+  - A routine declared in two `#if` arms of one file: the second arm's site ids move (`…/opN`,
+    `…/csN`, `loop`, `u`, `rule`).
+  - A routine declared in two or more files: each file's site ids are in that file's own block,
+    `…/op{block * 100000 + n}`, with the block picked from a hash of the file's own source unit.
+    The format is the same; the numbers are large. A file's ids move when a second file starts
+    or stops declaring the routine, or when its own path changes.
+  - Everything built on site ids moves with them: digest `factId`, `evidenceOperationId`,
+    `callsiteId`, snapshot and `diff` operation ids, `explain`/`prove` lines. Fingerprints strip
+    site segments, so baselines do not move except where a split changes a routine's id.
+    `SNAPSHOT_SCHEMA_VERSION` is unchanged (the snapshot's shape did not change).
+  - `alsem query` no longer calls a routine declared in two `#if` arms ambiguous (one candidate
+    per stable id).
+- **Schema and cache values** (now):
+  - Impact JSON `summarySchema`, and the impact-base cache key: **9**
+    (`impact::keys::SUMMARY_SCHEMA`; 2 before wave 2). A base cached earlier is not read.
+  - `PACK_SCHEMA` **17** (14 before wave 2): dependency packs are rebuilt.
+  - `FACADE_VERSION` **2** (1 before; the session dependency recorder, internal).
+- **Answers that changed without a new field:** the record operations of a report's, query's or
+  XmlPort's platform dataset run; a report's `SaveAs*`/`Execute`/`Print` and a query's
+  `Open`/`SaveAs*` now run their triggers; FlowField reads (`query touches`, `query effects`,
+  `digest --include-reads`, `fingerprint`'s `R` right); `unknown` where a dynamic object id or an
+  unreadable subscriber gave `no`; `conditional` for `#if` arms and per-record triggers; errors
+  caught by a trap leave the error answers.
+
+Terms used in the wave-2 sections below:
+- **`N`, `I`, `E`, and sets like `N|I` or `N|E`:** the `[CommitBehavior]` value a commit may run
+  under (`N` normal, `I` ignored, `E` raises an error); `N|I` means "normal or ignored", because
+  the routes or builds differ. `P` and `X` are the same value on a route pinned by a checked
+  `Codeunit.Run` (a commit that runs, or an error that the run traps).
+- **#160 step 11b, "the 11b rules":** the rules issue #160 added for rows of one routine id that
+  share a site id: a reader that looks a site up in such a group must take the row that holds
+  it, not any row.
+- **Class P:** of the 11b rules, the case where such a reader keeps the LAST row that holds the
+  site.
+- **Least fixpoint:** the result of repeating a rule over the reachable routines until no
+  routine changes; used for "may a write be pending at this run".
+- **Per-value transfer function** (`commit_scope::Transfer`): one result per `[CommitBehavior]`
+  value a routine may be entered under, so a "may" deep in the graph combines exactly with a
+  declaration above it.
+
+### Fixed (engine limits wave 2, B2 final review follow-up 5: the rest of the unreadable `[EventSubscriber]`)
+
+- **An unreadable field of a table's validate event is a gap too** (review of 1dbb302c).
+  `[EventSubscriber(ObjectType::Table, Database::"AD T", 'OnAfterValidateEvent', (Amt), …)]`
+  read as "no field", so it listened to no field event and `R.Validate(Amt, 1) may-commit`
+  said `no` (the same for `5` and `Rec.Amt`). A fourth argument present but not readable, on
+  a table's validate event, is now unreadable (`resolve::event::UNREADABLE_ELEMENT`) and the
+  gap applies to a `Validate` on that table, any field. On any other event the element is
+  not read by the dispatch, so it stays as it was.
+- **A readable field narrows the gap:** an unreadable publisher with `'OnAfterValidateEvent',
+  'Amt'` is a gap for a `Validate` of `Amt`, and a `Validate` of another field stays
+  definite.
+- **The publisher now narrows a record operation's gap.** The lookup used the object ids
+  while a record operation holds a model table id (`{guid}/table/{n}`), so it found nothing
+  and matched every table, and a publisher by number was not read. It now reads the model's
+  tables, by name or by number: an `Insert` on an unrelated table stays `no` and complete.
+- **An unreadable declaration's readable parts narrow what it borrows.** It takes only the
+  sibling subscriptions its own parts allow; when they rule out every readable
+  subscription of the routine it does subscribe differently, so the routine splits (probe
+  `cw`: `RaiseY` stays `no`, `RaiseX` is the gap). Names are compared with `fold_identifier`
+  on both sides.
+- `PACK_SCHEMA` 17, `SUMMARY_SCHEMA` 9 (the current values).
+- Tests (`tests/cli/cli_b2_alternative_declarations.rs`) with proofs, break with Edit, red,
+  revert with Edit, green:
+  - Unreadable element left as "no element": `an_unreadable_element…` red (`no`).
+  - Table lookup left empty: `a_record_operation_gap…` red (`unknown` on the other table).
+  - Publisher number not compared: the same test red, on its by-number pass.
+  - Field not compared: `a_readable_element_narrows…` red (`unknown` on `Name`).
+  - Borrowing not narrowed: both `an_unreadable_declaration` narrowing tests red (`yes`).
+  - No split when the parts rule the routine's subscriptions out: `…ruled_out…` red (`yes`).
+
+### Fixed (engine limits wave 2, B2 final review follow-up 4: an unreadable `[EventSubscriber]` is a gap)
+
+- **An `[EventSubscriber]` the engine cannot read never gives a definite `no`.** Probe u2
+  (review of 38738f3b): `a.al` subscribes to `OnX` and is empty, `b.al`'s
+  `[EventSubscriber(ObjectType::Codeunit, (Codeunit::"AD Pub"), 'OnX', …)]` commits. The
+  parentheses made the attribute unreadable, so the subscription lists differed, the
+  routine split, `b.al`'s body was reachable from no dispatch and `RaiseX may-commit` said
+  `no` (true answer `yes`). The same for one declaration, older, in
+  `parse_event_subscriber_ir`: an integer object type, two arguments, a parenthesised
+  publisher, `'On' + 'X'`, `ObjectType::Foo`, a bare identifier as the publisher: each
+  dropped the attribute and answered a definite `no` with no gap.
+- `resolve::event::read_event_subscriber_ir` keeps the attribute with the parts it could
+  read (`ParsedSubscriberArgs::is_unreadable`: an empty object type, publisher or event).
+  A part is unreadable for an object type no event is published on, a bare identifier as
+  the publisher (AL writes `Codeunit::"X"`), or an argument list longer than the
+  attribute's six (the grammar reads `'On' + 'X'` as three items).
+- **Split:** a declaration with an unreadable subscription never counts as subscribing
+  differently (only the readable copies are compared), so `u2` stays one routine and its
+  body stays reachable. When the readable copies differ and it does split, the unreadable
+  copy also subscribes to every event its readable siblings do. *(Follow-up 5 above changes
+  both halves: it does count as subscribing differently when its readable parts rule out
+  every readable subscription of its routine, and it borrows only the sibling subscriptions
+  its own parts allow.)*
+- **The gap:** `model::events` records one `unreadable` event edge per attribute of any
+  app (`unknown/unreadable/…`), and `combined_graph` puts an uncertainty
+  (`unreadable-event-subscriber`, a coverage reason) on every publisher routine and every
+  record operation (for a table event) it may be for, narrowed by the readable parts: a
+  readable event name, object type or publisher leaves the others alone (`RaiseY` stays
+  `no` when only `OnX` is named). Prove says `unknown` (the blocker names the attribute),
+  `explain` and `digest` report it as the coverage reason, `query effects` and `query
+  touches` as `analysis partial`. A subscriber with an unreadable subscription has
+  `hiddenCallers: unboundSubscriber` in `alsem graph` even when another subscription of
+  its binds, so the callers' questions say `unknown`.
+- Real code: **0 of 3,629** `[EventSubscriber]` attributes in the CDO baseline and its
+  dependencies are unreadable (`aldump --program-call-graph-stats`, every parsed attribute
+  counted, 2026-11-10), so no answer on CDO moved; the guards are for shapes nothing has
+  shown yet.
+- `PACK_SCHEMA` 16 (entries for unreadable attributes), `SUMMARY_SCHEMA` 8 (at this round; the
+  current values are in "Outside consumers (wave 2)" above). `alsem graph` schema unchanged.
+- Dependency selectors are scoped to the workspace app (a name finds no dependency
+  routine, a stable id does), for every routine, not only a split subscriber; unchanged.
+- Tests (`tests/cli/cli_b2_alternative_declarations.rs`) with proofs, break with Edit,
+  red, revert with Edit, green:
+  - Unreadable copies compared too (`.filter(|&i| true || …)`): not-split test red (two
+    nodes). Prove alone stayed green, since the union also makes the body reachable, so the
+    test pins the single node.
+  - No union on a split: `stays_reachable_when_the_others_split` red (`unknown`).
+  - Attributes dropped at extraction: every `an_unreadable…` test red (`no`).
+  - No gap at publishers: definite `no`, red.
+  - No narrowing by the event: `RaiseY` red (`unknown`).
+  - No gap at record operations: table test red (`no`).
+  - No `hiddenCallers` for a bound subscriber with an unreadable one: callers test red
+    (`no`; the proof first passed because the parenthesised attribute also trips parse
+    recovery, so the test uses `ObjectType::Foo`).
+  - `query effects` and `query touches` gaps: red (no `analysis partial`).
+
+### Fixed (engine limits wave 2, B2 final review follow-up 3: the program graph splits too)
+
+- **The program graph has one routine node per declaration of a subscriber whose
+  declarations subscribe differently** (`program::split_decls`, decided once in
+  `build::split_declarations`, before the dedup). Follow-up 2 below split only the MODEL,
+  so the walkers that read the program graph still saw one node holding every
+  declaration's subscriptions (review of 53d143ef):
+  - M1 (a wrong definite answer): `prove . "AD Q::C" callers-intercept-errors
+    --no-dependents` said `yes` through a `[TryFunction]` that raises `OnY`, reaching
+    `H` from the `a.al` declaration, which subscribes `OnX` and calls `C`. No build has
+    that path. Now `no`; and `callers-have-pending-writes`, the same walker.
+  - M2: `alsem tests` and `alsem impact` did not find a split subscriber (`"not in
+    projection"`, run the whole suite), and the callers' questions could not name one at
+    all (`~` id: "not in the call graph"; base id: no routine; name: ambiguous).
+  Each declaration node has the routine's id with its `sig_fp` mixed with a hash of its
+  place (its source unit and ordinal in the file, as the model's `~hex` suffix now is:
+  `split_decls::stable_suffix`), its own subscriptions, its own table-event and out
+  edges, its own source lines. Name lookup shows one declaration per routine, so
+  overload logic is unchanged (`resolve::reads::RoutineRun`), and the resolver sends a
+  direct call to every declaration (`split_decls::expand_call_routes`, one route per
+  declaration, each a possible build). The callers' walker, the sited graph, `alsem
+  graph`, the LSP call hierarchy and the model agree by construction, and the model's
+  own split (`split_subscriber_declarations`, `events::row_declares_subscription`,
+  `program_calls::split_declaration_edges`) is gone: its rows take their declaration's
+  ids from `node_of` (`workspace::adopt_declaration_ids`), so a demanded dependency
+  declaration splits even when it is the only row of its routine.
+- **A selector resolves a split subscriber.** A name or the routine's base id names every
+  declaration (form 1b of the selector cascade; `prove`/`digest`/`tests`/`impact`, the
+  one exception being the fingerprint query, which lists them as candidates, and
+  `differs_in` now says "the file or #if arm"); the `~hex` id names one declaration
+  (`SitedGraph::nodes_with_stable_id`, which also takes the base id for a split routine).
+- **`alsem graph`: every declaration's lines are there.** Split: a node per declaration.
+  Not split (an `#if` routine declared twice with no differing subscription): the node's
+  `sourcePath`/`line`/`endLine` are one declaration's, and the new optional node field
+  `otherDeclarations` (`[{sourcePath,line,endLine}]`) lists the others. Additive: the
+  graph's major version stays 1 (spec 2026-10-13 §4.2). bc-dev-mcp's join still falls
+  back by name for a place it does not read; it should read this field (outside-consumers
+  update).
+- **Ids:** `SUMMARY_SCHEMA` 7 at this round (a split declaration's model id and `~hex` suffix
+  derive from the place hash, so they move once); the recorder's `FACADE_VERSION` 2 (a new
+  query, `DeclarationsOf`, and `routines_of`/`routines_named` now hide the other
+  declarations). A split declaration's id stays the declaration's own when other files
+  change, but **a change of another file's subscription that starts or ends a split
+  does move an unchanged file's ids** (`H` in `a.al` moves between `…~9f0631d4` and its
+  base id, since its node is split only while a declaration elsewhere subscribes
+  differently), so fingerprints, baselines and diffs move for that routine. Always
+  suffixing every routine with a second declaration would stop that one case, at the
+  price of splitting every `#if` procedure in real code (model rows, selectors, the
+  join's "alternatives" reading) to save one rare, one-time move; not done.
+- *(Superseded by follow-ups 4 and 5 above: an unreadable `[EventSubscriber]` now stays on
+  its node as a coverage gap, and a copy with one is not compared.)* Limits, as measured
+  (engine-limits B2, updated): a subscription whose
+  `[EventSubscriber]` attribute the engine cannot read is not on its declaration's node
+  (as with any subscriber), and two copies count as subscribing alike or differently from
+  the readable ones; no real code has shown one.
+- Tests (`tests/cli/cli_b2_alternative_declarations.rs`, every shape and both file
+  orders; session refresh-equals-cold through a split starting and ending, both memory
+  modes, `program::session::workspace::tests`), with proofs (break with Edit, red, revert
+  with Edit, green):
+  - No split in `build::split_declarations` (`ixs.len() >= 9999`): the two callers'
+    tests red, `callers-intercept-errors` and `callers-have-pending-writes` said `yes`.
+  - `expand_call_routes` keeps its routes: `a_direct_call_…` red (`no`: the call reached
+    only the empty declaration).
+  - No `~suffix` in the sited graph's stable id: tests/impact red with `not in
+    projection`, the callers' question "not in the call graph", and the M1 tests unknown.
+  - Name and base id not resolved to declarations: tests/impact/callers red; base id
+    alone: the base-id step of the tests test red.
+  - `otherDeclarations` never filled (`p.len() >= 99`): the graph-lines test red.
+  - A name lookup shows every declaration (`is_hidden` false): `a_direct_call_…` red
+    (`unknown`: overload logic saw two candidates).
+  - Dependency rows not mapped to declarations (`file_declaration_ids` returns `None`):
+    the r4 cross-app dependency test red (no rows for the demanded declarations).
+  - `aldump --session-refresh <copy of probe s1> --verify`: every step `equalToCold:
+    true`.
+
+### Fixed (engine limits wave 2, B2 final review follow-up 2: one routine per subscriber declaration)
+
+- **Every walker reaches only the declaration that subscribes.** Follow-up 1 below tied a
+  subscription to its declarations in the cone alone, and said the other walkers could
+  not give a wrong answer. They could (review of 600e6943):
+  - N1: the match read the event NAME only. `a.al`'s `H` subscribes to `"AD Pub".OnX`
+    and commits, `b.al`'s to `"AD Pub2".OnX` and does nothing: `prove . "AD
+    Pub2::RaiseX2" may-commit` said `yes`, citing `a.al`.
+  - N2: the commit-scope graph sent a dispatch to the routine's hub, which reaches every
+    declaration. The `OnX` declaration under `[CommitBehavior(Error)]`, the `OnY` one
+    with none, both calling a committing `Q.C()`: `RaiseY throws-error` said `yes`
+    ("CommitBehavior Error on H"), and so did digest; `RaiseX may-commit` said `yes`
+    under `Error` and under `Ignore`.
+  - N3: the L4 summary solver entered every declaration: `query touches --table "AD W"`
+    listed `RaiseY` and `OnY` for the `OnX` declaration's insert, and `query effects
+    --routine RaiseY` counted it.
+- **The fix, in the shared layer.** *(Superseded by follow-up 3 above: the split now happens
+  once in the program graph, `program::split_decls` and `build::split_declarations`, and the
+  model takes each row's ids from its node. `split_subscriber_declarations`,
+  `events::row_declares_subscription` and `program_calls::split_declaration_edges` no longer
+  exist. The id's internal hash below is also `sig_fp`-mixed now. The rest of this bullet
+  describes this round's first version.)* Every walker reaches a routine through its id, so a
+  subscriber whose declarations (`#if` arms of a member list, whole-object arms, two
+  files) carry different `[EventSubscriber]` sets is now one ROUTINE per declaration
+  (`workspace::split_subscriber_declarations`, a step of the model join): a new internal
+  id (`{scope}/{sha256(id, the declaration's source unit, its ordinal among the
+  routine's declarations in that file)}`), a stable id `{stable}~{8 hex}`, and its site
+  and record-variable ids moved to the new id (a debug build asserts no field was
+  missed). The id depends on the declaration's own file only, so the row cache and a
+  session refresh stay as they were (checked below). Then:
+  - the event graph (`program_event_graph`) gives each declaration only the
+    subscriptions it declares, matched on the full identity
+    (`events::row_declares_subscription`: publisher object kind, the object by name or
+    by number, event, element);
+  - the table-event edges go to the declarations that declare that table event (the
+    same match, the publisher table's name and number from the model's objects), and a
+    direct call goes to every declaration, each a possible build
+    (`program_calls::split_declaration_edges`, after the conversion, which names one
+    declaration through the program graph's one node);
+  - the cone, the commit-scope graph, the L4 summary solver, the digest's witness
+    search, the detectors and `alsem impact` (built on the model) all walk those edges,
+    so all of them reach only the declaration that subscribes. The cone-only mechanism
+    of follow-up 1 (`arm_subscriber_nodes`, `rows_declaring_subscription`) is removed.
+    *(Follow-up 3 above splits the program graph too, so `alsem graph` is one node per split
+    declaration and does not list a declaration's callees under a dispatch it does not
+    subscribe to.)* `alsem graph` (`program::impact_graph`) is built from the program
+    graph's nodes, one per subscriber: it stays a may-execute graph that can list a
+    declaration's callees under a dispatch it does not subscribe to. Its contract is an
+    over-approximation (bc-dev-mcp selects MORE tests from it, never fewer), so it gives no
+    wrong definite answer.
+  Declarations that subscribe alike keep one id (the B2 per-arm reading, as before).
+- *(Superseded: follow-ups 3 to 5 above replace this. An unreadable `[EventSubscriber]` no
+  longer counts as a match that could widen a route: it is a coverage gap, narrowed by its
+  readable parts, and a selector names a split subscriber.)* **What is still a limit, and why
+  it gives no wrong definite answer.** A part of an
+  `[EventSubscriber]` the engine cannot read (an argument in no readable form) matches,
+  and a table-event edge whose event no declaration's attribute matches goes to every
+  declaration: a declaration that MAY subscribe is kept, which only adds possible
+  routes. A selector naming a split subscriber (`"AD Sub::H"`) is ambiguous between its
+  declarations (each listed as a candidate, by its own stable id).
+- **The site-block overflow check holds in release.** `file_site_blocks` gets the
+  largest site number of the routine's rows: one that does not fit a 100,000-wide block
+  widens every file's block to the next power of ten (as many blocks as `u32` holds);
+  when that leaves fewer blocks than files, the files keep their shared ids and an error
+  is logged (it was a `debug_assert`).
+- **Wording:** follow-up 1's "Left (stated)" bullet below said the other walkers could
+  not give a wrong answer; corrected there and in engine-limits B2.
+- **Outside consumers** (the list at the top of the wave-2 sections is the current one). A
+  split subscriber's declarations get new routine ids, stable
+  ids (`…#{hash}~{8 hex}`) and site ids; selectors, digests, snapshots, `diff`,
+  `alsem graph` and fingerprints see one routine per declaration (each displayed by the
+  routine's name). The impact summary schema was 6 at this round. No golden moved.
+- Tests: CLI `cli_b2_alternative_declarations` (each in one file `#if`/`#else` and in two
+  files, both orders, single-app and cross-app): `a_subscription_is_matched_on_its_publisher_too`
+  (N1), `a_dispatch_runs_under_its_own_declarations_commit_behavior` (N2, `Error` and
+  `Ignore`), `the_table_queries_follow_only_the_subscribing_declaration` (N3),
+  `a_table_event_reaches_only_the_declaration_that_subscribes`,
+  `a_direct_call_reaches_every_declaration_of_a_split_subscriber`; unit
+  `site_blocks_widen_past_a_full_block`. `r4_cross_app_program::a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once`
+  stated two rows of one id subscribing differently, which the split makes two
+  routines; its fixture now has both arms subscribe alike (the guard it pins is about
+  rows that share an id).
+- Session: `program::session::workspace::tests::{default_mode,low_mem}` green;
+  `aldump --session-refresh <copy> --verify` on a copy with the review's `ce` (split
+  subscriber, two files) and `c2` probes, `--file` on each split file and the callee,
+  default and `--low-mem`: every step `equalToCold: true`.
+- Discrimination proofs (break with Edit, narrowest test RED, revert with Edit, GREEN;
+  CLI = `cargo test --test cli cli_b2_alternative_declarations::`; three rounds, each
+  round's reverts seen green in the next, the last round's in a final run, 15/15; proofs 1
+  and 3 to 6 broke this round's model-level split, which follow-up 3 replaced, and follow-up
+  3's own proofs are the current ones):
+  1. The split off (`true ||` on the early return): RED N1, N2, N3, the B1 dispatch
+     test and the table-event test.
+  2. The overflow widening off (`true ||`): RED `site_blocks_widen_past_a_full_block`.
+  3. The publisher match off (`true || object_ok`): RED N1 (`RaiseX2` `yes`).
+  4. The table-event filter off (every declaration): RED
+     `a_table_event_reaches_only_…` (`Mod` `yes`).
+  5. A direct call to the converted declaration only: RED
+     `a_direct_call_reaches_every_…` (`no` when the empty declaration was the one).
+  6. The event graph's per-declaration filter off: RED the B1 dispatch test, N1, N2,
+     N3.
+
+### Fixed (engine limits wave 2, B2 final review follow-up: each declaration's own body)
+
+- **A dispatch reaches only the declarations that subscribe** (review blocking B1).
+  *(Superseded by follow-ups 2 and 3 above: the mechanism here, the cone-only
+  `arm_subscriber_nodes` and `rows_declaring_subscription`, was removed; a subscriber whose
+  declarations subscribe differently is now one node per declaration, in the program graph,
+  and the node's union of subscriptions no longer tells a build apart for such a subscriber.)*
+  The fix below made `EventFacts::of_arms` union every copy's subscriptions onto the one
+  routine node, so one copy's subscription reached ANOTHER copy's body: in `#if A [
+  EventSubscriber(…'OnX'…)] H: Commit(); #else [EventSubscriber(…'OnY'…)] H: (empty)
+  #endif`, `prove . "AD Pub::RaiseY" may-commit` said `yes`, citing the `OnX`
+  declaration's `Commit`, a path no build has (the same shape in one file had been wrong
+  since #103; master said `no` for two files). Now the cone ties each subscription to
+  the declarations that declare it: a dispatch edge whose event only some declarations
+  of the subscriber subscribe to (`model::events::rows_declaring_subscription`: a row
+  with no `[EventSubscriber]` naming that event, and element, cannot) goes to a cone
+  node of its own (`capability_cone::arm_subscriber_nodes`) that holds only those
+  declarations' direct facts and out-edges (a fact or an edge whose site no row of the
+  routine holds stays: the cautious side), with the routine's coverage, row and guard
+  frame. The node is internal to the cone: facts keep their subject, an inherited fact
+  names its hop (the event), and the node is dropped from what the cone returns. Both
+  the one-file whole-object `#if`/`#else` form and two files, both orders, single-app
+  and cross-app. The union on the node stays (what the routine subscribes to in some
+  build); which body a subscription runs is decided where the bodies are read.
+- **A declaration's own `[CommitBehavior]` is definite for its own body** (non-blocking
+  1). An attribute another declaration lacks is now marked
+  `AttributeInfo::another_declaration_lacks` (`AttributeIr::another_declaration_lacks`
+  in the lowerer, `anotherDeclarationLacks` in the attribute JSON), not `conditional`
+  (which stays "some build of THIS declaration lacks it"). `has_definite_attribute`
+  (a reader of the routine from outside: a caller's trap, the return summary) reads
+  both flags; the new `find_own_definite_attribute` reads `conditional` only, and
+  `commit_scope::declared` uses it, with the row's OWN declaring object (#279). The
+  commit-scope graph gives each row of a routine whose rows declare different behaviors
+  its own node (`CommitScopes::arms`, `CbGraph`: a hub that declares nothing, a node per
+  row with that row's declaration, a catch-all with every row's); a commit runs under
+  the row that holds it, a route through the routine under the row whose call site it
+  leaves by (`route_states` takes the route's terminal operation). So
+  `[CommitBehavior(Ignore)]` on the one declaration that commits: `may-commit` is `no`
+  for it and its callers (probes c1 member arms, c2 two files, c3 whole objects; was
+  `yes (conditional)`); the commit in the OTHER declaration stays `yes` (control).
+  `Two` with `Ignore` in one arm and `Error` in the other reads `I|E` (ignored or an error; no
+  build runs it normally), not `N|I|E` (any of the three).
+- **A file's site ids no longer move when another file changes** (non-blocking 2). The
+  fix below numbered a later file's rows after the earlier files', so adding sites to
+  `a.al` moved `b.al`'s (`op5` → `op7`) and a rename that changed the sort order moved
+  them too; persisted ids (digest `factId`s, snapshot and `diff` operation ids) drifted
+  on unrelated edits. Now each file keeps its own numbering (from 0, its own `#if` arms
+  apart) and, only for a routine declared in two or more files, moves it into a block
+  of its own: `block * 100000`, the block (1..=9999) picked from a hash of the file's
+  OWN source unit (`workspace::file_site_blocks`). Trade-offs, stated: the ids keep
+  their format (`{id}/op{n}`, so fingerprint stripping and every parser are unchanged)
+  but get large numbers (`op523400003`); a file's ids for such a routine move when a
+  second file starts or stops declaring it, and when its own path changes; two files
+  whose hashes pick one block take the next free one in source-unit order (the one case
+  where another file, by its path, never its content, moves a file's ids); a file with
+  100,000 sites in one routine would overflow its block (debug-asserted here; follow-up 2
+  makes it a release check that widens the blocks). Deterministic,
+  so a session refresh equals a cold build (checked below). The rejected option, a path
+  text in the id (`…/op0@b.al`), would have changed the id format for every reader.
+- **`CollidedRows::order` covers every row of a collided id** (non-blocking 3): it
+  cleared `dominates_success_return` only on rows with scope frames. A row without
+  frames carries no order today (a TryFunction's walk and a bodiless row stamp none),
+  but the rule no longer rests on that (`collided_row`).
+- **The join and the summary merge read every group alike** (non-blocking 4). The join
+  skipped symbol-only groups (by an `is_source` test that no longer exists) while `merge_alternative_summaries` merged
+  them. A symbol-only group is an ABI overload collapse: the overloads compile
+  together, but a caller bound to the id cannot tell which it reaches, so an attribute
+  one of them lacks is a "may" for that caller. The join now marks every group (lifting
+  and renumbering touch sites, which symbol-only rows have none of).
+- **Wording** (non-blocking 5): the fix below said the union of subscriptions was "the
+  cautious side, never a lost subscription"; it also let a subscription reach a body
+  that does not subscribe (B1 above). Corrected in `EventFacts::of_arms` and below.
+- **Outside consumers.** Persisted ids: a routine declared in two or more files has
+  every file's site ids in that file's block (`…/op{block*100000+n}`), and so the
+  digest `factId`s, `evidenceOperationId`/`callsiteId`s and snapshot/`diff` operation
+  ids built on them; fingerprints strip site segments, so baselines do not move. A
+  routine declared in one file, or in `#if` arms of one file only, keeps its ids. The
+  attribute JSON (the L2 projection's `attributesParsed`, and the model's
+  `AttributeInfo` wherever it is serialized) gains `anotherDeclarationLacks: true`
+  where it applies, and `conditional` no longer appears for an attribute only another
+  declaration lacks. The impact summary schema was 5 at this round
+  (`impact::keys::SUMMARY_SCHEMA`, the impact JSON field `summarySchema`). No golden
+  moved.
+- **Left (stated here, and wrong):** "only the cone ties a subscription to its
+  declarations; the other walkers … may pass through a declaration that does not
+  subscribe; the facts and the answers come from the cone". The answers did not all
+  come from the cone: the commit-scope graph gave `throws-error: yes` and `may-commit:
+  yes` through a declaration that does not subscribe, and the L4 summary solver gave
+  `query touches`/`query effects` a write no build has. Fixed by follow-up 2 above (one
+  routine per declaration, so every walker inherits it).
+- Tests: CLI `cli_b2_alternative_declarations`:
+  `a_dispatch_reaches_only_the_declarations_that_subscribe` (one file and two files,
+  the `OnX` declaration first and second, single-app and cross-app; `RaiseX` stays
+  `yes`), `an_own_commit_behavior_is_definite_for_its_own_commit` (c1, c2, c3 and the
+  control with the commit in the other declaration), `a_files_site_ids_do_not_move_when_another_file_changes`
+  (`b.al` byte-identical; `a.al` gains sites; `a.al` renamed to `z.al`). Unit:
+  `snapshot::collided_rows_order_tests::a_collided_row_without_frames_does_not_dominate`,
+  `return_summary::a_symbol_only_group_is_joined_like_every_group`,
+  `commit_scope::every_arm_adds_its_declaration` (now `I|E` for `Two`, and each row's
+  own bits), the lowerer's `an_attribute_one_arm_of_a_routine_lacks_is_conditional`
+  (now `another_declaration_lacks`, never `conditional`), the model's
+  `declarations_in_two_files_are_alternatives`.
+- Session: `program::session::workspace::tests::{default_mode,low_mem}` green;
+  `aldump --session-refresh <copy> --verify` on a copy holding the review's e2 and c2
+  probes (two files each), with `--file` on each split file and on the caller, default
+  and `--low-mem`: every step `equalToCold: true`.
+- Discrimination proofs (break with Edit, narrowest test RED, revert with Edit, GREEN;
+  CLI = `cargo test --test cli cli_b2_alternative_declarations::`; breaks with
+  independent tests were run together, five rounds, and each round's reverts were seen
+  green in the next; proofs 1 and 2 broke `arm_subscriber_nodes`, removed by follow-up 2):
+  1. `arm_subscriber_nodes` off (`true ||` on the early return): RED
+     `a_dispatch_reaches_only_…` (one file, `OnX` first: `RaiseY` `yes`).
+  2. Its site filter off (every fact and edge kept): RED the same test.
+  3. `declared` back to `find_definite_attribute`: RED `an_own_commit_…` (c1 `yes`)
+     and `every_arm_adds_its_declaration`.
+  4. `CommitScopes::arms` never filled: RED `an_own_commit_…` (c1 `yes`) and
+     `every_arm_adds_its_declaration` (`Two`: no arms).
+  5. `route_states` without the terminal (`terminal.filter(|_| false)`): RED
+     `an_own_commit_…` (c1 `yes`).
+  6. The join's attribute mark off (`false &&`): RED `a_try_function_…` (`no`).
+  7. `find_definite_attribute` back to `!conditional`: RED `a_try_function_…` (`no`).
+  8. `file_site_blocks` by sorted position instead of the path's hash: RED
+     `a_files_site_ids_…` (the rename moved `b.al`'s ids). The "a.al gains sites" half
+     is not separately broken (it held under this break too: a stated limit; it failed
+     under the fix below's sequential numbering, which the review reported).
+  9. `CollidedRows::order` by `frame_offset` again: RED
+     `a_collided_row_without_frames_does_not_dominate`.
+  10. The join's source-only filter back (`ws:` rows only): RED
+      `a_symbol_only_group_is_joined_like_every_group`.
+  11. The lowerer marking `conditional` instead: RED the lowerer test, `an_own_commit_…`
+      (c1 `yes`) and `every_arm_adds_its_declaration` (`Two` `N|I|E`).
+  12. `CommitScopes::of_model` reading every object row instead of the row's own: RED
+      `every_arm_adds_its_declaration` (`Q`: no arms).
+
+### Fixed (engine limits wave 2, B2 final review: one id declared in several places)
+
+- **Two declarations of one id that never compile together are alternatives, wherever
+  they are.** One app can declare a routine, an object or a table twice only where no
+  build compiles both: two `#if` arms of one member list, two whole-object `#if` arms
+  (`#if X codeunit 50 "A" {…} #else codeunit 50 "A" {…} #endif`, or two separate `#if`
+  blocks), or two FILES (one under `#if A`, one under `#if not A`). The engine treated
+  them as alternatives only inside one object declaration in one file. Found by the
+  wave 2 final review:
+  - A `[TryFunction]` in one of two whole-object arms, or in one of two files, trapped
+    the call in every build: `prove … throws-error` answered a wrong definite `no`
+    ("caught on every route by a trap"; the pre-wave-2 binary said `yes`). The
+    lowerer's `mark_attributes_some_arm_lacks` compared the routines of ONE object
+    declaration, and `LiteralReach::new` and `callers_context` read the id's first row.
+    With two files the answer depended on which file sorted first.
+  - One routine in two files was never lifted: `lift_arm_declarations` counted
+    declarations per file, so each file's write read `unconditional on success`
+    (`commits-on-success-path: yes`, though a build of the other file never commits).
+    The two files' rows also shared their site ids, so a write was cited at the other
+    file's line.
+  - `TableType = Temporary` in one file's declaration of a table made the table
+    temporary in every build when that row was read (a wrong `writes-table: no`, which
+    depended on file order).
+  - A subscriber or an XmlPort `Direction` in one file only was lost: the program graph
+    kept the FIRST file's copy (`EventFacts::of_arms` merged copies of one file only, a
+    #103 rule; `dedup_objects` did not merge the dataset).
+- **The fix: a model-level join** (`workspace::join_alternative_declarations`), run on the
+  assembled raw rows in every assembly entry (single-app, cross-app and the test entry),
+  before `RowNodes`, the record resolution and the attach. It reads other files' rows, so
+  it never runs in `project_ir`, and a file's cached raw rows (`row_cache`) stay a
+  function of that file alone. For the source rows of one routine id (any object
+  declaration, any file):
+  - an attribute not every row carries (same text, whitespace removed, lowercased) was
+    marked conditional on every row. So `has_definite_attribute` on ANY row is "every
+    row has it", and every reader that takes one row of an id (`traps::is_try_function`
+    in `LiteralReach::new` and `callers_context`, `return_summary::parse_commit_behavior`)
+    reads the definite answer only when every declaration agrees. (The follow-up above
+    marks it `another_declaration_lacks` instead, so a row's own body still reads its
+    own attribute as definite.)
+  - a `top-level` site is `conditional` (it replaces `lift_arm_declarations`);
+  - the rows of a later file continued the site numbering of the earlier files' (`op`,
+    `cs`, `loop`, `u`, `rule`), as `#if` arms in one file already did, so a site id
+    names one site. The rewrite covers every field that holds a site id; a debug build
+    asserts it (the row's `Debug` text after equals the rewrite of its text before).
+    Decided: distinct, not shared, so no reader needs the class-P rule (the "last owning
+    row"; see the terms list above) for real source any more. (The follow-up above replaces "continue after the
+    earlier files" with a block per file picked from its own path: the continuing
+    numbers moved a file's ids when another file changed.)
+  - A table declared more than once is temporary only when every declaration is.
+  - **Objects are not joined.** A `ModelObject` row is read by the routines it declares
+    (#279: `SingleInstance`, page permissions, `SourceTableTemporary`,
+    `InherentCommitBehavior`), and its properties hold in exactly the builds in which
+    those routines exist. A first version joined them (a value the declarations
+    disagree on read as not known); it lost #279's exact per-arm findings (d57, d39,
+    `cli_split_object_readers` R7/R8) and was dropped. The readers that ask about an
+    object from outside merge its declarations themselves: `commit_scope` (every object
+    row), the program graph's `dedup_objects`, and the return summaries below.
+- **The program graph merges the copies of one object or routine from any file.**
+  `dedup_objects` now merges an XmlPort's dataset (`DatasetNode::merge`: a direction
+  either copy allows, every item, an item property only where the copies agree).
+  `EventFacts::of_arms` unions the event facts of every stamped copy, not only the
+  survivor's own file's. The #103 tests that pinned first-wins across files are decided
+  again: `copies_from_a_second_file_add_their_subscriptions`,
+  `opposite_arms_in_two_files_are_merged` (first-wins could lose the current file's
+  subscriptions). The union alone was not safe: it let one declaration's subscription
+  reach another declaration's body, a wrong definite `yes` (the follow-up above ties
+  each subscription to the declarations that declare it).
+- **The return summaries merge the rows of an id** (`compute_return_summaries`, new
+  `merge_alternative_summaries`): a value the rows disagree on is `unknown` (normal
+  return, all paths error) or `conditional` (commit behavior), a "may" flag holds when
+  either row has it, coverage is `partial` when either is. It was the last row's.
+- **A two-arm callee's `Commit` does not dominate its caller's return.** The snapshot
+  clears `dominates_success_return` on every row of a collided id
+  (`CollidedRows::order`), as no row's site is `top-level`. A caller of `#if A … Insert;
+  Commit; #else … Insert; if k = 1 then exit; Commit; #endif` got a root-scope
+  `COMMIT_DOMINATES_RETURN`, valid for refutation, on arm A's commit (the review's
+  non-blocking item 1; `prove commits-on-success-path` already said `unknown`).
+- **A caller's digest names each reached site by its own operation id.** The review's
+  `ord` probe (`digest --routine Ord::CallsTwoArm`) printed `…/op1` for arm A's commit
+  at line 128 and for arm B's at line 137 (and `…/op0` for both inserts), which
+  contradicted "B2 per-arm ids" below. The ids were right; the digest was not. An
+  inherited effect enumerated per site (`reconstruct_site_witnesses`) carries the
+  site's own fact for its detail and line, but `origin_operation_ids` (the terminal's
+  `operationId`) took the REPRESENTATIVE fact's id. Plain AL had the same defect: a
+  callee with two `Commit`s printed one id at both lines. Now the site's own id.
+- **Outside consumers.** Persisted ids: a routine declared in two files has its second
+  file's site ids moved (`…/opN`, `…/csN` and the digest `factId`s, snapshot and `diff`
+  operation ids built on them; the follow-up above moves every file's of such a routine
+  into a block of its own); fingerprints strip site segments, so baselines do not
+  move. Digest: a caller's `paths[].terminal.operationId` now names the site whose line
+  it prints (any callee with two sites of one kind). The impact-base cache's summary
+  schema was 4 at this round (`impact::keys::SUMMARY_SCHEMA`; the impact JSON field
+  `summarySchema` read `4`): a base cached before holds the old ids and readings. `alsem graph` may gain
+  subscription edges (a subscriber declared in a second file). No snapshot schema bump
+  (its shape did not change). No golden moved.
+- **CDO** (`bc3ccb18`, counted from source, not run): the workspace declares no object
+  twice. Dependencies: Continia System Application declares 6 object numbers in two
+  files (codeunits 6225900, 6225911, 6225935, 6225936, 6225937 and enum 6225900): one
+  of each pair is a whole object under `#if USEFILEPROVIDERS` (or `#if
+  USEFILESERVICE`), the other an unconditional object with ANOTHER name. The ids key on
+  the number, so the join reads them as alternatives; their routine ids collide only
+  where the two objects share a routine signature. No app declares
+  one object twice in one file (Microsoft System Application's codeunit 8998 and enum
+  8889 split only their header by `#if`: one declaration each). The wave 2 per-arm
+  census on the cross-app model found 2 collision groups, both in one file (Base App
+  `PageManagement`, routine arms). The CDO run is left to the branch gate.
+- Tests: CLI `cli_b2_alternative_declarations.rs`, from the reviewers' probes, each
+  stating its precondition in its source and testing both file orders:
+  `a_try_function_one_declaration_lacks_traps_nothing_for_certain` (one file
+  `#if`/`#else`, one file two `#if` blocks, two files; the attribute on the first and on
+  the second declaration; single-app and cross-app; control: on both, `no`),
+  `a_routine_declared_in_two_files_is_conditional_and_cites_its_own_file`,
+  `a_table_temporary_in_one_file_only_may_be_written` (control: both temporary, `no`),
+  `a_subscription_in_one_file_only_is_possible` (control: neither, `no`),
+  `a_direction_in_one_file_only_may_still_import` (control: `Export` in both, `no`),
+  `a_callers_digest_names_each_site_by_its_own_operation` (two-arm and plain AL),
+  `a_two_arm_callees_commit_does_not_dominate_the_callers_return` (control: a routine
+  declared once keeps the label). Model `declarations_in_two_files_are_alternatives`.
+  The L4 host oracle's `t1u_collided_site_callee` needed two files to share a site,
+  which no source can do now: its precondition is now one site per row, and the
+  solve-global digest's `collided_site_callee` input has no discrimination proof
+  through that oracle any more (a stated limit; the class-P rules stay for rows that
+  share ids by assignment, `share_collided_site_ids`).
+- Session: `program::session::workspace::tests::{default_mode,low_mem}` green;
+  `aldump --session-refresh <copy> --verify` on a two-file fixture copy (the review's
+  `twofile-commit` and `ws6s` probes in one workspace), editing the tool's own pick and
+  each split file (`--file src/b.al`, `--file src/ta.al`), default and `--low-mem`:
+  every step `equalToCold: true`.
+- Discrimination proofs (break with Edit, run the narrowest test, revert with Edit, run
+  green; `cargo test --test cli cli_b2_alternative_declarations::` unless named):
+  1. The attribute join (`false &&`): RED `a_try_function_…` (`one file, #if/#else`,
+     first only: `no`).
+  2. The `top-level` lift (`false &&`): RED `a_routine_declared_in_two_files_…`
+     (`AD A`: `unconditional-on-success`).
+  3. The cross-file renumbering (`true ||`, skip): RED the same test (`AD A` cited at
+     `ws:src/b.al`).
+  4. The table join (`false &&`): RED `a_table_temporary_…` (`b.al` temporary: `no`).
+  5. `dedup_objects`' dataset merge (call commented out): RED `a_direction_…`
+     (`Export` in `a.al`: `no`).
+  6. `EventFacts::of_arms` back to the survivor's file: RED `a_subscription_…`
+     (subscriber in `b.al`: `no`).
+  7. The digest's origin back to the representative's id: RED
+     `a_callers_digest_…` (`…/op0` at lines 14 and 22; the plain-AL control printed
+     `…/op1` at 33 and 35 under the same break).
+  8. `CollidedRows::order` keeps `dominates_success_return`: RED
+     `a_two_arm_callees_commit_…`.
+  9. The return-summary merge off (last row wins): RED
+     `cargo test -p al-sem --lib declarations_in_two_files_are_alternatives` (`P`'s
+     `[TryFunction]` boundary lost).
+  10. The join call in the cross-app entry removed: RED `a_try_function_…` (the
+      cross-app run: `no`).
+  Each was GREEN once reverted (the module 7/7, the model test 1/1).
+
+### Changed (engine limits wave 2, compact explain card)
+
+- **explain's card says the same facts in fewer bytes.** Wave 2's new content (errors
+  caught by a trap, the dataset tables, more gaps) had pushed `CDO E-Mail
+  Handler::RunReportID`'s card to 41,509 bytes, over the MCP inline cap's margin. No
+  place, count or reason is dropped; repeated text is said once:
+  - places in one file print the file once: `ERROR_IMPLICIT at ws:a.al:29 (…), line 43
+    (…)`, and places that also share their note print `lines 351, 623 (…)`. This holds
+    for the kind-family lines (UI, HTTP, errors, …), the errors caught by a trap and
+    every `entered at` site list (`ws:a.al lines 204, 228, 308`);
+  - a trap in the error's own file is named by its line (`by the TryFunction with its
+    result used at line 234`), and the caught-errors line now says that `--detail`
+    (`detail: true`) lists the places it folds;
+  - a route's guard words with earlier exits give both counts first:
+    `9 guards, 3 earlier exits on the route; none evaluated` (was `9 guards on the
+    route, 0 evaluated; 3 earlier exits, 0 evaluated`), or `…; 1 exit evaluated`,
+    `…; 1 guard and 1 exit evaluated`. prove and digest print the same words;
+  - workspace gaps that say the same thing in one file share a line: `gap:
+    unresolved-call (callee Report.SaveAs, status dynamic-target) at
+    ws:src/Foundation/CDOFile.Table.al lines 171, 173, 175`;
+  - a write with no table-event subscriber says `no table-event subscriber loaded` (was
+    `table-event subscribers: none in the loaded program`);
+  - a `writes beyond dependency calls` entry whose effect types are the entry above's
+    says `also the same 15 effect types as the routine above` when that is shorter.
+
+  On CDO (`bc3ccb18`): RunReportID 41,509 → 38,631 bytes as the CLI prints it (38,694
+  as the MCP answer, 2,266 bytes under the 40 KiB inline cap); IssueReminder's MCP card
+  35,481 → 33,519.
+
+### Fixed (engine limits wave 2, B2 per-arm ids: the readers that look a site up)
+
+- **A routine declared in two `#if` arms is read through the arm that holds each
+  site.** With per-arm ids (below), arm A's `{id}/cs0` is in arm A's row only. Many
+  readers took ONE row per routine id (the last, from a by-id map; or the first, by
+  stable id) and looked a site up in it: they dropped the other arm's facts, fell back
+  to the whole body, or cited the other arm's line. Found in review: d9 counted
+  `writes 1 known table` where 2 were pending (`AP Log A` and `AP Log B`, the review
+  probe), because the span walk read the member's last row only.
+  - `projection::ArmRows` (the rows of each collided id, and the row that holds a site)
+    and `DetectorContext::routine_for_site`; `LiteralReach::row_at` for the readers
+    keyed by stable id; `projection::merged_site_rows` for the cone's by-id map.
+  - Fixed readers: the transaction spans (`closes_span`, the backward walk's call and
+    guard frame, now cached per row; each span member's pending writes read EVERY arm
+    that calls toward the Commit, `pending_writes::rows_before`), d9's and d8's
+    location (the arm that holds the Commit), d1 (its graph's terminals: every arm's
+    operations; its hop and terminal steps; the liveness pass's bindings), d2 (its
+    terminals, hop and terminal steps), d46 (every arm's commits; hop steps), d48 (each
+    arm's IO terminals at their own lines; hop steps), d32, d39, d43 (the caller's
+    call), d35 (another arm's site is not "partly analysed"), the summary solver's
+    temp substitution (`db_effect_solver::edge_caller`), the cone's guard frames
+    (every row's sites), the literal search (trap edges and places, guard frames,
+    table and value frames, pending writes before a checked run, route guards), prove's
+    witness steps and terminal (`group_path`) and its sites and route sites
+    (`prove_slice`), the callers' context (the row whose body holds the call), impact's
+    own keys and callers (every arm), impact's effect evidence (`assigns`).
+  - **Output on the review probe** (`ws2`): d9 at `Go`'s Commit `writes 2 known
+    table(s)` again; d9 at `Work`'s Commit `writes 2` (`AP Log A`, `AP Log C`), where
+    integrate/w2 said 3 (it also counted arm B's `AP Log B`, which no build compiling
+    arm A writes before that Commit); `Work`'s d9 finding sits at arm A's declaration.
+  - **Whole-object arms in one file are `conditional`.** `lift_arm_declarations`
+    counted the declarations per FILE (it was per object), so `#if A codeunit X {…}
+    #else codeunit X {…} #endif` in one file read each object's top-level sites as
+    `conditional` (a build compiles one object), pinned by
+    `natural_object_arms_in_one_file_number_apart`. (Superseded by the final review
+    above: the lift is now a model-level join over every row of an id, so it covers
+    two FILES too, which this per-file count never saw.)
+  - **Stated limits.** A routine-level location (a finding's routine) is the arm that
+    holds the finding's site, and the id's last row when the finding has none. The
+    literal flow program is built for a routine's first row only: another arm's call
+    reads no flow value (no literal pruning there, the conservative side).
+    `closed_world_temp` still refuses to prove a routine with several rows. Two FILES
+    that declared one id still shared site ids here; the final review above numbers
+    them apart.
+  - **CDO** (`bc3ccb18`, release-fast, against the `integrate/w2` run): `alsem analyze`
+    has the same 2,255 findings, byte for byte; only d43's `skipped.other` grows by 2
+    (the two `PageManagement` arms' dispatch sites are now read, then skipped). The
+    three `output_cdo` routines' explain, digest and prove answers are byte-identical,
+    so the CDO goldens are not expected to move. No golden moved.
+  - **No snapshot schema bump.** `SNAPSHOT_SCHEMA_VERSION` versions the snapshot's
+    shape, which did not change. A baseline saved before holds the second arm's facts
+    at shared ids with the first arm's lines; `diff` against it reports those facts as
+    changed, which they were (their old lines were wrong), so a stale baseline does not
+    mislead.
+  - Tests: `detector_context_arm_tests.rs` (d1, d1's temp verdict and its forwarded
+    parameter, d2, d8, d32, d39, d43, d46, d48, impact's effect evidence),
+    `transaction_spans_order_tests.rs` (pending writes of every arm, closing only in
+    the committing arm, a checked run read in its own arm, d9's location),
+    `impact::keys` (`a_two_arm_routine_summarizes_every_arm`), CLI
+    `cli_b2_arm_readers.rs` (prove's route and witness through a second arm, a literal
+    guard in each arm, the callers' question, a temporary argument in an arm, a site and
+    a trap in a second arm), `natural_arms_number_their_unreachable_statements_apart`
+    and `l2_numbers_two_arms_apart` (the `u` base and L2's numbering, review item 2).
+  - Discrimination proofs (break with Edit, run, revert, run green): every guard above
+    fails its test when its row pick is set back to the id's one row (`row_for` given an
+    unknown id, `rows_or` given an unknown id, `row_at` given an unknown site, the
+    merges set to keep one row); recorded per guard in the commit message. Stated
+    limits of the proofs: the cone's guard-frame merge and the literal search's frame
+    merge back each other (each break alone stays green, both together fail
+    `a_literal_guard_in_each_arm_rules_out_its_write`); the cone's site-union rows, the
+    literal `bind`, route-guard (`guards_at`), `local_pending` and `site_may_write`
+    picks, d2's affected-table pick and the d1 shadow oracle's (`d1_reach`,
+    `path_temp_resolve`) caller pick stay green under their breaks on these fixtures
+    (another path answers the same, or the path is test-only): fixed for consistency,
+    not pinned.
+- **Integration with wave 2 round 2 (merge into `integrate/w2`).** The per-arm ids
+  branched before round 2, so the readers round 2 added were audited on the merged tree:
+  - `LiteralReach::local_pending` (B7 round 2): whether a `Commit()` ends the write
+    before a checked run is decided in the row (arm) that holds the run, not in the
+    id's first row. Test `cli_b2_arm_readers::a_commit_an_arm_ignores_does_not_end_that_arms_write`
+    (arm A, the first row, has no commit; arm B's commit is ignored under
+    `[CommitBehavior(Ignore)]`: `throws-error yes`, `escapes-if-write-pending`). Proof:
+    reading the first row's commits → `no`.
+  - `commit_scope::CommitScopes::of_model` (B4): an id's declaration is the union of
+    every routine row's and every object row's (`Declared::union`), and a row that
+    declares nothing adds `Normal`; the last-wins maps kept one row. (`N|I|E` below: normal,
+    ignored or an error.) Tests
+    `cli_b2_arm_readers::a_declaration_one_files_row_lacks_only_may_apply` (one id in two
+    files, only one declares `Ignore`: `may-commit yes`; it was a definite `no`) and
+    `commit_scope::tests::every_arm_adds_its_declaration` (attribute and
+    `InherentCommitBehavior` per arm: `N|I|E`). Proofs: no `Normal` for a plain row →
+    the CLI test answers `no`; last routine row wins → `Two` reads `N|E`; last object
+    row wins → `Q` reads `N|E`. Where every row already holds `Normal` no CLI answer
+    moves (stated in the unit test).
+  - `projection::row_holds_site` and `merged_site_rows` (B5): a `FieldRef` operation
+    (`{call site}/fieldref`) is its arm's. Test
+    `projection::tests::a_field_ref_operation_is_owned_by_its_arm`. Proofs: skip
+    `field_ref_operations` in `row_holds_site` → no owner; skip them in the union → the
+    union holds none. No CLI reader asks a FieldRef operation's owner today (they are
+    reads; no `prove` slice or detector looks one up by site), so only the helpers are
+    pinned.
+  - Checked and left as they are: `commit_scope::object_runs` (call sites keyed by
+    their own per-arm ids; the callee row is read only for its kind and name), the
+    commit graph (per node), B5's FlowField pass (`attach_flow_field_reads` walks every
+    row; locals are never shared across rows), B6's dataset operations (keyed by call
+    site, every row walked), and the per-row evidence and operation index of B5. This
+    list also named "B2 round 2's attribute readers (the lowerer makes one id's rows
+    agree)" and "B7's trap callee test (kind and name only)". Both were false: the
+    lowerer compared the rows of ONE object declaration only, and the trap test reads
+    the callee row's `[TryFunction]` (`LiteralReach::new`, the id's first row, and
+    `callers_context`). The final review above fixes them with a model-level join.
+
+### Fixed (engine limits wave 2, B2 per-arm ids)
+
+- **A routine declared in two `#if` arms cites each arm's own line.** `#if A procedure
+  P() … #else procedure P() … #endif` is two declarations under one routine id (#160
+  step 11b: the rules for rows that share site ids; see the terms list above). Each
+  declaration numbered its sites from 0, so both arms minted
+  `{id}/op0`, `{id}/cs0`, and every reader that resolves a site id to one row (the
+  last) cited arm B's line for arm A's fact: `prove CallsOnlyInClean writes-table:"Log
+  A"` on the values probe answered `:58` (arm B's `LogB.Insert`) where the write is at
+  `:51`. Owner decision 2026-11-09: give each arm its own ids.
+  - The model builder (`workspace::project_ir`) walks the declarations of one id in a
+    FILE in document order and starts each one where the earlier ones stopped
+    (`ir_walk::SiteIdBase`: `op`, `cs`, `loop`, `u`; the rules' `rule` too). A routine
+    declared once keeps its ids, and so does the first arm. The L2 projection
+    (`l2_workspace`) numbers the same way. Two `#if` arms of a whole object in one file
+    count as one file's declarations too.
+  - `prove`, `explain` and `digest` now cite `:51` for Log A and `:58` for Log B on the
+    probe; every such answer stays `conditional` (a build runs one arm).
+  - **The #160 step 11b answers, decided again for per-arm ids** (BC compiles one arm
+    per build; no reading turns a possible effect into a definite "no"):
+    - a duplicated declaration's write is one producer PER ARM (two seeds), each citing
+      its own line (`digest::tests::per_arm_declarations_are_one_producer_each`);
+    - an interface call in each arm is one call site per arm, each dispatching to every
+      implementer with `candidate_count` = the number of implementers (2 sites × 2
+      implementers = 4 edges, never a count of 4 candidates;
+      `natural_interface_call_counts_per_arm_site`);
+    - d1 seeds each arm's in-loop call at its own site with its own callee
+      (`natural_d1_seeds_each_arm_at_its_own_site`);
+    - d35's closed arm has its own closed site; the open arm's site stays open and the
+      unknown-Commit finding stays (`i264_fo1`);
+    - `query effects` anchors each arm's operation at its own arm
+      (`query_effects_origin_is_each_arms_own_operation`).
+  - **The 11b collision rules stay**, for rows that share site ids for other reasons:
+    one id declared in two FILES still shared them here (numbering never crosses a
+    file, the unit the session's row cache reuses; the final review above numbers
+    them apart in the model-level join instead). The 11b tests now state the shared ids
+    BY ASSIGNMENT: `workspace::share_collided_site_ids` renumbers every collided row's
+    sites from 0 on the raw rows before the attach (and asserts it missed no field,
+    by comparing the row's `Debug` text), through the test entries
+    `assemble_and_resolve_inline_program_shared_site_ids` /
+    `assemble_and_resolve_workspace_program_shared_site_ids`; their assertions about
+    collision handling are unchanged. `collided()` asserts the shared `cs0`/`op0`.
+    The L4 host oracle `t1u` takes its collision from two files. (The final review above
+    changed that too: `t1u`'s precondition is now one site per row.)
+  - The collision census line gains `groups_one_file` (groups whose rows come from
+    one file: numbered apart now).
+- **Output and ids outside consumers read.** Only routines declared in two arms of one
+  file move: their second arm's site ids (`…/opN`, `…/csN`) and lines, and so the
+  digest `factId`s and `evidenceOperationId`/`callsiteId`s of its facts, the snapshot
+  and `diff` operation ids, and `explain`/`prove` lines. Fingerprints strip site
+  segments (`fingerprint::ROUTINE_SITE_TAGS`), so baselines do not move; `alsem graph`
+  takes its sites from the program graph, not these ids, so it does not move. Routine
+  ids and stable ids do not change. No golden moved.
+- **CDO** (`bc3ccb18`, release-fast, measured 2026-11-10): the cross-app model has 2
+  collision groups, both in one file of a dependency (Base App `PageManagement`:
+  `GetSalesHeaderPageID`, `GetPurchaseHeaderPageID`; census `groups_one_file=2`); the
+  workspace has none. Against an `integrate/w2` build, `alsem analyze` (cross-app JSON)
+  and `explain` (human and JSON), `digest` and `prove may-commit` for the three
+  `output_cdo` routines (IssueReminder, RunReportID, UpdateLastUpload) are
+  byte-identical but for the timestamp, so the CDO goldens are not expected to move.
+- **The impact-base cache's summary schema was 3 at this round**
+  (`impact::keys::SUMMARY_SCHEMA`): a base cached before could cite the other arm's line
+  for a site, so it is not read.
+
+### Fixed (engine limits wave 2, B2)
+
+- **The arms of a statement `#if` are alternatives, not one sequence.** The lowerer spliced
+  every arm of an `#if`/`#elif`/`#else` chain inside a routine body into one statement list.
+  An `exit` or `Error` in one arm then cut off the code after the group in every build, so
+  `prove` answered a wrong `no (every candidate decided)` (`writes-table` on a write after
+  `#if not CLEAN99 exit; #endif`) and a wrong `unconditional on success` (an `Error` only
+  one build compiles). Microsoft Learn ("AL preprocessor directives overview",
+  https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/directives/devenv-directives-in-al):
+  `#if` includes its code only when its expression is true, `#elif` only when no earlier
+  branch was selected, `#else` only when no earlier branch is true; so one build compiles
+  at most one arm, and with no `#else` a build may compile none.
+  - The IR's `PreprocGroup` (`al_syntax::ir`) is now built: one group per chain, one block
+    per arm the routine's own build context leaves live, and `falls_through` for the build
+    that takes no arm. A chain whose single live arm every build takes is still spliced
+    in place. `chain_shape` reports the fall-through per chain.
+  - The statement tree (`ir_walk`) gives a group as a `case` with no scrutinee, one
+    `case-branch` per arm, the `#else` arm as the case's else when there is no
+    fall-through. The walkers that follow paths (control context, reach, value flow,
+    return summary, the L4 CFG walk, detector path walks) read a `case` as alternatives.
+    The ordering walk did not, for an arm that only may exit (see the next entry).
+  - The unreachable-statement scan treats a group as one sibling: an `exit` in an arm no
+    longer marks the statement after the group.
+  - No configuration is chosen: `preprocessorSymbols` in `app.json` and `#define` are not
+    read (the later L22 steps). Each arm stays a possible build: "may" questions list
+    every arm's effects, and an effect in an arm is `conditional` (an `Error` alone in an
+    arm is `error-path`).
+- **Code after a construct that only MAY `exit` is no longer `unconditional on success`.**
+  The control-context walk (`program::body::control_context`) made the code after an `if`
+  or `case` conditional only when an arm ALWAYS ends; an arm that may `exit` on the way
+  (`if b then exit;` nested in it) left the code after the construct at the outer
+  context. Splicing used to hide this for `#if` arms, so the group above turned
+  `#if A if b then exit; #endif Commit();` into a wrong `commits-on-success-path: yes`
+  (its old answer was `unknown`), and nested groups (`#if A #if B exit; #endif … #endif
+  Insert();`) read the `Insert` as `unconditional on success`. The same gap was older in
+  plain AL: `if a then begin if b then exit; … end; Insert();`, an `exit` inside a loop
+  body, and an arm `begin if d then exit; Error(..) end` (counted as an `Error` only).
+  A new `control_flow::may_exit` ("some path through this node runs `exit`") is now THE
+  one rule for "can this statement return early". Second review: it is applied once, in
+  each statement walker's block loop, to every statement whatever its kind (an `if`, a
+  `case` or `#if` group, a loop, a bare `begin … end`, a `with` body), instead of once
+  per construct:
+  - `control_context`: the code after such a statement is at least `conditional`. A bare
+    `begin if b then exit; end; Insert();` read `unconditional on success` (the block
+    went through the generic arm, which dropped its continuation); it is `conditional`
+    now, and a bare block that always leaves (`begin exit; end;`) ends the block like a
+    plain `exit`.
+  - `operation_order` (the ordering facts): no op after such a statement dominates the
+    success return. Its own rule (`canNormalReturnBeforeAfter`, ported from al-sem)
+    looked one arm deep and skipped loops. So since the group change, an `#if` arm that
+    only MAY exit (`L.Insert(); #if not CLEAN99 if b then exit; #endif Commit();`) gave
+    digest a false `COMMIT_DOMINATES_RETURN` (scope root, valid for refutation) and
+    `WRITE_COMMITTED_BEFORE_RETURN`; master spliced the arm and made no such claim. The
+    plain-AL shapes (`if a then begin if b then exit; end;`, `while b do exit;`, a bare
+    block) had the same false labels on master too. Through a call, `ordering_inter`'s
+    `exactly_once_on_success` reads the same flag, so a commit in a callee called after
+    such a statement no longer dominates the root's return either.
+  Only `exit` counts: a raised `Error` ends the routine without success, so it never
+  takes code off a success path. (The control-context lattice still marks the code after
+  a `case` arm or a two-arm `if` arm that always raises `conditional`: an older,
+  conservative al-sem rule, left as it is.) The other readers of `branch_termination`
+  answer "always leaves" and use it only in the safe direction (`pending_writes` keeps an
+  arm that may fall through; `literal_flow::always_leaves` and `param_guard::is_exit_only`
+  refine only when an arm always leaves); none reads "may return early".
+- **An attribute or property that only some builds have is a "may", never a definite
+  declaration** (second review, blocking 2 and 3; for the attributes and properties listed
+  here. `SingleInstance`, `Access`, `ObsoleteState`, a `temporary` marker on `SourceTable` and a
+  `temporary` on a `VarDecl` are not read this way yet: engine limits, "B2 in detail").
+  `#if CLEAN99 [CommitBehavior(
+  CommitBehavior::Ignore)] #endif procedure P()` was read as declared in every build, so
+  `prove P may-commit` (and its caller's) said a definite `no`, though a build without
+  `CLEAN99` commits (master said `yes`). An XmlPort `Direction = Export;` in one arm
+  likewise dropped the import a build without the arm runs (default `Both`), so
+  `writes-table` said `no`. One rule, at the right layer:
+  - The lowerer marks it. `AttributeIr::conditional` (projected as `AttributeInfo::
+    conditional`, JSON `"conditional": true` only when set) is true when some build in
+    which the routine exists lacks the attribute with these arguments: it sits in an arm
+    the routine is not in, it reached the routine past a `#if` wrapper by a path not
+    every build takes (`[A] #if X procedure R1 … #endif procedure R2`: R1 always has it,
+    R2 only without `X`), or its arguments hold an `#if`. `ObjectProperty::conditional`
+    is true for a property in an `#if` arm or with a whole-value `#if`. Imprecise in one
+    direction only: arms that together cover every build still mark their entries.
+  - `program::attributes` states the rule: `find_attribute`/`has_attribute` answer "may
+    have it"; a reader that decides a definite answer from presence uses the new
+    `find_definite_attribute`/`has_definite_attribute`. Readers changed:
+    `commit_scope::declared` (a conditional `[CommitBehavior]` adds its value to what a
+    build without it runs under: `N|I` (normal or ignored), `N|E` (normal or an error), like
+    the object property, reason `… in
+    some builds only (may apply)`; new `DeclSource::ConditionalAttribute`, and its
+    callers'-question row); `return_summary::parse_commit_behavior` (definite only; new
+    value `"conditional"`, which `ordering_engine` grades `assumed_effective`, never
+    `proven_suppressed`/`proven_errors`/`proven_effective`; the dependency summary uses
+    the same function now); `RoutineReturnSummary::try_function_conditional` (the body
+    stays opaque, but `ordering_engine`'s proven-errors rule needs a definite
+    `[TryFunction]`); `traps::is_try_function` (a conditional `[TryFunction]` traps
+    nothing for certain: `throws-error` said `no`, now `yes`).
+  - The digest weakens a commit route whose behaviors hold more than `N` (a may-apply
+    declaration: a conditional attribute, the object's `InherentCommitBehavior`, an
+    unchecked object run), and an error route whose behaviors hold more than `E`, to
+    `conditional`: such a commit or commit-error does not happen on every success path.
+    So `commits-on-success-path` for the routine above is `unknown`, not `yes`.
+  - Properties: an `#if`-only `Direction` leaves `Both` possible (`node_extract`); an
+    `#if`-only `TableType = Temporary` (`ModelTable::is_temporary`), `SourceTableTemporary
+    = true` (`page_source_table_temporary` and the model's `source_table_temporary`) or
+    `UseTemporary = true` (the lowerer's temporary dataitems, now through
+    `bool_property`) no longer makes a record temporary, which dropped its database
+    writes (`writes-table: no`). `InherentCommitBehavior` with one value per arm takes
+    the strictest (`Error` > `Ignore` > `Allow`), read through one function
+    (`ir_object_metadata`) by the L2 index and the model; it was the first arm's.
+  - Readers left on "may" because presence is the cautious reading there: a
+    `[TryFunction]` makes control context, operation order and the return summary
+    opaque; `cross_rules`' must-error steps and the callers' question treat a possible
+    try as a try (fewer definite claims); `[EventSubscriber]` makes a subscription
+    (every forward answer already reads an event dispatch as conditional: a plain
+    subscriber's commit gives `commits-on-success-path: unknown`);
+    `[ErrorBehavior(Collect)]` never removes an error. (An isolated event's trap was
+    on this list too; the third review below changes it for an event isolated in some
+    builds only.)
+- **Third review of B2: an attribute only one arm of a routine declares is
+  conditional.** A routine declared in two `#if` arms (two whole declarations, or one
+  `#if`-split header) is one model row per arm under one id, and a build runs one of
+  them. The lowerer marked an attribute in a row's own arm as present in every build,
+  which holds for that row only; the readers take an attribute from whichever row has
+  it. So `#if CLEAN99 procedure P() #else [CommitBehavior(CommitBehavior::Ignore)]
+  procedure P() #endif begin Commit(); end;` made `may-commit` say a definite `no` for
+  `P` and its callers, and a `[TryFunction]` on one arm made `throws-error` say `no`
+  for a caller (the pre-B2 master said `yes`). The lowerer now groups an object's
+  routine rows by routine identity (kind, name, enclosing member, parameters, return
+  type; lowercased, no whitespace, so at least as coarse as `compute_routine_id`) and
+  marks an attribute conditional on every row when another row of the same routine does
+  not carry the same attribute text (`mark_attributes_some_arm_lacks`). The same
+  attribute on both arms stays definite. (This compared the routines of ONE object
+  declaration only: two whole-object arms, or two files, were not compared. The final
+  review above moves the rule to the model, over every row of an id.)
+- **Third review of B2: an `#if`-only page permission blocks nothing.** `page_ui`'s
+  block needed every entry of `Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`
+  to be `false`, so `#if CLEAN99 DeleteAllowed = false; #endif` blocked deletes in every
+  build and `explain` dropped the page from the table's `OnDelete` UI surfaces. A build
+  without the property has the default, `true` (Microsoft Learn, "DeleteAllowed
+  property": "The default value is true"). A block now also needs one entry that every
+  build has. The model's four page fields (read by d39's `page_may_modify` and d64) are
+  `None` when an entry is conditional, as `source_table_temporary` already was.
+- **Third review of B2: a conditional `InherentCommitBehavior` is `conditional` in the
+  return summary.** `ModelObject::inherent_commit_behavior_conditional` is set when the
+  property sits in an `#if` arm or has an `#if` value, and
+  `return_summary::merge_inherent_commit_behavior` then gives `conditional` instead of
+  `ignore`/`error`, so the ordering engine grades `assumed_effective`, not
+  `proven_suppressed`. (`commit_scope` already read the property as "may".) No CLI
+  probe showed a different answer; a model test pins it.
+- **Third review of B2: an event isolated in some builds only is no trap.**
+  `EventSymbol::isolated` means isolated in some build (#104). When the isolating
+  attribute is conditional (`#if X [IntegrationEvent(false, false, true)] #else
+  [IntegrationEvent(false, false, false)] #endif`, or an `#if` in its arguments), a
+  build that does not isolate the event lets a subscriber's error escape. The
+  literal-reach trap list leaves such an event out (the raiser's route said "otherwise
+  caught by the isolated event"), and `prove throws-error` on the subscriber says
+  "not established (the event is isolated in some builds only; …)" instead of "no,
+  unless …". One rule for both: `events::isolated_in_some_builds_only`.
+- Tests, third review: `tests/cli/cli_b2_preproc_arms.rs` gains a third fixture
+  (`ARMS_SOURCE`): `an_attribute_only_one_arm_of_a_routine_declares_is_conditional`
+  (the reviewer's split-header, two-declaration and `[TryFunction]` shapes, with
+  both-arm controls), `a_page_permission_only_some_builds_write_blocks_nothing`,
+  `an_event_isolated_in_some_builds_only_is_no_trap` (arm and argument shapes, with an
+  always-isolated control). Lowerer `an_attribute_one_arm_of_a_routine_lacks_is_conditional`
+  (with an overload control); model `a_property_only_some_builds_write_is_not_definite`;
+  `return_summary` `merge_icb_conditional_object_is_conditional`.
+- **A routine declared in two `#if` arms is `conditional` in each arm.** A build runs one
+  arm's body, so no arm's site runs on every success path; each arm's `Insert` read
+  `unconditional on success` through its callers. The model builder now lifts the
+  `top-level` sites of every row of a collided id to `conditional`
+  (`program::model::workspace::lift_arm_declarations`). (It counted the declarations
+  per file, so one id in two files was not lifted; the final review above replaces it
+  with the model-level join, `join_alternative_declarations`.)
+- **Not fixed here (fixed by "B2 per-arm ids" above): a routine declared in two `#if`
+  arms still cited one arm's line for the other's write.** Both arms minted the same site
+  ids (`{routine}/op0`), and readers resolve an id to one row (#160 step 11b, class P: a
+  reader keeps the last row that holds the site).
+- The #288 trust-gate tests G1/G2 state their dead marks by assignment: production no
+  longer marks the code after an arm's `exit` unreachable, which those tests relied on.
+- Leading-guard readers that stop at the first non-statement now stop at a group too
+  (`table_event_guard`'s entry exits, the temporary-record entry guard), where they used
+  to read an arm's guard as if every build ran it.
+- Tests: `tests/cli/cli_b2_preproc_arms.rs` (prove through the CLI: an arm's `exit`, an
+  arm's `Error`, an arm that may `exit` before a `Commit`, nested groups and the plain-AL
+  shapes with a no-exit control, a two-arm routine through its caller), lowerer
+  `statement_if_chains_are_groups_of_alternatives`, `ir_walk::preproc_group_tests`.
+  Second review: the same file adds digest's ordering labels for six may-exit shapes
+  with two controls, a bare block that always exits, and a second fixture
+  (`DECL_SOURCE`) with each `#if`-only declaration next to a control that declares it in
+  every build (`[CommitBehavior(Ignore|Error)]`, an attribute taken by a routine in an
+  arm, `[TryFunction]`, `InherentCommitBehavior` per arm, `Direction`, `TableType`,
+  `SourceTableTemporary` (direct write and a table-event subscriber that exits for a
+  temporary record), `UseTemporary`, the ordering grade). Lowerer
+  `an_attribute_only_some_builds_of_its_routine_have_is_conditional`,
+  `an_object_property_only_some_builds_have_is_conditional`; `return_summary`
+  `a_conditional_declaration_is_may_not_definite`; `ordering_engine`
+  `grade_commit_rules_priority` gains the new rule.
+- Discrimination proofs, second review (each: break with Edit, narrowest test RED,
+  revert, GREEN; the B2 CLI module was 13/13 after every revert):
+  1. The one may-exit rule in `control_context::walk_block` (`false &&`): RED
+     `a_nested_exit_…` (NestedArmExit, NestedIfExit, LoopExit, ExitOrError all read
+     `unconditional-on-success`) and `an_arm_that_may_exit_…`. This one guard replaces
+     the first fix-up's four (`walk_if_node` both-fall-through and error-guard cases,
+     `walk_case_node`, after loops), which no longer exist. BareBlockExit stayed
+     `conditional`: the bare-block arm carries the block's own continuation, a second
+     path (a stated limit: that carry has no proof of its own).
+  2. A bare block that always leaves ends the block (`false &&`): RED
+     `a_block_that_always_exits_ends_the_routine` (answer `yes`).
+  3. The may-exit rule in `operation_order::walk_block` (`false &&`): RED
+     `a_statement_that_may_exit_…`, every one of the six shapes regained
+     `COMMIT_DOMINATES_RETURN` (and the five direct ones `WRITE_COMMITTED_BEFORE_RETURN`).
+  4. *(`lift_arm_declarations` no longer exists: the final review replaced it with the model
+     join; its proof 2 is the current one.)* `lift_arm_declarations` call commented out (first
+     fix-up guard, unproven until now): RED `each_arm_of_a_two_arm_routine_is_conditional`.
+  5. Lowerer: an attribute written in an arm is conditional (`false &&`): RED
+     `a_commit_behavior_only_…`, `a_try_function_only_…`,
+     `a_commit_under_a_conditional_declaration_…` and the lowerer unit test.
+  6. Lowerer: an attribute that did not come out of every path it went into is
+     conditional (`was` alone): RED `an_attribute_a_routine_in_an_arm_takes_…` (and
+     the lowerer unit test).
+  7. Lowerer: `#if` in the arguments makes it conditional: RED the lowerer unit test.
+  8. Lowerer: a property in an `#if` arm is conditional (pass `in_arm` instead of
+     `true`): RED `a_property_only_…` (Direction, TableType and SourceTableTemporary
+     cases) and the lowerer property test.
+  9. Lowerer: a whole-value `#if` is conditional: RED the lowerer property test.
+  10. `UseTemporary` read through `bool_property` (back to "any entry is true"): RED
+      `a_property_only_…` (`B2 Rep Maybe` said `no`).
+  11. `ir_attributes` projects `conditional` (never emitted): RED four CLI tests.
+  12. `commit_scope::declared` keeps the build without the attribute (states `may`
+      only): RED `a_commit_behavior_only_…`, `an_attribute_a_routine_…`,
+      `a_commit_under_a_conditional_declaration_…`.
+  13. `parse_commit_behavior` definite only (`find_attribute`): RED the same three.
+  14. `grade_commit_rules`' new rule (`false &&`): RED `grade_commit_rules_priority`
+      (`proven_suppressed`). Breaking instead the `maybe_declared` computation in the
+      engine stayed GREEN on the CLI: on the fixture the chain is not proven anyway,
+      so the CLI test pins `parse_commit_behavior`, not this rule (a stated limit).
+  15. *(Superseded by 15' below: the merge with B4 removed B2's `MaySkip` copy of this
+      rule.)* Digest: a commit route under a may-apply declaration is conditional
+      (`false &&`): RED `a_commit_behavior_only_…` (`unconditional on success`) and
+      `an_attribute_a_routine_…`.
+  16. *(Superseded by 16' below, for the same reason.)* Digest: the same for an error
+      route: RED `a_commit_behavior_only_…` (ArmError's error row `unconditional on
+      success`); B4's 16 CLI tests stayed GREEN.
+  17. `traps::is_try_function` definite (back to `has_attribute`): RED
+      `a_try_function_only_…` (`no`).
+  18. `InherentCommitBehavior` strictest (back to the first value): RED
+      `an_inherent_commit_behavior_per_arm_…` (`no`).
+  19. `Direction` conditional (`true ||`): RED `a_property_only_…` (RunsArmExport
+      `no`).
+  20. `page_source_table_temporary` definite (`true ||`): GREEN at first (the direct
+      write is decided by the model's field); the subscriber case was added, then RED
+      (`B2 Page Maybe` → `B2 Sub Log` `no`).
+  21. The model's `source_table_temporary` (`false &&`): RED `a_property_only_…`
+      (direct write `no`).
+  22. `TableType` definite (`true ||`): RED `a_property_only_…` (WritesTempMaybe `no`).
+  23. `try_function_conditional` (`false &&`): RED
+      `a_conditional_declaration_is_may_not_definite`.
+- Discrimination proofs, third review (same method; after every revert the B2 CLI
+  module was 16/16, the lowerer attribute tests 28/28, the model and merge tests 7/7):
+  24. The `mark_attributes_some_arm_lacks` call removed: RED the lowerer test (the
+      `[TryFunction]` stayed `false`) and
+      `an_attribute_only_one_arm_of_a_routine_declares_is_conditional` (ElseIgn,
+      TwoBodies, CallTwo, CallTry all `no`, the reviewer's wrong answers).
+  25. Its per-attribute check (`true ||`, every attribute of a multi-row id
+      conditional): RED the same two tests on the both-arm controls (BothIgn,
+      CallBothTry `yes`).
+  26. `page_ui`'s "one entry every build has" (`p.conditional || !p.conditional`): RED
+      `a_page_permission_…` (no UI surface).
+  27. The model's definite page fields (`false &&`): RED
+      `a_property_only_some_builds_write_is_not_definite` (`modify_allowed` `Some(false)`).
+  28. `inherent_commit_behavior_conditional` never set (`false &&`): RED the same model
+      test.
+  29. `merge_inherent_commit_behavior`'s conditional arm (`&& false`): RED
+      `merge_icb_conditional_object_is_conditional` and the model test (`ignore`).
+  30. The literal-reach trap list keeps a some-builds event (`true ||`): RED
+      `an_event_isolated_…` (RaiseArm carried the `isolated-event` trap).
+  31. `prove`'s every-build split (`true ||`): RED `an_event_isolated_…` (SubArm lost
+      the "isolated in some builds only" line).
+  32. `isolated_in_some_builds_only` reads conditional attributes as definite
+      (`a.conditional || !a.conditional`): RED `an_event_isolated_…` (RaiseArm trapped).
+- **Integration with B4 and B6 (merge into `integrate/w2`).** B2's digest rule (a commit
+  or error route under a may-apply declaration is at most `conditional`, `MaySkip`) and
+  B4 round 2's (`Uncertain`, `at_least_conditional`) were the same rule over the same
+  normalized route behaviors; the merge keeps B4's one copy, whose predicate
+  (`commit_scope::uncertain`, and "holds `E` and more" for an error route) covers B2's
+  case. B2 and B6 round 2 had each added `ObjectProperty::conditional`; the merge keeps
+  B2's lowering (`in_arm` passed down through every `#if` wrapper), which already marks
+  what B6's post-pass marked. Proofs redone on the merged code (same method): 15' the
+  commit routes' `uncertain` filter forced off (`false &&`) → RED
+  `a_commit_behavior_only_…` (`ArmIgnore` `unconditional`) and `an_attribute_a_routine_…`;
+  16' `errs_maybe` forced off → RED `a_commit_behavior_only_…` (ArmError's error row);
+  8' the wrapper passing `in_arm` instead of `true` → RED B6's
+  `cli_dataset_operations::a_direction_in_an_if_arm_alone_may_still_import` (`no`) and
+  `a_property_only_…`. Each GREEN once reverted.
+
+### Fixed (engine limits wave 2, B4/L16)
+
+- **`[CommitBehavior]` now decides what a commit does in `prove` (its commit and error
+  questions, and the `--site/--match` slice), `digest` and `explain`.** Before, only the
+  callers' question read it: `prove … throws-error` answered `no (every candidate
+  decided)` for a `Commit()` under `CommitBehavior::Error`, and `may-commit` /
+  `commits-on-success-path` answered `yes` for a commit under `Ignore` (engine limits B4).
+  `alsem fingerprint` and `policy check` do not apply it yet: they still say `commit: yes`
+  for a root whose only commit is ignored or turned into an error (an over-statement,
+  never a wrong `no`; stated in engine limits L16).
+  The rule, from Microsoft Learn ("CommitBehavior attribute",
+  <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/attributes/devenv-commitbehavior-attribute>):
+  the behavior lasts for the attributed method's scope (the page's examples cover the
+  methods it calls and the subscribers of an event it publishes), returns to the previous
+  one when the method ends, only a stricter behavior can be set inside (`Error` over
+  `Ignore` stays `Error`), and it applies to explicit commits only, not to the implicit
+  commit of `Codeunit.Run`.
+- **A checked `Codeunit.Run` still commits inside an `Ignore` scope.** Learn
+  ("Codeunit.Run(Integer [, var Record]) Method",
+  <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/codeunit/codeunit-run-method>):
+  when the return value is used, the changes are committed at the end of the codeunit
+  unless an error occurs, and "the implicit commit by `Codeunit.Run` isn't affected by
+  `CommitBehavior`". The engine has no fact for that implicit commit (an older gap: a
+  checked run with no explicit `Commit()` answers `may-commit no`, before and after this
+  change; engine limits L16). So a commit inside a checked run stands in for it: once a
+  route crosses a checked run, a commit that runs normally or is ignored is the run's
+  commit, and no commit error escapes the run (the run traps it). (That speaks of an error
+  raised inside a run that has started. With a write pending at the run, B7 says a checked
+  run is no definite trap, and BC raises an error at the run itself; there is no commit
+  error row in that case either. The run's own error is not modeled, so such a shape can
+  answer a wrong `throws-error: no`, engine limits L28.) Without this,
+  `[CommitBehavior(Ignore)] procedure P() begin if Codeunit.Run(X) then; end` (X commits)
+  answered a wrong `may-commit no` with a false "ignored" reason.
+- **A checked run under `Error` may commit, but not for certain.** Learn does not say
+  whether the scope follows into a checked run. If it does, the commit inside raises an
+  error, the run traps it (returns `false`, rolls back) and nothing commits; if it does not,
+  the run commits. So `may-commit` says `yes`, `commits-on-success-path` says `unknown`
+  (before: `yes … unconditional on success`, a definite reading of something Learn does not
+  state), and `throws-error` adds no commit error. Same for an `Error` declared inside the
+  run. (A write pending at the run: see the previous entry's note and engine limits L28.)
+- **Learn does not say whether the scope follows into an object a call starts.** The
+  engine reads it as *may* apply for every way of starting one: any `Run` or `RunModal`, a
+  report's `SaveAs*`, `Execute` and `Print`, an XmlPort's `Import` and `Export`, a query's
+  `Open` and `SaveAs*`, keyword form (`Report.Run(Report::X)`) or variable form
+  (`Rep.Run()`), and the dataset operations of the started object (an XmlPort import's
+  insert runs the table's `OnInsert`). The commit stays possible, it is never
+  `unconditional on success` (before: it could be), and under `Error` a possible error is
+  added. No definite `no` rests on that reading. Before this round only `Codeunit.Run(…)`,
+  `Report.Run`/`Page.Run` in keyword form and a codeunit variable's `.Run` were runs: a
+  report variable's `.Run()`, `Report.SaveAsPdf(Report::X, …)`, `Rep.SaveAsPdf(…)` and the
+  other B6 run routes were plain calls, so `Ignore` answered a definite (wrong) `no`.
+  **What starts an object is decided once**, where the call resolves: one list of methods
+  (`resolve::dataset::starts_object`), read by the keyword form (`extract::classify_call`
+  through `dataset::keyword_run_kind`) and the variable form
+  (`resolver::member_starts_object`, also the resolver's own member arm); the resolver
+  records it as `SiteFacts::starts_object`, the model carries it on each edge
+  (`CallEdge::starts_object`), and the commit scope reads only that.
+- **A run into a dependency follows the same rule.** The crossing edge into a dependency
+  was composed as a plain call whatever its kind, so a checked or unchecked
+  `Codeunit.Run(Codeunit::"Dep Runner")` (or `if R.Run() then;`) of a dependency codeunit
+  under `Ignore` answered a definite (wrong) `may-commit no`, `commits-on-success-path no`
+  and digest `commits: no`. The crossing edge now enters by its own step.
+- **A run inside dependency code follows the same rule (round 3).** Round 2 brought a
+  regression: a dependency routine that itself starts an object (`Dep Lib::Outer3` does
+  `if Codeunit.Run(Codeunit::"Dep Runner") then;`, and `Dep Runner` commits), reached by a
+  plain call from an `Ignore` scope, answered a definite (wrong) `may-commit no`,
+  `commits-on-success-path no` and digest `commits: no` with a false "ignored" line (the
+  unchecked `Codeunit.Run(…)` and member `R.Run()` forms did so before round 2 too). The
+  cross-app tree keeps the calls of dependency code apart from the model's
+  (`dependency_calls`, walked by the commit search like the rest), but the run steps were
+  read from the model's calls alone, so the run inside the dependency was a plain step.
+  `CommitScopes::of_model` now reads both lists. The ledger's cut graph (built over the
+  model's calls alone) passes none.
+- **The prefix at a crossing is one walk per root.** Round 2 counted every route from the
+  root to the routine a crossing leaves with a whole-graph backward search per such
+  routine. It is now one forward walk of the root's reach (`CbGraph::states_from`), built
+  on the root's first crossing that needs it and dropped with the root. The answer is the
+  same (each step distributes over a union of behaviors; the unit test compares the two),
+  and the cost now follows the root's reach instead of the number of crossing routines.
+- **The filtered slice traps a commit turned into an error.** `prove … throws-error --site`
+  (also `--match`, `--op`) ruled the trap by the site's own row type, which is `COMMIT` for
+  such a site, so a commit under `Error` inside a used `[TryFunction]` answered `yes` while
+  the unfiltered answer and the digest said `no (caught … by the TryFunction)`. The slice
+  now rules it by the row type it reports (`ERROR_IMPLICIT`), like the other two, and keeps
+  the isolated-event note (`escapes only if a write is pending …`).
+- **How:** one rule, `commit_scope::declared` (the routine's attribute, else its object's
+  `InherentCommitBehavior`), read by the callers' question and by the digest. For each
+  COMMIT the digest reports, it finds the behaviors the commit can run under over every
+  route from the root (a backward search per commit site over the snapshot's edges, shared
+  by all roots, done only for sites a declaring routine can reach). The search keeps, per
+  routine, what the commit runs under for each behavior the routine may be entered under,
+  so a "may" step deep in the graph (an object run below a plain call) composes exactly
+  with a declaration above it; with one set per routine, `Ignore` on a caller two calls
+  above an object run read as a definite "ignored". A commit no route runs
+  normally is no COMMIT row; it is listed as `suppressedCommits` (prove, digest JSON) and as
+  a `commit behavior:` line (prove, digest and explain human) with why, e.g. `COMMIT at
+  ws:src/A.al:12 is ignored (CommitBehavior Ignore on Codeunit "X"::Y)`. A commit some route
+  runs under `Error` is an `ERROR_IMPLICIT` row with detail `commitBehavior` (`throws-error`
+  says `COMMIT (an error: CommitBehavior Error on …)`). A commit kept as a commit keeps only
+  the listed paths that run it normally, so an ignored unconditional route no longer makes
+  it `unconditional on success`. For a commit inside the workspace's reach (a part with no
+  rule-B boundary), a route the witness search did not list (it lists shortest paths only)
+  is found and shown; for a boundary part, every route from the root to the routine the
+  crossing leaves counts (a forward walk of the root's reach), without a shown route. A commit beyond a rule-B crossing follows the
+  dependency's declarations (Base Application has 16: 15 `Ignore`, 1 `Error` on posting
+  preview). The filtered `prove --site/--match` slice applies the same rule.
+- **`InherentCommitBehavior` is not on Microsoft Learn.** It is read as *may* apply: the
+  commit stays possible and, under `Error`, a possible error is added, so no definite `no`
+  rests on it. CDO and its dependencies have 0 uses.
+- **Output (additive):** prove JSON `result.suppressedCommits` and digest JSON entry
+  `suppressedCommits` (`behavior`, `file`, `line`, `beyond`, `reason`), only when present;
+  an `ERROR_IMPLICIT` row's `detail.commitBehavior`. Outputs move only where a declaring
+  routine is on a route.
+- **Tests:** `tests/cli/cli_prove_commit_behavior.rs` through the CLI, each stating its
+  precondition with a control: `every_way_of_starting_an_object_lets_the_scope_only_may_apply`
+  (13 ways of starting a report, page, query, XmlPort or codeunit under `Ignore`; controls:
+  a procedure call and the routine's own insert answer `no`),
+  `an_object_run_into_a_dependency_keeps_its_commit` (a dependency `.app` with a run
+  codeunit; control: a plain call into it answers `no`),
+  `an_object_run_inside_dependency_code_keeps_its_commit` (the same dependency, whose
+  `Outer2/3/4` start `Dep Runner` by unchecked, checked and member run; prove `may-commit
+  yes`, `commits-on-success-path unknown`, digest `commits: may`; same control),
+  `the_filtered_slice_traps_a_commit_turned_into_an_error` (control: a plain `Error` in a
+  used TryFunction), and `a_checked_run_inside_an_ignore_scope_still_commits` (now also
+  `commits-on-success-path unknown` under `Error`); unit test
+  `commit_scope::a_run_below_a_declaration_keeps_its_may` (hand-stated graph; it also
+  compares the per-root forward walk with the backward search). Five
+  adapter tests (`program_calls_adapter_tests`) now expect `starts_object` on run edges.
+- **Discrimination proofs** (break with Edit, run the narrowest test, revert, rerun: all
+  20 tests of `cli_prove_commit_behavior` and the 3 `commit_scope` unit tests pass after
+  every revert):
+  1. crossing edge entered as `Step::Plain` in `split_commit_part` →
+     `an_object_run_into_a_dependency_keeps_its_commit` FAILS (`IgnoreCheckedDepRun`
+     answers `no`, "ignored").
+  2. the member arm's `starts_object` fact forced `false` (`full.rs`) →
+     `every_way_…` FAILS on `ReportVarRun` and `an_object_run_into_a_dependency_…` on
+     `IgnoreCheckedDepMember` (both `no`).
+  3. a dataset operation not given its run's step (`object_runs`) → `every_way_…` FAILS on
+     `XmlportImport` (`no`).
+  4. the slice's trap gated on `rec.effect_type` again (`prove_slice.rs`) →
+     `the_filtered_slice_traps_…` FAILS (`--site` answers `yes`).
+  5. the backward pass composed by one set per routine
+     (`lift(v, apply(t, step.enter_one(N, d)))`) →
+     `a_run_below_a_declaration_keeps_its_may` FAILS (`Some(2)` = Ignore, want `N|I`).
+  6. a checked run always pinned (`P`, the round-1 reading) →
+     `a_checked_run_inside_an_ignore_scope_still_commits` FAILS (`ErrorCheckedRun`
+     `commits-on-success-path` answers `yes`, unconditional).
+  7. `at_least_conditional` disabled → `every_way_…` FAILS (`ReportRun` answers
+     `commits-on-success-path yes`) and `a_checked_run_…` FAILS.
+  8. the all-routes prefix at a crossing dropped (`CbGraph::beyond`, the guard that
+     replaced round 1's `anc_primary` widening, which no longer exists; redone in round 3 on the per-root walk:
+     `at_root.get(f) & 0`) →
+     `a_longer_normal_prefix_to_a_crossing_keeps_the_commit_beyond` FAILS (`Root` answers
+     `no`).
+  9. round 1's found normal route dropped (`commit_extra` = `None`) →
+     `a_longer_normal_route_keeps_a_commit_the_listed_routes_ignore` FAILS (`no`); this
+     records the proof round 1 left unrecorded.
+  10. the dependency code's calls left out of the run steps (`object_runs` chained
+      `&dependency_calls[..0]`) → `an_object_run_inside_dependency_code_keeps_its_commit`
+      FAILS (`IgnoreNestedDepRun` answers `no`).
+  11. the per-root forward walk entering every edge as `Step::Plain`
+      (`CbGraph::states_from`) → `a_run_below_a_declaration_keeps_its_may` FAILS (`B`:
+      `2` = Ignore, want `3` = `N|I`).
+- **Integration with B6 and B7 (merge into `integrate/w2`).** B4's one start rule
+  (`resolver::member_starts_object`) now has B6's binding: a report's `Print`/`Execute`/
+  `SaveAs*` and a query's `Open`/`SaveAs*` bind by AL's overload rule
+  (`run_by_other_name_binding`), so `R.Print()` on a report that declares `procedure
+  Print()` is a plain call, not a start (B4's earlier arity rule called it a start, and an
+  `Ignore` scope then answered a wrong `may-commit yes`). The answer is three-way
+  (`dataset::ObjectStart`: `Yes`, `No`, `Undecided`); the resolver's member arm, the site
+  fact `SiteFacts::starts_object` and the site's dataset run (`full::member_dataset_run`)
+  all read it. An undecided binding keeps B6's unresolved `OverloadAmbiguous` route
+  (`unknown`), and the commit scope reads its site as `Step::Run`, a "may", so no definite
+  answer rests on it. B7's `CbGraph::commit_surely_runs` (a checked run read as
+  `Step::Run`) runs on B4's per-value transfer functions (`commit_scope::Transfer`: one result
+  per behavior the routine may be entered under): `backward_states(origins, pin)`
+  keeps B7's `pin` flag, and the root's own declaration is applied to its transfer.
+  Tests: `cli_prove_commit_behavior::a_start_follows_the_overload_binding_and_an_undecided_one_gives_no_no`
+  (`CallPrint` `no` with one suppressed commit; `CallUndecided` `unknown`; `CallBuiltin`
+  `yes`, never `commits-on-success-path yes`) and the unit test
+  `commit_scope::a_start_binds_by_the_overload_rule_and_an_undecided_one_is_a_may` (model
+  flags `No`/`Undecided`/`Yes`, steps `Plain`/`Run`/`Run`, from real source). Proofs:
+  (a) the member site fact forced to `Yes` whatever the binding (`full.rs`) → both tests
+  FAIL (`Print` flag `Yes`; `CallPrint` answers `yes`); (b) the resolver's undecided early
+  return disabled → the CLI test FAILS (`CallUndecided` answers `yes` through the
+  procedure, still a "may" thanks to the step); (c) with (b) kept and `object_runs` also
+  taking only `Yes` sites → `CallUndecided` answers a definite `no`; (c) alone → the unit
+  test FAILS (step `Plain`, want `Run`); (d) `commit_surely_runs` applying `N` instead of
+  the root's declaration → `cli_prove_traps::a_commit_that_commitbehavior_stops_does_not_end_the_write`
+  FAILS (`IgnoredCommitRun` `no`); (e) B7's proof R2 redone on the port
+  (`decl[origin] == N`) → the same test FAILS at `IgnoreOuter`. Each passes once reverted.
+
+### Fixed (engine limits wave 2, B5)
+
+- **A table read through a FlowField is now a read of that table.** A FlowField stores
+  nothing: BC computes it from its `CalcFormula` over the formula's table. So
+  `Cust.CalcFields("Net Change (LCY)")` reads `Detailed Cust. Ledg. Entry`, though the
+  record is a `Customer`. Before, every effect answer saw only the record's own table, and
+  `query touches --direction down` answered a definite `no (every candidate decided)`. On
+  CDO, `query touches --table "Detailed Cust. Ledg. Entry" --from "CDO Customer
+  Setup.Balance" --direction down` now answers `down: yes` (was `no`), and `query touches
+  --table "Detailed Cust. Ledg. Entry"` counts 35 workspace sites (was 5; 30 are
+  `CalcFields`). `ValidateHandledFilterOnSalesInvoice` (a `SetFilter` on the FlowField
+  `"CDO Email Log"`) now touches `CDO E-Mail Log` (was `no`).
+- **Where the read is placed** (new `program::model::flow_fields`, run once at L3
+  resolve, after table-extension fields are merged): on `CalcFields(F1, F2, ...)`, each
+  argument that is a FlowField; on `SetRange`/`SetFilter` of a FlowField (Learn: "if you
+  apply a filter to a FlowField, the calculation is based on the filtered data"; the
+  filter issues no query, so this places a may-read one step early); and on every
+  `Get`/`Find*`/`Next` of a record the same routine calls `SetAutoCalcFields` on (Learn:
+  the fields are "automatically calculated when the record is retrieved from the
+  database"). A bare `SetAutoCalcFields(F)` is a call on the record of its innermost
+  implicit record frame: the `X` of an enclosing `with X do`, else the object's implicit
+  `Rec` (see round 2 below). When the record is shared between routines (the implicit
+  `Rec`, or an object global), every `Get`/`Find*`/`Next` of it in every routine that
+  shares it gets the read too (`SetAutoCalcFields` in `OnOpenPage`, `Rec.FindSet` in an
+  action, also one a page extension adds); a routine with a local or parameter of that
+  name is not touched. Each read is a
+  `CalcFields` row on the formula's table, at the
+  operation's own line, and reaches `query touches` (down, up and table mode), `query
+  effects` (the human row names the field: `[CalcFields] on Detailed Cust. Ledg. Entry
+  through FlowField "Net Change (LCY)"`), `digest --include-reads` (a `DB_READ`) and
+  `fingerprint` (an `R` right on the table). `prove` asks no read question, and
+  explain lists no reads, so neither changes.
+- **The formula's table comes from source or from the symbols.** The lowerer keeps each
+  field's `CalcFormula` text (one per `#if` arm, `FieldDecl::calc_formula`), and the
+  symbol reader keeps the `CalcFormula` property of `SymbolReference.json` (Base
+  Application's symbols carry it: 2,094 formulas). When the engine cannot tell which table
+  is read (a FlowField with no formula in the symbols, a formula that does not parse, a
+  table that is not loaded, a table name that two loaded tables share (the model keeps no
+  namespace, so the engine does not pick one by load order), an argument that names no
+  field of a table that has FlowFields), the read goes
+  to the `unknown` table bucket with its reason, so a touches answer says `unknown`,
+  never `no`. On CDO no workspace site is undecided.
+- **Not FlowField reads:** `CalcSums` (sums ordinary fields of the record's own table,
+  already a read of it), `CalcFields` of a Blob, and a FlowFilter field's value. A
+  formula's `WHERE` part names only fields of its own table and constants, filters or
+  fields of the record, so the formula's table is the only table it reads
+  ([CalcFormula property](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-calcformula-property)).
+- **Temp state:** Learn does not say how a FlowField of a temporary record is computed.
+  The rule takes the reading that never hides a read: the formula's table is read as the
+  table it is (temporary only when declared `TableType = Temporary`), as d1's FlowField
+  gate already assumed.
+- **Detectors see nothing new:** the reads hang off the record operation
+  (`ModelRecordOperation::flow_field_reads`), not the operation list, so no detector
+  input changed (no r4 golden moved). The r3a2/r3a3 goldens gain one effect and one
+  capability fact each in `ws-d21` and `ws-d22` (their `Customer."Balance (LCY)"`
+  FlowField over `Ledger Entry`), and the manifest matrices move by those 2.
+- **One read, not two:** a `CalcFields` of a FlowField over the record's own table, with
+  the same temp state, is the record's own read. The base summary, the capability cone
+  and `query touches`' table mode each emit it once. In `query effects` only the derived
+  `CalcFields` row names the FlowField; the `FindSet` row of a `SetAutoCalcFields` read
+  is the record's own read and no longer says "through FlowField".
+- **Round 2 (second review of the integrated tree).** Four wrong answers fixed:
+  - *A wrong `yes` from a bare `SetAutoCalcFields`.* The first fix-up made a bare call a
+    may-read on EVERY retrieval of the routine whose table has that FlowField, to cover
+    an obsolete `with X do`. That fired in routines with no `with` at all:
+    `SetAutoCalcFields("Line Count"); Other.FindFirst()` in a table procedure answered
+    `yes`, though `Rec`'s setting does not apply to `Other`. The fallback is gone. The body
+    walk now records, for each bare `SetAutoCalcFields` call (round 3: only that name, so
+    no other call allocates), the record of its innermost implicit record
+    frame (`PCallSite::implicit_receiver`): the `with` record, else `Rec`. That is the same
+    frame a bare `FindFirst()` takes its record from, so a bare call inside `with X do`
+    reaches `X`'s retrievals and nothing else. AL looks a bare name up in the `with`
+    record first and then outward, so a `with` on a non-record does not hide `Rec`.
+  - *A wrong `no` across a page extension.* The implicit `Rec` was shared only between
+    routines of one object. A page extension's triggers run on the extended page's `Rec`,
+    and a table extension's procedures on the table's (Learn's table extension example
+    reads `rec.ShoeSize` in an extension trigger). So `Rec.SetAutoCalcFields` in a page's
+    `OnOpenPage` and `Rec.FindSet()` in an action a page extension adds answered `no`.
+    Sharing is now keyed by the base object: `page:<name>` for a page and every extension
+    of it, likewise tables and reports (an extension names its target by name; a
+    namespace-qualified target also matches by its last part). An object global is
+    shared by its own object's routines, and a base object's global also by its
+    extensions (a `protected var`). Two same-named pages of different apps share too,
+    which can only add a may-read.
+  - *A wrong `no` for a qualified field argument.* `X.SetFilter(X."Total Amount", ...)`
+    kept the text `X."Total Amount"`, found no field and added nothing. A field
+    argument now names the field after its last dot outside quotes, and `Rec.FieldNo(F)`
+    names `F`; `X.CalcFields(X."F")` is now decided (it was `unknown`). An argument that
+    still names no field is "not decided" on a table that has FlowFields (it was ignored
+    for a filter) and reads nothing more on a table without any (it was "not decided"
+    for `CalcFields`): nothing can be calculated there.
+  - *A silent `no` for `FieldRef.CalcField()`.* Learn: it "Updates FlowFields in a
+    record", like `Record.CalcFields`. It is not a record operation, so no read existed.
+    `FieldRef.CalcField()`, and `FieldRef.SetFilter`/`SetRange` on a FlowField, are now
+    operations on the FieldRef's record, kept in a new list
+    (`ModelRoutine::field_ref_operations`) so detectors see exactly what they saw before;
+    the effect builders read both lists (`ModelRoutine::effect_operations`: the base
+    summary, the capability cone's table family, the operation index behind `query
+    effects`, `query touches`' table mode and the dependency evidence; round 3 adds the
+    digest/prove snapshot evidence). The field comes
+    from `FR := RecRef.Field(<number> | '<name>' | Rec.FieldNo(<field>))` (a local
+    FieldRef that nothing else binds), the table from the RecordRef's resolved
+    operations or its provable `Open`/`GetTable` bindings. A `CalcField` whose table is
+    not known (a FieldRef parameter, for example) is a read of a table not resolved, so
+    the answer is `unknown`; a field that is not known (`FieldIndex(i)`) on a table with
+    FlowFields is "not decided". `RecRef.SetAutoCalcFields(4)` names fields by NUMBER
+    (Learn: `RecordRef.SetAutoCalcFields([Fields: Integer,...])`); field 4 is now looked
+    up by number (it was "not decided"). RecordRef has no `CalcFields` method.
+  - Tests (`tests/cli/cli_flowfield_reads.rs`, through the `alsem` binary, built from the
+    reviewer's probes): `bare_set_auto_calc_fields_is_on_its_implicit_record`,
+    `implicit_rec_is_shared_across_an_object_and_its_extensions`,
+    `qualified_and_unknown_field_arguments`, `record_ref_and_field_ref_flowfield_reads`;
+    lib tests in `flow_fields`: `field_arguments_name_their_field`,
+    `a_field_that_is_not_found_is_undecided_only_where_flowfields_exist`,
+    `extensions_share_their_base_objects_group`.
+  - Discrimination proofs (each guard broken with Edit, the narrowest test run, then
+    reverted and run again; after all reverts the 10 `cli_flowfield_reads` tests and the
+    6 `flow_field` lib tests pass). Each line: guard, break, what failed.
+    (1) Bare-call collection: the `implicit_receiver` arm skips every call; `BareAuto`,
+    `TabFetchBare` and `WithAuto` answered `down: no`.
+    (2) Innermost record frame: the walk takes the OUTERMOST frame; `WithAuto` answered
+    `down: no`.
+    (3) No blanket fallback: a `Rec`-keyed call applies to every retrieval;
+    `NoWithOther` answered `down: yes`.
+    (4) `Rec` keyed across routines: an undeclared name shares nothing; `TabFetchBare`
+    answered `down: no`.
+    (5) Sharing with extensions: an extension gets its own group; the page extension's
+    `OnAction` answered `down: no`.
+    (6) Shadowing exclusion: a local is shared object-wide; `Shadowed` (and
+    `ReadBlobAndSums`, `MissingFilter`) answered `down: yes`.
+    (7) Object globals: a global gets no object scope; `Fetch` answered `down: no`.
+    (8) `TABLE_AMBIGUOUS`: a name collision keeps the last table; the ambiguous-name
+    test's `query effects` lost the "not decided" row.
+    (9) Cone self-read skip (`repeats_host_read && false`):
+    `a_flowfield_over_its_own_table_is_one_read_fact` failed (2 facts, want 1).
+    (10) Table-mode self-read skip: `flowfield_over_its_own_table_is_one_read` read
+    `CalcFields 2, Get 1`.
+    (11) Qualified argument: the whole text is the field name; `QualifiedFilter`
+    answered `down: unknown`.
+    (12) Not-found field on a FlowField table: nothing is pushed; `MissingFilter` and
+    `FieldRefByIndex` answered `down: no`, and the lib test failed.
+    (13) Host table not loaded: nothing is pushed; the lib test failed (`[]`, want
+    `the record's table is not loaded`).
+    (14) Field by number: never found; `RecRefCalc` answered `down: unknown`.
+    (15) FieldRef operations: none are written; `RecRefCalc` answered `down: no`.
+    (16) A `CalcField` with no known table stays a read: dropped when the table is
+    unknown; `FieldRefParam` answered `down: no`.
+    (17) FieldRef filter: the `setfilter` arm never matches; `FieldRefFilter` answered
+    `down: no`.
+    (18) Base summary reads `effect_operations`: back to `record_operations`;
+    `RecRefCalc` answered `down: no`.
+    (19) Cone reads the FieldRef operations: chain filtered out; `digest
+    --include-reads` had 0 `DB_READ`s of B5 Line (want 1).
+    (20) Table mode reads them: back to `record_operations`; `query touches --table "B5
+    Line"` no longer listed `RecRefCalc`.
+    The first round's proofs (65ba25d1) for the derived-read loops, the undecided
+    branch, the FieldClass gate, the SetAutoCalcFields and filter rules, the base
+    summary dedup and the symbol reader still stand: this change does not touch them.
+  - Learn: [FieldRef.CalcField](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/fieldref/fieldref-calcfield-method),
+    [RecordRef.SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/recordref/recordref-setautocalcfields-method),
+    [RecordRef data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/recordref/recordref-data-type),
+    [Page extension object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-page-ext-object).
+- **Round 3 (review of round 2).**
+  - *Two FieldRef guards had no test.* A local FieldRef passed to a call is not decided
+    by its own assignment (a `var` parameter can rebind it), and assignments that
+    disagree decide neither the field nor the table. Both were right but unpinned. New
+    fixtures in `record_ref_and_field_ref_flowfield_reads`, each answering `down:
+    unknown`: `FieldRefPassed` (`FR := RR.Field(1); Bind(FR); FR.CalcField()`, where
+    `Bind` rebinds `FR` to `"Line Count"`), `FieldRefTwoFields` (`Field(1)` then
+    `Field(4)`) and `FieldRefTwoTables` (field 2 of `"B5 Node"`, a Normal field, then
+    field 2 of `"B5 Header"`, a FlowField over `"B5 Line"`).
+  - *FieldRef operations had no evidence in digest and prove.* The snapshot's
+    operation evidence (the whole derivation in `snapshot.rs` and the per-row one in
+    `snapshot_view.rs`) looped over `record_operations` only, so a FieldRef read's
+    `DB_READ` cited `sourceKind: unavailable` and added an `evidence-unavailable` entry
+    diagnostic. Both now read `effect_operations`. A FieldRef operation has no operation
+    site, so its control context, order and `asserterror` flag come from its call site
+    (`ModelRoutine::effect_operation_site`; the id is the call site's id plus
+    `/fieldref`, `FIELD_REF_OP_SUFFIX`). A record operation keeps its operation site's
+    context and order as before.
+  - *Memory.* `PCallSite::implicit_receiver` is now set only for a bare
+    `SetAutoCalcFields` (its one reader); round 2 allocated `"Rec"` for every bare call in
+    an object with an implicit `Rec`. `tests/ir-l2-goldens/l2_features.snapshot` moves 11
+    lines back (it hashes `PCallSite`'s Debug text).
+  - Tests: the three fixtures above; the RecRefCalc digest now also asserts the
+    `DB_READ`'s evidence is `ws:src/Round2.al` line 166 and the entry has no
+    diagnostics; lib test `flow_fields::field_ref_operation_evidence_cites_its_call_site`
+    (the full snapshot's evidence for a FieldRef `CalcField` under `if` and under
+    `asserterror`).
+  - Discrimination proofs (break with Edit, narrowest test, revert, pass):
+    (21) Rebinding guard (`if passed` made `if passed && false`): `FieldRefPassed`
+    answered `down: no (every candidate decided)`.
+    (22) Field agreement (`true ||` before the `all`): `FieldRefTwoFields` answered
+    `down: no`.
+    (23) Table agreement (`true ||` before `tables_of.all`): `FieldRefTwoTables`
+    answered `down: no`. (A first fixture with field 4 of `"B5 Line"` then of `"B5
+    Header"` answered `yes` under the break, a wrong reason that happens to give the
+    right word; it was replaced by the `"B5 Node"` one, whose break gives `no`.)
+    (24) Per-row evidence reads `effect_operations` (back to `record_operations`): the
+    RecRefCalc digest's evidence was `unavailable`, want `source`.
+    (25) Whole-derivation evidence reads them (back to `record_operations`): the lib test
+    found no evidence for `…/cs2/fieldref`. This break passed the CLI test, which goes
+    through the per-row path only, hence the lib test.
+    (26) A FieldRef operation takes its call site's context (the branch disabled): the lib
+    test's `CondFr` evidence had control context `None`, want `conditional`.
+    After all reverts: 10/10 `cli_flowfield_reads` and the 7 `flow_field` lib tests pass.
+- **Round 4 (final review of wave 2).**
+  - *A wrong `no` for a FieldRef FILTER whose bindings disagree or cannot be read.*
+    Round 3 pinned the rebinding and table-agreement guards for `CalcField` only. For
+    `SetFilter`/`SetRange` the same guard result left the table unknown, nothing was
+    looked up, and the filter was dropped as "reads no FlowField". So
+    `if X then FR := NodeRR.Field(2) else FR := HeaderRR.Field(2); FR.SetFilter('>0');
+    HeaderRR.FindFirst()` answered `down: no (every candidate decided)` for `"B5 Line"`,
+    though field 2 of `"B5 Header"` is a FlowField over it; so did a FieldRef rebound by a
+    call (`Rebind(FR)`). That contradicted this section's own rule (an undecided read is
+    `unknown`, never `no`). Master answered `no` too (it had no FieldRef operations), so
+    this was not a regression. Now a FieldRef filter reads what EVERY binding of the
+    FieldRef reads (each `FR := RecRef.Field(..)` assignment, each on its own table and
+    field: a may-read), and is "not decided" (`unknown`) when a binding's table is not
+    known or the bindings cannot be read (a FieldRef parameter or global, a local passed
+    to a call). It is dropped only when every binding is decided and none is a FlowField.
+    The two-table and if/else probes now answer `yes`; `Field(1)` then `Field(2)` on one
+    table also answers `yes` (it was "not decided"); the rebound, parameter and
+    RecordRef-parameter forms answer `unknown`. `CalcField` is unchanged.
+  - *Audit of every other early exit in the B5 code.* A record operation with no table
+    (`attach_flow_field_reads`) gets no FlowField read, but then the record's own
+    retrieval or `CalcFields` is itself a read of an unresolved table, so the answer is
+    already `unknown`. A filter on a record whose table is not loaded adds nothing: such a
+    table comes from a dependency that is not loaded, and its FlowFields can name only
+    tables that are not loaded either; a workspace table extension's FlowField is in the
+    loaded extension stub. Probe: a table extension's FlowField on a dependency's
+    `Customer`, filtered, answers `yes` cross-app and `unknown` with `--single-app`.
+    A bare `SetAutoCalcFields` with no implicit record frame is not a record method.
+    Nothing else drops an operation.
+  - *`alsem query` could not address a routine declared in two `#if` arms* (B2, found in
+    this review): `query effects --routine ArmFr` and `query touches --from ArmFr`
+    answered `names 2 routines (differs in: the parameter lists)` and listed two
+    identical candidates, so the suggested selectors looped. The two rows are one routine
+    (one stable id); `resolve_routine_selector` now keeps one candidate per stable id
+    (its first row, the one a stable-id selector already took). explain, prove, digest
+    and fingerprint resolve through the identity table and were not affected.
+  - Tests: `cli_flowfield_reads::field_ref_filter_is_never_a_silent_no` (the
+    reviewer's `FilterCondTables`, `FilterTwoTables` and `FilterPassedRecord` probes, plus
+    two fields on one table, two plain bindings (`no`), a FieldRef parameter and a
+    FieldRef on a RecordRef parameter) and
+    `cli_b2_arm_readers::a_query_selector_takes_a_two_arm_routine_as_one`.
+  - Discrimination proofs (break with Edit, narrowest test, revert, pass):
+    (27) Every binding is read (the loop made `sources.iter().take(1)`):
+    `FilterCondTables` answered `down: no (every candidate decided)`.
+    (28) Unreadable bindings are not decided (the `None` arm pushes nothing):
+    `FilterPassed` answered `down: no`.
+    (29) A binding with no known table is not decided (that arm pushes nothing):
+    `FilterOnRecRefParam` answered `down: no`.
+    (30) One query candidate per stable id (the `retain` kept every row): `query effects
+    --routine Mid` exited 2 (ambiguous). A first break that deduped by the internal id
+    instead stayed green: the two arm rows share the internal id too, so it was no break.
+    After all reverts: 11/11 `cli_flowfield_reads` and 9/9 `cli_b2_arm_readers` pass.
+- **Still open (rest of L19):** (1) a page that shows a FlowField calculates it when it
+  is displayed, which no routine's cone holds; that needs L2's page column index. A
+  report dataitem's `CalcFields` property is the same kind of declared read and is not
+  read yet either. (2) A
+  record passed to another routine: a caller's `SetAutoCalcFields` followed by the
+  callee's `Find*`/`Get`/`Next` on the record it received is not linked, so the caller's
+  answer can still be `no`. A caller's filter on a FlowField is placed at the filter, so
+  the caller answers `yes`, but the callee's own answer (`--from` the callee) can still
+  be `no`, because it depends on what its caller set. Linking these needs the resolved
+  calls with their record arguments, which L3 resolve does not have; a `SetAutoCalcFields`
+  is not a record operation, so a read cannot be placed at it. CDO has no such
+  `SetAutoCalcFields` case; the filter case was not counted. The same holds for a
+  FieldRef or RecordRef received from a caller: its table and field are not known here
+  (a `CalcField` or, since round 4, a filter on it answers `unknown`). (3)
+  `Record.GetBySystemId` is not a record operation at all (engine limits L35), so a
+  `SetAutoCalcFields` read at it, and its own host read, are missing. (4) The implicit
+  `Rec` is shared by every routine of the object and its extensions, without telling
+  instances apart: `X.TabFetchBare()` from a codeunit whose own `X` never calls
+  `SetAutoCalcFields` answers a plain `yes` because another routine set up some other
+  `Rec` (a may-read, never a lost one). (5) A record array element
+  (`Recs[1].FindFirst()`, `with Recs[1] do`) produces no record operation at all, so even
+  the record's own table can answer `no` (engine limits L36; predates wave 2). (6) The
+  temp state of a RecordRef known only from `Open(Database::X)` is not inferred from
+  `Open`'s default (not temporary), so a FieldRef read on it says "temp state not
+  resolved" (safe, not precise).
+- Learn: [CalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-calcfields-method),
+  [SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setautocalcfields-method),
+  [FlowFields overview](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-flowfields).
+
+### Fixed (engine limits wave 2, B6)
+
+- **`prove writes-table` no longer says a definite `no` for a table written only by an
+  XmlPort's automatic insert** (B6, L20). The platform's own dataset operations are now
+  record operations of the call that runs the object, anchored at that call, each with
+  its reason: `XMLport "DS Import" imports into table "DS Line" (tableelement LineEl,
+  AutoSave)`. They reach `prove writes-table`, `explain` (a `platform:` line under the
+  write's anchor), `digest` and `prove` evidence (the evidence excerpt is the reason),
+  and `query effects` / `query touches` (`origin.platform` in JSON, `(platform: …)` in
+  human output). What runs what:
+  - A **report** run, run-modal, print, execute or save (`Report.Run`/`RunModal`/
+    `Execute`/`Print`/`SaveAs*`, static with `Report::X` or on a report variable) reads
+    every dataitem's table, its report extensions' dataitems included, and a
+    `ProcessingOnly` report too ([Report object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-report-object):
+    the report object "specifies which database tables and fields to pull data from").
+    `RunRequestPage` runs no dataset.
+  - A **query** reads every dataitem's table at `Open` or a save (`SaveAsCsv/Json/Xml`):
+    "you must call the Open method before the Read method"
+    ([Query.Read](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/query/queryinstance-read-method),
+    [Query object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-query-object)).
+  - An **XmlPort import** (`Xmlport.Import`, or the variable's `Import`) looks up and
+    inserts each table element's record when `AutoSave` is true, the default, and also
+    modifies an existing one when `AutoUpdate` or `AutoReplace` is true
+    ([AutoSave](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-autosave-property),
+    [AutoUpdate](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-autoupdate-property),
+    [AutoReplace](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-autoreplace-property)).
+    An export reads each table element's table. `Xmlport.Run` imports, exports or both
+    as `Direction` allows, `Both` by default
+    ([Direction](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/properties/devenv-direction-property)).
+  - `UseTemporary = true` makes the operation's record temporary; a property that `#if`
+    arms set differently reads as "may" (temp state not resolved, AutoSave may be on).
+  - **Learn is silent** on whether an XmlPort's own insert or modify runs the table's
+    `OnInsert`/`OnModify` trigger. The engine reads it as "may run" (a `Maybe` trigger
+    edge), which never turns a possible write into a `no`; the platform table events
+    (`OnAfterInsertEvent`, …) are followed as for any insert.
+  - **A dataset that is not known** (a symbol-only report, XmlPort or query: the symbol
+    data has no dataitems or `AutoSave`; or a file that did not parse cleanly) gives
+    operations with no table, with the reason. `prove writes-table` then answers
+    `unknown (blocked by: write on a table not resolved …)`, never `no`; `query effects`
+    lists the read under `table not resolved`.
+  - The trigger code inside the object was already followed through the run edge; the
+    platform's operations are new rows, so nothing is counted twice.
+- **A report's `SaveAs*`, `Execute` and `Print`, and a query's `Open` and `SaveAs*`,
+  now run the object's triggers, as `Report.Run` does** (review fix). They used to
+  resolve as catalog builtins that reach no code, so `prove writes-table` said a
+  definite `no` for a table that only the report's `OnAfterGetRecord` writes, when the
+  report was saved or executed (`Report.SaveAsPdf(Report::X, …)`, `Rep.Execute(…)`).
+  The static forms (`Report.SaveAsPdf(Report::X, …)`, `Query.SaveAsCsv(Query::X, …)`)
+  are object runs now, like `Report.Run(Report::X)`; the variable forms
+  (`Rep.SaveAsPdf(…)`, `Q.Open()`) dispatch to the run's triggers like `Rep.Run()`. A
+  query's run trigger is `OnBeforeOpen`
+  ([OnBeforeOpen (Query) trigger](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/triggers-auto/query/devenv-onbeforeopen-query-trigger)).
+  A call that binds to the report's or query's own procedure of that name runs neither
+  the triggers nor the dataset; which one a call binds to is decided by the overload
+  rule in the round-2 entry below.
+- **A dynamic object id no longer gives a definite `no`** (review fix).
+  `Report.SaveAsPdf(Id, …)`, `Report.Execute(Id, …)`, `Report.Print(Id, …)` and
+  `Query.SaveAsCsv(Id, …)` with a computed `Id` named no object, so they read no
+  dataset and ran no trigger, and `query touches` answered `down: no (every candidate
+  decided)` for every table. They are now dynamic runs, like `Report.Run(Id)`: `prove`
+  answers `unknown (blocked by: call not resolved)` and `query touches` `down: unknown`.
+  On the call graph (`alsem graph`) a static report save is a resolved `run` edge to the
+  report instead of an `Open` edge into the `h:run:report` hub.
+- **A report save or query save still keeps the RecordRef passed to it** (review
+  fix). Once those calls became object runs, the RecordRef flow (`l5::recref_flow`)
+  read them as calls that may rebind their arguments, so a `RecordRef` passed to
+  `Report.SaveAs(Id, …, RecRef)` lost its table and the literal pruning behind it.
+  On Continia DO, `explain` for `IssueReminder` grew from 147 to 418 tables written.
+  The flow now reads them as the platform methods they are (a run's triggers get their
+  own record): 198 tables, the rest of the growth being the report triggers the saves
+  now reach in dependency code.
+- **`Xmlport.Run(X, false, Import)` follows its `Import` argument** (review fix). With
+  no request page (`RequestWindow` a literal `false`) and a literal `Import`, the run
+  imports (`true`) or exports (`false`) only: "Specify true to run the XmlPort and
+  import data; specify false to export data"
+  ([Xmlport.Run](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/xmlport/xmlport-run-method)).
+  With a request page the user may choose either, so both stay possible.
+- **Plumbing:** the IR keeps `ObjectDecl::dataset_items` (report and query dataitems,
+  XmlPort table elements, with `UseTemporary`/`AutoSave`/`AutoUpdate`/`AutoReplace` per
+  build), the graph `ObjectNode::dataset` (pack schema 15 at this round), the resolver
+  `SiteFacts::dataset_run` with each operation's trigger and table-event routes
+  (`program::resolve::dataset`), and the model `ModelRecordOperation::dataset_reason`.
+- **Output that outside consumers read:** `query effects`/`touches` JSON gains
+  `origin.platform` on such rows; the evidence `excerpt` of such an operation is its
+  reason instead of `Var.Op`. No field was removed or renamed.
+- **A call to a report's or query's own procedure named `Print`, `Execute`, `SaveAs*`
+  or `Open` is a call of that procedure again** (round-2 review). The first fix-up
+  honoured such a procedure only for a call with arguments, so `R.Print()` against a
+  report that declares `procedure Print()` was read as a run of the report: `prove
+  writes-table` said `no` for the table the procedure writes and `yes` for one the
+  report's `OnPreReport` writes, and `alsem graph` had a `run` edge to the report and
+  no edge to `Print`, so bc-dev-mcp selected no test for a change to `Print`. These
+  methods take part in ordinary overload resolution with the object's procedures,
+  unlike `Codeunit.Run`, where any declared `Run(…)` hides the built-in for a call with
+  arguments. Probed with alc 18.0.43.1464 (a procedure returning `Guid` shows which one
+  bound): `R.Print()` and `R.Execute(5)` bind the procedures `Print()` and
+  `Execute(Integer)`; `R.Execute('')` binds the built-in `Execute(Text)` next to
+  `Execute(Integer)`; `R.SaveAsPdf('x')` binds the built-in `SaveAsPdf(Text)` over a
+  procedure `SaveAsPdf(Code[250])`; `Cu.Run(DateRec)` against `procedure Run(var R:
+  Record Integer)` is still AL0133. The rule now (`resolver::run_by_other_name_binding`,
+  used by the resolver and by the dataset run alike):
+  - a procedure that fits the argument count where no built-in signature does takes
+    the call; a built-in that fits where no procedure does takes it. The built-in
+    signatures are Learn's instance methods: `Report.Execute(Text [, RecordRef])`,
+    `Print(Text [, Text] [, RecordRef])`, `SaveAs(Text, ReportFormat, var OutStream
+    [, RecordRef])`, `SaveAsExcel/Html/Pdf/Word/Xml(Text)`; `Query.Open()`,
+    `SaveAsCsv(Text | OutStream [, Integer] [, Text])`, `SaveAsJson(OutStream)`,
+    `SaveAsXml(Text | OutStream)` ([Report data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/report/report-data-type),
+    [Query data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/query/query-data-type));
+  - when both fit, the argument types decide through the resolver's fail-closed pick
+    between overloads; when they do not decide (`R.SaveAsWord('x')` next to
+    `SaveAsWord(Code[250])`, which alc binds to the built-in), the call is
+    `unknown (blocked by: call not resolved)`, never `no`;
+  - a procedure the caller cannot see (`local`, another app's `internal`) takes no part,
+    as in AL.
+  This also fixes a `no` the reviewer found on master: a report declaring `procedure
+  SaveAsPdf(N: Integer)` no longer swallows the built-in call `R.SaveAsPdf('x.pdf')`, so
+  the report's triggers run again.
+- **What a report runs once per record is conditional on the run, never "unconditional
+  on success"** (round-2 review). A `Commit` or a write in a dataitem's
+  `OnAfterGetRecord` was reported as `unconditional on success` through `Report.Run`
+  (already on master) and, after the first fix-up, through `Report.SaveAs*`, `Execute`
+  and `Print`: `prove commits-on-success-path` said `yes` where the report may read no
+  record at all. Learn ([Report Triggers and Runtime Operations](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-report-triggers)):
+  `OnAfterGetRecord` is called "after a record is retrieved from the data item", and an
+  indented data item's records are processed once per record of the item above it. A
+  run edge into such a trigger now carries `fires: maybe` (`CallEdge::fires`, the typed
+  graph and the snapshot's `object-run-resolved`/`variable-typed-call` edges), and
+  digest's path conditionality puts the `conditional` floor on that hop, as it already
+  did for a table trigger that may not fire. Which triggers (`resolver::
+  run_trigger_may_not_run`):
+  - every dataitem trigger of a report or report extension (`OnPreDataItem`,
+    `OnAfterGetRecord`, `OnPostDataItem`): the model does not know which data items are
+    indented, so a top-level `OnPreDataItem` loses its `unconditional` too (imprecise,
+    never unsound);
+  - every table-element trigger of an XmlPort (they run per record exported or per
+    element found in the file);
+  - a page's `OnAfterGetRecord`, `OnAfterGetCurrRecord`, `OnNextRecord`, `OnNewRecord`
+    and the background-task triggers.
+  The object-level triggers (`OnPreReport`, `OnPreXmlPort`, `OnBeforeOpen`, a page's
+  `OnOpenPage`) keep `unconditional on success`. Now `prove commits-on-success-path`
+  answers `unknown (blocked by: conditional effect exists 1)` for the reviewer's probe,
+  and `prove writes-table` ends `(conditional)`. explain's rules across calls
+  (`cross_rules`) no longer let a rule in such a trigger protect the caller's later
+  write: a run edge with `fires` is not a definite step.
+- **A `Direction` written in one `#if` arm alone may still import** (round-2 review,
+  also on master). `#if CLEAN Direction = Export; #endif` was read as `Export` in every
+  build, so `Xmlport.Run` answered `no` for the table it imports into in a build without
+  `CLEAN` (where `Direction` is the default `Both`). Object properties now say whether
+  they sit in an `#if` arm (`ObjectProperty::conditional`); when every `Direction` entry
+  does, both directions stay possible.
+- **`alsem graph` follows an XmlPort import into its tables' trigger and events**
+  (round-2 review, the bc-dev-mcp test-selection gap). The import's own insert or modify
+  may run the table's `OnInsert`/`OnModify` and raises its table events; the model's
+  cone followed them, the call graph did not, so a test that imports into a table was
+  not selected for a change to that table's `OnInsert` or to an `OnAfterInsertEvent`
+  subscriber. The importing routine now has `implicitTrigger` and `tableEvent` edges
+  (confidence `OverApprox`: Learn does not say whether the platform's insert runs
+  `OnInsert`). The schema is unchanged.
+- **Round-2 discrimination proofs** (each break made with Edit, the narrowest test run,
+  then reverted; `cargo test --test cli cli_dataset_operations::` passed with every
+  break reverted):
+  - procedure fits, no built-in → procedure (`(true, false) => Builtin`): FAILED,
+    `CallPrint: answer: no` for "BO Own";
+  - the type pick's procedure arm (`Some(_) => Builtin`): FAILED, `CallOwnSave: answer:
+    no`;
+  - undecided → unknown (`Undecided => true`, a run): FAILED, `BO Own: answer: no` for
+    `CallUndecided`;
+  - only visible procedures compete (visibility filter off): FAILED, `CallLocalHidden:
+    answer: unknown (blocked by: call not resolved 1)`;
+  - the dataset run follows the binding (`!= Undecided` instead of `== Builtin`):
+    FAILED, `query effects` for `CallPrint` listed 2 operations (a `platform:` read);
+  - report dataitem triggers may not run (`Report` dropped from the rule): FAILED,
+    `SaveRows: … (unconditional on success)`;
+  - XmlPort element triggers (`XmlPort` dropped): FAILED, `ImportRows: … (unconditional
+    on success)`;
+  - page per-record triggers (`onaftergetrecord` misspelled): FAILED, `ShowPage: …
+    (unconditional on success)`;
+  - the `fires` source in the call adapter (`callee.kind == "triggerX"`): FAILED,
+    `SaveRows: … (unconditional on success)`;
+  - digest's object-run arm (matches `Always`): FAILED, `SaveRows: … (unconditional on
+    success)`; its variable-call arm: FAILED, `SaveRowsVariable: … (unconditional on
+    success)`;
+  - cross-rules skip a `fires` edge (`true || e.fires.is_none()`): FAILED, explain for
+    `ViaRows` showed `inherits via OnAfterGetRecord (I): rejects when I.Blocked`;
+  - `Direction` in `#if` only (`unconditional = true`): FAILED, `RunIfDir: answer: no`;
+  - the graph's dataset edges (effects filtered out): FAILED, `ImportStatic`'s only edge
+    was `run`.
+  Guards from the first fix-up whose proofs were not recorded, rerun now:
+  - *(Superseded: B4 round 2 replaced `is_run_by_other_name`, and the merge rebuilt the
+    member arm on `member_starts_object`; redone on the merged code below.)* variable
+    report/query saves dispatch to the run (`is_run_by_other_name = false && …`):
+    FAILED, `SaveTrigVariable: answer: no`;
+    redone in the final wave-2 review on `resolver.rs`'s member arm: the
+    `ObjectStart::Yes` → `dispatch_entry_trigger` branch made to skip every method with
+    a built-in run signature (`&& builtin_run_signatures(*kind, method_lc).is_empty()`,
+    so a bound `Rep.SaveAsPdf`/`Q.Open` falls to the procedure lookup): FAILED,
+    `cli_dataset_operations::a_run_by_another_name_runs_the_triggers_and_a_dynamic_one_is_unknown`
+    at `SaveTrigVariable: answer: no — no write site on DS Side`; GREEN once reverted
+    (9/9 `cli_dataset_operations`);
+  - static `Report.SaveAs*/Execute/Print` are runs (`&& false` on the report clause in
+    `extract::classify_call`): FAILED, `SaveTrig: answer: no`;
+  - a dynamic report id is a dynamic run (the clause kept only for a static id):
+    FAILED, `DynSave: answer: no`;
+  - static `Query.SaveAs*` are runs (`&& false` on the query clause): FAILED,
+    `SaveTrigQuery: answer: unknown (blocked by: call not resolved 1)`;
+  - `xmlport_run_direction` (literal `(false, false)` kept as `XmlPortRun`): FAILED,
+    `RunExportByArgument: answer: yes`;
+  - `is_platform_run_site` (report arm `&& false`): FAILED, explain for `SaveFiltered`
+    lost `literal arguments rule out: 1 table`.
+
+### Fixed (engine limits wave 2, B7/L23 + L30)
+
+- **An error behind a trap is no longer reported as escaping.** `prove … throws-error` (with
+  and without `--match`, `--site`, `--op`, `--table`), explain's and digest's error lines
+  counted every error the root's cone can raise, even one that a trap on every route turns
+  into `false`. Fixture (`if not Codeunit.Run(Codeunit::Thrower)`): `yes — ERROR_THROW at
+  thrower.al:5 (unconditional on success)`; now `no` with `caught on every route by a trap: 1
+  error site (… by the checked Codeunit.Run at callers.al:6)`. A definite trap is:
+  - a checked run: `if [not] Codeunit.Run(…)`, `Ok := Codeunit.Run(…)`, `exit(Codeunit.Run(…))`,
+    `MyCodeunit.Run()` with its result used (Microsoft Learn, "Codeunit.Run(Integer [, var
+    Record]) Method",
+    https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/codeunit/codeunit-run-method:
+    without the return value "a runtime error will occur"; with it, the run returns false and
+    its changes are not committed), **but only where no write may be pending at it**. The same
+    page says "If you're already in a transaction you must commit first before calling
+    Codeunit.Run": a checked run inside an open write transaction is itself a run-time error,
+    raised at the run. So a write that may be pending at the run makes it no definite trap (see
+    the review fixes below);
+  - a `[TryFunction]` call whose value is the whole right-hand side of `Ok := …` or the whole
+    condition of an `if`, `while` or `until` (through parentheses and `not`). Learn ("Handling
+    errors using try methods",
+    https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-handling-errors-using-try-methods):
+    "If a try method call doesn't use the return value, the try method operates like an
+    ordinary method, and errors are exposed as usual"; "If a try method call uses the return
+    value in an `OK:=` statement or a conditional statement such as `if-then`, errors are
+    caught". Learn names no other shape (see the review fixes below). A TryFunction does not
+    roll back database changes (same page), and nothing says it does;
+  - a call or record operation under `asserterror`.
+- **An isolated event's subscriber error stays `yes` and states its condition**: `escapes only
+  if a write is pending when the event is raised, or during an install or upgrade; otherwise
+  caught by the isolated event at …`. Learn ("Isolated events in AL"): a write transaction not
+  committed before the event makes it run as a normal event, and install/upgrade runs it
+  normally. prove's yes is a may-answer, so the error is kept.
+- **A route trapped on some paths and not others says which.** The row keeps escaping and says
+  `escapes on a route with no trap; caught on others (the checked Codeunit.Run at …)`; with a
+  filter, the printed route is one that crosses no trap.
+- **L30, `[ErrorBehavior(ErrorBehavior::Collect)]` forward:** an `Error` whose route passes a
+  collecting procedure says it may be collected and raised when that procedure ends, unless the
+  code clears it. The error is kept: Learn ("Collecting errors", "Collectible errors API") says
+  only a collectible `ErrorInfo` is collected and a collected error is still shown when the
+  procedure ends. Whether a given `Error` is collectible is not read (stated as left in
+  `docs/engine-limits.md`).
+- **One trap rule for both directions:** `src/engine/l5/traps.rs` holds it;
+  `callers-intercept-errors` (callers_context), the pending-writes walk and the forward answers
+  all read it (the checked-run test was in three copies before). A fourth checked-run test, the
+  transaction spans' commit boundary (`transaction_spans::is_checked_codeunit_run`), stays
+  apart: it answers where a transaction ends, counts no codeunit variable's `.Run`, and moving
+  it would change the commit answers (left, in `docs/engine-limits.md`). The forward search
+  (`literal_reach`) marks trap edges once; for a root with a trap in its reach it walks the
+  edges again with guards ignored and trap edges not crossed. A site whose routine that walk
+  does not reach is caught: ignoring guards reaches at least what any literal arguments and
+  any loaded-subscriber assumption reach, so `caught` rests on neither. (A first version ran a
+  second guarded search instead; `scripts/cdo-speed` failed it at prove CPU x1.27.) A site
+  whose only trap-free route the literal arguments rule out stays escaping.
+- **The same applies to the error's dialog (`UI_ERROR`)**: `reaches-ui` no longer counts the
+  dialog of an error caught on every route.
+- **Output (outside consumers):** digest's per-effect `status` has a new value `caught`;
+  effects gain an additive `trap` object (`verdict`: `caught` / `escapes-if-write-pending` /
+  `trapped-on-some-routes`, `kind`, `routine`, `file`, `line`) and `collectedBy`; digest and
+  explain summaries gain `caughtErrors` (and an error caught on every route leaves `kinds`);
+  prove's slice JSON gains `caught`. Human text gains the `caught on every route by a trap`
+  lines and the trap words in the condition.
+- **Errors beyond a call into dependency code** (a boundary group) are caught when every route
+  to the crossing crosses a trap.
+- CDO (`SendQueue`, release-fast): `throws-error --site CDOQueueEntry.Table.al:249` answered
+  `yes`; the site sits behind `if not Codeunit.Run(…)` at `CDOQueueManagement.Codeunit.al:46`.
+  It now answers `unknown` (no matching site reachable; the cone's open-world and unresolved
+  calls still block a `no`), and 7,246 of the 7,249 error sites are named as caught. Unfiltered
+  `throws-error`: 317 evidence rows before, 3 now (`DOSetup.Get()` at :27 and the two
+  `Modify()` at :41 and :49, the only error sites outside the checked run), 314 caught.
+  `RunReportID`'s explain: `errors at 296 places` before, 271 and 26 caught now (TryFunctions);
+  `IssueReminder`: 289 before, 286 and 4 caught. `scripts/cdo-speed` (load 350-490): PASS,
+  prove CPU x0.88, round total x0.89, memory x1.02.
+- **Review fixes (two false `no` answers the first version gave):**
+  - **A checked run with a write pending is no definite trap.** Fixture `R.ModifyAll(V, 1); if
+    Codeunit.Run(Codeunit::Thrower) then;` answered `no … limits: none`; BC raises an error at
+    that run. It now answers `yes`, the row's trap verdict is `escapes-if-write-pending` with
+    kind `checked-run`, and the condition reads `a write may be pending at the checked
+    Codeunit.Run at …: a checked Codeunit.Run inside a write transaction is itself a run-time
+    error, raised there; with no write pending it catches the error`. Whether a write may be
+    pending is read per root: a write of the run's own routine before the run (the
+    pending-writes walk's statement order, so a `Commit()` before the run clears it when it
+    runs normally on every route, see round 2 below, and a write to a known-temporary record
+    is none), a call before the run into code that may leave
+    a write (a callee's write, a call no edge resolves, a callee with no row; not through a
+    checked run), or a write pending where a caller in the root's reach called the routine
+    (the rule repeated over the root's reach until no routine changes). When the ruling may rest on a checked run with no write
+    pending inside the root, the answer states the one thing it cannot see: `assumptions: …
+    assumes the routine's callers have no write pending when they call it …` (prove JSON:
+    `obligations.assumesNoPendingWriteAtEntry: true`), for the unfiltered and the filtered
+    question alike.
+  - **A TryFunction traps only where its value is tested.** `Use(TryIt())` answered `no`
+    (caught by the TryFunction); Learn names only `OK :=` and a condition, and its one argument
+    example (`DoWork(DoInsert(Rec)); // Allowed as the DoWork return value isn't used so it's
+    not a try function`) does not establish that a try call used as an argument traps. A new
+    call-site fact, `PCallSite::result_tested` (set by the body walk), marks the tested shapes:
+    `Ok := …` and the whole condition of `if`, `while` or `until`, through parentheses and
+    `not`. Learn names `OK :=` and `if-then`; reading `while`/`until` and `B := not TryIt()`
+    the same way goes slightly beyond what Learn names and was not checked on BC. An
+    argument, `exit(TryIt())` and `a and TryIt()` are now ordinary calls (the error is
+    reported as escaping). `callers-intercept-errors` reads the same rule, and its "not
+    intercepted" line now says why for a used-but-unnamed shape. Not modeled, stated in
+    `traps.rs`: an error in a try call's arguments is caught too ("Arguments for a try
+    function are evaluated inside the try function"), which the answers report as escaping
+    (safe); and on premises with `DisableWriteInsideTryFunctions` a write inside a try method
+    is itself a run-time error, which the answers do not add. Learn does not say whether the
+    try call catches that error, so this one is NOT known to be safe (left, L23).
+  - **The pending-writes walk reads a `Commit()` inside a loop.** A target inside a loop counted
+    the whole body (an earlier iteration) and stopped there, so a `Commit()` that runs before the
+    target in the same iteration ended nothing. CDO's `SendQueue` is exactly that (`repeat …
+    Modify(); Commit(); if not Codeunit.Run(…) … until`), and without this the checked run read
+    as having a write pending. The walk now also follows the iteration that holds the target, so
+    such a `Commit()` ends what came before, earlier iterations included. A `Commit()` after the
+    target in the body, or in a loop that does not hold it, still ends nothing. This walk also
+    serves the transaction spans and the callers' questions; on CDO `alsem analyze --preset
+    transaction-integrity` is byte-identical before and after, and no golden moved.
+  - CDO after the review fixes (release-fast): `SendQueue` is unchanged from the first version
+    (its run commits first), and its `no`/`unknown` answers now carry the callers' precondition.
+    `RunReportID`'s explain: `errors at 281 places; 16 error places caught` (26 caught in the
+    first version): the 10 sites behind `exit(TryMergePdf(…))` at
+    `CDOContniaOnlinePDFMgt.Codeunit.al:160` are reported as escaping again, since Learn does
+    not name `exit(…)` as a try call. `IssueReminder` and `UpdateLastUpload` are unchanged.
+  - `scripts/cdo-speed` on the review-fix tree (load average 9.2 at the start, 5.7 at the end):
+    PASS. prove CPU x1.06, round total x1.05, model build CPU x1.11 (wall x1.22), warm-tests
+    x0.96, peak memory x0.995.
+  - New additive JSON: `obligations.assumesNoPendingWriteAtEntry` on prove; the trap verdict
+    `escapes-if-write-pending` can now carry kind `checked-run`.
+  - A `no` that left errors out as caught says so in its headline: `no — no error site escapes
+    the routine; N error sites caught on every route by a trap`.
+  - A trap ruling needs a known owner for every operation of the row (before, one known owner
+    was enough).
+  - When no trap-free route can be printed for a site trapped on some routes (its search
+    stopped at the cap, or literal arguments rule it out), the filtered answer no longer says
+    `escapes on the route below (no trap on it)`; it says the escaping route could not be
+    printed and the route below is a trapped one.
+- **Second review fixes (round 2, `fix/w2r2-b7`):**
+  - **A `Commit()` that `[CommitBehavior]` stops no longer ends the write before a checked
+    run.** Fixture: `[CommitBehavior(CommitBehavior::Ignore)] procedure IgnoredCommitRun …
+    R.ModifyAll(V, 1); Commit(); if Codeunit.Run(Codeunit::Thrower) then;` answered `no — no
+    error site escapes the routine; 1 error site caught … by the checked Codeunit.Run`, while
+    `prove may-commit` on the same routine said the commit is ignored. Microsoft Learn
+    ("CommitBehavior attribute",
+    https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/attributes/devenv-commitbehavior-attribute):
+    under `Ignore` "this commit is ignored", so the write stays pending and the checked run is
+    itself a run-time error; under `Error` "this commit causes an error", so it commits nothing
+    either. It now answers `yes` with the `escapes-if-write-pending` verdict, with and without
+    `--match`, and so does a scope the caller sets (`[CommitBehavior(Ignore)] IgnoreOuter`
+    calling the same shape) and `[CommitBehavior(Error)]`. The pending-writes search reads the
+    behavior from B4's rule rather than a copy of it: `commit_scope::CbGraph` gains
+    `commit_surely_runs(root, routine)`, which is true only when every route from the root runs
+    the routine's commits normally. For this question it reads a checked run as a run the
+    scope MAY follow into (B4 pins it to normal, which stands for the run's implicit commit;
+    whether a caller's scope reaches an explicit commit inside the run is not on Learn). No
+    current answer depends on that choice: an error inside a clean checked run is caught by the
+    run anyway. `pending_writes::sites_before_where` takes whether the commits end anything.
+  - **When a run is clean only because a `Commit()` before it ends the write, the answer
+    states a second assumption.** The root is read as entered with no behavior set; a caller
+    that calls it under `Ignore` or `Error` would stop that commit. prove's assumptions line
+    reads `assumes the routine's callers have no write pending when they call it and do not
+    call it under [CommitBehavior(Ignore)] or [CommitBehavior(Error)]: …`, and its JSON adds
+    `obligations.assumesNoCommitBehaviorAtEntry: true` (the search runs a second time with no
+    commit ending anything; the flag is set when that makes more runs unsafe). A ruling that
+    needs no commit (a helper that only runs) keeps the shorter sentence.
+  - **explain and digest state the assumption too.** They dropped a caught error with a
+    definite "they do not leave the routine" and only `assumptions: loaded program …`. Now
+    their header assumptions line carries the same sentence as prove
+    (`traps::entry_assumption`, one source), the caught line reads `errors caught on every
+    route by a trap (they do not leave the routine if its callers have no write pending when
+    they call it …)`, the JSON summary gains `assumesNoPendingWriteAtEntry` and
+    `assumesNoCommitBehaviorAtEntry` (present only when set, as prove's), and
+    `coverage.assumptions` gains `no-pending-write-at-entry` and `no-commit-behavior-at-entry`.
+    A caught dialog row (`UI_ERROR`) counts too, since it is left out on the same ruling. A
+    caught error behind no checked run (a used TryFunction) keeps the plain wording.
+  - `LiteralReach::new` now takes the snapshot (it needs the tree's `[CommitBehavior]`
+    scopes); every caller passed the snapshot's edges and facts already.
+  - Docs corrected: `traps.rs`, this entry and `docs/engine-limits.md` no longer call the
+    unmodeled `DisableWriteInsideTryFunctions` case safe (Learn does not say whether the try
+    catches that error), and no longer say the TryFunction rule keeps to "the shapes Learn
+    names" (`while`/`until` and `not` go slightly beyond them).
+  - **Discrimination proofs, round 2** (each break made with Edit, the narrowest test run,
+    then reverted and run green):
+    - R1, the B4 rule is read (`local_pending`'s `commit_surely_runs` replaced by `true`):
+      `a_commit_that_commitbehavior_stops_does_not_end_the_write` FAILED (IgnoredCommitRun
+      answered `no`). Reverted: PASS.
+    - R2, the route's scope, not only the routine's own declaration (`commit_surely_runs`
+      returns `decl == Normal`): the same test FAILED at IgnoreOuter (`no`), while
+      IgnoredCommitRun and ErrorCommitRun passed. Reverted: PASS.
+    - R3, the second assumption is detected (`by_commit` forced false): the same test FAILED
+      (CommitThenRun: no `assumesNoCommitBehaviorAtEntry`). Reverted: PASS.
+    - R4, the unfiltered prove obligation (`trap_assumes_normal_commit` forced false): the same
+      test FAILED at CommitThenRun. Reverted: PASS.
+    - R5, the filtered slice's flag (`caught_assumes_normal_commit` never set): the same test
+      FAILED at `CommitRunAndFail --match thrower` (its unfiltered answer is `yes` and states
+      nothing, so only the slice can set it). Reverted: PASS.
+    - R6, the rollup records what a caught row assumes (`note_caught_assumes` a no-op):
+      `explain_and_digest_state_what_a_caught_error_assumes` FAILED (explain header without
+      the sentence). Reverted: PASS.
+    - R7, digest's header merges it (the loop in `digest_cli` skipped): the same test FAILED at
+      the digest header, explain passing. Reverted: PASS.
+    - R8, explain's header merges it (the loop in `explain_header` skipped): the same test
+      FAILED at the explain header. Reverted: PASS.
+    - The cleaner reading of a checked run (not pinned) has no proof: no CLI answer can show
+      it (see above).
+  - **Discrimination proofs of the first review fixes**, run then (logs `b7/pA`..`pJ2` in the
+    session scratchpad) and recorded here, as the second review asked:
+    - A (TryFunction shape: `call_trap` back to `!in_statement_position`):
+      `a_tryfunction_traps_only_in_the_shapes_learn_names` FAILED. Reverted: PASS.
+    - B (the `not` look-through in `ir_walk::note_tested` removed): FAILED that test,
+      `an_error_behind_a_definite_trap_does_not_escape` (CheckedTry) and
+      `a_checked_run_with_a_write_pending_is_no_definite_trap`. Reverted: PASS.
+    - C (soft runs: `TrapScope::stops` ignores `soft`):
+      `a_checked_run_with_a_write_pending_is_no_definite_trap` FAILED. Reverted: PASS.
+    - D (own write before the run; `site_may_write`'s write check off): FAILED at
+      WriteThenRun (`no`). Reverted: PASS.
+    - E (a callee may leave a write; the `may_write` check off): FAILED at
+      CalleeWritesThenRun. Reverted: PASS.
+    - F (callers in the root's reach; the entry fixpoint never marks): FAILED at
+      WriteThenHelperRuns. Reverted: PASS.
+    - G (a temporary write is none; the `Known(true)` skip off): FAILED at TempWriteThenRun
+      (`yes`). Reverted: PASS.
+    - H (statement order and Commit; `sites_before` with `whole_body = true`): FAILED at
+      WriteCommitRun (`yes`). Reverted: PASS.
+    - I (unfiltered caller assumption forced off in `judge_traps`): FAILED at WriteCommitRun.
+      Reverted: PASS.
+    - J (filtered caller assumption off in the slice): first GREEN, because the unfiltered
+      path already set the flag; the RunAndFail case was added, and the break then FAILED.
+      Reverted: PASS.
+    - K (a Commit earlier in the same loop iteration; the new `walk_list` in
+      `pending_writes::walk_node` off): FAILED the pending-writes unit test, and LoopCommitRun
+      answered `yes`. Reverted: PASS.
+    - Not proven: the every-op-needs-an-owner guard (`trap_verdict`); no CLI fixture can build
+      a row with an ownerless operation.
+  - `scripts/cdo-speed` against `integrate/w2` (load average 321 at the start, 30 at the end,
+    so the samples are noisy): PASS. prove CPU x0.98, round total CPU x1.02 (wall x0.97),
+    model build CPU x1.01 (wall x1.42, under the 1.60 warm-up limit), warm-tests CPU x0.98,
+    peak memory x1.03. The extra work is a second pending-writes pass only for roots where a
+    `Commit()` ended a write, and one `[CommitBehavior]` graph per read when a declaration and
+    a checked run both exist.
+  - **Output (outside consumers), additive:** prove `obligations.assumesNoCommitBehaviorAtEntry`;
+    digest and explain `summary.assumesNoPendingWriteAtEntry` /
+    `summary.assumesNoCommitBehaviorAtEntry` and the two `coverage.assumptions` labels; the
+    longer prove assumption sentence; explain's and digest's header assumption sentence and
+    the longer caught line. Answers that flip from `no` to `yes`: a checked run after a
+    `Commit()` that a `[CommitBehavior(Ignore|Error)]` on the route stops.
+
 ### Changed (engine limits wave 1, L14 review fixes)
 
 - **The speed gate now catches a change that loses parallelism.** The entry below said

@@ -28,7 +28,9 @@
 //! model: a fact missing from a dump may still be modelled (#15). The complete
 //! list (`serde_skip_list_is_complete` keeps it in sync):
 //!   - `PCallSite.in_statement_position`
+//!   - `PCallSite.result_tested`
 //!   - `PCallSite.receiver_temp_state`
+//!   - `PCallSite.implicit_receiver`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -247,6 +249,22 @@ pub struct PCallSite {
     /// is (baseline vectors deserialize the default and would compare unequal).
     #[serde(skip)]
     pub in_statement_position: bool,
+    /// True iff the call's value, looking through parentheses and `not`, is
+    /// the WHOLE right-hand side of a plain assignment (`Ok := F()`) or the
+    /// WHOLE condition of an `if`, `while` or `repeat … until`. These are the
+    /// shapes Microsoft Learn names for a try method call whose errors are
+    /// caught ("Handling errors using try methods": "`OK:=` statement or a
+    /// conditional statement such as `if-then`"). Any other use (an
+    /// argument, `exit(F())`, a part of `a and F()`) is `false`: Learn does
+    /// not say it traps, and its argument example (`DoWork(DoInsert(Rec))`)
+    /// points the other way. Read by the one trap rule
+    /// (`engine::l5::traps::call_trap`, engine limits B7).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`; deserialized rows default it to `false` (no
+    /// trap: the safe side).
+    #[serde(skip)]
+    pub result_tested: bool,
     /// The temp state of the RECORD this call is made on, when the callee may be
     /// a table method: the member receiver (`Buf.ClearBuffer()` -> `Buf`), or the
     /// caller's implicit `Rec` for a bare call. A table method's implicit `Rec` is
@@ -258,6 +276,22 @@ pub struct PCallSite {
     /// `in_statement_position`.
     #[serde(skip)]
     pub receiver_temp_state: Option<PTempState>,
+    /// For a BARE `SetAutoCalcFields` call, the record it is made on: the
+    /// receiver text of the innermost implicit frame that
+    /// is a record, `with X do`'s `X` or the object's implicit `Rec`, the same
+    /// frame a bare record operation takes its `record_variable_name` from.
+    /// AL looks a bare name up among the `with` record's members first, then
+    /// outward, so a `with` on a non-record does not hide the outer `Rec`.
+    /// `None` for every other call (only this name is recorded, so the other
+    /// bare calls allocate nothing), for a `SetAutoCalcFields` that is one of
+    /// the object's own routines, and where no record frame is in scope. Read
+    /// by the FlowField rule for a bare `SetAutoCalcFields`
+    /// (`program::model::flow_fields`, engine limits B5).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`.
+    #[serde(skip)]
+    pub implicit_receiver: Option<String>,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -1165,7 +1199,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 21, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 23, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

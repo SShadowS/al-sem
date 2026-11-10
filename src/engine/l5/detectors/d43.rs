@@ -108,7 +108,13 @@ fn enumerate_dispatch_sites(
         let Some(callsite_id) = &edge.callsite_id else {
             continue;
         };
-        let Some(caller) = routine_by_id.get(edge.from.as_str()).copied() else {
+        // Engine limits B2: the caller's row (its `#if` arm) that holds the
+        // call; the rest of the site's analysis reads that row.
+        let Some(caller) = routine_by_id
+            .get(edge.from.as_str())
+            .copied()
+            .map(|r| ctx.arm_rows.row_for(&edge.from, callsite_id, r))
+        else {
             continue;
         };
         let Some(publisher) = routine_by_id.get(to.as_str()).copied() else {

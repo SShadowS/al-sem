@@ -10,11 +10,11 @@ computed: current effects of the 1 routine these files touches, in the working t
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Sender.Codeunit.al:18 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    D47 Rec: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
+    D47 Rec: Modify 1 — known persistent; runs: no OnModify trigger run; no table-event subscriber loaded
       Modify at ws:src/Sender.Codeunit.al:16
       path: ExportAfterModify (in the routine itself)
   file at 1 place: FILE at ws:src/Sender.Codeunit.al:17 (unconditional on success)
-  errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:14 (unconditional on success); ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:16 (unconditional on success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al lines 14, 16 (unconditional on success)
   gaps in workspace code (1 call the engine cannot follow):
     F.WriteAllText (unresolved-receiver-type) in ExportAfterModify at ws:src/Sender.Codeunit.al:17
 changed-roots: file-unmatched src/Rec.Table.al

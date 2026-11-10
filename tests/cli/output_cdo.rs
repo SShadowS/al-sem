@@ -784,6 +784,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // (`CDOModuleManager.Codeunit.al:16`, `:42`) every route fixes by an
         // enum literal (2,515 B alone); both together measured on the merge.
         ("RunReportID", "prove may-commit human") => (20, 2_750),
+        // Engine limits wave 2 (2026-11-10): the first COMMIT row used to print
+        // a route that ended at another site; it now prints the real route to
+        // its own site, the long way through `RunReportID` (3,346 B).
+        ("IssueReminder", "prove may-commit human") => (20, 3_500),
         (_, "prove may-commit human") => (20, 2_400),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
         (_, "prove writes-table human") => (20, 2_500),
@@ -802,7 +806,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // sites the literal arguments rule out (26 lines, 3,429 B). r4 final
         // (m02, c15, 2026-11-09): 282 blockers and one line for the 2
         // interface calls every route fixes by an enum literal (3,573 B).
-        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_700),
+        // Engine limits wave 2 (2026-11-10): report saves now run the report's
+        // triggers, so the answer is a real `yes` with two evidence rows sharing
+        // a 33-hop route (4,568 B), not `unknown` with folded blockers.
+        ("IssueReminder", "prove writes-table data-exch human") => (30, 4_800),
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
         ("RunReportID", "digest human") => (135, 46_300),

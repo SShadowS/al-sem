@@ -1942,6 +1942,8 @@ pub(crate) struct EffectEvidenceIndex<'m> {
     model: &'m Model,
     by_id: HashMap<&'m str, usize>,
     by_stable: HashMap<&'m str, usize>,
+    /// The rows of a stable id with several (two `#if` arms), in row order.
+    arms: HashMap<&'m str, Vec<usize>>,
     out_edges: HashMap<&'m str, Vec<&'m str>>,
     row_fields: std::sync::OnceLock<HashMap<usize, HashMap<String, BTreeSet<String>>>>,
 }
@@ -1950,9 +1952,14 @@ impl<'m> EffectEvidenceIndex<'m> {
     pub(crate) fn new(model: &'m Model) -> EffectEvidenceIndex<'m> {
         let routines = &model.workspace.routines;
         let mut by_stable: HashMap<&str, usize> = HashMap::new();
+        let mut arms: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, r) in routines.iter().enumerate() {
             by_stable.entry(r.stable_routine_id.as_str()).or_insert(i);
+            arms.entry(r.stable_routine_id.as_str())
+                .or_default()
+                .push(i);
         }
+        arms.retain(|_, v| v.len() > 1);
         let mut out_edges: HashMap<&str, Vec<&str>> = HashMap::new();
         for e in &model.calls.edges {
             if let Some(to) = &e.to {
@@ -1970,6 +1977,7 @@ impl<'m> EffectEvidenceIndex<'m> {
                 .map(|(i, r)| (r.id.as_str(), i))
                 .collect(),
             by_stable,
+            arms,
             out_edges,
             row_fields: std::sync::OnceLock::new(),
         }
@@ -2009,7 +2017,23 @@ impl<'m> EffectEvidenceIndex<'m> {
 
     /// The fields row `row` assigns on table `table_id` (explain's
     /// `row_fields`, the same field-write index).
-    fn assigned(&self, row: usize, table_id: &str) -> Option<&BTreeSet<String>> {
+    /// The row of routine `stable` that holds operation `op` (engine limits
+    /// B2: one `#if` arm of a routine declared in two), else its first row.
+    pub(crate) fn row_holding(&self, stable: &str, op: &str) -> Option<usize> {
+        let first = *self.by_stable.get(stable)?;
+        let rows = &self.model.workspace.routines;
+        let Some(arms) = self.arms.get(stable) else {
+            return Some(first);
+        };
+        Some(
+            arms.iter()
+                .copied()
+                .rfind(|&i| crate::program::model::projection::row_holds_site(&rows[i], op))
+                .unwrap_or(first),
+        )
+    }
+
+    pub(crate) fn assigned(&self, row: usize, table_id: &str) -> Option<&BTreeSet<String>> {
         let index = self.row_fields.get_or_init(|| {
             let mut m: HashMap<usize, HashMap<String, BTreeSet<String>>> = HashMap::new();
             for w in field_writes(self.model) {
@@ -2066,7 +2090,7 @@ pub(crate) fn effect_evidence(
                     let Some(owner) = rcx.op_owner(op) else {
                         continue;
                     };
-                    let Some(&row) = index.by_stable.get(owner.stable_id.as_str()) else {
+                    let Some(row) = index.row_holding(owner.stable_id.as_str(), op) else {
                         continue;
                     };
                     if let Some(fields) = index.assigned(row, id) {
@@ -2762,6 +2786,12 @@ fn explain_header(
                 limits.push(l.clone());
             }
         }
+        // B7 review round 2: what a card's caught errors rest on.
+        for a in &c.4.1.assumptions {
+            if !h.assumptions.contains(a) {
+                h.assumptions.push(a.clone());
+            }
+        }
     }
     if let Some(f) = &resolved.field
         && !f.search.1.is_empty()
@@ -3204,6 +3234,7 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
         },
         entry_diagnostics: Vec::new(),
         declaration_only: false,
+        suppressed_commits: Vec::new(),
     }
 }
 
@@ -3279,6 +3310,18 @@ fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
             .collect();
         if !assumes.is_empty() {
             o.insert("literalAssumes".into(), assumes.into());
+        }
+    }
+    // B7/L23 + L30 (additive): the traps on an error row's routes, and the
+    // routines that collect it.
+    if let Some(o) = v.as_object_mut() {
+        if let Some(t) = crate::engine::l5::prove::trap_value(e) {
+            o.insert("trap".into(), t);
+        }
+        if let Some(n) = e.flow_notes.as_deref()
+            && !n.collected_by.is_empty()
+        {
+            o.insert("collectedBy".into(), n.collected_by.clone().into());
         }
     }
 }
@@ -5161,7 +5204,7 @@ impl Card {
         let coverage = json!({
             "status": full.coverage_status,
             "reasons": full.coverage_reasons,
-            "assumptions": ["loaded-program"],
+            "assumptions": crate::engine::l5::routine_rollup::coverage_assumption_labels(&rollup),
             "limits": counted,
             "notes": notes,
         });
@@ -5540,6 +5583,19 @@ impl Card {
                 rf_plural(shown.len(), "gap", "gaps")
             ));
         }
+        // Engine limits wave 2 (compact card): consecutive gaps that say the
+        // same thing (kind, callee, status, …) in the same file print on one
+        // line with their lines (`at ws:a.al lines 171, 173, 175`); a gap
+        // with skipped rules keeps its own line.
+        let mut pending: Option<(String, Vec<String>)> = None;
+        let flush = |pending: &mut Option<(String, Vec<String>)>, line: &mut dyn FnMut(&str)| {
+            if let Some((head, sites)) = pending.take() {
+                line(&format!(
+                    "  {head} at {}",
+                    crate::engine::l5::routine_rollup::sites_words(&sites)
+                ));
+            }
+        };
         for g in shown {
             let kind = g.json["kind"].as_str().unwrap_or("");
             let what = ["callee", "routine", "what", "table", "app", "status"]
@@ -5547,21 +5603,43 @@ impl Card {
                 .filter_map(|k| g.json[*k].as_str().map(|v| format!("{k} {v}")))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let at = g
-                .json
-                .get("anchor")
-                .map(|a| format!(" at {}", anchor_value_human(a)))
-                .unwrap_or_default();
-            line(&format!(
-                "  gap: {kind}{}{at}",
+            let head = format!(
+                "gap: {kind}{}",
                 if what.is_empty() {
                     String::new()
                 } else {
                     format!(" ({what})")
                 }
-            ));
+            );
+            let anchor = g.json.get("anchor").map(anchor_value_human);
+            let rules = g.json["rules"].as_array().filter(|r| !r.is_empty());
+            // A gap whose anchor is `file:line` and has no rules may join
+            // the run before it.
+            let site = anchor.as_deref().filter(|a| {
+                rules.is_none()
+                    && a.rsplit_once(':')
+                        .is_some_and(|(_, l)| l.parse::<usize>().is_ok())
+            });
+            if let Some(site) = site {
+                let file = |s: &str| s.rsplit_once(':').map(|(f, _)| f.to_string());
+                match &mut pending {
+                    Some((h, sites))
+                        if *h == head && sites.last().and_then(|s| file(s)) == file(site) =>
+                    {
+                        sites.push(site.to_string());
+                    }
+                    _ => {
+                        flush(&mut pending, &mut line);
+                        pending = Some((head, vec![site.to_string()]));
+                    }
+                }
+                continue;
+            }
+            flush(&mut pending, &mut line);
+            let at = anchor.map(|a| format!(" at {a}")).unwrap_or_default();
+            line(&format!("  {head}{at}"));
             // The skipped table-trigger rules, one line each.
-            for r in g.json["rules"].as_array().into_iter().flatten() {
+            for r in rules.into_iter().flatten() {
                 let when = r["whenText"].as_str().unwrap_or("");
                 line(&format!(
                     "    skips {}: {}  [{} {}]",
@@ -5576,6 +5654,7 @@ impl Card {
                 ));
             }
         }
+        flush(&mut pending, &mut line);
         // 21: gaps in dependency code, as counts.
         for l in &s.dependency_gaps {
             line(l);

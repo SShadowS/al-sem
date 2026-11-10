@@ -556,7 +556,25 @@ pub fn base_intraprocedural_summary(
 
     // Body available + parsed — derive direct facts from the operation stream.
     let mut db_effects: Vec<DbEffect> = Vec::new();
-    for op in &routine.record_operations {
+    // The record operations and the `FieldRef` operations (engine limits B5).
+    for op in routine.effect_operations() {
+        // Engine limits B5: the FlowField destination tables this operation
+        // reads (`program::model::flow_fields`), each a `CalcFields` read of
+        // that table at this operation, its temp state the table's own.
+        for ffr in &op.flow_field_reads {
+            let table_id = ffr.effect_table_id().to_string();
+            let temp_state = TempState::Known(ffr.temporary());
+            let effect_key = effect_key_of("CalcFields", &table_id, &op.id, &temp_state.to_kind());
+            db_effects.push(DbEffect {
+                effect_key,
+                operation_id: op.id.clone(),
+                op: "CalcFields".to_string(),
+                table_id,
+                record_variable_id: None,
+                temp_state,
+                via: "direct".to_string(),
+            });
+        }
         if !is_db_touching(&op.op) {
             continue;
         }
@@ -581,6 +599,12 @@ pub fn base_intraprocedural_summary(
 
     // Sort by effect_key for determinism (matches al-sem sort).
     db_effects.sort_by(|a, b| a.effect_key.cmp(&b.effect_key));
+    // A FlowField over the record's own table (`CalcFields` of a persistent
+    // record) gives the host read's key once more: keep one. Every other key
+    // is unique (one per operation id). The solve's effect store merges equal
+    // keys too, so the CLI answers do not show the duplicate; detectors that
+    // read a base summary directly would count it twice.
+    db_effects.dedup_by(|a, b| a.effect_key == b.effect_key);
 
     RoutineSummary {
         routine_id: routine.id.clone(),
@@ -1486,6 +1510,9 @@ fn solve_v2(
     let _t = summaries_census::start();
     let routines_by_id: HashMap<String, &ModelRoutine> =
         projection::last_per_id(&rows, routines.iter().map(Some).collect());
+    // Engine limits B2: the row (`#if` arm) that holds an edge's site, for the
+    // PD substitution's bindings.
+    let arm_rows = projection::ArmRows::build(routines);
     summaries_census::add_since(&summaries_census::ROUTINES_BY_ID_NANOS, _t);
 
     let _t = summaries_census::start();
@@ -1743,6 +1770,7 @@ fn solve_v2(
             scc_entry,
             graph,
             &routines_by_id,
+            &arm_rows,
             &v2_map,
             &base_summaries,
             upgraded_bindings,
@@ -3183,5 +3211,72 @@ codeunit 50102 Cyc
             EffectPresence::No,
             "capped OnCyc must not publish an incomplete No"
         );
+    }
+}
+
+/// Engine limits B5: the base summary's FlowField reads.
+#[cfg(test)]
+mod flow_field_tests {
+    use super::*;
+    use crate::program::body::features::PTempState;
+    use crate::program::model::flow_fields::{FlowFieldRead, FlowFieldSource};
+
+    fn known_false() -> PTempState {
+        PTempState {
+            kind: "known".to_string(),
+            value: Some(false),
+            parameter_index: None,
+        }
+    }
+
+    /// Hand-stated: a persistent `CalcFields` on table T whose FlowField
+    /// counts T itself, and one over table U. The read of T is one effect, the
+    /// read of U another; nothing else.
+    #[test]
+    fn a_flowfield_over_its_own_table_is_one_effect() {
+        let mut r = crate::engine::l5::test_support::routine("R", "procedure");
+        let mut op = crate::engine::l5::test_support::record_op(
+            "R/op0",
+            "CalcFields",
+            "Rec",
+            Some("app/table/1"),
+            Vec::new(),
+            false,
+        );
+        op.temp_state = Some(known_false());
+        op.flow_field_reads = vec![
+            FlowFieldRead {
+                field: "Child Count".to_string(),
+                source: FlowFieldSource::Table {
+                    table_id: "app/table/1".to_string(),
+                    temporary: false,
+                },
+            },
+            FlowFieldRead {
+                field: "Total".to_string(),
+                source: FlowFieldSource::Table {
+                    table_id: "app/table/2".to_string(),
+                    temporary: false,
+                },
+            },
+        ];
+        r.record_operations = vec![op];
+        let s = base_intraprocedural_summary(&r, &HashMap::new(), &FieldIndex::new());
+        let got: Vec<(&str, &str)> = s
+            .db_effects
+            .iter()
+            .map(|e| (e.op.as_str(), e.table_id.as_str()))
+            .collect();
+        assert_eq!(
+            got.iter().filter(|(_, t)| *t == "app/table/1").count(),
+            1,
+            "{got:?}"
+        );
+        assert_eq!(
+            got.iter().filter(|(_, t)| *t == "app/table/2").count(),
+            1,
+            "{got:?}"
+        );
+        assert_eq!(got.len(), 2, "{got:?}");
     }
 }

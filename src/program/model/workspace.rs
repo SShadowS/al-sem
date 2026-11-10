@@ -81,6 +81,12 @@ pub struct ModelObject {
     /// lower-case form). Consumed by R4-F `return_summary` to merge the
     /// object-level commit behavior into each routine's `commitBehavior`.
     pub inherent_commit_behavior: Option<String>,
+    /// Engine limits B2: `true` when some build may not have
+    /// [`Self::inherent_commit_behavior`] (the property sits in a `#if` arm, or
+    /// its value is an `#if`). A reader that decides a definite answer from it
+    /// reads it as "may" (`return_summary::merge_inherent_commit_behavior`).
+    /// Always `false` for a dependency object (its symbols carry one build).
+    pub inherent_commit_behavior_conditional: bool,
     /// Page / PageExtension declared `SourceTableTemporary` property: `Some(true)`
     /// when written `true`, `Some(false)` for any other written value, `None` when
     /// absent (native path). A dependency page known only from its symbols carries
@@ -203,6 +209,12 @@ pub struct ModelField {
     /// the engine does not read a caption from (intent-evidence spec open
     /// question 2). A plain fact, like the IR's (spec §4.1b).
     pub captions: Vec<String>,
+    /// The field's `CalcFormula` text(s): from source one per textually present
+    /// `#if` arm (`FieldDecl::calc_formula`), from a symbol-only dependency the
+    /// `SymbolReference.json` property (0 or 1). Empty for a FlowField means the
+    /// formula is not known, never that the field reads nothing
+    /// ([`super::flow_fields`], engine limits B5).
+    pub calc_formula: Vec<String>,
 }
 
 /// A workspace table key (the L3-relevant subset of al-sem's `Key`). Only the
@@ -426,6 +438,41 @@ pub struct ModelRecordOperation {
     /// the operation's table is decided at run time. Read by `alsem query`'s
     /// "table not resolved" wording. Never serialized.
     pub receiver_is_record_ref: bool,
+    /// Engine limits B5: the FlowField source tables this operation reads
+    /// through a `CalcFormula` (a `CalcFields`, a filter on a FlowField, or a
+    /// read after `SetAutoCalcFields`), one entry per source table, or one
+    /// "not decided" entry with its reason. Written at L3 resolve
+    /// ([`super::flow_fields::attach_flow_field_reads`]); empty for every other
+    /// operation. The record operation list itself is unchanged, so detectors
+    /// do not see these reads. Never serialized.
+    pub flow_field_reads: Vec<super::flow_fields::FlowFieldRead>,
+    /// B6 (engine limits L20): `Some(reason)` for an operation the PLATFORM
+    /// performs when the call at `source_anchor` runs a report, XmlPort or
+    /// query: a dataitem's read, an XmlPort import's insert or modify
+    /// (`program_calls::dataset_operations`). The reason names the object, the
+    /// item and the property (`XMLport "Imp" imports into table "Line"
+    /// (tableelement LineEl, AutoSave)`). No code writes it, so its record
+    /// variable is none; it is added after resolution, at the end of the
+    /// routine's list. `None` for every operation written in code.
+    pub dataset_reason: Option<String>,
+}
+
+impl ModelRecordOperation {
+    /// The operation as evidence shows it: `Var.Op` (`?.Op` with no variable),
+    /// or for a platform dataset operation its reason (B6), which names the
+    /// object, the item and the property, since no code at the site says it.
+    #[must_use]
+    pub fn evidence_text(&self) -> String {
+        if let Some(reason) = &self.dataset_reason {
+            return reason.clone();
+        }
+        let var = if self.record_variable_name.is_empty() {
+            "?"
+        } else {
+            self.record_variable_name.as_str()
+        };
+        format!("{var}.{}", self.op)
+    }
 }
 
 /// A lexical variable (params → locals → globals) carrying its declared type, for
@@ -750,6 +797,17 @@ pub struct ModelRoutine {
     /// `record_types` gives their operations the one table the bindings
     /// name. Empty for most routines.
     pub recordref_bindings: Vec<(String, Vec<crate::program::recordref_table::Binding>)>,
+    /// Engine limits B5: the record reads a `FieldRef` call makes, each as an
+    /// operation on the FieldRef's record (`FieldRef.CalcField()` as a
+    /// `CalcFields`, `FieldRef.SetFilter` / `SetRange` as that filter), with
+    /// its FlowField reads ([`ModelRecordOperation::flow_field_reads`]).
+    /// Written at L3 resolve by
+    /// [`super::flow_fields::attach_flow_field_reads`]; ids are
+    /// `{call site id}/fieldref`. Kept apart from `record_operations`, so the
+    /// detectors see exactly the operations they saw before; the effect
+    /// builders read both ([`ModelRoutine::effect_operations`]). Empty for
+    /// most routines.
+    pub field_ref_operations: Vec<ModelRecordOperation>,
     /// The routine's rules (intent-evidence spec §4.2): `None` when the view
     /// did not declare `ViewNeeds::rules` (not built), `Some(vec![])` when they
     /// were built and the routine has none (a routine with no body, a
@@ -877,6 +935,54 @@ impl ModelRoutine {
         )
     }
 
+    /// Every operation the effect builders read: the record operations, then
+    /// the `FieldRef` operations (`field_ref_operations`, engine limits B5).
+    /// The ONE list the base summary, the capability cone's table family, the
+    /// operation index and `query touches`' table mode share, so an effect
+    /// row always finds its operation. Detectors read `record_operations`.
+    pub fn effect_operations(&self) -> impl Iterator<Item = &ModelRecordOperation> {
+        self.record_operations
+            .iter()
+            .chain(&self.field_ref_operations)
+    }
+
+    /// The operation at index `i` of [`Self::effect_operations`].
+    #[must_use]
+    pub fn effect_operation(&self, i: usize) -> Option<&ModelRecordOperation> {
+        self.record_operations.get(i).or_else(|| {
+            self.field_ref_operations
+                .get(i.checked_sub(self.record_operations.len())?)
+        })
+    }
+
+    /// The control context, order and `asserterror` flag the evidence of the
+    /// effect operation `ro` cites, from the sites in `call_sites` /
+    /// `operation_sites` (the caller passes the ordered copies when it
+    /// re-stamps order): a record operation takes its operation site's
+    /// context and order and no `asserterror` flag (as before), a `FieldRef`
+    /// operation takes its call site's.
+    #[must_use]
+    pub fn effect_operation_site<'s>(
+        ro: &ModelRecordOperation,
+        call_sites: &'s [crate::program::body::features::PCallSite],
+        operation_sites: &'s [crate::program::body::features::POperationSite],
+    ) -> EffectOperationSite<'s> {
+        if let Some(site) = field_ref_op_call_site(&ro.id) {
+            let cs = call_sites.iter().find(|cs| cs.id == site);
+            return EffectOperationSite {
+                control_context: cs.and_then(|c| c.control_context.as_deref()),
+                order: cs.and_then(|c| c.order.as_ref()),
+                under_asserterror: cs.is_some_and(|c| c.under_asserterror == Some(true)),
+            };
+        }
+        let op = operation_sites.iter().find(|op| op.id == ro.id);
+        EffectOperationSite {
+            control_context: op.and_then(|o| o.control_context.as_deref()),
+            order: op.and_then(|o| o.order.as_ref()),
+            under_asserterror: false,
+        }
+    }
+
     /// The routine's rules. Reading them from a model built without
     /// `ViewNeeds::rules` is a bug and panics, in every build
     /// (`get_ordering_facts`'s pattern), so "not built" never reads as "none".
@@ -913,6 +1019,25 @@ impl ModelRoutine {
     pub(crate) fn site_is_dead_marked(&self, control_context: Option<&str>) -> bool {
         self.dead_marks_trusted && control_context == Some("unreachable")
     }
+}
+
+/// The suffix of a `FieldRef` operation's id
+/// ([`ModelRoutine::field_ref_operations`]): `{call site id}/fieldref`.
+pub const FIELD_REF_OP_SUFFIX: &str = "/fieldref";
+
+/// The call site a `FieldRef` operation id stands for, `None` for any other
+/// operation id. A `FieldRef` operation has no operation site of its own, so
+/// its control context, order and `asserterror` state are its call site's.
+#[must_use]
+pub fn field_ref_op_call_site(op_id: &str) -> Option<&str> {
+    op_id.strip_suffix(FIELD_REF_OP_SUFFIX)
+}
+
+/// What [`ModelRoutine::effect_operation_site`] returns.
+pub struct EffectOperationSite<'s> {
+    pub control_context: Option<&'s str>,
+    pub order: Option<&'s crate::program::body::operation_order::OperationOrder>,
+    pub under_asserterror: bool,
 }
 
 /// The assembled workspace L3 model (pre-resolve until `resolve` runs).
@@ -956,6 +1081,7 @@ fn index_table_ir(
             data_type: f.data_type.clone(),
             is_blob_like: f.is_blob_like,
             captions: f.caption.clone(),
+            calc_formula: f.calc_formula.clone(),
         })
         .collect();
     let fields_by_name: std::collections::HashMap<String, String> = fields
@@ -986,11 +1112,13 @@ fn index_table_ir(
             declared_by: None,
         })
         .collect();
+    // Engine limits B2: only a `TableType = Temporary` every build has makes
+    // the table temporary; an `#if`-only one leaves `Normal` possible.
     let is_temporary = o
         .properties
         .iter()
         .find(|p| p.name == "tabletype")
-        .map(|p| p.value.trim().to_lowercase() == "temporary")
+        .map(|p| !p.conditional && p.value.trim().to_lowercase() == "temporary")
         .unwrap_or(false)
         || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     ModelTable {
@@ -1499,6 +1627,18 @@ fn project_ir(
 ) -> Vec<(usize, usize)> {
     // The `(object, routine)` position in `ir_file` of each row pushed, in order.
     let mut positions = Vec::new();
+    // Engine limits B2 (per-arm ids): where the next declaration of each id
+    // starts numbering its sites and rules. The first declaration starts at 0
+    // (the ids of a routine declared once); a later `#if` arm continues where
+    // the earlier ones stopped, so no two arms share a site id and each fact
+    // cites its own arm's line (`ir_walk::SiteIdBase`). Per file: the file is
+    // the unit the session's row cache reuses (`row_cache`), so a row's ids
+    // never depend on another file. Declarations of one id in two FILES are
+    // numbered apart by the model-level join
+    // ([`join_alternative_declarations`]), which also reads every row of an
+    // id as one alternative of the others.
+    let mut next_base_by_id: HashMap<String, (crate::program::body::ir_walk::SiteIdBase, u32)> =
+        HashMap::new();
     for (oi, routine_ixs) in population {
         let oi = *oi;
         let o = &ir_file.objects[oi];
@@ -1565,31 +1705,29 @@ fn project_ir(
             None
         };
         // Object `InherentCommitBehavior` — Codeunit / Table / TableExtension only
-        // (object-indexer.ts parity). The raw value is a qualified_enum_value like
-        // "InherentCommitBehavior::Ignore"; extract the member after "::", then
-        // lower-case. Unrecognised values → None (conservative).
-        let inherent_commit_behavior = if object_type == "Codeunit"
-            || object_type == "Table"
-            || object_type == "TableExtension"
-        {
-            ir_prop("inherentcommitbehavior").and_then(|raw| {
-                let sep = raw.rfind("::").map(|i| i + 2).unwrap_or(0);
-                let member = raw[sep..].to_lowercase();
-                match member.as_str() {
-                    "ignore" => Some("ignore".to_string()),
-                    "error" => Some("error".to_string()),
-                    "allow" => Some("allow".to_string()),
-                    _ => None,
-                }
-            })
-        } else {
-            None
-        };
+        // (object-indexer.ts parity): the L2 reading, one rule for both
+        // (`ir_object_metadata`: the member after "::", lower-cased; with one
+        // value per `#if` arm, the strictest, engine limits B2).
+        let inherent_commit_behavior =
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type).3;
+        // Engine limits B2: some build may lack the value read above.
+        let inherent_commit_behavior_conditional = inherent_commit_behavior.is_some()
+            && o.properties
+                .iter()
+                .any(|p| p.name == "inherentcommitbehavior" && p.conditional);
         // Object `SourceTableTemporary` — Page / PageExtension only (Task 5 / G4).
         // Structural boolean property: `SourceTableTemporary = true;` means the
         // page's implicit `Rec` and `xRec` are always temporary. EXACT case-insensitive
         // match against "true" — anything else present → Some(false); absent → None.
-        let source_table_temporary = if object_type == "Page" || object_type == "PageExtension" {
+        // Engine limits B2: a value only some `#if` arms write is not known
+        // (`None`): `Some(true)` makes the page's `Rec` temporary, which drops
+        // its database writes in a build that has no such arm.
+        let source_table_temporary = if (object_type == "Page" || object_type == "PageExtension")
+            && !o
+                .properties
+                .iter()
+                .any(|p| p.name == "sourcetabletemporary" && p.conditional)
+        {
             ir_prop("sourcetabletemporary").map(|v| v.trim().to_lowercase() == "true")
         } else {
             None
@@ -1604,12 +1742,22 @@ fn project_ir(
         } else {
             None
         };
+        // Engine limits B2: a page property only some builds write is not known
+        // (`None`, as `source_table_temporary` above): `Some(false)` tells d39
+        // the page cannot modify, while a build without it has the default `true`.
+        let definite_bool_prop = |name: &str| {
+            if o.properties.iter().any(|p| p.name == name && p.conditional) {
+                None
+            } else {
+                bool_prop(name)
+            }
+        };
         let (editable, insert_allowed, modify_allowed, delete_allowed) = if object_type == "Page" {
             (
-                bool_prop("editable"),
-                bool_prop("insertallowed"),
-                bool_prop("modifyallowed"),
-                bool_prop("deleteallowed"),
+                definite_bool_prop("editable"),
+                definite_bool_prop("insertallowed"),
+                definite_bool_prop("modifyallowed"),
+                definite_bool_prop("deleteallowed"),
             )
         } else {
             (None, None, None, None)
@@ -1685,6 +1833,7 @@ fn project_ir(
             object_subtype,
             page_type,
             inherent_commit_behavior,
+            inherent_commit_behavior_conditional,
             source_table_temporary,
             page_controls,
             single_instance,
@@ -1784,7 +1933,10 @@ fn project_ir(
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
                 );
-                let (feats, site_exprs, implicit) =
+                let base = next_base_by_id
+                    .get(&rid)
+                    .map_or_else(Default::default, |&(b, _)| b);
+                let (feats, site_exprs, implicit, next) =
                     crate::program::body::ir_walk::project_routine_features_ir_with(
                         ir_file,
                         oi,
@@ -1794,7 +1946,9 @@ fn project_ir(
                         source_unit_id,
                         source_table_name.as_deref(),
                         parenless_calls,
+                        base,
                     );
+                next_base_by_id.entry(rid.clone()).or_default().0 = next;
                 (rid, feats, site_exprs, implicit)
             };
 
@@ -1928,6 +2082,8 @@ fn project_ir(
                     in_statement_position: op.in_statement_position,
                     run_trigger: op.run_trigger,
                     receiver_is_record_ref: op.receiver_is_record_ref,
+                    flow_field_reads: Vec::new(),
+                    dataset_reason: None,
                 })
                 .collect();
             let field_accesses = std::mem::take(&mut features.field_accesses);
@@ -2199,7 +2355,8 @@ fn project_ir(
                     .iter()
                     .map(|rv| (rv.name.clone(), rv.table_name.clone()))
                     .collect();
-                crate::program::body::rules::build_rule_drafts(
+                let rule_base = next_base_by_id.get(&routine_id).map_or(0, |&(_, r)| r);
+                let drafts = crate::program::body::rules::build_rule_drafts(
                     &crate::program::body::rules::RuleInputs {
                         file: ir_file,
                         object: o,
@@ -2212,8 +2369,13 @@ fn project_ir(
                         record_variables: &record_vars,
                         object_clean: clean,
                         anchor: &|origin| anchor_from_origin(origin, source_unit_id, cols),
+                        rule_base,
                     },
-                )
+                );
+                if let Some(e) = next_base_by_id.get_mut(&routine_id) {
+                    e.1 = rule_base + u32::try_from(drafts.len()).expect("a rule count fits u32");
+                }
+                drafts
             });
             // V3 §2.1: the member's kind and caption, for the routine display.
             let member_detail = enclosing_member
@@ -2286,6 +2448,7 @@ fn project_ir(
                 recordref_bindings: crate::program::recordref_table::local_recordref_bindings_all(
                     ir_file, ir_routine,
                 ),
+                field_ref_operations: Vec::new(),
                 rules: None,
                 rule_drafts,
                 card_text,
@@ -2294,6 +2457,317 @@ fn project_ir(
         }
     }
     positions
+}
+
+/// Engine limits B2 (wave 2 final review): the model-level join of the
+/// declarations of one id. One app can declare a routine, an object or a table
+/// more than once only where no build compiles two of them: two `#if` arms of
+/// one member list, two `#if` arms that each declare the whole object (in one
+/// file, or in two separate `#if` blocks), or two FILES (`#if A` in one, `#if
+/// not A` in the other; an object id twice in one compiled app does not
+/// compile). No configuration is chosen (later L22 steps), so each declaration
+/// is one possible build, and a fact one of them lacks is a "may":
+///
+/// - **Routines** (rows of one id, [`join_routine_declarations`]): an
+///   attribute not every row carries (same text) is marked
+///   `another_declaration_lacks` on every row that has it, so a reader that
+///   takes ONE row and asks whether the ROUTINE has it
+///   (`has_definite_attribute`: a caller's trap) gets the answer every row
+///   gives, while a reader of that row's own body
+///   (`find_own_definite_attribute`: its own commits) still reads it as
+///   definite; a `top-level` site is only `conditional` (a build runs one
+///   row's body); and the rows of two files are numbered apart (each file's
+///   site numbers in a block picked from its own path,
+///   [`file_site_blocks`]), as `#if` arms in one file already are, so a site
+///   id names one site.
+/// - **Tables** ([`join_table_declarations`]): `TableType = Temporary` holds
+///   only when every declaration is temporary. A table is read by its id from
+///   anywhere (a `Record "T"` variable), so one declaration's property
+///   decided every build.
+///
+/// **Objects are not joined.** A `ModelObject` row is read by the routines it
+/// declares (`declaring::DeclaringObjects`, #279: a routine reads its OWN
+/// declaration's `SingleInstance`, page permissions, `SourceTableTemporary`,
+/// `InherentCommitBehavior`), and that row's properties hold in exactly the
+/// builds in which that routine exists: exact, not a "may". A reader that asks
+/// about the object from outside merges the declarations itself:
+/// `commit_scope` (every object row's `InherentCommitBehavior`), the program
+/// graph's `dedup_objects` (page UI blocks, an XmlPort's dataset, the source
+/// table), `compute_return_summaries` (per id, after each row's own object).
+///
+/// It runs on the assembled raw rows, before `RowNodes`, the record
+/// resolution and the attach, in every assembly entry. It reads other files'
+/// rows, so it never runs in `project_ir`: a file's cached raw rows
+/// (`row_cache`) stay a function of that file alone.
+///
+/// `node_of` is each row's program node and `declarations` the graph's split
+/// routines (`program::split_decls`): a row whose node is a split
+/// declaration takes that declaration's own ids.
+pub(crate) fn join_alternative_declarations(
+    ws: &mut ModelEntities,
+    node_of: &[Option<crate::program::node::RoutineNodeId>],
+    declarations: &crate::program::split_decls::SplitDecls,
+) {
+    join_routine_declarations(&mut ws.routines, node_of, declarations);
+    join_table_declarations(&mut ws.tables);
+}
+
+/// Attribute text as [`join_routine_declarations`] compares it: whitespace
+/// removed, lowercased (the lowerer's `mark_attributes_some_arm_lacks` rule).
+fn attribute_text_key(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The routine half of [`join_alternative_declarations`], over EVERY group of
+/// rows that share an id. A group never mixes roles
+/// (`projection::mixed_role_groups`). A symbol-only group is an ABI overload
+/// collapse (two overloads whose signatures hash alike): they compile
+/// together, but a caller bound to the id cannot tell which one it reaches,
+/// so an attribute one of them lacks is a "may" for that caller too, the same
+/// reading `return_summary::compute_return_summaries` gives every group
+/// (`merge_alternative_summaries`). Steps 2 and 3 touch sites, which a
+/// symbol-only row has none of.
+fn join_routine_declarations(
+    rows: &mut [ModelRoutine],
+    node_of: &[Option<crate::program::node::RoutineNodeId>],
+    declarations: &crate::program::split_decls::SplitDecls,
+) {
+    // The declaration suffix of row `i` when the graph split its routine.
+    let suffix_of = |i: usize| -> Option<&str> {
+        let node = node_of.get(i)?.as_ref()?;
+        declarations.base_of(node).map(|(_, s)| s)
+    };
+    const TOP: &str = "top-level";
+    const COND: &str = "conditional";
+    let groups: Vec<Vec<usize>> = {
+        let mut count: HashMap<&str, u32> = HashMap::new();
+        for r in rows.iter() {
+            *count.entry(r.id.as_str()).or_default() += 1;
+        }
+        let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, r) in rows.iter().enumerate() {
+            if count.get(r.id.as_str()).is_some_and(|&n| n >= 2) {
+                by_id.entry(r.id.as_str()).or_default().push(i);
+            }
+        }
+        let mut groups: Vec<Vec<usize>> = by_id.into_values().collect();
+        groups.sort_unstable();
+        groups
+    };
+    for group in groups {
+        // 1. An attribute some row lacks is marked on every row that has it
+        // (`another_declaration_lacks`: a "may" for the id, definite for the
+        // row's own builds).
+        let texts: Vec<Vec<String>> = group
+            .iter()
+            .map(|&i| {
+                rows[i]
+                    .attributes_parsed
+                    .iter()
+                    .map(|a| attribute_text_key(&a.raw))
+                    .collect()
+            })
+            .collect();
+        for (&i, own) in group.iter().zip(&texts) {
+            for (a, text) in rows[i].attributes_parsed.iter_mut().zip(own) {
+                if !texts.iter().all(|t| t.contains(text)) {
+                    a.another_declaration_lacks = true;
+                }
+            }
+        }
+        // 2. No row's site runs on every success path of the routine.
+        for &i in &group {
+            let r = &mut rows[i];
+            for c in r
+                .call_sites
+                .iter_mut()
+                .map(|s| &mut s.control_context)
+                .chain(r.operation_sites.iter_mut().map(|s| &mut s.control_context))
+            {
+                if c.as_deref() == Some(TOP) {
+                    *c = Some(COND.to_string());
+                }
+            }
+        }
+        // 3. The rows of a split routine take their own ids below, which
+        // leaves no site id shared.
+        if group.iter().any(|&i| suffix_of(i).is_some()) {
+            continue;
+        }
+        // 4. Rows from several files: each file's numbering (from 0, its
+        // own `#if` arms apart, `project_ir`) moves into a block of its own
+        // (`file_site_blocks`).
+        let units: Vec<String> = group
+            .iter()
+            .map(|&i| rows[i].source_anchor.source_unit_id.clone())
+            .collect();
+        if units.iter().all(|u| *u == units[0]) {
+            continue;
+        }
+        let id = rows[group[0]].id.clone();
+        // The largest site number any row of the group holds: a file whose
+        // numbers do not fit one block widens every file's block (and that
+        // one case depends on another file's content; never seen: a routine
+        // would need 100,000 sites in one file).
+        let max = group
+            .iter()
+            .flat_map(|&i| site_id_extremes(&format!("{:?}", rows[i]), &id).into_values())
+            .map(|(_, max)| max)
+            .max()
+            .unwrap_or(0);
+        let unit_refs: Vec<&str> = units.iter().map(String::as_str).collect();
+        let Some(blocks) = file_site_blocks(&unit_refs, max) else {
+            log::error!(
+                "{id}: {max} sites in one file leave no room for {} files' blocks; \
+                 its declarations keep shared site ids (the #160 step 11b rules read them)",
+                unit_refs.len()
+            );
+            continue;
+        };
+        for (&i, unit) in group.iter().zip(&units) {
+            let offset = blocks[unit.as_str()];
+            let map = |_: &'static str, n: u32| offset + n;
+            let f = |s: &str| rebase_site_ids(s, &id, &map);
+            #[cfg(debug_assertions)]
+            let before = format!("{:?}", rows[i]);
+            rewrite_routine_site_ids(&mut rows[i], &f);
+            #[cfg(debug_assertions)]
+            assert_eq!(
+                format!("{:?}", rows[i]),
+                f(&before),
+                "join_alternative_declarations: a field of {id} holds a site id the \
+                 rewrite missed"
+            );
+        }
+    }
+    // Every row of a split routine, also one with no other row here (a
+    // dependency's declaration that alone was demanded).
+    if !declarations.is_empty() {
+        for (i, row) in rows.iter_mut().enumerate() {
+            if let Some(suffix) = suffix_of(i) {
+                adopt_declaration_ids(row, suffix);
+            }
+        }
+    }
+}
+
+/// The width of one file's block of site numbers ([`file_site_blocks`]): a
+/// file numbers a routine's sites from 0, far below this.
+const SITE_BLOCK: u32 = 100_000;
+
+/// How many blocks a file's own path picks from (so a number stays below
+/// `u32::MAX`: `(SITE_BLOCKS + 1) * SITE_BLOCK`).
+const SITE_BLOCKS: u32 = 9_999;
+
+/// Engine limits B2 (wave 2 final review, item 2): where each file's site
+/// numbers start for a routine id declared in several files (`units`: the
+/// rows' source units). Each file numbers the id's sites from 0 by itself
+/// (`project_ir`, the session's per-file row cache), so two files would share
+/// `{id}/op0`. Each file's numbers move by `block * SITE_BLOCK`, its block
+/// picked from a hash of its OWN source unit (`1..=SITE_BLOCKS`; 0 stays the
+/// numbering of a routine declared in one file), so a declaration's site ids
+/// do not depend on another file's content, its name or its sort order. Two
+/// files whose hashes pick one block take the next free one, in source-unit
+/// order: the only case in which another file (its path, never its content)
+/// moves a file's ids. Deterministic, so a session refresh equals a cold
+/// build.
+///
+/// `max` is the largest site number of any file's rows. When it does not fit
+/// one block (a release check, not only a debug one), every block widens to
+/// the next power of ten above it, with as many blocks as `u32` then holds;
+/// `None` when that leaves fewer blocks than files (the caller keeps the
+/// files' shared ids and logs an error).
+fn file_site_blocks<'u>(units: &[&'u str], max: u32) -> Option<HashMap<&'u str, u32>> {
+    let mut distinct: Vec<&str> = units.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let (width, count) = if max < SITE_BLOCK {
+        (SITE_BLOCK, SITE_BLOCKS)
+    } else {
+        let width = 10u32.checked_pow(max.checked_ilog10()? + 1)?;
+        (width, (u32::MAX / width).saturating_sub(1))
+    };
+    if (count as usize) < distinct.len() {
+        return None;
+    }
+    let mut taken: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut out = HashMap::new();
+    for u in distinct {
+        let h = blake3::hash(u.as_bytes());
+        let mut b = 1 + u32::from_le_bytes(h.as_bytes()[..4].try_into().expect("4 bytes")) % count;
+        while !taken.insert(b) {
+            b = b % count + 1;
+        }
+        out.insert(u, b * width);
+    }
+    Some(out)
+}
+
+/// The stable id of the routine a split declaration (`program::split_decls`)
+/// belongs to: its own stable id without the `~` and 8 hex digits the split
+/// adds; `None` for any other routine.
+#[must_use]
+pub fn split_origin(stable: &str) -> Option<&str> {
+    let (origin, tag) = stable.rsplit_once('~')?;
+    (tag.len() == 8 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && origin.contains('#'))
+        .then_some(origin)
+}
+
+/// Engine limits B2: row `r`'s ids once the graph has split its routine, one
+/// node per declaration (`program::split_decls`, the one place that decides a
+/// split). Its id derives from the routine's id and the declaration's suffix,
+/// its stable id is the routine's with `~` and the suffix, and its site ids
+/// move to the new id (`{new id}/op0`). The suffix depends only on the
+/// declaration's own file, so these ids depend on no other file except when
+/// another file starts or ends the split. The node's own subscriptions and
+/// routes then give each declaration its own dispatches and its share of a
+/// direct call; the join's steps before this one still read the declarations
+/// as alternatives.
+fn adopt_declaration_ids(r: &mut ModelRoutine, suffix: &str) {
+    let old = r.id.clone();
+    let scope = old.rsplit_once('/').map_or("", |(s, _)| s);
+    let hex = crate::engine::ids::sha256_hex(&format!("{old}\u{1f}{suffix}"));
+    let new = format!("{scope}/{hex}");
+    let (from, to) = (format!("{old}/"), format!("{new}/"));
+    let f = |s: &str| s.replace(&from, &to);
+    #[cfg(debug_assertions)]
+    let before = format!("{r:?}");
+    rewrite_routine_site_ids(r, &f);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        format!("{r:?}"),
+        f(&before),
+        "adopt_declaration_ids: a field of {old} holds a site id the rewrite missed"
+    );
+    r.id = new;
+    r.stable_routine_id = format!("{}~{suffix}", r.stable_routine_id);
+}
+
+/// The table half of [`join_alternative_declarations`]: a table declared more
+/// than once (not a `tableextension` stub sharing its id) is temporary only when
+/// every declaration is (`TableType = Temporary` in one file alone left the
+/// table's database writes out in every build).
+fn join_table_declarations(tables: &mut [ModelTable]) {
+    let mut by_id: HashMap<&str, (usize, bool)> = HashMap::new();
+    for t in tables.iter().filter(|t| !t.is_extension_stub) {
+        let e = by_id.entry(t.id.as_str()).or_insert((0, true));
+        e.0 += 1;
+        e.1 &= t.is_temporary;
+    }
+    let not_every: std::collections::HashSet<String> = by_id
+        .into_iter()
+        .filter(|(_, (n, every))| *n >= 2 && !every)
+        .map(|(id, _)| id.to_string())
+        .collect();
+    for t in tables
+        .iter_mut()
+        .filter(|t| !t.is_extension_stub && not_every.contains(&t.id))
+    {
+        t.is_temporary = false;
+    }
 }
 
 /// The evidence-card text of routine `rix` of object `o` (intent-evidence
@@ -2369,7 +2843,9 @@ pub fn assemble_and_resolve_workspace_from_program(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
-    let (ws, node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
+    let (mut ws, node_of) =
+        assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
+    join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
@@ -2387,23 +2863,224 @@ pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
+    assemble_and_resolve_workspace_from_program_edited(
+        inputs,
+        skip_roots_config,
+        ctx,
+        parenless,
+        needs,
+        |ws, node_of| {
+            let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+            for (ri, r) in ws.routines.iter().enumerate() {
+                by_id.entry(r.id.clone()).or_default().push(ri);
+            }
+            for rows in by_id.values().filter(|rows| rows.len() > 1) {
+                let (mut i, mut j) = (0, rows.len() - 1);
+                while i < j {
+                    ws.routines.swap(rows[i], rows[j]);
+                    node_of.swap(rows[i], rows[j]);
+                    i += 1;
+                    j -= 1;
+                }
+            }
+        },
+    )
+}
+
+/// [`assemble_and_resolve_workspace_from_program`] with `edit` applied to the
+/// raw rows (and their nodes, by row position) before `RowNodes` and the
+/// attach, so a test can state a precondition by assignment and every later
+/// stage sees it. Test entry.
+#[doc(hidden)]
+pub fn assemble_and_resolve_workspace_from_program_edited(
+    inputs: &crate::program::inputs::WorkspaceInputs,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
+    edit: impl FnOnce(&mut ModelEntities, &mut Vec<Option<crate::program::node::RoutineNodeId>>),
+) -> Option<ModelRows> {
     let (mut ws, mut node_of) =
         assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
-    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
-    for (ri, r) in ws.routines.iter().enumerate() {
-        by_id.entry(r.id.clone()).or_default().push(ri);
-    }
-    for rows in by_id.values().filter(|rows| rows.len() > 1) {
-        let (mut i, mut j) = (0, rows.len() - 1);
-        while i < j {
-            ws.routines.swap(rows[i], rows[j]);
-            node_of.swap(rows[i], rows[j]);
-            i += 1;
-            j -= 1;
-        }
-    }
+    join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
+    edit(&mut ws, &mut node_of);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
+}
+
+/// The site-id tags a routine's walk mints (`ir_walk::SiteIdBase`), plus the
+/// rules' `rule` tag.
+const SITE_ID_TAGS: [&str; 5] = ["op", "cs", "loop", "u", "rule"];
+
+/// `s` with every `{id}/{tag}{n}` site id renumbered to `{id}/{tag}{map(tag, n)}`.
+fn rebase_site_ids(s: &str, id: &str, map: &dyn Fn(&'static str, u32) -> u32) -> String {
+    let prefix = format!("{id}/");
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find(&prefix) {
+        let after = &rest[at + prefix.len()..];
+        out.push_str(&rest[..at + prefix.len()]);
+        rest = after;
+        let Some((tag, digits)) = SITE_ID_TAGS.iter().find_map(|t| {
+            let d = after.strip_prefix(t)?;
+            let n = d.bytes().take_while(u8::is_ascii_digit).count();
+            (n > 0).then_some((*t, &d[..n]))
+        }) else {
+            continue;
+        };
+        let n: u32 = digits.parse().expect("a site number fits u32");
+        out.push_str(tag);
+        out.push_str(&map(tag, n).to_string());
+        rest = &after[tag.len() + digits.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The smallest and the largest number of each site-id tag of `id` in `text`.
+fn site_id_extremes(text: &str, id: &str) -> HashMap<&'static str, (u32, u32)> {
+    let prefix = format!("{id}/");
+    let mut out: HashMap<&'static str, (u32, u32)> = HashMap::new();
+    for (at, _) in text.match_indices(&prefix) {
+        let after = &text[at + prefix.len()..];
+        for t in SITE_ID_TAGS {
+            let Some(d) = after.strip_prefix(t) else {
+                continue;
+            };
+            let n = d.bytes().take_while(u8::is_ascii_digit).count();
+            if n > 0 {
+                let v: u32 = d[..n].parse().expect("a site number fits u32");
+                let m = out.entry(t).or_insert((v, v));
+                *m = (m.0.min(v), m.1.max(v));
+            }
+            break;
+        }
+    }
+    out
+}
+
+/// Rewrite every site id row `r` holds with `f`. The caller checks that no
+/// field was missed: `r`'s `Debug` text after the rewrite must equal `f`
+/// applied to its `Debug` text before ([`share_collided_site_ids`] asserts it,
+/// [`join_alternative_declarations`] in debug builds).
+fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
+    use crate::program::body::features::PCFNNode;
+    fn tree(n: &mut PCFNNode, f: &dyn Fn(&str) -> String) {
+        for s in [&mut n.operation_id, &mut n.callsite_id]
+            .into_iter()
+            .flatten()
+        {
+            *s = f(s);
+        }
+        for kids in [
+            &mut n.condition_leaves,
+            &mut n.children,
+            &mut n.else_children,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for k in kids {
+                tree(k, f);
+            }
+        }
+    }
+    let all = |v: &mut Vec<String>| v.iter_mut().for_each(|s| *s = f(s));
+    // Record variable ids (`{id}/rv/{name}`): no site tag, so a renumbering
+    // leaves them as they are; a new routine id (a split declaration) moves
+    // them with the sites.
+    for v in &mut r.record_variables {
+        v.id = f(&v.id);
+    }
+    for o in r
+        .record_operations
+        .iter_mut()
+        .chain(r.field_ref_operations.iter_mut())
+    {
+        if let Some(rv) = &mut o.record_variable_id {
+            *rv = f(rv);
+        }
+    }
+    for o in &mut r.record_operations {
+        o.id = f(&o.id);
+        all(&mut o.loop_stack);
+    }
+    for c in &mut r.call_sites {
+        c.id = f(&c.id);
+        c.operation_id = f(&c.operation_id);
+        all(&mut c.loop_stack);
+    }
+    for o in &mut r.operation_sites {
+        o.id = f(&o.id);
+        all(&mut o.loop_stack);
+    }
+    for l in &mut r.loops {
+        l.id = f(&l.id);
+        if let Some((a, b)) = &mut l.exhausting_advance {
+            (*a, *b) = (f(a), f(b));
+        }
+    }
+    for u in &mut r.unreachable_statements {
+        u.id = f(&u.id);
+    }
+    if let Some(t) = &mut r.statement_tree {
+        tree(std::sync::Arc::make_mut(t), f);
+    }
+    for rule in r.rules.iter_mut().flatten() {
+        rule.id = f(&rule.id);
+    }
+    for d in r.rule_drafts.iter_mut().flatten() {
+        d.rekey_ids(f);
+    }
+}
+
+/// #160 step 11b's collided-id contract, stated BY ASSIGNMENT (engine limits
+/// B2, per-arm ids). Production now gives each `#if` arm of a routine its own
+/// site ids (`ir_walk::SiteIdBase`), so two declarations of one id no longer
+/// share `{id}/op0`; rows that DO share their site ids (for any other reason)
+/// must still be handled by the 11b rules. This renumbers every row of each
+/// collision group (rows sharing one `id`) so its site ids start at 0 again,
+/// the shape the 11b tests state: after it, the rows of a group share their
+/// site ids, as two declarations numbered on their own would. Returns how many
+/// rows changed.
+///
+/// Every field of a row that holds a site id is rewritten, and the function
+/// asserts it: the row's `Debug` text after the rewrite must equal the rewrite
+/// applied to its `Debug` text before, so a field added later that holds a
+/// site id fails here instead of leaving a half-renumbered row. Run it on
+/// the raw rows ([`assemble_and_resolve_workspace_from_program_edited`]) so
+/// the attach builds the calls from the renumbered sites. Test entry.
+///
+/// # Panics
+/// When a row's rewrite misses a field that holds one of its site ids.
+#[doc(hidden)]
+pub fn share_collided_site_ids(routines: &mut [ModelRoutine]) -> usize {
+    let mut groups: HashMap<String, usize> = HashMap::new();
+    for r in routines.iter() {
+        *groups.entry(r.id.clone()).or_default() += 1;
+    }
+    let mut changed = 0;
+    for r in routines
+        .iter_mut()
+        .filter(|r| groups.get(&r.id).is_some_and(|&n| n > 1))
+    {
+        let id = r.id.clone();
+        let before = format!("{r:?}");
+        let mins = site_id_extremes(&before, &id);
+        if mins.values().all(|&(m, _)| m == 0) {
+            continue;
+        }
+        let map = |tag: &'static str, n: u32| n - mins.get(tag).map_or(0, |&(m, _)| m);
+        let f = |s: &str| rebase_site_ids(s, &id, &map);
+        rewrite_routine_site_ids(r, &f);
+        assert_eq!(
+            format!("{r:?}"),
+            f(&before),
+            "share_collided_site_ids: a field of {id} holds a site id the rewrite missed"
+        );
+        changed += 1;
+    }
+    changed
 }
 
 /// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
@@ -2466,6 +3143,7 @@ pub(crate) fn assemble_and_resolve_cross_app_from_program_cached(
         let _s = pt::span("l3", "l3.dependency_rows");
         append_dependency_rows(&mut ws, &mut node_of, ctx, demand, parenless, needs, cache)
     };
+    join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
@@ -2719,17 +3397,34 @@ fn append_dependency_rows(
             // A session keeps each dependency file's routine ids (a pure
             // function of the app and the parse), so the demanded slice and
             // the rows' nodes are looked up, not hashed again.
-            let ids = match (cache.as_deref_mut(), app) {
-                (Some(c), Some(app)) => {
-                    Some(c.dependency_ids(app, pf.virtual_path, pf.text, || {
-                        dependency_routine_ids(tree(), app)
-                    }))
+            let ids: Option<std::sync::Arc<Vec<Vec<crate::program::node::RoutineNodeId>>>> =
+                match (cache.as_deref_mut(), app) {
+                    (Some(c), Some(app)) => {
+                        Some(c.dependency_ids(app, pf.virtual_path, pf.text, || {
+                            dependency_routine_ids(tree(), app)
+                        }))
+                    }
+                    (None, Some(app)) => {
+                        Some(std::sync::Arc::new(dependency_routine_ids(tree(), app)))
+                    }
+                    _ => None,
+                };
+            // A split subscriber's declarations (`split_decls`) are nodes of
+            // their own; the kept ids stay a function of this file alone.
+            let ids = ids.map(|ids| {
+                let unit = crate::program::split_decls::unit_id(guid, pf.virtual_path);
+                match ctx
+                    .graph()
+                    .workspace_rows
+                    .declarations
+                    .file_declaration_ids(&ids, &unit)
+                {
+                    Some(mapped) => std::sync::Arc::new(mapped),
+                    None => ids,
                 }
-                _ => None,
-            };
-            let population = match (demand, app, &ids) {
-                (Some(d), Some(_), Some(ids)) => demanded_population_from_ids(ids, d),
-                (Some(d), Some(app), None) => demanded_population(tree(), app, d),
+            });
+            let population = match (demand, &ids) {
+                (Some(d), Some(ids)) => demanded_population_from_ids(ids, d),
                 _ => whole_file_population(tree()),
             };
             let no_calls = std::collections::HashSet::new();
@@ -2815,16 +3510,11 @@ fn append_dependency_rows(
                     }
                 }
             };
-            node_of.extend(positions.into_iter().map(|(oi, ri)| match &ids {
-                Some(ids) => Some(ids[oi][ri].clone()),
-                None => app.map(|app| {
-                    let o = &tree().objects[oi];
-                    crate::program::sig_fp::source_routine_node_id(
-                        dep_object_node_id(app, o),
-                        &o.routines[ri],
-                    )
-                }),
-            }));
+            node_of.extend(
+                positions
+                    .into_iter()
+                    .map(|(oi, ri)| ids.as_ref().map(|ids| ids[oi][ri].clone())),
+            );
         }
     }
     if let Some(c) = cache {
@@ -2907,8 +3597,10 @@ fn append_abi_rows(
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
 }
 
-/// Each routine's program id in dependency file `ir_file` of `app`, per
-/// object, as [`demanded_population`] builds them.
+/// Each routine's id in dependency file `ir_file` of `app`, per object, as the
+/// source spells it and the resolver builds a caller's (the owning app, the
+/// object's number or folded name): a function of this file alone, before any
+/// split (`split_decls::SplitDecls::file_declaration_ids`).
 pub(crate) fn dependency_routine_ids(
     ir_file: &al_syntax::ir::AlFile,
     app: crate::program::node::AppRef,
@@ -2926,8 +3618,9 @@ pub(crate) fn dependency_routine_ids(
         .collect()
 }
 
-/// [`demanded_population`] from the file's routine ids
-/// ([`dependency_routine_ids`]).
+/// Every object of a dependency file, with only its demanded routines (S8.2),
+/// from the file's routine ids ([`dependency_routine_ids`], each split
+/// declaration's own, so a demanded declaration brings only itself).
 fn demanded_population_from_ids(
     ids: &[Vec<crate::program::node::RoutineNodeId>],
     demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
@@ -2942,37 +3635,6 @@ fn demanded_population_from_ids(
                 .map(|(ri, _)| ri)
                 .collect();
             (oi, kept)
-        })
-        .collect()
-}
-
-/// Every object of a dependency file, with only its demanded routines (S8.2). The
-/// routine ids are built as the resolver builds a caller's
-/// (`resolve_file_obligations`): the owning app, the object's number or folded name.
-fn demanded_population(
-    ir_file: &al_syntax::ir::AlFile,
-    app: crate::program::node::AppRef,
-    demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
-) -> FilePopulation {
-    ir_file
-        .objects
-        .iter()
-        .enumerate()
-        .map(|(oi, o)| {
-            let object = dep_object_node_id(app, o);
-            let routines = o
-                .routines
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| {
-                    demand.contains(&crate::program::sig_fp::source_routine_node_id(
-                        object.clone(),
-                        r,
-                    ))
-                })
-                .map(|(ri, _)| ri)
-                .collect();
-            (oi, routines)
         })
         .collect()
 }
@@ -3304,6 +3966,10 @@ pub fn resolve(workspace: &mut ModelEntities) {
     }
 
     merge_extension_fields(workspace);
+
+    // Engine limits B5: after the merge, so a table extension's FlowField on a
+    // dependency table is found.
+    super::flow_fields::attach_flow_field_reads(workspace);
 }
 
 // ---------------------------------------------------------------------------
@@ -3373,6 +4039,11 @@ pub struct CollisionCensus {
     /// Groups whose rows do not share one role (#160 step 11b §4.3): the count
     /// the projection's role check makes. Must read 0.
     pub groups_mixed_role: usize,
+    /// Groups whose rows all come from one source file (engine limits B2,
+    /// per-arm ids): `#if` arms numbered apart by `project_ir`. The other
+    /// groups (rows from several files) are numbered apart by the model join
+    /// (`join_alternative_declarations`); neither shares a site id.
+    pub groups_one_file: usize,
 }
 
 impl CollisionCensus {
@@ -3383,7 +4054,8 @@ impl CollisionCensus {
         eprintln!(
             "[retained-census] collision routine_rows={} distinct_ids={} collision_groups={} \
              collision_rows={} groups_one_node={} groups_several_nodes={} rows_primary={} \
-             rows_dependency_source={} rows_symbol_only={} groups_mixed_role={}",
+             rows_dependency_source={} rows_symbol_only={} groups_mixed_role={} \
+             groups_one_file={}",
             c.routine_rows,
             c.distinct_ids,
             c.collision_groups,
@@ -3393,7 +4065,8 @@ impl CollisionCensus {
             c.rows_primary,
             c.rows_dependency_source,
             c.rows_symbol_only,
-            c.groups_mixed_role
+            c.groups_mixed_role,
+            c.groups_one_file
         );
     }
 }
@@ -3421,6 +4094,10 @@ pub fn collision_census(ws: &ModelEntities, row_nodes: &RowNodes) -> CollisionCe
             c.groups_one_node += 1;
         } else {
             c.groups_several_nodes += 1;
+        }
+        let unit = |ri: usize| &ws.routines[ri].source_anchor.source_unit_id;
+        if rows.iter().all(|&ri| unit(ri) == unit(rows[0])) {
+            c.groups_one_file += 1;
         }
         for &ri in rows {
             let unit = &ws.routines[ri].source_anchor.source_unit_id;
@@ -4074,6 +4751,210 @@ codeunit 50816 "T5 F3 Dedup"
             pg.source_anchor.is_some(),
             "native objects carry their decl anchor"
         );
+    }
+
+    /// Engine limits B2 (third review): an object property only some builds
+    /// write is not read as definite. A page permission in one `#if` arm is
+    /// not known (`None`: d39/d64 read `Some(false)` as "cannot modify"), and
+    /// an `InherentCommitBehavior` in one arm is marked conditional, so a
+    /// routine's return summary reads it as `conditional`, never a definite
+    /// `ignore`. Each control is written in every build.
+    #[test]
+    fn a_property_only_some_builds_write_is_not_definite() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("src")).unwrap();
+        std::fs::write(
+            t.path().join("app.json"),
+            r#"{"id":"b2b2b2b2-0000-4000-8000-0000000000c3","name":"B2P","publisher":"t","version":"1.0.0.0","dependencies":[],"preprocessorSymbols":["CLEAN99"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            t.path().join("src/p.al"),
+            "table 50100 T { fields { field(1; \"No.\"; Integer) { } } }\n\
+             page 50101 Armed\n{\n    SourceTable = T;\n#if CLEAN99\n    ModifyAllowed = false;\n#endif\n    Editable = false;\n}\n\
+             codeunit 50102 IcbArm\n{\n#if CLEAN99\n    InherentCommitBehavior = Ignore;\n#endif\n    procedure P()\n    begin\n        Commit();\n    end;\n}\n\
+             codeunit 50103 IcbAll\n{\n    InherentCommitBehavior = Ignore;\n    procedure P()\n    begin\n        Commit();\n    end;\n}\n",
+        )
+        .unwrap();
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(
+                t.path(),
+            )
+            .expect("assemble");
+        let obj = |name: &str| {
+            resolved
+                .workspace
+                .objects
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap()
+        };
+        let pg = obj("Armed");
+        assert_eq!(pg.modify_allowed, None);
+        assert_eq!(pg.editable, Some(false));
+        assert!(obj("IcbArm").inherent_commit_behavior_conditional);
+        assert!(!obj("IcbAll").inherent_commit_behavior_conditional);
+        let summaries = crate::engine::return_summary::compute_return_summaries(
+            &resolved.workspace.routines,
+            Some(resolved.workspace.objects.as_slice()),
+        );
+        let cb = |object: &str| {
+            let o = obj(object);
+            let r = resolved
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.object_id == o.id)
+                .unwrap();
+            summaries[&r.id].commit_behavior
+        };
+        assert_eq!(cb("IcbArm"), "conditional");
+        assert_eq!(cb("IcbAll"), "ignore");
+    }
+
+    /// Engine limits B2 (wave 2 final review, follow-up 2): the site-block
+    /// overflow check holds in release. Stated by assignment: a largest site
+    /// number of 99,999 fits the 100,000-wide blocks; 100,000 widens every
+    /// block to 1,000,000 (each file's numbers stay inside its block: no two
+    /// files' blocks overlap); a width that leaves fewer blocks than files is
+    /// `None` (the caller keeps the shared ids and logs an error).
+    #[test]
+    fn site_blocks_widen_past_a_full_block() {
+        let units = ["ws:src/a.al", "ws:src/b.al"];
+        let fits = file_site_blocks(&units, SITE_BLOCK - 1).expect("fits");
+        assert!(
+            fits.values()
+                .all(|&b| b % SITE_BLOCK == 0 && b >= SITE_BLOCK)
+        );
+        let wide = file_site_blocks(&units, SITE_BLOCK).expect("widened");
+        let mut starts: Vec<u32> = wide.values().copied().collect();
+        starts.sort_unstable();
+        assert!(starts.iter().all(|&b| b % (10 * SITE_BLOCK) == 0 && b > 0));
+        assert!(
+            starts[1] - starts[0] >= 10 * SITE_BLOCK,
+            "the blocks do not overlap: {starts:?}"
+        );
+        let many: Vec<String> = (0..5).map(|i| format!("ws:src/{i}.al")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(
+            file_site_blocks(&many, 1_000_000_000).is_none(),
+            "one block of 10^10 > u32: no room"
+        );
+    }
+
+    /// Engine limits B2, wave 2 final review: declarations of one id in two
+    /// FILES (`#if A` in `a.al`, `#if not A` in `b.al`) are alternative
+    /// builds, joined at the model level (`join_alternative_declarations`).
+    /// Stated: `a.al`'s `Cu` carries `InherentCommitBehavior = Ignore` and
+    /// `P`'s `[TryFunction]`, and its `Q` always raises; `b.al`'s carries
+    /// neither and its `Q` returns. `BothCu` carries them in both files (the
+    /// control), `Once` is declared once. An attribute `b.al` lacks is marked
+    /// `another_declaration_lacks` on the row that has it (never
+    /// `conditional`: its own builds all have it); a summary value the rows disagree on is
+    /// `unknown`/`conditional` (`compute_return_summaries`: the last row's
+    /// alone before). Each object row keeps its own properties (#279).
+    #[test]
+    fn declarations_in_two_files_are_alternatives() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("src")).unwrap();
+        std::fs::write(
+            t.path().join("app.json"),
+            r#"{"id":"b2b2b2b2-0000-4000-8000-0000000000f8","name":"B2J","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+        )
+        .unwrap();
+        let cu = |props: &str, attr: &str, q: &str| {
+            format!(
+                "codeunit 50112 Cu\n{{\n{props}{attr}    procedure P()\n    begin\n        Error('x');\n    end;\n\n    procedure Q()\n    begin\n{q}    end;\n}}\n"
+            )
+        };
+        let both = "codeunit 50113 BothCu\n{\n    InherentCommitBehavior = Ignore;\n    [TryFunction]\n    procedure P()\n    begin\n        Error('x');\n    end;\n}\n";
+        let a = format!(
+            "#if A\n{}{}#endif\n",
+            cu(
+                "    InherentCommitBehavior = Ignore;\n",
+                "    [TryFunction]\n",
+                "        Error('x');\n"
+            ),
+            both
+        );
+        let b = format!(
+            "#if not A\n{}{}#endif\n",
+            cu("", "", "        Commit();\n"),
+            both
+        );
+        std::fs::write(t.path().join("src/a.al"), a).unwrap();
+        std::fs::write(t.path().join("src/b.al"), b).unwrap();
+        std::fs::write(
+            t.path().join("src/t.al"),
+            "codeunit 50114 Once\n{\n    [TryFunction]\n    procedure P()\n    begin\n        Error('x');\n    end;\n}\n",
+        )
+        .unwrap();
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(
+                t.path(),
+            )
+            .expect("assemble");
+        let objs = |name: &str| -> Vec<&ModelObject> {
+            let v: Vec<_> = resolved
+                .workspace
+                .objects
+                .iter()
+                .filter(|o| o.name == name)
+                .collect();
+            assert!(!v.is_empty(), "{name}");
+            v
+        };
+        let icb: Vec<Option<&str>> = objs("Cu")
+            .iter()
+            .map(|o| o.inherent_commit_behavior.as_deref())
+            .collect();
+        assert_eq!(icb, [Some("ignore"), None], "each row its own (#279)");
+        let rows = |object: &str| -> Vec<&ModelRoutine> {
+            let ids: Vec<&str> = objs(object).iter().map(|o| o.id.as_str()).collect();
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| ids.contains(&r.object_id.as_str()))
+                .collect()
+        };
+        let try_fn = |r: &ModelRoutine| {
+            r.attributes_parsed
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case("TryFunction"))
+                .map(|a| {
+                    assert!(!a.conditional, "each row's own builds all have it");
+                    a.another_declaration_lacks
+                })
+        };
+        let named = |object: &str, name: &str| -> Vec<&ModelRoutine> {
+            rows(object)
+                .into_iter()
+                .filter(|r| r.name == name)
+                .collect()
+        };
+        let p_rows = named("Cu", "P");
+        assert_eq!(p_rows.len(), 2, "precondition: one row per file");
+        assert_eq!(try_fn(p_rows[0]), Some(true), "a.al's row");
+        assert_eq!(try_fn(p_rows[1]), None, "b.al's row has none");
+        for r in rows("BothCu") {
+            assert_eq!(try_fn(r), Some(false), "control: both rows carry it");
+        }
+        let summaries = crate::engine::return_summary::compute_return_summaries(
+            &resolved.workspace.routines,
+            Some(resolved.workspace.objects.as_slice()),
+        );
+        let s = &summaries[&p_rows[0].id];
+        assert!(s.has_try_function_boundary && s.try_function_conditional);
+        assert_eq!(s.commit_behavior, "conditional");
+        let q = &summaries[&named("Cu", "Q")[0].id];
+        assert_eq!(q.all_paths_error, serde_json::json!("unknown"));
+        assert_eq!(q.has_normal_return_path, serde_json::json!("unknown"));
+        assert_eq!(q.commit_behavior, "conditional");
+        let both_p = &summaries[&rows("BothCu")[0].id];
+        assert_eq!(both_p.commit_behavior, "ignore", "control");
+        let once = &summaries[&rows("Once")[0].id];
+        assert!(once.has_try_function_boundary && !once.try_function_conditional);
     }
 
     // Task 3 (BCQuality wave): `PVariableSymbol.scope` forwards onto `ModelVariable` —

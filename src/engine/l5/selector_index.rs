@@ -275,6 +275,22 @@ fn cascade(
     {
         return (vec![selector.to_string()], "stable-routine-id", None);
     }
+    // Form 1b: the stable id of a split routine (`split_decls`), which no
+    // routine carries: every declaration of it.
+    if selector.contains('#') {
+        let mut declarations: Vec<String> = idx
+            .routine_display_by_id
+            .keys()
+            .map(String::as_str)
+            .chain(idx.dependency_routine_ids.iter().map(String::as_str))
+            .filter(|id| crate::program::model::workspace::split_origin(id) == Some(selector))
+            .map(str::to_string)
+            .collect();
+        if !declarations.is_empty() {
+            declarations.sort();
+            return (declarations, "stable-routine-id", None);
+        }
+    }
     let sep = last_separator(selector);
 
     // Form 2: full display name (normalized). A selector with no `::` is a
@@ -895,8 +911,21 @@ pub(crate) fn ambiguity_lines(
     out
 }
 
+/// Whether stable ids `ids` (at least one) are all declarations of one split
+/// routine (`split_decls`): one signature, declared in several files or `#if`
+/// arms, so a selector that matches them names the routine.
+#[must_use]
+pub fn declarations_of_one_routine<S: AsRef<str>>(ids: &[S]) -> bool {
+    use crate::program::model::workspace::split_origin;
+    let Some(first) = ids.first().and_then(|s| split_origin(s.as_ref())) else {
+        return false;
+    };
+    ids.iter().all(|s| split_origin(s.as_ref()) == Some(first))
+}
+
 /// What tells an ambiguity's candidates apart (round-2 G40), or `None` when
-/// nothing short says it: `the object` (one name in two objects), `a
+/// nothing short says it: `the file or #if arm …` (the declarations of one
+/// split routine), `the object` (one name in two objects), `a
 /// trailing Boolean` (one list extends the other by one parameter),
 /// `trailing Boolean, Text`, `parameter 3 (Integer or Text)` (same length),
 /// `the number of parameters (7, 9, 11)` (each list extends the shorter
@@ -905,6 +934,13 @@ pub(crate) fn ambiguity_lines(
 pub fn differs_in(cands: &[AmbiguousCandidate]) -> Option<String> {
     if cands.len() < 2 {
         return None;
+    }
+    let ids: Vec<&str> = cands.iter().map(|c| c.stable_id.as_str()).collect();
+    if declarations_of_one_routine(&ids) {
+        return Some(
+            "the file or #if arm: each is a declaration of one routine, in builds of its own"
+                .to_string(),
+        );
     }
     let object = |c: &AmbiguousCandidate| {
         c.display
@@ -1735,6 +1771,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,
@@ -1845,6 +1882,24 @@ mod tests {
         assert!(
             !offered.iter().any(|d| d.contains("PrintPDFAction")),
             "a far action is not offered: {offered:?}"
+        );
+    }
+
+    /// Engine limits B2: two declarations of one split routine differ by their
+    /// file or `#if` arm, not their (equal) parameter lists.
+    #[test]
+    fn differs_in_names_the_declarations_of_one_split_routine() {
+        let c = |stable_id: &str| AmbiguousCandidate {
+            display: "C::H()".to_string(),
+            at: String::new(),
+            selector: String::new(),
+            types: Vec::new(),
+            stable_id: stable_id.to_string(),
+        };
+        assert!(
+            differs_in(&[c("app:C:1#ab~00000001"), c("app:C:1#ab~00000002")])
+                .unwrap()
+                .starts_with("the file or #if arm"),
         );
     }
 

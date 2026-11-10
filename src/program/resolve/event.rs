@@ -49,40 +49,67 @@ pub struct ParsedSubscriberArgs {
 /// - 4 `Literal::Bool`                            → `skip_on_missing_license` (absent → false)
 /// - 5 `Literal::Bool`                            → `skip_on_missing_permission` (absent → false)
 ///
-/// Returns `None` when arg 0/1/2 is missing or of an unrecognised kind.
+/// Returns `None` when arg 0/1/2 is missing or of an unrecognised kind
+/// ([`ParsedSubscriberArgs::is_unreadable`]).
 pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSubscriberArgs> {
-    if attr.args.len() < 3 {
-        return None;
-    }
+    Some(read_event_subscriber_ir(attr, ir)).filter(|p| !p.is_unreadable())
+}
 
-    // Arg 0: `ObjectType::Codeunit` → QualifiedEnum { value: "Codeunit" }
-    let publisher_object_type = match &ir.expr(attr.args[0]).kind {
-        ExprKind::QualifiedEnum { value, .. } => value.to_ascii_lowercase(),
-        _ => return None,
-    };
+/// [`parse_event_subscriber_ir`] that never drops the attribute: a part it
+/// cannot read is left empty ([`ParsedSubscriberArgs::is_unreadable`]), so the
+/// parts it can read narrow which events the subscription may be for. An
+/// unreadable subscription may be for any event its readable parts allow, so
+/// it must never read as "no subscription" (engine limits B2).
+pub fn read_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> ParsedSubscriberArgs {
+    let arg = |i: usize| attr.args.get(i).copied();
+
+    // Arg 0: `ObjectType::Codeunit` → QualifiedEnum { value: "Codeunit" }. A
+    // value AL events are not published on (`ObjectType::Foo`) names no kind.
+    let publisher_object_type = arg(0)
+        .and_then(|id| match &ir.expr(id).kind {
+            ExprKind::QualifiedEnum { value, .. } => Some(value.to_ascii_lowercase()),
+            _ => None,
+        })
+        .filter(|t| crate::program::resolve::index::kind_from_object_type_str(t).is_some())
+        .unwrap_or_default();
 
     // Arg 1: `Codeunit::"Pub"` — several IR shapes depending on grammar parse
     // path — or the object number (`50`), which AL also accepts.
-    let (publisher_name, publisher_id) = match &ir.expr(attr.args[1]).kind {
-        ExprKind::Literal(Literal::Int(n)) => (String::new(), Some(n.trim().parse().ok()?)),
-        _ => (resolve_publisher_name(ir, attr.args[1])?, None),
-    };
+    let (publisher_name, publisher_id) = arg(1)
+        .and_then(|id| match &ir.expr(id).kind {
+            ExprKind::Literal(Literal::Int(n)) => {
+                Some((String::new(), Some(n.trim().parse().ok()?)))
+            }
+            _ => Some((resolve_publisher_name(ir, id)?, None)),
+        })
+        .unwrap_or_default();
 
     // Arg 2: the event name, as a text literal (`'OnAfterX'`) or as an
     // identifier (`OnAfterX`, `"On After X"`); AL accepts both, and real code
     // uses both (35 of CDO's 96 subscriptions name the event as an identifier).
-    let event_name = name_arg_text(ir, attr.args[2])?;
-    if event_name.is_empty() {
-        return None;
-    }
+    // More than the attribute's six arguments is an expression the grammar did
+    // not take as one (`'On' + 'X'` is three items), so the event is unknown.
+    let event_name = arg(2)
+        .filter(|_| attr.args.len() <= 6)
+        .and_then(|id| name_arg_text(ir, id))
+        .unwrap_or_default();
 
     // Arg 3 (optional): element filter, in the same two forms — absent or empty
-    // → None.
-    let element = attr
-        .args
-        .get(3)
-        .and_then(|&id| name_arg_text(ir, id))
-        .filter(|v| !v.is_empty());
+    // → None. On a table's validate event the element says which field's event
+    // this is, so one present but not readable is unknown, not "no element":
+    // no other event's dispatch reads the element.
+    let element = arg(3).and_then(|id| match name_arg_text(ir, id) {
+        Some(v) => Some(v).filter(|v| !v.is_empty()),
+        None if matches!(publisher_object_type.as_str(), "table" | "tableextension")
+            && matches!(
+                event_name.as_str(),
+                "onbeforevalidateevent" | "onaftervalidateevent"
+            ) =>
+        {
+            Some(UNREADABLE_ELEMENT.to_string())
+        }
+        None => None,
+    });
 
     // Arg 4 (optional): skip_on_missing_license; absent → false.
     let skip_on_missing_license = attr
@@ -96,7 +123,7 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
         .get(5)
         .is_some_and(|&id| matches!(&ir.expr(id).kind, ExprKind::Literal(Literal::Bool(true))));
 
-    Some(ParsedSubscriberArgs {
+    ParsedSubscriberArgs {
         publisher_object_type: publisher_object_type.into(),
         publisher_name: publisher_name.into(),
         publisher_id,
@@ -104,8 +131,42 @@ pub fn parse_event_subscriber_ir(attr: &AttributeIr, ir: &Ir) -> Option<ParsedSu
         element: element.map(SharedStr::from),
         skip_on_missing_license,
         skip_on_missing_permission,
-    })
+    }
 }
+
+impl ParsedSubscriberArgs {
+    /// Whether this attribute has a part the engine cannot read: its object
+    /// type, publisher or event name is empty, or a table's validate event
+    /// names a field in no readable form. Such an entry binds no publisher; it
+    /// is a gap for the events its readable parts allow.
+    #[must_use]
+    pub fn is_unreadable(&self) -> bool {
+        self.publisher_object_type.is_empty()
+            || (self.publisher_name.is_empty() && self.publisher_id.is_none())
+            || self.event_name.is_empty()
+            || self.element.as_deref() == Some(UNREADABLE_ELEMENT)
+    }
+
+    /// Whether this unreadable subscription may be the readable `other`: every
+    /// part it could read agrees with `other`.
+    #[must_use]
+    pub fn may_be(&self, other: &ParsedSubscriberArgs) -> bool {
+        let publisher_known = !self.publisher_name.is_empty() || self.publisher_id.is_some();
+        (self.publisher_object_type.is_empty()
+            || self.publisher_object_type == other.publisher_object_type)
+            && (!publisher_known
+                || (self.publisher_id.is_some() && self.publisher_id == other.publisher_id)
+                || (!self.publisher_name.is_empty()
+                    && self.publisher_name == other.publisher_name)
+                // One says a name, the other a number: they may be one object.
+                || (self.publisher_id.is_some() != other.publisher_id.is_some()))
+            && (self.event_name.is_empty() || self.event_name == other.event_name)
+    }
+}
+
+/// `ParsedSubscriberArgs::element` of a table validate event whose field the
+/// engine could not read. Not a field name: AL names have no control character.
+pub const UNREADABLE_ELEMENT: &str = "\u{1}unreadable";
 
 /// The text of an event-name or element argument, unquoted and folded: a text
 /// literal (`'OnAfterX'`) or an identifier (`OnAfterX` / `"On After X"`).
@@ -125,7 +186,6 @@ fn name_arg_text(ir: &Ir, id: ExprId) -> Option<String> {
 /// - `DatabaseReference("Codeunit::\"Pub\"")` — split on `::`, strip quotes on RHS
 /// - `Member { member: "\"Pub\"", .. }`        — strip quotes from member text
 /// - `QualifiedEnum { value, .. }`              — already unquoted by `ident_text`
-/// - `Identifier` / `QuotedIdentifier`          — strip quotes, lowercase
 fn resolve_publisher_name(ir: &Ir, id: ExprId) -> Option<String> {
     match &ir.expr(id).kind {
         ExprKind::DatabaseReference(t) => {
@@ -137,9 +197,8 @@ fn resolve_publisher_name(ir: &Ir, id: ExprId) -> Option<String> {
         }
         ExprKind::Member { member, .. } => Some(strip_al_string(member).fold_identifier()),
         ExprKind::QualifiedEnum { value, .. } => Some(value.fold_identifier()),
-        ExprKind::Identifier(s) | ExprKind::QuotedIdentifier(s) => {
-            Some(strip_al_string(s).fold_identifier())
-        }
+        // A bare identifier (no `Codeunit::`) names no object the way AL
+        // writes one, so it is read as unreadable, not as an object name.
         _ => None,
     }
 }

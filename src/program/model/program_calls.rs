@@ -332,6 +332,18 @@ impl SiteCensus {
     }
 }
 
+/// The separator of a dataset operation's id: `<call site id>/dataset<n>`
+/// (B6, `Converter::dataset_operations`).
+const DATASET_OP: &str = "/dataset";
+
+/// The call site whose object run performs the dataset operation `op_id`;
+/// `None` for any other record operation.
+#[must_use]
+pub(crate) fn dataset_op_callsite(op_id: &str) -> Option<&str> {
+    let (site, n) = op_id.rsplit_once(DATASET_OP)?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(site)
+}
+
 /// The span of a model anchor, its unit spelled as the model spells it (the
 /// `ws:` prefix dropped): an unmatched site's location, and the model side of
 /// the span debug assertion.
@@ -465,7 +477,8 @@ pub(crate) fn resolved_calls_from_program(
     rows: &crate::program::model::workspace::ModelRows,
     upgrade_dependency_bindings: bool,
 ) -> (ResolvedCalls, SiteCensus) {
-    adapter(view, ctx, rows, upgrade_dependency_bindings, None, None)
+    let (calls, census, _) = adapter(view, ctx, rows, upgrade_dependency_bindings, None, None);
+    (calls, census)
 }
 
 /// #160 steps 10 + 11a (§4.3, §4.5, §4.7, §4.8): [`resolved_calls_from_program`]
@@ -479,7 +492,8 @@ pub(crate) fn resolved_calls_from_rows(
     upgrade_dependency_bindings: bool,
     demand: Option<&HashSet<RoutineNodeId>>,
 ) -> (ResolvedCalls, SiteCensus) {
-    adapter(view, ctx, rows, upgrade_dependency_bindings, None, demand)
+    let (calls, census, _) = adapter(view, ctx, rows, upgrade_dependency_bindings, None, demand);
+    (calls, census)
 }
 
 /// The join's census alone (no conversion, no `adapter_*` counts), under
@@ -531,7 +545,7 @@ fn attach_program_calls_with(
     SiteCensus,
 ) {
     use crate::engine::perf_trace as pt;
-    let (calls, census) = {
+    let (calls, census, dataset_ops) = {
         let _s = pt::span("b3", "b3.adapter");
         let body = program.body();
         adapter(body.edge_view(), &body.ctx, &rows, true, abi_rows, demand)
@@ -563,6 +577,11 @@ fn attach_program_calls_with(
     for r in &mut rows.workspace.routines {
         r.file = None;
         r.site_exprs = crate::program::site_key::SiteExprs::default();
+    }
+    // B6: the platform's dataset operations join their call site's row, after
+    // the operations written in code (no site key: the site keys end above).
+    for (ri, ops) in dataset_ops {
+        rows.workspace.routines[ri].record_operations.extend(ops);
     }
     // The pages that block a user's record operation, from the graph (the
     // sited graph's page lifecycle reads the same function).
@@ -791,6 +810,85 @@ pub fn assemble_and_resolve_inline_program_reversed_groups(
             AssemblyNeeds::BASE,
         )
         .unwrap_or_else(|| panic!("model assembly failed for inline workspace {app_guid}"));
+    attach_program_calls(rows, program).0
+}
+
+/// [`assemble_and_resolve_inline_program_default`] with the #160 step 11b
+/// collided-id contract stated BY ASSIGNMENT: before `RowNodes` and the attach,
+/// every row of a collision group has its site ids renumbered from 0
+/// ([`crate::program::model::workspace::share_collided_site_ids`]), so the rows
+/// of one id share `{id}/op0`, `{id}/cs0`, … as two declarations numbered on
+/// their own would. Production gives each `#if` arm its own ids (engine limits
+/// B2); this is how a test states a collision of site ids. `reversed` also
+/// reverses each group's rows (as
+/// [`assemble_and_resolve_inline_program_reversed_groups`]). Test entry.
+///
+/// A group whose later rows mint no site renumbers nothing; a test that needs
+/// shared sites asserts them on the rows it reads.
+///
+/// # Panics
+/// On a failed build.
+#[doc(hidden)]
+#[must_use]
+pub fn assemble_and_resolve_inline_program_shared_site_ids(
+    files: &[(String, String)],
+    app_guid: &str,
+    reversed: bool,
+) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
+    assemble_and_resolve_workspace_program_shared_site_ids(
+        &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
+        true,
+        reversed,
+    )
+}
+
+/// The single-app model of `inputs` with the #160 step 11b shared site ids
+/// stated by assignment, as
+/// [`assemble_and_resolve_inline_program_shared_site_ids`] states them. Test
+/// entry.
+///
+/// # Panics
+/// On a failed build.
+#[doc(hidden)]
+#[must_use]
+pub fn assemble_and_resolve_workspace_program_shared_site_ids(
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    skip_roots_config: bool,
+    reversed: bool,
+) -> crate::program::model::workspace::Model {
+    use crate::program::model::workspace::{
+        assemble_and_resolve_workspace_from_program_edited, share_collided_site_ids,
+    };
+    let program = ResolvedProgram::build(inputs, ProgramScope::Workspace)
+        .unwrap_or_else(|_| panic!("program build failed for the workspace"));
+    let rows = assemble_and_resolve_workspace_from_program_edited(
+        inputs,
+        skip_roots_config,
+        &program.body().ctx,
+        &program.body().parenless_calls,
+        AssemblyNeeds::BASE,
+        |ws, node_of| {
+            share_collided_site_ids(&mut ws.routines);
+            if reversed {
+                let mut by_id: std::collections::HashMap<String, Vec<usize>> =
+                    std::collections::HashMap::new();
+                for (ri, r) in ws.routines.iter().enumerate() {
+                    by_id.entry(r.id.clone()).or_default().push(ri);
+                }
+                for rows in by_id.values().filter(|rows| rows.len() > 1) {
+                    let (mut i, mut j) = (0, rows.len() - 1);
+                    while i < j {
+                        ws.routines.swap(rows[i], rows[j]);
+                        node_of.swap(rows[i], rows[j]);
+                        i += 1;
+                        j -= 1;
+                    }
+                }
+            }
+        },
+    )
+    .unwrap_or_else(|| panic!("model assembly failed for the workspace"));
     attach_program_calls(rows, program).0
 }
 
@@ -1156,7 +1254,7 @@ fn adapter(
     upgrade_dependency_bindings: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
     demand: Option<&HashSet<RoutineNodeId>>,
-) -> (ResolvedCalls, SiteCensus) {
+) -> (ResolvedCalls, SiteCensus, DatasetOps) {
     use crate::engine::perf_trace as pt;
     let j = {
         let _s = pt::span("b3", "b3.adapter.join");
@@ -1473,7 +1571,7 @@ fn convert<'a>(
     row_nodes: &'a crate::program::model::workspace::RowNodes,
     upgrade_dependency_bindings: bool,
     abi_rows: Option<&crate::program::model::workspace::AbiRowIds>,
-) -> (ResolvedCalls, SiteCensus) {
+) -> (ResolvedCalls, SiteCensus, DatasetOps) {
     use crate::engine::perf_trace as pt;
     let mut c = j.census;
     let surface = ctx.decl_surface();
@@ -1561,19 +1659,29 @@ fn convert<'a>(
             _ => None,
         })
         .collect();
-    let event_flow: HashMap<&RoutineNodeId, &ClassifiedEdge> = if table_event_edges.is_empty() {
-        HashMap::new()
-    } else {
-        view.all_edges()
-            .filter_map(|ce| match &ce.obligation_id {
-                ObligationId::Publisher(p) => Some((p, ce)),
-                _ => None,
-            })
-            .collect()
-    };
+    // B6: a dataset insert or modify raises table events too.
+    let dataset_events = view.site_facts.iter().any(|(_, f)| {
+        f.dataset_run
+            .as_ref()
+            .is_some_and(|r| r.effects.iter().any(|e| !e.table_events.is_empty()))
+    });
+    let event_flow: HashMap<&RoutineNodeId, &ClassifiedEdge> =
+        if table_event_edges.is_empty() && !dataset_events {
+            HashMap::new()
+        } else {
+            view.all_edges()
+                .filter_map(|ce| match &ce.obligation_id {
+                    ObligationId::Publisher(p) => Some((p, ce)),
+                    _ => None,
+                })
+                .collect()
+        };
     let mut background_starts: HashMap<String, BackgroundStart> = HashMap::new();
+    let mut dataset_ops: Vec<(usize, Vec<ModelRecordOperation>)> = Vec::new();
+    let mut dataset_edges: Vec<CallEdge> = Vec::new();
     // Call sites in routine order, then the implicit-trigger edges in
-    // routine/op order (the legacy resolver's order).
+    // routine/op order (the legacy resolver's order), then the dataset
+    // operations' trigger and table-event edges (B6).
     for (ri, r) in ws.routines.iter().enumerate() {
         let ix = RoutineIx::of(ri);
         for (ci, cs) in r.call_sites.iter().enumerate() {
@@ -1604,6 +1712,17 @@ fn convert<'a>(
             };
             edges.extend(site_edges);
             bindings_per_site.push((cs.id.clone(), bindings));
+            // B6: the platform's own operations on the run object's dataset.
+            if let Some(run) = program_edge
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .and_then(|f| f.dataset_run.as_ref())
+            {
+                let (ops, op_edges) = conv.dataset_operations(ix, r, cs, run, &event_flow, &mut c);
+                dataset_edges.extend(op_edges);
+                if !ops.is_empty() {
+                    dataset_ops.push((ri, ops));
+                }
+            }
         }
     }
     for (ri, r) in ws.routines.iter().enumerate() {
@@ -1629,6 +1748,7 @@ fn convert<'a>(
             }
         }
     }
+    edges.extend(dataset_edges);
     let upgraded_bindings = super::projection::last_per_key_pairs(bindings_per_site);
     (
         ResolvedCalls {
@@ -1639,8 +1759,14 @@ fn convert<'a>(
             background_starts: std::sync::Arc::new(background_starts),
         },
         c,
+        dataset_ops,
     )
 }
+
+/// B6: per row index, the platform's dataset operations of its call sites
+/// ([`Converter::dataset_operations`]), for [`attach_program_calls`] to append
+/// to the row's `record_operations`.
+type DatasetOps = Vec<(usize, Vec<ModelRecordOperation>)>;
 
 /// Where a route's target lives relative to the model (engine-switch S7.3).
 enum Target<'a> {
@@ -1882,6 +2008,11 @@ impl<'a> Converter<'a> {
             PCallee::ObjectRun { object_kind, .. } => object_run_dispatch_kind(object_kind),
             PCallee::Unknown => DispatchKind::Unresolved,
         };
+        // B4: the resolver's one rule for a call that starts an object.
+        e.starts_object = self
+            .site_facts
+            .get(&ce.obligation_id)
+            .map_or_else(Default::default, |f| f.starts_object);
         let external = if is_run {
             Resolution::Opaque
         } else {
@@ -1949,10 +2080,24 @@ impl<'a> Converter<'a> {
             }
             return Some((edges, state.bindings));
         }
+        // A direct call to a split subscriber: one edge per declaration
+        // (`split_decls`), each a possible build.
+        if edge.shape == DispatchShape::Exact
+            && edge.routes.len() > 1
+            && self.routes_are_declarations_of_one_routine(&edge.routes)
+        {
+            let mut edges = Vec::with_capacity(edge.routes.len());
+            for route in &edge.routes {
+                let mut one = e.clone();
+                self.route_into(&mut one, route, cs, ce, external, is_run, &mut state, c)?;
+                edges.push(one);
+            }
+            return Some((edges, state.bindings));
+        }
         // S3.6: no route is cut. A call edge with several routes outside an
-        // interface or a run (the resolver makes none today: `Exact` has one
-        // route) converts as the closed candidate set it is, never as its
-        // first route.
+        // interface or a run (the resolver makes none today but the split
+        // above: `Exact` has one route) converts as the closed candidate set
+        // it is, never as its first route.
         let shape = match edge.shape {
             DispatchShape::Exact if edge.routes.len() > 1 => {
                 c.adapter_multi_route_sites += 1;
@@ -2035,6 +2180,22 @@ impl<'a> Converter<'a> {
         Some((vec![e], state.bindings))
     }
 
+    /// Whether every route is a declaration of one split routine.
+    fn routes_are_declarations_of_one_routine(
+        &self,
+        routes: &[crate::program::resolve::edge::Route],
+    ) -> bool {
+        let declarations = &self.graph.workspace_rows.declarations;
+        let base = |r: &crate::program::resolve::edge::Route| match &r.target {
+            RouteTarget::Routine(id) => declarations.base_of(id).map(|(b, _)| b.clone()),
+            _ => None,
+        };
+        let Some(first) = routes.first().and_then(base) else {
+            return false;
+        };
+        routes.iter().all(|r| base(r).as_ref() == Some(&first))
+    }
+
     /// One route of a call site into `e`: its callee, resolution and kind.
     /// `None` when a workspace callee has no L3 routine (the caller falls back
     /// to L3).
@@ -2057,6 +2218,18 @@ impl<'a> Converter<'a> {
                 let _ = upgrade_bindings(state, callee, &cs.id);
                 e.to = Some(callee.id.clone());
                 e.resolution = Resolution::Resolved;
+                // B6 round 2: a run reaches a per-record trigger (a report's
+                // `OnAfterGetRecord`, …) that may not run at all. A call site
+                // reaches a trigger only through a run.
+                if callee.kind == "trigger"
+                    && crate::program::resolve::resolver::run_trigger_may_not_run(
+                        id.object.kind,
+                        id.name_lc.as_str(),
+                        id.enclosing_member_lc.is_some(),
+                    )
+                {
+                    e.fires = Some(crate::engine::l4::combined_graph::TriggerFires::Maybe);
+                }
                 if let PCallee::Member { method, .. } = &cs.callee {
                     if method.fold_identifier() == "run"
                         && id.object.kind == al_syntax::ir::ObjectKind::Codeunit
@@ -2456,6 +2629,164 @@ impl<'a> Converter<'a> {
         ce: &ClassifiedEdge,
         c: &mut SiteCensus,
     ) -> Vec<CallEdge> {
+        self.trigger_edges(ix, r, op, &ce.edge.routes, c)
+    }
+
+    /// B6 (engine limits L20): the record operations the platform performs
+    /// when call site `cs` runs a report, XmlPort or query (`run`, the
+    /// resolver's [`crate::program::resolve::dataset::DatasetRun`]), each
+    /// anchored at the call site with its reason, plus the trigger and
+    /// table-event edges each insert or modify reaches. An operation on an item
+    /// whose table does not resolve, or of an object whose dataset is not known,
+    /// has no table: every answer reads it as "table not resolved", never "no".
+    #[allow(clippy::too_many_arguments)]
+    fn dataset_operations(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        cs: &PCallSite,
+        run: &crate::program::resolve::dataset::DatasetRun,
+        event_flow: &HashMap<&RoutineNodeId, &ClassifiedEdge>,
+        c: &mut SiteCensus,
+    ) -> (Vec<ModelRecordOperation>, Vec<CallEdge>) {
+        use crate::program::body::features::PTempState;
+        let object_text = |id: &ObjectNodeId| match self.graph.object(id) {
+            Some(o) => format!(
+                "{} \"{}\"",
+                crate::program::body::ir_walk::ir_object_type(&id.kind).unwrap_or("Object"),
+                o.name
+            ),
+            None => format!("{:?}", id.kind),
+        };
+        let run_text = object_text(&run.object);
+        let (mut ops, mut edges) = (Vec::new(), Vec::new());
+        for (n, e) in run.effects.iter().enumerate() {
+            let owner = self.graph.object(&e.owner);
+            let item = e.item.and_then(|i| owner.map(|o| &o.dataset.items[i]));
+            let table_name = e
+                .table
+                .as_ref()
+                .and_then(|t| self.graph.object(t))
+                .map(|t| format!("\"{}\"", t.name));
+            let verb = match e.op {
+                "Insert" => "imports into",
+                "Modify" => "updates",
+                "Get" => "looks up",
+                _ => "reads",
+            };
+            let reason = match (item, &table_name) {
+                (Some(it), Some(t)) => {
+                    let what = match it.kind {
+                        crate::program::node_extract::DatasetItemKind::XmlPortTableElement => {
+                            "tableelement"
+                        }
+                        _ => "dataitem",
+                    };
+                    let from = if e.owner == run.object {
+                        String::new()
+                    } else {
+                        format!(" of {}", object_text(&e.owner))
+                    };
+                    let property = e.property.map(|p| format!(", {p}")).unwrap_or_default();
+                    format!(
+                        "{run_text} {verb} table {t} ({what} {}{from}{property})",
+                        it.name
+                    )
+                }
+                (Some(it), None) => format!(
+                    "{run_text} {verb} the table of {}, which does not resolve",
+                    it.name
+                ),
+                (None, _) => {
+                    let why = match owner {
+                        Some(o) if !o.dataset.known => "the symbol data has no dataitems",
+                        _ => "its file did not parse cleanly",
+                    };
+                    let whose = if e.owner == run.object {
+                        String::new()
+                    } else {
+                        format!(" ({})", object_text(&e.owner))
+                    };
+                    format!(
+                        "{run_text} {verb} tables its dataset names, and its dataset{whose} is \
+                         not known ({why})"
+                    )
+                }
+            };
+            let table_id = e.table.as_ref().and_then(|t| match &t.key {
+                crate::program::node::ObjKey::Id(number) => {
+                    Some(crate::engine::ids::encode_table_id(
+                        &self.graph.apps.resolve(t.app).guid,
+                        *number,
+                    ))
+                }
+                crate::program::node::ObjKey::Name(_) => None,
+            });
+            let temp_state = match e.temporary {
+                Some(v) => PTempState {
+                    kind: "known".to_string(),
+                    value: Some(v),
+                    parameter_index: None,
+                },
+                None => PTempState {
+                    kind: "unknown".to_string(),
+                    value: None,
+                    parameter_index: None,
+                },
+            };
+            let op = ModelRecordOperation {
+                // Read back by [`dataset_op_callsite`].
+                id: format!("{}{DATASET_OP}{n}", cs.id),
+                op: e.op.to_string(),
+                // Names the item, never a variable of the routine: no code
+                // declares it (a quote and a dot keep it from matching one).
+                record_variable_name: match item {
+                    Some(it) => format!("{}.{}", object_text(&e.owner), it.name),
+                    None => run_text.clone(),
+                },
+                record_variable_id: None,
+                table_id,
+                temp_state: Some(temp_state),
+                field_arguments: None,
+                source_anchor: cs.source_anchor.clone(),
+                loop_stack: cs.loop_stack.clone(),
+                field_argument_infos: None,
+                in_until_condition: false,
+                in_statement_position: false,
+                run_trigger: None,
+                modify_all_field: None,
+                transfer_fields_source: None,
+                receiver_is_record_ref: false,
+                // A report column bound to a FlowField calculates it, but the
+                // dataset columns are not read yet (engine limits L19, left 1).
+                flow_field_reads: Vec::new(),
+                dataset_reason: Some(reason),
+            };
+            edges.extend(self.trigger_edges(ix, r, &op, &e.triggers, c));
+            edges.extend(self.table_event_edges(
+                ix,
+                r,
+                &op,
+                &e.table_events,
+                crate::program::table_event_guard::RaiseContext::default(),
+                event_flow,
+                c,
+            ));
+            ops.push(op);
+        }
+        (ops, edges)
+    }
+
+    /// [`Self::triggers`] over the trigger `routes` of `op`: the program
+    /// edge's, or a dataset operation's (B6, [`Self::dataset_operations`]).
+    fn trigger_edges(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        op: &ModelRecordOperation,
+        routes: &[Route],
+        c: &mut SiteCensus,
+    ) -> Vec<CallEdge> {
         let is_validate = op.op.fold_identifier() == "validate";
         let field_lc = if is_validate {
             // The validated field: its first argument, quotes stripped, doubled
@@ -2473,7 +2804,7 @@ impl<'a> Converter<'a> {
             None
         };
         let mut tos: Vec<String> = Vec::new();
-        for route in &ce.edge.routes {
+        for route in routes {
             // S3.6: a trigger outside the model (a dependency table's, in a
             // single-app model) keeps its identity and body state, but gets no
             // edge, and L3 never had an edge for it either. Whether such a
@@ -2574,6 +2905,30 @@ impl Converter<'_> {
         let Some(te) = table_event_edges.get(&(caller, span, *callee_fp)) else {
             return Vec::new();
         };
+        // What the site proves about the dispatch (`table_event_guard`): the
+        // program resolver's declared-temporary / RunTrigger reading.
+        let raise = self
+            .site_facts
+            .get(&ce.obligation_id)
+            .and_then(|f| f.table_event_raise)
+            .unwrap_or_default();
+        self.table_event_edges(ix, r, op, &te.edge.routes, raise, event_flow, c)
+    }
+
+    /// [`Self::table_events`] over the platform-event `publishers` op raises
+    /// and what its site proves (`raise`): the program edge's, or a dataset
+    /// operation's (B6, [`Self::dataset_operations`]).
+    #[allow(clippy::too_many_arguments)]
+    fn table_event_edges(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        op: &ModelRecordOperation,
+        publishers: &[Route],
+        mut raise: crate::program::table_event_guard::RaiseContext,
+        event_flow: &HashMap<&RoutineNodeId, &ClassifiedEdge>,
+        c: &mut SiteCensus,
+    ) -> Vec<CallEdge> {
         let op_lc = op.op.fold_identifier();
         let field_lc = (op_lc == "validate").then(|| {
             op.field_arguments
@@ -2585,15 +2940,8 @@ impl Converter<'_> {
                         .fold_identifier()
                 })
         });
-        // What the site proves about the dispatch (`table_event_guard`): the
-        // program resolver's declared-temporary / RunTrigger reading, plus the
-        // model's own temp state of the op (a `TableType = Temporary` table, an
-        // entry guard, a RecordRef opened temporary, …).
-        let mut raise = self
-            .site_facts
-            .get(&ce.obligation_id)
-            .and_then(|f| f.table_event_raise)
-            .unwrap_or_default();
+        // Plus the model's own temp state of the op (a `TableType = Temporary`
+        // table, an entry guard, a RecordRef opened temporary, …).
         let known_temp = op
             .temp_state
             .as_ref()
@@ -2607,7 +2955,7 @@ impl Converter<'_> {
             crate::engine::l4::combined_graph::TriggerFires::Always
         };
         let mut out: Vec<(String, String, bool)> = Vec::new();
-        for publisher in &te.edge.routes {
+        for publisher in publishers {
             let RouteTarget::Routine(pid) = &publisher.target else {
                 continue;
             };

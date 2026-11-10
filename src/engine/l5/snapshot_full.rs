@@ -2701,6 +2701,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             routine_order_frames: None,
             pd_solution: PdArena::default(),
             boundary: None,
+            commit_scopes: Default::default(),
         }
     }
 
@@ -3430,6 +3431,7 @@ page 50818 "T5 I-3 Wizard Alpha"
                 from: from.clone(),
                 to: to.clone(),
                 receiver_type: s("Codeunit X"),
+                fires: None,
                 source_anchor: anchor.clone(),
                 edge_id: eid.clone(),
             },
@@ -3450,6 +3452,7 @@ page 50818 "T5 I-3 Wizard Alpha"
                 to: to.clone(),
                 target_object: format!("{P}:Codeunit:1"),
                 object_type: s("Codeunit"),
+                fires: None,
                 source_anchor: anchor.clone(),
                 edge_id: eid.clone(),
             },

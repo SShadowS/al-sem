@@ -16,11 +16,11 @@ Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
   callers: 2 direct — 1 routine: Codeunit "Explain Tests"::PostUnreleasedFails; 1 page action in 1 object (--detail lists them); 1 page action reaches it in all (directly or through callers)
     reached from page action Page "Explain Order Card".action(Post "P&ost") at ws:src/card.al:19
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
+    Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18; runs: no OnModify trigger run; no table-event subscriber loaded
   events raised (1 in workspace code, its own and downstream): Codeunit "Explain Post": OnBeforePostOrder; 0 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
-  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (0 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated)
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (0 guards on the route, 0 evaluated; 1 earlier exit, 0 evaluated); ERROR_IMPLICIT at ws:src/post.al:18 (0 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated); ERROR_THROW at ws:src/post.al:11 (1 guard on the route, 0 evaluated)
+  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (0 guards, 2 earlier exits on the route; 1 exit evaluated)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (0 guards, 1 earlier exit on the route; none evaluated), line 18 (0 guards, 2 earlier exits on the route; 1 exit evaluated); ERROR_THROW at ws:src/post.al:11 (1 guard on the route, 0 evaluated)
   test Codeunit "Explain Tests"::PostUnreleasedFails (3 own assert(s))
   next: alsem explain --callers-context --routine 'Codeunit "Explain Post"::PostOrder' — its callers' pending writes, intercepted errors and non-interactive entries
 
@@ -36,7 +36,7 @@ Codeunit "Explain Post"::Archive  defined at ws:src/post.al:23
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/post.al:27 (unconditional on success)
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
+    Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26; runs: no OnModify trigger run; no table-event subscriber loaded
   errors at 1 place: ERROR_IMPLICIT at ws:src/post.al:26 (unconditional on success)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
 

@@ -1792,6 +1792,25 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
 /// other. The workspace raises both events through the dependency's `RaiseA`
 /// and `RaiseB`.
 fn if_dup_dependency_workspace(dir: &Path) {
+    if_dup_dependency_workspace_with(dir, false);
+}
+
+/// [`if_dup_dependency_workspace`], or (`alike`) with BOTH arms subscribing
+/// `OnA` and `OnB`: declarations that subscribe alike keep one routine id
+/// (engine limits B2, wave 2 final review: declarations that subscribe
+/// differently are split into one routine each).
+fn if_dup_dependency_workspace_with(dir: &Path, alike: bool) {
+    let (first, second) = if alike {
+        (
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnB', '', false, false)]\n",
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnB', '', false, false)]\n",
+        )
+    } else {
+        (
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n",
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnB', '', false, false)]\n",
+        )
+    };
     write(
         &dir.join("app.json"),
         &format!(
@@ -1813,8 +1832,9 @@ fn if_dup_dependency_workspace(dir: &Path) {
         &symbols,
         &[(
             "src/Pub.al",
-            r#"codeunit 50171 "Dep Pub"
-{
+            format!(
+                r#"codeunit 50171 "Dep Pub"
+{{
     procedure RaiseA()
     begin
         OnA();
@@ -1836,20 +1856,20 @@ fn if_dup_dependency_workspace(dir: &Path) {
     end;
 
 #if XSYM
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
-    local procedure H()
+{first}    local procedure H()
     begin
         Commit();
     end;
 #else
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnB', '', false, false)]
-    local procedure H()
+{second}    local procedure H()
     begin
         Commit();
     end;
 #endif
-}
-"#,
+}}
+"#
+            )
+            .as_str(),
         )],
         "",
     );
@@ -1886,9 +1906,11 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         .collect();
     assert_eq!(h.len(), 2, "precondition: two rows for H");
     let node = |ri: usize| rows.row_nodes.node_of[ri].clone();
+    // Engine limits B2: arms that subscribe differently are one node each
+    // (`split_decls`).
     assert!(
-        node(h[0]).is_some() && node(h[0]) == node(h[1]),
-        "precondition: both H rows map to one node"
+        node(h[0]).is_some() && node(h[1]).is_some() && node(h[0]) != node(h[1]),
+        "precondition: each H row maps to its own node"
     );
     let m = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE)
         .expect("model")
@@ -1935,12 +1957,15 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
 /// does not know) before the production `program_event_graph` runs
 /// (`cross_app_event_graph_after`). H still gets each of its edges exactly
 /// once, from its second row. Break 8 (mark an id processed before its row
-/// maps) loses both edges.
+/// maps) loses both edges. Both arms subscribe `OnA` and `OnB` here, so they
+/// keep one routine id (engine limits B2, wave 2 final review: arms that
+/// subscribe differently are split into one routine each, and no longer share
+/// the id this guard is about).
 #[test]
 fn a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once() {
     use al_sem::program::model::program_calls::cross_app_event_graph_after;
     let dir = tempfile::tempdir().unwrap();
-    if_dup_dependency_workspace(dir.path());
+    if_dup_dependency_workspace_with(dir.path(), true);
     let mut h_ids: Vec<String> = Vec::new();
     let graph = cross_app_event_graph_after(&read(dir.path()), |rows| {
         let h: Vec<usize> = rows
@@ -2212,6 +2237,12 @@ fn event_graph_reads_node_of() {
 /// row: `op0` is arm B's (its top-level frame), `op1` arm A's (the only owner),
 /// and every op's frame is in the entry. Break: today's pairing (frames LAST,
 /// ops FIRST). Stage B.
+///
+/// Engine limits B2 (per-arm ids): production numbers arm B's op after arm
+/// A's, so the arms no longer share `op0`. The shared ids this test is about are
+/// stated BY ASSIGNMENT on the model's rows
+/// (`workspace::share_collided_site_ids`) before the artifacts are built; `Work`
+/// has no call site, so no call edge carries an id the assignment changes.
 #[test]
 fn dep_order_index_pairs_frames_and_ops_of_one_row() {
     use al_sem::engine::deps::dep_artifact_l4::{
@@ -2272,7 +2303,7 @@ codeunit 50172 "Dep Ord"
         )],
         "",
     );
-    let x = assemble_and_resolve_cross_app_program(&read(dir), false, BASE).expect("model");
+    let mut x = assemble_and_resolve_cross_app_program(&read(dir), false, BASE).expect("model");
     let rows: Vec<usize> = x
         .resolved
         .workspace
@@ -2283,6 +2314,12 @@ codeunit 50172 "Dep Ord"
         .map(|(ri, _)| ri)
         .collect();
     assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    assert!(
+        rows.iter()
+            .all(|&ri| x.resolved.workspace.routines[ri].call_sites.is_empty()),
+        "precondition: Work makes no call (no call edge holds its site ids)"
+    );
+    al_sem::program::model::workspace::share_collided_site_ids(&mut x.resolved.workspace.routines);
     let row = |ri: usize| &x.resolved.workspace.routines[ri];
     let id = row(rows[0]).id.clone();
     assert_eq!(row(rows[1]).id, id, "precondition: one id");
@@ -2293,6 +2330,11 @@ codeunit 50172 "Dep Ord"
         ),
         (2, 1),
         "precondition: arm A has two record ops, arm B (the last row) one"
+    );
+    assert_eq!(
+        row(rows[0]).record_operations[0].id,
+        row(rows[1]).record_operations[0].id,
+        "precondition (by assignment): both arms own op0"
     );
     let arts = dep_artifacts_from_model(&x);
     let mut consumer = ConsumerModel::with_routine_ids(

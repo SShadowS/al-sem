@@ -723,17 +723,25 @@ pub fn compute_ordering(
                 .unwrap_or(false);
 
         // Rules 2-4 signals: any TryFunction/Error on chain; any Ignore.
+        // Engine limits B2: a TryFunction or CommitBehavior only some builds
+        // declare proves nothing either way (`maybe_declared`).
         let mut found_try_or_error = false;
         let mut found_ignore = false;
+        let mut maybe_declared = false;
         for r_id in &chain_routine_ids {
             let Some(summary) = summaries.get(r_id) else {
                 continue;
             };
-            if summary.has_try_function_boundary || summary.commit_behavior == "error" {
+            let definite_try =
+                summary.has_try_function_boundary && !summary.try_function_conditional;
+            if definite_try || summary.commit_behavior == "error" {
                 found_try_or_error = true;
             }
             if summary.commit_behavior == "ignore" {
                 found_ignore = true;
+            }
+            if summary.try_function_conditional || summary.commit_behavior == "conditional" {
+                maybe_declared = true;
             }
         }
 
@@ -742,6 +750,7 @@ pub fn compute_ordering(
             commit_not_on_success_path,
             found_try_or_error,
             found_ignore,
+            maybe_declared,
             chain_complete,
             commit_root_trusted,
             is_multi_path,
@@ -1542,6 +1551,9 @@ pub fn compute_ordering(
 /// the precomputed signals. Priority (first match wins):
 /// - commit op not on a success path → proven_errors (rule 1)
 /// - any TryFunction boundary OR CommitBehavior::Error on chain → proven_errors (rules 2/3)
+/// - a TryFunction or CommitBehavior only some builds declare on chain →
+///   assumed_effective (engine limits B2: a build with it may suppress or error
+///   the commit, a build without it may not, so nothing is proven)
 /// - any CommitBehavior::Ignore on chain → proven_suppressed (rule 4)
 /// - clean + complete + trusted + single-path → proven_effective (rule 5)
 /// - otherwise → assumed_effective (rule 6)
@@ -1549,6 +1561,7 @@ fn grade_commit_rules(
     commit_not_on_success_path: bool,
     found_try_or_error: bool,
     found_ignore: bool,
+    maybe_declared: bool,
     chain_complete: bool,
     commit_root_trusted: bool,
     is_multi_path: bool,
@@ -1558,6 +1571,9 @@ fn grade_commit_rules(
     }
     if found_try_or_error {
         return "proven_errors";
+    }
+    if maybe_declared {
+        return "assumed_effective";
     }
     if found_ignore {
         return "proven_suppressed";
@@ -1684,37 +1700,47 @@ mod tests {
     fn grade_commit_rules_priority() {
         // Rule 1: not-on-success-path beats everything → proven_errors.
         assert_eq!(
-            grade_commit_rules(true, false, true, true, true, false),
+            grade_commit_rules(true, false, true, false, true, true, false),
             "proven_errors"
         );
         // Rule 2/3: TryFunction/Error → proven_errors (beats Ignore).
         assert_eq!(
-            grade_commit_rules(false, true, true, true, true, false),
+            grade_commit_rules(false, true, true, false, true, true, false),
             "proven_errors"
+        );
+        // B2: a declaration only some builds have beats Ignore and the clean
+        // promotion → assumed_effective.
+        assert_eq!(
+            grade_commit_rules(false, false, true, true, true, true, false),
+            "assumed_effective"
+        );
+        assert_eq!(
+            grade_commit_rules(false, false, false, true, true, true, false),
+            "assumed_effective"
         );
         // Rule 4: Ignore → proven_suppressed (beats the clean promotion).
         assert_eq!(
-            grade_commit_rules(false, false, true, true, true, false),
+            grade_commit_rules(false, false, true, false, true, true, false),
             "proven_suppressed"
         );
         // Rule 5: clean + complete + trusted + single-path → proven_effective.
         assert_eq!(
-            grade_commit_rules(false, false, false, true, true, false),
+            grade_commit_rules(false, false, false, false, true, true, false),
             "proven_effective"
         );
         // Cap: multi-path blocks proven_effective → assumed_effective.
         assert_eq!(
-            grade_commit_rules(false, false, false, true, true, true),
+            grade_commit_rules(false, false, false, false, true, true, true),
             "assumed_effective"
         );
         // Cap: untrusted root blocks proven_effective → assumed_effective.
         assert_eq!(
-            grade_commit_rules(false, false, false, true, false, false),
+            grade_commit_rules(false, false, false, false, true, false, false),
             "assumed_effective"
         );
         // Cap: incomplete chain blocks proven_effective → assumed_effective.
         assert_eq!(
-            grade_commit_rules(false, false, false, false, true, false),
+            grade_commit_rules(false, false, false, false, false, true, false),
             "assumed_effective"
         );
     }
@@ -1739,6 +1765,7 @@ mod tests {
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
+            commit_scopes: Default::default(),
         }
     }
 

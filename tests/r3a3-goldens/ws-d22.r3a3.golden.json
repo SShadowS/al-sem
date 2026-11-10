@@ -124,6 +124,23 @@
 							"value": false
 						}
 					}
+				},
+				{
+					"op": "read",
+					"resourceKind": "table",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"resourceId": "11111111-0000-0000-0000-00000000d220:Table:50801",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#b0a37a5e282ed0a6539e462070e7e4488ba29159ac07a06be9ea941079ae843c/op1",
+					"extra": {
+						"kind": "table",
+						"opSubtype": "CalcFields",
+						"tempState": {
+							"kind": "known",
+							"value": false
+						}
+					}
 				}
 			],
 			"capabilityFactsInherited": [],

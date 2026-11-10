@@ -14,8 +14,8 @@ Codeunit "Calls Post"::QuickPost  defined at ws:src/post.al:18
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
   inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:15]
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
-    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:25; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
-  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:25 (unconditional on success); ERROR_THROW at ws:src/checks.al:6 (1 guard on the route, 0 evaluated); ERROR_THROW at ws:src/checks.al:15 (1 guard on the route, 0 evaluated; 1 earlier exit, 0 evaluated)
+    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:25; runs: no OnModify trigger run; no table-event subscriber loaded
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:25 (unconditional on success); ERROR_THROW at ws:src/checks.al:6 (1 guard on the route, 0 evaluated), line 15 (1 guard, 1 earlier exit on the route; none evaluated)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   gaps in workspace code (3 gaps):
     gap: error-collector (callee Codeunit "Error Message Management"::LogSimpleError, routine Codeunit "Calls Checks"::LogIfBlocked) at ws:src/checks.al:53

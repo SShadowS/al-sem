@@ -316,7 +316,8 @@ impl<'a> GroupPaths<'a> {
     fn step(&self, reach: &LiteralReach<'a>, s: &Step<'a>) -> WitnessStep {
         let (edge_id, anchor) = match s.site {
             Some(EdgeSite::Guarded(id)) => {
-                let caller = reach.routine(s.from);
+                // Engine limits B2: the caller row (`#if` arm) that holds it.
+                let caller = reach.row_at(s.from, id);
                 let anchor = caller.and_then(|r| {
                     r.call_sites
                         .iter()
@@ -352,7 +353,7 @@ impl<'a> GroupPaths<'a> {
     fn terminal(&self, reach: &LiteralReach<'a>, op: &str) -> WitnessTerminal {
         let anchor = reach
             .op_owner(op)
-            .and_then(|o| reach.routine(o))
+            .and_then(|o| reach.row_at(o, op))
             .and_then(|r| {
                 r.record_operations
                     .iter()

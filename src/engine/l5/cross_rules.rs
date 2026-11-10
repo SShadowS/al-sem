@@ -542,10 +542,14 @@ impl CrossRulesIndex {
                     .or_default()
                     .push((from, SiteIx::Call(cs_ix)));
             }
+            // B6 round 2: a run into a trigger it may skip (`Rep.SaveAsPdf(…)`
+            // into a dataitem's `OnAfterGetRecord`, `CallEdge::fires`) runs
+            // nothing for certain.
             let definite = edges.iter().all(|e| {
                 matches!(e.dispatch_kind, DispatchKind::Direct | DispatchKind::Method)
                     && e.resolution == Resolution::Resolved
                     && e.to.is_some()
+                    && e.fires.is_none()
             });
             if !definite || tos.len() != 1 {
                 continue;

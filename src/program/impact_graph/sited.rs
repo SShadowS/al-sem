@@ -211,11 +211,13 @@ pub mod flag {
 }
 
 /// One routine's StableRoutineId, interned: its object part's index in
-/// [`SitedGraph::stable_object`] and the 32 bytes of its signature hash.
+/// [`SitedGraph::stable_object`], the 32 bytes of its signature hash and the
+/// `~` suffix of a split declaration (`split_decls`; 0: none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct StableEntry {
     object: u32,
     hash: [u8; 32],
+    suffix: u32,
     node: u32,
 }
 
@@ -538,15 +540,22 @@ impl SitedGraph {
         let i = *self.stable_of.get(ix as usize)?;
         let e = self.stable.get(i as usize)?;
         let hex: String = e.hash.iter().map(|b| format!("{b:02x}")).collect();
-        Some(format!("{}#{hex}", self.stable_objects[e.object as usize]))
+        let object = &self.stable_objects[e.object as usize];
+        Some(if e.suffix == 0 {
+            format!("{object}#{hex}")
+        } else {
+            format!("{object}#{hex}~{:08x}", e.suffix)
+        })
     }
 
     /// The nodes whose StableRoutineId is `id` (more than one for `#if` arms
     /// the program keeps apart), ascending; empty when none has it. The test
     /// universe's lookup of a production routine (agent-tasks design §4.3).
+    /// A routine's id without a suffix also names every declaration of the
+    /// routine when the graph split it (`split_decls`).
     #[must_use]
     pub fn nodes_with_stable_id(&self, id: &str) -> Vec<u32> {
-        let Some((object, hash)) = split_stable_id(id) else {
+        let Some((object, hash, suffix)) = split_stable_id(id) else {
             return Vec::new();
         };
         let Some(&object) = self.stable_object_ix.get(object) else {
@@ -558,6 +567,7 @@ impl SitedGraph {
         self.stable[lo..]
             .iter()
             .take_while(|e| (e.object, e.hash) == (object, hash))
+            .filter(|e| suffix == 0 || e.suffix == suffix)
             .map(|e| e.node)
             .collect()
     }
@@ -792,8 +802,13 @@ impl SitedGraph {
 
 /// A StableRoutineId's object part and hash bytes (`None` when it is not
 /// `{object}#{64 hex}`).
-fn split_stable_id(id: &str) -> Option<(&str, [u8; 32])> {
-    let (object, hex) = id.rsplit_once('#')?;
+fn split_stable_id(id: &str) -> Option<(&str, [u8; 32], u32)> {
+    let (object, rest) = id.rsplit_once('#')?;
+    let (hex, suffix) = match rest.split_once('~') {
+        Some((hex, suffix)) if suffix.len() == 8 => (hex, u32::from_str_radix(suffix, 16).ok()?),
+        Some(_) => return None,
+        None => (rest, 0),
+    };
     if hex.len() != 64 {
         return None;
     }
@@ -801,7 +816,7 @@ fn split_stable_id(id: &str) -> Option<(&str, [u8; 32])> {
     for (i, b) in hash.iter_mut().enumerate() {
         *b = u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()?;
     }
-    Some((object, hash))
+    Some((object, hash, suffix))
 }
 
 fn object_key_heap(o: &crate::program::node::ObjectNodeId) -> usize {
@@ -1036,7 +1051,7 @@ impl SitedBuilder {
                         let id = super::stable_routine_id(graph, r, node, m);
                         let parts = split_stable_id(&id);
                         debug_assert!(parts.is_some(), "a stable id is object#hex: {id}");
-                        if let Some((object, hash)) = parts {
+                        if let Some((object, hash, suffix)) = parts {
                             let next = stable_objects.len() as u32;
                             let object =
                                 *stable_object_ix.entry(object.into()).or_insert_with(|| {
@@ -1046,6 +1061,7 @@ impl SitedBuilder {
                             stable.push(StableEntry {
                                 object,
                                 hash,
+                                suffix,
                                 node: i as u32,
                             });
                         }

@@ -1219,6 +1219,7 @@ mod tests {
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
+            commit_scopes: Default::default(),
         }
     }
 
@@ -1227,6 +1228,7 @@ mod tests {
             has_normal_return_path: JsonValue::Bool(true),
             all_paths_error: JsonValue::Bool(false),
             has_try_function_boundary: try_fn,
+            try_function_conditional: false,
             has_error_behavior_collect: collect,
             coverage: "resolved",
             commit_behavior: "normal",

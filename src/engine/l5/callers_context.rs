@@ -94,9 +94,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::engine::l4::cone_derived::ConeDerivedStore;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    ForwardSites, PendingCtx, PendingReport, is_checked_run, pending_before_report,
+    ForwardSites, PendingCtx, PendingReport, pending_before_report,
 };
 use crate::engine::l5::prove::{BlockerAnchor, ProveAnswer, ProveBlocker};
+use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, checked_run, is_try_function};
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::impact_graph::SitedGraph;
 use crate::program::impact_graph::reverse::{
@@ -920,6 +921,18 @@ struct Visitor<'a, 'c> {
 }
 
 impl<'a, 'c> Visitor<'a, 'c> {
+    /// What an edge into node `to` enters, for the trap rule: an object node
+    /// (an object run's target), else the node's routine row.
+    fn trap_callee(&self, to: NodeIx) -> TrapCallee<'a> {
+        let g = self.cx.g;
+        match g.object_node(to) {
+            Some(o) => TrapCallee::Object {
+                codeunit: o.kind == al_syntax::ir::ObjectKind::Codeunit,
+            },
+            None => TrapCallee::Routine(self.ix.row_for(g, to, None)),
+        }
+    }
+
     fn block(
         &mut self,
         kind: &'static str,
@@ -1065,7 +1078,18 @@ impl<'a, 'c> Visitor<'a, 'c> {
             return self.eval_intercept_dispatch(from, site, c);
         }
         let unit = st.anchor.map(|a| g.unit(a.unit).to_string());
-        let Some(r) = self.ix.row_for(g, c, unit.as_deref()) else {
+        // Engine limits B2: of the routine's rows in the site's file (two
+        // `#if` arms of one routine are two rows of one file), the one whose
+        // body holds the site.
+        let holding = match (&st.anchor, &unit) {
+            (Some(a), Some(u)) => self
+                .ix
+                .rows_of(g, c)
+                .into_iter()
+                .find(|r| body_site(r, u, a).is_some()),
+            _ => None,
+        };
+        let Some(r) = holding.or_else(|| self.ix.row_for(g, c, unit.as_deref())) else {
             let d = self.ix.display(g, c);
             self.block(
                 "order-unknown",
@@ -1172,28 +1196,13 @@ impl<'a, 'c> Visitor<'a, 'c> {
             );
             return SiteEval::default();
         };
-        if let BodySite::Call(cs) = &body {
-            let to_row = self.ix.row_for(g, st.to, None);
-            let to_object = g.object_node(st.to);
-            let checked = match &to_object {
-                Some(o) => {
-                    o.kind == al_syntax::ir::ObjectKind::Codeunit
-                        && match &cs.callee {
-                            PCallee::ObjectRun { .. } => cs.object_run_return_used == Some(true),
-                            PCallee::Member { method, .. } => {
-                                method.eq_ignore_ascii_case("run") && !cs.in_statement_position
-                            }
-                            _ => false,
-                        }
-                }
-                None => is_checked_run(cs, to_row),
+        if let BodySite::Call(cs) = &body
+            && checked_run(cs, self.trap_callee(st.to))
+        {
+            return SiteEval {
+                stop: Some("checked-run"),
+                bits: 0,
             };
-            if checked {
-                return SiteEval {
-                    stop: Some("checked-run"),
-                    bits: 0,
-                };
-            }
         }
         let mut bits = 0;
         // R runs inside a write's trigger.
@@ -1414,22 +1423,15 @@ impl<'a, 'c> Visitor<'a, 'c> {
         let BodySite::Call(cs) = body else {
             return SiteEval::default();
         };
-        let to_object = g.object_node(st.to);
-        let to_row = self.ix.row_for(g, st.to, None);
-        let checked = match &to_object {
-            Some(o) => {
-                o.kind == al_syntax::ir::ObjectKind::Codeunit
-                    && match &cs.callee {
-                        PCallee::ObjectRun { .. } => cs.object_run_return_used == Some(true),
-                        PCallee::Member { method, .. } => {
-                            method.eq_ignore_ascii_case("run") && !cs.in_statement_position
-                        }
-                        _ => false,
-                    }
-            }
-            None => is_checked_run(cs, to_row),
+        // The one trap rule ([`crate::engine::l5::traps`]), shared with the
+        // forward error answers. A TryFunction trap holds on a synchronous
+        // edge only.
+        let callee = self.trap_callee(st.to);
+        let trap = match call_trap(cs, callee) {
+            Some(TrapKind::TryFunction) if st.boundary != Boundary::Sync => None,
+            t => t,
         };
-        if checked {
+        if trap == Some(TrapKind::CheckedRun) {
             self.witness(
                 "catch-and-return-false",
                 c,
@@ -1449,16 +1451,28 @@ impl<'a, 'c> Visitor<'a, 'c> {
             };
         }
         // The edge enters a TryFunction.
-        let into_try = to_row.is_some_and(|t| has_attr(t, "TryFunction"));
+        let into_try = matches!(callee, TrapCallee::Routine(Some(t)) if is_try_function(t));
         if into_try && st.boundary == Boundary::Sync {
-            if cs.in_statement_position {
-                self.not_intercepted.insert(format!(
-                    "{} called as a statement at {}: its result is discarded, so it is an \
-                     ordinary call",
-                    cs.callee_text,
-                    at.as_ref()
-                        .map_or(String::new(), |(f, l)| format!("{f}:{l}"))
-                ));
+            if trap != Some(TrapKind::TryFunction) {
+                let place = at
+                    .as_ref()
+                    .map_or(String::new(), |(f, l)| format!("{f}:{l}"));
+                self.not_intercepted.insert(if cs.in_statement_position {
+                    format!(
+                        "{} called as a statement at {place}: its result is discarded, so it is \
+                         an ordinary call",
+                        cs.callee_text
+                    )
+                } else {
+                    // B7: Learn names only `Ok := …` and a condition as a try
+                    // call ([`crate::engine::l5::traps`]).
+                    format!(
+                        "{} at {place}: its result is used, but not as `Ok := …` or a whole \
+                         condition, the shapes Microsoft Learn names for a try call; counted as \
+                         an ordinary call",
+                        cs.callee_text
+                    )
+                });
                 return SiteEval::default();
             }
             self.witness(
@@ -1636,25 +1650,49 @@ impl<'a, 'c> Visitor<'a, 'c> {
             return;
         }
         let g = self.cx.g;
+        // B4/L16: the one rule the forward answers apply too
+        // ([`crate::engine::l5::commit_scope::declared`]).
+        use crate::engine::l5::commit_scope::{DeclSource, declared};
         for r in self.ix.rows_of(g, n) {
-            if let Some(m) = attr_member(r, "CommitBehavior") {
-                self.commit_behavior.insert(format!(
-                    "{m} on {} (an added COMMIT below it is {})",
-                    self.ix.display(g, n),
-                    if m.eq_ignore_ascii_case("ignore") {
-                        "ignored"
-                    } else {
-                        "an error"
-                    }
-                ));
-            }
-            if let Some(o) = self.ix.objects.get(r.object_id.as_str())
-                && let Some(b) = &o.inherent_commit_behavior
-            {
-                self.commit_behavior.insert(format!(
-                    "InherentCommitBehavior {b} on {} {}",
-                    o.object_type, o.name
-                ));
+            let object = self.ix.objects.get(r.object_id.as_str()).copied();
+            let Some(d) = declared(r, object) else {
+                continue;
+            };
+            match (d.source, object) {
+                (DeclSource::Attribute, _) => {
+                    self.commit_behavior.insert(format!(
+                        "{} on {} (an added COMMIT below it is {})",
+                        d.word(),
+                        self.ix.display(g, n),
+                        if d.word() == "Ignore" {
+                            "ignored"
+                        } else {
+                            "an error"
+                        }
+                    ));
+                }
+                (DeclSource::ObjectProperty, Some(o)) => {
+                    self.commit_behavior.insert(format!(
+                        "InherentCommitBehavior {} on {} {}",
+                        o.inherent_commit_behavior.as_deref().unwrap_or_default(),
+                        o.object_type,
+                        o.name
+                    ));
+                }
+                (DeclSource::ObjectProperty, None) => {}
+                // Engine limits B2: an attribute only some builds have.
+                (DeclSource::ConditionalAttribute, _) => {
+                    self.commit_behavior.insert(format!(
+                        "{} on {} in some builds only (an added COMMIT below it may be {})",
+                        d.word(),
+                        self.ix.display(g, n),
+                        if d.states & crate::engine::l5::commit_scope::E != 0 {
+                            "an error"
+                        } else {
+                            "ignored"
+                        }
+                    ));
+                }
             }
         }
     }

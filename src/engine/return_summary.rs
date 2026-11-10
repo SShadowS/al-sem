@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::program::attributes::{find_attribute, has_attribute, qualified_arg};
+use crate::program::attributes::{
+    find_attribute, find_definite_attribute, has_attribute, has_definite_attribute, qualified_arg,
+};
 use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 // ---------------------------------------------------------------------------
@@ -34,14 +36,21 @@ pub struct RoutineReturnSummary {
     /// false — at least one path reaches a normal exit.
     /// "unknown" — body unavailable or indeterminate.
     pub all_paths_error: JsonValue, // true | false | "unknown"
-    /// True when the routine carries `[TryFunction]`.
+    /// True when the routine MAY carry `[TryFunction]` (some build has it):
+    /// the cautious reading for a reader that degrades on a try boundary.
     pub has_try_function_boundary: bool,
+    /// True when that `[TryFunction]` is only in some builds (engine limits
+    /// B2, `AttributeInfo::conditional`). A reader that decides a definite
+    /// answer from the boundary (`ordering_engine`'s proven-errors rule) needs
+    /// `has_try_function_boundary && !try_function_conditional`.
+    pub try_function_conditional: bool,
     /// True when the routine carries `[ErrorBehavior(ErrorBehavior::Collect)]`.
     pub has_error_behavior_collect: bool,
     /// "resolved" — body available and summary computed structurally.
     /// "partial"  — body unavailable or TryFunction (semantics opaque).
     pub coverage: &'static str,
-    /// "normal" | "ignore" | "error"
+    /// "normal" | "ignore" | "error" | "conditional" (only some builds declare
+    /// `Ignore`/`Error`, see [`parse_commit_behavior`]).
     pub commit_behavior: &'static str,
 }
 
@@ -282,11 +291,26 @@ fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> Subt
 /// Parse `[CommitBehavior]` from `attributes_parsed`. Returns "normal" | "ignore"
 /// | "error". Mirrors al-sem's `parseCommitBehavior` with the dual-shape fallback
 /// (native qualified_enum_value → `member`; dep ABI bare-Value → `value`/`text`).
+///
+/// Engine limits B2: only an attribute every build of the routine has decides
+/// it. When only conditional ones (`AttributeInfo::conditional`) declare
+/// `Ignore` or `Error`, the answer is `"conditional"`: some build may run
+/// under it, another may not, so no reader may treat the routine as ignoring
+/// (or erroring on) its commits for certain.
 pub fn parse_commit_behavior(attrs: &[crate::program::attributes::AttributeInfo]) -> &'static str {
-    let Some(attr) = find_attribute(attrs, "CommitBehavior") else {
-        return "normal";
-    };
+    if let Some(attr) = find_definite_attribute(attrs, "CommitBehavior") {
+        return commit_behavior_value(attr);
+    }
+    let conditional = attrs.iter().any(|a| {
+        !a.in_every_build()
+            && a.name.eq_ignore_ascii_case("CommitBehavior")
+            && commit_behavior_value(a) != "normal"
+    });
+    if conditional { "conditional" } else { "normal" }
+}
 
+/// One `[CommitBehavior]` attribute's value: "normal" | "ignore" | "error".
+pub fn commit_behavior_value(attr: &crate::program::attributes::AttributeInfo) -> &'static str {
     // Native shape: qualified_enum_value → read the member.
     let mut member: Option<String> = qualified_arg(attr, 0).map(|qa| qa.member);
 
@@ -338,14 +362,21 @@ pub fn parse_has_error_behavior_collect(
 /// Routine-level `[CommitBehavior]` WINS: only apply the object property when the
 /// routine has no explicit override (i.e., routineCB == "normal"). Mirrors
 /// `mergeInherentCommitBehavior`.
+///
+/// Engine limits B2: `object_conditional` (`ModelObject::
+/// inherent_commit_behavior_conditional`) says only some builds declare the
+/// property, so a build without it runs its commits normally: an `ignore` or
+/// `error` reading is then only `"conditional"`, which proves nothing either way.
 pub fn merge_inherent_commit_behavior(
     routine_commit_behavior: &'static str,
     object_behavior: Option<&str>,
+    object_conditional: bool,
 ) -> &'static str {
     if routine_commit_behavior != "normal" {
         return routine_commit_behavior;
     }
     match object_behavior {
+        Some("ignore" | "error") if object_conditional => "conditional",
         Some("ignore") => "ignore",
         Some("error") => "error",
         // "allow" or None → no override; stays "normal".
@@ -361,7 +392,10 @@ pub fn merge_inherent_commit_behavior(
 /// `computeRoutineReturnSummary`.
 pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSummary {
     let attrs = &routine.attributes_parsed;
+    // "May": a TryFunction in some build makes the body opaque (B2).
     let has_try_function_boundary = has_attribute(attrs, "TryFunction");
+    let try_function_conditional =
+        has_try_function_boundary && !has_definite_attribute(attrs, "TryFunction");
     let has_error_behavior_collect = parse_has_error_behavior_collect(attrs);
     let commit_behavior = parse_commit_behavior(attrs);
 
@@ -371,6 +405,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
             has_normal_return_path: JsonValue::String("unknown".to_string()),
             all_paths_error: JsonValue::String("unknown".to_string()),
             has_try_function_boundary,
+            try_function_conditional,
             has_error_behavior_collect,
             coverage: "partial",
             commit_behavior,
@@ -383,6 +418,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
             has_normal_return_path: JsonValue::String("unknown".to_string()),
             all_paths_error: JsonValue::String("unknown".to_string()),
             has_try_function_boundary: true,
+            try_function_conditional,
             has_error_behavior_collect,
             coverage: "partial",
             commit_behavior,
@@ -396,6 +432,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
             has_normal_return_path: JsonValue::Bool(true),
             all_paths_error: JsonValue::Bool(false),
             has_try_function_boundary,
+            try_function_conditional,
             has_error_behavior_collect,
             coverage: "partial",
             commit_behavior,
@@ -408,6 +445,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
         has_normal_return_path: JsonValue::Bool(reach.has_normal),
         all_paths_error: JsonValue::Bool(reach.all_error),
         has_try_function_boundary,
+        try_function_conditional,
         has_error_behavior_collect,
         coverage: "resolved",
         commit_behavior,
@@ -446,6 +484,7 @@ pub fn compute_return_summaries(
             let merged_cb = merge_inherent_commit_behavior(
                 summary.commit_behavior,
                 obj.inherent_commit_behavior.as_deref(),
+                obj.inherent_commit_behavior_conditional,
             );
             if merged_cb != summary.commit_behavior {
                 RoutineReturnSummary {
@@ -459,6 +498,14 @@ pub fn compute_return_summaries(
             summary.clone()
         };
 
+        // Engine limits B2 (wave 2 final review): an id declared more than
+        // once (`#if` arms, or two files) is one summary over every row; the
+        // last row alone decided it.
+        let effective_summary = match result.get(&r.id) {
+            Some(earlier) => merge_alternative_summaries(earlier, &effective_summary),
+            None => effective_summary,
+        };
+
         // Key by internal RoutineId (slash format).
         result.insert(r.id.clone(), effective_summary.clone());
 
@@ -469,6 +516,44 @@ pub fn compute_return_summaries(
     }
 
     result
+}
+
+/// The summary of one routine id whose rows `a` and `b` are alternative
+/// builds (two `#if` arms, or two files; engine limits B2): a value they
+/// disagree on is not known (`"unknown"`, and `"conditional"` for the commit
+/// behavior), a "may" flag holds when either has it, and the coverage is
+/// `partial` when either is.
+#[must_use]
+pub fn merge_alternative_summaries(
+    a: &RoutineReturnSummary,
+    b: &RoutineReturnSummary,
+) -> RoutineReturnSummary {
+    let agree = |x: &JsonValue, y: &JsonValue| {
+        if x == y {
+            x.clone()
+        } else {
+            JsonValue::String("unknown".to_string())
+        }
+    };
+    RoutineReturnSummary {
+        has_normal_return_path: agree(&a.has_normal_return_path, &b.has_normal_return_path),
+        all_paths_error: agree(&a.all_paths_error, &b.all_paths_error),
+        has_try_function_boundary: a.has_try_function_boundary || b.has_try_function_boundary,
+        try_function_conditional: a.try_function_conditional
+            || b.try_function_conditional
+            || a.has_try_function_boundary != b.has_try_function_boundary,
+        has_error_behavior_collect: a.has_error_behavior_collect || b.has_error_behavior_collect,
+        coverage: if a.coverage == "partial" || b.coverage == "partial" {
+            "partial"
+        } else {
+            a.coverage
+        },
+        commit_behavior: if a.commit_behavior == b.commit_behavior {
+            a.commit_behavior
+        } else {
+            "conditional"
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +631,8 @@ mod tests {
                 member: Some(member.to_string()),
             }],
             raw: format!("[{name}({qualifier}::{member})]"),
+            conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -561,6 +648,8 @@ mod tests {
                 member: None,
             }],
             raw: format!("[{name}({value})]"),
+            conditional: false,
+            another_declaration_lacks: false,
         }
     }
 
@@ -670,6 +759,8 @@ mod tests {
             name: "TryFunction".to_string(),
             args: vec![],
             raw: "[TryFunction]".to_string(),
+            conditional: false,
+            another_declaration_lacks: false,
         }];
         // Simulate body_available = true, statement_tree = Some(block with error)
         // but TryFunction should short-circuit to unknown/partial.
@@ -686,6 +777,64 @@ mod tests {
         );
         assert_eq!(summary.coverage, "partial");
         assert!(summary.has_try_function_boundary);
+        assert!(!summary.try_function_conditional);
+    }
+
+    /// Engine limits B2 (wave 2 final review, item 4): the model join and the
+    /// summary merge read EVERY group of rows that share an id alike, a
+    /// symbol-only group (an ABI overload collapse) included. Stated by
+    /// assignment: two symbol-only rows (`abi:` unit) of one id, one carrying
+    /// `[TryFunction]` with no `#if` at all; a caller bound to the id cannot
+    /// tell which overload it reaches. After the join the attribute is
+    /// "another declaration lacks it" (a "may" for the id), the summary says
+    /// the boundary is conditional, and the row's own reading is still
+    /// definite.
+    #[test]
+    fn a_symbol_only_group_is_joined_like_every_group() {
+        let mut try_fn = attr_abi_bare("TryFunction", "x");
+        try_fn.args.clear();
+        let row = |attrs: Vec<AttributeInfo>| {
+            let mut r = make_routine_with_attrs(attrs, false, None);
+            r.source_anchor.source_unit_id = "abi:test".to_string();
+            r
+        };
+        let mut ws = crate::program::model::workspace::ModelEntities {
+            objects: Vec::new(),
+            tables: Vec::new(),
+            routines: vec![row(vec![try_fn]), row(vec![])],
+        };
+        assert!(
+            ws.routines[0].attributes_parsed[0].in_every_build(),
+            "precondition: a symbol attribute, definite before the join"
+        );
+        crate::program::model::workspace::join_alternative_declarations(
+            &mut ws,
+            &[],
+            &Default::default(),
+        );
+        let a = &ws.routines[0].attributes_parsed[0];
+        assert!(a.another_declaration_lacks && !a.conditional);
+        let summaries = compute_return_summaries(&ws.routines, None);
+        let s = &summaries[&ws.routines[0].id];
+        assert!(s.has_try_function_boundary && s.try_function_conditional);
+    }
+
+    /// Engine limits B2: a `[TryFunction]` / `[CommitBehavior]` only some
+    /// builds have is "may": the body stays opaque, but neither reads as a
+    /// definite declaration (stated by assignment: `conditional: true`).
+    #[test]
+    fn a_conditional_declaration_is_may_not_definite() {
+        let mut try_fn = attr_abi_bare("TryFunction", "x");
+        try_fn.args.clear();
+        try_fn.conditional = true;
+        let mut ignore = attr_qualified("CommitBehavior", "CommitBehavior", "Ignore");
+        ignore.conditional = true;
+        let routine = make_routine_with_attrs(vec![try_fn, ignore], true, Some(cfn_leaf("error")));
+        let summary = compute_routine_return_summary(&routine);
+        assert!(summary.has_try_function_boundary, "opaque in some build");
+        assert!(summary.try_function_conditional);
+        assert_eq!(summary.coverage, "partial");
+        assert_eq!(summary.commit_behavior, "conditional");
     }
 
     // -----------------------------------------------------------------------
@@ -749,7 +898,29 @@ mod tests {
     fn merge_icb_routine_normal_object_ignore() {
         // routine "normal" + object "ignore" → "ignore"
         assert_eq!(
-            merge_inherent_commit_behavior("normal", Some("ignore")),
+            merge_inherent_commit_behavior("normal", Some("ignore"), false),
+            "ignore"
+        );
+    }
+
+    /// Engine limits B2: a property only some builds declare proves nothing
+    /// either way; a routine's own declaration still wins.
+    #[test]
+    fn merge_icb_conditional_object_is_conditional() {
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", Some("ignore"), true),
+            "conditional"
+        );
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", Some("error"), true),
+            "conditional"
+        );
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", Some("allow"), true),
+            "normal"
+        );
+        assert_eq!(
+            merge_inherent_commit_behavior("ignore", Some("error"), true),
             "ignore"
         );
     }
@@ -758,7 +929,7 @@ mod tests {
     fn merge_icb_routine_error_object_ignore() {
         // routine "error" + object "ignore" → "error" (routine wins)
         assert_eq!(
-            merge_inherent_commit_behavior("error", Some("ignore")),
+            merge_inherent_commit_behavior("error", Some("ignore"), false),
             "error"
         );
     }
@@ -767,7 +938,7 @@ mod tests {
     fn merge_icb_routine_ignore_object_error() {
         // routine "ignore" + object "error" → "ignore" (routine wins)
         assert_eq!(
-            merge_inherent_commit_behavior("ignore", Some("error")),
+            merge_inherent_commit_behavior("ignore", Some("error"), false),
             "ignore"
         );
     }
@@ -775,14 +946,17 @@ mod tests {
     #[test]
     fn merge_icb_object_allow_stays_normal() {
         assert_eq!(
-            merge_inherent_commit_behavior("normal", Some("allow")),
+            merge_inherent_commit_behavior("normal", Some("allow"), false),
             "normal"
         );
     }
 
     #[test]
     fn merge_icb_object_none_stays_normal() {
-        assert_eq!(merge_inherent_commit_behavior("normal", None), "normal");
+        assert_eq!(
+            merge_inherent_commit_behavior("normal", None, false),
+            "normal"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -958,6 +1132,7 @@ mod tests {
             entry_temp_guard_receiver: None,
             table_event_exits: Default::default(),
             recordref_bindings: Vec::new(),
+            field_ref_operations: Vec::new(),
             rules: None,
             rule_drafts: None,
             card_text: None,
@@ -980,6 +1155,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: inherent_commit_behavior.map(str::to_string),
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,

@@ -1097,7 +1097,7 @@ fn a_cancelled_enumeration_stops_with_its_limit() {
         crate::engine::l4::cone_derived::WitnessScope::All,
     );
     let model = &base.resolved;
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let id = |name: &str| {
         model
             .workspace
@@ -1245,7 +1245,7 @@ fn route_guard_counts_are_the_full_enclosing_count() {
     let (v, human) = prove(tmp.path(), "GcRoot", "throws-error", None, None, None, None);
     assert_eq!(answer(&v), "yes", "{human}");
     assert!(
-        human.contains("(8 guards on the route, 0 evaluated; 2 earlier exits, 1 evaluated)"),
+        human.contains("(8 guards, 2 earlier exits on the route; 1 exit evaluated)"),
         "the answer line's words: {human}"
     );
     assert!(

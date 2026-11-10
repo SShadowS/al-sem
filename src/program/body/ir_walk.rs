@@ -120,6 +120,35 @@ pub struct IrSpine {
     /// comparison (`=`, `<>`, `in`) that is a literal or a label. The CFN
     /// builder reads it for [`super::features::ValueFact`].
     pub value_labels: HashMap<ExprId, ValueLabel>,
+    /// Where the numbering of the next declaration of the same routine id
+    /// starts ([`SiteIdBase`]).
+    pub next_base: SiteIdBase,
+}
+
+/// Engine limits B2 (per-arm ids): the first number of each site-id tag
+/// (`{routine}/op{N}`, `/cs{N}`, `/loop{N}`, `/u{N}`) a routine's walk mints.
+///
+/// A routine declared in two arms of an `#if` (`#if A procedure P() … #else
+/// procedure P() … #endif`) is two declarations under ONE routine id (#160
+/// step 11b). Each declaration used to number its sites from 0, so both arms
+/// minted `P/op0`, and every reader that resolves a site id to one row cited
+/// one arm's line for the other arm's fact. The model builder now walks the
+/// declarations of one id in document order and starts each one where the
+/// previous one stopped ([`IrSpine::next_base`]): the first declaration keeps
+/// today's ids, and the ids of one id never repeat across its declarations.
+/// A routine declared once is walked from [`SiteIdBase::default`], so its ids
+/// do not move.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteIdBase {
+    /// The first `op` number (record operations, commits, errors, then each
+    /// call site's `operation_id`).
+    pub op: u32,
+    /// The first `cs` number.
+    pub cs: u32,
+    /// The first `loop` number.
+    pub loops: u32,
+    /// The first `u` (unreachable statement) number.
+    pub unreachable: u32,
 }
 
 /// An implicit-receiver frame (table-method base `Rec` seed / `with` body). Carries
@@ -437,6 +466,8 @@ struct SpineCtx<'a> {
     source: &'a str,
     cols: &'a Utf16Cols<'a>,
     source_unit_id: &'a str,
+    /// Where this declaration's site numbering starts ([`SiteIdBase`]).
+    base: SiteIdBase,
     op_index: u32,
     cs_index: u32,
     loop_count: u32,
@@ -465,6 +496,11 @@ struct SpineCtx<'a> {
     /// drives object-run result_consumed/return_used (a bare statement does not
     /// consume the result; an expression-position call does).
     in_stmt_position: bool,
+    /// The call expressions whose value is tested in a shape Learn names for
+    /// a try method call (`PCallSite.result_tested`): the whole right-hand
+    /// side of a plain assignment or the whole condition of an `if`, `while`
+    /// or `until`, looking through parentheses and `not`.
+    tested_calls: HashSet<ExprId>,
     /// One-shot: the NEXT call walked is a chained-call RECEIVER (the object of a
     /// member call), so its bare function name is harvested as an identifier-ref
     /// (legacy `collect_identifiers_from` counts it — a non-root identifier in the
@@ -796,7 +832,7 @@ impl<'a> SpineCtx<'a> {
     fn enter_loop(&mut self, loop_type: &str, origin: &Origin) {
         let n = self.loops.len() as u32;
         // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
-        let id = format!("{}/loop{}", self.routine_id, n);
+        let id = format!("{}/loop{}", self.routine_id, self.base.loops + n);
         let source_anchor = self.anchor(origin);
         self.loops.push(PLoop {
             id,
@@ -901,7 +937,7 @@ impl<'a> SpineCtx<'a> {
         self.cur_loops
             .iter()
             // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
-            .map(|n| format!("{}/loop{}", self.routine_id, n))
+            .map(|n| format!("{}/loop{}", self.routine_id, self.base.loops + n))
             .collect()
     }
 
@@ -910,21 +946,20 @@ impl<'a> SpineCtx<'a> {
         // the FIRST statement that is an unconditional exit makes its immediate
         // next sibling unreachable. Comments/keywords are not IR statements, so the
         // block's Stmt items already match legacy's filtered `block_statements`.
-        let stmts: Vec<al_syntax::ir::StmtId> = self
-            .file
-            .ir
-            .block(bid)
-            .items
-            .iter()
-            .filter_map(|it| match it {
-                BlockItem::Stmt(s) => Some(*s),
-                BlockItem::Preproc(_) => None,
-            })
-            .collect();
-        for i in 0..stmts.len().saturating_sub(1) {
-            if let Some(exit_kind) = self.unconditional_exit_kind(stmts[i]) {
-                let exit_anchor = self.anchor(&self.file.ir.stmt(stmts[i]).origin);
-                let unreachable_anchor = self.anchor(&self.file.ir.stmt(stmts[i + 1]).origin);
+        // A `#if` group is a sibling too (B2): an exit before it makes the group
+        // unreachable, and an exit INSIDE one of its branches ends that branch only
+        // (its own block's scan), never the code after the group.
+        let items = &self.file.ir.block(bid).items;
+        for i in 0..items.len().saturating_sub(1) {
+            let BlockItem::Stmt(s) = items[i] else {
+                continue;
+            };
+            if let Some(exit_kind) = self.unconditional_exit_kind(s) {
+                let exit_anchor = self.anchor(&self.file.ir.stmt(s).origin);
+                let unreachable_anchor = self.anchor(match &items[i + 1] {
+                    BlockItem::Stmt(next) => &self.file.ir.stmt(*next).origin,
+                    BlockItem::Preproc(g) => &g.origin,
+                });
                 self.unreachable_statements.push(PUnreachableStatement {
                     // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
                     id: format!("{}/u{}", self.routine_id, self.unreachable_index),
@@ -997,6 +1032,21 @@ impl<'a> SpineCtx<'a> {
         }
     }
 
+    /// Marks the call `eid` is, looking through parentheses and `not`, as
+    /// [`PCallSite::result_tested`] (`eid`: an assignment's right-hand side
+    /// or a loop's or `if`'s whole condition).
+    fn note_tested(&mut self, mut eid: ExprId) {
+        while let ExprKind::Parenthesized(x)
+        | ExprKind::Unary {
+            op: al_syntax::ir::UnaryOp::Not,
+            operand: x,
+        } = &self.file.ir.expr(eid).kind
+        {
+            eid = *x;
+        }
+        self.tested_calls.insert(eid);
+    }
+
     fn walk_stmt(&mut self, sid: al_syntax::ir::StmtId) {
         use StmtKind::*;
         let st = self.file.ir.stmt(sid);
@@ -1042,6 +1092,9 @@ impl<'a> SpineCtx<'a> {
                 self.assign_target = Some((*target, kind));
                 self.walk_expr(*target);
                 self.assign_target = None;
+                if !*compound {
+                    self.note_tested(*value);
+                }
                 self.walk_expr(*value);
             }
             Call(x) => {
@@ -1058,6 +1111,7 @@ impl<'a> SpineCtx<'a> {
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*cond, "if", &sa);
                 self.note_comparison_labels(*cond);
+                self.note_tested(*cond);
                 self.walk_expr(*cond);
                 self.walk_block(*then_block);
                 if let Some(b) = else_block {
@@ -1088,6 +1142,7 @@ impl<'a> SpineCtx<'a> {
                 let sa = self.anchor(&st.origin);
                 self.collect_cond_idents(*cond, "while", &sa);
                 self.enter_loop("while", &st.origin);
+                self.note_tested(*cond);
                 self.walk_expr(*cond);
                 self.walk_block(*body);
                 self.cur_loops.pop();
@@ -1100,6 +1155,7 @@ impl<'a> SpineCtx<'a> {
                 self.enter_loop("repeat", &st.origin);
                 self.walk_block(*body);
                 self.in_until = true;
+                self.note_tested(*until);
                 self.walk_expr(*until);
                 self.in_until = false;
                 self.loops[loop_ix].exhausting_advance =
@@ -1364,6 +1420,27 @@ impl<'a> SpineCtx<'a> {
                 } else {
                     (None, None)
                 };
+                // The record a bare `SetAutoCalcFields` is called on
+                // (`PCallSite::implicit_receiver`): the innermost record frame,
+                // unless the name is one of the object's own routines. Only
+                // that name is recorded (its one reader), so other bare calls
+                // allocate nothing.
+                let implicit_receiver = match &callee {
+                    PCallee::Bare { name }
+                        if name.eq_ignore_ascii_case("setautocalcfields")
+                            && !self
+                                .scope
+                                .object_procedure_names
+                                .contains(&name.to_ascii_lowercase()) =>
+                    {
+                        self.implicit
+                            .iter()
+                            .rev()
+                            .find(|f| f.is_record)
+                            .map(|f| f.text.clone())
+                    }
+                    _ => None,
+                };
                 self.site_exprs.calls.push(expr_ix);
                 self.call_sites.push(PCallSite {
                     id: cs_id,
@@ -1381,7 +1458,9 @@ impl<'a> SpineCtx<'a> {
                     control_context: None,
                     order: None,
                     in_statement_position: self.in_stmt_position,
+                    result_tested: self.tested_calls.contains(&eid),
                     receiver_temp_state: None,
+                    implicit_receiver,
                 });
                 self.cs_arg_exprs.push(args.clone());
             }
@@ -1530,7 +1609,8 @@ impl<'a> SpineCtx<'a> {
 }
 
 /// Walk the routine body, producing the op/cs id maps + has_branching + the
-/// anchored `loops` and `field_accesses`.
+/// anchored `loops` and `field_accesses`. Site ids are numbered from `base`
+/// ([`SiteIdBase`]).
 #[allow(clippy::too_many_arguments)]
 pub fn walk_spine(
     file: &AlFile,
@@ -1542,6 +1622,7 @@ pub fn walk_spine(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
+    base: SiteIdBase,
 ) -> IrSpine {
     let (scope, implicit_rec) = build_scope(file, object_idx, routine, source_table_name);
     let mut ctx = SpineCtx {
@@ -1552,8 +1633,9 @@ pub fn walk_spine(
         source,
         cols,
         source_unit_id,
-        op_index: 0,
-        cs_index: 0,
+        base,
+        op_index: base.op,
+        cs_index: base.cs,
         loop_count: 0,
         has_branching: false,
         // Base implicit frame: an object with an implicit `Rec` (table/tableext/
@@ -1574,11 +1656,12 @@ pub fn walk_spine(
         condition_references: Vec::new(),
         identifier_ref_set: HashSet::new(),
         unreachable_statements: Vec::new(),
-        unreachable_index: 0,
+        unreachable_index: base.unreachable,
         record_operations: Vec::new(),
         operation_sites: Vec::new(),
         assert_depth: 0,
         in_stmt_position: false,
+        tested_calls: HashSet::new(),
         count_next_call_fn: false,
         in_until: false,
         call_sites: Vec::new(),
@@ -1598,6 +1681,15 @@ pub fn walk_spine(
         // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
         cs.operation_id = format!("{}/op{}", routine_id, op_count + i as u32);
     }
+    // The next declaration of this id starts after every number minted here:
+    // the call sites' `operation_id`s follow the ops.
+    let call_count = u32::try_from(ctx.call_sites.len()).expect("a call-site count fits u32");
+    let next_base = SiteIdBase {
+        op: op_count + call_count,
+        cs: ctx.cs_index,
+        loops: base.loops + u32::try_from(ctx.loops.len()).expect("a loop count fits u32"),
+        unreachable: ctx.unreachable_index,
+    };
     // Post-pass ordering to match legacy: var_assignments by source anchor,
     // condition_references by reference anchor, identifier_references sorted+deduped.
     let mut var_assignments = ctx.var_assignments;
@@ -1636,6 +1728,7 @@ pub fn walk_spine(
         site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
         value_labels: ctx.value_labels,
+        next_base,
     }
 }
 
@@ -1894,14 +1987,38 @@ impl<'a> IrCfn<'a> {
                         out.push(c);
                     }
                 }
-                BlockItem::Preproc(g) => {
-                    for b in &g.branches {
-                        out.extend(self.block_items(*b));
-                    }
-                }
+                BlockItem::Preproc(g) => out.push(self.build_preproc(g)),
             }
         }
         out
+    }
+
+    /// A statement-position `#if` chain (engine limits B2): its branches are
+    /// alternatives, a build compiles at most one. It is a `case` with no
+    /// scrutinee (no condition leaves, flow fact or value fact), one `case-branch`
+    /// per branch. With no implicit empty branch (`#else` present, or a branch the
+    /// build context decides true) the last branch is the case's else, so the
+    /// case is exhaustive; otherwise the no-match path falls through, as a `case`
+    /// without `else` does. Every walker of the tree already reads a `case` this
+    /// way, so none treats the branches as one sequence.
+    fn build_preproc(&self, g: &al_syntax::ir::PreprocGroup) -> PCFNNode {
+        let last = g.branches.len().saturating_sub(1);
+        let branches = g
+            .branches
+            .iter()
+            .enumerate()
+            .map(|(i, &bid)| {
+                let mut b = cfn_node("case-branch");
+                b.is_case_else = i == last && !g.falls_through;
+                b.source_range = self.range_of(&self.ir().block(bid).origin);
+                b.children = Some(vec![self.build_block(bid)]);
+                b
+            })
+            .collect();
+        let mut n = cfn_node("case");
+        n.source_range = self.range_of(&g.origin);
+        n.children = Some(branches);
+        n
     }
 
     pub fn build_block(&self, bid: BlockId) -> PCFNNode {
@@ -2622,11 +2739,14 @@ pub struct IrPartialFeatures {
     pub call_sites: Vec<PCallSite>,
     /// #160 §4.2: each site's expression index (see [`IrSpine::site_exprs`]).
     pub site_exprs: crate::program::site_key::SiteExprs,
+    /// [`IrSpine::next_base`].
+    pub next_base: SiteIdBase,
 }
 
 /// Build the validated slice of `PFeatures` from the owned IR for one routine.
 /// `source_table_name` gates the page implicit `Rec` for `ir_record_variables`
 /// (which supplies the record-op temp_state/record_variable_id backfill).
+/// Site ids are numbered from `base` ([`SiteIdBase`]).
 #[allow(clippy::too_many_arguments)]
 pub fn routine_features_partial(
     file: &AlFile,
@@ -2637,6 +2757,7 @@ pub fn routine_features_partial(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
+    base: SiteIdBase,
 ) -> IrPartialFeatures {
     let cols = Utf16Cols::new(source);
     let spine = walk_spine(
@@ -2649,6 +2770,7 @@ pub fn routine_features_partial(
         source_unit_id,
         source_table_name,
         parenless_calls,
+        base,
     );
     let statement_tree = routine.body.map(|b| {
         let cfn = IrCfn {
@@ -2793,6 +2915,7 @@ pub fn routine_features_partial(
         operation_sites: spine.operation_sites,
         call_sites,
         site_exprs: spine.site_exprs,
+        next_base: spine.next_base,
     }
 }
 
@@ -2800,6 +2923,7 @@ pub fn routine_features_partial(
 /// `project_routine_features_ir`. `order` / `control_context` / `scope_frames` are
 /// left empty (post-pass fields that `extract_body_features` also leaves empty;
 /// the L2 emitter applies operation_order/control_context on the `statement_tree`).
+/// Site ids start at 0 ([`SiteIdBase::default`]): the routine's only declaration.
 #[allow(clippy::too_many_arguments)]
 pub fn project_routine_features_ir(
     file: &AlFile,
@@ -2810,7 +2934,33 @@ pub fn project_routine_features_ir(
     source_unit_id: &str,
     source_table_name: Option<&str>,
 ) -> super::features::PFeatures {
-    project_routine_features_ir_with(
+    project_routine_features_ir_at(
+        file,
+        object_idx,
+        routine,
+        routine_id,
+        source,
+        source_unit_id,
+        source_table_name,
+        SiteIdBase::default(),
+    )
+    .0
+}
+
+/// [`project_routine_features_ir`] with site ids numbered from `base`, plus
+/// where the next declaration of the same id starts ([`SiteIdBase`]).
+#[allow(clippy::too_many_arguments)]
+pub fn project_routine_features_ir_at(
+    file: &AlFile,
+    object_idx: usize,
+    routine: &RoutineDecl,
+    routine_id: &str,
+    source: &str,
+    source_unit_id: &str,
+    source_table_name: Option<&str>,
+    base: SiteIdBase,
+) -> (super::features::PFeatures, SiteIdBase) {
+    let (features, _, _, next) = project_routine_features_ir_with(
         file,
         object_idx,
         routine,
@@ -2819,15 +2969,18 @@ pub fn project_routine_features_ir(
         source_unit_id,
         source_table_name,
         &HashSet::new(),
-    )
-    .0
+        base,
+    );
+    (features, next)
 }
 
 /// [`project_routine_features_ir`] with the parens-less value reads the program
 /// resolver kept as calls (`program::resolve::full::ParenlessCalls`), plus each
 /// site's expression index (#160 §4.2) and the implicit-record field accesses
 /// ([`IrSpine::implicit_field_accesses`]), both kept apart from `PFeatures` so
-/// the L2 snapshot (a `Debug` hash of `PFeatures`) does not see them.
+/// the L2 snapshot (a `Debug` hash of `PFeatures`) does not see them. Site ids
+/// are numbered from `base`; the last item is where the next declaration of
+/// the same id starts ([`SiteIdBase`]).
 #[allow(clippy::too_many_arguments)]
 pub fn project_routine_features_ir_with(
     file: &AlFile,
@@ -2838,10 +2991,12 @@ pub fn project_routine_features_ir_with(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
+    base: SiteIdBase,
 ) -> (
     super::features::PFeatures,
     crate::program::site_key::SiteExprs,
     Vec<PFieldAccess>,
+    SiteIdBase,
 ) {
     let p = routine_features_partial(
         file,
@@ -2852,6 +3007,7 @@ pub fn project_routine_features_ir_with(
         source_unit_id,
         source_table_name,
         parenless_calls,
+        base,
     );
     let record_variables =
         ir_record_variables(file, object_idx, routine, routine_id, source_table_name);
@@ -2873,7 +3029,12 @@ pub fn project_routine_features_ir_with(
         statement_tree: p.statement_tree,
         scope_frames: Vec::new(),
     };
-    (features, p.site_exprs, p.implicit_field_accesses)
+    (
+        features,
+        p.site_exprs,
+        p.implicit_field_accesses,
+        p.next_base,
+    )
 }
 
 // ---- record_variables (params + locals + implicit Rec) ----
@@ -3264,10 +3425,11 @@ fn ir_is_temporary_error_guard(file: &AlFile, sid: al_syntax::ir::StmtId) -> Opt
 /// is a record var). The guard must be the FIRST body statement.
 pub fn ir_entry_temp_guard_receiver(file: &AlFile, routine: &RoutineDecl) -> Option<String> {
     let body = routine.body?;
-    let first = file.ir.block(body).items.iter().find_map(|it| match it {
-        al_syntax::ir::BlockItem::Stmt(s) => Some(*s),
-        _ => None,
-    })?;
+    // A leading `#if` group is not the guard: some build may skip it (B2).
+    let first = match file.ir.block(body).items.first()? {
+        al_syntax::ir::BlockItem::Stmt(s) => *s,
+        al_syntax::ir::BlockItem::Preproc(_) => return None,
+    };
     ir_is_temporary_error_guard(file, first)
 }
 
@@ -3625,7 +3787,18 @@ pub fn ir_attributes(
             .iter()
             .map(|&arg| ir_attr_arg(file, arg, source))
             .collect();
-        parsed.push(json!({ "name": a.name, "args": args, "raw": a.raw }));
+        let mut one = json!({ "name": a.name, "args": args, "raw": a.raw });
+        // Engine limits B2: only some builds have it (`AttributeInfo::conditional`).
+        // Absent when false, so every unconditional attribute keeps its shape.
+        if a.conditional {
+            one["conditional"] = serde_json::Value::Bool(true);
+        }
+        // Another declaration of the routine lacks it (`AttributeInfo::
+        // another_declaration_lacks`). Absent when false.
+        if a.another_declaration_lacks {
+            one["anotherDeclarationLacks"] = serde_json::Value::Bool(true);
+        }
+        parsed.push(one);
     }
     (raw, parsed)
 }
@@ -3699,19 +3872,32 @@ pub fn ir_object_metadata(
         page_type = prop("pagetype");
         source_table_name = prop("sourcetable").map(|s| s.trim().trim_matches('"').to_string());
     }
-    if (object_type == "Codeunit" || object_type == "Table" || object_type == "TableExtension")
-        && let Some(icb_raw) = prop("inherentcommitbehavior")
-    {
-        let member = match icb_raw.rfind("::") {
-            Some(sep) => icb_raw[sep + 2..].to_lowercase(),
-            None => icb_raw.to_lowercase(),
+    if object_type == "Codeunit" || object_type == "Table" || object_type == "TableExtension" {
+        // One entry per `#if` arm (engine limits B2): the strictest value any
+        // build declares (`error` > `ignore` > `allow`). Its reader
+        // (`commit_scope::declared`) reads the property as MAY apply and keeps
+        // a normal commit possible, so no build's value is lost by this.
+        let rank = |v: &str| match v {
+            "error" => 3,
+            "ignore" => 2,
+            "allow" => 1,
+            _ => 0,
         };
-        inherent_commit_behavior = match member.as_str() {
-            "ignore" => Some("ignore".to_string()),
-            "error" => Some("error".to_string()),
-            "allow" => Some("allow".to_string()),
-            _ => None,
-        };
+        for p in o
+            .properties
+            .iter()
+            .filter(|p| p.name == "inherentcommitbehavior")
+        {
+            let icb_raw = &p.value;
+            let member = match icb_raw.rfind("::") {
+                Some(sep) => icb_raw[sep + 2..].to_lowercase(),
+                None => icb_raw.to_lowercase(),
+            };
+            let current = inherent_commit_behavior.as_deref().map_or(0, rank);
+            if rank(&member) > current {
+                inherent_commit_behavior = Some(member);
+            }
+        }
     }
     (
         object_subtype,
@@ -3986,6 +4172,7 @@ codeunit 50101 C
                         "u",
                         None,
                         &std::collections::HashSet::new(),
+                        super::SiteIdBase::default(),
                     )
                     .2
                     .into_iter()
@@ -4263,5 +4450,125 @@ table 50011 T
                 row("RecReturn", "Rec", None, false),
             ]
         );
+    }
+}
+
+/// Engine limits B2: a statement-position `#if` group is a `case` of its
+/// branches in the statement tree, never one sequence, and the control-context
+/// walk reads it so.
+#[cfg(test)]
+mod preproc_group_tests {
+    use crate::program::body::features::PCFNNode;
+    use crate::program::body::l2_workspace::ir_features_for_named_routine;
+
+    const SRC: &str = r#"
+codeunit 50002 T
+{
+    procedure NoElse()
+    var
+        L: Record Customer;
+    begin
+#if not CLEAN99
+        exit;
+#endif
+        L.Insert();
+    end;
+
+    procedure IfElse()
+    var
+        L: Record Customer;
+    begin
+#if CLEAN99
+        L.Insert();
+#else
+        L.Modify();
+#endif
+        L.Delete();
+    end;
+}
+"#;
+
+    fn tree(name: &str) -> (PCFNNode, crate::program::body::features::PFeatures) {
+        let (mut f, params, _) = ir_features_for_named_routine(SRC, name, "g", "u").expect(name);
+        crate::program::body::control_context::apply_control_contexts(&mut f, &[], &params);
+        (f.statement_tree.clone().expect("a body"), f)
+    }
+
+    /// `(kind, is_case_else)` of the top-level statements and of the group's arms.
+    fn shape(t: &PCFNNode) -> (Vec<&str>, Vec<bool>) {
+        let top: Vec<&PCFNNode> = t.children.iter().flatten().collect();
+        let group = top.iter().find(|n| n.kind == "case").expect("a group");
+        (
+            top.iter().map(|n| n.kind.as_str()).collect(),
+            group
+                .children
+                .iter()
+                .flatten()
+                .map(|b| {
+                    assert_eq!(b.kind, "case-branch");
+                    b.is_case_else
+                })
+                .collect(),
+        )
+    }
+
+    fn context(f: &crate::program::body::features::PFeatures, op: &str) -> Option<String> {
+        let id = &f
+            .record_operations
+            .iter()
+            .find(|o| o.op == op)
+            .unwrap_or_else(|| panic!("no {op}"))
+            .id;
+        f.operation_sites
+            .iter()
+            .find(|s| &s.id == id)
+            .unwrap_or_else(|| panic!("no site {id}"))
+            .control_context
+            .clone()
+    }
+
+    #[test]
+    fn a_group_without_else_falls_through() {
+        let (t, f) = tree("NoElse");
+        // One arm and the implicit empty one: no arm is the case's else.
+        assert_eq!(shape(&t), (vec!["case", "op"], vec![false]));
+        // The write after the group is reachable (an arm may exit first).
+        assert_eq!(context(&f, "Insert").as_deref(), Some("conditional"));
+    }
+
+    /// The temporary-record entry guard must be the routine's first statement in
+    /// every build: one inside a leading `#if` arm is skipped by the build that
+    /// skips the arm. The same guard outside the group is still read.
+    #[test]
+    fn a_guard_in_a_leading_arm_is_no_entry_guard() {
+        let src = |guard: &str| {
+            format!(
+                "table 50003 T\n{{\n    fields {{ field(1; A; Integer) {{ }} }}\n    \
+                 procedure P(var Rec: Record T)\n    begin\n{guard}        Rec.Insert();\n    \
+                 end;\n}}\n"
+            )
+        };
+        let guard = |src: &str| {
+            let f = al_syntax::parse(src);
+            super::ir_entry_temp_guard_receiver(&f, &f.objects[0].routines[0])
+        };
+        let plain = "        if not Rec.IsTemporary then\n            Error('temp only');\n";
+        assert_eq!(guard(&src(plain)).as_deref(), Some("rec"), "precondition");
+        let armed = format!("#if not CLEAN99\n{plain}#endif\n");
+        assert_eq!(guard(&src(&armed)), None);
+        // A leading group runs first in some build, so the guard after it is
+        // not the first statement either.
+        let after = format!("#if not CLEAN99\n        Message('x');\n#endif\n{plain}");
+        assert_eq!(guard(&src(&after)), None);
+    }
+
+    #[test]
+    fn a_group_with_else_is_exhaustive() {
+        let (t, f) = tree("IfElse");
+        // `#else` is the case's else: a build takes exactly one arm.
+        assert_eq!(shape(&t), (vec!["case", "op"], vec![false, true]));
+        assert_eq!(context(&f, "Insert").as_deref(), Some("conditional"));
+        assert_eq!(context(&f, "Modify").as_deref(), Some("conditional"));
+        assert_eq!(context(&f, "Delete").as_deref(), Some("top-level"));
     }
 }

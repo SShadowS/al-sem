@@ -15,7 +15,6 @@ use crate::program::node::{ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectRef;
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{ParsedType, classify_type_text, unquote_identifier};
-use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::ParsedUnit;
 
 /// What a declaration may run.
@@ -93,6 +92,10 @@ pub struct SourceFacts {
     pub configured: HashMap<RoutineNodeId, super::configured_dispatch::Region>,
     /// The catalog's outcome in this program.
     pub catalog: super::configured_dispatch::CatalogReport,
+    /// Every source place (path, 1-based first and last line) of a routine
+    /// node with more than one declaration in the source (`#if` arms, or two
+    /// files, none of them split): `graph`'s `otherDeclarations`.
+    pub declaration_places: HashMap<RoutineNodeId, Vec<(String, u32, u32)>>,
 }
 
 /// Read the facts from every unit in `units` (the workspace and the dependency
@@ -110,18 +113,28 @@ pub fn extract_source_facts(
         HashMap::new();
     // Per page (every copy of it): declared `SourceTableTemporary = true`.
     let mut temp_pages: HashMap<ObjectNodeId, bool> = HashMap::new();
+    // Per routine node, its declarations' places (`declaration_places`).
+    let mut places: HashMap<RoutineNodeId, Vec<(String, u32, u32)>> = HashMap::new();
     for unit in units {
         let Some(app) = graph.apps.find(&unit.app) else {
             continue;
         };
         for pf in &unit.files {
-            for obj in &pf.file.objects {
+            // A split subscriber's declarations have a node each
+            // (`split_decls`), so each keeps its own guard and facts.
+            let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+                graph,
+                &pf.file,
+                app,
+                &crate::program::split_decls::unit_of_parsed(pf),
+            );
+            for (obj_ix, obj) in pf.file.objects.iter().enumerate() {
                 let obj_id = ObjectNodeId {
                     app,
                     kind: obj.kind,
                     key: ObjKey::from_source(obj),
                 };
-                for routine in obj.routines.iter().filter(|r| {
+                for (routine_ix, routine) in obj.routines.iter().enumerate().filter(|(_, r)| {
                     r.attributes_parsed
                         .iter()
                         .any(|a| a.name.eq_ignore_ascii_case("eventsubscriber"))
@@ -130,7 +143,7 @@ pub fn extract_source_facts(
                         &pf.file, routine,
                     );
                     exits
-                        .entry(source_routine_node_id(obj_id.clone(), routine))
+                        .entry(decl_nodes[obj_ix][routine_ix].clone())
                         .and_modify(|x| *x = x.intersection(e))
                         .or_insert(e);
                 }
@@ -160,7 +173,15 @@ pub fn extract_source_facts(
                         .map(|p| p.value.as_str())
                 };
                 let (subtype, page_type) = (obj_prop("subtype"), obj_prop("pagetype"));
-                for routine in &obj.routines {
+                for (routine_ix, routine) in obj.routines.iter().enumerate() {
+                    places
+                        .entry(decl_nodes[obj_ix][routine_ix].clone())
+                        .or_default()
+                        .push((
+                            pf.virtual_path.clone(),
+                            routine.origin.start.row + 1,
+                            routine.origin.end.row + 1,
+                        ));
                     // An interface's methods are declarations, not routines
                     // the model rows (or a run) can start.
                     let root_kinds = if obj.kind == ObjectKind::Interface {
@@ -212,7 +233,7 @@ pub fn extract_source_facts(
                         table_event_exits: Default::default(),
                     };
                     if rf != RoutineFacts::default() {
-                        let id = source_routine_node_id(obj_id.clone(), routine);
+                        let id = decl_nodes[obj_ix][routine_ix].clone();
                         let slot = out.routines.entry(id).or_default();
                         slot.test |= rf.test;
                         slot.root_kinds |= rf.root_kinds;
@@ -223,6 +244,11 @@ pub fn extract_source_facts(
             }
         }
     }
+    places.retain(|_, p| p.len() >= 2);
+    for p in places.values_mut() {
+        p.sort();
+    }
+    out.declaration_places = places;
     for (id, e) in exits {
         if !e.is_empty() {
             out.routines.entry(id).or_default().table_event_exits = e;

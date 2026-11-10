@@ -1331,6 +1331,7 @@ mod fixtures {
             entry_temp_guard_receiver: None,
             table_event_exits: Default::default(),
             recordref_bindings: Vec::new(),
+            field_ref_operations: Vec::new(),
             rules: None,
             rule_drafts: None,
             card_text: None,
@@ -1379,6 +1380,8 @@ mod fixtures {
             modify_all_field: None,
             transfer_fields_source: None,
             receiver_is_record_ref: false,
+            flow_field_reads: Vec::new(),
+            dataset_reason: None,
         }
     }
 
@@ -1425,7 +1428,9 @@ mod fixtures {
             control_context: None,
             order: None,
             in_statement_position: false,
+            result_tested: false,
             receiver_temp_state: None,
+            implicit_receiver: None,
         }
     }
 

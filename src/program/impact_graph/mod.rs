@@ -150,6 +150,12 @@ pub struct Node {
     pub line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_line: Option<u32>,
+    /// The other source places of a routine declared more than once (`#if`
+    /// arms, or two files, compiled apart): the node's `sourcePath`, `line`
+    /// and `endLine` are one of the declarations, and a change at any of these
+    /// places is a change of this node. Omitted when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub other_declarations: Vec<DeclarationPlace>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dependency: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,6 +174,15 @@ pub struct Node {
     pub hub_arg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub universal: Option<bool>,
+}
+
+/// One place a routine is declared at (`Node::other_declarations`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclarationPlace {
+    pub source_path: String,
+    pub line: u32,
+    pub end_line: u32,
 }
 
 /// One `edge` line.
@@ -600,13 +615,19 @@ pub(crate) fn stable_routine_id(
         .enclosing_member
         .as_deref()
         .map(crate::program::body::scope::unescape_al_identifier);
-    crate::engine::ids::to_stable_routine_id_from_parts(
+    let stable = crate::engine::ids::to_stable_routine_id_from_parts(
         &crate::engine::ids::to_stable_object_id(&crate::program::model::model_object_id(
             graph, &r.object,
         )),
         &hash,
         member.as_deref(),
-    )
+    );
+    // A split declaration's own id, as the model mints it
+    // (`workspace::adopt_declaration_ids`).
+    match graph.workspace_rows.declarations.base_of(r) {
+        Some((_, suffix)) => format!("{stable}~{suffix}"),
+        None => stable,
+    }
 }
 
 pub(crate) fn render_node(
@@ -630,6 +651,7 @@ pub(crate) fn render_node(
         source_path: None,
         line: None,
         end_line: None,
+        other_declarations: Vec::new(),
         dependency: None,
         symbol_only: None,
         synthetic: None,
@@ -704,6 +726,18 @@ pub(crate) fn render_node(
                 n.source_path = Some(path.to_string());
                 n.line = Some(m.origin.start.row + 1);
                 n.end_line = Some(m.origin.end.row + 1);
+                if let Some(places) = inp.facts.declaration_places.get(r) {
+                    let own = (path, m.origin.start.row + 1, m.origin.end.row + 1);
+                    n.other_declarations = places
+                        .iter()
+                        .filter(|(p, l, e)| (p.as_str(), *l, *e) != own)
+                        .map(|(p, l, e)| DeclarationPlace {
+                            source_path: p.clone(),
+                            line: *l,
+                            end_line: *e,
+                        })
+                        .collect();
+                }
             }
             if node.is_some_and(|x| {
                 x.publisher_kind == Some(crate::program::resolve::event::PublisherKind::Platform)

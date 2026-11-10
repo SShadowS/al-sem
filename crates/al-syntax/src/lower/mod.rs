@@ -9,8 +9,8 @@
 use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
-    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, RoutineDecl, RoutineKind,
-    SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
+    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, PreprocGroup, RoutineDecl,
+    RoutineKind, SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -360,6 +360,7 @@ fn lower_object(
                             .map(|guard| PendingAttr {
                                 node: e.node,
                                 guard,
+                                conditional: e.conditional,
                             })
                     })
                     .collect(),
@@ -374,6 +375,7 @@ fn lower_object(
             ));
         }
     }
+    mark_attributes_some_arm_lacks(&mut routines);
 
     // Report dataitems and XmlPort table elements (name, source-table) — the name is
     // in scope as a record var across all the object's routines. Empty otherwise.
@@ -389,6 +391,13 @@ fn lower_object(
     let mut query_columns = Vec::new();
     if kind == ObjectKind::Query {
         collect_query_columns(node, "", source, &mut query_columns);
+    }
+    let mut dataset_items = Vec::new();
+    if matches!(
+        kind,
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort | ObjectKind::Query
+    ) {
+        collect_dataset_items(node, source, &mut dataset_items);
     }
 
     // Extension `extends` target (the grammar's `base_object` field) — None for
@@ -436,7 +445,7 @@ fn lower_object(
         for member in body.named_children() {
             collect_globals(member, source, &mut globals);
             collect_protected_names(member, source, &mut protected_globals);
-            collect_properties(member, source, &mut properties);
+            collect_properties(member, source, false, &mut properties);
             if matches!(kind, ObjectKind::Enum | ObjectKind::EnumExtension) {
                 collect_enum_values(member, source, &mut enum_values);
             }
@@ -472,6 +481,7 @@ fn lower_object(
         dataitems,
         temporary_dataitems,
         query_columns,
+        dataset_items,
         extends_target,
         implements,
         page_controls,
@@ -520,7 +530,7 @@ fn lower_action(node: RawNode, source: &str) -> crate::ir::ActionDecl {
     let mut props = Vec::new();
     for body in node.children_by_field(FieldName::Body) {
         for member in body.named_children() {
-            collect_properties(member, source, &mut props);
+            collect_properties(member, source, false, &mut props);
         }
     }
     let kind_str = node.kind_str();
@@ -613,7 +623,7 @@ fn collect_enum_values(node: RawNode, source: &str, out: &mut Vec<crate::ir::Enu
             let mut properties = Vec::new();
             if let Some(body) = node.field(FieldName::Body) {
                 for member in body.named_children() {
-                    collect_properties(member, source, &mut properties);
+                    collect_properties(member, source, false, &mut properties);
                 }
             }
             out.push(crate::ir::EnumValueDecl {
@@ -644,7 +654,7 @@ fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
             RawKind::CodeBlock => {}
             RawKind::Property => {
                 let mut props = Vec::new();
-                lower_property(child, source, &mut props);
+                lower_property(child, source, false, &mut props);
                 out.extend(
                     props
                         .into_iter()
@@ -848,7 +858,7 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
     let mut props = Vec::new();
     for body in node.children_by_field(FieldName::Body) {
         for member in body.named_children() {
-            collect_properties(member, source, &mut props);
+            collect_properties(member, source, false, &mut props);
         }
     }
     let values_of = |name: &str| -> Vec<String> {
@@ -896,6 +906,11 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         caption: literal_values(&props, "caption"),
         tooltip: literal_values(&props, "tooltip"),
         option_caption: literal_values(&props, "optioncaption"),
+        calc_formula: props
+            .iter()
+            .filter(|p| p.name == "calcformula" && !p.value.is_empty())
+            .map(|p| p.value.clone())
+            .collect(),
         doc: None,
         origin: origin_of(node),
     }
@@ -924,7 +939,7 @@ fn collect_xmlport_text_nodes(node: RawNode, source: &str, out: &mut Vec<VarDecl
             let mut props = Vec::new();
             if let Some(body) = child.field(FieldName::Body) {
                 for p in body.named_children() {
-                    collect_properties(p, source, &mut props);
+                    collect_properties(p, source, false, &mut props);
                 }
             }
             let big = props
@@ -968,7 +983,7 @@ fn collect_query_columns(
                 let mut props = Vec::new();
                 if let Some(body) = child.field(FieldName::Body) {
                     for p in body.named_children() {
-                        collect_properties(p, source, &mut props);
+                        collect_properties(p, source, false, &mut props);
                     }
                 }
                 if let (Some(name), Some(field)) = (name, field)
@@ -1042,22 +1057,144 @@ fn collect_temporary_dataitems(node: RawNode, source: &str, out: &mut Vec<String
 }
 
 /// Whether `item`'s OWN properties (not a nested dataitem's or element's, not
-/// a trigger's) include `UseTemporary = true`.
+/// a trigger's) set `UseTemporary = true` in every build. A `UseTemporary =
+/// true` only some `#if` arm writes leaves the default (`false`) possible, so the
+/// item is not known temporary (engine limits B2): reading it as temporary drops
+/// its record's writes in a build that writes the database.
 fn own_use_temporary(item: RawNode, source: &str) -> bool {
-    item.named_children().into_iter().any(|c| match c.kind() {
-        RawKind::ReportDataitem
-        | RawKind::XmlportElement
-        | RawKind::Procedure
-        | RawKind::TriggerDeclaration => false,
-        RawKind::Property => {
-            let mut props = Vec::new();
-            lower_property(c, source, &mut props);
-            props
-                .iter()
-                .any(|p| p.name == "usetemporary" && p.value.trim().eq_ignore_ascii_case("true"))
+    bool_property(&own_item_properties(item, source), "usetemporary", false) == Some(true)
+}
+
+/// The dataset items under `node` (see [`crate::ir::ObjectDecl::dataset_items`]):
+/// report and query dataitems and XmlPort table elements, nested ones and every `#if`
+/// arm's included, document order. An item with no name or no table is skipped.
+fn collect_dataset_items(node: RawNode, source: &str, out: &mut Vec<crate::ir::DatasetItemDecl>) {
+    use crate::ir::DatasetItemKind as K;
+    for child in node.named_children() {
+        let kind = match child.kind() {
+            RawKind::ReportDataitem => Some(K::ReportDataitem),
+            RawKind::QueryDataitem => Some(K::QueryDataitem),
+            RawKind::XmlportElement
+                if child
+                    .field(FieldName::ElementType)
+                    .is_some_and(|t| t.kind() == RawKind::TableelementKeyword) =>
+            {
+                Some(K::XmlPortTableElement)
+            }
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let name = child
+                .field(FieldName::Name)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            let table = match kind {
+                K::XmlPortTableElement => child
+                    .field(FieldName::Source)
+                    .map(|n| ident_text(n, source)),
+                _ => dataitem_table_name(child, source),
+            }
+            .unwrap_or_default();
+            if !name.is_empty() && !table.is_empty() {
+                let props = own_item_properties(child, source);
+                let xml = kind == K::XmlPortTableElement;
+                out.push(crate::ir::DatasetItemDecl {
+                    kind,
+                    name,
+                    table,
+                    // A query has no `UseTemporary`: it reads the database.
+                    use_temporary: if kind == K::QueryDataitem {
+                        Some(false)
+                    } else {
+                        bool_property(&props, "usetemporary", false)
+                    },
+                    auto_save: if xml {
+                        bool_property(&props, "autosave", true)
+                    } else {
+                        Some(false)
+                    },
+                    auto_update: if xml {
+                        bool_property(&props, "autoupdate", false)
+                    } else {
+                        Some(false)
+                    },
+                    auto_replace: if xml {
+                        bool_property(&props, "autoreplace", false)
+                    } else {
+                        Some(false)
+                    },
+                    origin: origin_of(child),
+                });
+            }
         }
-        _ => own_use_temporary(c, source),
-    })
+        // Nested items live under an item's body; routine bodies hold none.
+        collect_dataset_items(child, source, out);
+    }
+}
+
+/// `item`'s OWN properties (not a nested item's, not a trigger's) as
+/// `(name lowercased, value, conditional)`: `conditional` when the property, or its
+/// whole value, sits in an `#if` arm.
+fn own_item_properties(item: RawNode, source: &str) -> Vec<(String, String, bool)> {
+    fn walk(n: RawNode, source: &str, conditional: bool, out: &mut Vec<(String, String, bool)>) {
+        for c in n.named_children() {
+            match c.kind() {
+                RawKind::ReportDataitem
+                | RawKind::QueryDataitem
+                | RawKind::XmlportElement
+                | RawKind::Procedure
+                | RawKind::TriggerDeclaration => {}
+                RawKind::Property => {
+                    let mut props = Vec::new();
+                    lower_property(c, source, conditional, &mut props);
+                    // A whole-value `#if` (even with one arm) is conditional.
+                    out.extend(props.into_iter().map(|p| (p.name, p.value, p.conditional)));
+                }
+                _ if is_preproc_wrapper(c) => walk(c, source, true, out),
+                _ => walk(c, source, conditional, out),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(item, source, false, &mut out);
+    out
+}
+
+/// A Boolean property's value in every build (see
+/// [`crate::ir::DatasetItemDecl`]): `default` when it is not written, the written
+/// value when it is written outside `#if`, and `None` when the builds disagree or a
+/// value is not `true`/`false`. A property written only inside `#if` arms keeps the
+/// default as a possible value: a build may take no arm. That is also assumed when
+/// an `#else` arm covers every build (`#if X AutoSave = false; #else AutoSave =
+/// false; #endif` reads as `None`), which is imprecise but never claims a value
+/// some build does not have.
+fn bool_property(props: &[(String, String, bool)], name: &str, default: bool) -> Option<bool> {
+    let entries: Vec<(&str, bool)> = props
+        .iter()
+        .filter(|(n, _, _)| n == name)
+        .map(|(_, v, c)| (v.trim(), *c))
+        .collect();
+    let mut values: Vec<Option<bool>> = entries
+        .iter()
+        .map(|(v, _)| {
+            if v.eq_ignore_ascii_case("true") {
+                Some(true)
+            } else if v.eq_ignore_ascii_case("false") {
+                Some(false)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if entries.iter().all(|(_, c)| *c) {
+        values.push(Some(default));
+    }
+    let first = values[0];
+    if values.iter().all(|v| *v == first) {
+        first
+    } else {
+        None
+    }
 }
 
 /// Lower a `property` node (`name = value`) into `out`. Name lowercased; value is the
@@ -1069,21 +1206,38 @@ fn own_use_temporary(item: RawNode, source: &str) -> bool {
 /// one-per-branch contract of [`collect_properties`]. Its raw text, directives and
 /// all, is not a value: as one entry it reached `singular_property_value` as a
 /// confident single table name.
-fn lower_property(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectProperty>) {
+///
+/// `in_arm`: the property sits in an `#if` arm. It, or a whole-value `#if`, makes
+/// every entry [`crate::ir::ObjectProperty::conditional`] (engine limits B2).
+fn lower_property(
+    node: RawNode,
+    source: &str,
+    in_arm: bool,
+    out: &mut Vec<crate::ir::ObjectProperty>,
+) {
     let Some(name_node) = node.field(FieldName::Name) else {
         return;
     };
     let name = name_node.text(source).trim().fold_identifier();
     let mut values = Vec::new();
-    match node.field(FieldName::Value) {
+    let value = node.field(FieldName::Value);
+    match value {
         Some(v) => property_arm_values(v, source, &mut values),
         None => values.push(String::new()),
     }
+    let whole_value_if = value.is_some_and(|v| {
+        matches!(
+            v.kind(),
+            RawKind::PreprocConditionalPropertyValue
+                | RawKind::PreprocConditionalPropertyValueSequence
+        )
+    });
     for value in values {
         out.push(crate::ir::ObjectProperty {
             name: name.clone(),
             value,
             origin: origin_of(node),
+            conditional: in_arm || whole_value_if,
         });
     }
 }
@@ -1118,12 +1272,24 @@ fn property_arm_values(v: RawNode, source: &str, out: &mut Vec<String>) {
 /// for degrading such a conflict rather than silently picking one (first/
 /// last-wins is the cardinal sin this fix exists to prevent) — see
 /// `node_extract::singular_property_value`.
-fn collect_properties(node: RawNode, source: &str, out: &mut Vec<crate::ir::ObjectProperty>) {
+///
+/// `in_arm`: `node` sits in an `#if` arm, so each entry it gives is
+/// [`crate::ir::ObjectProperty::conditional`] (engine limits B2). Imprecise in one
+/// direction only: an arm every build takes, or arms that together cover every
+/// build, still mark their entries conditional.
+fn collect_properties(
+    node: RawNode,
+    source: &str,
+    in_arm: bool,
+    out: &mut Vec<crate::ir::ObjectProperty>,
+) {
     match node.kind() {
-        RawKind::Property => lower_property(node, source, out),
+        RawKind::Property => lower_property(node, source, in_arm, out),
         _ if is_preproc_wrapper(node) => {
+            // Inside an `#if` arm: a build may take no arm (B2; B6 round 2
+            // set the same flag here for an XmlPort's `Direction`).
             for c in node.named_children() {
-                collect_properties(c, source, out);
+                collect_properties(c, source, true, out);
             }
         }
         _ => {}
@@ -1197,7 +1363,11 @@ fn collect_routines<'t>(
         match child.kind() {
             RawKind::AttributeItem => {
                 if let Some(guard) = consistent(&[], ctx) {
-                    pending.push(PendingAttr { node: child, guard });
+                    pending.push(PendingAttr {
+                        node: child,
+                        guard,
+                        conditional: false,
+                    });
                 }
             }
             // The grammar's `extras` (`grammar.js:539-547`) may sit anywhere and can
@@ -1383,8 +1553,20 @@ fn collect_routines<'t>(
                     .iter()
                     .map(|e| chain_shape(&directives, source, &in_syms(&e.guard)))
                     .collect();
-                let (shape, _) = chain_shape(&directives, source, &in_syms(ctx));
+                let (shape, ctx_falls) = chain_shape(&directives, source, &in_syms(ctx));
                 let last = shape.len() - 1;
+                // Engine limits B2: how many build paths through this chain the
+                // context leaves open (live arms, plus taking none). An attribute
+                // written inside an arm is in every build only when its arm is the
+                // one path.
+                // (A wrapper with no directive has no arm: `shape` is one entry.)
+                let arms = shape.get(1..last).unwrap_or_default();
+                let ctx_paths = arms.iter().filter(|(_, live)| *live).count()
+                    + usize::from(matches!(ctx_falls.last(), Some(Some(_))));
+                // Per incoming attribute node: the arms some entry of it entered,
+                // and the arms it came out of (not taken by a routine there).
+                let mut entered: Vec<(usize, usize)> = Vec::new();
+                let mut emerged: Vec<(usize, usize)> = Vec::new();
                 for (k, ((syms, live), branch)) in shape.into_iter().zip(contents).enumerate() {
                     if !live {
                         continue;
@@ -1392,7 +1574,7 @@ fn collect_routines<'t>(
                     // Entry 0 (before `#if`) and the last group (after `#endif`) are
                     // no arm; for a single chain both are empty (ledger P16).
                     let arm = single && k != 0 && k != last;
-                    let admitted = if arm {
+                    let admitted: Vec<PendingAttr> = if arm {
                         incoming
                             .iter()
                             .zip(&chains)
@@ -1401,6 +1583,7 @@ fn collect_routines<'t>(
                     } else {
                         Vec::new()
                     };
+                    entered.extend(admitted.iter().map(|e| (e.node.id(), k)));
                     let inner: Vec<(String, bool)> = ctx.iter().cloned().chain(syms).collect();
                     let left = collect_routines(
                         branch,
@@ -1415,15 +1598,58 @@ fn collect_routines<'t>(
                         out,
                     );
                     if arm {
-                        pending.extend(left);
+                        for mut e in left {
+                            if incoming.iter().any(|i| i.node.id() == e.node.id()) {
+                                emerged.push((e.node.id(), k));
+                            } else if ctx_paths != 1 {
+                                // Written inside this arm: a build that takes
+                                // another path (or none) does not have it.
+                                e.conditional = true;
+                            }
+                            pending.push(e);
+                        }
                     }
                 }
-                pending.extend(incoming.into_iter().zip(chains).filter_map(|(e, c)| {
+                let mut falls: Vec<usize> = Vec::new();
+                pending.extend(incoming.iter().zip(chains).filter_map(|(e, c)| {
+                    let guard = consistent(&e.guard, c.1.last()?.as_ref()?)?;
+                    falls.push(e.node.id());
                     Some(PendingAttr {
-                        guard: consistent(&e.guard, &c.1?)?,
+                        guard,
                         node: e.node,
+                        conditional: e.conditional,
                     })
                 }));
+                // An attribute from before the chain is still in every build
+                // after it only when it came out of every path it went into: an
+                // arm whose routine took it, or the no-arm path it did not
+                // have, leaves it out of the builds of that path.
+                // One answer per node: its copies (one per path) are one
+                // attribute, conditional when any copy is.
+                let mut conditional_nodes: Vec<usize> = Vec::new();
+                for e in &pending {
+                    let id = e.node.id();
+                    if !incoming.iter().any(|i| i.node.id() == id)
+                        || conditional_nodes.contains(&id)
+                    {
+                        continue;
+                    }
+                    let arms_in = entered.iter().filter(|(n, _)| *n == id).map(|(_, k)| *k);
+                    let every_arm = arms_in
+                        .clone()
+                        .all(|k| emerged.iter().any(|&(n, j)| n == id && j == k));
+                    let paths = arms_in.count() + usize::from(falls.contains(&id));
+                    let was = incoming.iter().any(|i| i.node.id() == id && i.conditional)
+                        || pending.iter().any(|p| p.node.id() == id && p.conditional);
+                    if was || !every_arm || paths == 0 {
+                        conditional_nodes.push(id);
+                    }
+                }
+                for e in pending.iter_mut() {
+                    if conditional_nodes.contains(&e.node.id()) {
+                        e.conditional = true;
+                    }
+                }
                 settle_pending(&mut pending, child.byte_range().end, cond_syms, issues);
             }
             _ => {
@@ -1458,12 +1684,85 @@ fn collect_routines<'t>(
     pending
 }
 
+/// Engine limits B2: a routine declared in several `#if` arms (two object-level
+/// arms, or one `#if`-split header) is one row per arm under ONE routine identity,
+/// and a build runs exactly one of them. An attribute that one row carries and
+/// another does not (`#if X [TryFunction] procedure P() #else procedure P()
+/// #endif`) is therefore missing from some build of the routine, though its own
+/// row has it on every build of that row: it is marked
+/// [`crate::ir::AttributeIr::another_declaration_lacks`] on the row that has it
+/// (not `conditional`, which is about the row's own builds).
+///
+/// This compares the routines of ONE object declaration only (the IR's unit).
+/// The model compares every row of a routine id, across whole-object `#if` arms
+/// and across files (`al-sem`'s `workspace::join_alternative_declarations`); the
+/// model's readers rely on that join, and this pass keeps the IR's own reading
+/// (the L2 projection's attribute JSON) right inside one declaration.
+///
+/// The rows are grouped by the routine identity's parts as the IR has them (kind,
+/// name, enclosing member, parameter `var`-ness and types, return type), compared
+/// lowercased with whitespace removed: at least as coarse as
+/// `compute_routine_id`'s lowercased, trimmed signature, so rows the engine counts
+/// as one routine are always in one group. A coarser group only marks more
+/// attributes conditional (the "may" direction). Attributes compare by their
+/// whole text, normalized the same way, so two arms that write the same attribute
+/// with different arguments each make the other conditional.
+fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
+    fn norm(s: &str) -> String {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    let key = |r: &RoutineDecl| {
+        (
+            r.kind == RoutineKind::Trigger,
+            norm(&r.name),
+            r.enclosing_member.as_ref().map(|(m, _)| norm(m)),
+            r.params
+                .iter()
+                .map(|p| (p.by_ref, norm(p.ty.as_deref().unwrap_or_default())))
+                .collect::<Vec<_>>(),
+            norm(r.return_type.as_deref().unwrap_or_default()),
+        )
+    };
+    let mut groups: std::collections::HashMap<_, Vec<usize>> = std::collections::HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        groups.entry(key(r)).or_default().push(i);
+    }
+    for rows in groups.values().filter(|rows| rows.len() >= 2) {
+        let texts: Vec<Vec<String>> = rows
+            .iter()
+            .map(|&i| {
+                routines[i]
+                    .attributes_parsed
+                    .iter()
+                    .map(|a| norm(&a.raw))
+                    .collect()
+            })
+            .collect();
+        for (&i, own) in rows.iter().zip(&texts) {
+            for (a, text) in routines[i].attributes_parsed.iter_mut().zip(own) {
+                if !texts.iter().all(|t| t.contains(text)) {
+                    a.another_declaration_lacks = true;
+                }
+            }
+        }
+    }
+}
+
 /// One attribute waiting for its routine (`collect_routines`), and its guard: the
 /// build context, projected by [`settle_pending`], under which it still waits.
 #[derive(Clone)]
 struct PendingAttr<'t> {
     node: RawNode<'t>,
     guard: Syms,
+    /// Some build in which the attribute's routine exists may not have it
+    /// (engine limits B2): it crossed a `#if` wrapper by a path that not
+    /// every build takes and not every path carried it on. `false` promises
+    /// that every build reaching this point still has it pending. See
+    /// [`crate::ir::AttributeIr::conditional`].
+    conditional: bool,
 }
 
 /// More distinct guards than this for one attribute in one `pending` list being
@@ -1486,6 +1785,7 @@ fn admit<'t>(e: &PendingAttr<'t>, (syms, live): &(Syms, bool)) -> Option<Pending
     Some(PendingAttr {
         node: e.node,
         guard: consistent(&e.guard, syms)?,
+        conditional: e.conditional,
     })
 }
 
@@ -1797,21 +2097,21 @@ fn chain_parts<'t>(node: RawNode<'t>) -> (Vec<RawNode<'t>>, Vec<Vec<RawNode<'t>>
 
 /// The directive walk of [`preproc_branches`], over a wrapper's `directives` only
 /// ([`chain_parts`]), with no branch contents: per arm its `(symbols, live under
-/// the context `lookup` reads)`, plus the symbols of the build that takes no arm
-/// (every `#if`/`#elif` condition false): `Some` only when the chain has no `#else`
-/// and the context decides no arm true. The fall-through is read for the LAST chain
-/// of the wrapper (a single-chain wrapper has one). It costs the directives, not the
-/// wrapper's children, so it runs once per pending attribute.
+/// the context `lookup` reads)`, plus, per chain closed by an `#endif` (in order),
+/// the symbols of the build that takes none of its arms (every `#if`/`#elif`
+/// condition false): `Some` only when the chain has no `#else` and the context
+/// decides no arm true. It costs the directives, not the wrapper's children, so it
+/// runs once per pending attribute.
 fn chain_shape(
     directives: &[RawNode],
     source: &str,
     lookup: &dyn Fn(&str) -> Option<bool>,
-) -> (Vec<(Syms, bool)>, Option<Syms>) {
+) -> (Vec<(Syms, bool)>, Vec<Option<Syms>>) {
     let mut out = vec![(Vec::new(), true)];
     let mut earlier: Vec<RawNode> = Vec::new();
     let mut taken = false;
     let mut has_else = false;
-    let mut falls_through = None;
+    let mut falls_through = Vec::new();
     for &c in directives {
         match c.kind() {
             RawKind::PreprocIf | RawKind::PreprocElif => {
@@ -1838,13 +2138,13 @@ fn chain_shape(
                 out.push((syms, !taken));
             }
             RawKind::PreprocEndif => {
-                falls_through = (!has_else && !taken).then(|| {
+                falls_through.push((!has_else && !taken).then(|| {
                     let mut syms = Vec::new();
                     for e in &earlier {
                         assume_preproc(*e, false, source, &mut syms);
                     }
                     syms
-                });
+                }));
                 earlier.clear();
                 taken = false;
                 has_else = false;
@@ -2247,6 +2547,9 @@ fn lower_routine<'t>(
                     .map(|c| PendingAttr {
                         node: c,
                         guard: guard.clone(),
+                        // In the routine's own header arm: every build of
+                        // this routine has it.
+                        conditional: false,
                     }),
             );
         }
@@ -2258,8 +2561,13 @@ fn lower_routine<'t>(
     // build (union-read). Selecting before `lower_expr` leaves no dead `ExprId`. The
     // `#if`-in-arguments `SyntaxIssue` is deduplicated apart from this, by group node
     // (`reported`), so it is raised once per group however many selections keep it.
-    let mut seen: std::collections::HashSet<(usize, Vec<Vec<usize>>)> =
-        std::collections::HashSet::new();
+    //
+    // Engine limits B2: the kept entry is conditional when any path that
+    // brought it is (`collect_routines` gives every path of one node the same
+    // answer, so this only joins equal flags), or when its arguments hold an
+    // `#if` group (one build's arguments are read, another build's differ).
+    let mut seen: std::collections::HashMap<(usize, Vec<Vec<usize>>), usize> =
+        std::collections::HashMap::new();
     let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut selected = Vec::new();
     for e in &attr_items {
@@ -2271,8 +2579,15 @@ fn lower_routine<'t>(
                 .map(|l| l.items.iter().map(|n| n.id()).collect())
                 .collect(),
         );
-        if seen.insert(key) {
-            selected.push((e.node, lists));
+        match seen.entry(key) {
+            std::collections::hash_map::Entry::Occupied(at) => {
+                let kept: &mut (_, _, bool) = &mut selected[*at.get()];
+                kept.2 |= e.conditional;
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(selected.len());
+                selected.push((e.node, lists, e.conditional));
+            }
         }
     }
 
@@ -2280,10 +2595,11 @@ fn lower_routine<'t>(
     // the full parsed form (name + raw text + lowered argument exprs).
     let mut attributes: Vec<String> = Vec::new();
     let mut attributes_parsed: Vec<crate::ir::AttributeIr> = Vec::new();
-    for (item, lists) in selected {
+    for (item, lists, path_conditional) in selected {
         let Some(content) = item.field(FieldName::Attribute) else {
             continue;
         };
+        let conditional = path_conditional || lists.iter().any(|l| !l.groups.is_empty());
         let Some(name_node) = content.field(FieldName::Name) else {
             continue;
         };
@@ -2311,6 +2627,8 @@ fn lower_routine<'t>(
             raw: item.text(source).to_string(),
             args,
             origin: origin_of(item),
+            conditional,
+            another_declaration_lacks: false,
         });
     }
     let name = arm_field(FieldName::Name)
@@ -2807,6 +3125,144 @@ fn lower_stmt_seq(
     ir.add_block(Block { items, origin })
 }
 
+/// An [`Origin`] from the start of `from` to `to` (a byte offset and its point).
+fn span_origin(from: RawNode, to: (usize, tree_sitter::Point)) -> Origin {
+    let s = from.start_position();
+    Origin {
+        kind_text: from.kind_str(),
+        byte: from.byte_range().start..to.0.max(from.byte_range().start),
+        start: Point {
+            row: s.row as u32,
+            column: s.column as u32,
+        },
+        end: Point {
+            row: to.1.row as u32,
+            column: to.1.column as u32,
+        },
+    }
+}
+
+/// One `#if` … `#endif` chain of a statement-position wrapper while it is read:
+/// its `#if` directive and its live arms (symbols, contents, origin).
+struct StmtChain<'t> {
+    open: RawNode<'t>,
+    arms: Vec<(Syms, Vec<RawNode<'t>>, Origin)>,
+}
+
+/// A statement-position `#if` wrapper (engine limits B2, step 1 of L22). Each chain
+/// (`#if` … `#endif`) becomes ONE [`PreprocGroup`]: its arms the build context
+/// leaves live, each lowered into its own block under its own branch's symbols
+/// (`BUILD_CONTEXT`). The arms are ALTERNATIVES, never a sequence: a build compiles
+/// at most one of them, so an `exit` or `Error` in one arm does not cut off the code
+/// after the group. `falls_through` is the build that takes no arm (no `#else`, and
+/// no arm the context decides true), the implicit empty arm. No configuration is
+/// chosen here (that is a later L22 step): every live arm is kept.
+///
+/// A chain whose only live arm is taken by every build (one live arm, no
+/// fall-through) is spliced in place, as a plain statement sequence; a chain with no
+/// live arm adds nothing. Content outside any chain (before the first `#if`, after an
+/// `#endif`) is lowered in place, in document order. A chain the parser left without
+/// its `#endif` is closed with a fall-through, the reading that never drops a build.
+fn lower_preproc_statements(
+    node: RawNode,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    items: &mut Vec<BlockItem>,
+    depth: u32,
+) {
+    let (directives, contents) = chain_parts(node);
+    let (shape, falls) = chain_shape(&directives, source, &in_syms(&build_context()));
+    let mut falls = falls.into_iter();
+    let wrapper_end = (node.byte_range().end, node.end_position());
+    let mut chain: Option<StmtChain> = None;
+    let emit = |chain: StmtChain,
+                end: (usize, tree_sitter::Point),
+                falls_through: bool,
+                ir: &mut Ir,
+                issues: &mut Vec<SyntaxIssue>,
+                items: &mut Vec<BlockItem>| {
+        if chain.arms.is_empty() {
+            return;
+        }
+        if chain.arms.len() == 1 && !falls_through {
+            let (syms, children, _) = chain.arms.into_iter().next().expect("one arm");
+            with_build_context(&syms, ir, |ir| {
+                for c in children {
+                    lower_block_child(c, ir, issues, source, items, depth);
+                }
+            });
+            return;
+        }
+        let branches = chain
+            .arms
+            .into_iter()
+            .map(|(syms, children, origin)| {
+                let mut arm_items = Vec::new();
+                with_build_context(&syms, ir, |ir| {
+                    for c in children {
+                        lower_block_child(c, ir, issues, source, &mut arm_items, depth);
+                    }
+                });
+                ir.add_block(Block {
+                    items: arm_items,
+                    origin,
+                })
+            })
+            .collect();
+        items.push(BlockItem::Preproc(PreprocGroup {
+            branches,
+            falls_through,
+            origin: span_origin(chain.open, end),
+        }));
+    };
+    for (k, ((syms, live), children)) in shape.into_iter().zip(contents).enumerate() {
+        let opener = k.checked_sub(1).map(|i| directives[i]);
+        // An arm runs from its directive to the next directive (or the wrapper's end).
+        let arm_end = directives
+            .get(k)
+            .map_or(wrapper_end, |d| (d.byte_range().start, d.start_position()));
+        match opener.map(RawNode::kind) {
+            Some(RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse) => {
+                let d = opener.expect("an opener");
+                // An `#if` before the last chain's `#endif` (a parser recovery):
+                // that chain is closed with a fall-through.
+                if d.kind() == RawKind::PreprocIf
+                    && let Some(open) = chain.take()
+                {
+                    let end = (d.byte_range().start, d.start_position());
+                    emit(open, end, true, ir, issues, items);
+                }
+                let c = chain.get_or_insert_with(|| StmtChain {
+                    open: d,
+                    arms: Vec::new(),
+                });
+                if live {
+                    c.arms.push((syms, children, span_origin(d, arm_end)));
+                }
+            }
+            _ => {
+                if let Some(d) = opener {
+                    // `#endif`: one fall-through flag per `#endif`, in order.
+                    let falls_through = falls.next().is_none_or(|f| f.is_some());
+                    if let Some(open) = chain.take() {
+                        let end = (d.byte_range().end, d.end_position());
+                        emit(open, end, falls_through, ir, issues, items);
+                    }
+                }
+                with_build_context(&syms, ir, |ir| {
+                    for c in children {
+                        lower_block_child(c, ir, issues, source, items, depth);
+                    }
+                });
+            }
+        }
+    }
+    if let Some(open) = chain.take() {
+        emit(open, wrapper_end, true, ir, issues, items);
+    }
+}
+
 fn lower_block_child(
     node: RawNode,
     ir: &mut Ir,
@@ -2816,17 +3272,7 @@ fn lower_block_child(
     depth: u32,
 ) {
     if is_preproc_wrapper(node) {
-        // Union-read every branch the build context leaves live, each under
-        // its own branch's symbols (`BUILD_CONTEXT`).
-        for (syms, live, children) in preproc_branches(node, source, &build_context()) {
-            if live {
-                with_build_context(&syms, ir, |ir| {
-                    for c in children {
-                        lower_block_child(c, ir, issues, source, items, depth);
-                    }
-                });
-            }
-        }
+        lower_preproc_statements(node, ir, issues, source, items, depth);
         return;
     }
     // Statement-position keyword tokens are named children that leak from certain
@@ -4007,6 +4453,114 @@ table 50000 \"T Two\"
                 ("Elem".to_string(), "T".to_string()),
                 ("Inner Line".to_string(), "Sales Line".to_string())
             ]
+        );
+    }
+
+    /// B6: the dataset items keep each XmlPort table element's `AutoSave`,
+    /// `AutoUpdate`, `AutoReplace` and `UseTemporary` as the value every build
+    /// gives it: the AL default when not written, `None` when `#if` arms make
+    /// builds disagree (a property in one arm alone keeps the default in the
+    /// build that takes no arm). A nested element's properties are its own.
+    #[test]
+    fn dataset_items_keep_their_properties_per_build() {
+        let src = "xmlport 50003 X
+{
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Plain; T)
+            {
+                tableelement(NoSave; U)
+                {
+                    AutoSave = false;
+                    AutoReplace = true;
+                }
+            }
+            tableelement(Armed; T)
+            {
+#if CLEAN
+                AutoSave = false;
+#endif
+                UseTemporary = true;
+            }
+        }
+    }
+}
+query 50004 Q
+{
+    elements
+    {
+        dataitem(QItem; T)
+        {
+            column(K; K) { }
+        }
+    }
+}
+";
+        let af = parse(src);
+        let items = |o: usize| -> Vec<_> {
+            af.objects[o]
+                .dataset_items
+                .iter()
+                .map(|d| {
+                    (
+                        d.kind,
+                        d.name.clone(),
+                        d.table.clone(),
+                        d.use_temporary,
+                        d.auto_save,
+                        d.auto_update,
+                        d.auto_replace,
+                    )
+                })
+                .collect()
+        };
+        use crate::ir::DatasetItemKind::{QueryDataitem, XmlPortTableElement};
+        let t = |s: &str| s.to_string();
+        assert_eq!(
+            items(0),
+            vec![
+                (
+                    XmlPortTableElement,
+                    t("Plain"),
+                    t("T"),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(false)
+                ),
+                (
+                    XmlPortTableElement,
+                    t("NoSave"),
+                    t("U"),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(true)
+                ),
+                (
+                    XmlPortTableElement,
+                    t("Armed"),
+                    t("T"),
+                    Some(true),
+                    None,
+                    Some(false),
+                    Some(false)
+                ),
+            ]
+        );
+        assert_eq!(
+            items(1),
+            vec![(
+                QueryDataitem,
+                t("QItem"),
+                t("T"),
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(false)
+            )]
         );
     }
 
@@ -5564,7 +6118,10 @@ codeunit 50104 T
                     .then_some(*eid),
                     _ => None,
                 },
-                _ => None,
+                // A `#if` group's branches (B2: kept as a group, not spliced).
+                crate::ir::BlockItem::Preproc(g) => {
+                    g.branches.iter().find_map(|&br| find_call(af, br, name))
+                }
             })
         }
         let s = |v: &[(&str, bool)]| -> Vec<(String, bool)> {
@@ -6713,6 +7270,47 @@ table 50120 T
         assert!(f[2].obsolete_state.is_empty() && f[2].obsolete_reason.is_empty());
     }
 
+    /// Engine limits B5: a field's `CalcFormula` text is kept, one per `#if`
+    /// arm, so the FlowField read rule can name its table.
+    #[test]
+    fn field_calc_formula_is_kept_per_arm() {
+        let src = r#"
+table 50121 T
+{
+    fields
+    {
+        field(1; Total; Decimal)
+        {
+            FieldClass = FlowField;
+            CalcFormula = sum("Cust. Ledger Entry".Amount where("Customer No." = field("No.")));
+        }
+        field(2; Moving; Integer)
+        {
+            FieldClass = FlowField;
+#if not CLEAN24
+            CalcFormula = count("Old Entry");
+#else
+            CalcFormula = count("New Entry");
+#endif
+        }
+        field(3; Plain; Integer) { }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let f = &af.objects[0].fields;
+        assert_eq!(
+            f[0].calc_formula,
+            [r#"sum("Cust. Ledger Entry".Amount where("Customer No." = field("No.")))"#]
+        );
+        assert_eq!(
+            f[1].calc_formula,
+            [r#"count("Old Entry")"#, r#"count("New Entry")"#]
+        );
+        assert!(f[2].calc_formula.is_empty());
+    }
+
     /// A whole-value `#if` property gives one `ObjectProperty` per nonempty arm,
     /// nested conditionals included, never one entry holding the directive text.
     #[test]
@@ -6964,6 +7562,178 @@ pageextension 50117 PE extends P
         assert_eq!(
             r.origin.start.row, 4,
             "the routine node starts at the keyword"
+        );
+    }
+
+    /// `(routine name, [(attribute name, conditional)])` of every routine.
+    fn attr_conditionality(src: &str) -> Vec<(String, Vec<(String, bool)>)> {
+        let af = parse(src);
+        af.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    r.attributes_parsed
+                        .iter()
+                        .map(|a| (a.name.clone(), a.conditional))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Engine limits B2: an attribute is conditional when some build in which
+    /// its routine exists does not have it. Each shape states its builds.
+    #[test]
+    fn an_attribute_only_some_builds_of_its_routine_have_is_conditional() {
+        let t = |name: &str, c: bool| (name.to_string(), c);
+        // In an arm the routine is not in: a build without X has no attribute.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n#endif\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", true)])]
+        );
+        // In the routine's own arm: every build of P has it.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n#endif\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", false)])]
+        );
+        // Before a wrapper whose arm holds R1: R1 (only in X builds) always
+        // takes it; R2 takes it only in the builds without X.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n#if X\n    procedure R1()\n    begin\n    end;\n#endif\n    procedure R2()\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("R1".to_string(), vec![t("TryFunction", false)]),
+                ("R2".to_string(), vec![t("TryFunction", true)]),
+            ]
+        );
+        // Past a wrapper whose arms hold no routine: every build carries it on.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n#if X\n    // nothing\n#endif\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", false)])]
+        );
+        // No `#if` at all.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("TryFunction", false)])]
+        );
+        // An `#if` inside the arguments: one build's arguments are read.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [Obsolete('r',\n#if X\n    '1.0'\n#else\n    '2.0'\n#endif\n    )]\n    procedure P()\n    begin\n    end;\n}\n"
+            ),
+            vec![("P".to_string(), vec![t("Obsolete", true)])]
+        );
+    }
+
+    /// `(routine name, [(attribute name, another_declaration_lacks)])` of
+    /// every routine; asserts no attribute here is `conditional` (each sits in
+    /// its own declaration's arm).
+    fn attr_lacks(src: &str) -> Vec<(String, Vec<(String, bool)>)> {
+        let af = parse(src);
+        af.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    r.attributes_parsed
+                        .iter()
+                        .map(|a| {
+                            assert!(!a.conditional, "{}: own arm, every build", a.name);
+                            (a.name.clone(), a.another_declaration_lacks)
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Engine limits B2 (third review, final review): one routine declared in
+    /// two `#if` arms is one row per arm; an attribute that one row carries
+    /// and another does not is missing from the builds of the other arm, so
+    /// it is marked `another_declaration_lacks` on the row that has it (a
+    /// "may" for a reader judging the routine from outside), while its own
+    /// row's builds all have it (not `conditional`). The same attribute on
+    /// every row is not marked. An overload (other parameters) is another
+    /// routine and is not compared.
+    #[test]
+    fn an_attribute_one_arm_of_a_routine_lacks_is_conditional() {
+        let t = |name: &str, c: bool| (name.to_string(), c);
+        let attr_conditionality = attr_lacks;
+        // Two whole declarations.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n    begin\n    end;\n#else\n    procedure P()\n    begin\n    end;\n#endif\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", true)]),
+                ("P".to_string(), vec![]),
+            ]
+        );
+        // A split header, the attribute in the `#else` arm.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    procedure P(a: Integer)\n#else\n    [TryFunction]\n    procedure P(a: Integer)\n#endif\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![]),
+                ("P".to_string(), vec![t("TryFunction", true)]),
+            ]
+        );
+        // The same attribute in both arms: every build has it.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n#if X\n    [TryFunction]\n    procedure P()\n#else\n    [TryFunction]\n    procedure P()\n#endif\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", false)]),
+                ("P".to_string(), vec![t("TryFunction", false)]),
+            ]
+        );
+        // Overloads in no `#if` are two routines.
+        assert_eq!(
+            attr_conditionality(
+                "codeunit 1 C\n{\n    [TryFunction]\n    procedure P(a: Integer)\n    begin\n    end;\n\n    procedure P(a: Text)\n    begin\n    end;\n}\n"
+            ),
+            vec![
+                ("P".to_string(), vec![t("TryFunction", false)]),
+                ("P".to_string(), vec![]),
+            ]
+        );
+    }
+
+    /// Engine limits B2: an object property in an `#if` arm, or with a
+    /// whole-value `#if`, is conditional; one outside every `#if` is not.
+    #[test]
+    fn an_object_property_only_some_builds_have_is_conditional() {
+        let af = parse(
+            "codeunit 1 C\n{\n    Subtype = Normal;\n#if X\n    SingleInstance = true;\n#endif\n    TableNo =\n#if Y\n        Customer\n#else\n        Vendor\n#endif\n        ;\n}\n",
+        );
+        let got: Vec<(String, String, bool)> = af.objects[0]
+            .properties
+            .iter()
+            .map(|p| (p.name.clone(), p.value.clone(), p.conditional))
+            .collect();
+        let t = |n: &str, v: &str, c: bool| (n.to_string(), v.to_string(), c);
+        assert_eq!(
+            got,
+            vec![
+                t("subtype", "Normal", false),
+                t("singleinstance", "true", true),
+                t("tableno", "Customer", true),
+                t("tableno", "Vendor", true),
+            ]
         );
     }
 
@@ -8878,5 +9648,118 @@ page 50137 P
                 ("/* block */", true, true, 6),
             ]
         );
+    }
+
+    /// Engine limits B2: a statement-position `#if` chain is ONE group whose
+    /// branches are alternatives, never spliced into one statement sequence. The
+    /// group records whether some build takes no branch (no `#else`); a chain whose
+    /// one live branch every build takes (the routine's own `#if` decides it) is
+    /// spliced as plain statements; each branch's block starts at its directive.
+    #[test]
+    fn statement_if_chains_are_groups_of_alternatives() {
+        use crate::ir::{BlockItem, PreprocGroup};
+        let src = r#"
+codeunit 50139 G
+{
+    procedure IfElse()
+    begin
+#if A
+        exit;
+#else
+        Second();
+#endif
+        After();
+    end;
+
+    procedure NoElse()
+    begin
+#if not A
+        exit;
+#endif
+        After();
+    end;
+
+    procedure Elif()
+    begin
+#if A
+        First();
+#elif B
+        Second();
+#endif
+    end;
+
+#if A
+    procedure Decided()
+    begin
+#if A
+        exit;
+#endif
+#if not A
+        Dead();
+#endif
+        After();
+    end;
+#endif
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let items = |name: &str| -> &[BlockItem] {
+            let r = af.objects[0]
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("no routine {name}"));
+            &af.ir.block(r.body.expect("body")).items
+        };
+        let group = |item: &BlockItem| -> (usize, bool, Vec<u32>) {
+            let BlockItem::Preproc(PreprocGroup {
+                branches,
+                falls_through,
+                ..
+            }) = item
+            else {
+                panic!("expected a #if group");
+            };
+            let rows = branches
+                .iter()
+                .map(|&b| af.ir.block(b).origin.start.row)
+                .collect();
+            (branches.len(), *falls_through, rows)
+        };
+        let stmt_kinds = |items: &[BlockItem]| -> Vec<&'static str> {
+            items
+                .iter()
+                .map(|i| match i {
+                    BlockItem::Stmt(s) => match af.ir.stmt(*s).kind {
+                        StmtKind::Exit(_) => "exit",
+                        StmtKind::Call(_) => "call",
+                        _ => "other",
+                    },
+                    BlockItem::Preproc(_) => "group",
+                })
+                .collect()
+        };
+
+        // `#if … #else … #endif`: two branches, no build skips both; the call after
+        // the group is a sibling of the group, not of the `exit`.
+        let it = items("IfElse");
+        assert_eq!(stmt_kinds(it), ["group", "call"]);
+        assert_eq!(group(&it[0]), (2, false, vec![5, 7]));
+
+        // No `#else`: the implicit empty branch.
+        let it = items("NoElse");
+        assert_eq!(stmt_kinds(it), ["group", "call"]);
+        assert_eq!(group(&it[0]), (1, true, vec![15]));
+
+        // `#if … #elif … #endif`: two branches and the build that takes neither.
+        let it = items("Elif");
+        assert_eq!(stmt_kinds(it), ["group"]);
+        assert_eq!(group(&it[0]).0, 2);
+        assert!(group(&it[0]).1);
+
+        // Under the routine's own `#if A`, the inner `#if A` is taken by every build
+        // (spliced) and `#if not A` by none (dropped).
+        assert_eq!(stmt_kinds(items("Decided")), ["exit", "call"]);
     }
 }

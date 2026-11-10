@@ -1178,6 +1178,11 @@ pub fn resolve_routine_selector<'a>(
         bare
     };
     let mut hits = hits;
+    // A routine declared in two `#if` arms is two rows of ONE stable id
+    // (engine limits B2): one candidate, its first row in workspace order,
+    // the row a `stableRoutineId` selector takes above.
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|r| seen.insert(r.stable_routine_id.as_str()));
     hits.sort_by(|a, b| a.id.cmp(&b.id));
     match hits.len() {
         0 => Resolution::Unmatched,
@@ -1408,14 +1413,19 @@ impl<'a> OwnerIndex<'a> {
 /// real memberships are `inherited`: the effect surfaces on the routine you
 /// asked about, but the `Cust.Modify()` itself sits in a callee possibly twelve
 /// frames down. `operation_id` is the store's own per-operation identity, and
-/// every db effect originates in some routine's `record_operations` entry — so
-/// the anchor is a plain lookup, not an inference.
+/// every db effect originates in some routine's `record_operations` or
+/// `field_ref_operations` entry (`ModelRoutine::effect_operations`) — so the
+/// anchor is a plain lookup, not an inference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRef {
     pub owner: RoutineRef,
     pub file: String,
     pub line: u32,
     pub column: u32,
+    /// B6: for an operation the platform performs when the call at the anchor
+    /// runs a report, XmlPort or query, why
+    /// (`ModelRecordOperation::dataset_reason`); `None` for code's own.
+    pub platform: Option<String>,
 }
 
 /// `operation_id` -> the routine + record operation that produced it, read
@@ -1447,6 +1457,7 @@ impl<'a> OperationJoin<'a> {
             file: op.source_anchor.source_unit_id.clone(),
             line: op.source_anchor.start_line,
             column: op.source_anchor.start_column,
+            platform: op.dataset_reason.clone(),
         })
     }
 
@@ -1458,6 +1469,30 @@ impl<'a> OperationJoin<'a> {
         self.index
             .last_record_operation(operation_id)
             .is_some_and(|(_, op)| op.receiver_is_record_ref)
+    }
+
+    /// Engine limits B5: the FlowField read of `table_id` the operation
+    /// makes (`ModelRecordOperation::flow_field_reads`), read off the same
+    /// claiming row [`Self::get`] reads. `None` for an effect row that is not a
+    /// FlowField read (its `effect_op` is the operation's own, such as the
+    /// `FindSet` row of a `SetAutoCalcFields` read), for a `CalcFields` on its
+    /// own table, and for an operation outside the model's routines.
+    pub fn flow_field(
+        &self,
+        operation_id: &str,
+        effect_op: &str,
+        table_id: &str,
+    ) -> Option<&'a crate::program::model::flow_fields::FlowFieldRead> {
+        if effect_op != "CalcFields" {
+            return None;
+        }
+        let (_, op) = self.index.last_record_operation(operation_id)?;
+        if op.op == "CalcFields" && op.table_id.as_deref() == Some(table_id) {
+            return None;
+        }
+        op.flow_field_reads
+            .iter()
+            .find(|f| f.effect_table_id() == table_id)
     }
 
     /// The operation is dependency code's: its owning row is not a
@@ -1487,17 +1522,30 @@ fn unresolved_label(record_ref: bool) -> &'static str {
 fn origin_json(origin: Option<&OperationRef>) -> Value {
     match origin {
         None => Value::Null,
-        Some(o) => json!({
-            "routine": routine_ref_json(&o.owner),
-            "anchor": { "file": o.file, "line": shown(o.line), "column": o.column },
-        }),
+        Some(o) => {
+            let mut v = json!({
+                "routine": routine_ref_json(&o.owner),
+                "anchor": { "file": o.file, "line": shown(o.line), "column": o.column },
+            });
+            if let Some(p) = &o.platform {
+                v["platform"] = p.as_str().into();
+            }
+            v
+        }
     }
 }
 
-/// `Object::Routine at file:line` — the human rendering of an effect's origin.
+/// `Object::Routine at file:line` — the human rendering of an effect's origin,
+/// then (B6) `: <why>` for an operation the platform performs.
 fn origin_human(origin: Option<&OperationRef>, operation_id: &str) -> String {
     match origin {
-        Some(o) => format!("{} at {}:{}", o.owner.qualified(), o.file, shown(o.line)),
+        Some(o) => {
+            let at = format!("{} at {}:{}", o.owner.qualified(), o.file, shown(o.line));
+            match &o.platform {
+                Some(p) => format!("{at} (platform: {p})"),
+                None => at,
+            }
+        }
         None => format!("(outside the workspace: {operation_id})"),
     }
 }
@@ -1776,6 +1824,10 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
         h.analysis = Analysis::NotAnalyzed("the input did not resolve".to_string());
     } else if payload.pointer("/down/answer").and_then(Value::as_str) == Some("unknown") {
         h.analysis = Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
+    } else if payload.get("unreadableEventSubscribers").is_some() {
+        h.analysis = Analysis::Partial(vec![
+            "an [EventSubscriber] the engine could not read may also run for these routines".into(),
+        ]);
     }
     let depth = if kind == "query.effects" {
         "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
@@ -2328,6 +2380,15 @@ fn finish_human(
         hc,
         families.as_ref(),
     );
+    // Engine limits B2: the header says what `payload.result.scope` says.
+    if r.json_text.contains("\"unreadableEventSubscribers\"") {
+        r.human_text = r.human_text.replacen(
+            "analysis complete",
+            "analysis partial (an [EventSubscriber] the engine could not read may also run for \
+             these routines)",
+            1,
+        );
+    }
     // Round-2 G40: an ambiguous routine selector offers the complete calls,
     // one per candidate, in this surface's words.
     if r.exit_code == 2
@@ -2545,11 +2606,43 @@ fn render_query_touches_body(
             let mut dep_routines: BTreeSet<&str> = BTreeSet::new();
             for r in &resolved.workspace.routines {
                 let primary = is_primary_routine(resolved, r);
-                for o in &r.record_operations {
+                // The record operations and the `FieldRef` operations (B5).
+                for o in r.effect_operations() {
                     let hit = match o.table_id.as_deref() {
                         Some(t) => t == table.id || (unknown && is_unknown_table(t)),
                         None => unknown,
                     };
+                    // Engine limits B5: a read of the table through a
+                    // FlowField at this operation is a `CalcFields` site of
+                    // it, unless the operation is already one on this table.
+                    for ffr in &o.flow_field_reads {
+                        if ffr.effect_table_id() != table.id || ffr.repeats_host_read(o) {
+                            continue;
+                        }
+                        if primary {
+                            ws_routines.insert(r.stable_routine_id.as_str());
+                            ws_sites.push(TableSite {
+                                file: o.source_anchor.source_unit_id.clone(),
+                                line: o.source_anchor.start_line + 1,
+                                op: "CalcFields".to_string(),
+                                who: names.display(&r.stable_routine_id),
+                                object: join.of(r).object_display,
+                                key: None,
+                                unresolved: match &ffr.source {
+                                    crate::program::model::flow_fields::FlowFieldSource::Undecided(
+                                        why,
+                                    ) => format!("FlowField {}: {why}", ffr.field),
+                                    crate::program::model::flow_fields::FlowFieldSource::Table {
+                                        ..
+                                    } => String::new(),
+                                },
+                                temp: TempStateKind::Known(ffr.temporary()),
+                            });
+                        } else {
+                            dep_routines.insert(r.stable_routine_id.as_str());
+                            *dep_by_op.entry("CalcFields".to_string()).or_default() += 1;
+                        }
+                    }
                     if !hit {
                         continue;
                     }
@@ -3019,6 +3112,20 @@ fn render_query_touches_body(
         }
     }
 
+    // Engine limits B2: an `[EventSubscriber]` the engine could not read may
+    // run for an event raised anywhere, so the routines that reach a touch
+    // through it are not all listed.
+    let unreadable = substrate
+        .resolved()
+        .events
+        .graph
+        .edges
+        .iter()
+        .filter(|e| e.resolution == crate::program::model::events::UNREADABLE_RESOLUTION)
+        .count();
+    if unreadable > 0 {
+        payload.insert("unreadableEventSubscribers".into(), unreadable.into());
+    }
     let summary = touches_summary(&payload);
     QueryRunResult {
         json_text: envelope(
@@ -5243,7 +5350,15 @@ fn render_query_effects_body(
             .iter()
             .filter(|u| u.open_world == Some(true))
             .count();
-        (b.entry.unresolved.len() - open, open)
+        // An `[EventSubscriber]` the engine cannot read is one more thing the
+        // cone could not follow (engine limits B2).
+        let unreadable = usize::from(
+            b.entry
+                .coverage_reasons
+                .iter()
+                .any(|r| r == crate::engine::l4::combined_graph::UNREADABLE_SUBSCRIBER),
+        );
+        (b.entry.unresolved.len() - open + unreadable, open)
     });
     // Engine limits B8: the operations are inventoried one dependency
     // routine deep, which limits them only when the cone enters dependency
@@ -5798,7 +5913,14 @@ fn render_query_effects_body(
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
     for (e, lit) in effects.iter().zip(&literal).filter(|_| all) {
-        let table = if is_unknown_table(e.table_id) {
+        // Engine limits B5: a read through a FlowField names the field (and,
+        // when the table is not decided, why).
+        let flow_field = ops.flow_field(e.operation_id, e.op, e.table_id);
+        let table = if let Some(ff) = flow_field
+            && let crate::program::model::flow_fields::FlowFieldSource::Undecided(why) = &ff.source
+        {
+            format!("table not decided ({why})")
+        } else if is_unknown_table(e.table_id) {
             unresolved_label(ops.receiver_is_record_ref(e.operation_id)).to_string()
         } else {
             match tables.get(e.table_id) {
@@ -5829,8 +5951,11 @@ fn render_query_effects_body(
                 _ => "temp state not resolved".to_string(),
             },
         };
+        let through = flow_field.map_or(String::new(), |ff| {
+            format!(" through FlowField \"{}\"", ff.field)
+        });
         human.push_str(&format!(
-            "    [{}] on {} via {}, {temp} — {}{mark}\n",
+            "    [{}] on {}{through} via {}, {temp} — {}{mark}\n",
             e.op,
             table,
             e.via.as_str(),
@@ -7137,6 +7262,7 @@ tableextension 50101 \"Cust Ext\" extends Cust
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,

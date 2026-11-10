@@ -72,7 +72,6 @@ use crate::program::resolve::extract::{CalleeShape, extract_sites_for_routine};
 use crate::program::resolve::index::ResolveIndex;
 use crate::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
 use crate::program::resolve::receiver::{FrameworkKind, ReceiverType, infer_receiver_type};
-use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::ParsedUnit;
 
 // ---------------------------------------------------------------------------
@@ -1011,6 +1010,12 @@ fn build_fan_out_site_context(
                 continue;
             }
 
+            let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+                graph,
+                &pf.file,
+                primary_app_ref,
+                &crate::program::split_decls::unit_of_parsed(pf),
+            );
             for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
                 let obj_key = ObjKey::from_source(obj);
                 let obj_node_id = ObjectNodeId {
@@ -1034,7 +1039,7 @@ fn build_fan_out_site_context(
                     .collect();
 
                 for (routine_idx, routine) in obj.routines.iter().enumerate() {
-                    let caller = source_routine_node_id(obj_node_id.clone(), routine);
+                    let caller = decl_nodes[obj_idx][routine_idx].clone();
 
                     let sites = extract_sites_for_routine(
                         &pf.file,
@@ -1592,6 +1597,7 @@ mod tests {
             fields: vec![],
             dataitems: vec![],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,

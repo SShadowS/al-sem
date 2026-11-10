@@ -209,12 +209,12 @@ fn policy_evaluates_a_collided_routine_through_its_last_row() {
 }
 
 // ---------------------------------------------------------------------------
-// FP-20 (#22, class P): `query effects` anchors a collided id's operation at its
-// LAST OWNING row, through the production `OperationJoin` use.
+// FP-20 (#22): `query effects` anchors each operation of a two-arm routine at
+// its own arm, through the production `OperationJoin` use.
 // ---------------------------------------------------------------------------
 
-/// `Work` in two arms that both own `op0` (arm A inserts `QJ A`, arm B, the last
-/// row, modifies `QJ B`), at different lines; `Go` calls `Work`.
+/// `Work` in two arms (arm A inserts `QJ A`, arm B, the last row, modifies
+/// `QJ B`), at different lines; `Go` calls `Work`.
 const JOIN_AL: &str = r#"table 50891 "QJ A"
 {
     fields { field(1; "No."; Code[20]) { } }
@@ -253,11 +253,19 @@ codeunit 50891 "QJ Work"
 "#;
 
 /// `alsem query effects` (the production pipeline, `run_query_effects_pipeline`)
-/// on `Go`: every effect whose operation is `Work`'s `op0` has its origin at arm
-/// B's `op0` line (the LAST owning row's), never arm A's. Break: `OperationJoin`
-/// keeps the first writer -> arm A's line.
+/// on `Go`: each effect of `Work` has its origin at ITS OWN arm's operation.
+///
+/// Engine limits B2 (per-arm ids, owner decision 2026-11-09): this test used to
+/// pin FP-20's class-P pick (both arms owned `op0`, and every `op0` origin was
+/// arm B's line, the LAST owning row's, so arm A's insert cited arm B's line).
+/// Production now numbers arm B's sites after arm A's, so arm A's insert is
+/// `op0` and arm B's modify `op1`, and the pick never has two owners here. The
+/// pick for rows that DO share an id is pinned by the unit test
+/// `operation_join_reads_the_last_owning_row`, which states the shared ids by
+/// assignment. Break: number every arm from 0 (the model builder's
+/// `SiteIdBase`) -> arm A's insert cites arm B's line again.
 #[test]
-fn query_effects_origin_is_the_last_owning_rows_operation() {
+fn query_effects_origin_is_each_arms_own_operation() {
     let ws_model = assemble_and_resolve_inline_program_default(
         &[("src/Work.al".to_string(), JOIN_AL.to_string())],
         APP_GUID,
@@ -270,15 +278,20 @@ fn query_effects_origin_is_the_last_owning_rows_operation() {
         .collect();
     assert_eq!(rows.len(), 2, "precondition: Work is two rows");
     assert_eq!(rows[0].id, rows[1].id, "precondition: one id");
-    let op0_line = |r: &al_sem::program::model::workspace::ModelRoutine| {
-        r.record_operations
-            .iter()
-            .find(|o| o.id.ends_with("/op0"))
-            .map(|o| u64::from(o.source_anchor.start_line))
-            .expect("precondition: op0")
+    let op = |r: &al_sem::program::model::workspace::ModelRoutine| {
+        let o = r.record_operations.first().expect("precondition: an op");
+        (
+            o.id.rsplit('/').next().unwrap().to_string(),
+            u64::from(o.source_anchor.start_line),
+        )
     };
-    let (a_line, b_line) = (op0_line(rows[0]), op0_line(rows[1]));
-    assert_ne!(a_line, b_line, "precondition: the arms' op0 lines differ");
+    let (a, b) = (op(rows[0]), op(rows[1]));
+    assert_eq!(
+        (a.0.as_str(), b.0.as_str()),
+        ("op0", "op1"),
+        "each arm has its own op id"
+    );
+    assert_ne!(a.1, b.1, "precondition: the arms' lines differ");
 
     let dir = tempfile::tempdir().unwrap();
     let ws = dir.path().join("ws");
@@ -295,24 +308,27 @@ fn query_effects_origin_is_the_last_owning_rows_operation() {
     )
     .expect("query effects");
     let doc: Value = serde_json::from_str(&q.json_text).expect("query json");
-    let lines: Vec<u64> = doc["payload"]["effects"]
+    let effects = doc["payload"]["effects"]
         .as_array()
-        .unwrap_or_else(|| panic!("effects: {doc}"))
-        .iter()
-        .filter(|e| {
-            e["operationId"]
-                .as_str()
-                .is_some_and(|o| o.ends_with("/op0"))
-        })
-        .filter_map(|e| e["origin"]["anchor"]["line"].as_u64())
-        .collect();
-    assert!(
-        !lines.is_empty(),
-        "precondition: Go's effects include Work's op0: {doc}"
-    );
+        .unwrap_or_else(|| panic!("effects: {doc}"));
     // The model's rows are 0-based; the document's lines 1-based (`lineBase: 1`).
-    assert!(
-        lines.iter().all(|&l| l == b_line + 1),
-        "every op0 origin is arm B's row {b_line} (arm A: {a_line}), written 1-based: {lines:?}"
-    );
+    for (suffix, line) in [(&a.0, a.1), (&b.0, b.1)] {
+        let lines: Vec<u64> = effects
+            .iter()
+            .filter(|e| {
+                e["operationId"]
+                    .as_str()
+                    .is_some_and(|o| o.ends_with(&format!("/{suffix}")))
+            })
+            .filter_map(|e| e["origin"]["anchor"]["line"].as_u64())
+            .collect();
+        assert!(
+            !lines.is_empty(),
+            "precondition: Go's effects include Work's {suffix}: {doc}"
+        );
+        assert!(
+            lines.iter().all(|&l| l == line + 1),
+            "every {suffix} origin is its own arm's row {line}, written 1-based: {lines:?}"
+        );
+    }
 }

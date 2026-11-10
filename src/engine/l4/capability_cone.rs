@@ -628,7 +628,56 @@ pub(crate) fn direct_facts_for_routine(
     };
 
     // ── table family (al-sem table.ts) ─────────────────────────────────────
-    for op in &record_ops {
+    // The record operations, then the `FieldRef` operations (engine limits
+    // B5; never at an unreachable call site, `flow_fields`).
+    for op in record_ops
+        .iter()
+        .copied()
+        .chain(&routine.field_ref_operations)
+    {
+        // Engine limits B5: a read of each FlowField destination table this
+        // operation reads (`program::model::flow_fields`); an undecided one is
+        // an unresolved table read, never no read. A `CalcFields` of a
+        // FlowField over the record's own table is the host fact below.
+        for ffr in &op.flow_field_reads {
+            if ffr.repeats_host_read(op) {
+                continue;
+            }
+            let resource_id = match &ffr.source {
+                crate::program::model::flow_fields::FlowFieldSource::Table { table_id, .. } => {
+                    Some(table_id.clone())
+                }
+                crate::program::model::flow_fields::FlowFieldSource::Undecided(_) => None,
+            };
+            let confidence = if resource_id.is_some() {
+                "static"
+            } else {
+                "unresolved"
+            };
+            facts.push(CapabilityFact {
+                subject: routine.id.clone(),
+                op: "read",
+                resource_kind: "table",
+                resource_id,
+                resource_arg_source: None,
+                confidence,
+                provenance: "direct",
+                via: "self",
+                witness_operation_id: Some(op.id.clone()),
+                witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+                extra: Some(CapabilityExtra::Table {
+                    record_variable_id: None,
+                    temp_state: Some(crate::program::body::features::PTempState {
+                        kind: "known".to_string(),
+                        value: Some(ffr.temporary()),
+                        parameter_index: None,
+                    }),
+                    op_subtype: Some("CalcFields".to_string()),
+                }),
+            });
+        }
         // The one table op map shared with L2 (#69 D5, #100).
         let Some(cap_op) = table_commit::map_op(&op.op) else {
             continue;
@@ -2486,8 +2535,23 @@ fn guard_frames(
                 .map(|e| e.to.as_str())
                 .collect()
         };
-        if let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id) {
-            out.insert(r.id.clone(), f);
+        let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id) else {
+            continue;
+        };
+        // Engine limits B2: a routine declared in two `#if` arms is two rows,
+        // each with its own sites and its own frame. The id's frame holds every
+        // row's sites (a site two rows share: the LAST row's requirements, as
+        // before) and the guard parameters usable in every row (fewer usable
+        // parameters is the sound over-approximation).
+        match out.entry(r.id.clone()) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(f);
+            }
+            std::collections::hash_map::Entry::Occupied(mut o) => {
+                let prev: &mut super::param_guard::FrameGuards = o.get_mut();
+                prev.usable.retain(|i| f.usable.contains(i));
+                prev.by_site.extend(f.by_site);
+            }
         }
     }
     out
@@ -2820,8 +2884,10 @@ impl ConeStore {
         };
         let no_arena = super::pd_solve::ConeArena::default();
         let arena = arena.unwrap_or(&no_arena);
-        let routines_by_id: HashMap<&str, &ModelRoutine> =
-            routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        // Engine limits B2: a collided id's row holds every arm's sites.
+        let unions = crate::program::model::projection::merged_site_rows(routines);
+        let routines_by_id =
+            crate::program::model::projection::by_id_with_site_unions(routines, &unions);
         let mut reps = super::pd_solve::EntryReps::new();
         let mode = MemberMode {
             derived: false,
@@ -4091,8 +4157,11 @@ pub fn compose_cone_over_graph_retained(
     drop(s_dedup);
     let _t_compose = crate::engine::l5::detector_context::cones_census::start();
     let s_frames = crate::engine::perf_trace::span("cone", "cone.frames");
-    let routines_by_id: HashMap<&str, &ModelRoutine> =
-        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    // Engine limits B2: a collided id's row holds every arm's sites, for the
+    // PD substitution's bindings and the guard carry.
+    let unions = crate::program::model::projection::merged_site_rows(routines);
+    let routines_by_id =
+        crate::program::model::projection::by_id_with_site_unions(routines, &unions);
     let frames = guard_frames(&g, routines, &routines_by_id);
     drop(s_frames);
     let (pd_digests, seed, keep_cones) = match pd {
@@ -5517,8 +5586,10 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     // ⟨C1 Task 3⟩ Raw only (`derived: false`) — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
     // 7) and discards the derived store. Folding one was build-then-drop.
-    let routines_by_id: HashMap<&str, &ModelRoutine> =
-        ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    // Engine limits B2: a collided id's row holds every arm's sites.
+    let unions = crate::program::model::projection::merged_site_rows(&ws.routines);
+    let routines_by_id =
+        crate::program::model::projection::by_id_with_site_unions(&ws.routines, &unions);
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
     let ComposedCones {
         coverage: cone_coverage,
@@ -7490,6 +7561,8 @@ codeunit 50111 "Cell Calls"
     /// The four kinds the fold maps, written out (not read from the classifier).
     /// A deliberate hand-stated copy of `is_callsite_local_kind`'s list: the
     /// test's expectation must not come from the code under test.
+    /// (The fifth, `unreadable-event-subscriber`, has no fixture site here: it
+    /// is produced at a publisher, and tests/cli's B2 tests pin it.)
     const KINDS: [&str; 4] = [
         "ambiguous-overload",
         "external-target",
@@ -8412,11 +8485,17 @@ codeunit 50100 C
                 // RunTrigger`, so most subscriber self-loops close no cycle any more
                 // (self-loops 65 -> 31, recursive SCCs 106 -> 71, the largest
                 // 650 -> 633, routines 34,118 -> 34,119).
+                // 972 -> 1039 on 2026-11-10 (engine limits wave 2, B6): a report's
+                // SaveAs*/Execute/Print and a query's Open/SaveAs* now run the
+                // object's triggers, which adds call edges. Measured on the
+                // pinned baseline: with `dataset::starts_object` answering no
+                // for those methods and nothing else changed, this count is
+                // exactly 972 again.
                 assert_eq!(
-                    stats.recursive_members_emitted, 972,
+                    stats.recursive_members_emitted, 1039,
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
-                     972 since the temp-record table-event guards (2026-11-07); a \
-                     different number means the input moved and the spec's numbers are stale"
+                     1039 since report saves and query opens run their triggers (2026-11-10); \
+                     a different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s
                 // fixtures reach none of them), so a moved baseline must not drop them
@@ -9458,5 +9537,55 @@ codeunit 50100 C
             .map(|f| f.witness_callsite_id)
             .collect();
         assert_eq!(sites, [None, Some(String::new())].into());
+    }
+}
+
+/// Engine limits B5: the table family's FlowField read facts.
+#[cfg(test)]
+mod flow_field_fact_tests {
+    use super::*;
+    use crate::program::body::features::PTempState;
+    use crate::program::model::flow_fields::{FlowFieldRead, FlowFieldSource};
+
+    fn table_read(table_id: &str) -> FlowFieldRead {
+        FlowFieldRead {
+            field: "F".to_string(),
+            source: FlowFieldSource::Table {
+                table_id: table_id.to_string(),
+                temporary: false,
+            },
+        }
+    }
+
+    /// Hand-stated: a persistent `CalcFields` on table 1 whose FlowFields
+    /// count table 1 itself and table 2. Table 1's read is the host fact,
+    /// once; table 2's is one derived fact.
+    #[test]
+    fn a_flowfield_over_its_own_table_is_one_read_fact() {
+        let mut r = crate::engine::l5::test_support::routine("R", "procedure");
+        let mut op = crate::engine::l5::test_support::record_op(
+            "R/op0",
+            "CalcFields",
+            "Rec",
+            Some("app/table/1"),
+            Vec::new(),
+            false,
+        );
+        op.temp_state = Some(PTempState {
+            kind: "known".to_string(),
+            value: Some(false),
+            parameter_index: None,
+        });
+        op.flow_field_reads = vec![table_read("app/table/1"), table_read("app/table/2")];
+        r.record_operations = vec![op];
+        let (facts, _, _) = direct_facts_for_routine(&r, &[]);
+        let reads = |t: &str| {
+            facts
+                .iter()
+                .filter(|f| f.op == "read" && f.resource_id.as_deref() == Some(t))
+                .count()
+        };
+        assert_eq!(reads("app/table/1"), 1, "{facts:?}");
+        assert_eq!(reads("app/table/2"), 1, "{facts:?}");
     }
 }

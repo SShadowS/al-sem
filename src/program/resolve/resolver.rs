@@ -73,6 +73,7 @@ use crate::program::resolve::arg_dispatch::{
     pick_candidate,
 };
 use crate::program::resolve::builtins::{catalog_version, global_builtin_id};
+use crate::program::resolve::dataset::ObjectStart;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
     AbiEventKind, AbiRoutineKey, AbiRoutineKind, BuiltinId, CanonicalSpan, Condition,
@@ -2195,11 +2196,13 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
         ObjectKind::Report => "onprereport",
         // Like Report's `OnPreReport`: the trigger a run reaches after the init one.
         ObjectKind::XmlPort => "onprexmlport",
+        // A query's one trigger (Learn, "OnBeforeOpen (Query) Trigger").
+        ObjectKind::Query => "onbeforeopen",
         _ => "onrun",
     }
 }
 
-/// The triggers a run of a page, report or XMLport MAY reach with no user
+/// The triggers a run of a page, report, XMLport or query MAY reach with no user
 /// acting on a control, as (object-level names, member-level names), folded;
 /// `None` for a codeunit (its `OnRun` alone, [`entry_trigger_name`]).
 ///
@@ -2259,7 +2262,55 @@ pub(crate) fn run_triggers(
                 "onaftergetrecord",
             ],
         )),
+        // B6: a query's `Open` (or save) runs its one trigger.
+        ObjectKind::Query => Some((&["onbeforeopen"], &[])),
         _ => None,
+    }
+}
+
+/// B6 round 2: whether a run of its object may finish without running trigger
+/// `trigger_lc` (folded) of an object of `kind`, `member_level` when the
+/// trigger belongs to a dataitem, table element or control rather than to the
+/// object. Such a trigger's effects are conditional on the run, never
+/// unconditional on its success.
+///
+/// - A report's dataitem triggers (and a report extension's): Learn, "Report
+///   Triggers and Runtime Operations": `OnAfterGetRecord` is called "after a
+///   record is retrieved from the data item", once per record, so never for an
+///   empty one; an indented data item's `OnPreDataItem`/`OnPostDataItem` run
+///   once per record of the data item above it. Which data items are indented
+///   is not in the model, so every dataitem trigger counts (a top-level data
+///   item's `OnPreDataItem` loses its `unconditional`; never the reverse).
+/// - An XmlPort's element triggers: they run per record exported or per
+///   element found in the imported file, possibly never.
+/// - A page's `OnAfterGetRecord`, `OnAfterGetCurrRecord`, `OnNextRecord`,
+///   `OnNewRecord` (a record must be there, or be made) and the background
+///   task triggers (a task must have been started).
+///
+/// The object-level triggers of a report, XmlPort and query, and a page's
+/// `OnInit`/`OnOpenPage`/`OnFindRecord`/`OnQueryClosePage`/`OnClosePage`, are
+/// not decided here (a request page the user cancels is a separate limit).
+#[must_use]
+pub(crate) fn run_trigger_may_not_run(
+    kind: ObjectKind,
+    trigger_lc: &str,
+    member_level: bool,
+) -> bool {
+    match kind {
+        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort => member_level,
+        ObjectKind::Page | ObjectKind::PageExtension => {
+            !member_level
+                && matches!(
+                    trigger_lc,
+                    "onaftergetrecord"
+                        | "onaftergetcurrrecord"
+                        | "onnextrecord"
+                        | "onnewrecord"
+                        | "onpagebackgroundtaskcompleted"
+                        | "onpagebackgroundtaskerror"
+                )
+        }
+        _ => false,
     }
 }
 
@@ -2437,11 +2488,46 @@ pub(crate) fn object_receiver_target<'g>(
     }
 }
 
+/// Every procedure (never a trigger) named `method_lc` that `target` declares,
+/// and, for a Page or Report, that a `PageExtension`/`ReportExtension` of it
+/// in `from_object`'s dependency closure declares.
+fn declared_procedures<'g>(
+    target: &ObjectNode,
+    method_lc: &str,
+    from_object: &ObjectNode,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
+) -> Vec<&'g RoutineNode> {
+    let mut out: Vec<&'g RoutineNode> = graph
+        .routines_named(&target.id, method_lc)
+        .filter(|r| !r.is_trigger)
+        .collect();
+    let extensions: &[ObjectNodeId] = match target.id.kind {
+        ObjectKind::Page => index.page_extensions_of(&target.name.fold_identifier()),
+        ObjectKind::Report => index.report_extensions_of(&target.name.fold_identifier()),
+        _ => &[],
+    };
+    if extensions.is_empty() {
+        return out;
+    }
+    let closure = graph.closure(from_object.id.app);
+    for ext in extensions.iter().filter(|e| closure.contains(&e.app)) {
+        out.extend(
+            graph
+                .routines_named(ext, method_lc)
+                .filter(|r| !r.is_trigger),
+        );
+    }
+    out
+}
+
 /// Whether `target` declares a procedure named `method_lc` that hides the
 /// built-in entry-dispatch method of the same name (`Run`, `RunModal`,
 /// `Import`, `Export`) for a call WITH arguments. For a Page or Report, a
 /// procedure of a `PageExtension`/`ReportExtension` in `from_object`'s
-/// dependency closure counts too.
+/// dependency closure counts too. A report's `SaveAs*`/`Execute`/`Print` and a
+/// query's `Open`/`SaveAs*` do not follow this rule; see
+/// [`run_by_other_name_binding`].
 ///
 /// AL's rule, probed with alc 18.1.43.24897 (fix/transitive-dependency-demand):
 /// - A procedure with the built-in's own parameters (`procedure Run()`) is
@@ -2452,34 +2538,246 @@ pub(crate) fn object_receiver_target<'g>(
 ///   `procedure Run(var R: Record "Integer")`, `Cu.Run(DateRec)` is AL0133
 ///   (cannot convert), and with `procedure Run(A: Integer; C: Integer)`,
 ///   `Cu.Run(IntRec)` is AL0135 (missing argument) — the built-in
-///   `Run(var Record)` is never a fallback.
+///   `Run(var Record)` is never a fallback. Probed again with alc
+///   18.0.43.1464 (B6 round 2): `Cu.Run(DateRec)` against
+///   `procedure Run(var R: Record "Integer")` is still AL0133.
+/// - The page, report and XmlPort built-ins (`Run()`, `RunModal()`,
+///   `Import()`, `Export()`) take no argument, so a call with arguments can
+///   only be a declared procedure under either rule.
 ///
 /// Microsoft's System Application has such procedures
 /// (`"Azure AD User Mgmt. Impl.".Run(ForUserSecurityId: Guid)`,
 /// `"Guided Experience".Run(…)`).
-fn declares_entry_method_overload(
+pub(crate) fn declares_entry_method_overload(
     target: &ObjectNode,
     method_lc: &str,
     from_object: &ObjectNode,
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
 ) -> bool {
-    let declares = |oid: &ObjectNodeId| graph.routines_named(oid, method_lc).any(|r| !r.is_trigger);
-    if declares(&target.id) {
-        return true;
-    }
-    let extensions: &[ObjectNodeId] = match target.id.kind {
-        ObjectKind::Page => index.page_extensions_of(&target.name.fold_identifier()),
-        ObjectKind::Report => index.report_extensions_of(&target.name.fold_identifier()),
+    !declared_procedures(target, method_lc, from_object, graph, index).is_empty()
+}
+
+/// One built-in signature: each parameter's type text and whether it is `var`.
+type BuiltinSig = &'static [(&'static str, bool)];
+
+/// The instance signatures of the built-in methods that run a report or a
+/// query under another name than `Run`, one entry per argument count (AL has
+/// no named arguments, so an optional parameter is a shorter overload).
+/// Empty for any other method. From Learn, "Report data type" and "Query data
+/// type" (instance methods):
+/// - `Report.Execute(Text [, RecordRef])`, `Report.Print(Text [, Text]
+///   [, RecordRef])`, `Report.SaveAs(Text, ReportFormat, var OutStream
+///   [, RecordRef])`, `Report.SaveAsExcel/Html/Pdf/Word/Xml(Text)`;
+/// - `Query.Open()`, `Query.SaveAsCsv(Text | OutStream [, Integer] [, Text])`,
+///   `Query.SaveAsJson(OutStream)`, `Query.SaveAsXml(Text | OutStream)`.
+pub(crate) fn builtin_run_signatures(kind: ObjectKind, method_lc: &str) -> &'static [BuiltinSig] {
+    const TEXT: (&str, bool) = ("Text", false);
+    const RECREF: (&str, bool) = ("RecordRef", false);
+    const INT: (&str, bool) = ("Integer", false);
+    const OUT: (&str, bool) = ("OutStream", false);
+    const VAR_OUT: (&str, bool) = ("OutStream", true);
+    const FORMAT: (&str, bool) = ("ReportFormat", false);
+    match (kind, method_lc) {
+        (ObjectKind::Report, "execute") => &[&[TEXT], &[TEXT, RECREF]],
+        (ObjectKind::Report, "print") => &[&[TEXT], &[TEXT, TEXT], &[TEXT, TEXT, RECREF]],
+        (ObjectKind::Report, "saveas") => {
+            &[&[TEXT, FORMAT, VAR_OUT], &[TEXT, FORMAT, VAR_OUT, RECREF]]
+        }
+        (
+            ObjectKind::Report,
+            "saveasexcel" | "saveashtml" | "saveaspdf" | "saveasword" | "saveasxml",
+        ) => &[&[TEXT]],
+        (ObjectKind::Query, "open") => &[&[]],
+        (ObjectKind::Query, "saveascsv") => &[
+            &[TEXT],
+            &[TEXT, INT],
+            &[TEXT, INT, TEXT],
+            &[OUT],
+            &[OUT, INT],
+            &[OUT, INT, TEXT],
+        ],
+        (ObjectKind::Query, "saveasjson") => &[&[OUT]],
+        (ObjectKind::Query, "saveasxml") => &[&[TEXT], &[OUT]],
         _ => &[],
-    };
-    if extensions.is_empty() {
-        return false;
     }
-    let closure = graph.closure(from_object.id.app);
-    extensions
+}
+
+/// How a call on a report or query variable to a method that runs the object
+/// under another name than `Run` ([`builtin_run_signatures`]) binds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RunBinding {
+    /// The platform's method: it runs the object (its triggers and dataset).
+    Builtin,
+    /// The object's own procedure of that name.
+    Procedure,
+    /// Both fit the call and its argument types do not decide which.
+    Undecided,
+}
+
+/// B6 round 2: which of the built-in run-by-another-name method and the
+/// object's own procedures of that name `Obj.<method_lc>(args)` binds to.
+///
+/// Unlike `Codeunit.Run` ([`declares_entry_method_overload`]), these methods
+/// take part in ordinary overload resolution with the declared procedures.
+/// Probed with alc 18.0.43.1464 on report `procedure Print(): Guid`,
+/// `procedure Execute(N: Integer): Guid`, `procedure SaveAsPdf(T:
+/// Code[250]): Guid` (the return type shows which one bound):
+/// - `G := R.Print()` and `G := R.Execute(5)` compile: the procedure (the
+///   built-ins need at least one argument);
+/// - `G := R.Execute('')` is AL0122 "cannot convert 'None' to 'Guid'": the
+///   built-in `Execute(Text)`, next to a declared `Execute(Integer)`;
+/// - `G := R.SaveAsPdf('x')` is AL0122 "cannot convert 'Boolean' to 'Guid'":
+///   the built-in `SaveAsPdf(Text)` wins over `SaveAsPdf(Code[250])`;
+/// - the same holds for a query (`Q.Open()` next to `procedure Open(N:
+///   Integer)`, `Q.SaveAsCsv('x')` next to `procedure SaveAsCsv(N: Integer)`).
+///
+/// So: a procedure that fits the argument count where no built-in does takes
+/// the call; a built-in that fits where no procedure does takes it; when both
+/// fit, the argument types decide through the same fail-closed pick the
+/// resolver uses between procedures ([`pick_candidate`]), and a call they do
+/// not decide is [`RunBinding::Undecided`]. A procedure the caller cannot see
+/// (`local`, another app's `internal`) is left out, as AL leaves it out of
+/// overload resolution.
+#[allow(clippy::too_many_arguments)] // the resolver's lookup inputs, plus the call's arity and typed arguments.
+pub(crate) fn run_by_other_name_binding(
+    target: &ObjectNode,
+    method_lc: &str,
+    arity: usize,
+    args: &[ArgDispatchInfo],
+    from_object: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+) -> RunBinding {
+    let builtins: Vec<BuiltinSig> = builtin_run_signatures(target.id.kind, method_lc)
         .iter()
-        .any(|ext| closure.contains(&ext.app) && declares(ext))
+        .copied()
+        .filter(|s| s.len() == arity)
+        .collect();
+    let procedures: Vec<&RoutineNodeId> =
+        declared_procedures(target, method_lc, from_object, graph, index)
+            .into_iter()
+            .map(|r| &r.id)
+            .filter(|rid| routine_candidate_is_visible(rid, &from_object.id, graph, index))
+            .collect();
+    // A symbol-only procedure whose parameter count the ABI did not give may
+    // fit any call.
+    let unknown_arity = procedures
+        .iter()
+        .any(|rid| rid.params_count == crate::program::abi_ingest::UNKNOWN_ARITY);
+    let fitting: Vec<&RoutineNodeId> = procedures
+        .into_iter()
+        .filter(|rid| rid.params_count == arity)
+        .collect();
+    if unknown_arity && !builtins.is_empty() {
+        return RunBinding::Undecided;
+    }
+    match (builtins.is_empty(), fitting.is_empty()) {
+        // No procedure fits: the built-in (a call that fits neither does not
+        // compile; it keeps the built-in's reading).
+        (_, true) => RunBinding::Builtin,
+        (true, false) => RunBinding::Procedure,
+        (false, false) => {
+            if args.len() != arity {
+                return RunBinding::Undecided;
+            }
+            let mut candidates: Vec<Vec<ParamDispatchInfo>> =
+                Vec::with_capacity(builtins.len() + fitting.len());
+            for sig in &builtins {
+                let mut params = Vec::with_capacity(sig.len());
+                for &(ty, by_ref) in sig.iter() {
+                    let Some(canonical) =
+                        crate::program::resolve::arg_dispatch::dispatch_canonical_type_text(
+                            ty,
+                            &from_object.id,
+                            graph,
+                            index,
+                        )
+                    else {
+                        return RunBinding::Undecided;
+                    };
+                    params.push(ParamDispatchInfo {
+                        canonical,
+                        exact_text: crate::program::sig_fp::normalize_type_text(ty),
+                        by_ref,
+                    });
+                }
+                candidates.push(params);
+            }
+            for rid in &fitting {
+                match candidate_param_infos_either(rid, graph, index, surface) {
+                    Some(p) => candidates.push(p),
+                    None => return RunBinding::Undecided,
+                }
+            }
+            match pick_candidate(args, &candidates) {
+                Some(i) if i < builtins.len() => RunBinding::Builtin,
+                Some(_) => RunBinding::Procedure,
+                None => RunBinding::Undecided,
+            }
+        }
+    }
+}
+
+/// B4 + B6: THE rule for whether the member call `method_lc` (folded) with
+/// `arity` arguments (`args`) on a variable of the object `target` (of
+/// `kind`) starts the object, running its entry triggers
+/// ([`dispatch_entry_trigger`]) and its dataset, instead of calling one of
+/// its procedures. Read by the member arm of [`resolve_member_with_args`],
+/// by the resolver's site facts (`full::SiteFacts::starts_object` and
+/// `dataset_run`), so the route, the model's start flag and the dataset run
+/// agree by construction.
+///
+/// - The method must be one of [`crate::program::resolve::dataset::
+///   starts_object`]'s.
+/// - A report's `SaveAs*`/`Execute`/`Print` and a query's `Open`/`SaveAs*`
+///   bind by AL's overload rule between the built-in and the object's own
+///   procedures ([`run_by_other_name_binding`]); a call whose argument types
+///   do not decide is [`ObjectStart::Undecided`], never a definite answer.
+/// - `Run`, `RunModal`, `Import` and `Export` take at most one argument (a
+///   codeunit's record), and a call with arguments to an object that
+///   declares a procedure of that name binds to the procedure
+///   ([`declares_entry_method_overload`]).
+#[allow(clippy::too_many_arguments)] // the resolver's lookup inputs, plus the call's arity and typed arguments.
+pub(crate) fn member_starts_object(
+    kind: ObjectKind,
+    method_lc: &str,
+    arity: usize,
+    args: &[ArgDispatchInfo],
+    target: &ObjectNode,
+    from_object: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+) -> ObjectStart {
+    if !crate::program::resolve::dataset::starts_object(kind, method_lc) {
+        return ObjectStart::No;
+    }
+    if !builtin_run_signatures(kind, method_lc).is_empty() {
+        return match run_by_other_name_binding(
+            target,
+            method_lc,
+            arity,
+            args,
+            from_object,
+            graph,
+            index,
+            surface,
+        ) {
+            RunBinding::Builtin => ObjectStart::Yes,
+            RunBinding::Procedure => ObjectStart::No,
+            RunBinding::Undecided => ObjectStart::Undecided,
+        };
+    }
+    if arity <= 1
+        && !(arity >= 1
+            && declares_entry_method_overload(target, method_lc, from_object, graph, index))
+    {
+        ObjectStart::Yes
+    } else {
+        ObjectStart::No
+    }
 }
 
 /// The Opaque boundary for a symbol-only object's entry trigger: the trigger
@@ -3195,24 +3493,34 @@ pub(crate) fn resolve_member_with_args(
             // ENTRY_DISPATCH_BUILTIN_IDS`). Codeunit has no RunModal member
             // (MS Learn documents RunModal only on Page/Report), so "runmodal"
             // is only an entry dispatch for Page/Report.
-            let is_entry_trigger_dispatch = match *kind {
-                ObjectKind::Codeunit => method_lc == "run",
-                ObjectKind::Page | ObjectKind::Report => {
-                    method_lc == "run" || method_lc == "runmodal"
-                }
-                // An XmlPort runs its own triggers on Run, Import and Export.
-                ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
-                _ => false,
-            };
-            // A call with arguments to an object that declares a procedure of
-            // that name binds to the procedure, never to the built-in run
-            // (`declares_entry_method_overload`); the general dispatch below
-            // resolves it.
-            if is_entry_trigger_dispatch
-                && arity <= 1
-                && !(arity == 1
-                    && declares_entry_method_overload(target, method_lc, from_object, graph, index))
-            {
+            // An XmlPort runs its own triggers on Run, Import and Export; B6:
+            // `Rep.SaveAsPdf(…)`, `Rep.Execute(…)`, `Rep.Print(…)` run the
+            // report as `Run` does (its triggers and its dataset), and
+            // `Q.Open()`/`Q.SaveAsCsv(…)` open the query (its `OnBeforeOpen`
+            // and its dataset), when the call binds to the built-in and not
+            // to the object's own procedure of that name. The rule is
+            // [`member_starts_object`] (B4 + B6), which the resolver's site
+            // facts read too; the general dispatch below resolves a
+            // procedure.
+            let start = member_starts_object(
+                *kind,
+                method_lc,
+                arity,
+                args,
+                target,
+                from_object,
+                graph,
+                index,
+                surface,
+            );
+            if start == ObjectStart::Undecided {
+                // The run or the procedure: the engine cannot name which.
+                return (
+                    DispatchShape::Exact,
+                    vec![unresolved_route(UnknownReason::OverloadAmbiguous)],
+                );
+            }
+            if start == ObjectStart::Yes {
                 // ponytail: completeness is re-derived from the shape by the
                 // caller (`full.rs`), so a closed empty codeunit/XmlPort run reads
                 // `Partial` there; both classify as honest-empty.
@@ -5099,6 +5407,7 @@ pageextension 52911 "ExtA" extends BasePage
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5122,6 +5431,7 @@ pageextension 52911 "ExtA" extends BasePage
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5281,6 +5591,7 @@ pageextension 52911 "ExtA" extends BasePage
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5304,6 +5615,7 @@ pageextension 52911 "ExtA" extends BasePage
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5490,6 +5802,7 @@ pageextension 52911 "ExtA" extends BasePage
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5513,6 +5826,7 @@ pageextension 52911 "ExtA" extends BasePage
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5898,6 +6212,7 @@ codeunit 50612 "MixedCU2"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -5921,6 +6236,7 @@ codeunit 50612 "MixedCU2"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -6145,6 +6461,7 @@ codeunit 50612 "MixedCU2"
             fields: vec![],
             dataitems: vec![],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
@@ -6301,6 +6618,7 @@ codeunit 50612 "MixedCU2"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -6324,6 +6642,7 @@ codeunit 50612 "MixedCU2"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -6910,6 +7229,7 @@ codeunit 50203 "NoTriggerCU"
             fields: vec![],
             dataitems: vec![],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
@@ -7213,6 +7533,7 @@ codeunit 50300 "OverloadCU"
             fields: vec![],
             dataitems: vec![],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
@@ -9578,9 +9899,11 @@ codeunit 50611 "PageCaller"
         assert_eq!(rid.object.kind, ObjectKind::Page);
     }
 
-    // Test 2: Report Object receiver + `saveaspdf` → Catalog route ReportInstance::saveaspdf
+    // Test 2: Report Object receiver + `saveaspdf` → the report's run triggers
+    // (B6: a save runs the report as `Run` does; it was a catalog route that
+    // reached no code), with any number of arguments.
     #[test]
-    fn resolve_member_report_saveaspdf_emits_catalog_route() {
+    fn resolve_member_report_saveaspdf_runs_the_report_triggers() {
         use crate::program::resolve::receiver::ReceiverType;
 
         let src_report: &'static str = r#"
@@ -9589,6 +9912,9 @@ report 50612 "MyReport"
     dataset
     {
     }
+    trigger OnPreReport()
+    begin
+    end;
 }
 "#;
         let src_caller: &'static str = r#"
@@ -9613,33 +9939,24 @@ codeunit 50613 "ReportCaller"
             name_lc: "myreport".into(),
             id: None,
         };
-        let (shape, routes) = resolve_member(
-            &receiver,
-            "saveaspdf",
-            0,
-            from_obj,
-            &graph,
-            &index,
-            &surface,
-        );
-
-        assert_eq!(shape, DispatchShape::Exact);
-        assert_eq!(routes.len(), 1);
-        assert!(
-            matches!(routes[0].target, RouteTarget::Builtin(_)),
-            "target must be Builtin; got {:?}",
-            routes[0].target
-        );
-        assert_eq!(routes[0].evidence, Evidence::Catalog);
-        assert!(
-            matches!(routes[0].witness, Witness::CatalogEntry { .. }),
-            "witness must be CatalogEntry; got {:?}",
-            routes[0].witness
-        );
-        let RouteTarget::Builtin(ref bid) = routes[0].target else {
-            unreachable!()
-        };
-        assert_eq!(bid.0, "ReportInstance::saveaspdf");
+        for arity in [1, 3] {
+            let (shape, routes) = resolve_member(
+                &receiver,
+                "saveaspdf",
+                arity,
+                from_obj,
+                &graph,
+                &index,
+                &surface,
+            );
+            assert_eq!(shape, DispatchShape::Multicast, "arity {arity}");
+            assert_eq!(routes.len(), 1, "arity {arity}");
+            assert_eq!(routes[0].evidence, Evidence::Source);
+            let RouteTarget::Routine(ref rid) = routes[0].target else {
+                panic!("expected the OnPreReport trigger, got {:?}", routes[0]);
+            };
+            assert_eq!(rid.name_lc, "onprereport");
+        }
     }
 
     // Test 3: EnumType receiver + `asinteger` → Catalog route Enum::asinteger
@@ -11489,6 +11806,7 @@ codeunit 50000 "Caller"
             fields: vec![],
             dataitems: vec![],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
@@ -13043,15 +13361,10 @@ codeunit 62072 "RxMergeCaller8"
 
         // A genuine platform-intrinsic (ReportInstance catalog) member absent
         // from both base and extension still falls through to Catalog.
-        let (shape2, routes2) = resolve_member(
-            &receiver,
-            "saveaspdf",
-            0,
-            from_obj,
-            &graph,
-            &index,
-            &surface,
-        );
+        // (`SaveAsPdf` was the example until B6 made it a run of the report;
+        // `Preview` runs nothing.)
+        let (shape2, routes2) =
+            resolve_member(&receiver, "preview", 0, from_obj, &graph, &index, &surface);
         assert_eq!(shape2, DispatchShape::Exact);
         assert_eq!(routes2.len(), 1);
         assert_eq!(routes2[0].evidence, Evidence::Catalog);
@@ -13768,6 +14081,7 @@ codeunit 53971 "OverloadNCaller"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -13791,6 +14105,7 @@ codeunit 53971 "OverloadNCaller"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -14172,6 +14487,7 @@ codeunit 53975 "Overload3Caller"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -14195,6 +14511,7 @@ codeunit 53975 "Overload3Caller"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -14381,6 +14698,7 @@ codeunit 53975 "Overload3Caller"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
@@ -14404,6 +14722,7 @@ codeunit 53975 "Overload3Caller"
                 fields: vec![],
                 dataitems: vec![],
                 query_columns: Vec::new(),
+                dataset: Default::default(),
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,

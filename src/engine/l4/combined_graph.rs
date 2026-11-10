@@ -96,8 +96,11 @@ pub struct TypedEdge {
     /// `implicit-trigger` only: the trigger routine's name (`OnValidate`,
     /// `OnInsert`, …). `None` on every other kind.
     pub trigger_kind: Option<String>,
-    /// `implicit-trigger` only: whether the trigger fires every time its record
-    /// operation executes ([`trigger_fires`]). `None` on every other kind.
+    /// `implicit-trigger`: whether the trigger fires every time its record
+    /// operation executes ([`trigger_fires`]). B6 round 2: on an
+    /// `object-run-resolved` or `variable-typed-call` edge, `Maybe` when the
+    /// run may finish without running the target trigger
+    /// (`resolver::run_trigger_may_not_run`). `None` on every other edge.
     pub fires: Option<TriggerFires>,
 }
 
@@ -493,6 +496,9 @@ pub(crate) fn assemble(
         }
     }
 
+    // --- unreadable [EventSubscriber]s: a coverage gap wherever one may apply ---
+    unreadable_subscriber_gaps(workspace, event_graph, &mut uncertainty_edges);
+
     // --- assemble: sorted nodes, sorted per-from edge lists, sorted uncertainties ---
     let mut nodes: Vec<String> = workspace.routines.iter().map(|r| r.id.clone()).collect();
     nodes.sort();
@@ -567,6 +573,96 @@ fn simple_uncertainty_cs(kind: &str, callsite_id: &str) -> Uncertainty {
         operation_id: None,
         routine_id: None,
         interface_name: None,
+    }
+}
+
+/// The uncertainty kind of a dispatch an `[EventSubscriber]` the engine cannot
+/// read may be part of. Every answer that reaches such a dispatch is `unknown`
+/// on it, never a definite `no` (engine limits B2).
+pub(crate) const UNREADABLE_SUBSCRIBER: &str = "unreadable-event-subscriber";
+
+/// Engine limits B2: an uncertainty on each publisher routine, and each record
+/// operation (its table events), an `unreadable` subscription may be for
+/// (`events::unreadable_gap`: narrowed by the parts the engine could read).
+/// One edge per (routine, subscriber or operation).
+fn unreadable_subscriber_gaps(
+    workspace: &ModelEntities,
+    event_graph: &EventGraph,
+    uncertainty_edges: &mut Vec<UncertaintyEdge>,
+) {
+    use crate::program::model::events::unreadable_gap;
+    let gaps: Vec<(_, &str)> = event_graph
+        .edges
+        .iter()
+        .filter_map(|e| Some((unreadable_gap(e)?, e.subscriber_routine_id.as_str())))
+        .collect();
+    if gaps.is_empty() {
+        return;
+    }
+    let objects: HashMap<&str, _> = workspace
+        .objects
+        .iter()
+        .map(|o| (o.id.as_str(), o))
+        .collect();
+    let tables: HashMap<&str, _> = workspace
+        .tables
+        .iter()
+        .map(|t| (t.id.as_str(), t))
+        .collect();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    for sym in &event_graph.events {
+        let (Some(publisher), Some(object)) = (
+            &sym.publisher_routine_id,
+            objects.get(sym.publisher_object_id.as_str()),
+        ) else {
+            continue;
+        };
+        for (gap, subscriber) in &gaps {
+            if gap.may_match(
+                &object.object_type,
+                &object.name,
+                object.object_number,
+                &sym.event_name,
+            ) && seen.insert((publisher.clone(), (*subscriber).to_string()))
+            {
+                uncertainty_edges.push(UncertaintyEdge {
+                    from: publisher.clone(),
+                    uncertainty: Uncertainty {
+                        kind: UNREADABLE_SUBSCRIBER.to_string(),
+                        callsite_id: None,
+                        operation_id: None,
+                        routine_id: Some((*subscriber).to_string()),
+                        interface_name: None,
+                    },
+                });
+            }
+        }
+    }
+    for r in &workspace.routines {
+        for op in &r.record_operations {
+            // Model table ids are `{guid}/table/{n}`, not object ids.
+            let table = op.table_id.as_deref().and_then(|t| tables.get(t)).map(|t| {
+                crate::program::model::events::OpTable {
+                    name: &t.name,
+                    number: t.table_number,
+                }
+            });
+            let field = op
+                .field_arguments
+                .as_ref()
+                .and_then(|a| a.first())
+                .map(String::as_str);
+            if gaps
+                .iter()
+                .any(|(gap, _)| gap.may_match_table_op(&op.op, table, field))
+                && seen.insert((r.id.clone(), op.id.clone()))
+            {
+                uncertainty_edges.push(UncertaintyEdge {
+                    from: r.id.clone(),
+                    uncertainty: simple_uncertainty_op(UNREADABLE_SUBSCRIBER, &op.id),
+                });
+            }
+        }
     }
 }
 
@@ -799,7 +895,9 @@ fn build_typed_edges(
                     object_type: None,
                     target_id_source: None,
                     trigger_kind: None,
-                    fires: None,
+                    // B6 round 2: a run (`Rep.SaveAsPdf(…)`) into a trigger the
+                    // run may skip (`CallEdge::fires`).
+                    fires: ce.fires,
                 });
             } else if ce.dispatch_kind == DispatchKind::Interface
                 && ce.resolution == Resolution::Maybe
@@ -866,7 +964,8 @@ fn build_typed_edges(
                     object_type: Some(object_type.to_string()),
                     target_id_source: None,
                     trigger_kind: None,
-                    fires: None,
+                    // B6 round 2: a trigger the run may skip (`CallEdge::fires`).
+                    fires: ce.fires,
                 });
             }
             // method unresolved / interface non-maybe etc. — skip

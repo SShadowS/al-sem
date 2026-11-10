@@ -48,7 +48,7 @@ use std::io::Cursor;
 
 use crate::engine::deps::app_package_zip::app_zip_bytes;
 use crate::engine::l4::capability_cone::direct_facts_for_routine;
-use crate::program::attributes::{AttributeInfo, find_attribute, has_attribute};
+use crate::program::attributes::{AttributeInfo, has_attribute};
 use crate::program::body::operation_order::apply_operation_order;
 use crate::program::model::events::EventSymbol;
 use crate::program::model::taxonomy::{DispatchKind, Resolution};
@@ -404,7 +404,9 @@ fn artifact_from_model(
                 },
             );
         }
-        for ro in &r.record_operations {
+        // The record operations and the `FieldRef` operations (engine limits
+        // B5): every operation an effect can cite.
+        for ro in r.effect_operations() {
             if !cited_op_ids.contains(&ro.id) {
                 continue;
             }
@@ -423,7 +425,10 @@ fn artifact_from_model(
                     start_column: a.start_column,
                     end_line: a.end_line,
                     end_column: a.end_column,
-                    display_text: format!("{}.{}", ro.record_variable_name, ro.op),
+                    display_text: ro
+                        .dataset_reason
+                        .clone()
+                        .unwrap_or_else(|| format!("{}.{}", ro.record_variable_name, ro.op)),
                     control_context: matching_cc,
                 },
             );
@@ -948,21 +953,11 @@ fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> Subt
 
 /// Parse `[CommitBehavior(CommitBehavior::Ignore|Error)]` → "ignore"|"error", else
 /// "normal" (port of al-sem `parseCommitBehavior`, both native + ABI arg shapes).
+///
+/// The one reading of `return_summary::parse_commit_behavior`, so an attribute
+/// only some builds have gives `"conditional"` here too (engine limits B2).
 fn parse_commit_behavior(attrs: &[AttributeInfo]) -> String {
-    let Some(attr) = find_attribute(attrs, "CommitBehavior") else {
-        return "normal".to_string();
-    };
-    let arg0 = attr.args.first();
-    // Native shape: qualified_enum_value → member. ABI shape: bare value/text.
-    let member = arg0
-        .and_then(|a| a.member.clone())
-        .or_else(|| arg0.and_then(|a| a.value.clone()))
-        .or_else(|| arg0.map(|a| a.text.clone()));
-    match member.map(|m| m.to_lowercase()).as_deref() {
-        Some("ignore") => "ignore".to_string(),
-        Some("error") => "error".to_string(),
-        _ => "normal".to_string(),
-    }
+    crate::engine::return_summary::parse_commit_behavior(attrs).to_string()
 }
 
 // ===========================================================================

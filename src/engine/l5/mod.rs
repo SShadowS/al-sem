@@ -109,7 +109,9 @@ pub mod path_temp_resolve;
 pub mod path_walker;
 // The writes pending at a Commit (engine-switch S8 gap 3): d8 / d9.
 pub(crate) mod pending_writes;
+// B7/L23: the one trap rule both error directions read.
 pub mod registry;
+pub(crate) mod traps;
 
 // R4-F Stage-2b — the CapabilitySnapshot CONSUMED-CORE port (composeSnapshot's
 // ordering-facts subset). Re-projects the R3a source-only base into the snapshot
@@ -121,6 +123,9 @@ pub mod table_rights;
 // R4-F Stage-3b — the DIGEST witness + effects + occurrence-build path. Reads off
 // the Stage-2 CapabilitySnapshot (snapshot.rs) and produces per-root
 // DigestEffectResult[] each with a stable occurrenceId (= factId). Additive.
+// B4/L16 — `[CommitBehavior]` scope: the one rule for the callers' question
+// and the forward commit/error answers the digest gives.
+pub mod commit_scope;
 pub mod digest;
 
 // R4-F Stage-4 — the ORDERING ENGINE: per-effect scopedGuarantee derivation for

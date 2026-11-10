@@ -43,6 +43,7 @@ use serde::Serialize;
 use crate::engine::ids::sha256_hex;
 use crate::engine::l4::combined_graph::TriggerFires;
 use crate::engine::l4::effect_lattice::TempStateKind;
+use crate::engine::l5::commit_scope::CbGraph;
 use crate::engine::l5::snapshot::{
     CapabilitySnapshot, EdgeIx, PdArena, SnapCapabilityExtra, SnapTempState, SnapValueSource,
     SnapshotCallsiteEvidence, SnapshotGraphEdge, StateIx, compose_snapshot,
@@ -543,6 +544,10 @@ enum WitnessHop {
         source_file: Option<String>,
         line: Option<u32>,
         column: Option<u32>,
+        /// B6 round 2: `Maybe` when the run may finish without running
+        /// `routine_id` (a report's `OnAfterGetRecord`, …). Internal: read by
+        /// the conditionality arm only, not in the hop's JSON.
+        fires: Option<TriggerFires>,
     },
     EventDispatch {
         routine_id: String,
@@ -559,6 +564,9 @@ enum WitnessHop {
         source_file: Option<String>,
         line: Option<u32>,
         column: Option<u32>,
+        /// B6 round 2: as [`WitnessHop::ObjectRun`]'s, for a run through an
+        /// object variable (`Rep.SaveAsPdf(…)`).
+        fires: Option<TriggerFires>,
     },
     InterfaceDispatch {
         routine_id: String,
@@ -953,6 +961,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
             to,
             callsite_id,
             target_object,
+            fires,
             ..
         } => {
             let display = idx
@@ -970,6 +979,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 source_file: cs.map(|c| c.source_file.clone()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
+                fires: *fires,
             })
         }
         SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
@@ -998,6 +1008,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
             to,
             callsite_id,
             receiver_type,
+            fires,
             ..
         } => {
             let display = idx
@@ -1015,6 +1026,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 source_file: cs.map(|c| c.source_file.clone()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
+                fires: *fires,
             })
         }
         SnapshotGraphEdge::InterfaceDispatch {
@@ -3335,6 +3347,7 @@ fn project_hop(
             source_file,
             line,
             column,
+            ..
         } => Some(QueryWitnessHop {
             kind: "variable-typed-call",
             from_routine_id: from_id.to_string(),
@@ -3605,6 +3618,7 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             source_file,
             line,
             column,
+            ..
         } => {
             req_str(&mut s, &mut w, "kind", "object-run");
             req_str(&mut s, &mut w, "routineId", routine_id);
@@ -3639,6 +3653,7 @@ fn witness_hop_json(hop: &WitnessHop) -> String {
             source_file,
             line,
             column,
+            ..
         } => {
             req_str(&mut s, &mut w, "kind", "variable-typed-call");
             req_str(&mut s, &mut w, "routineId", routine_id);
@@ -3865,6 +3880,19 @@ fn find_terminal(hops: &[Rc<WitnessHop>]) -> Option<&WitnessHop> {
         .rev()
         .map(|h| &**h)
         .find(|h| matches!(h, WitnessHop::Terminal { .. }))
+}
+
+/// The operation id of `p`'s terminal (the commit a COMMIT route ends at):
+/// the site that names the row of a routine declared more than once
+/// (`CbGraph::route_states`).
+fn path_terminal_op(p: &WitnessPath) -> Option<&str> {
+    match find_terminal(&p.hops) {
+        Some(WitnessHop::Terminal {
+            operation_id: Some(op),
+            ..
+        }) => Some(op.as_str()),
+        _ => None,
+    }
 }
 
 /// SourceAnchorContract — the evidence form. `unavailable` when no citable anchor.
@@ -4189,6 +4217,367 @@ pub struct DigestEntryResult {
     /// fix (an enum value's own implementation), sorted; empty before the
     /// pass. No open-world gap: the unresolved cone leaves them out too.
     pub literal_narrowed_sites: Vec<String>,
+    /// B4/L16: the commits the root reaches that run on no route as a
+    /// commit, because a `[CommitBehavior]` on every route ignores them or
+    /// turns them into an error ([`crate::engine::l5::commit_scope`]).
+    /// They are no COMMIT row; each is listed here with why. Sorted, each
+    /// once.
+    pub suppressed_commits: Vec<SuppressedCommit>,
+}
+
+/// A commit that runs on no route as a commit (B4/L16): what happens to it
+/// instead, where it is and the declaration that decides it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SuppressedCommit {
+    /// `Error` when some route turns it into an error, else `Ignore`.
+    pub behavior: &'static str,
+    /// The commit's source file and 0-based line; for a commit beyond a
+    /// rule-B crossing, the crossing's.
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    /// For a commit beyond a crossing, the dependency routine it enters.
+    pub beyond: Option<String>,
+    /// `CommitBehavior Ignore on Codeunit "X"::Y`.
+    pub reason: String,
+}
+
+/// How the `[CommitBehavior]` scope splits one part of a COMMIT fact's
+/// outcome (B4/L16): the listed paths that still run it as a commit, those
+/// that turn it into an error, a route found for a behavior no listed path
+/// shows, and the reasons.
+struct CommitSplit {
+    commit_ix: Vec<usize>,
+    commit_extra: Option<WitnessPath>,
+    commit_twins: Vec<usize>,
+    /// The commit routes that commit on one reading only (B4), or on which a
+    /// declaration only MAY apply (an `#if`-only attribute, engine limits
+    /// B2): the route's behaviors hold `N` and also `I` or `E`.
+    uncertain: Uncertain,
+    /// The error routes that error on one reading only: a route whose
+    /// behaviors hold `E` and more raises the error only where the may-apply
+    /// declaration does.
+    error_uncertain: Uncertain,
+    error_ix: Vec<usize>,
+    error_extra: Option<WitnessPath>,
+    /// `CommitBehavior Error on …`, when some route errors.
+    error_reason: Option<String>,
+    /// Set when no route runs it as a commit.
+    suppressed: Option<SuppressedCommit>,
+}
+
+/// What one part of a fact's outcome contributes to one effect row: the
+/// listed paths `ix`, a found route `extra`, the twins whose conditionality
+/// counts (`None`: all of them), and for a commit's error row, why.
+struct PartOffer {
+    effect_type: &'static str,
+    bnd: Option<Rc<BoundaryEnd>>,
+    ix: Vec<usize>,
+    extra: Option<WitnessPath>,
+    twins: Option<Vec<usize>>,
+    error_reason: Option<String>,
+    uncertain: Uncertain,
+}
+
+/// B4: the routes of a commit row that commit on one reading only (a
+/// `[CommitBehavior]` that MAY follow into a started object, a checked run
+/// that may trap the commit, or a declaration only some builds have, engine
+/// limits B2): listed paths (by index), the found route, the twins (by
+/// index). Each counts as at least `conditional`, so such a route never
+/// makes the commit `unconditional on success`.
+#[derive(Default)]
+struct Uncertain {
+    ix: Vec<usize>,
+    extra: bool,
+    twins: Vec<usize>,
+}
+
+/// `c`, or `conditional` when `c` is `unconditional on success` and the
+/// route commits on one reading only.
+fn at_least_conditional(
+    c: crate::engine::l5::conditionality::EffectConditionality,
+    uncertain: bool,
+) -> crate::engine::l5::conditionality::EffectConditionality {
+    use crate::engine::l5::conditionality::{CONDITIONAL, UNCONDITIONAL};
+    if uncertain && c == UNCONDITIONAL {
+        CONDITIONAL
+    } else {
+        c
+    }
+}
+
+/// The routine ids a raw path passes, root side first (the root not
+/// included).
+fn path_routines(p: &WitnessPath) -> impl Iterator<Item = &str> {
+    p.hops.iter().filter_map(|h| h.routine_id())
+}
+
+/// Each hop a raw path passes as (routine id, the call site of the edge
+/// that enters it), root side first: what [`CbGraph::route_states`] reads
+/// (a checked `Codeunit.Run` is told by its call site).
+fn path_steps(p: &WitnessPath) -> impl Iterator<Item = (&str, Option<&str>)> {
+    p.hops
+        .iter()
+        .filter_map(|h| h.routine_id().map(|r| (r, hop_nonterminal_callsite_id(h))))
+}
+
+/// A raw path over `route` (root side first) ending on `terminal`.
+fn path_over(
+    route: &[&SnapshotGraphEdge],
+    terminal: &WitnessHop,
+    idx: &FingerprintIndexes,
+) -> WitnessPath {
+    let mut hops: Vec<Rc<WitnessHop>> = route
+        .iter()
+        .filter_map(|e| edge_to_hop(e, idx))
+        .map(Rc::new)
+        .collect();
+    hops.push(Rc::new(terminal.clone()));
+    WitnessPath {
+        hops,
+        alternatives: Vec::new(),
+    }
+}
+
+/// Split one part (`bnd`, path indexes `ix`) of a COMMIT fact's outcome by
+/// the `[CommitBehavior]` on its routes (B4/L16); `None` when every route
+/// runs the commit normally (nothing changes).
+///
+/// - A part with no boundary ends at the commit: each listed path's
+///   behaviors are its own routines', entered by its edges' steps (a
+///   checked `Codeunit.Run` pins the route normal, an object run lets the
+///   scope only MAY apply: [`CbGraph::route_states`]); the
+///   commit's behaviors over EVERY route from the root
+///   ([`CbGraph::states_at`]) decide what a listed path does not show, with
+///   a route found for it ([`CbGraph::route_to`]).
+/// - A boundary part ends at a rule-B crossing: each path's behaviors are its
+///   prefix's composed with those of any commit the entered dependency
+///   routine reaches ([`CbGraph::beyond`]).
+fn split_commit_part(
+    cb: &CbGraph<'_>,
+    cb_root: &std::cell::OnceCell<crate::engine::l5::commit_scope::RootStates>,
+    rid: &str,
+    outcome: &WitnessOutcomeExt,
+    bnd: Option<&BoundaryEnd>,
+    ix: &[usize],
+    idx: &FingerprintIndexes,
+) -> Option<CommitSplit> {
+    use crate::engine::l5::commit_scope::{E, N, norm, uncertain};
+    if ix.is_empty() {
+        return None;
+    }
+    // `Codeunit "X"::Y`, as prove names a routine.
+    let display = |id: &str| {
+        let routine = idx.routine_display_by_id.get(id).map_or(id, String::as_str);
+        id.split_once(ROUTINE_ID_SEPARATOR)
+            .and_then(|(object, _)| {
+                let kind = object.split(':').nth(1)?;
+                let name = idx.stable_id_to_display.get(object)?;
+                (!name.is_empty()).then(|| {
+                    crate::engine::l4::effect_query_cli::owner_qualified(
+                        &crate::engine::l4::effect_query_cli::object_display(kind, name),
+                        routine,
+                    )
+                })
+            })
+            .unwrap_or_else(|| routine.to_string())
+    };
+    let terminal = find_terminal(&outcome.paths[ix[0]].hops)?.clone();
+    // Per listed path: its behaviors, and (boundary) the entered routines.
+    let mut states: Vec<u8> = Vec::with_capacity(ix.len());
+    let mut origin: Option<&str> = None;
+    match bnd {
+        None => {
+            let last = path_routines(&outcome.paths[ix[0]]).last().unwrap_or(rid);
+            if !cb.in_zone(last) {
+                return None;
+            }
+            origin = Some(last);
+            for &i in ix {
+                let p = &outcome.paths[i];
+                states.push(norm(cb.route_states(
+                    rid,
+                    path_steps(p),
+                    path_terminal_op(p),
+                )));
+            }
+        }
+        Some(b) => {
+            let crossing = idx.crossings.get(&b.id)?;
+            let at_root = cb_root.get_or_init(|| cb.states_from(rid));
+            for &i in ix {
+                let p = &outcome.paths[i];
+                let from = path_routines(p).last().unwrap_or(rid);
+                let prefix = cb.route_states(rid, path_steps(p), None);
+                // Each crossing edge enters by its own step: a checked run
+                // pins the commits beyond, an object run lets the scope only
+                // MAY follow (B4 review, finding A).
+                let s = crossing
+                    .edges
+                    .iter()
+                    .filter(|e| e.from == from)
+                    .fold(0u8, |acc, e| {
+                        let step = cb.step_at(e.site.guarded_id());
+                        acc | cb.beyond(at_root, prefix, from, &e.to, step)
+                    });
+                states.push(if s == 0 { norm(prefix) } else { s });
+            }
+        }
+    }
+    let listed = states.iter().fold(0u8, |a, &s| a | s);
+    let all = match origin {
+        Some(o) => listed | cb.states_at(rid, o).unwrap_or(N),
+        None => listed,
+    };
+    if all == N {
+        return None;
+    }
+    let pick = |bit: u8| -> Vec<usize> {
+        ix.iter()
+            .zip(&states)
+            .filter(|(_, s)| **s & bit != 0)
+            .map(|(&i, _)| i)
+            .collect()
+    };
+    let commit_ix = pick(N);
+    let error_ix = pick(E);
+    // A listed path that commits on one reading only (a scope that MAY
+    // follow into a started object, a checked run that may trap the commit,
+    // a declaration only some builds have, engine limits B2): it does not
+    // make the commit unconditional. The error routes below follow the same
+    // rule: one that errors on one reading only is at least conditional.
+    let commit_uncertain: Vec<usize> = ix
+        .iter()
+        .zip(&states)
+        .filter(|(_, s)| uncertain(**s))
+        .map(|(&i, _)| i)
+        .collect();
+    // A route for a behavior no listed path shows (a part with no boundary).
+    let found = |bit: u8, listed_ix: &[usize]| -> Option<WitnessPath> {
+        if all & bit == 0 || !listed_ix.is_empty() {
+            return None;
+        }
+        let o = origin?;
+        cb.route_to(rid, o, bit)
+            .map(|route| path_over(&route, &terminal, idx))
+    };
+    let commit_extra = found(N, &commit_ix);
+    let extra_uncertain = commit_extra
+        .as_ref()
+        .is_some_and(|p| uncertain(cb.route_states(rid, path_steps(p), path_terminal_op(p))));
+    let error_extra = found(E, &error_ix);
+    // An error route that errors on one reading only.
+    let errs_maybe = |s: u8| s & E != 0 && s != E;
+    // The error row counts no twins (its offer selects none), so a twin
+    // never makes it `unconditional`; its listed paths and found route are
+    // each at least `conditional` when they error on one reading only.
+    let error_uncertain = Uncertain {
+        ix: ix
+            .iter()
+            .zip(&states)
+            .filter(|(_, s)| errs_maybe(**s))
+            .map(|(&i, _)| i)
+            .collect(),
+        extra: error_extra.as_ref().is_some_and(|p| {
+            errs_maybe(norm(cb.route_states(
+                rid,
+                path_steps(p),
+                path_terminal_op(p),
+            )))
+        }),
+        twins: Vec::new(),
+    };
+    // Twins (equal projection: the same hops, so the same steps; only the
+    // terminal differs) follow their path.
+    let twin_states: Vec<u8> = outcome
+        .twins
+        .iter()
+        .map(|t| norm(cb.route_states(rid, path_steps(t), path_terminal_op(t))))
+        .collect();
+    let commit_twins: Vec<usize> = (0..outcome.twins.len())
+        .filter(|&t| twin_states[t] & N != 0)
+        .collect();
+    let twins_uncertain: Vec<usize> = (0..outcome.twins.len())
+        .filter(|&t| uncertain(twin_states[t]))
+        .collect();
+    // Why: the declaring routine on a route of that behavior — a listed
+    // path's, else the found route's, else (boundary) one beyond it.
+    let why = |bit: u8| -> Option<String> {
+        let reason_on = |nodes: &[&str]| {
+            cb.cause(nodes.iter().copied(), bit)
+                .map(|(id, d)| d.reason(&display(id)))
+        };
+        let listed = ix
+            .iter()
+            .zip(&states)
+            .find(|(_, s)| **s & bit != 0)
+            .map(|(&i, _)| &outcome.paths[i])
+            .or(if bit == E { error_extra.as_ref() } else { None });
+        let Some(p) = listed else {
+            // No listed path of that behavior: a route from the root.
+            let route = cb.route_to(rid, origin?, bit)?;
+            let nodes: Vec<&str> = std::iter::once(rid)
+                .chain(route.iter().filter_map(|x| edge_to(x)))
+                .collect();
+            return reason_on(&nodes);
+        };
+        let nodes: Vec<&str> = std::iter::once(rid).chain(path_routines(p)).collect();
+        if let Some(r) = reason_on(&nodes) {
+            return Some(r);
+        }
+        // Beyond a crossing: a route from the routine it enters.
+        let crossing = bnd.and_then(|b| idx.crossings.get(&b.id))?;
+        let from = *nodes.last()?;
+        let prefix = cb.route_states(rid, path_steps(p), None);
+        for e in crossing.edges.iter().filter(|e| e.from == from) {
+            let start = cb.entered(prefix, cb.step_at(e.site.guarded_id()), &e.to);
+            if let Some(route) = cb.route_beyond(&e.to, start, bit) {
+                let beyond: Vec<&str> = std::iter::once(e.to.as_str())
+                    .chain(route.iter().filter_map(|x| edge_to(x)))
+                    .collect();
+                if let Some(r) = reason_on(&beyond) {
+                    return Some(r);
+                }
+            }
+        }
+        None
+    };
+    let error_reason = (all & E != 0).then(|| why(E)).flatten();
+    let suppressed = (all & N == 0).then(|| {
+        let behavior = if all & E != 0 { "Error" } else { "Ignore" };
+        let bit = if all & E != 0 {
+            E
+        } else {
+            crate::engine::l5::commit_scope::I
+        };
+        let (file, line) = match &terminal {
+            WitnessHop::Terminal {
+                source_file, line, ..
+            } => (source_file.clone(), *line),
+            _ => (None, None),
+        };
+        SuppressedCommit {
+            behavior,
+            file,
+            line,
+            beyond: bnd.map(|b| b.display.clone()),
+            reason: why(bit).unwrap_or_else(|| "a CommitBehavior on every route".to_string()),
+        }
+    });
+    Some(CommitSplit {
+        commit_ix,
+        commit_extra,
+        commit_twins,
+        uncertain: Uncertain {
+            ix: commit_uncertain,
+            extra: extra_uncertain,
+            twins: twins_uncertain,
+        },
+        error_uncertain,
+        error_ix,
+        error_extra,
+        error_reason,
+        suppressed,
+    })
 }
 
 /// The callsiteId of a NON-terminal witness hop (the `callsiteId?` field TS reads on
@@ -4233,6 +4622,31 @@ fn compute_path_conditionality(
             } else {
                 op
             }
+        }
+        // B6 round 2: a run into a trigger the run may finish without running
+        // (a report's `OnAfterGetRecord` with no record): the call site's own
+        // context, plus the conditional floor.
+        WitnessHop::ObjectRun {
+            callsite_id,
+            fires: Some(TriggerFires::Maybe),
+            ..
+        } => {
+            let site = match callsite_id {
+                Some(csid) => {
+                    context_to_conditionality(cs_ctx.get(csid.as_str()).copied().flatten())
+                }
+                None => UNKNOWN,
+            };
+            path_conditionality(&[site, CONDITIONAL], UNCONDITIONAL)
+        }
+        WitnessHop::VariableTypedCall {
+            callsite_id,
+            fires: Some(TriggerFires::Maybe),
+            ..
+        } => {
+            let site =
+                context_to_conditionality(cs_ctx.get(callsite_id.as_str()).copied().flatten());
+            path_conditionality(&[site, CONDITIONAL], UNCONDITIONAL)
         }
         _ => match hop_nonterminal_callsite_id(hop) {
             Some(csid) => context_to_conditionality(cs_ctx.get(csid).copied().flatten()),
@@ -4376,6 +4790,9 @@ pub(crate) struct QueryCx<'a, 'i> {
     op_ctx: &'a HashMap<&'a str, Option<&'a str>>,
     ordering_index: &'a crate::engine::l5::ordering_engine::OrderingIndex<'a>,
     carrier_cache: &'i CarrierCache<'i>,
+    /// B4/L16: the tree's `[CommitBehavior]` graph; `None` when no routine
+    /// declares one.
+    commit_scopes: Option<&'i CbGraph<'i>>,
 }
 
 /// Build [`QueryCx`] over `snap` under `boundary` and hand it to `f`.
@@ -4408,6 +4825,8 @@ pub(crate) fn with_query_cx<R>(
         .collect();
     let ordering_index = crate::engine::l5::ordering_engine::OrderingIndex::new(snap);
     let carrier_cache = CarrierCache::default();
+    // B4/L16: the tree's `[CommitBehavior]` graph (`None`: none declared).
+    let commit_scopes = CbGraph::of_tree(snap);
     f(&QueryCx {
         snap,
         idx: &idx,
@@ -4416,6 +4835,7 @@ pub(crate) fn with_query_cx<R>(
         op_ctx: &op_ctx,
         ordering_index: &ordering_index,
         carrier_cache: &carrier_cache,
+        commit_scopes: commit_scopes.as_ref(),
     })
 }
 
@@ -4459,6 +4879,7 @@ impl QueryCx<'_, '_> {
                     isolated_event_ids,
                     ordering_witness_only,
                     include_reads,
+                    self.commit_scopes,
                 )
                 .map(&reduce)
             })
@@ -4801,9 +5222,18 @@ fn digest_one_root<'i>(
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
     include_reads: bool,
+    commit_scopes: Option<&CbGraph<'_>>,
 ) -> Option<DigestEntryResult> {
     {
         let display = idx.routine_display_by_id.get(rid).cloned()?;
+        // B4/L16: the `[CommitBehavior]` graph, when a declaring routine is
+        // on some route from this root.
+        let cb = commit_scopes.filter(|cb| !cb.root_unaffected(rid));
+        // What each routine this root reaches runs under, built on the first
+        // crossing that needs it (one walk of the root's reach).
+        let cb_root: std::cell::OnceCell<crate::engine::l5::commit_scope::RootStates> =
+            std::cell::OnceCell::new();
+        let mut suppressed_commits: BTreeSet<SuppressedCommit> = BTreeSet::new();
 
         let empty_facts: Vec<&Fact> = Vec::new();
         let all_facts = idx.facts_by_routine.get(rid).unwrap_or(&empty_facts);
@@ -5003,16 +5433,21 @@ fn digest_one_root<'i>(
             };
 
             let mut positions: Vec<usize> = Vec::new();
-            for (outcome, site) in outcomes {
+            for (mut outcome, site) in outcomes {
                 // A site's row carries the site's own detail (`SiteWitnesses`).
                 let detail = match site {
                     Some(s) => effect_detail_of(s, &idx.stable_id_to_display),
                     None => detail.clone(),
                 };
+                // ...and its own operation: the representative's names ONE site,
+                // so two sites of one carrier (two `Commit`s, or one per `#if`
+                // arm) would both carry it, each row with its own line but the
+                // same `operationId` (wave 2 final review, B2 item 2).
+                let origin_op = site.unwrap_or(fact).witness_operation_id();
                 // Project all paths to QueryWitnessHop[][] AND compute each raw path's
                 // conditionality from its OWN terminal hop (#8 — must be done before
                 // projection, which strips terminals).
-                let projected_paths: Vec<ProjPath> = match outcome.projected {
+                let projected_paths: Vec<ProjPath> = match outcome.projected.take() {
                     Some(pre) => pre,
                     None => outcome
                         .paths
@@ -5057,10 +5492,83 @@ fn digest_one_root<'i>(
                     }
                 }
 
+                // B4/L16: a COMMIT part splits by the `[CommitBehavior]` on its
+                // routes into the paths that still commit and those that raise
+                // an error (an `ERROR_IMPLICIT` row of its own); a commit no
+                // route runs is listed as suppressed instead of as a row.
+                let mut offers: Vec<PartOffer> = Vec::with_capacity(parts.len());
                 for (bnd, ix) in parts {
+                    let split = match cb {
+                        Some(cb) if effect_type == "COMMIT" => {
+                            split_commit_part(cb, &cb_root, rid, &outcome, bnd.as_deref(), &ix, idx)
+                        }
+                        _ => None,
+                    };
+                    let Some(split) = split else {
+                        offers.push(PartOffer {
+                            effect_type,
+                            bnd,
+                            ix,
+                            extra: None,
+                            twins: None,
+                            error_reason: None,
+                            uncertain: Uncertain::default(),
+                        });
+                        continue;
+                    };
+                    if let Some(s) = split.suppressed {
+                        suppressed_commits.insert(s);
+                    }
+                    if !split.commit_ix.is_empty() || split.commit_extra.is_some() {
+                        offers.push(PartOffer {
+                            effect_type,
+                            bnd: bnd.clone(),
+                            ix: split.commit_ix,
+                            extra: split.commit_extra,
+                            twins: Some(split.commit_twins),
+                            error_reason: None,
+                            uncertain: split.uncertain,
+                        });
+                    }
+                    if !split.error_ix.is_empty() || split.error_extra.is_some() {
+                        offers.push(PartOffer {
+                            effect_type: "ERROR_IMPLICIT",
+                            bnd,
+                            ix: split.error_ix,
+                            extra: split.error_extra,
+                            twins: Some(Vec::new()),
+                            error_reason: Some(split.error_reason.unwrap_or_else(|| {
+                                "CommitBehavior Error on a routine of its route".to_string()
+                            })),
+                            uncertain: split.error_uncertain,
+                        });
+                    }
+                }
+
+                for offer in offers {
+                    let PartOffer {
+                        effect_type,
+                        bnd,
+                        ix,
+                        extra,
+                        twins: twin_sel,
+                        error_reason,
+                        uncertain,
+                    } = offer;
+                    // A commit turned into an error names why (B4/L16).
+                    let detail = match &error_reason {
+                        Some(r) => {
+                            let mut d = detail.clone();
+                            d.push(("commitBehavior".to_string(), r.clone()));
+                            d
+                        }
+                        None => detail.clone(),
+                    };
                     let terminal = ix
                         .first()
-                        .and_then(|&i| find_terminal(&outcome.paths[i].hops));
+                        .map(|&i| &outcome.paths[i])
+                        .or(extra.as_ref())
+                        .and_then(|p| find_terminal(&p.hops));
                     let evidence = evidence_from_terminal(terminal);
                     let evidence_operation_id = match terminal {
                         Some(WitnessHop::Terminal {
@@ -5076,22 +5584,56 @@ fn digest_one_root<'i>(
                         }) => Some(cs.clone()),
                         _ => None,
                     };
-                    let paths: Vec<ProjPath> =
+                    let mut paths: Vec<ProjPath> =
                         ix.iter().map(|&i| projected_paths[i].clone()).collect();
                     // A group's terminal context is `unknown` (the callee is not
                     // analysed, spec §14.3.5 item 4), so each of its paths is.
-                    let conds: Vec<crate::engine::l5::conditionality::EffectConditionality> =
+                    let mut conds: Vec<crate::engine::l5::conditionality::EffectConditionality> =
                         match &bnd {
                             Some(_) => vec![crate::engine::l5::conditionality::UNKNOWN; ix.len()],
                             None => ix
                                 .iter()
                                 .map(|&i| {
-                                    compute_path_conditionality(&outcome.paths[i], cs_ctx, op_ctx)
+                                    at_least_conditional(
+                                        compute_path_conditionality(
+                                            &outcome.paths[i],
+                                            cs_ctx,
+                                            op_ctx,
+                                        ),
+                                        uncertain.ix.contains(&i),
+                                    )
                                 })
                                 .collect(),
                         };
+                    // B4/L16: a route the commit-behavior search found for a
+                    // behavior no listed path shows.
+                    if let Some(p) = &extra {
+                        paths.push(ProjPath::from_hops(project_path(p, rid, &display, idx)));
+                        conds.push(at_least_conditional(
+                            compute_path_conditionality(p, cs_ctx, op_ctx),
+                            uncertain.extra,
+                        ));
+                    }
+                    let selected_twins: Vec<
+                        crate::engine::l5::conditionality::EffectConditionality,
+                    >;
                     let part_twins: &[crate::engine::l5::conditionality::EffectConditionality] =
-                        if bnd.is_some() { &[] } else { &twin_conds };
+                        match (&bnd, &twin_sel) {
+                            (Some(_), _) => &[],
+                            (None, None) => &twin_conds,
+                            (None, Some(sel)) => {
+                                selected_twins = sel
+                                    .iter()
+                                    .map(|&t| {
+                                        at_least_conditional(
+                                            twin_conds[t],
+                                            uncertain.twins.contains(&t),
+                                        )
+                                    })
+                                    .collect();
+                                &selected_twins
+                            }
+                        };
                     let key = match &bnd {
                         // (effect type with its temp class, boundary identity).
                         Some(b) => format!(
@@ -5100,6 +5642,12 @@ fn digest_one_root<'i>(
                             b.id
                         ),
                         None => dedupe_key(effect_type, terminal, fact, &detail),
+                    };
+                    // A commit's error row never merges with the commit's own.
+                    let key = if error_reason.is_some() {
+                        format!("CBE|{key}")
+                    } else {
+                        key
                     };
                     // Merge into the effect (or, for a new effect, into an empty
                     // window): ONE path serves both branches (#69 D3), so the
@@ -5132,7 +5680,7 @@ fn digest_one_root<'i>(
                                 .group_ops
                                 .entry(r.to_string())
                                 .or_insert_with(|| Some(BTreeSet::new()));
-                            match (fact.witness_operation_id(), ops.as_mut()) {
+                            match (origin_op, ops.as_mut()) {
                                 (Some(op), Some(set)) => {
                                     set.insert(op.to_string());
                                 }
@@ -5150,7 +5698,7 @@ fn digest_one_root<'i>(
                         acc.temp_state = merged_temp;
                         if acc.group.is_none() {
                             acc.origin_operation_ids
-                                .extend(fact.witness_operation_id().map(str::to_string));
+                                .extend(origin_op.map(str::to_string));
                         }
                         pos
                     } else {
@@ -5175,10 +5723,7 @@ fn digest_one_root<'i>(
                             origin_operation_ids: if bnd.is_some() {
                                 BTreeSet::new()
                             } else {
-                                fact.witness_operation_id()
-                                    .map(str::to_string)
-                                    .into_iter()
-                                    .collect()
+                                origin_op.map(str::to_string).into_iter().collect()
                             },
                             group: bnd.clone().map(|b| (b, BTreeMap::new())),
                             group_ops: BTreeMap::new(),
@@ -5201,7 +5746,11 @@ fn digest_one_root<'i>(
                             outcome
                                 .twins
                                 .iter()
-                                .map(|p| ProjPath::from_hops(project_path(p, rid, &display, idx)))
+                                .enumerate()
+                                .filter(|(t, _)| twin_sel.as_ref().is_none_or(|s| s.contains(t)))
+                                .map(|(_, p)| {
+                                    ProjPath::from_hops(project_path(p, rid, &display, idx))
+                                })
                                 .collect()
                         };
                         let all = [paths.clone(), twin_paths].concat();
@@ -5290,10 +5839,20 @@ fn digest_one_root<'i>(
                             acc.group_unresolved.to_string(),
                         ));
                     }
+                    // B4/L16: a group of commits that raise an error says why.
+                    d.extend(
+                        acc.detail
+                            .iter()
+                            .filter(|(k, _)| k == "commitBehavior")
+                            .cloned(),
+                    );
                     d
                 }
                 None => acc.detail,
             };
+            // B4/L16: a commit's error row never shares an id with an error
+            // row of the same place.
+            let commit_error = detail.iter().any(|(k, _)| k == "commitBehavior");
 
             // A kt DB effect's key carries its class (#69 D3), so a kt and an nt
             // write never share an occurrence id; nt keys are unchanged.
@@ -5314,6 +5873,9 @@ fn digest_one_root<'i>(
                 && let Some((_, r)) = detail.iter().find(|(k, _)| k == "resourceId")
             {
                 key_effect_type = format!("{key_effect_type}|{r}");
+            }
+            if commit_error {
+                key_effect_type = format!("{key_effect_type}|commit");
             }
             let (canonical_key, link_signature) = build_canonical_key(
                 rid,
@@ -5512,6 +6074,7 @@ fn digest_one_root<'i>(
             partial_site_types: partial_site_types.into_iter().map(str::to_string).collect(),
             literal_dead_sites: Vec::new(),
             literal_narrowed_sites: Vec::new(),
+            suppressed_commits: suppressed_commits.into_iter().collect(),
         })
     }
 }
@@ -6848,6 +7411,7 @@ mod tests {
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
+            commit_scopes: Default::default(),
         }
     }
 
@@ -8337,11 +8901,117 @@ codeunit 50101 "T7b Temp Classes"
         assert_eq!(depth, 1, "{:?}", out.diagnostics);
     }
 
-    /// A routine id declared twice (two `#if` arms) is ONE producer: the solve
-    /// seeds it once, and its short and its longer proof both survive cap 2.
+    /// Two declarations of one routine id that SHARE their site ids are ONE
+    /// producer: the solve seeds it once, and its short and its longer proof
+    /// both survive cap 2. Engine limits B2: production gives each `#if` arm
+    /// its own site ids, so the shared ids are stated by assignment
+    /// (`assemble_and_resolve_inline_program_shared_site_ids`);
+    /// `per_arm_declarations_are_one_producer_each` pins the production answer.
     #[test]
     fn duplicated_declaration_is_one_producer() {
-        let src = r#"
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_shared_site_ids(
+                &[("DupProducer.al".to_string(), DUP_PRODUCER_SRC.to_string())],
+                "00000000-0000-0000-0000-00000000d1a2",
+                false,
+            );
+        let named = |n: &str| -> Vec<&crate::program::model::workspace::ModelRoutine> {
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.name == n)
+                .collect()
+        };
+        let h = named("H");
+        assert_eq!(h.len(), 2, "precondition: two declarations of H");
+        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
+        assert_eq!(
+            h[0].record_operations[0].id, h[1].record_operations[0].id,
+            "precondition: the declarations share their insert's site id"
+        );
+        let snap = compose_snapshot(&resolved);
+        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
+        assert_eq!(seeds, 1, "H's insert is one producer");
+        let root = &named("Root")[0].stable_routine_id;
+        let f = snap
+            .capability_facts
+            .iter()
+            .find(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert")
+            .expect("Root inherits H's insert");
+        let idx = build_fingerprint_indexes(&snap);
+        let out = reconstruct_witness_paths(
+            root,
+            f,
+            &idx,
+            2,
+            &mut HopCache::default(),
+            &mut DagCache::default(),
+            &CarrierCache::default(),
+        );
+        let lens: Vec<usize> = out.paths.iter().map(|p| p.hops.len()).collect();
+        assert_eq!(lens, vec![3, 4], "Root→A→H and Root→A→B→H, each + terminal");
+    }
+
+    /// Engine limits B2 (per-arm ids, owner decision 2026-11-09): the two `#if`
+    /// arms of `H` are two declarations that never coexist in one build, each
+    /// with its own site id, so each arm's insert is its own producer (two
+    /// seeds), and each cites its own arm's line. One producer per arm is the
+    /// reading that matches BC: whichever arm a build compiles, its insert is
+    /// the one that runs. Root still inherits an insert.
+    #[test]
+    fn per_arm_declarations_are_one_producer_each() {
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("DupProducer.al".to_string(), DUP_PRODUCER_SRC.to_string())],
+                "00000000-0000-0000-0000-00000000d1a3",
+            );
+        let h: Vec<&crate::program::model::workspace::ModelRoutine> = resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == "H")
+            .collect();
+        assert_eq!(h.len(), 2, "precondition: two declarations of H");
+        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
+        let ins = |r: &crate::program::model::workspace::ModelRoutine| {
+            let o = &r.record_operations[0];
+            (o.id.clone(), o.source_anchor.start_line)
+        };
+        let (a, b) = (ins(h[0]), ins(h[1]));
+        assert_ne!(a.0, b.0, "each arm's insert has its own site id");
+        let lines = |text: &str| -> Vec<u32> {
+            DUP_PRODUCER_SRC
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| l.contains(text))
+                .map(|(i, _)| i as u32)
+                .collect()
+        };
+        assert_eq!(
+            vec![a.1, b.1],
+            lines("R.Insert();"),
+            "each insert cites its own arm's (0-based) line"
+        );
+        let snap = compose_snapshot(&resolved);
+        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
+        assert_eq!(seeds, 2, "one producer per arm");
+        let root = &resolved
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Root")
+            .unwrap()
+            .stable_routine_id;
+        assert!(
+            snap.capability_facts
+                .iter()
+                .any(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert"),
+            "Root inherits H's insert"
+        );
+    }
+
+    const DUP_PRODUCER_SRC: &str = r#"
 table 50410 "Dup Tab"
 {
     fields
@@ -8383,44 +9053,6 @@ codeunit 50410 DupProducer
 #endif
 }
 "#;
-        let resolved =
-            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
-                &[("DupProducer.al".to_string(), src.to_string())],
-                "00000000-0000-0000-0000-00000000d1a2",
-            );
-        let named = |n: &str| -> Vec<&crate::program::model::workspace::ModelRoutine> {
-            resolved
-                .workspace
-                .routines
-                .iter()
-                .filter(|r| r.name == n)
-                .collect()
-        };
-        let h = named("H");
-        assert_eq!(h.len(), 2, "precondition: two declarations of H");
-        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
-        let snap = compose_snapshot(&resolved);
-        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
-        assert_eq!(seeds, 1, "H's insert is one producer");
-        let root = &named("Root")[0].stable_routine_id;
-        let f = snap
-            .capability_facts
-            .iter()
-            .find(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert")
-            .expect("Root inherits H's insert");
-        let idx = build_fingerprint_indexes(&snap);
-        let out = reconstruct_witness_paths(
-            root,
-            f,
-            &idx,
-            2,
-            &mut HopCache::default(),
-            &mut DagCache::default(),
-            &CarrierCache::default(),
-        );
-        let lens: Vec<usize> = out.paths.iter().map(|p| p.hops.len()).collect();
-        assert_eq!(lens, vec![3, 4], "Root→A→H and Root→A→B→H, each + terminal");
-    }
 
     // -----------------------------------------------------------------------
     // #97 — the ORDINARY witness: a capped witness is the prefix of the
@@ -9283,6 +9915,7 @@ codeunit 50410 DupProducer
             to: to.to_string(),
             target_object: format!("obj-{to}"),
             object_type: "Codeunit".to_string(),
+            fires: None,
             source_anchor: anchor(from),
             edge_id: format!("e-{cs}"),
         }

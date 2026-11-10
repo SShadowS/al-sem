@@ -868,7 +868,9 @@ pub fn resolve_changed_roots(
                     selector,
                 ),
             });
-        } else if matches.len() >= 2 {
+        } else if matches.len() >= 2
+            && !crate::engine::l5::selector_index::declarations_of_one_routine(&matches)
+        {
             // candidates = `<owner>::<display>` (display falls back to the id).
             // Round-2 G40: ordered by where each is declared (file, line), so
             // every rendering lists an ambiguity in source order; the sort is
@@ -921,10 +923,13 @@ pub fn resolve_changed_roots(
                 candidates,
             });
         } else {
-            // Every declaration of the id is touched (a selector names no line).
-            let id = matches.into_iter().next().unwrap();
-            hits.extend_from_slice(spans.of_routine(&id));
-            roots.insert(id);
+            // Every declaration of the id is touched (a selector names no
+            // line), and so is every declaration of a split routine
+            // (`split_decls`): a name names the routine, not one build of it.
+            for id in matches {
+                hits.extend_from_slice(spans.of_routine(&id));
+                roots.insert(id);
+            }
         }
     }
 
@@ -1125,6 +1130,9 @@ pub struct DigestEntryFull {
     pub entry_diagnostics: Vec<EntryDiagnostic>,
     /// An Interface / ControlAddIn procedure declaration (#71): no body, no effects.
     pub declaration_only: bool,
+    /// B4/L16: the commits no route runs as a commit, with why
+    /// ([`crate::engine::l5::digest::DigestEntryResult::suppressed_commits`]).
+    pub suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
 }
 
 pub struct DigestEffectFull {
@@ -1975,11 +1983,7 @@ impl<'t> LiteralPass<'t> {
     pub(crate) fn new(tree: &'t CapabilitySnapshot, model: &'t Model) -> LiteralPass<'t> {
         let reach = {
             let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
-            crate::engine::l5::literal_reach::LiteralReach::new(
-                &tree.typed_edges,
-                &tree.capability_facts,
-                model,
-            )
+            crate::engine::l5::literal_reach::LiteralReach::new(tree, model)
         };
         // G35: how each group resource is reached inside the dependency.
         let group_paths = {
@@ -2013,6 +2017,117 @@ impl<'t> LiteralPass<'t> {
             unresolved_sites,
         } = self;
         literal_reach_entries(reach, group_paths, suffixes, unresolved_sites, entries);
+    }
+}
+
+/// B7/L23: the effect types a trap acts on: an error (`Error`, an implicit
+/// error) and the error dialog it shows (`UI_ERROR`, the same site): a
+/// caught error shows no dialog.
+pub(crate) fn is_error_row_type(t: &str) -> bool {
+    matches!(t, "ERROR_THROW" | "ERROR_IMPLICIT" | "UI_ERROR")
+}
+
+/// B7/L23 + L30 (engine limits wave 2): rule each error row of `entry` (an
+/// `Error`, an implicit error, its dialog) against the traps on its routes
+/// ([`crate::engine::l5::traps`]), into the row's
+/// [`FlowNotes::trap`](crate::engine::l5::literal_reach::FlowNotes): caught
+/// on every route, escaping only with a write pending at an isolated event,
+/// or escaping while its first route is trapped. And name the routines on
+/// its route that collect errors (L30, `FlowNotes::collected_by`).
+///
+/// Only a row that is ONE site is ruled (its type's site search completed,
+/// not a boundary group): a row that may stand for unseen sites keeps
+/// escaping. Only completed searches rule: a capped one leaves every row as
+/// it was. A root with no trap and no collector in its reach pays one scan
+/// of the trap table and nothing more.
+fn judge_traps<'t>(
+    reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
+    root_tree: &mut Option<Option<crate::engine::l5::literal_reach::LiveTree<'t>>>,
+    entry: &mut DigestEntryResult,
+) {
+    let partial = |t: &str| entry.partial_site_types.iter().any(|p| p == t);
+    // A boundary group (errors beyond a call into dependency code) is ruled
+    // by its crossing's site: every error beyond it is caught when every
+    // route to the crossing crosses a trap. (A crossing edge that is itself
+    // a trap is not ruled here: such a group stays escaping.)
+    let rows: Vec<usize> = (0..entry.effects.len())
+        .filter(|&i| {
+            let e = &entry.effects[i];
+            !e.literal_unreachable
+                && is_error_row_type(&e.effect_type)
+                && (e.boundary_group || !partial(&e.effect_type))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let Some(full) = root_tree
+        .get_or_insert_with(|| reach.live_tree_of(&entry.routine_id))
+        .as_ref()
+    else {
+        return;
+    };
+    let scope = reach.trap_scope(&entry.routine_id, full);
+    let collectors = reach.collectors_reached(full);
+    if scope.is_none() && !collectors {
+        return;
+    }
+    for i in rows {
+        let e = &mut entry.effects[i];
+        let ops: Vec<String> = if e.boundary_group {
+            // The crossing's own site (an event crossing has none: not ruled).
+            let site = match &e.crossing {
+                Some(c) => c.site.guarded_id(),
+                None => e
+                    .evidence_callsite_id
+                    .as_deref()
+                    .or(e.evidence_operation_id.as_deref()),
+            };
+            match site {
+                Some(s) => vec![s.to_string()],
+                None => continue,
+            }
+        } else {
+            let mut ops: Vec<String> = e
+                .evidence_operation_id
+                .iter()
+                .chain(&e.evidence_callsite_id)
+                .cloned()
+                .collect();
+            for op in &e.origin_operation_ids {
+                if !ops.contains(op) {
+                    ops.push(op.clone());
+                }
+            }
+            ops
+        };
+        let trap = scope
+            .as_ref()
+            .and_then(|s| reach.trap_verdict(full, s, &ops)); // B7 review: a caught ruling that may rest on a checked run assumes
+        // the root's callers have no write pending.
+        let caught = matches!(
+            trap,
+            Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
+        );
+        let assumes_clean_entry = caught && scope.as_ref().is_some_and(|s| s.clean_checked);
+        // Round 2: ... and, when a `Commit()` before the run ends the write,
+        // that the callers set no `[CommitBehavior]` that stops it.
+        let assumes_normal_commit = caught && scope.as_ref().is_some_and(|s| s.clean_by_commit);
+        let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
+            reach
+                .tree_witness(full, &ops)
+                .map(|(steps, _)| reach.collectors_on(&entry.routine_id, &steps))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if trap.is_some() || !collected_by.is_empty() {
+            let notes = e.flow_notes.get_or_insert_with(Default::default);
+            notes.trap = trap;
+            notes.trap_assumes_clean_entry = assumes_clean_entry;
+            notes.trap_assumes_normal_commit = assumes_normal_commit;
+            notes.collected_by = collected_by;
+        }
     }
 }
 
@@ -2092,7 +2207,14 @@ fn literal_reach_entries<'t>(
                     && !e.effect_type.starts_with("DB_")
                     && e.effect_type != "EVENT_PUBLISH"
                 {
-                    let ops = vec![(String::new(), reach.terminal_ops(&e.effect_type))];
+                    // B4/L16: a group of commits that raise an error ends
+                    // on a commit.
+                    let ty = if e.detail.iter().any(|(k, _)| k == "commitBehavior") {
+                        "COMMIT"
+                    } else {
+                        e.effect_type.as_str()
+                    };
+                    let ops = vec![(String::new(), reach.terminal_ops(ty))];
                     e.group_terminal_path = group_paths
                         .paths(reach, tree, entries, e, &ops, suffixes, &never)
                         .pop()
@@ -2159,6 +2281,8 @@ fn literal_reach_entries<'t>(
                 .get_or_insert_with(Default::default)
                 .assumed = keeps;
         }
+        // B7/L23 + L30: error rows behind traps, and under error collection.
+        judge_traps(reach, &mut root_tree, entry);
         // G33: a group's resources reached only through code that cannot run.
         for (i, resources) in dead_resources {
             entry.effects[i].dead_group_resources = resources;
@@ -2403,6 +2527,7 @@ pub fn run_digest_query_full_from_entries(
                 },
                 entry_diagnostics: Vec::new(),
                 declaration_only: true,
+                suppressed_commits: Vec::new(),
             });
             continue;
         }
@@ -2435,8 +2560,10 @@ pub fn run_digest_query_full_from_entries(
 
         let mut full_effects: Vec<DigestEffectFull> = Vec::new();
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
+        let mut suppressed_commits = Vec::new();
 
         if let Some(entry) = base_entry {
+            suppressed_commits = std::mem::take(&mut entry.suppressed_commits);
             // A site list the search could not finish (the depth bound): its
             // count is a lower bound, and the renderers say "at least".
             for ty in &entry.partial_site_types {
@@ -2660,6 +2787,7 @@ pub fn run_digest_query_full_from_entries(
             unresolved_traversal: cone.traversal,
             entry_diagnostics,
             declaration_only: false,
+            suppressed_commits,
         });
     }
 
@@ -2674,6 +2802,55 @@ pub fn run_digest_query_full_from_entries(
 // ---------------------------------------------------------------------------
 // JSON document projection
 // ---------------------------------------------------------------------------
+
+/// B4/L16: one suppressed commit as a sentence, for prove, digest and
+/// explain: `COMMIT at <file:line> is ignored (CommitBehavior Ignore on …)`,
+/// or `raises an error instead (…)`; a commit beyond a crossing is named by
+/// the crossing.
+#[must_use]
+pub fn suppressed_commit_words(s: &crate::engine::l5::digest::SuppressedCommit) -> String {
+    let at = match (&s.file, s.line) {
+        (Some(f), Some(l)) => format!(" at {f}:{}", crate::engine::line_base::shown(l)),
+        (Some(f), None) => format!(" at {f}"),
+        _ => String::new(),
+    };
+    let what = match &s.beyond {
+        Some(b) => format!("the COMMITs beyond {b}, entered{at},"),
+        None => format!("COMMIT{at}"),
+    };
+    let (verb_one, verb_many) = if s.behavior == "Error" {
+        ("raises an error instead", "raise an error instead")
+    } else {
+        ("is ignored", "are ignored")
+    };
+    let verb = if s.beyond.is_some() {
+        verb_many
+    } else {
+        verb_one
+    };
+    format!("{what} {verb} ({})", s.reason)
+}
+
+/// B4/L16: one suppressed commit's JSON (`behavior`, `file`, `line`
+/// 1-based, `beyond`, `reason`).
+#[must_use]
+pub fn suppressed_commit_value(
+    s: &crate::engine::l5::digest::SuppressedCommit,
+) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("behavior".into(), s.behavior.into());
+    if let Some(f) = &s.file {
+        m.insert("file".into(), f.clone().into());
+    }
+    if let Some(l) = s.line {
+        m.insert("line".into(), crate::engine::line_base::shown(l).into());
+    }
+    if let Some(b) = &s.beyond {
+        m.insert("beyond".into(), b.clone().into());
+    }
+    m.insert("reason".into(), s.reason.clone().into());
+    serde_json::Value::Object(m)
+}
 
 /// An anchor's JSON: `a.line` is the model's 0-based row, written 1-based
 /// (`lineBase: 1`, [`crate::engine::line_base`]).
@@ -2920,6 +3097,18 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
         "unresolvedTraversal".into(),
         serde_json::Value::Object(trav),
     );
+    // B4/L16 (additive): the commits a `[CommitBehavior]` ignores or turns
+    // into an error.
+    if !entry.suppressed_commits.is_empty() {
+        m.insert(
+            "suppressedCommits".into(),
+            entry
+                .suppressed_commits
+                .iter()
+                .map(suppressed_commit_value)
+                .collect(),
+        );
+    }
 
     serde_json::Value::Object(m)
 }
@@ -3644,6 +3833,12 @@ fn digest_header(
         for l in &f.limits {
             if !h.limits.contains(l) {
                 h.limits.push(l.clone());
+            }
+        }
+        // B7 review round 2: what a root's caught errors rest on.
+        for a in &f.assumptions {
+            if !h.assumptions.contains(a) {
+                h.assumptions.push(a.clone());
             }
         }
     }
@@ -5488,6 +5683,7 @@ mod tests {
             },
             entry_diagnostics: diagnostics,
             declaration_only: false,
+            suppressed_commits: Vec::new(),
         }
     }
 
@@ -6272,8 +6468,8 @@ mod tests {
         let all = kind_lines(&r, &e, RenderOpts::new(true, None)).join("\n");
         assert!(
             all.ends_with(
-                "BACKGROUND_TASK beyond dep:Z (3 places, entered at ws:src/Z.al:11, \
-                 ws:src/Z.al:12, ws:src/Z.al:13)"
+                "BACKGROUND_TASK beyond dep:Z (3 places, entered at ws:src/Z.al lines 11, 12, \
+                 13)"
             ),
             "{all}"
         );

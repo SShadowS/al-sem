@@ -36,6 +36,13 @@
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
+            "trap": {
+              "file": "ws:src/tests.al",
+              "kind": "asserterror",
+              "line": 14,
+              "routine": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
+              "verdict": "caught"
+            },
             "type": "ERROR_IMPLICIT",
             "via": [
               "PostOrder"
@@ -51,6 +58,13 @@
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
+            "trap": {
+              "file": "ws:src/tests.al",
+              "kind": "asserterror",
+              "line": 14,
+              "routine": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
+              "verdict": "caught"
+            },
             "type": "ERROR_IMPLICIT",
             "via": [
               "PostOrder"
@@ -66,6 +80,13 @@
               "sourceKind": "source"
             },
             "conditionality": "error-path",
+            "trap": {
+              "file": "ws:src/tests.al",
+              "kind": "asserterror",
+              "line": 14,
+              "routine": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
+              "verdict": "caught"
+            },
             "type": "ERROR_THROW",
             "via": [
               "PostOrder"
@@ -231,6 +252,7 @@
       "summary": {
         "callerDependentTables": 0,
         "callers": 0,
+        "caughtErrors": 3,
         "commits": {
           "answer": "no observed",
           "callSites": 0,
@@ -256,7 +278,6 @@
           "workspace": 2
         },
         "kinds": {
-          "errors": 3,
           "ui": 1
         },
         "literalDeadTables": 0,

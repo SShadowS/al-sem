@@ -712,6 +712,32 @@ fn duplicate_ids_across_if_arms(mode: MemoryMode) {
     assert_eq!(r.class, ChangeClass::BodyOnly);
 }
 
+/// Engine limits B2 (`split_decls`): a change of one file's subscription
+/// starts a split (the other file's routine moves to its own node) and ends
+/// it again. An unchanged file's resolution and rows depend on the split only
+/// through what its reads recorded, so each refresh must equal a cold build.
+fn a_subscription_change_starts_and_ends_a_split(mode: MemoryMode) {
+    let publisher = "codeunit 50120 \"Pub\"\n{\n    procedure Raise()\n    begin\n        OnX();\n        OnY();\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnX()\n    begin\n    end;\n\n    [IntegrationEvent(false, false)]\n    procedure OnY()\n    begin\n    end;\n}\n";
+    let a = "#if A\ncodeunit 50121 \"HSub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Pub\", 'OnX', '', false, false)]\n    procedure H()\n    begin\n    end;\n}\n#endif\n";
+    let b = "#if not A\ncodeunit 50121 \"HSub\"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Pub\", 'OnX', '', false, false)]\n    procedure H()\n    var\n        C: Codeunit \"Callee\";\n    begin\n        C.Q();\n    end;\n}\n#endif\n";
+    let caller = "codeunit 50122 \"HCaller\"\n{\n    procedure Go()\n    var\n        S: Codeunit \"HSub\";\n    begin\n        S.H();\n    end;\n}\n";
+    let ws = Ws::new(&[
+        ("Callee.Codeunit.al", CALLEE),
+        ("Pub.Codeunit.al", publisher),
+        ("HA.Codeunit.al", a),
+        ("HB.Codeunit.al", b),
+        ("HCaller.Codeunit.al", caller),
+    ]);
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold, one routine");
+    ws.edit("HB.Codeunit.al", "'OnX'", "'OnY'");
+    let r = refresh_and_compare(&mut s, &ws, "the split starts");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    ws.edit("HB.Codeunit.al", "'OnY'", "'OnX'");
+    let r = refresh_and_compare(&mut s, &ws, "the split ends");
+    assert_eq!(r.class, ChangeClass::Declaration);
+}
+
 const HOLDER: &str = "interface \"H Evaluator\"\n{\n    procedure Evaluate(): Text;\n}\ncodeunit 50311 \"H Real\" implements \"H Evaluator\"\n{\n    procedure Evaluate(): Text\n    begin\n        exit('x');\n    end;\n}\ncodeunit 50312 \"H Other\" implements \"H Evaluator\"\n{\n    procedure Evaluate(): Text\n    begin\n        exit('w');\n    end;\n}\ncodeunit 50313 \"H Holder\"\n{\n    Access = Internal;\n\n    var\n        Evaluator: Interface \"H Evaluator\";\n\n    internal procedure SetEvaluator(NewEvaluator: Interface \"H Evaluator\")\n    begin\n        Evaluator := NewEvaluator;\n    end;\n\n    internal procedure Lookup(): Text\n    begin\n        exit(Evaluator.Evaluate());\n    end;\n}\n";
 const HOLDER_CALLER: &str = "codeunit 50314 \"H Caller\"\n{\n    procedure Go(): Text\n    var\n        Real: Codeunit \"H Real\";\n        Other: Codeunit \"H Other\";\n        Any: Interface \"H Evaluator\";\n        Holder: Codeunit \"H Holder\";\n    begin\n        Holder.SetEvaluator(Real);\n        exit(Holder.Lookup());\n    end;\n}\n";
 
@@ -854,6 +880,40 @@ fn method_id_change_through_a_synthesized_dispatch(mode: MemoryMode) {
 const ENUM_I: &str = "interface \"EI Shape\"\n{\n    procedure Area(): Integer;\n}\ncodeunit 50131 \"EI Square\" implements \"EI Shape\"\n{\n    procedure Area(): Integer\n    begin\n        exit(4);\n    end;\n}\ncodeunit 50132 \"EI Circle\" implements \"EI Shape\"\n{\n    procedure Area(): Integer\n    begin\n        exit(3);\n    end;\n}\n";
 const ENUM_E: &str = "enum 50130 \"EI Kind\" implements \"EI Shape\"\n{\n    Extensible = false;\n    value(0; Square) { Implementation = \"EI Shape\" = \"EI Square\"; }\n    value(1; Circle) { Implementation = \"EI Shape\" = \"EI Circle\"; }\n}\n";
 const ENUM_USE: &str = "codeunit 50133 \"EI Use\"\n{\n    procedure Go(K: Enum \"EI Kind\"): Integer\n    var\n        S: Interface \"EI Shape\";\n    begin\n        S := K;\n        exit(S.Area());\n    end;\n}\n";
+
+const DS_PORT: &str = "table 50140 \"DS T\"\n{\n    fields { field(1; K; Integer) { } }\n    keys { key(PK; K) { } }\n}\nxmlport 50141 \"DS Port\"\n{\n    schema\n    {\n        textelement(Root)\n        {\n            tableelement(El; \"DS T\")\n            {\n                AutoSave = false;\n            }\n        }\n    }\n}\n";
+const DS_USE: &str = "codeunit 50142 \"DS Use\"\n{\n    procedure Go()\n    begin\n        Xmlport.Import(Xmlport::\"DS Port\");\n    end;\n}\n";
+
+/// B6: an XmlPort's `AutoSave` (S, its file's projection) decides whether an
+/// UNCHANGED caller's import inserts: the caller's file is re-resolved, its
+/// dataset operations follow. Stated precondition: the caller's file is not
+/// edited, and the first revision's import writes nothing.
+fn dataset_property_of_an_unchanged_caller(mode: MemoryMode) {
+    let ws = Ws::new(&[("Port.al", DS_PORT), ("Use.Codeunit.al", DS_USE)]);
+    let inserts = |s: &mut WorkspaceSession| -> usize {
+        let inputs = ws.inputs();
+        let program = s.refresh_program(&inputs).expect("session program");
+        let model = s
+            .refresh_model(Ok(program), &inputs, false, AssemblyNeeds::RULES)
+            .expect("session model");
+        model
+            .resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == "Go")
+            .flat_map(|r| &r.record_operations)
+            .filter(|o| o.op == "Insert" && o.dataset_reason.is_some())
+            .count()
+    };
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold (no AutoSave)");
+    assert_eq!(inserts(&mut s), 0, "precondition: AutoSave = false");
+    ws.edit("Port.al", "AutoSave = false;", "AutoSave = true;");
+    let r = refresh_and_compare(&mut s, &ws, "AutoSave on");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert_eq!(inserts(&mut s), 1, "the import inserts once AutoSave is on");
+}
 
 /// An enum's extensibility and implementation map (S) close or open an
 /// unchanged caller's interface dispatch.
@@ -1489,10 +1549,12 @@ in_both_modes!(
     dependency_raiser_and_subscriber_edits,
     event_flow_edge_of_an_unchanged_publisher_moves_under_b,
     duplicate_ids_across_if_arms,
+    a_subscription_change_starts_and_ends_a_split,
     setter_argument_holder_refinement,
     temp_proof_revocation_in_an_unchanged_subscriber,
     method_id_change_through_a_synthesized_dispatch,
     enum_extensibility_and_impls,
+    dataset_property_of_an_unchanged_caller,
     package_change_rebuilds_and_roots_config_is_b,
     coverage_config_and_nested_app_json_are_b,
     app_json_change_is_p,

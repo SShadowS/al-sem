@@ -266,9 +266,14 @@ fn build_dep_nodes(
     let mut dep_meta: Vec<(RoutineNodeId, RoutineMeta)> = Vec::with_capacity(meta_total);
     let mut recovered: Vec<String> = Vec::new();
     // Issue #103: every dependency file is its own source unit, numbered
-    // across all apps (one app read twice is two units), because the step 4
-    // dedup unions event facts per source file only.
+    // across all apps (one app read twice is two units). The step 4 dedup
+    // unions the event facts of every stamped copy (`EventFacts::of_arms`).
     let mut source_unit = 1u32..;
+    // Per routine (push order) its source unit (`""`: not a source
+    // routine), and per `dep_meta` entry the routine it belongs to
+    // (`split_declarations`, engine limits B2 follow-up 3).
+    let mut unit_of: Vec<String> = Vec::new();
+    let mut meta_routine: Vec<Option<usize>> = Vec::new();
     // The summaries' consumption into the layer (context-server design r4
     // §6.7: the work a declaration pack would remove, with `deps.extract`).
     let consume_span = crate::engine::perf_trace::span("deps", "deps.layer_consume");
@@ -285,6 +290,16 @@ fn build_dep_nodes(
             file.objects.share_strings(&mut pool);
             file.routines.share_strings(&mut pool);
             objects.extend(file.objects);
+            // Each routine's source unit, and (when the file's metadata is one entry per routine, in the same order) the
+            // routine each metadata entry belongs to (`split_declarations`).
+            let unit_id = crate::program::split_decls::unit_id(&unit.app.guid, &file.virtual_path);
+            unit_of.resize(routines.len(), String::new());
+            if file.routine_meta.len() == file.routines.len() {
+                meta_routine.extend((0..file.routines.len()).map(|k| Some(routines.len() + k)));
+            } else {
+                meta_routine.extend(std::iter::repeat_n(None, file.routine_meta.len()));
+            }
+            unit_of.extend(std::iter::repeat_n(unit_id, file.routines.len()));
             routines.extend(file.routines);
             dep_meta.extend(file.routine_meta.into_iter().map(|(mut id, mut meta)| {
                 id.share_strings(&mut pool);
@@ -358,6 +373,20 @@ fn build_dep_nodes(
     // with identical ids. Dedup after sort keeps the first occurrence
     // (arbitrary but stable) — see `dedup_routines_preserving_genuine_overloads`'s
     // doc for why routines need content-aware, not blanket, dedup.
+    // Engine limits B2 (wave 2 final review, follow-up 3): one node per
+    // declaration of a subscriber whose declarations subscribe differently,
+    // its metadata entry renamed with it.
+    unit_of.resize(routines.len(), String::new());
+    let declarations = split_declarations(&mut routines, &unit_of);
+    if !declarations.is_empty() {
+        for (entry, ri) in dep_meta.iter_mut().zip(&meta_routine) {
+            if let Some(ri) = ri
+                && declarations.base_of(&routines[*ri].id).is_some()
+            {
+                entry.0 = routines[*ri].id.clone();
+            }
+        }
+    }
     objects.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
@@ -365,6 +394,7 @@ fn build_dep_nodes(
     let routines = Arc::new(routines);
 
     DepNodes {
+        declarations,
         objects: Arc::new(objects),
         dep_meta: Arc::new(DepMeta::build(Arc::clone(&routines), dep_meta)),
         routines,
@@ -447,6 +477,8 @@ pub fn assemble_program_graph(
 
     use crate::engine::perf_trace as pt;
     let extract_span = pt::span("graph", "graph.extract");
+    // Each routine's source unit (`split_decls::unit_id`).
+    let mut units: Vec<String> = Vec::new();
     for (unit, pf) in (1u32..).zip(&ws_unit.files) {
         let (o0, r0) = (objects.len(), routines.len());
         extract_nodes(
@@ -456,13 +488,26 @@ pub fn assemble_program_graph(
             &mut objects,
             &mut routines,
         );
-        // Issue #103: the dedup unions event facts per source file only.
+        // Issue #103: the dedup unions the event facts of stamped copies only.
         for r in &mut routines[r0..] {
             r.source_unit = std::num::NonZeroU32::new(unit);
         }
+        units.extend(std::iter::repeat_n(
+            crate::program::split_decls::unit_of_parsed(pf),
+            routines.len() - r0,
+        ));
         // Before the sort + dedup below: one row per occurrence (S2b.3).
         workspace_rows.record_file(&pf.virtual_path, &pf.file, &objects[o0..], &routines[r0..]);
     }
+    // Engine limits B2 (wave 2 final review, follow-up 3): a subscriber whose
+    // declarations subscribe differently is one node per declaration; the
+    // rows (one per occurrence, in push order) name those nodes.
+    let mut declarations = split_declarations(&mut routines, &units);
+    for (row, r) in workspace_rows.routines.iter_mut().zip(&routines) {
+        row.node = r.id.clone();
+    }
+    declarations.extend(&dep.dep_nodes.declarations);
+    workspace_rows.declarations = declarations;
 
     objects.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_objects(&mut objects);
@@ -910,6 +955,10 @@ fn dedup_objects(objects: &mut Vec<ObjectNode>) {
         // A page blocks a user's operation only when every copy declares it;
         // every copy's `Editable(…)` setters count.
         kept.page_ui.merge(&dup.page_ui);
+        // Engine limits B2 (wave 2 final review): the copies are alternative
+        // builds (two `#if` arms, or two files), so the dataset is what any
+        // of them may run.
+        kept.dataset.merge(std::mem::take(&mut dup.dataset));
         true
     });
 }
@@ -1142,6 +1191,129 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
     routines.shrink_to(pre_len);
 }
 
+/// Engine limits B2 (wave 2 final review, follow-up 3): give each declaration
+/// of a source subscriber whose declarations subscribe differently a node id
+/// of its own (`split_decls`), BEFORE the sort and dedup, so they stay apart.
+/// `routines` are in push order (files in build order, then document order),
+/// `units` each routine's source unit (`split_decls::unit_id`). A routine is
+/// split when it has two or more copies and their `[EventSubscriber]` lists
+/// differ as sets; copies that subscribe alike stay one node (and keep the
+/// #103 union of their event facts).
+fn split_declarations(
+    routines: &mut [RoutineNode],
+    units: &[String],
+) -> crate::program::split_decls::SplitDecls {
+    use crate::program::split_decls::{Ordinals, SplitDecls, decl_id};
+    debug_assert_eq!(routines.len(), units.len(), "one unit per routine");
+    let mut by_id: HashMap<&RoutineNodeId, Vec<usize>> = HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        if r.tier != TrustTier::SymbolOnly {
+            by_id.entry(&r.id).or_default().push(i);
+        }
+    }
+    let same = |a: &[crate::program::resolve::event::ParsedSubscriberArgs],
+                b: &[crate::program::resolve::event::ParsedSubscriberArgs]| {
+        a.iter().all(|x| b.contains(x)) && b.iter().all(|x| a.contains(x))
+    };
+    // A copy with an `[EventSubscriber]` the engine cannot read may subscribe to
+    // anything, so it never counts as subscribing differently: only the copies
+    // whose subscriptions are all readable are compared.
+    let unreadable = |i: usize, routines: &[RoutineNode]| {
+        routines[i]
+            .event_subscribers
+            .iter()
+            .any(|s| s.is_unreadable())
+    };
+    let groups: Vec<Vec<usize>> = by_id
+        .into_values()
+        .filter(|ixs| {
+            let readable: Vec<usize> = ixs
+                .iter()
+                .copied()
+                .filter(|&i| !unreadable(i, routines))
+                .collect();
+            // An unreadable copy whose readable parts rule out every readable
+            // subscription of the routine does subscribe differently.
+            let ruled_out = ixs.iter().any(|&i| {
+                let own: Vec<_> = routines[i]
+                    .event_subscribers
+                    .iter()
+                    .filter(|s| s.is_unreadable())
+                    .collect();
+                !own.is_empty()
+                    && readable
+                        .iter()
+                        .flat_map(|&j| routines[j].event_subscribers.iter())
+                        .next()
+                        .is_some()
+                    && !readable
+                        .iter()
+                        .flat_map(|&j| routines[j].event_subscribers.iter())
+                        .any(|r| own.iter().any(|s| s.may_be(r)))
+            });
+            ixs.len() >= 2
+                && ixs
+                    .iter()
+                    .any(|&i| !routines[i].event_subscribers.is_empty())
+                && (ruled_out
+                    || readable.iter().any(|&i| {
+                        !same(
+                            &routines[i].event_subscribers,
+                            &routines[readable[0]].event_subscribers,
+                        )
+                    }))
+        })
+        .collect();
+    // A split that happens for other copies: the unreadable copy stays
+    // reachable from each event of its routine's readable copies that its own
+    // readable parts allow.
+    for group in &groups {
+        let union: Vec<_> = group
+            .iter()
+            .filter(|&&i| !unreadable(i, routines))
+            .flat_map(|&i| routines[i].event_subscribers.iter().cloned())
+            .collect();
+        for &i in group {
+            if unreadable(i, routines) {
+                for s in &union {
+                    let allowed = routines[i]
+                        .event_subscribers
+                        .iter()
+                        .any(|o| o.is_unreadable() && o.may_be(s));
+                    if allowed && !routines[i].event_subscribers.contains(s) {
+                        routines[i].event_subscribers.push(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut split: Vec<usize> = groups.into_iter().flatten().collect();
+    let mut out = SplitDecls::default();
+    if split.is_empty() {
+        return out;
+    }
+    split.sort_unstable();
+    // Ordinals per (unit, routine), in push (document) order.
+    let mut ordinals: HashMap<&str, Ordinals> = HashMap::new();
+    let mut decls: std::collections::BTreeMap<RoutineNodeId, Vec<(RoutineNodeId, String, u32)>> =
+        std::collections::BTreeMap::new();
+    for i in split {
+        let base = routines[i].id.clone();
+        let unit = units[i].as_str();
+        let k = ordinals.entry(unit).or_default().next(&base);
+        let id = decl_id(&base, unit, k);
+        decls
+            .entry(base)
+            .or_default()
+            .push((id.clone(), unit.to_string(), k));
+        routines[i].id = id;
+    }
+    for (base, d) in decls {
+        out.insert(base, d);
+    }
+    out
+}
+
 /// The event facts a same-signature duplicate's survivor takes from ALL its
 /// copies (issue #103): the copies are one routine declared in several `#if`
 /// arms, and the survivor exists under every arm's build.
@@ -1157,23 +1329,28 @@ impl EventFacts {
     /// every same-key copy in document order, the survivor first), or `None`
     /// to leave it as it is.
     ///
-    /// Only the copies from the survivor's own source file
-    /// ([`RoutineNode::source_unit`]) are merged. One file can declare a
-    /// routine twice only under `#if` (two arms of one `#if`, or two whole
-    /// object declarations under a top-level `#if`), so those copies are
-    /// the arms. A copy from another file (`Al/` plus `.dependencies/`, a
-    /// sibling app read twice) is the same routine read again, possibly
-    /// stale, so it keeps today's first-wins behaviour. A copy with no
-    /// source unit (never stamped by a build) is merged with nothing.
+    /// Every stamped copy ([`RoutineNode::source_unit`]) is merged, from any
+    /// file. One app can declare a routine twice only where no build compiles
+    /// both: two arms of one `#if`, two whole object declarations under `#if`
+    /// in one file, or two files (`#if A` in one, `#if not A` in the other).
+    /// So the copies are alternative builds, and the survivor stands for each
+    /// of them (engine limits B2, wave 2 final review: the per-file rule of
+    /// #103 kept the FIRST file's facts, so a subscription only the second
+    /// file declared was lost in every build, a wrong "no" for a "may"
+    /// question). A copy that is the same app read twice (`Al/` plus
+    /// `.dependencies/`) says the same, or, when stale, adds its facts as
+    /// possible subscriptions. The union is what the node subscribes to in
+    /// SOME build; it does not say which declaration's body a subscription
+    /// runs. Declarations that subscribe differently are therefore split into
+    /// one node each before the dedup ([`split_declarations`]), else one
+    /// declaration's subscription reached another's body (a wrong definite
+    /// `yes`), so the copies merged here subscribe alike. A copy
+    /// with no source unit (never stamped by a build) is merged with nothing.
     fn of_arms(copies: &[&RoutineNode]) -> Option<Self> {
         let (survivor, rest) = copies.split_first()?;
         survivor.source_unit?;
         let arms: Vec<&RoutineNode> = std::iter::once(*survivor)
-            .chain(
-                rest.iter()
-                    .copied()
-                    .filter(|c| c.source_unit == survivor.source_unit),
-            )
+            .chain(rest.iter().copied().filter(|c| c.source_unit.is_some()))
             .collect();
         // The common re-parse duplicate: every arm already says the same.
         if arms[1..].iter().all(|o| {
@@ -2951,14 +3128,16 @@ codeunit 50107 "Repro Sender"
         r
     }
 
-    /// The final panel's counterexample (#103 provenance fix, case b): file
-    /// 1 holds only the `#if X` arm, file 2 (stale) holds `#else` and then
-    /// `#if X` again. The conditions of file 1's arm and file 2's first copy
-    /// contradict, but they come from two files, so nothing of file 2 is
-    /// merged in. An unconditional copy in each of two files is first-wins
-    /// too, and so are copies with no source unit at all.
+    /// The #103 final panel's case b, decided again (engine limits B2, wave 2
+    /// final review): file 1 holds only the `#if X` arm, file 2 holds `#else`
+    /// and then `#if X` again. One app's copies of one routine are
+    /// alternatives wherever they sit, so every copy's subscriptions are
+    /// possible (a stale second read adds possible ones; first-wins could
+    /// lose the current file's). An unconditional copy in each of two files
+    /// is unioned too. Copies with no source unit at all are merged with
+    /// nothing.
     #[test]
-    fn copies_from_a_second_file_keep_the_first_files_subscriptions() {
+    fn copies_from_a_second_file_add_their_subscriptions() {
         let obj = dep_obj_id(AppRef(0), 51213);
         let mut routines = vec![
             h_copy(&obj, 0, Some(true), "ona"),
@@ -2967,14 +3146,14 @@ codeunit 50107 "Repro Sender"
         ];
         dedup_routines_preserving_genuine_overloads(&mut routines);
         assert_eq!(routines.len(), 1);
-        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
+        assert_eq!(subscribed_events(&routines[0]), ["ona", "onstale", "onold"]);
 
         let mut routines = vec![
             h_copy(&obj, 0, None, "ona"),
             h_copy(&obj, 1, None, "onstale"),
         ];
         dedup_routines_preserving_genuine_overloads(&mut routines);
-        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
+        assert_eq!(subscribed_events(&routines[0]), ["ona", "onstale"]);
 
         // Copies no build stamped have no known file: merged with nothing.
         let unstamped = |x: bool, event: &str| RoutineNode {
@@ -2986,18 +3165,20 @@ codeunit 50107 "Repro Sender"
         assert_eq!(subscribed_events(&routines[0]), ["ona"]);
     }
 
-    /// Case d: two files that each hold ONE arm, with opposite conditions,
-    /// are two reads of the routine, not one `#if`: first-wins. The same
-    /// two arms in one file are unioned, so only the unit tells them apart.
+    /// Case d, decided again (engine limits B2, wave 2 final review): two
+    /// files that each hold ONE arm, with opposite conditions (`#if X` in
+    /// one, `#if not X` in the other), are two builds of one routine, exactly
+    /// like the same two arms in one file: unioned. First-wins lost the
+    /// second file's subscription in every build.
     #[test]
-    fn opposite_arms_in_two_files_are_not_merged() {
+    fn opposite_arms_in_two_files_are_merged() {
         let obj = dep_obj_id(AppRef(0), 51214);
         let mut routines = vec![
             h_copy(&obj, 0, Some(true), "ona"),
             h_copy(&obj, 1, Some(false), "onb"),
         ];
         dedup_routines_preserving_genuine_overloads(&mut routines);
-        assert_eq!(subscribed_events(&routines[0]), ["ona"]);
+        assert_eq!(subscribed_events(&routines[0]), ["ona", "onb"]);
 
         let mut routines = vec![
             h_copy(&obj, 0, Some(true), "ona"),

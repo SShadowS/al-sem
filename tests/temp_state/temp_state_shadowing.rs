@@ -99,6 +99,8 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         modify_all_field: None,
         transfer_fields_source: None,
         receiver_is_record_ref: false,
+        flow_field_reads: Vec::new(),
+        dataset_reason: None,
     };
 
     ModelRoutine {
@@ -147,6 +149,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         entry_temp_guard_receiver: None,
         table_event_exits: Default::default(),
         recordref_bindings: Vec::new(),
+        field_ref_operations: Vec::new(),
         rules: None,
         rule_drafts: None,
         card_text: None,

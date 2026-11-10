@@ -78,7 +78,7 @@ fn insert_live(subscriber_body: bool) -> bool {
         .expect("precondition: Root's Insert")
         .id
         .clone();
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     reach.live_in_root(&root.stable_routine_id, &op)
 }
 
@@ -179,7 +179,7 @@ fn a_replayed_search_rules_out_what_the_search_does() {
     .remove(0)
     .effects;
     let per_site: Vec<&str> = crate::engine::l5::digest::SITE_ENUMERATED.to_vec();
-    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let reach = LiteralReach::new(&tree, model);
     let (&root, _) = reach.by_stable.get_key_value(start.as_str()).unwrap();
     let reached = reach.search(root, ALL).expect("precondition: not capped");
     let (dead, _) = reach.judge(&reached, &effects, &per_site, ALL);

@@ -6,6 +6,16 @@
 //! the FIRST row is the `#if` arm, the LAST the `#else` arm), and each test
 //! asserts its precondition from the CURRENT rows first.
 //!
+//! **The shared site ids are stated BY ASSIGNMENT** (engine limits B2, per-arm
+//! ids; owner decision 2026-11-09). Production now numbers each `#if` arm's
+//! sites after the earlier arms' (`ir_walk::SiteIdBase`), so two arms no
+//! longer share `{id}/cs0`. These tests are about rows that DO share their
+//! site ids, so [`build`] renumbers every collided row's sites from 0 on the
+//! raw rows, before the attach
+//! (`workspace::share_collided_site_ids`), and [`collided`] asserts the shared
+//! sites. What the per-arm ids answer for the same sources is pinned by the
+//! `natural_*` tests at the end of this file.
+//!
 //! Each test names the stage that turns it green (C, A or B, §4.1). Through C
 //! and A the projection reproduces today's rules, so the B tests are red until
 //! stage B; T7, T-guard and T1j hold today by design.
@@ -14,18 +24,31 @@ use super::*;
 use crate::engine::l5::registry::substrate;
 use crate::program::model::program_calls::{
     assemble_and_resolve_inline_program_default,
-    assemble_and_resolve_inline_program_reversed_groups,
+    assemble_and_resolve_inline_program_shared_site_ids,
 };
 
+/// The model of `src`, every collided row's site ids renumbered from 0 (the
+/// 11b precondition, stated by assignment; see the module doc).
 fn build(src: &str, guid: &str) -> Model {
-    assemble_and_resolve_inline_program_default(&[("src/T.al".to_string(), src.to_string())], guid)
-}
-
-fn build_reversed(src: &str, guid: &str) -> Model {
-    assemble_and_resolve_inline_program_reversed_groups(
+    assemble_and_resolve_inline_program_shared_site_ids(
         &[("src/T.al".to_string(), src.to_string())],
         guid,
+        false,
     )
+}
+
+/// [`build`] with each collision group's rows in reversed order.
+fn build_reversed(src: &str, guid: &str) -> Model {
+    assemble_and_resolve_inline_program_shared_site_ids(
+        &[("src/T.al".to_string(), src.to_string())],
+        guid,
+        true,
+    )
+}
+
+/// The production model of `src`: each `#if` arm with its own site ids.
+fn build_natural(src: &str, guid: &str) -> Model {
+    assemble_and_resolve_inline_program_default(&[("src/T.al".to_string(), src.to_string())], guid)
 }
 
 /// The rows named `name`, by position (`RoutineIx`).
@@ -49,6 +72,19 @@ fn collided(m: &Model, name: &str) -> (String, Vec<usize>) {
         m.workspace.routines[rows[1]].id, id,
         "precondition: {name}'s rows share one id"
     );
+    // The stated shared sites: each row numbers its own sites from 0, so the
+    // first call site and the first operation site of both rows (when both
+    // have one) carry one id.
+    let (a, b) = (
+        &m.workspace.routines[rows[0]],
+        &m.workspace.routines[rows[1]],
+    );
+    if let (Some(x), Some(y)) = (a.call_sites.first(), b.call_sites.first()) {
+        assert_eq!(x.id, y.id, "precondition: {name}'s rows share cs0");
+    }
+    if let (Some(x), Some(y)) = (a.operation_sites.first(), b.operation_sites.first()) {
+        assert_eq!(x.id, y.id, "precondition: {name}'s rows share op0");
+    }
     (id, rows)
 }
 
@@ -3040,4 +3076,422 @@ codeunit 50904 "SE Work"
         "the equal rows' evidence is listed once"
     );
     assert_eq!(table, want_table, "the equal rows share one frame block");
+}
+
+// ---------------------------------------------------------------------------
+// Engine limits B2, per-arm ids: what production answers for two `#if` arms
+// (owner decision 2026-11-09). The tests above state shared site ids by
+// assignment; these read the production rows, where each arm numbers its
+// sites after the earlier arm's.
+// ---------------------------------------------------------------------------
+
+/// Two arms of `Work`, each with a loop, a call, a record operation and a
+/// commit: production gives the second arm site ids after the first arm's,
+/// for every tag (`op`, `cs`, `loop`), and each site cites its own arm's line.
+/// The first arm keeps the ids a routine declared once has.
+/// Break: number every declaration from 0 (`SiteIdBase::default()` in the
+/// model builder) -> the arms share `cs0`, `op0`, `loop0`.
+#[test]
+fn natural_arms_number_their_sites_apart() {
+    let src = r#"
+table 50895 "NA T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50895 "NA Work"
+{
+    local procedure Touch()
+    begin
+    end;
+
+#if A
+    procedure Work()
+    var
+        T: Record "NA T";
+        I: Integer;
+    begin
+        for I := 1 to 2 do
+            Touch();
+        T.Insert();
+        Commit();
+    end;
+#else
+    procedure Work()
+    var
+        T: Record "NA T";
+        I: Integer;
+    begin
+        for I := 1 to 2 do
+            Touch();
+        T.Modify();
+        Commit();
+    end;
+#endif
+}
+"#;
+    let m = build_natural(src, "22222222-0000-0000-0000-00000011b0a1");
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let (a, b) = (
+        &m.workspace.routines[rows[0]],
+        &m.workspace.routines[rows[1]],
+    );
+    assert_eq!(a.id, b.id, "precondition: one id");
+    let id = &a.id;
+    let ids = |r: &ModelRoutine| -> Vec<String> {
+        let mut v: Vec<String> = r
+            .call_sites
+            .iter()
+            .flat_map(|c| [c.id.clone(), c.operation_id.clone()])
+            .chain(r.operation_sites.iter().map(|o| o.id.clone()))
+            .chain(r.loops.iter().map(|l| l.id.clone()))
+            .map(|s| s[id.len()..].to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    let sorted = |v: &[&str]| {
+        let mut v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    };
+    // Arm A: Insert op0, Commit op1, Touch cs0 (its operation id op2), loop0.
+    assert_eq!(
+        ids(a),
+        sorted(&["/cs0", "/op2", "/op0", "/op1", "/loop0"]),
+        "arm A keeps a single declaration's ids"
+    );
+    assert_eq!(
+        ids(b),
+        sorted(&["/cs1", "/op5", "/op3", "/op4", "/loop1"]),
+        "arm B numbers after arm A"
+    );
+    let insert_line = |r: &ModelRoutine| r.record_operations[0].source_anchor.start_line;
+    let line_of = |text: &str| src.lines().position(|l| l.contains(text)).unwrap() as u32;
+    assert_eq!(
+        insert_line(a),
+        line_of("T.Insert();"),
+        "arm A cites its line"
+    );
+    assert_eq!(
+        insert_line(b),
+        line_of("T.Modify();"),
+        "arm B cites its line"
+    );
+}
+
+/// The arms may hold the whole object: `#if A codeunit X { … } #else codeunit
+/// X { … } #endif` in ONE file gives `Work` two rows of one id, and the model
+/// builder numbers per file, so the second object's `Work` numbers after the
+/// first's. Two FILES still share their numbers (each file is numbered on
+/// its own, the unit the session's row cache reuses): that collision is the
+/// one the 11b rules above handle. Break: number per object (a map reset per
+/// object) -> both `Work`s mint `op0`.
+#[test]
+fn natural_object_arms_in_one_file_number_apart() {
+    let arm = |table: &str| {
+        format!(
+            "codeunit 50891 \"NO Work\"\n{{\n    procedure Work()\n    var\n        T: Record \"{table}\";\n    begin\n        T.Insert();\n    end;\n}}\n"
+        )
+    };
+    let tables = "table 50889 \"NO A\"\n{\n    fields { field(1; \"No.\"; Code[20]) { } }\n}\n\ntable 50890 \"NO B\"\n{\n    fields { field(1; \"No.\"; Code[20]) { } }\n}\n";
+    let one_file = format!(
+        "{tables}\n#if A\n{}#else\n{}#endif\n",
+        arm("NO A"),
+        arm("NO B")
+    );
+    let m = build_natural(&one_file, "22222222-0000-0000-0000-00000011b0a5");
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let op = |ri: usize| {
+        let r = &m.workspace.routines[ri];
+        r.record_operations[0].id[r.id.len()..].to_string()
+    };
+    assert_eq!(
+        m.workspace.routines[rows[0]].id,
+        m.workspace.routines[rows[1]].id
+    );
+    assert_eq!((op(rows[0]), op(rows[1])), ("/op0".into(), "/op1".into()));
+    // `join_alternative_declarations` counts every declaration of the id, so
+    // each object arm's top-level insert is only `conditional` (a build
+    // compiles one object). Break: skip the lift -> `top-level`.
+    for &ri in &rows {
+        assert_eq!(
+            m.workspace.routines[ri].operation_sites[0]
+                .control_context
+                .as_deref(),
+            Some("conditional"),
+            "an object arm's insert runs in one build only"
+        );
+    }
+}
+
+/// The unreachable statements of a two-arm routine number apart too: arm A's
+/// `{id}/u0`, arm B's `{id}/u1`, each anchored on its own arm. Break:
+/// `walk_spine` starts `unreachable_index` at 0 -> both are `u0`.
+#[test]
+fn natural_arms_number_their_unreachable_statements_apart() {
+    let src = r#"
+codeunit 50888 "NU Work"
+{
+#if A
+    procedure Work(): Integer
+    begin
+        exit(1);
+        Message('a');
+    end;
+#else
+    procedure Work(): Integer
+    begin
+        exit(2);
+        Message('b');
+    end;
+#endif
+}
+"#;
+    let m = build_natural(src, "22222222-0000-0000-0000-00000011b0a6");
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let id = m.workspace.routines[rows[0]].id.clone();
+    let us = |ri: usize| -> Vec<(String, u32)> {
+        m.workspace.routines[ri]
+            .unreachable_statements
+            .iter()
+            .map(|u| {
+                (
+                    u.id[id.len()..].to_string(),
+                    u.unreachable_anchor.start_line,
+                )
+            })
+            .collect()
+    };
+    let line_of = |text: &str| src.lines().position(|l| l.contains(text)).unwrap() as u32;
+    assert_eq!(
+        us(rows[0]),
+        vec![("/u0".to_string(), line_of("Message('a');"))]
+    );
+    assert_eq!(
+        us(rows[1]),
+        vec![("/u1".to_string(), line_of("Message('b');"))]
+    );
+}
+
+/// The rules of a two-arm routine number apart too: arm A's check is
+/// `{id}/rule0`, arm B's `{id}/rule1`, each anchored on its own arm's line.
+/// Break: the model builder's `rule_base` always 0 -> both are `rule0`.
+#[test]
+fn natural_arms_number_their_rules_apart() {
+    let src = r#"
+codeunit 50892 "NR Work"
+{
+#if A
+    procedure Work(X: Boolean)
+    begin
+        if X then
+            Error('arm a');
+    end;
+#else
+    procedure Work(X: Boolean)
+    begin
+        if X then
+            Error('arm b');
+    end;
+#endif
+}
+"#;
+    let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_with(
+        &[("src/T.al".to_string(), src.to_string())],
+        "22222222-0000-0000-0000-00000011b0a4",
+        crate::program::model::workspace::AssemblyNeeds::RULES,
+    );
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let id = m.workspace.routines[rows[0]].id.clone();
+    let rules = |ri: usize| -> Vec<(String, u32)> {
+        m.workspace.routines[ri]
+            .rules()
+            .iter()
+            .map(|r| (r.id[id.len()..].to_string(), r.anchor.start_line))
+            .collect()
+    };
+    let line_of = |text: &str| src.lines().position(|l| l.contains(text)).unwrap() as u32;
+    assert_eq!(
+        rules(rows[0]),
+        vec![("/rule0".to_string(), line_of("Error('arm a');"))],
+        "arm A's rule"
+    );
+    assert_eq!(
+        rules(rows[1]),
+        vec![("/rule1".to_string(), line_of("Error('arm b');"))],
+        "arm B's rule numbers after arm A's"
+    );
+}
+
+/// Settled answer 2 of 11b, re-decided for per-arm ids: an interface call in
+/// each arm is one call SITE per arm, and each site dispatches to every
+/// implementer: two sites, one edge per (site, implementer), and every edge's
+/// `candidate_count` is the number of implementers (2), never the arms'
+/// candidates counted together (4, the pre-11b defect). Counting per arm is
+/// counting per site: a build compiles one arm, so one of the two sites, with
+/// its 2 candidates. The shared-ids case keeps one edge per implementer
+/// (`collided_interface_call_counts_each_implementer_once`).
+#[test]
+fn natural_interface_call_counts_per_arm_site() {
+    let src = r#"
+interface "NI I"
+{
+    procedure Go();
+}
+
+codeunit 50896 "NI Impl1" implements "NI I"
+{
+    procedure Go()
+    begin
+    end;
+}
+
+codeunit 50897 "NI Impl2" implements "NI I"
+{
+    procedure Go()
+    begin
+    end;
+}
+
+codeunit 50894 "NI Work"
+{
+#if A
+    procedure Work()
+    var
+        I: Interface "NI I";
+    begin
+        I.Go();
+    end;
+#else
+    procedure Work()
+    var
+        I: Interface "NI I";
+    begin
+        I.Go();
+    end;
+#endif
+}
+"#;
+    let m = build_natural(src, "22222222-0000-0000-0000-00000011b0a2");
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let id = m.workspace.routines[rows[0]].id.clone();
+    let rel = crate::engine::l4::exec_relation::ExecRelation::single_app(&m);
+    let mut dispatch: Vec<(String, Option<usize>, String)> = rel
+        .cone()
+        .iter()
+        .filter(|e| e.kind == "interface-dispatch" && e.from == id)
+        .map(|e| {
+            (
+                e.callsite_id.clone().unwrap_or_default(),
+                e.candidate_count,
+                e.to.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    dispatch.sort();
+    assert!(
+        dispatch.iter().all(|(_, c, _)| *c == Some(2)),
+        "candidate_count = the number of implementers: {dispatch:?}"
+    );
+    let sites: std::collections::BTreeSet<String> =
+        dispatch.iter().map(|(s, _, _)| s.clone()).collect();
+    assert_eq!(
+        sites.into_iter().collect::<Vec<_>>(),
+        vec![format!("{id}/cs0"), format!("{id}/cs1")],
+        "one site per arm: {dispatch:?}"
+    );
+    assert_eq!(
+        dispatch.len(),
+        4,
+        "one edge per (site, implementer): {dispatch:?}"
+    );
+}
+
+/// Settled answer 3 of 11b, re-decided for per-arm ids: `Work`'s arms loop
+/// over a call to `WriteA` (arm A) and `WriteB` (arm B). With per-arm ids the
+/// two calls are two sites (`cs0`, `cs1`), so d1 seeds each from its own row,
+/// with its own callee; neither arm's in-loop chain is lost (the shared-ids
+/// case keeps both too: `d1_keeps_both_arms_unequal_seeds`).
+#[test]
+fn natural_d1_seeds_each_arm_at_its_own_site() {
+    let src = r#"
+table 50893 "ND T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50893 "ND Work"
+{
+    local procedure WriteA()
+    var
+        T: Record "ND T";
+    begin
+        T.Insert();
+    end;
+
+    local procedure WriteB()
+    var
+        T: Record "ND T";
+    begin
+        T.Modify();
+    end;
+
+#if A
+    procedure Work()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 3 do
+            WriteA();
+    end;
+#else
+    procedure Work()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 3 do
+            WriteB();
+    end;
+#endif
+}
+"#;
+    let m = build_natural(src, "22222222-0000-0000-0000-00000011b0a3");
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let id = m.workspace.routines[rows[0]].id.clone();
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let mut memo = HashMap::new();
+    let (graph, seeds) = crate::engine::l5::d1_graph::build_d1_graph(&ctx, &m.workspace, &mut memo);
+    let prefix = format!("{id}/");
+    let mut mine: Vec<(String, usize, &str)> = seeds
+        .iter()
+        .filter(|s| s.callsite.id.starts_with(&prefix))
+        .map(|s| {
+            let row = rows
+                .iter()
+                .copied()
+                .find(|&ri| std::ptr::eq(s.loop_routine, &m.workspace.routines[ri]))
+                .expect("the seed's loop routine is a row of Work");
+            (s.callsite.id.clone(), row, graph.node_ids[s.entry as usize])
+        })
+        .collect();
+    mine.sort();
+    let (write_a, write_b) = (id_named(&m, "WriteA"), id_named(&m, "WriteB"));
+    assert_eq!(
+        mine,
+        vec![
+            (format!("{id}/cs0"), rows[0], write_a.as_str()),
+            (format!("{id}/cs1"), rows[1], write_b.as_str()),
+        ],
+        "one seed per arm, each at its own site with its own row's callee"
+    );
 }

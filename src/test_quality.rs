@@ -613,6 +613,7 @@ mod tests {
         let group = f.ir.add_block(Block {
             items: vec![BlockItem::Preproc(PreprocGroup {
                 branches,
+                falls_through: false,
                 origin: origin.clone(),
             })],
             origin,

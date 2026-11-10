@@ -478,6 +478,11 @@ impl SubscriberIndex {
                     continue;
                 };
                 let args = &sub_routine.event_subscribers[ordinal];
+                // Not a subscription this index can bind (engine limits B2):
+                // `model::events` turns it into a coverage gap.
+                if args.is_unreadable() {
+                    continue;
+                }
                 let mut entry = build_entry(sub_routine, args);
                 // OR, taken before the `retain` below narrows `conditions`.
                 let mut conditional_any = !entry.conditions.is_empty();
@@ -750,13 +755,7 @@ impl ResolveIndex {
         obj: &ObjectNodeId,
         name_lc: &str,
     ) -> impl ExactSizeIterator<Item = &'g RoutineNodeId> + Clone + use<'g> {
-        graph
-            .routines
-            .run_by(|r| {
-                r.id.object
-                    .cmp(obj)
-                    .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
-            })
+        crate::program::resolve::reads::GraphReads::routines_named(graph, obj, name_lc)
             .map(|r| &r.id)
     }
 
@@ -1480,6 +1479,9 @@ pub(crate) fn resolve_subscription_publisher<'g>(
     from: AppRef,
     args: &ParsedSubscriberArgs,
 ) -> Option<&'g ObjectNode> {
+    if args.is_unreadable() {
+        return None;
+    }
     let kind = kind_from_object_type_str(&args.publisher_object_type)?;
     match args.publisher_id {
         Some(n) => graph.resolve_object_by_number(from, kind, n),
@@ -1564,7 +1566,7 @@ impl PublisherExtensions {
 /// Map a lowercased publisher-object-type string (as written in an
 /// `[EventSubscriber]` attribute) to the corresponding [`ObjectKind`].
 /// Returns `None` for unrecognised strings.
-fn kind_from_object_type_str(s: &str) -> Option<ObjectKind> {
+pub(crate) fn kind_from_object_type_str(s: &str) -> Option<ObjectKind> {
     match s {
         "codeunit" => Some(ObjectKind::Codeunit),
         "table" => Some(ObjectKind::Table),
@@ -1700,6 +1702,7 @@ mod tests {
             fields: vec![],
             dataitems: vec![],
             query_columns: Vec::new(),
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,

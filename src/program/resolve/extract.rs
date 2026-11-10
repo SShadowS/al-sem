@@ -294,6 +294,7 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
         "page" => Some("Page"),
         "report" => Some("Report"),
         "xmlport" => Some("XmlPort"),
+        "query" => Some("Query"),
         _ => None,
     }
 }
@@ -355,9 +356,12 @@ pub(crate) fn positive_object_id(text: &str) -> Option<i64> {
 /// 1. `Member` with `Identifier`/`QuotedIdentifier` receiver in `rvars` AND
 ///    method a record op ([`crate::record_ops::record_op_type`], the table L2
 ///    also reads) → `RecordOp`.
-/// 2. `Member` with `keyword_identifier` receiver (`codeunit`/`page`/`report`)
-///    AND method `"run"` (any kind) OR `"runmodal"` (Page/Report only —
-///    Codeunit has no RunModal member) → `ObjectRun`.
+/// 2. `Member` with `keyword_identifier` receiver (`codeunit`/`page`/`report`/
+///    `xmlport`/`query`) AND method `"run"` (not Query) OR `"runmodal"`
+///    (Page/Report only — Codeunit has no RunModal member) OR a method that
+///    runs the object by another name (B6: a report's `SaveAs*`/`Execute`/
+///    `Print`, an XmlPort's `Import`/`Export`, a query's `SaveAs*`) →
+///    `ObjectRun`.
 /// 3. Any other `Member` → `Member`.
 /// 4. Bare `Identifier("commit")` / `QuotedIdentifier("commit")` → `Commit`.
 /// 5. A bare record op on a record implicit receiver, not named like one of
@@ -414,11 +418,17 @@ fn classify_call(
             // `target_ref = None` (dynamic dispatch).
             if obj.origin.kind_text == "keyword_identifier" {
                 let obj_text = &src[obj.origin.byte.clone()];
+                // The one list of the methods that start an object
+                // (`dataset::starts_object`, through its keyword form): a
+                // codeunit's `Run`, a page's or report's `Run`/`RunModal`, a
+                // report's `SaveAs*`/`Execute`/`Print` (B6), an XmlPort's
+                // `Run`/`Import`/`Export`, a query's `SaveAs*` (B6).
                 if let Some(okind) = object_run_kind(obj_text)
-                    && (method_lc == "run"
-                    || (method_lc == "runmodal" && matches!(okind, "Page" | "Report"))
-                    // Static `XmlPort.Import/Export(XmlPort::X, ...)` run X too.
-                    || (okind == "XmlPort" && matches!(method_lc.as_str(), "import" | "export")))
+                    && crate::program::resolve::dataset::keyword_run_kind(
+                        &okind.to_ascii_lowercase(),
+                        &method_lc,
+                    )
+                    .is_some()
                 {
                     let (target_ref, target_is_name) =
                         match static_database_reference_target(file, args) {

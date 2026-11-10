@@ -85,6 +85,8 @@ pub struct ProjectedField {
     pub field_class: String,
     pub data_type: String,
     pub is_blob_like: bool,
+    /// The symbols' `CalcFormula` text ([`super::symbol_reference::AbiField`]).
+    pub calc_formula: Option<String>,
 }
 
 /// A projected dependency key (resolved field-id list, in FieldNames[] order).
@@ -307,6 +309,7 @@ pub fn project_abi_to_index(abi: &SymbolReferenceAbi, app_guid: &str) -> Project
                 field_class: f.field_class.clone(),
                 data_type: f.data_type.clone(),
                 is_blob_like: f.is_blob_like,
+                calc_formula: f.calc_formula.clone(),
             })
             .collect();
 

@@ -38,6 +38,11 @@ pub struct ObjectDecl {
     /// field's type (alc 18.0.41.45789: assigning an Enum-field column to a `Date`
     /// fails AL0122 naming the enum); a `Method` column's type is not modelled.
     pub query_columns: Vec<(String, String, String)>,
+    /// The tables the platform reads or writes by itself when the object runs (B6):
+    /// every report `dataitem` (Report / ReportExtension), XmlPort `tableelement` and
+    /// query `dataitem`, nested ones included, `#if` arms included (every arm),
+    /// document order. Empty for every other object kind.
+    pub dataset_items: Vec<DatasetItemDecl>,
     /// The `extends <Target>` target name (unquoted) for an extension object
     /// (Table/Page/Report/Enum/PermissionSet extension), else `None`.
     pub extends_target: Option<String>,
@@ -68,6 +73,38 @@ pub struct ObjectDecl {
     /// blocks, in `#if` arms (every arm) and in a report's request page. A
     /// page-extension `modify(X)` block is not a declaration and gives no entry.
     pub actions: Vec<ActionDecl>,
+    pub origin: Origin,
+}
+
+/// What declares a [`DatasetItemDecl`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatasetItemKind {
+    /// A report or report-extension `dataitem(Name; Table)`.
+    ReportDataitem,
+    /// An XmlPort `tableelement(Name; Table)`.
+    XmlPortTableElement,
+    /// A query `dataitem(Name; Table)`.
+    QueryDataitem,
+}
+
+/// One table of an object's dataset (see [`ObjectDecl::dataset_items`]). Each
+/// property is `Some(value)` when every build gives it that value (the AL default
+/// when it is not written) and `None` when `#if` arms give it different values or
+/// the value is not `true`/`false`.
+pub struct DatasetItemDecl {
+    pub kind: DatasetItemKind,
+    /// The item name, unquoted, as written.
+    pub name: String,
+    /// The source table, unquoted, as written (a name or a number).
+    pub table: String,
+    /// `UseTemporary` (report dataitem, XmlPort table element; default `false`).
+    pub use_temporary: Option<bool>,
+    /// XmlPort table element `AutoSave` (default `true`); `Some(false)` otherwise.
+    pub auto_save: Option<bool>,
+    /// XmlPort table element `AutoUpdate` (default `false`).
+    pub auto_update: Option<bool>,
+    /// XmlPort table element `AutoReplace` (default `false`).
+    pub auto_replace: Option<bool>,
     pub origin: Origin,
 }
 
@@ -159,6 +196,10 @@ pub struct FieldDecl {
     /// The field's `OptionCaption` text(s), same rule (the whole comma list as one
     /// string: `A,B`).
     pub option_caption: Vec<String>,
+    /// The field's `CalcFormula` value text(s) as written (`sum("Cust. Ledger
+    /// Entry".Amount where(...))`), one per textually present `#if` arm; empty
+    /// = none declared. Read by the FlowField read rule (engine limits B5).
+    pub calc_formula: Vec<String>,
     /// The comment run directly above the field (see [`RoutineDecl::doc`]).
     pub doc: Option<String>,
     /// The field declaration node's origin (for a field whose header is split
@@ -172,6 +213,14 @@ pub struct ObjectProperty {
     pub name: String,
     pub value: String,
     pub origin: Origin,
+    /// `true` when only some builds have this entry (engine limits B2; B6
+    /// round 2 added the same flag for an XmlPort's `Direction`): the
+    /// property sits in an `#if` arm, or its whole value is an `#if`
+    /// (`TableNo = #if X Customer; #endif`). A build that takes another arm, or
+    /// none, has another value or the property's default. No configuration is
+    /// chosen, so a reader that decides a definite answer from the value must
+    /// treat a conditional entry as "may": the default stays possible.
+    pub conditional: bool,
 }
 
 /// A parsed routine attribute (`[EventSubscriber(ObjectType::Codeunit, …)]`).
@@ -184,6 +233,29 @@ pub struct AttributeIr {
     /// The `attribute_item` node's origin (#71: the routine's declaration span starts
     /// at its first attribute).
     pub origin: super::Origin,
+    /// `true` when some build in which THIS declaration of the routine exists
+    /// does not have this attribute with these arguments (engine limits B2):
+    /// it sits in an `#if` arm the declaration is not in (`#if CLEAN99
+    /// [CommitBehavior(…)] #endif procedure P()`), it reached the routine past a
+    /// `#if` wrapper by a path not every build takes, or its arguments hold an
+    /// `#if` group. No configuration is chosen, so every such build stays
+    /// possible: a reader that decides a definite answer from the attribute's
+    /// presence must read a conditional one as "may"
+    /// (`program::attributes::find_definite_attribute`). Imprecise in one
+    /// direction only: an attribute whose arms together cover every build
+    /// (`#if X [A] #else [A] #endif`) is still conditional.
+    pub conditional: bool,
+    /// `true` when the routine is declared more than once (two `#if` arms of a
+    /// member list, of a whole object, or two files) and ANOTHER declaration
+    /// does not carry the same attribute (engine limits B2, wave 2 final
+    /// review). It says nothing about this declaration's own builds: in every
+    /// build in which this declaration exists the attribute holds (unless
+    /// [`Self::conditional`]). So a reader judging this declaration's own body
+    /// reads it as definite, and a reader judging the routine from outside (a
+    /// caller asking "is this a TryFunction") reads it as "may". Set here for
+    /// the declarations of one object declaration; the model sets it across
+    /// object declarations and files.
+    pub another_declaration_lacks: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]

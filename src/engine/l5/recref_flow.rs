@@ -298,6 +298,20 @@ impl<'a> RecRefFlow<'a> {
                 }
             }
         }
+        // B6: a report save/print or query save is an object run now (its
+        // triggers, or no target for a dynamic id), but it is still the
+        // platform method it was: it cannot rebind a RecordRef or Variant
+        // passed to it (`Report.SaveAs(Id, …, RecRef)`), as a builtin.
+        for r in routines {
+            for cs in &r.call_sites {
+                if is_platform_run_site(cs) {
+                    let id = cs.id.as_str();
+                    targets.remove(id);
+                    open_sites.remove(id);
+                    builtin_sites.insert(id);
+                }
+            }
+        }
         let mut subscribers: HashMap<usize, Vec<usize>> = HashMap::new();
         for e in edges {
             if let SnapshotGraphEdge::EventDispatch { from, to, .. } = e
@@ -1487,6 +1501,36 @@ fn writes_arguments(cs: &PCallSite) -> bool {
         }
         PCallee::Bare { name } => matches!(lc(name).as_str(), "evaluate" | "copyarray"),
         _ => true,
+    }
+}
+
+/// B6: whether `cs` is a report's static save, print or execute, or a
+/// query's static save, through its keyword (`Report.SaveAs(Id, …, RecRef)`,
+/// `Report.Print(…)`, `Query.SaveAsCsv(…)`). They resolved as catalog
+/// builtins until B6 made them object runs
+/// ([`crate::program::resolve::dataset::keyword_run_kind`]): a static one now
+/// reaches the object's triggers, a dynamic one no target at all, and either
+/// read as a call that may rebind its arguments. They are still platform
+/// methods, which cannot rebind a RecordRef or Variant passed to them (the
+/// object's triggers get their own record); [`RecRefFlow::new`] reads them as
+/// builtins. Losing that cost Continia DO's `IssueReminder` most of its
+/// literal pruning (`explain`: 418 tables written instead of 198).
+/// (`Report.Run(Id)` and `Xmlport.Import(…)`, object runs from the start,
+/// keep their own reading.)
+fn is_platform_run_site(cs: &PCallSite) -> bool {
+    use al_syntax::ir::ObjectKind;
+    let PCallee::Member { receiver, method } = &cs.callee else {
+        return false;
+    };
+    let method = method.to_ascii_lowercase();
+    let kind =
+        crate::program::resolve::dataset::keyword_run_kind(&receiver.to_ascii_lowercase(), &method);
+    match kind {
+        Some(ObjectKind::Report) => {
+            crate::program::resolve::dataset::is_report_output_method(&method)
+        }
+        Some(ObjectKind::Query) => true,
+        _ => false,
     }
 }
 

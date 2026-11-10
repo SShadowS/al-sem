@@ -62,6 +62,11 @@ pub struct PhysicalRoutineRow {
 pub struct PhysicalIndex {
     pub objects: Vec<PhysicalObjectRow>,
     pub routines: Vec<PhysicalRoutineRow>,
+    /// The graph's split routines (workspace and dependency): each
+    /// declaration of a subscriber whose declarations subscribe differently
+    /// is a node of its own (`program::split_decls`). The rows above already
+    /// name the declaration nodes.
+    pub declarations: crate::program::split_decls::SplitDecls,
 }
 
 impl PhysicalIndex {

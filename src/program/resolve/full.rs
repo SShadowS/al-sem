@@ -51,6 +51,7 @@ use crate::program::resolve::abi_check::{
 };
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
 use crate::program::resolve::background;
+use crate::program::resolve::dataset::{DatasetMode, DatasetRun, dataset_mode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
     CanonicalSpan, Condition, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram,
@@ -72,7 +73,6 @@ use crate::program::resolve::resolver::{
     emit_event_flow_edges, resolve_bare, resolve_bare_with_args, resolve_implicit_trigger,
     resolve_member_with_args, resolve_object_run,
 };
-use crate::program::sig_fp::source_routine_node_id;
 use crate::snapshot::{
     AppSetSnapshot, AppUnit, DependencySource, ParsedFile, ParsedUnit, SnapshotBuilder,
 };
@@ -219,6 +219,24 @@ pub struct SiteFacts {
     /// site), and its consumers drop it per site: the model's table-event
     /// edges (`program_calls`) and the sited graph's reverse walk.
     pub table_event_raise: Option<crate::program::table_event_guard::RaiseContext>,
+    /// B6: the report, XmlPort or query this call runs, and the operations the
+    /// platform performs on its dataset by itself
+    /// ([`crate::program::resolve::dataset`]). `None` for any other call, and
+    /// for a run whose target is not static.
+    pub dataset_run: Option<DatasetRun>,
+    /// B4: the call starts an object (runs its entry triggers) rather than
+    /// calling one of its procedures: every keyword run (`Codeunit.Run(…)`,
+    /// `Report.SaveAsPdf(Report::X, …)`, `Xmlport.Import(…)`, …,
+    /// `extract::classify_call`) and every variable form the resolver
+    /// dispatches to the run triggers (`Rep.Run()`, `Rep.SaveAsPdf(…)`,
+    /// `Q.Open()`, …, [`crate::program::resolve::resolver::member_starts_object`]).
+    /// Both read one list of methods,
+    /// [`crate::program::resolve::dataset::starts_object`]. A variable form
+    /// whose binding (B6) the argument types do not decide is
+    /// [`ObjectStart::Undecided`](crate::program::resolve::dataset::ObjectStart),
+    /// never a definite answer. The model carries it on the call's edges
+    /// (`CallEdge::starts_object`).
+    pub starts_object: crate::program::resolve::dataset::ObjectStart,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -510,6 +528,7 @@ pub(crate) fn site_open_bounds(
                     "Page" => Some(ObjectKind::Page),
                     "Report" => Some(ObjectKind::Report),
                     "XmlPort" => Some(ObjectKind::XmlPort),
+                    "Query" => Some(ObjectKind::Query),
                     _ => None,
                 },
             }),
@@ -834,6 +853,27 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
+                // B4 + B6: whether the call starts its object, by the member
+                // arm's own rule (`resolver::member_starts_object`), and the
+                // dataset that start runs.
+                if let ReceiverType::Object { kind, name_lc, id } = &recv
+                    && crate::program::resolve::dataset::starts_object(*kind, &method_lc)
+                    && let Some(target) = crate::program::resolve::resolver::object_receiver_target(
+                        kind,
+                        name_lc,
+                        id.as_ref(),
+                        obj_node,
+                        graph,
+                    )
+                {
+                    facts_out.starts_object =
+                        crate::program::resolve::resolver::member_starts_object(
+                            *kind, &method_lc, arity, &args_info, target, obj_node, graph, index,
+                            surface,
+                        );
+                    facts_out.dataset_run =
+                        member_dataset_run(*kind, &method_lc, target, facts_out.starts_object);
+                }
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
                 if s == DispatchShape::Multicast
@@ -938,11 +978,15 @@ fn resolve_call_site_obligation(
             target_ref,
             target_is_name,
         } => {
+            // A keyword run starts its object (`extract::classify_call` made
+            // it an `ObjectRun` by `dataset::starts_object`).
+            facts_out.starts_object = crate::program::resolve::dataset::ObjectStart::Yes;
             let okind_opt = match object_kind.as_str() {
                 "Codeunit" => Some(ObjectKind::Codeunit),
                 "Page" => Some(ObjectKind::Page),
                 "Report" => Some(ObjectKind::Report),
                 "XmlPort" => Some(ObjectKind::XmlPort),
+                "Query" => Some(ObjectKind::Query),
                 _ => None,
             };
             // `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the lookup page of
@@ -990,6 +1034,28 @@ fn resolve_call_site_obligation(
                     None,
                 )
             } else if let Some(okind) = okind_opt {
+                // B6: `Report.Run(Report::X)`, `Xmlport.Import(Xmlport::X, …)`.
+                let method_lc = callee_text
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or_default()
+                    .fold_identifier();
+                if let (Some(mode), Some(t)) = (dataset_mode(okind, &method_lc), target_ref) {
+                    let mode = xmlport_run_direction(mode, call_args, file);
+                    facts_out.dataset_run = crate::program::resolve::resolver::object_run_target(
+                        caller_app,
+                        okind,
+                        t,
+                        *target_is_name,
+                        graph,
+                        index,
+                    )
+                    .map(|o| DatasetRun {
+                        object: o.id.clone(),
+                        mode,
+                        effects: Vec::new(),
+                    });
+                }
                 let (shape, completeness, routes) = resolve_object_run(
                     caller_app,
                     okind,
@@ -1214,6 +1280,14 @@ pub(crate) fn resolve_file_obligations(
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
     let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
     let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
+    // Each declaration's own node (a split subscriber's declarations have
+    // one each, `program::split_decls`).
+    let decl_nodes = crate::program::split_decls::file_declaration_nodes(
+        graph,
+        &pf.file,
+        caller_app,
+        &crate::program::split_decls::unit_of_parsed(pf),
+    );
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = ObjKey::from_source(obj);
@@ -1248,7 +1322,7 @@ pub(crate) fn resolve_file_obligations(
             .collect();
 
         for (routine_idx, routine) in obj.routines.iter().enumerate() {
-            let caller = source_routine_node_id(obj_node_id.clone(), routine);
+            let caller = decl_nodes[obj_idx][routine_idx].clone();
 
             let sites = extract_sites_for_routine(
                 &pf.file,
@@ -1308,6 +1382,16 @@ pub(crate) fn resolve_file_obligations(
                     &pf.text,
                     &mut table_events,
                 );
+                // B6: what the platform does with the run object's dataset.
+                if let Some(run) = facts.dataset_run.as_mut() {
+                    run.effects = crate::program::resolve::dataset::dataset_effects(
+                        &run.object,
+                        run.mode,
+                        graph,
+                        index,
+                        surface,
+                    );
+                }
                 // A parens-less value read is a call only when it reaches a
                 // routine; otherwise it is a variable, field or built-in read.
                 // ponytail: a parens-less built-in (`Rec.Count`) is dropped too,
@@ -1417,7 +1501,9 @@ pub(crate) fn resolve_file_obligations(
                         kind,
                         shape,
                         completeness,
-                        routes,
+                        routes: crate::program::split_decls::expand_call_routes(
+                            graph, kind, routes,
+                        ),
                     },
                     // #160 §4.2, §4.4: the key, and whether a record op can fire
                     // a trigger (the extractor's own op name).
@@ -1595,6 +1681,60 @@ fn zero_page_table(
         ReceiverType::Record { table: Some(t) } => Some(t),
         _ => None,
     }
+}
+
+/// B6: an `Xmlport.Run(X, RequestWindow, Import, …)` with a literal
+/// `RequestWindow = false` and a literal `Import` runs in that one direction
+/// (Learn, "Xmlport.Run method": "Specify true to run the XmlPort and import
+/// data; specify false to export data"). With a request page, or a value not
+/// written as a literal, the user or the value may choose either: `mode`
+/// stays as given ([`DatasetMode::XmlPortRun`] follows `Direction`).
+fn xmlport_run_direction(
+    mode: DatasetMode,
+    call_args: &[al_syntax::ir::ExprId],
+    file: &al_syntax::ir::AlFile,
+) -> DatasetMode {
+    use al_syntax::ir::{ExprKind, Literal};
+    let literal = |i: usize| match call_args.get(i).map(|&a| &file.ir.expr(a).kind) {
+        Some(ExprKind::Literal(Literal::Bool(b))) => Some(*b),
+        _ => None,
+    };
+    match (mode, literal(1), literal(2)) {
+        (DatasetMode::XmlPortRun, Some(false), Some(true)) => DatasetMode::Import,
+        (DatasetMode::XmlPortRun, Some(false), Some(false)) => DatasetMode::Export,
+        _ => mode,
+    }
+}
+
+/// B6: the dataset run of a member call ([`SiteFacts::dataset_run`]): a
+/// report, XmlPort or query variable's own method (`Rep.SaveAsPdf(…)`,
+/// `Xp.Import()`, `Q.Open()`). A `CurrReport`/`CurrXmlPort` call names no
+/// other object: `None`. The keyword forms (`Report.SaveAsPdf(Report::X, …)`,
+/// `Query.SaveAsCsv(Query::X, …)`) are object runs
+/// (`extract::classify_call`), whose arm sets the fact; a variable receiver
+/// whose object is not in the graph resolves as unknown
+/// (`resolver::resolve_member_with_args`), never as a run of nothing.
+///
+/// `start` is the call's [`SiteFacts::starts_object`], the resolver's one
+/// rule (`resolver::member_starts_object`): a call that binds to the
+/// object's own procedure of that name runs no dataset. An undecided one
+/// resolves as unknown, which already keeps `prove` from a `no`; its dataset
+/// is not claimed.
+fn member_dataset_run(
+    kind: ObjectKind,
+    method_lc: &str,
+    target: &ObjectNode,
+    start: crate::program::resolve::dataset::ObjectStart,
+) -> Option<DatasetRun> {
+    let mode = dataset_mode(kind, method_lc)?;
+    if start != crate::program::resolve::dataset::ObjectStart::Yes {
+        return None;
+    }
+    Some(DatasetRun {
+        object: target.id.clone(),
+        mode,
+        effects: Vec::new(),
+    })
 }
 
 /// The [`ReceiverFact`] for a member call whose receiver typed as `recv`

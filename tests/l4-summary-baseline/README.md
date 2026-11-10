@@ -231,6 +231,14 @@ root-cause any movement before committing (the old solver is at the
   byte; with the app scope they give the new ones. CDO is one app, so every id keeps one
   common prefix and `canonical()`'s sort by `routine_id` is unchanged; only the id text
   moved. The reverse index's oracle comparison passed in the re-freezing run.
+- **2026-11-10, engine limits wave 2** (`integrate/w2`). Whole-program `46c002a2…` -> `46ef73cc…`;
+  reverse index `ce2b1abf…` -> `bf331871…`. 5479 routines. Exact attribution on the pinned
+  `bc3ccb18` baseline, on the wave-2 head: with three things switched off together, and nothing
+  else changed, both tests reproduce the OLD digests byte for byte. The three are `dataset::starts_object`
+  answering no for a report's SaveAs*/Execute/Print and a query's Open/SaveAs* (B6), `dataset_operations`
+  returning nothing (B6: the platform's dataset reads and XmlPort writes), and
+  `attach_flow_field_reads` doing nothing (B5: reads through a FlowField's CalcFormula). The first alone
+  moved both digests but did not restore them. So no other wave-2 change moves a DB effect here.
 - **2026-11-07, the round-2 fix branches** (`integrate/r2-fixes`, head `cb123d31`).
   Whole-program `b696264e…` -> `46c002a2…`; reverse index `9576f2c0…` -> `ce2b1abf…`. (The
   `b696264e…`/`9576f2c0…` pair was minted by F1, `58dc4781`, and recorded only in

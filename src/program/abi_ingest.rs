@@ -683,6 +683,8 @@ fn ingest_abi_objects(
             // receivers, Task 1: source `extract_nodes` path only).
             dataitems: vec![],
             query_columns: Vec::new(),
+            // The symbol data has no dataset: not known (B6).
+            dataset: Default::default(),
             protected_vars: Vec::new(),
             // ABI ingestion is a JSON deserialization, never a tree-sitter parse — the
             // `parse_incomplete` concept (error-recovered CST) does not apply here; ABI's
@@ -2064,6 +2066,7 @@ codeunit 50900 "Subscriber CU"
                             data_type: "Code[20]".into(),
                             field_class: "Normal".into(),
                             is_blob_like: false,
+                            calc_formula: None,
                         },
                         AbiField {
                             field_number: 2,
@@ -2075,6 +2078,7 @@ codeunit 50900 "Subscriber CU"
                             data_type: "Enum \"Dep Status\"".into(),
                             field_class: "Normal".into(),
                             is_blob_like: false,
+                            calc_formula: None,
                         },
                     ],
                     keys: vec![],

@@ -479,6 +479,7 @@ fn build_finding(
         &result.path,
         op_temp_state_kind(terminal_op),
         routine_by_id,
+        &crate::program::model::projection::ArmRows::default(),
         edge_kind_by_callsite,
         closed_world_temp_params,
     );
@@ -733,12 +734,17 @@ impl<'a> D1Policy<'a> {
 /// full suite proves the old walk path is byte-identical).
 pub(crate) fn hop_step(
     routine_by_id: &HashMap<&str, &ModelRoutine>,
+    arms: &crate::program::model::projection::ArmRows<'_>,
     from: &str,
     to: &str,
     kind: &str,
     callsite_id: Option<&str>,
 ) -> EvidenceStep {
-    let from_routine = routine_by_id.get(from).copied();
+    // Engine limits B2: the caller row that holds the call (its `#if` arm).
+    let from_routine = routine_by_id
+        .get(from)
+        .copied()
+        .map(|r| callsite_id.map_or(r, |cid| arms.row_for(from, cid, r)));
     let cs = callsite_id.and_then(|cid| {
         from_routine.and_then(|fr| fr.call_sites.iter().find(|c| c.id.as_str() == cid))
     });
@@ -787,11 +793,16 @@ pub(crate) fn hop_step(
 /// delegates here — behaviour-preserving.
 pub(crate) fn terminal_step(
     routine_by_id: &HashMap<&str, &ModelRoutine>,
+    arms: &crate::program::model::projection::ArmRows<'_>,
     table_by_id: &HashMap<&str, &ModelTable>,
     terminal_routine_id: &str,
     op_id: Option<&str>,
 ) -> EvidenceStep {
-    let routine = routine_by_id.get(terminal_routine_id).copied();
+    // Engine limits B2: the row that holds the op (its `#if` arm).
+    let routine = routine_by_id
+        .get(terminal_routine_id)
+        .copied()
+        .map(|r| op_id.map_or(r, |oid| arms.row_for(terminal_routine_id, oid, r)));
     let op = op_id.and_then(|oid| {
         routine.and_then(|r| r.record_operations.iter().find(|o| o.id.as_str() == oid))
     });
@@ -880,6 +891,7 @@ impl<'a> WalkPolicy for D1Policy<'a> {
     fn build_hop_step(&self, edge: &CombinedEdge, _ctx: &PathCtx) -> EvidenceStep {
         hop_step(
             self.routine_by_id,
+            &crate::program::model::projection::ArmRows::default(),
             &edge.from,
             &edge.to,
             &edge.kind,
@@ -890,6 +902,7 @@ impl<'a> WalkPolicy for D1Policy<'a> {
     fn build_terminal_step(&self, t: &Terminal, _ctx: &PathCtx) -> EvidenceStep {
         terminal_step(
             self.routine_by_id,
+            &crate::program::model::projection::ArmRows::default(),
             self.table_by_id,
             &t.routine_id,
             t.op_id.as_deref(),
@@ -2368,6 +2381,8 @@ mod memo_tests {
             modify_all_field: None,
             transfer_fields_source: None,
             receiver_is_record_ref: false,
+            flow_field_reads: Vec::new(),
+            dataset_reason: None,
         };
 
         let c = routine("C", "procedure");

@@ -665,6 +665,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: Some(true),
             page_controls: Vec::new(),
             single_instance: None,
@@ -702,6 +703,8 @@ mod tests {
             modify_all_field: None,
             transfer_fields_source: None,
             receiver_is_record_ref: false,
+            flow_field_reads: Vec::new(),
+            dataset_reason: None,
         };
         let temp = Some(ts_known(true));
         // (is_implicit_rec, expected: Rec row temp, Rec op temp, xRec op temp)

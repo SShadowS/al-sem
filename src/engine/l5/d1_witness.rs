@@ -160,6 +160,7 @@ pub(crate) fn direct_witness(
     let loop_step = loop_step_ev(routine, loop_info);
     let op_step = terminal_step(
         &ctx.routine_by_id,
+        &ctx.arm_rows,
         &ctx.table_by_id,
         routine.id.as_str(),
         Some(op.id.as_str()),
@@ -204,6 +205,7 @@ fn render_hop(
     let to_id = graph.node_ids[edge.to as usize];
     hop_step(
         &ctx.routine_by_id,
+        &ctx.arm_rows,
         from_id,
         to_id,
         edge.kind,
@@ -353,6 +355,7 @@ pub(crate) fn representative_witness<'a>(
 
     let terminal_ev = terminal_step(
         &ctx.routine_by_id,
+        &ctx.arm_rows,
         &ctx.table_by_id,
         terminal_owner.id.as_str(),
         Some(terminal_op.id.as_str()),

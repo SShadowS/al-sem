@@ -39,6 +39,8 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         // + ABI agree on the ModelObject shape. Consumed by return_summary to merge
         // object-level commit behavior into each dep routine's commitBehavior.
         inherent_commit_behavior: o.inherent_commit_behavior.clone(),
+        // A symbol carries the compiled value: one build, never conditional.
+        inherent_commit_behavior_conditional: false,
         source_table_temporary: o.page_props.source_table_temporary,
         page_controls: o
             .page_controls
@@ -83,6 +85,7 @@ fn dep_field_to_l3(f: &crate::engine::deps::projection::ProjectedField) -> Model
         is_blob_like: f.is_blob_like,
         // A symbol-only field: no caption is read (spec open question 2).
         captions: Vec::new(),
+        calc_formula: f.calc_formula.iter().cloned().collect(),
     }
 }
 
@@ -267,6 +270,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         entry_temp_guard_receiver: None,
         table_event_exits: Default::default(),
         recordref_bindings: Vec::new(),
+        field_ref_operations: Vec::new(),
     }
 }
 

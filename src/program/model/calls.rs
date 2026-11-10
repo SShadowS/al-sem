@@ -183,10 +183,12 @@ pub struct CallEdge {
     /// table procedures) `table-unresolved::<declType>::<method>` vs
     /// `proc-not-found::<declType>::<method>`. `None` on all other edges.
     pub receiver_shape: Option<String>,
-    /// `ImplicitTrigger` edges only: whether the trigger runs every time its
+    /// `ImplicitTrigger` edges: whether the trigger runs every time its
     /// record operation executes. Decided ONCE, by the adapter that builds the
-    /// edge from the op (#96); the typed graph copies it. `None` on every other
-    /// edge.
+    /// edge from the op (#96); the typed graph copies it. B6 round 2: also a
+    /// call site's run edge into a trigger the run may finish without running
+    /// (`resolver::run_trigger_may_not_run`: a report's `OnAfterGetRecord`, …),
+    /// always `Maybe`. `None` on every other edge.
     pub fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
     /// `TableEvent` edges only (F1): the platform table event the record
     /// operation raises, in the event graph's id form
@@ -194,6 +196,16 @@ pub struct CallEdge {
     /// validate event), and whether the subscription may be skipped (a manual
     /// or conditional subscriber). `None` on every other edge.
     pub table_event: Option<TableEventMeta>,
+    /// B4: the call starts an object (a run, a report save, a query open, …)
+    /// rather than calling one of its procedures: the resolver's
+    /// `SiteFacts::starts_object`, on every edge of the call site. Its
+    /// dispatch kind does not say so for a variable form (`Rep.Run()` is a
+    /// `Method` edge). Read by the commit scope
+    /// (`engine::l5::commit_scope`), whose `[CommitBehavior]` only MAY
+    /// follow into a started object. `Undecided` (B6: the platform's method
+    /// or the object's own procedure, the argument types do not tell) is read
+    /// there as a run too, a "may", so no definite answer rests on it.
+    pub starts_object: crate::program::resolve::dataset::ObjectStart,
 }
 
 /// The platform event behind a `TableEvent` [`CallEdge`] (F1).
@@ -233,6 +245,7 @@ impl CallEdge {
             receiver_shape: None,
             fires: None,
             table_event: None,
+            starts_object: crate::program::resolve::dataset::ObjectStart::No,
         }
     }
 }

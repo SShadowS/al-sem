@@ -156,6 +156,7 @@ pub fn routine(id: &str, kind: &str) -> ModelRoutine {
         entry_temp_guard_receiver: None,
         table_event_exits: Default::default(),
         recordref_bindings: Vec::new(),
+        field_ref_operations: Vec::new(),
         rules: None,
         rule_drafts: None,
         card_text: None,
@@ -204,7 +205,9 @@ pub fn object_run_call_site(id: &str, object_kind: &str, return_used: Option<boo
         control_context: None,
         order: None,
         in_statement_position: false,
+        result_tested: false,
         receiver_temp_state: None,
+        implicit_receiver: None,
     }
 }
 
@@ -293,7 +296,9 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
         control_context: None,
         order: None,
         in_statement_position: false,
+        result_tested: false,
         receiver_temp_state: None,
+        implicit_receiver: None,
     }
 }
 
@@ -375,6 +380,8 @@ pub fn record_op(
         modify_all_field: None,
         transfer_fields_source: None,
         receiver_is_record_ref: false,
+        flow_field_reads: Vec::new(),
+        dataset_reason: None,
     }
 }
 

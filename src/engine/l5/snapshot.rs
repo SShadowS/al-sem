@@ -764,6 +764,10 @@ pub enum SnapshotGraphEdge {
         to: String,
         #[serde(rename = "receiverType")]
         receiver_type: String,
+        /// B6 round 2: `maybe` when this call is a run into a trigger the run
+        /// may finish without running (`resolver::run_trigger_may_not_run`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
         #[serde(rename = "sourceAnchor")]
         source_anchor: SnapshotSourceAnchor,
         #[serde(rename = "edgeId")]
@@ -794,6 +798,10 @@ pub enum SnapshotGraphEdge {
         target_object: String,
         #[serde(rename = "objectType")]
         object_type: String,
+        /// B6 round 2: `maybe` when the run may finish without running `to`
+        /// (`resolver::run_trigger_may_not_run`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fires: Option<crate::engine::l4::combined_graph::TriggerFires>,
         #[serde(rename = "sourceAnchor")]
         source_anchor: SnapshotSourceAnchor,
         #[serde(rename = "edgeId")]
@@ -1265,6 +1273,11 @@ pub struct CapabilitySnapshot {
     /// #160 step 6 rule B (spec §14.3.5): set only on digest's tree over the
     /// cone graph ([`compose_tree`]); `None` on the cut. Never serialized.
     pub boundary: Option<BoundaryRule>,
+    /// B4/L16: every routine's `[CommitBehavior]` declaration
+    /// ([`crate::engine::l5::commit_scope`]), which the digest applies to
+    /// each COMMIT it reports. Empty when no routine declares one. Shared;
+    /// never serialized.
+    pub commit_scopes: std::sync::Arc<crate::engine::l5::commit_scope::CommitScopes>,
 }
 
 /// Rule B's input (spec §14.3.5): the tree's dependency routines, by the role
@@ -1546,6 +1559,8 @@ struct CollidedRows<'a> {
     frame_offset: HashMap<usize, i64>,
     /// Collided id -> its one frame table.
     frames: HashMap<&'a str, Vec<ScopeFrame>>,
+    /// Every row of a collided id, with or without frames ([`Self::order`]).
+    collided_row: std::collections::HashSet<usize>,
 }
 
 impl<'a> CollidedRows<'a> {
@@ -1555,7 +1570,9 @@ impl<'a> CollidedRows<'a> {
         let site_owner = site_owners(&rows, routines);
         let mut frame_offset = HashMap::new();
         let mut frames = HashMap::new();
+        let mut collided_row = std::collections::HashSet::new();
         for (id, ixs) in rows.collided() {
+            collided_row.extend(ixs.iter().map(|ix| ix.get()));
             let mut per_row: Vec<(usize, Vec<ScopeFrame>)> = ixs
                 .iter()
                 .map(|ix| {
@@ -1598,15 +1615,31 @@ impl<'a> CollidedRows<'a> {
             site_owner,
             frame_offset,
             frames,
+            collided_row,
         }
     }
 
     /// Row `ri`'s `order`, its frame id shifted into its id's table.
+    ///
+    /// Engine limits B2 (wave 2 final review): a collided id's rows are
+    /// alternative builds of one routine (`#if` arms, or two files), and a
+    /// build runs ONE row's body, so no row's site dominates the ROUTINE's
+    /// success return in every build (as no row's site is `top-level`,
+    /// `workspace::join_alternative_declarations`). Without this, a caller of
+    /// a two-arm routine got a root-scope `COMMIT_DOMINATES_RETURN`, valid for
+    /// refutation, on one arm's `Commit`, though the other arm may return
+    /// before its own. Every row of a collided id is read so, with or without
+    /// scope frames (a row with none carries no order today: a TryFunction's
+    /// walk and a bodiless row stamp none; the rule does not rest on that).
     fn order(&self, ri: usize, order: Option<OperationOrder>) -> Option<OperationOrder> {
         let off = self.frame_offset.get(&ri).copied().unwrap_or(0);
+        let collided = self.collided_row.contains(&ri);
         order.map(|mut o| {
             if o.frame_id >= 0 {
                 o.frame_id += off;
+            }
+            if collided {
+                o.dominates_success_return = false;
             }
             o
         })
@@ -1733,6 +1766,11 @@ pub fn compose_snapshot_from_base(
         routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         pd_solution,
         boundary: None,
+        // The cut graph is built over `resolved.calls` alone (no dependency
+        // calls apart, `dependency_calls: &[]` above), so its object runs are
+        // all there.
+        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(resolved, &[])
+            .into(),
     })
 }
 
@@ -2164,6 +2202,13 @@ pub(crate) fn compose_tree_over(
         routine_order_frames,
         pd_solution,
         boundary: Some(boundary),
+        // The cone's typed edges include the dependency code's own calls
+        // (`typed` = `rel.cone()`): their object runs need their step too.
+        commit_scopes: crate::engine::l5::commit_scope::CommitScopes::of_model(
+            model,
+            dependency_calls,
+        )
+        .into(),
     })
 }
 
@@ -2800,6 +2845,7 @@ fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeK
                     from: from_stable.clone(),
                     to: to_stable.clone().unwrap_or_default(),
                     receiver_type: e.receiver_type.clone().unwrap_or_default(),
+                    fires: e.fires,
                     source_anchor: match cs_anchor {
                         Some(a) => a,
                         None => break 'build None,
@@ -2826,6 +2872,7 @@ fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeK
                     to: to_stable.clone().unwrap_or_default(),
                     target_object: target_object_internal.clone().unwrap_or_default(),
                     object_type: e.object_type.clone().unwrap_or_default(),
+                    fires: e.fires,
                     source_anchor: match cs_anchor {
                         Some(a) => a,
                         None => break 'build None,
@@ -3203,11 +3250,6 @@ fn derive_operation_evidence<'r>(
         let stable = stable_routine_id(&r.id, base.routine_to_stable);
         // Re-stamp op/callsite order (L3 assembly does not).
         let order = compute_routine_order(r);
-        let op_order_by_id: HashMap<&str, &OperationOrder> = order
-            .operation_sites
-            .iter()
-            .filter_map(|op| op.order.as_ref().map(|o| (op.id.as_str(), o)))
-            .collect();
 
         // operationSites first.
         for op in &order.operation_sites {
@@ -3236,22 +3278,16 @@ fn derive_operation_evidence<'r>(
         }
         // recordOperations OVERWRITE the operationSites entry for the same id
         // (richer displayText `Var.Op`); preserves controlContext + order from the
-        // matching operationSite.
-        for ro in &r.record_operations {
+        // matching operationSite. The FieldRef operations (engine limits B5)
+        // follow, citing their call site's context, order and asserterror.
+        for ro in r.effect_operations() {
             if !referenced.contains(&ro.id) {
                 continue;
             }
-            let matching = r.operation_sites.iter().find(|op| op.id == ro.id);
+            let site =
+                ModelRoutine::effect_operation_site(ro, &order.call_sites, &order.operation_sites);
             let a = &ro.source_anchor;
-            let display = format!(
-                "{}.{}",
-                if ro.record_variable_name.is_empty() {
-                    "?".to_string()
-                } else {
-                    ro.record_variable_name.clone()
-                },
-                ro.op
-            );
+            let display = ro.evidence_text();
             let entry = SnapshotOperationEvidence {
                 operation_id: ro.id.clone(),
                 routine: stable.clone(),
@@ -3261,12 +3297,9 @@ fn derive_operation_evidence<'r>(
                 end_line: a.end_line,
                 end_column: a.end_column,
                 display_text: display,
-                control_context: matching.and_then(|op| op.control_context.clone()),
-                order: collided.order(
-                    ri,
-                    matching.and_then(|_| op_order_by_id.get(ro.id.as_str()).map(|o| **o)),
-                ),
-                under_asserterror: None,
+                control_context: site.control_context.map(str::to_string),
+                order: collided.order(ri, site.order.copied()),
+                under_asserterror: site.under_asserterror.then_some(true),
             };
             by_id.insert(ro.id.clone(), entry);
         }
@@ -5440,5 +5473,36 @@ mod cone_memory_step2_tests {
         assert_eq!(edited.subject(), "edited#");
         assert!(!std::sync::Arc::ptr_eq(edited.tables(), rows[0].tables()));
         assert_eq!(fields_of(&rows), before, "the composed rows are unchanged");
+    }
+}
+
+#[cfg(test)]
+mod collided_rows_order_tests {
+    use super::*;
+
+    /// Engine limits B2 (wave 2 final review, item 3): every row of a
+    /// collided id is read as not dominating its routine's success return,
+    /// whether or not it has scope frames. Stated by assignment: row 3 is a
+    /// collided row with NO frame offset (a row whose walk stamped no frame),
+    /// row 4 a row of a single-row id; both carry an order that dominates.
+    #[test]
+    fn a_collided_row_without_frames_does_not_dominate() {
+        let c = CollidedRows {
+            site_owner: HashMap::new(),
+            frame_offset: HashMap::new(),
+            frames: HashMap::new(),
+            collided_row: [3].into_iter().collect(),
+        };
+        let o = OperationOrder {
+            order_id: 1,
+            frame_id: 0,
+            on_success_path: true,
+            dominates_success_return: true,
+        };
+        assert!(!c.order(3, Some(o)).unwrap().dominates_success_return);
+        assert!(
+            c.order(4, Some(o)).unwrap().dominates_success_return,
+            "control: a single-row id keeps it"
+        );
     }
 }

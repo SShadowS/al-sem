@@ -933,6 +933,7 @@ mod tests {
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,
+            inherent_commit_behavior_conditional: false,
             source_table_temporary: None,
             page_controls: Vec::new(),
             single_instance: None,
@@ -1004,6 +1005,7 @@ mod tests {
             entry_temp_guard_receiver: None,
             table_event_exits: Default::default(),
             recordref_bindings: Vec::new(),
+            field_ref_operations: Vec::new(),
             rules: None,
             rule_drafts: None,
             card_text: None,
@@ -1251,6 +1253,8 @@ mod tests {
             name: "Test".to_string(),
             args: Vec::new(),
             raw: "[Test]".to_string(),
+            conditional: false,
+            another_declaration_lacks: false,
         }];
         routines.push(test_proc);
 
