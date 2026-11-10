@@ -332,8 +332,19 @@ fn coverage_reasons(
         {
             continue;
         }
-        // This row's own site: rows sharing the id (e.g. `#if` alternatives) share
-        // the edge list and site ids, and `call_site_by_id` keeps only the last.
+        // This row's own site: rows sharing the id share the edge list, and
+        // `call_site_by_id` keeps only the last. Engine limits B2: two `#if`
+        // arms of a routine each hold their own sites, so another arm's site
+        // is that arm's, not a site this row is missing.
+        if let Some(id) = u.callsite_id.as_deref()
+            && !routine.call_sites.iter().any(|cs| cs.id == id)
+            && ctx
+                .arm_rows
+                .owner(&routine.id, id)
+                .is_some_and(|o| !std::ptr::eq(o, routine))
+        {
+            continue;
+        }
         let cs = u
             .callsite_id
             .as_deref()
@@ -828,12 +839,29 @@ mod tests {
             ],
             "shared site id"
         );
-        // Each row has a site the other lacks.
+        // Each row has a site the other lacks (engine limits B2: two `#if` arms,
+        // each numbering its own sites). The other arm's site is that arm's,
+        // not a site this row is missing: no "partly analysed". Break: count
+        // another row's site as not found -> both findings say "partly
+        // analysed".
         assert_eq!(
             run(
                 vec![site_at("cs-a", "A", 2, 0)],
                 vec![site_at("cs-b", "B", 7, 0)],
                 &["cs-a", "cs-b"],
+            ),
+            vec![
+                fix("interface-open-world; unresolved: A (line 3)"),
+                fix("interface-open-world; unresolved: B (line 8)"),
+            ],
+            "distinct site ids"
+        );
+        // A site no row holds is still not found: "partly analysed".
+        assert_eq!(
+            run(
+                vec![site_at("cs-a", "A", 2, 0)],
+                vec![site_at("cs-b", "B", 7, 0)],
+                &["cs-a", "cs-b", "cs-none"],
             ),
             vec![
                 fix(
@@ -843,7 +871,7 @@ mod tests {
                     "interface-open-world; unresolved: B (line 8); partly analysed: sub (Codeunit 1)"
                 ),
             ],
-            "distinct site ids"
+            "a site in no row"
         );
     }
 

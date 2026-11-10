@@ -327,6 +327,169 @@ pub fn sites_of<'a>(
         .unwrap_or_else(|| routine.call_sites.iter().collect())
 }
 
+/// Engine limits B2 (per-arm ids): the rows of every COLLIDED id, so a reader
+/// that holds one row of an id (the last, from a by-id map) can find the row
+/// that holds a given SITE, or walk every row of the id.
+///
+/// A routine declared in two `#if` arms of one file is two rows of one id,
+/// and each arm numbers its own sites (`ir_walk::SiteIdBase`): arm A's
+/// `{id}/cs0` is in arm A's row only. A reader that looks a site up in the
+/// id's LAST row misses arm A's sites (it drops their facts, or falls back to
+/// the whole body, or cites the other arm's line). Rows that share their site
+/// ids (one id declared in two files) are found too: the owner of a shared
+/// site is its LAST holding row (class P, #160 step 11b §4.6).
+///
+/// Transient like [`RowsOfId`] (R1-12): build it from the current rows. A
+/// single-row id is absent, so [`ArmRows::owner`] is `None` and the reader
+/// keeps its own row.
+#[derive(Default)]
+pub struct ArmRows<'a> {
+    // A `Vec` (covariant), so a reader can borrow it beside shorter-lived
+    // lookups under one lifetime.
+    rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,
+}
+
+impl<'a> ArmRows<'a> {
+    /// The rows of every collided id of `routines`, in row order.
+    #[must_use]
+    pub fn build(routines: &'a [ModelRoutine]) -> Self {
+        Self::build_from(routines.iter())
+    }
+
+    /// [`ArmRows::build`] over any iterator of rows (a reader that holds
+    /// references).
+    #[must_use]
+    pub fn build_from(routines: impl IntoIterator<Item = &'a ModelRoutine>) -> Self {
+        let mut all: HashMap<&'a str, Vec<&'a ModelRoutine>> = HashMap::new();
+        for r in routines {
+            all.entry(r.id.as_str()).or_default().push(r);
+        }
+        all.retain(|_, rows| rows.len() > 1);
+        ArmRows { rows: all }
+    }
+
+    /// Whether `id` has two or more rows.
+    #[must_use]
+    pub fn is_collided(&self, id: &str) -> bool {
+        self.rows.contains_key(id)
+    }
+
+    /// The rows of a collided `id`, in row order; `None` for a single-row id.
+    #[must_use]
+    pub fn rows(&self, id: &str) -> Option<&[&'a ModelRoutine]> {
+        self.rows.get(id).map(|v| v.as_slice())
+    }
+
+    /// The rows of `id`: every row of a collided id, else `one` alone.
+    #[must_use]
+    pub fn rows_or(&self, id: &str, one: &'a ModelRoutine) -> SmallVec<[&'a ModelRoutine; 2]> {
+        self.rows
+            .get(id)
+            .map_or_else(|| smallvec::smallvec![one], |v| v.iter().copied().collect())
+    }
+
+    /// The LAST row of a collided `id` that holds the site `site` (a call
+    /// site, its operation id, an operation, a record operation, a loop or an
+    /// unreachable statement). `None` when `id` has one row, or no row of it
+    /// holds `site`.
+    #[must_use]
+    pub fn owner(&self, id: &str, site: &str) -> Option<&'a ModelRoutine> {
+        self.rows
+            .get(id)?
+            .iter()
+            .rev()
+            .copied()
+            .find(|r| row_holds_site(r, site))
+    }
+
+    /// The row a reader should read `site` of `id` from: its owner
+    /// ([`ArmRows::owner`]), else `fallback` (the reader's own row).
+    #[must_use]
+    pub fn row_for(&self, id: &str, site: &str, fallback: &'a ModelRoutine) -> &'a ModelRoutine {
+        self.owner(id, site).unwrap_or(fallback)
+    }
+}
+
+/// For every COLLIDED id, one owned SITE-UNION row (engine limits B2, per-arm
+/// ids): the id's last row, with the call sites, operation sites, record
+/// operations, loops and unreachable statements of every row of the id (each
+/// site once; a site two rows share, its LAST holding row's copy, class P).
+///
+/// For the readers that take one row per id and only look SITES up in it (a
+/// call site's argument bindings, a record operation's temp state): the cone's
+/// PD substitution and its guard carry. Row-level fields (name, parameters,
+/// the statement tree) stay the last row's, as the by-id pick gave before; a
+/// reader that walks the statement tree to a site uses [`ArmRows::owner`].
+#[must_use]
+pub fn merged_site_rows(routines: &[ModelRoutine]) -> Vec<ModelRoutine> {
+    let arms = ArmRows::build(routines);
+    let mut ids: Vec<&str> = arms.rows.keys().copied().collect();
+    ids.sort_unstable();
+    ids.into_iter()
+        .map(|id| {
+            let rows = &arms.rows[id];
+            let last = *rows.last().expect("a collided id has rows");
+            let mut m = last.clone();
+            fn add<T: Clone>(out: &mut Vec<T>, more: &[T], key: impl Fn(&T) -> &str) {
+                for x in more {
+                    match out.iter_mut().find(|o| key(o) == key(x)) {
+                        Some(o) => *o = x.clone(),
+                        None => out.push(x.clone()),
+                    }
+                }
+            }
+            m.call_sites.clear();
+            m.operation_sites.clear();
+            m.record_operations.clear();
+            m.loops.clear();
+            m.unreachable_statements.clear();
+            for r in rows {
+                add(&mut m.call_sites, &r.call_sites, |c| c.id.as_str());
+                add(&mut m.operation_sites, &r.operation_sites, |o| {
+                    o.id.as_str()
+                });
+                add(&mut m.record_operations, &r.record_operations, |o| {
+                    o.id.as_str()
+                });
+                add(&mut m.loops, &r.loops, |l| l.id.as_str());
+                add(
+                    &mut m.unreachable_statements,
+                    &r.unreachable_statements,
+                    |u| u.id.as_str(),
+                );
+            }
+            m
+        })
+        .collect()
+}
+
+/// A by-id map over `routines` (the LAST row of an id, class P) whose
+/// collided ids point at their [`merged_site_rows`] row instead.
+#[must_use]
+pub fn by_id_with_site_unions<'a>(
+    routines: &'a [ModelRoutine],
+    unions: &'a [ModelRoutine],
+) -> HashMap<&'a str, &'a ModelRoutine> {
+    let mut out: HashMap<&'a str, &'a ModelRoutine> =
+        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    for u in unions {
+        out.insert(u.id.as_str(), u);
+    }
+    out
+}
+
+/// Whether row `r` holds the site id `site` (see [`ArmRows::owner`]).
+#[must_use]
+pub fn row_holds_site(r: &ModelRoutine, site: &str) -> bool {
+    r.call_sites
+        .iter()
+        .any(|c| c.id == site || c.operation_id == site)
+        || r.operation_sites.iter().any(|o| o.id == site)
+        || r.record_operations.iter().any(|o| o.id == site)
+        || r.loops.iter().any(|l| l.id == site)
+        || r.unreachable_statements.iter().any(|u| u.id == site)
+}
+
 /// One call site, as the per-site consumers (d37, `compose_roles_only`) read it
 /// (spec §4.6 `site_pick`).
 pub struct SitePick<'a, B> {

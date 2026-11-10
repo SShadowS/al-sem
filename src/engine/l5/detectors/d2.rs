@@ -87,6 +87,8 @@ fn uncertainty_lites(uncertainties: &[Uncertainty]) -> Vec<UncertaintyLite> {
 /// walk that locates the exact DB op inside a witness subscriber.
 struct D2Policy<'a> {
     routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
+    /// Engine limits B2: the row (`#if` arm) that holds a site.
+    arms: &'a crate::program::model::projection::ArmRows<'a>,
     table_by_id: &'a HashMap<&'a str, &'a ModelTable>,
     summaries: &'a HashMap<String, crate::engine::l5::full_summary::FullRoutineSummary>,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
@@ -97,24 +99,27 @@ struct D2Policy<'a> {
 
 impl<'a> WalkPolicy for D2Policy<'a> {
     fn terminals_at(&self, node: &str, _ctx: &PathCtx) -> Vec<Terminal> {
-        let Some(r) = self.routine_by_id.get(node).copied() else {
+        let Some(last) = self.routine_by_id.get(node).copied() else {
             return Vec::new();
         };
-        r.record_operations
-            .iter()
-            .filter(|op| is_db_touching_class(classify_op(&op.op)))
+        // Engine limits B2: every `#if` arm (row) holds its own ops.
+        self.arms
+            .rows_or(node, last)
+            .into_iter()
+            .flat_map(|r| r.record_operations.iter().map(move |op| (r, op)))
+            .filter(|(_, op)| is_db_touching_class(classify_op(&op.op)))
             // Class C (G-1): a `until <var>.Next() …` terminator is the subscriber
             // loop's own cursor advancement, never an actionable db op — mirrors
             // d1's interprocedural terminal filter (d1.rs).
-            .filter(|op| !is_terminator_next(op))
+            .filter(|(_, op)| !is_terminator_next(op))
             // Class C (G-6): an op on a BC virtual/system table reads the platform's
             // in-memory metadata store (no SQL round-trip), so it is never a d2
             // terminal — mirrors d1.
-            .filter(|op| !op_targets_virtual_system_table(op, r, self.table_by_id))
+            .filter(|(r, op)| !op_targets_virtual_system_table(op, r, self.table_by_id))
             // Class A: an op provably on a Known(true) temporary record does no
             // physical-db work — mirrors d33's temp gate.
-            .filter(|op| !is_known_temp(op))
-            .map(|op| Terminal {
+            .filter(|(_, op)| !is_known_temp(op))
+            .map(|(_, op)| Terminal {
                 routine_id: node.to_string(),
                 local_loop_depth: op.loop_stack.len() as i64,
                 op_id: Some(op.id.clone()),
@@ -144,7 +149,16 @@ impl<'a> WalkPolicy for D2Policy<'a> {
     }
 
     fn build_hop_step(&self, edge: &CombinedEdge, _ctx: &PathCtx) -> EvidenceStep {
-        let from_routine = self.routine_by_id.get(edge.from.as_str()).copied();
+        // Engine limits B2: the caller's row (its `#if` arm) that holds the call.
+        let from_routine = self
+            .routine_by_id
+            .get(edge.from.as_str())
+            .copied()
+            .map(|r| {
+                edge.callsite_id
+                    .as_deref()
+                    .map_or(r, |cid| self.arms.row_for(&edge.from, cid, r))
+            });
         let cs = edge.callsite_id.as_ref().and_then(|cid| {
             from_routine.and_then(|fr| fr.call_sites.iter().find(|c| &c.id == cid))
         });
@@ -187,7 +201,16 @@ impl<'a> WalkPolicy for D2Policy<'a> {
     }
 
     fn build_terminal_step(&self, t: &Terminal, _ctx: &PathCtx) -> EvidenceStep {
-        let routine = self.routine_by_id.get(t.routine_id.as_str()).copied();
+        // Engine limits B2: the row (its `#if` arm) that holds the op.
+        let routine = self
+            .routine_by_id
+            .get(t.routine_id.as_str())
+            .copied()
+            .map(|r| {
+                t.op_id
+                    .as_deref()
+                    .map_or(r, |oid| self.arms.row_for(&t.routine_id, oid, r))
+            });
         let op = t.op_id.as_ref().and_then(|oid| {
             routine.and_then(|r| r.record_operations.iter().find(|o| &o.id == oid))
         });
@@ -285,6 +308,7 @@ pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
 
     let policy = D2Policy {
         routine_by_id: &ctx.routine_by_id,
+        arms: &ctx.arm_rows,
         table_by_id: &ctx.table_by_id,
         summaries: &ctx.summaries,
         edges_by_from: &ctx.graph.edges_by_from,
@@ -459,8 +483,7 @@ pub fn detect_d2(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 }
                 if let Some(term) = complete.path.last()
                     && let Some(op_id) = &term.operation_id
-                    && let Some(term_routine) =
-                        ctx.routine_by_id.get(term.routine_id.as_str()).copied()
+                    && let Some(term_routine) = ctx.routine_for_site(&term.routine_id, op_id)
                     && let Some(term_op) = term_routine
                         .record_operations
                         .iter()

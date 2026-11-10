@@ -191,6 +191,10 @@ pub struct Names<'m> {
     by_id: HashMap<&'m str, &'m ModelRoutine>,
     /// Stable id → its first row.
     by_stable: HashMap<&'m str, &'m ModelRoutine>,
+    /// Stable id → every row of it, in row order (engine limits B2: a
+    /// routine declared in two `#if` arms is two rows, each with its own
+    /// sites).
+    rows_by_stable: HashMap<&'m str, Vec<&'m ModelRoutine>>,
     /// Internal routine id → the edges it emits.
     edges_from: HashMap<&'m str, Vec<&'m CallEdge>>,
     /// Internal routine id → the edges that reach it (callers).
@@ -205,8 +209,13 @@ impl<'m> Names<'m> {
     pub fn new(model: &'m Model, rollup: &'m RollupCx<'m>) -> Names<'m> {
         let ws = &model.workspace;
         let mut by_stable = HashMap::new();
+        let mut rows_by_stable: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
         for r in &ws.routines {
             by_stable.entry(r.stable_routine_id.as_str()).or_insert(r);
+            rows_by_stable
+                .entry(r.stable_routine_id.as_str())
+                .or_default()
+                .push(r);
         }
         let mut edges_from: HashMap<&str, Vec<&CallEdge>> = HashMap::new();
         let mut edges_to: HashMap<&str, Vec<&CallEdge>> = HashMap::new();
@@ -224,10 +233,19 @@ impl<'m> Names<'m> {
                 .collect(),
             by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
             by_stable,
+            rows_by_stable,
             edges_from,
             edges_to,
             rollup,
         }
+    }
+
+    /// Every row of a stable id, in row order (empty when none).
+    #[must_use]
+    pub fn rows(&self, stable_id: &str) -> &[&'m ModelRoutine] {
+        self.rows_by_stable
+            .get(stable_id)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The one routine display of a routine row (V3 §2.1, no member
@@ -346,15 +364,32 @@ fn message_key(
     format!("expr:{}", short_hash(&norm))
 }
 
-/// The own sites of `r` by key, with their labels.
+/// The own sites of routine `rows` (its rows: one, or each `#if` arm of a
+/// routine declared in two, engine limits B2) by key, with their labels. Each
+/// row gives its own direct facts, and each site is read in the row that
+/// holds it (the LAST holding row, class P).
 fn own_keys(
     names: &Names<'_>,
-    r: &ModelRoutine,
+    rows: &[&ModelRoutine],
     labels: &mut BTreeMap<String, String>,
 ) -> BTreeMap<String, Vec<Site>> {
     let mut own: BTreeMap<String, Vec<Site>> = BTreeMap::new();
-    let call_site = |id: &str| r.call_sites.iter().find(|c| c.id == id);
+    let Some(&r) = rows.last() else {
+        return own;
+    };
+    let call_site = |id: &str| {
+        rows.iter()
+            .rev()
+            .find_map(|r| r.call_sites.iter().find(|c| c.id == id))
+    };
+    let op_row = |id: &str| -> Option<&ModelRoutine> {
+        rows.iter().rev().copied().find(|r| {
+            r.record_operations.iter().any(|o| o.id == id)
+                || r.operation_sites.iter().any(|o| o.id == id)
+        })
+    };
     let op_site = |id: &str| {
+        let r = op_row(id)?;
         r.record_operations
             .iter()
             .find(|o| o.id == id)
@@ -389,7 +424,15 @@ fn own_keys(
             c.argument_texts.len()
         )
     };
-    let (facts, _, _) = direct_facts_for_routine(r, &[]);
+    // Every row's own facts; a fact two rows share (one site in both) once.
+    let mut facts = Vec::new();
+    for row in rows {
+        for f in direct_facts_for_routine(row, &[]).0 {
+            if !facts.contains(&f) {
+                facts.push(f);
+            }
+        }
+    }
     for f in &facts {
         let anchor = if let Some(op) = f.witness_operation_id.as_deref() {
             op_site(op)
@@ -425,6 +468,11 @@ fn own_keys(
             ("transaction", "commit") => ("commit".into(), "commit".into()),
             ("error", op) => {
                 let msg = if op == "error-throw" {
+                    let r = f
+                        .witness_operation_id
+                        .as_deref()
+                        .and_then(op_row)
+                        .unwrap_or(r);
                     f.witness_operation_id
                         .as_deref()
                         .and_then(|id| r.operation_sites.iter().find(|o| o.id == id))
@@ -589,7 +637,12 @@ fn callers(names: &Names<'_>, r: &ModelRoutine) -> Callers {
             c.page_actions += 1;
         }
         if c.first.len() < 10 {
-            let site = from.call_sites.iter().find(|s| s.id == e.callsite_id);
+            // Engine limits B2: in the caller's row (`#if` arm) that holds it.
+            let site = names
+                .rows(&from.stable_routine_id)
+                .iter()
+                .rev()
+                .find_map(|r| r.call_sites.iter().find(|s| s.id == e.callsite_id));
             c.first.push(CallerSite {
                 display: names.named(from),
                 file: site.map_or_else(
@@ -618,7 +671,7 @@ pub fn summarize(
 ) -> Option<RootSummary> {
     let r = names.routine(stable_id)?;
     let mut labels = BTreeMap::new();
-    let own = own_keys(names, r, &mut labels);
+    let own = own_keys(names, names.rows(stable_id), &mut labels);
     let (cone, literal_dead_rows) =
         entry.map_or_else(|| (BTreeSet::new(), 0), |e| cone_keys(e, &mut labels));
     let mut sites_partial: Vec<String> = entry

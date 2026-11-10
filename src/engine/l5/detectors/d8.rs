@@ -76,7 +76,10 @@ pub fn detect_d8(
         if span.seed_kind != SeedKind::ExplicitCommit {
             continue;
         }
-        let Some(commit_routine) = ctx.routine_by_id.get(span.commit_routine_id.as_str()) else {
+        // The row that holds the Commit (engine limits B2: its `#if` arm).
+        let Some(commit_routine) =
+            ctx.routine_for_site(&span.commit_routine_id, &span.commit_operation_id)
+        else {
             continue;
         };
         // roleOf(routine) === "primary": source-only ⇒ every routine is primary.

@@ -1305,6 +1305,7 @@ fn keep_verdict(
 fn edge_trap(
     e: &SnapshotGraphEdge,
     by_stable: &HashMap<&str, &ModelRoutine>,
+    site_rows: &HashMap<&str, &ModelRoutine>,
     under_asserterror: &HashSet<&str>,
     isolated_events: &HashSet<&str>,
 ) -> Option<TrapKind> {
@@ -1339,8 +1340,10 @@ fn edge_trap(
             if !may {
                 return None;
             }
-            let cs = by_stable
-                .get(from.as_str())?
+            // Engine limits B2: in the caller row (`#if` arm) that holds it.
+            let cs = site_rows
+                .get(callsite_id.as_str())
+                .or_else(|| by_stable.get(from.as_str()))?
                 .call_sites
                 .iter()
                 .find(|c| c.id == *callsite_id)?;
@@ -1526,6 +1529,14 @@ impl<'a> LiveTree<'a> {
 pub(crate) struct LiteralReach<'a> {
     out: HashMap<&'a str, Vec<OutEdge<'a>>>,
     by_stable: HashMap<&'a str, &'a ModelRoutine>,
+    /// Engine limits B2 (per-arm ids): for a routine with several rows (two
+    /// `#if` arms of one routine), each of its sites (call site, its
+    /// operation id, operation, record operation) -> the row that holds it
+    /// (the LAST holding row, class P). `by_stable` keeps the FIRST row for
+    /// row-level reads; a site-level read goes through [`Self::row_at`].
+    site_rows: HashMap<&'a str, &'a ModelRoutine>,
+    /// Every row of a routine with several rows (stable id), in row order.
+    arm_rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,
     frames: HashMap<&'a str, FrameGuards>,
     tables: HashMap<&'a str, TableFrame>,
     /// r3 E1: per routine (stable id) its value frame ([`values`]).
@@ -1870,15 +1881,64 @@ impl<'a> LiteralReach<'a> {
         let mut value_frames = HashMap::new();
         let mut by_stable = HashMap::new();
         let mut op_owner = HashMap::new();
+        let mut rows_per_stable: HashMap<&str, usize> = HashMap::new();
+        for r in routines {
+            *rows_per_stable
+                .entry(r.stable_routine_id.as_str())
+                .or_default() += 1;
+        }
+        let mut site_rows: HashMap<&str, &ModelRoutine> = HashMap::new();
+        let mut arm_rows: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
         for r in routines {
             by_stable.entry(r.stable_routine_id.as_str()).or_insert(r);
+            if rows_per_stable[r.stable_routine_id.as_str()] > 1 {
+                arm_rows
+                    .entry(r.stable_routine_id.as_str())
+                    .or_default()
+                    .push(r);
+                // Engine limits B2: each row (`#if` arm) owns its sites.
+                for cs in &r.call_sites {
+                    site_rows.insert(cs.id.as_str(), r);
+                    site_rows.insert(cs.operation_id.as_str(), r);
+                }
+                for o in &r.operation_sites {
+                    site_rows.insert(o.id.as_str(), r);
+                }
+                for o in &r.record_operations {
+                    site_rows.insert(o.id.as_str(), r);
+                }
+            }
             let callees_at =
                 |cs: &str| -> Vec<&str> { callees.get(cs).cloned().unwrap_or_default() };
             if let Some(f) = frame_guards_over(r, callees_at, &by_id) {
-                frames.insert(r.stable_routine_id.as_str(), f);
+                // Engine limits B2: a routine's rows (its `#if` arms) each have
+                // their own sites; its frame holds every row's sites (a shared
+                // site: the LAST row's requirements) and the guard parameters
+                // usable in every row.
+                match frames.entry(r.stable_routine_id.as_str()) {
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(f);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                        let prev: &mut FrameGuards = o.get_mut();
+                        prev.usable.retain(|i| f.usable.contains(i));
+                        prev.by_site.extend(f.by_site);
+                    }
+                }
             }
             if let Some(t) = table_frame(r) {
-                tables.insert(r.stable_routine_id.as_str(), t);
+                // As the frame: every row's sites, the parameters usable in
+                // every row.
+                match tables.entry(r.stable_routine_id.as_str()) {
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(t);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                        let prev: &mut TableFrame = o.get_mut();
+                        prev.usable.retain(|i| t.usable.contains(i));
+                        prev.by_site.extend(t.by_site);
+                    }
+                }
             }
             let passes_by_value = |cs_id: &str, arg: u32| {
                 value_passes_by_value(r, cs_id, arg, &callees, &builtin_sites, &by_id)
@@ -1887,7 +1947,16 @@ impl<'a> LiteralReach<'a> {
                 values::resolve_label(r, &tables_by_id, l)
             };
             if let Some(v) = values::value_frame(r, passes_by_value, &resolve) {
-                value_frames.insert(r.stable_routine_id.as_str(), v);
+                match value_frames.entry(r.stable_routine_id.as_str()) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(v);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                        let prev: &mut values::ValueFrame = o.get_mut();
+                        prev.usable.retain(|u| v.usable.contains(u));
+                        prev.by_site.extend(v.by_site);
+                    }
+                }
             }
             for op in &r.record_operations {
                 op_owner.insert(op.id.as_str(), r.stable_routine_id.as_str());
@@ -1943,7 +2012,13 @@ impl<'a> LiteralReach<'a> {
         for e in edges {
             if let Some((from, to, site, binds)) = edge_parts(e) {
                 let list = out.entry(from).or_default();
-                if let Some(k) = edge_trap(e, &by_stable, &under_asserterror, &isolated_events) {
+                if let Some(k) = edge_trap(
+                    e,
+                    &by_stable,
+                    &site_rows,
+                    &under_asserterror,
+                    &isolated_events,
+                ) {
                     let j = u32::try_from(list.len()).expect("an edge position fits u32");
                     traps.entry(from).or_default().push((j, k));
                 }
@@ -1983,6 +2058,8 @@ impl<'a> LiteralReach<'a> {
         let mut reach = LiteralReach {
             out,
             by_stable,
+            site_rows,
+            arm_rows,
             frames,
             tables,
             value_frames,
@@ -2206,12 +2283,10 @@ impl<'a> LiteralReach<'a> {
         {
             return Bindings::default();
         }
-        let Some((r, cs)) = self.by_stable.get(caller).and_then(|r| {
-            r.call_sites
-                .iter()
-                .find(|c| c.id == site)
-                .map(|cs| (*r, cs))
-        }) else {
+        let Some((r, cs)) = self
+            .row_at(caller, site)
+            .and_then(|r| r.call_sites.iter().find(|c| c.id == site).map(|cs| (r, cs)))
+        else {
             return Bindings::default();
         };
         let forwarded = |j: u32| {
@@ -2929,8 +3004,7 @@ impl<'a> LiteralReach<'a> {
         !has_edge
             && !self.builtin_sites.contains(s)
             && self
-                .by_stable
-                .get(f)
+                .row_at(f, s)
                 .is_some_and(|r| r.call_sites.iter().any(|c| c.id == s))
     }
 
@@ -2951,18 +3025,31 @@ impl<'a> LiteralReach<'a> {
         if let Some(&v) = memo.get(&(f, j)) {
             return v;
         }
-        let v = match self.by_stable.get(f) {
-            None => (true, false),
-            Some(row) => {
-                let site = self.out[f][j as usize].1.and_then(EdgeSite::guarded);
+        let site = self.out[f][j as usize].1.and_then(EdgeSite::guarded);
+        // Engine limits B2: a site is read in the row (`#if` arm) that holds
+        // it; an edge with no site reads every row's whole body.
+        let rows: Vec<&ModelRoutine> = match site {
+            Some(s) => self.row_at(f, s).into_iter().collect(),
+            None => self
+                .arm_rows
+                .get(f)
+                .cloned()
+                .unwrap_or_else(|| self.by_stable.get(f).copied().into_iter().collect()),
+        };
+        let v = if rows.is_empty() {
+            (true, false)
+        } else {
+            let mut dirty = w.siteless_writers.contains(f);
+            let mut committed = true;
+            for row in rows {
                 let before = match site {
                     Some(s) => crate::engine::l5::pending_writes::sites_before(row, &[s], false),
                     None => crate::engine::l5::pending_writes::sites_before(row, &[], true),
                 };
-                let dirty = w.siteless_writers.contains(f)
-                    || before.sites.iter().any(|s| self.site_may_write(f, s, w));
-                (dirty, before.committed)
+                dirty |= before.sites.iter().any(|s| self.site_may_write(f, s, w));
+                committed &= before.committed;
             }
+            (dirty, committed)
         };
         memo.insert((f, j), v);
         v
@@ -3114,7 +3201,11 @@ impl<'a> LiteralReach<'a> {
     /// The place of trap `k` on step `s`: its call site or operation in the
     /// caller, or (an event) the publisher.
     fn trap_at(&self, s: &Step<'a>, k: TrapKind) -> TrapAt {
-        let r = self.by_stable.get(s.from).copied();
+        // Engine limits B2: the caller row (`#if` arm) that holds the site.
+        let r = match s.site {
+            Some(EdgeSite::Guarded(id)) => self.row_at(s.from, id),
+            _ => self.by_stable.get(s.from).copied(),
+        };
         let anchor = match s.site {
             Some(EdgeSite::Guarded(id)) => r.and_then(|r| {
                 r.call_sites
@@ -3254,6 +3345,18 @@ impl<'a> LiteralReach<'a> {
     /// The model routine of stable id `stable`.
     pub(crate) fn routine(&self, stable: &str) -> Option<&'a ModelRoutine> {
         self.by_stable.get(stable).copied()
+    }
+
+    /// The row of routine `stable` that holds the site `site` (a call site,
+    /// its operation id, an operation or a record operation): for a routine
+    /// declared in two `#if` arms, the arm whose site it is (engine limits B2,
+    /// per-arm ids); otherwise [`Self::routine`].
+    pub(crate) fn row_at(&self, stable: &str, site: &str) -> Option<&'a ModelRoutine> {
+        self.site_rows
+            .get(site)
+            .filter(|r| r.stable_routine_id == stable)
+            .copied()
+            .or_else(|| self.routine(stable))
     }
 
     /// Whether the edge `from → to` leaving at `site` is one of `crossing`'s
@@ -3656,10 +3759,17 @@ impl<'a> LiteralReach<'a> {
 
     /// The guards `site` sits under in `routine` (r3 E2), evaluated under `b`.
     fn guards_at(&self, routine: &str, site: &str, b: &Bindings) -> Vec<RouteGuard> {
-        let Some(r) = self.by_stable.get(routine) else {
+        // Engine limits B2: the row (`#if` arm) that holds the site. The flow
+        // program is built for the routine's first row only, so another arm's
+        // site reads its own row's tree.
+        let Some(r) = self.row_at(routine, site) else {
             return Vec::new();
         };
-        let prog = self.flow_progs.get(routine);
+        let prog = self.flow_progs.get(routine).filter(|_| {
+            self.by_stable
+                .get(routine)
+                .is_some_and(|f| std::ptr::eq(*f, r))
+        });
         let tree: &PCFNNode = match (prog, &r.statement_tree) {
             (Some(p), _) => p.tree(),
             (None, Some(t)) => t,

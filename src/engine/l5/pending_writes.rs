@@ -211,6 +211,47 @@ pub(crate) fn sites_before(r: &ModelRoutine, targets: &[&str], whole_body: bool)
     }
 }
 
+/// [`sites_before`] over every row of a routine id that reaches one of
+/// `targets`: `(row, the targets it holds, its sites before them)`.
+///
+/// Engine limits B2 (per-arm ids): a routine declared in two `#if` arms is
+/// two rows, and each arm holds only its own call sites, so a target is in one
+/// arm's tree. Reading the id's last row alone missed arm A's targets, fell
+/// back to arm B's whole body and lost arm A's writes before its call toward
+/// the Commit. Each row that holds a target (or every row, when an edge has no
+/// site) is read with its own targets; a row that holds none does not reach
+/// the Commit through this member in its build. With one row, or when no row
+/// holds a target, `rows`' last row is read as before.
+pub(crate) fn rows_before<'r, 't>(
+    rows: &[&'r ModelRoutine],
+    targets: &[&'t str],
+    unsited: bool,
+) -> Vec<(&'r ModelRoutine, Vec<&'t str>, Before)> {
+    let Some(&last) = rows.last() else {
+        return Vec::new();
+    };
+    if rows.len() > 1 {
+        let parts: Vec<_> = rows
+            .iter()
+            .filter_map(|&r| {
+                let own: Vec<&'t str> = targets
+                    .iter()
+                    .copied()
+                    .filter(|t| crate::program::model::projection::row_holds_site(r, t))
+                    .collect();
+                (unsited || !own.is_empty()).then(|| {
+                    let before = sites_before(r, &own, unsited);
+                    (r, own, before)
+                })
+            })
+            .collect();
+        if !parts.is_empty() {
+            return parts;
+        }
+    }
+    vec![(last, targets.to_vec(), sites_before(last, targets, unsited))]
+}
+
 /// What `r` has pending when control reaches any of `targets`: the effects of
 /// `before`, which [`sites_before`] computed over the same `targets`.
 pub(crate) fn pending_of(
@@ -244,9 +285,10 @@ fn effects(
     } = *cx;
     let mut out = Pending::default();
     if let Some(s) = summaries.get(&r.id) {
-        // A collided id's direct facts are the union of its rows' facts, and
-        // its rows share site ids: a sited fact is this row's only if the row
-        // itself makes it (#160 step 11b §4.6, every piece of a key from one row).
+        // A collided id's direct facts are the union of its rows' facts (rows
+        // that share site ids, or `#if` arms each with their own, engine
+        // limits B2): a sited fact is this row's only if the row itself makes
+        // it (#160 step 11b §4.6, every piece of a key from one row).
         // (Only a collided id's rows compute it, sorted for the lookup.)
         let own = collided.contains(r.id.as_str()).then(|| {
             let mut own = crate::engine::l4::capability_cone::direct_facts_for_routine(r, &[]).0;

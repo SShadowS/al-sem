@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 per-arm ids: the readers that look a site up)
+
+- **A routine declared in two `#if` arms is read through the arm that holds each
+  site.** With per-arm ids (below), arm A's `{id}/cs0` is in arm A's row only. Many
+  readers took ONE row per routine id (the last, from a by-id map; or the first, by
+  stable id) and looked a site up in it: they dropped the other arm's facts, fell back
+  to the whole body, or cited the other arm's line. Found in review: d9 counted
+  `writes 1 known table` where 2 were pending (`AP Log A` and `AP Log B`, the review
+  probe), because the span walk read the member's last row only.
+  - `projection::ArmRows` (the rows of each collided id, and the row that holds a site)
+    and `DetectorContext::routine_for_site`; `LiteralReach::row_at` for the readers
+    keyed by stable id; `projection::merged_site_rows` for the cone's by-id map.
+  - Fixed readers: the transaction spans (`closes_span`, the backward walk's call and
+    guard frame, now cached per row; each span member's pending writes read EVERY arm
+    that calls toward the Commit, `pending_writes::rows_before`), d9's and d8's
+    location (the arm that holds the Commit), d1 (its graph's terminals: every arm's
+    operations; its hop and terminal steps; the liveness pass's bindings), d2 (its
+    terminals, hop and terminal steps), d46 (every arm's commits; hop steps), d48 (each
+    arm's IO terminals at their own lines; hop steps), d32, d39, d43 (the caller's
+    call), d35 (another arm's site is not "partly analysed"), the summary solver's
+    temp substitution (`db_effect_solver::edge_caller`), the cone's guard frames
+    (every row's sites), the literal search (trap edges and places, guard frames,
+    table and value frames, pending writes before a checked run, route guards), prove's
+    witness steps and terminal (`group_path`) and its sites and route sites
+    (`prove_slice`), the callers' context (the row whose body holds the call), impact's
+    own keys and callers (every arm), impact's effect evidence (`assigns`).
+  - **Output on the review probe** (`ws2`): d9 at `Go`'s Commit `writes 2 known
+    table(s)` again; d9 at `Work`'s Commit `writes 2` (`AP Log A`, `AP Log C`), where
+    integrate/w2 said 3 (it also counted arm B's `AP Log B`, which no build compiling
+    arm A writes before that Commit); `Work`'s d9 finding sits at arm A's declaration.
+  - **Whole-object arms in one file are `conditional`.** `lift_arm_declarations`
+    counts the declarations per FILE now (it was per object), so `#if A codeunit X {…}
+    #else codeunit X {…} #endif` in one file reads each object's top-level sites as
+    `conditional` (a build compiles one object), pinned by
+    `natural_object_arms_in_one_file_number_apart`.
+  - **Stated limits.** A routine-level location (a finding's routine) is the arm that
+    holds the finding's site, and the id's last row when the finding has none. The
+    literal flow program is built for a routine's first row only: another arm's call
+    reads no flow value (no literal pruning there, the conservative side).
+    `closed_world_temp` still refuses to prove a routine with several rows. Two FILES
+    that declare one id still share site ids (B2 below).
+  - **CDO** (`bc3ccb18`, release-fast, against the `integrate/w2` run): `alsem analyze`
+    has the same 2,255 findings, byte for byte; only d43's `skipped.other` grows by 2
+    (the two `PageManagement` arms' dispatch sites are now read, then skipped). The
+    three `output_cdo` routines' explain, digest and prove answers are byte-identical,
+    so the CDO goldens are not expected to move. No golden moved.
+  - **No snapshot schema bump.** `SNAPSHOT_SCHEMA_VERSION` versions the snapshot's
+    shape, which did not change. A baseline saved before holds the second arm's facts
+    at shared ids with the first arm's lines; `diff` against it reports those facts as
+    changed, which they were (their old lines were wrong), so a stale baseline does not
+    mislead.
+  - Tests: `detector_context_arm_tests.rs` (d1, d1's temp verdict and its forwarded
+    parameter, d2, d8, d32, d39, d43, d46, d48, impact's effect evidence),
+    `transaction_spans_order_tests.rs` (pending writes of every arm, closing only in
+    the committing arm, a checked run read in its own arm, d9's location),
+    `impact::keys` (`a_two_arm_routine_summarizes_every_arm`), CLI
+    `cli_b2_arm_readers.rs` (prove's route and witness through a second arm, a literal
+    guard in each arm, the callers' question, a temporary argument in an arm, a site and
+    a trap in a second arm), `natural_arms_number_their_unreachable_statements_apart`
+    and `l2_numbers_two_arms_apart` (the `u` base and L2's numbering, review item 2).
+  - Discrimination proofs (break with Edit, run, revert, run green): every guard above
+    fails its test when its row pick is set back to the id's one row (`row_for` given an
+    unknown id, `rows_or` given an unknown id, `row_at` given an unknown site, the
+    merges set to keep one row); recorded per guard in the commit message. Stated
+    limits of the proofs: the cone's guard-frame merge and the literal search's frame
+    merge back each other (each break alone stays green, both together fail
+    `a_literal_guard_in_each_arm_rules_out_its_write`); the cone's site-union rows, the
+    literal `bind`, route-guard (`guards_at`), `local_pending` and `site_may_write`
+    picks, d2's affected-table pick and the d1 shadow oracle's (`d1_reach`,
+    `path_temp_resolve`) caller pick stay green under their breaks on these fixtures
+    (another path answers the same, or the path is test-only): fixed for consistency,
+    not pinned.
+
 ### Fixed (engine limits wave 2, B2 per-arm ids)
 
 - **A routine declared in two `#if` arms cites each arm's own line.** `#if A procedure

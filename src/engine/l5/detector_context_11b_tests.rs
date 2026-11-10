@@ -3214,6 +3214,68 @@ fn natural_object_arms_in_one_file_number_apart() {
         m.workspace.routines[rows[1]].id
     );
     assert_eq!((op(rows[0]), op(rows[1])), ("/op0".into(), "/op1".into()));
+    // `lift_arm_declarations` counts the declarations per file too, so each
+    // object arm's top-level insert is only `conditional` (a build compiles
+    // one object). Break: count per object -> `top-level`.
+    for &ri in &rows {
+        assert_eq!(
+            m.workspace.routines[ri].operation_sites[0]
+                .control_context
+                .as_deref(),
+            Some("conditional"),
+            "an object arm's insert runs in one build only"
+        );
+    }
+}
+
+/// The unreachable statements of a two-arm routine number apart too: arm A's
+/// `{id}/u0`, arm B's `{id}/u1`, each anchored on its own arm. Break:
+/// `walk_spine` starts `unreachable_index` at 0 -> both are `u0`.
+#[test]
+fn natural_arms_number_their_unreachable_statements_apart() {
+    let src = r#"
+codeunit 50888 "NU Work"
+{
+#if A
+    procedure Work(): Integer
+    begin
+        exit(1);
+        Message('a');
+    end;
+#else
+    procedure Work(): Integer
+    begin
+        exit(2);
+        Message('b');
+    end;
+#endif
+}
+"#;
+    let m = build_natural(src, "22222222-0000-0000-0000-00000011b0a6");
+    let rows = rows_named(&m, "Work");
+    assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    let id = m.workspace.routines[rows[0]].id.clone();
+    let us = |ri: usize| -> Vec<(String, u32)> {
+        m.workspace.routines[ri]
+            .unreachable_statements
+            .iter()
+            .map(|u| {
+                (
+                    u.id[id.len()..].to_string(),
+                    u.unreachable_anchor.start_line,
+                )
+            })
+            .collect()
+    };
+    let line_of = |text: &str| src.lines().position(|l| l.contains(text)).unwrap() as u32;
+    assert_eq!(
+        us(rows[0]),
+        vec![("/u0".to_string(), line_of("Message('a');"))]
+    );
+    assert_eq!(
+        us(rows[1]),
+        vec![("/u1".to_string(), line_of("Message('b');"))]
+    );
 }
 
 /// The rules of a two-arm routine number apart too: arm A's check is

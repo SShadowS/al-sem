@@ -547,6 +547,7 @@ mod tests {
                     &steps,
                     terminal_ts.clone(),
                     &routine_by_id,
+                    &crate::program::model::projection::ArmRows::default(),
                     &edge_kind_by_callsite,
                     cw,
                 );

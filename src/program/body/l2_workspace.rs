@@ -513,3 +513,66 @@ pub fn project_named_routine(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    /// Engine limits B2 (per-arm ids): the L2 projection numbers a routine's
+    /// two `#if` arms apart, as the model builder does. Arm A's insert is
+    /// `op0`, arm B's modify `op1` (after arm A's one op), each anchored on its
+    /// own arm's line. Break: `build_proutine` walks every declaration from
+    /// `SiteIdBase::default()` -> both are `op0`.
+    #[test]
+    fn l2_numbers_two_arms_apart() {
+        const SRC: &str = r#"table 50330 "L2A T"
+{
+    fields { field(1; "No."; Integer) { } }
+}
+
+codeunit 50330 "L2A Work"
+{
+#if A
+    procedure Work()
+    var
+        T: Record "L2A T";
+    begin
+        T.Insert();
+    end;
+#else
+    procedure Work()
+    var
+        T: Record "L2A T";
+    begin
+        T.Modify();
+    end;
+#endif
+}
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"b2b2b2b2-0000-4000-8000-0000000000c2","name":"L2A","publisher":"t","version":"1.0.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Work.al"), SRC).unwrap();
+        let l2 = super::project_workspace(dir.path()).unwrap();
+        let ops: Vec<(String, u32)> = l2
+            .routines
+            .iter()
+            .filter(|r| r.name == "Work")
+            .map(|r| {
+                let o = &r.features.record_operations[0];
+                let (_, n) = o.id.rsplit_once('/').unwrap();
+                (n.to_string(), o.source_anchor.start_line)
+            })
+            .collect();
+        let line_of = |t: &str| SRC.lines().position(|l| l.contains(t)).unwrap() as u32;
+        assert_eq!(
+            ops,
+            vec![
+                ("op0".to_string(), line_of("T.Insert();")),
+                ("op1".to_string(), line_of("T.Modify();")),
+            ],
+            "each arm numbers its own op, the second after the first"
+        );
+    }
+}

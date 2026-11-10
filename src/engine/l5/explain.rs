@@ -1942,6 +1942,8 @@ pub(crate) struct EffectEvidenceIndex<'m> {
     model: &'m Model,
     by_id: HashMap<&'m str, usize>,
     by_stable: HashMap<&'m str, usize>,
+    /// The rows of a stable id with several (two `#if` arms), in row order.
+    arms: HashMap<&'m str, Vec<usize>>,
     out_edges: HashMap<&'m str, Vec<&'m str>>,
     row_fields: std::sync::OnceLock<HashMap<usize, HashMap<String, BTreeSet<String>>>>,
 }
@@ -1950,9 +1952,14 @@ impl<'m> EffectEvidenceIndex<'m> {
     pub(crate) fn new(model: &'m Model) -> EffectEvidenceIndex<'m> {
         let routines = &model.workspace.routines;
         let mut by_stable: HashMap<&str, usize> = HashMap::new();
+        let mut arms: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, r) in routines.iter().enumerate() {
             by_stable.entry(r.stable_routine_id.as_str()).or_insert(i);
+            arms.entry(r.stable_routine_id.as_str())
+                .or_default()
+                .push(i);
         }
+        arms.retain(|_, v| v.len() > 1);
         let mut out_edges: HashMap<&str, Vec<&str>> = HashMap::new();
         for e in &model.calls.edges {
             if let Some(to) = &e.to {
@@ -1970,6 +1977,7 @@ impl<'m> EffectEvidenceIndex<'m> {
                 .map(|(i, r)| (r.id.as_str(), i))
                 .collect(),
             by_stable,
+            arms,
             out_edges,
             row_fields: std::sync::OnceLock::new(),
         }
@@ -2009,7 +2017,23 @@ impl<'m> EffectEvidenceIndex<'m> {
 
     /// The fields row `row` assigns on table `table_id` (explain's
     /// `row_fields`, the same field-write index).
-    fn assigned(&self, row: usize, table_id: &str) -> Option<&BTreeSet<String>> {
+    /// The row of routine `stable` that holds operation `op` (engine limits
+    /// B2: one `#if` arm of a routine declared in two), else its first row.
+    pub(crate) fn row_holding(&self, stable: &str, op: &str) -> Option<usize> {
+        let first = *self.by_stable.get(stable)?;
+        let rows = &self.model.workspace.routines;
+        let Some(arms) = self.arms.get(stable) else {
+            return Some(first);
+        };
+        Some(
+            arms.iter()
+                .copied()
+                .rfind(|&i| crate::program::model::projection::row_holds_site(&rows[i], op))
+                .unwrap_or(first),
+        )
+    }
+
+    pub(crate) fn assigned(&self, row: usize, table_id: &str) -> Option<&BTreeSet<String>> {
         let index = self.row_fields.get_or_init(|| {
             let mut m: HashMap<usize, HashMap<String, BTreeSet<String>>> = HashMap::new();
             for w in field_writes(self.model) {
@@ -2066,7 +2090,7 @@ pub(crate) fn effect_evidence(
                     let Some(owner) = rcx.op_owner(op) else {
                         continue;
                     };
-                    let Some(&row) = index.by_stable.get(owner.stable_id.as_str()) else {
+                    let Some(row) = index.row_holding(owner.stable_id.as_str(), op) else {
                         continue;
                     };
                     if let Some(fields) = index.assigned(row, id) {

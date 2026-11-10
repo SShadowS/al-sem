@@ -2529,8 +2529,23 @@ fn guard_frames(
                 .map(|e| e.to.as_str())
                 .collect()
         };
-        if let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id) {
-            out.insert(r.id.clone(), f);
+        let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id) else {
+            continue;
+        };
+        // Engine limits B2: a routine declared in two `#if` arms is two rows,
+        // each with its own sites and its own frame. The id's frame holds every
+        // row's sites (a site two rows share: the LAST row's requirements, as
+        // before) and the guard parameters usable in every row (fewer usable
+        // parameters is the sound over-approximation).
+        match out.entry(r.id.clone()) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(f);
+            }
+            std::collections::hash_map::Entry::Occupied(mut o) => {
+                let prev: &mut super::param_guard::FrameGuards = o.get_mut();
+                prev.usable.retain(|i| f.usable.contains(i));
+                prev.by_site.extend(f.by_site);
+            }
         }
     }
     out
@@ -2863,8 +2878,10 @@ impl ConeStore {
         };
         let no_arena = super::pd_solve::ConeArena::default();
         let arena = arena.unwrap_or(&no_arena);
-        let routines_by_id: HashMap<&str, &ModelRoutine> =
-            routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        // Engine limits B2: a collided id's row holds every arm's sites.
+        let unions = crate::program::model::projection::merged_site_rows(routines);
+        let routines_by_id =
+            crate::program::model::projection::by_id_with_site_unions(routines, &unions);
         let mut reps = super::pd_solve::EntryReps::new();
         let mode = MemberMode {
             derived: false,
@@ -4134,8 +4151,11 @@ pub fn compose_cone_over_graph_retained(
     drop(s_dedup);
     let _t_compose = crate::engine::l5::detector_context::cones_census::start();
     let s_frames = crate::engine::perf_trace::span("cone", "cone.frames");
-    let routines_by_id: HashMap<&str, &ModelRoutine> =
-        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    // Engine limits B2: a collided id's row holds every arm's sites, for the
+    // PD substitution's bindings and the guard carry.
+    let unions = crate::program::model::projection::merged_site_rows(routines);
+    let routines_by_id =
+        crate::program::model::projection::by_id_with_site_unions(routines, &unions);
     let frames = guard_frames(&g, routines, &routines_by_id);
     drop(s_frames);
     let (pd_digests, seed, keep_cones) = match pd {
@@ -5560,8 +5580,10 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     // ⟨C1 Task 3⟩ Raw only (`derived: false`) — this projection consumes the RAW cone (its
     // `sort_inherited` byte order IS the R3a-3 golden surface, Global Constraint
     // 7) and discards the derived store. Folding one was build-then-drop.
-    let routines_by_id: HashMap<&str, &ModelRoutine> =
-        ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    // Engine limits B2: a collided id's row holds every arm's sites.
+    let unions = crate::program::model::projection::merged_site_rows(&ws.routines);
+    let routines_by_id =
+        crate::program::model::projection::by_id_with_site_unions(&ws.routines, &unions);
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
     let ComposedCones {
         coverage: cone_coverage,
