@@ -2010,6 +2010,52 @@ fn is_split_routine(k: RawKind) -> bool {
     )
 }
 
+/// A nested group of headers in a split routine's arm: of headers
+/// (`preproc_conditional_procedure_header`, grammar 5.0.0) or, in a split preamble,
+/// of header + `var` section (`_procedure_preamble` / `_trigger_preamble`, 5.1.0).
+fn is_nested_header_group(k: RawKind) -> bool {
+    matches!(
+        k,
+        RawKind::PreprocConditionalProcedureHeader
+            | RawKind::PreprocConditionalProcedurePreamble
+            | RawKind::PreprocConditionalTriggerPreamble
+    )
+}
+
+/// Whether attribute `attr` (a child of one of `levels`, [`header_levels`]) belongs
+/// to the routine of header arm `arm`: it sits in the arm, or (grammar 5.1.0 item 82)
+/// in an enclosing arm before the nested group that holds `arm`, with no directive of
+/// its level between them.
+fn attr_in_arm(levels: &[RawNode], attr: RawNode, arm: &std::ops::Range<usize>) -> bool {
+    if arm.contains(&attr.byte_range().start) {
+        return true;
+    }
+    let at = attr.byte_range().end;
+    levels.iter().any(|l| {
+        let kids = l.named_children();
+        if !kids.iter().any(|c| c.id() == attr.id()) {
+            return false;
+        }
+        let Some(group) = kids
+            .iter()
+            .find(|g| is_nested_header_group(g.kind()) && g.byte_range().contains(&arm.start))
+        else {
+            return false;
+        };
+        let gs = group.byte_range().start;
+        at <= gs
+            && !kids.iter().any(|d| {
+                matches!(
+                    d.kind(),
+                    RawKind::PreprocIf
+                        | RawKind::PreprocElif
+                        | RawKind::PreprocElse
+                        | RawKind::PreprocEndif
+                ) && (at..gs).contains(&d.byte_range().start)
+            })
+    })
+}
+
 /// The arms of one level of a split header, added to `arms`, nested groups expanded
 /// ([`header_arms`]). Returns where the tail after this level's `#endif` starts.
 fn header_group_arms(node: RawNode, arms: &mut Vec<std::ops::Range<usize>>) -> usize {
@@ -2017,10 +2063,7 @@ fn header_group_arms(node: RawNode, arms: &mut Vec<std::ops::Range<usize>>) -> u
     let close_arm = |r: std::ops::Range<usize>, arms: &mut Vec<std::ops::Range<usize>>| {
         let mut nested = kids
             .iter()
-            .filter(|c| {
-                c.kind() == RawKind::PreprocConditionalProcedureHeader
-                    && r.contains(&c.byte_range().start)
-            })
+            .filter(|c| is_nested_header_group(c.kind()) && r.contains(&c.byte_range().start))
             .peekable();
         if nested.peek().is_none() {
             arms.push(r);
@@ -2062,7 +2105,7 @@ fn header_levels(node: RawNode<'_>) -> Vec<RawNode<'_>> {
             let nested: Vec<_> = out[i]
                 .named_children()
                 .into_iter()
-                .filter(|c| c.kind() == RawKind::PreprocConditionalProcedureHeader)
+                .filter(|c| is_nested_header_group(c.kind()))
                 .collect();
             out.extend(nested);
             i += 1;
@@ -2432,10 +2475,10 @@ fn arm_conditions<'t>(node: RawNode<'t>, arm: &std::ops::Range<usize>) -> Vec<(R
     let mut level = Some(node);
     while let Some(n) = level.take() {
         let kids = n.named_children();
-        level = kids.iter().copied().find(|c| {
-            c.kind() == RawKind::PreprocConditionalProcedureHeader
-                && c.byte_range().contains(&arm.start)
-        });
+        level = kids
+            .iter()
+            .copied()
+            .find(|c| is_nested_header_group(c.kind()) && c.byte_range().contains(&arm.start));
         let opens_by = level.map_or(arm.start, |g| g.byte_range().start);
         let Some(open_end) = kids
             .iter()
@@ -2631,7 +2674,7 @@ fn lower_routine<'t>(
                 levels
                     .iter()
                     .flat_map(|l| l.named_children())
-                    .filter(|c| c.kind() == RawKind::AttributeItem && in_arm(*c))
+                    .filter(|c| c.kind() == RawKind::AttributeItem && attr_in_arm(&levels, *c, arm))
                     .map(|c| PendingAttr {
                         node: c,
                         guard: guard.clone(),
@@ -2840,11 +2883,16 @@ fn lower_routine<'t>(
     });
 
     // Locals: var_section child(ren) of the routine (+ preproc-wrapped): this arm's
-    // own (a split preamble's) plus the shared tail's.
+    // own (a split preamble's, at whichever level holds the arm) plus the shared
+    // tail's. A nested group never lies inside an arm it holds, so it is not
+    // descended whole (which would add every nested arm's `var` section).
     let mut locals = Vec::new();
-    for child in node.named_children() {
-        if in_arm(child) || child.byte_range().start >= shared_from {
-            collect_globals(child, source, &mut locals);
+    for level in &levels {
+        for child in level.named_children() {
+            if in_arm(child) || (level.id() == node.id() && child.byte_range().start >= shared_from)
+            {
+                collect_globals(child, source, &mut locals);
+            }
         }
     }
 
@@ -3042,7 +3090,9 @@ fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::i
         ..Default::default()
     };
     let mut locked_true = false;
-    let mut locked_false = false;
+    // A `Locked` in an `#if` group (grammar 5.1.0) holds in some builds only: no
+    // constant. The group's other attributes are not read.
+    let mut locked_false = has_grouped_locked(decl, source);
     for attr in decl.named_children() {
         if attr.kind() != RawKind::LabelAttribute {
             continue;
@@ -3086,6 +3136,24 @@ fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::i
     }
     out.locked = locked_true && !locked_false;
     Some(out)
+}
+
+/// Whether a `Locked` label attribute sits in an `#if` group of `decl`'s attributes,
+/// at any depth ([`label_value`]).
+fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
+    fn walk(n: RawNode, source: &str) -> bool {
+        n.named_children().into_iter().any(|c| match c.kind() {
+            RawKind::LabelAttribute => c
+                .field(FieldName::Name)
+                .is_some_and(|m| m.text(source).trim().eq_ignore_ascii_case("locked")),
+            RawKind::PreprocConditionalLabelAttributes => walk(c, source),
+            _ => false,
+        })
+    }
+    decl.named_children()
+        .into_iter()
+        .filter(|c| c.kind() == RawKind::PreprocConditionalLabelAttributes)
+        .any(|g| walk(g, source))
 }
 
 /// A `TextConst`'s value (`Name: TextConst ENU = 'a', DEU = 'b';`): the `ENU`
@@ -9361,6 +9429,44 @@ codeunit 50100 C
         );
     }
 
+    /// Grammar 5.1.0 (B7b-1d): a label's attributes may sit in `#if` groups. A
+    /// `Locked` in a group holds in some builds only, so the label is no constant;
+    /// another grouped attribute leaves a direct `Locked = true` as it is.
+    #[test]
+    fn grouped_label_locked_makes_no_constant() {
+        let src = "codeunit 50100 C
+{
+    var
+        F: Label 'f', Locked = true
+#if X
+, Locked = false
+#endif
+;
+        G: Label 'g', Locked = true
+#if X
+, Comment = 'c'
+#endif
+;
+        H: Label 'h'
+#if X
+, Locked = true
+#endif
+;
+}
+";
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let locked: Vec<_> = af.objects[0]
+            .globals
+            .iter()
+            .map(|g| (g.name.as_str(), g.label.as_ref().map(|l| l.locked)))
+            .collect();
+        assert_eq!(
+            locked,
+            [("F", Some(false)), ("G", Some(true)), ("H", Some(false))]
+        );
+    }
+
     /// Intent evidence step 1: a label's `Comment`, `MaxLength` and any other
     /// attribute, and a `TextConst`'s text and translations. Shapes checked
     /// against `tree-sitter parse` (grammar `label_attribute`, `ml_value_list`).
@@ -9977,6 +10083,155 @@ codeunit 50139 G
                 ),
                 ("Q", vec!["I"], vec![t("X", true), t("Y", false)], vec![]),
                 ("Q", vec!["J"], vec![t("X", false)], vec![]),
+            ]
+        );
+        for r in rs {
+            assert!(call_reachable(&af, r.body.expect("shared body"), "Bar"));
+        }
+    }
+
+    /// Grammar 5.1.0 items 82/83: an arm of a split preamble may be a nested group of
+    /// header + `var` section (`preproc_conditional_procedure_preamble`), with an
+    /// attribute before it. Each nested arm is a routine with its OWN locals, its
+    /// context holding both levels, and the outer arm's attribute.
+    #[test]
+    fn nested_preamble_group_yields_one_routine_per_arm_with_its_own_locals() {
+        let src = "codeunit 50100 C
+{
+#if X
+    [Outer]
+#if Y
+    procedure Q()
+    var
+        A: Integer;
+#else
+    procedure Q(I: Integer)
+    var
+        B: Integer;
+#endif
+#else
+    procedure Q(J: Code[10])
+    var
+        C: Integer;
+#endif
+    begin
+        Bar();
+    end;
+}
+";
+        let af = parse(src);
+        let rs = &af.objects[0].routines;
+        let t = |s: &str, v| (s.to_string(), v);
+        let shape: Vec<_> = rs
+            .iter()
+            .map(|r| {
+                (
+                    r.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+                    r.locals.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+                    r.preproc_context.clone(),
+                    r.attributes.clone(),
+                )
+            })
+            .collect();
+        let outer = vec!["outer".to_string()];
+        assert_eq!(
+            shape,
+            [
+                (
+                    vec![],
+                    vec!["A"],
+                    vec![t("X", true), t("Y", true)],
+                    outer.clone()
+                ),
+                (
+                    vec!["I"],
+                    vec!["B"],
+                    vec![t("X", true), t("Y", false)],
+                    outer
+                ),
+                (vec!["J"], vec!["C"], vec![t("X", false)], vec![]),
+            ]
+        );
+        for r in rs {
+            assert_eq!(r.kind, crate::ir::RoutineKind::Procedure);
+            assert!(call_reachable(&af, r.body.expect("shared body"), "Bar"));
+        }
+    }
+
+    /// Grammar 5.1.0 item 82: an attribute reaches a nested group only from its own
+    /// outer arm. Here `[A]` is the `#if X` arm's (a header of its own) and the nested
+    /// group is the `#else` arm's.
+    #[test]
+    fn attribute_of_another_outer_arm_does_not_reach_a_nested_group() {
+        let src = "codeunit 50100 C
+{
+#if X
+    [A]
+    procedure Q()
+#else
+#if Y
+    procedure Q(I: Integer)
+#else
+    procedure Q(J: Integer)
+#endif
+#endif
+    begin
+    end;
+}
+";
+        let af = parse(src);
+        let attrs: Vec<_> = af.objects[0]
+            .routines
+            .iter()
+            .map(|r| r.attributes.clone())
+            .collect();
+        assert_eq!(attrs, [vec!["a".to_string()], vec![], vec![]]);
+    }
+
+    /// Grammar 5.1.0 item 85: the trigger sibling (`preproc_conditional_trigger_preamble`),
+    /// a `var` section in some arms only.
+    #[test]
+    fn nested_trigger_preamble_group_yields_one_trigger_per_arm() {
+        let src = "codeunit 50100 C
+{
+#if X
+#if Y
+    trigger OnRun()
+    var
+        A: Integer;
+#else
+    trigger OnRun()
+#endif
+#else
+    trigger OnRun()
+    var
+        C: Integer;
+#endif
+    begin
+        Bar();
+    end;
+}
+";
+        let af = parse(src);
+        let rs = &af.objects[0].routines;
+        let t = |s: &str, v| (s.to_string(), v);
+        let shape: Vec<_> = rs
+            .iter()
+            .map(|r| {
+                (
+                    r.kind,
+                    r.locals.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+                    r.preproc_context.clone(),
+                )
+            })
+            .collect();
+        let trig = crate::ir::RoutineKind::Trigger;
+        assert_eq!(
+            shape,
+            [
+                (trig, vec!["A"], vec![t("X", true), t("Y", true)]),
+                (trig, vec![], vec![t("X", true), t("Y", false)]),
+                (trig, vec!["C"], vec![t("X", false)]),
             ]
         );
         for r in rs {

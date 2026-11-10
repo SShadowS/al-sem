@@ -291,6 +291,7 @@ pub enum RawKind {
     PreprocConditionalArguments,
     PreprocConditionalArrayDimensions,
     PreprocConditionalAttributeArgs,
+    PreprocConditionalCaptionSubfields,
     PreprocConditionalCase,
     PreprocConditionalCasePatterns,
     PreprocConditionalControladdin,
@@ -302,13 +303,16 @@ pub enum RawKind {
     PreprocConditionalImplValues,
     PreprocConditionalImplements,
     PreprocConditionalKeys,
+    PreprocConditionalLabelAttributes,
     PreprocConditionalLabels,
     PreprocConditionalLayout,
     PreprocConditionalLayoutMixed,
     PreprocConditionalLinkValues,
     PreprocConditionalListElements,
+    PreprocConditionalMlPairs,
     PreprocConditionalMoveArgs,
     PreprocConditionalMoveElements,
+    PreprocConditionalNamespacePairs,
     PreprocConditionalObject,
     PreprocConditionalOperand,
     PreprocConditionalOptionMembers,
@@ -316,16 +320,19 @@ pub enum RawKind {
     PreprocConditionalParameters,
     PreprocConditionalPermissions,
     PreprocConditionalProcedureHeader,
+    PreprocConditionalProcedurePreamble,
     PreprocConditionalPropertyValue,
     PreprocConditionalPropertyValueSequence,
     PreprocConditionalQuery,
     PreprocConditionalRendering,
     PreprocConditionalReport,
+    PreprocConditionalReportLabelAttributes,
     PreprocConditionalReturn,
     PreprocConditionalReturnType,
     PreprocConditionalSortingFields,
     PreprocConditionalStatement,
     PreprocConditionalTableRelation,
+    PreprocConditionalTriggerPreamble,
     PreprocConditionalVar,
     PreprocConditionalVarBlock,
     PreprocConditionalVarNames,
@@ -817,6 +824,9 @@ impl RawKind {
                 Some(RawKind::PreprocConditionalArrayDimensions)
             }
             "preproc_conditional_attribute_args" => Some(RawKind::PreprocConditionalAttributeArgs),
+            "preproc_conditional_caption_subfields" => {
+                Some(RawKind::PreprocConditionalCaptionSubfields)
+            }
             "preproc_conditional_case" => Some(RawKind::PreprocConditionalCase),
             "preproc_conditional_case_patterns" => Some(RawKind::PreprocConditionalCasePatterns),
             "preproc_conditional_controladdin" => Some(RawKind::PreprocConditionalControladdin),
@@ -832,13 +842,20 @@ impl RawKind {
             "preproc_conditional_impl_values" => Some(RawKind::PreprocConditionalImplValues),
             "preproc_conditional_implements" => Some(RawKind::PreprocConditionalImplements),
             "preproc_conditional_keys" => Some(RawKind::PreprocConditionalKeys),
+            "preproc_conditional_label_attributes" => {
+                Some(RawKind::PreprocConditionalLabelAttributes)
+            }
             "preproc_conditional_labels" => Some(RawKind::PreprocConditionalLabels),
             "preproc_conditional_layout" => Some(RawKind::PreprocConditionalLayout),
             "preproc_conditional_layout_mixed" => Some(RawKind::PreprocConditionalLayoutMixed),
             "preproc_conditional_link_values" => Some(RawKind::PreprocConditionalLinkValues),
             "preproc_conditional_list_elements" => Some(RawKind::PreprocConditionalListElements),
+            "preproc_conditional_ml_pairs" => Some(RawKind::PreprocConditionalMlPairs),
             "preproc_conditional_move_args" => Some(RawKind::PreprocConditionalMoveArgs),
             "preproc_conditional_move_elements" => Some(RawKind::PreprocConditionalMoveElements),
+            "preproc_conditional_namespace_pairs" => {
+                Some(RawKind::PreprocConditionalNamespacePairs)
+            }
             "preproc_conditional_object" => Some(RawKind::PreprocConditionalObject),
             "preproc_conditional_operand" => Some(RawKind::PreprocConditionalOperand),
             "preproc_conditional_option_members" => Some(RawKind::PreprocConditionalOptionMembers),
@@ -848,6 +865,9 @@ impl RawKind {
             "preproc_conditional_procedure_header" => {
                 Some(RawKind::PreprocConditionalProcedureHeader)
             }
+            "preproc_conditional_procedure_preamble" => {
+                Some(RawKind::PreprocConditionalProcedurePreamble)
+            }
             "preproc_conditional_property_value" => Some(RawKind::PreprocConditionalPropertyValue),
             "preproc_conditional_property_value_sequence" => {
                 Some(RawKind::PreprocConditionalPropertyValueSequence)
@@ -855,11 +875,17 @@ impl RawKind {
             "preproc_conditional_query" => Some(RawKind::PreprocConditionalQuery),
             "preproc_conditional_rendering" => Some(RawKind::PreprocConditionalRendering),
             "preproc_conditional_report" => Some(RawKind::PreprocConditionalReport),
+            "preproc_conditional_report_label_attributes" => {
+                Some(RawKind::PreprocConditionalReportLabelAttributes)
+            }
             "preproc_conditional_return" => Some(RawKind::PreprocConditionalReturn),
             "preproc_conditional_return_type" => Some(RawKind::PreprocConditionalReturnType),
             "preproc_conditional_sorting_fields" => Some(RawKind::PreprocConditionalSortingFields),
             "preproc_conditional_statement" => Some(RawKind::PreprocConditionalStatement),
             "preproc_conditional_table_relation" => Some(RawKind::PreprocConditionalTableRelation),
+            "preproc_conditional_trigger_preamble" => {
+                Some(RawKind::PreprocConditionalTriggerPreamble)
+            }
             "preproc_conditional_var" => Some(RawKind::PreprocConditionalVar),
             "preproc_conditional_var_block" => Some(RawKind::PreprocConditionalVarBlock),
             "preproc_conditional_var_names" => Some(RawKind::PreprocConditionalVarNames),
@@ -1362,6 +1388,7 @@ impl RawKind {
             RawKind::PreprocConditionalArguments => "preproc_conditional_arguments",
             RawKind::PreprocConditionalArrayDimensions => "preproc_conditional_array_dimensions",
             RawKind::PreprocConditionalAttributeArgs => "preproc_conditional_attribute_args",
+            RawKind::PreprocConditionalCaptionSubfields => "preproc_conditional_caption_subfields",
             RawKind::PreprocConditionalCase => "preproc_conditional_case",
             RawKind::PreprocConditionalCasePatterns => "preproc_conditional_case_patterns",
             RawKind::PreprocConditionalControladdin => "preproc_conditional_controladdin",
@@ -1373,13 +1400,16 @@ impl RawKind {
             RawKind::PreprocConditionalImplValues => "preproc_conditional_impl_values",
             RawKind::PreprocConditionalImplements => "preproc_conditional_implements",
             RawKind::PreprocConditionalKeys => "preproc_conditional_keys",
+            RawKind::PreprocConditionalLabelAttributes => "preproc_conditional_label_attributes",
             RawKind::PreprocConditionalLabels => "preproc_conditional_labels",
             RawKind::PreprocConditionalLayout => "preproc_conditional_layout",
             RawKind::PreprocConditionalLayoutMixed => "preproc_conditional_layout_mixed",
             RawKind::PreprocConditionalLinkValues => "preproc_conditional_link_values",
             RawKind::PreprocConditionalListElements => "preproc_conditional_list_elements",
+            RawKind::PreprocConditionalMlPairs => "preproc_conditional_ml_pairs",
             RawKind::PreprocConditionalMoveArgs => "preproc_conditional_move_args",
             RawKind::PreprocConditionalMoveElements => "preproc_conditional_move_elements",
+            RawKind::PreprocConditionalNamespacePairs => "preproc_conditional_namespace_pairs",
             RawKind::PreprocConditionalObject => "preproc_conditional_object",
             RawKind::PreprocConditionalOperand => "preproc_conditional_operand",
             RawKind::PreprocConditionalOptionMembers => "preproc_conditional_option_members",
@@ -1387,6 +1417,9 @@ impl RawKind {
             RawKind::PreprocConditionalParameters => "preproc_conditional_parameters",
             RawKind::PreprocConditionalPermissions => "preproc_conditional_permissions",
             RawKind::PreprocConditionalProcedureHeader => "preproc_conditional_procedure_header",
+            RawKind::PreprocConditionalProcedurePreamble => {
+                "preproc_conditional_procedure_preamble"
+            }
             RawKind::PreprocConditionalPropertyValue => "preproc_conditional_property_value",
             RawKind::PreprocConditionalPropertyValueSequence => {
                 "preproc_conditional_property_value_sequence"
@@ -1394,11 +1427,15 @@ impl RawKind {
             RawKind::PreprocConditionalQuery => "preproc_conditional_query",
             RawKind::PreprocConditionalRendering => "preproc_conditional_rendering",
             RawKind::PreprocConditionalReport => "preproc_conditional_report",
+            RawKind::PreprocConditionalReportLabelAttributes => {
+                "preproc_conditional_report_label_attributes"
+            }
             RawKind::PreprocConditionalReturn => "preproc_conditional_return",
             RawKind::PreprocConditionalReturnType => "preproc_conditional_return_type",
             RawKind::PreprocConditionalSortingFields => "preproc_conditional_sorting_fields",
             RawKind::PreprocConditionalStatement => "preproc_conditional_statement",
             RawKind::PreprocConditionalTableRelation => "preproc_conditional_table_relation",
+            RawKind::PreprocConditionalTriggerPreamble => "preproc_conditional_trigger_preamble",
             RawKind::PreprocConditionalVar => "preproc_conditional_var",
             RawKind::PreprocConditionalVarBlock => "preproc_conditional_var_block",
             RawKind::PreprocConditionalVarNames => "preproc_conditional_var_names",
@@ -1887,6 +1924,7 @@ impl RawKind {
         RawKind::PreprocConditionalArguments,
         RawKind::PreprocConditionalArrayDimensions,
         RawKind::PreprocConditionalAttributeArgs,
+        RawKind::PreprocConditionalCaptionSubfields,
         RawKind::PreprocConditionalCase,
         RawKind::PreprocConditionalCasePatterns,
         RawKind::PreprocConditionalControladdin,
@@ -1898,13 +1936,16 @@ impl RawKind {
         RawKind::PreprocConditionalImplValues,
         RawKind::PreprocConditionalImplements,
         RawKind::PreprocConditionalKeys,
+        RawKind::PreprocConditionalLabelAttributes,
         RawKind::PreprocConditionalLabels,
         RawKind::PreprocConditionalLayout,
         RawKind::PreprocConditionalLayoutMixed,
         RawKind::PreprocConditionalLinkValues,
         RawKind::PreprocConditionalListElements,
+        RawKind::PreprocConditionalMlPairs,
         RawKind::PreprocConditionalMoveArgs,
         RawKind::PreprocConditionalMoveElements,
+        RawKind::PreprocConditionalNamespacePairs,
         RawKind::PreprocConditionalObject,
         RawKind::PreprocConditionalOperand,
         RawKind::PreprocConditionalOptionMembers,
@@ -1912,16 +1953,19 @@ impl RawKind {
         RawKind::PreprocConditionalParameters,
         RawKind::PreprocConditionalPermissions,
         RawKind::PreprocConditionalProcedureHeader,
+        RawKind::PreprocConditionalProcedurePreamble,
         RawKind::PreprocConditionalPropertyValue,
         RawKind::PreprocConditionalPropertyValueSequence,
         RawKind::PreprocConditionalQuery,
         RawKind::PreprocConditionalRendering,
         RawKind::PreprocConditionalReport,
+        RawKind::PreprocConditionalReportLabelAttributes,
         RawKind::PreprocConditionalReturn,
         RawKind::PreprocConditionalReturnType,
         RawKind::PreprocConditionalSortingFields,
         RawKind::PreprocConditionalStatement,
         RawKind::PreprocConditionalTableRelation,
+        RawKind::PreprocConditionalTriggerPreamble,
         RawKind::PreprocConditionalVar,
         RawKind::PreprocConditionalVarBlock,
         RawKind::PreprocConditionalVarNames,
@@ -2119,7 +2163,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "e9005d07a594f40bcd990c12809d5b6c77251a33579b64195ed5b8490ec87cb0";
+    "f4b531c07c6cf9f3d0ce1fbdbc3606ee55360542b88917ef4ac2ec0cccce1e33";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 506;
+pub const NAMED_KIND_COUNT: usize = 513;

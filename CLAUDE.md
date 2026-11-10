@@ -154,7 +154,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ## Prerequisites
 
 - Rust 1.75+
-- tree-sitter-al grammar (currently **v5.0.0, `main` at `18c988e8`**, see the Grammar
+- tree-sitter-al grammar (currently **v5.1.0, `main` at `abc77b25`**, see the Grammar
   section — the package version did not move for 463 commits before v4.5.0, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned
   and NOT a submodule** (it was one until 2026-10-03). Local builds and CI both build
@@ -413,11 +413,10 @@ scans: genuinely O(distinct callers), a different complexity class than
 `prepare`/`outgoing` (whose cost doesn't scale with fan-in). 20ms is still
 editor-imperceptible for a "who calls this" panel.
 
-## Grammar (tree-sitter-al v5.0.0, main `18c988e8`)
+## Grammar (tree-sitter-al v5.1.0, main `abc77b25`)
 
-**Current reality:** the grammar is **v5.0.0** by `tree-sitter-al/package.json`, and the
-committed `node-types.sha256` matches `main` at **`18c988e8`** (2026-11-10, past the v5.0.0 release
-commit). `main` changes shapes without moving the package version. **The package
+**Current reality:** the grammar is **v5.1.0** by `tree-sitter-al/package.json`, and the
+committed `node-types.sha256` matches `main` at **`abc77b25`** (2026-11-10, the v5.1.0 tag). `main` changes shapes without moving the package version. **The package
 version is NOT a grammar identity any more** — name the commit. What each bump moved is in
 CHANGELOG.md.
 
