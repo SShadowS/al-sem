@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::program::attributes::{find_attribute, has_attribute, qualified_arg};
+use crate::program::attributes::{
+    find_attribute, find_definite_attribute, has_attribute, has_definite_attribute, qualified_arg,
+};
 use crate::program::model::workspace::{ModelObject, ModelRoutine};
 
 // ---------------------------------------------------------------------------
@@ -34,14 +36,21 @@ pub struct RoutineReturnSummary {
     /// false — at least one path reaches a normal exit.
     /// "unknown" — body unavailable or indeterminate.
     pub all_paths_error: JsonValue, // true | false | "unknown"
-    /// True when the routine carries `[TryFunction]`.
+    /// True when the routine MAY carry `[TryFunction]` (some build has it):
+    /// the cautious reading for a reader that degrades on a try boundary.
     pub has_try_function_boundary: bool,
+    /// True when that `[TryFunction]` is only in some builds (engine limits
+    /// B2, `AttributeInfo::conditional`). A reader that decides a definite
+    /// answer from the boundary (`ordering_engine`'s proven-errors rule) needs
+    /// `has_try_function_boundary && !try_function_conditional`.
+    pub try_function_conditional: bool,
     /// True when the routine carries `[ErrorBehavior(ErrorBehavior::Collect)]`.
     pub has_error_behavior_collect: bool,
     /// "resolved" — body available and summary computed structurally.
     /// "partial"  — body unavailable or TryFunction (semantics opaque).
     pub coverage: &'static str,
-    /// "normal" | "ignore" | "error"
+    /// "normal" | "ignore" | "error" | "conditional" (only some builds declare
+    /// `Ignore`/`Error`, see [`parse_commit_behavior`]).
     pub commit_behavior: &'static str,
 }
 
@@ -282,11 +291,26 @@ fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> Subt
 /// Parse `[CommitBehavior]` from `attributes_parsed`. Returns "normal" | "ignore"
 /// | "error". Mirrors al-sem's `parseCommitBehavior` with the dual-shape fallback
 /// (native qualified_enum_value → `member`; dep ABI bare-Value → `value`/`text`).
+///
+/// Engine limits B2: only an attribute every build of the routine has decides
+/// it. When only conditional ones (`AttributeInfo::conditional`) declare
+/// `Ignore` or `Error`, the answer is `"conditional"`: some build may run
+/// under it, another may not, so no reader may treat the routine as ignoring
+/// (or erroring on) its commits for certain.
 pub fn parse_commit_behavior(attrs: &[crate::program::attributes::AttributeInfo]) -> &'static str {
-    let Some(attr) = find_attribute(attrs, "CommitBehavior") else {
-        return "normal";
-    };
+    if let Some(attr) = find_definite_attribute(attrs, "CommitBehavior") {
+        return commit_behavior_value(attr);
+    }
+    let conditional = attrs.iter().any(|a| {
+        a.conditional
+            && a.name.eq_ignore_ascii_case("CommitBehavior")
+            && commit_behavior_value(a) != "normal"
+    });
+    if conditional { "conditional" } else { "normal" }
+}
 
+/// One `[CommitBehavior]` attribute's value: "normal" | "ignore" | "error".
+pub fn commit_behavior_value(attr: &crate::program::attributes::AttributeInfo) -> &'static str {
     // Native shape: qualified_enum_value → read the member.
     let mut member: Option<String> = qualified_arg(attr, 0).map(|qa| qa.member);
 
@@ -361,7 +385,10 @@ pub fn merge_inherent_commit_behavior(
 /// `computeRoutineReturnSummary`.
 pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSummary {
     let attrs = &routine.attributes_parsed;
+    // "May": a TryFunction in some build makes the body opaque (B2).
     let has_try_function_boundary = has_attribute(attrs, "TryFunction");
+    let try_function_conditional =
+        has_try_function_boundary && !has_definite_attribute(attrs, "TryFunction");
     let has_error_behavior_collect = parse_has_error_behavior_collect(attrs);
     let commit_behavior = parse_commit_behavior(attrs);
 
@@ -371,6 +398,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
             has_normal_return_path: JsonValue::String("unknown".to_string()),
             all_paths_error: JsonValue::String("unknown".to_string()),
             has_try_function_boundary,
+            try_function_conditional,
             has_error_behavior_collect,
             coverage: "partial",
             commit_behavior,
@@ -383,6 +411,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
             has_normal_return_path: JsonValue::String("unknown".to_string()),
             all_paths_error: JsonValue::String("unknown".to_string()),
             has_try_function_boundary: true,
+            try_function_conditional,
             has_error_behavior_collect,
             coverage: "partial",
             commit_behavior,
@@ -396,6 +425,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
             has_normal_return_path: JsonValue::Bool(true),
             all_paths_error: JsonValue::Bool(false),
             has_try_function_boundary,
+            try_function_conditional,
             has_error_behavior_collect,
             coverage: "partial",
             commit_behavior,
@@ -408,6 +438,7 @@ pub fn compute_routine_return_summary(routine: &ModelRoutine) -> RoutineReturnSu
         has_normal_return_path: JsonValue::Bool(reach.has_normal),
         all_paths_error: JsonValue::Bool(reach.all_error),
         has_try_function_boundary,
+        try_function_conditional,
         has_error_behavior_collect,
         coverage: "resolved",
         commit_behavior,
@@ -546,6 +577,7 @@ mod tests {
                 member: Some(member.to_string()),
             }],
             raw: format!("[{name}({qualifier}::{member})]"),
+            conditional: false,
         }
     }
 
@@ -561,6 +593,7 @@ mod tests {
                 member: None,
             }],
             raw: format!("[{name}({value})]"),
+            conditional: false,
         }
     }
 
@@ -670,6 +703,7 @@ mod tests {
             name: "TryFunction".to_string(),
             args: vec![],
             raw: "[TryFunction]".to_string(),
+            conditional: false,
         }];
         // Simulate body_available = true, statement_tree = Some(block with error)
         // but TryFunction should short-circuit to unknown/partial.
@@ -686,6 +720,25 @@ mod tests {
         );
         assert_eq!(summary.coverage, "partial");
         assert!(summary.has_try_function_boundary);
+        assert!(!summary.try_function_conditional);
+    }
+
+    /// Engine limits B2: a `[TryFunction]` / `[CommitBehavior]` only some
+    /// builds have is "may": the body stays opaque, but neither reads as a
+    /// definite declaration (stated by assignment: `conditional: true`).
+    #[test]
+    fn a_conditional_declaration_is_may_not_definite() {
+        let mut try_fn = attr_abi_bare("TryFunction", "x");
+        try_fn.args.clear();
+        try_fn.conditional = true;
+        let mut ignore = attr_qualified("CommitBehavior", "CommitBehavior", "Ignore");
+        ignore.conditional = true;
+        let routine = make_routine_with_attrs(vec![try_fn, ignore], true, Some(cfn_leaf("error")));
+        let summary = compute_routine_return_summary(&routine);
+        assert!(summary.has_try_function_boundary, "opaque in some build");
+        assert!(summary.try_function_conditional);
+        assert_eq!(summary.coverage, "partial");
+        assert_eq!(summary.commit_behavior, "conditional");
     }
 
     // -----------------------------------------------------------------------

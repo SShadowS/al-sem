@@ -1028,11 +1028,13 @@ fn index_table_ir(
             declared_by: None,
         })
         .collect();
+    // Engine limits B2: only a `TableType = Temporary` every build has makes
+    // the table temporary; an `#if`-only one leaves `Normal` possible.
     let is_temporary = o
         .properties
         .iter()
         .find(|p| p.name == "tabletype")
-        .map(|p| p.value.trim().to_lowercase() == "temporary")
+        .map(|p| !p.conditional && p.value.trim().to_lowercase() == "temporary")
         .unwrap_or(false)
         || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     ModelTable {
@@ -1607,31 +1609,24 @@ fn project_ir(
             None
         };
         // Object `InherentCommitBehavior` — Codeunit / Table / TableExtension only
-        // (object-indexer.ts parity). The raw value is a qualified_enum_value like
-        // "InherentCommitBehavior::Ignore"; extract the member after "::", then
-        // lower-case. Unrecognised values → None (conservative).
-        let inherent_commit_behavior = if object_type == "Codeunit"
-            || object_type == "Table"
-            || object_type == "TableExtension"
-        {
-            ir_prop("inherentcommitbehavior").and_then(|raw| {
-                let sep = raw.rfind("::").map(|i| i + 2).unwrap_or(0);
-                let member = raw[sep..].to_lowercase();
-                match member.as_str() {
-                    "ignore" => Some("ignore".to_string()),
-                    "error" => Some("error".to_string()),
-                    "allow" => Some("allow".to_string()),
-                    _ => None,
-                }
-            })
-        } else {
-            None
-        };
+        // (object-indexer.ts parity): the L2 reading, one rule for both
+        // (`ir_object_metadata`: the member after "::", lower-cased; with one
+        // value per `#if` arm, the strictest, engine limits B2).
+        let inherent_commit_behavior =
+            crate::program::body::ir_walk::ir_object_metadata(o, object_type).3;
         // Object `SourceTableTemporary` — Page / PageExtension only (Task 5 / G4).
         // Structural boolean property: `SourceTableTemporary = true;` means the
         // page's implicit `Rec` and `xRec` are always temporary. EXACT case-insensitive
         // match against "true" — anything else present → Some(false); absent → None.
-        let source_table_temporary = if object_type == "Page" || object_type == "PageExtension" {
+        // Engine limits B2: a value only some `#if` arms write is not known
+        // (`None`): `Some(true)` makes the page's `Rec` temporary, which drops
+        // its database writes in a build that has no such arm.
+        let source_table_temporary = if (object_type == "Page" || object_type == "PageExtension")
+            && !o
+                .properties
+                .iter()
+                .any(|p| p.name == "sourcetabletemporary" && p.conditional)
+        {
             ir_prop("sourcetabletemporary").map(|v| v.trim().to_lowercase() == "true")
         } else {
             None

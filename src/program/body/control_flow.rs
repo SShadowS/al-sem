@@ -115,8 +115,17 @@ fn statement_termination(node: &PCFNNode) -> Termination {
 /// `unconditional` into a `conditional`, never the reverse.
 ///
 /// Only `exit` counts. An `Error` that may fire ends the routine WITHOUT success,
-/// so every successful run still reaches the code after it; the success-path
-/// lattice already treats a single-arm `if c then Error(..)` that way.
+/// so every successful run still reaches the code after it. (The control
+/// context lattice still marks the code after a `case` arm or a two-arm `if`
+/// arm that always raises `conditional`, a conservative al-sem rule this
+/// function does not change.)
+///
+/// This is THE one "can this statement return early" rule. Both statement
+/// walkers apply it to every statement of a block, whatever its kind:
+/// `control_context::walk_block` (the code after it is at least
+/// `conditional`) and `operation_order::walk_block` (no later op dominates the
+/// success return). A new reader of the question must call it too, never
+/// re-derive it from [`branch_termination`].
 pub fn may_exit(node: &PCFNNode) -> bool {
     node.kind == "exit"
         || children_of(node).iter().any(may_exit)

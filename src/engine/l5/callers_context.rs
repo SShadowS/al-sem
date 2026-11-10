@@ -1669,6 +1669,19 @@ impl<'a, 'c> Visitor<'a, 'c> {
                     ));
                 }
                 (DeclSource::ObjectProperty, None) => {}
+                // Engine limits B2: an attribute only some builds have.
+                (DeclSource::ConditionalAttribute, _) => {
+                    self.commit_behavior.insert(format!(
+                        "{} on {} in some builds only (an added COMMIT below it may be {})",
+                        d.word(),
+                        self.ix.display(g, n),
+                        if d.states & crate::engine::l5::commit_scope::E != 0 {
+                            "an error"
+                        } else {
+                            "ignored"
+                        }
+                    ));
+                }
             }
         }
     }

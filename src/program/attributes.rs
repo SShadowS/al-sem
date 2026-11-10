@@ -50,6 +50,40 @@ pub struct AttributeInfo {
     pub args: Vec<AttributeArg>,
     /// The full `[…]` source slice.
     pub raw: String,
+    /// Only some builds of the routine have this attribute with these
+    /// arguments (engine limits B2, `al_syntax::ir::AttributeIr::conditional`):
+    /// it sits in an `#if` arm the routine is not in, or its arguments hold an
+    /// `#if`. Always `false` for a symbol (ABI) attribute. Absent from JSON
+    /// when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conditional: bool,
+}
+
+// ── The definite / may rule (engine limits B2) ──────────────────────────────
+//
+// No build configuration is chosen, so every `#if` arm stays a possible build.
+// [`find_attribute`] / [`has_attribute`] answer "MAY the routine have it"
+// (some build does). A reader that decides a DEFINITE answer from an
+// attribute's presence (a trap that removes an error, a commit that is
+// suppressed, a commit that errors) must use [`find_definite_attribute`] /
+// [`has_definite_attribute`] instead, which see only an attribute every build
+// of the routine has. A reader for whom presence is the cautious reading
+// (a TryFunction body read as opaque) keeps the "may" accessors.
+
+/// [`find_attribute`] over the attributes every build of the routine has
+/// (not [`AttributeInfo::conditional`]).
+pub fn find_definite_attribute<'a>(
+    attrs: &'a [AttributeInfo],
+    name: &str,
+) -> Option<&'a AttributeInfo> {
+    attrs
+        .iter()
+        .find(|a| !a.conditional && a.name.eq_ignore_ascii_case(name))
+}
+
+/// True when every build of the routine has an attribute named `name`.
+pub fn has_definite_attribute(attrs: &[AttributeInfo], name: &str) -> bool {
+    find_definite_attribute(attrs, name).is_some()
 }
 
 /// The qualifier/member halves of a `::`-qualified arg.

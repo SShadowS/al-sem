@@ -28,7 +28,7 @@
 //!    + all conditionLeaves + error/exit leaves reset it to false.
 
 use super::control_flow::{
-    Termination, branch_termination, else_termination, has_explicit_else, terminates,
+    Termination, branch_termination, else_termination, has_explicit_else, may_exit, terminates,
 };
 use super::features::{PCFNNode, PCallSite, PFeatures, POperationSite};
 use serde::{Deserialize, Serialize};
@@ -230,57 +230,6 @@ fn walk_condition_leaves(
 // Block-level walker (postdominance tracking)
 // ============================================================================
 
-/// Whether a top-level statement can cause a NORMAL return (exit, or a
-/// conditional that allows an exit on some arm) WITHOUT being an unconditional
-/// terminator. Error-only arms do NOT count. Mirrors
-/// `operation-order.ts:canNormalReturnBeforeAfter`.
-fn can_normal_return_before_after(stmt: &PCFNNode) -> bool {
-    if stmt.kind == "if" {
-        let then_body = children_of(stmt).first();
-        let then_term = then_body
-            .map(branch_termination)
-            .unwrap_or(Termination::Fallthrough);
-        let else_term = else_termination(stmt);
-
-        // Single-arm error-only guard: no normal return possible.
-        if !has_explicit_else(stmt) && then_term == Termination::Error {
-            return false;
-        }
-        // then-arm exits (no explicit else, else falls through): conditional
-        // normal-return possible.
-        if !has_explicit_else(stmt) && then_term == Termination::Exit {
-            return true;
-        }
-        if has_explicit_else(stmt) {
-            if then_term == Termination::Exit && else_term != Termination::Exit {
-                return true;
-            }
-            if else_term == Termination::Exit && then_term != Termination::Exit {
-                return true;
-            }
-            // Both exit: continuation unreachable (handled by reachable=false).
-            // Neither exits: no normal-return via this if.
-        }
-        return false;
-    }
-
-    if stmt.kind == "case" {
-        for branch in children_of(stmt) {
-            let body = children_of(branch).first();
-            let term = body
-                .map(branch_termination)
-                .unwrap_or(Termination::Fallthrough);
-            if term == Termination::Exit {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Loops, calls, ops, other — not a top-level conditional normal-return.
-    false
-}
-
 /// Walk a "block" node's children in execution order. Returns whether control is
 /// still reachable at the end of the block (false after an unconditional
 /// exit/error).
@@ -332,25 +281,28 @@ fn walk_block(
                 if !still_reachable {
                     reachable = false;
                 }
-                // Update AFTER visiting: only LATER root statements see it.
-                if is_root_block && can_normal_return_before_after(stmt) {
-                    normal_return_possible_before_here = true;
-                }
             }
             "case" => {
                 walk_case_node(stmt, frame_id, on_success_path, result);
-                if is_root_block && can_normal_return_before_after(stmt) {
-                    normal_return_possible_before_here = true;
-                }
             }
             "while" | "for" | "foreach" | "repeat" => {
                 walk_loop_node(stmt, frame_id, on_success_path, result);
-                // Loops are NOT treated as normal-return-possible (verbatim).
             }
             _ => {
                 // call / op / other / try — collect at current frame.
                 collect_node(stmt, frame_id, on_success_path, stmt_dominates, result);
             }
+        }
+
+        // THE one may-exit rule (engine limits B2, shared with control_context):
+        // a statement that MAY `exit` on some path (an `exit` at any depth: an
+        // `if` or `case` arm, a `#if` arm, a loop body, a bare block, a `with`
+        // body) is a possible normal return, so no later op dominates the
+        // success return. Updated AFTER visiting: only LATER root statements see
+        // it. (al-sem's `canNormalReturnBeforeAfter` looked only one arm deep
+        // and skipped loops, which gave a false COMMIT_DOMINATES_RETURN.)
+        if may_exit(stmt) {
+            normal_return_possible_before_here = true;
         }
     }
 

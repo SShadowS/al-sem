@@ -151,20 +151,20 @@ fn dataset_of(obj: &al_syntax::ir::ObjectDecl) -> DatasetNode {
         })
         .collect();
     // `Direction`, one entry per `#if` arm; not written is `Both` (Learn,
-    // "Direction property"). A value we do not know allows both. Limit: a
-    // `Direction` written inside an `#if` arm alone reads as written in every
-    // build (the properties do not say which are conditional).
+    // "Direction property"). A value we do not know allows both. An entry only
+    // some builds have (`ObjectProperty::conditional`, engine limits B2) leaves
+    // the default possible too: a build that skips its arm runs `Both`.
     let (mut may_import, mut may_export) = (false, false);
-    let mut written = false;
+    let mut every_build_writes = false;
     for p in obj.properties.iter().filter(|p| p.name == "direction") {
-        written = true;
+        every_build_writes |= !p.conditional;
         match p.value.trim().to_ascii_lowercase().as_str() {
             "import" => may_import = true,
             "export" => may_export = true,
             _ => (may_import, may_export) = (true, true),
         }
     }
-    if !written {
+    if !every_build_writes {
         (may_import, may_export) = (true, true);
     }
     DatasetNode {

@@ -4222,12 +4222,30 @@ struct CommitSplit {
     commit_ix: Vec<usize>,
     commit_extra: Option<WitnessPath>,
     commit_twins: Vec<usize>,
+    /// The commit routes (listed paths, the found route, twins) on which a
+    /// declaration only MAY apply (the route's behaviors hold `N` and also
+    /// `I` or `E`: an `#if`-only attribute, engine limits B2, an object's
+    /// `InherentCommitBehavior`, an unchecked object run): the commit may not
+    /// run there, so such a route is never `unconditional on success`.
+    may_skip: MaySkip,
     error_ix: Vec<usize>,
+    /// The same for the error routes: a route whose behaviors hold `E` and
+    /// more raises the error only where the may-apply declaration does.
+    error_may_skip: MaySkip,
     error_extra: Option<WitnessPath>,
     /// `CommitBehavior Error on …`, when some route errors.
     error_reason: Option<String>,
     /// Set when no route runs it as a commit.
     suppressed: Option<SuppressedCommit>,
+}
+
+/// [`CommitSplit::may_skip`]: listed path indexes, the found route, twin
+/// indexes.
+#[derive(Default)]
+struct MaySkip {
+    ix: Vec<usize>,
+    extra: bool,
+    twins: Vec<usize>,
 }
 
 /// What one part of a fact's outcome contributes to one effect row: the
@@ -4240,6 +4258,8 @@ struct PartOffer {
     extra: Option<WitnessPath>,
     twins: Option<Vec<usize>>,
     error_reason: Option<String>,
+    /// A commit's routes that may not run it ([`CommitSplit::may_skip`]).
+    may_skip: MaySkip,
 }
 
 /// The routine ids a raw path passes, root side first (the root not
@@ -4379,6 +4399,38 @@ fn split_commit_part(
     let commit_twins: Vec<usize> = (0..outcome.twins.len())
         .filter(|&t| norm(cb.route_states(rid, path_steps(&outcome.twins[t]))) & N != 0)
         .collect();
+    // Engine limits B2: a commit route whose behaviors hold more than `N`
+    // runs the commit only where the may-apply declaration does not; an error
+    // route whose behaviors hold more than `E` raises it only where it does.
+    let weak = |s: u8, bit: u8| norm(s) & !bit != 0;
+    let may_skip = MaySkip {
+        ix: ix
+            .iter()
+            .zip(&states)
+            .filter(|(_, s)| **s & N != 0 && weak(**s, N))
+            .map(|(&i, _)| i)
+            .collect(),
+        extra: commit_extra
+            .as_ref()
+            .is_some_and(|p| weak(cb.route_states(rid, path_steps(p)), N)),
+        twins: commit_twins
+            .iter()
+            .copied()
+            .filter(|&t| weak(cb.route_states(rid, path_steps(&outcome.twins[t])), N))
+            .collect(),
+    };
+    let error_may_skip = MaySkip {
+        ix: ix
+            .iter()
+            .zip(&states)
+            .filter(|(_, s)| **s & E != 0 && weak(**s, E))
+            .map(|(&i, _)| i)
+            .collect(),
+        extra: error_extra
+            .as_ref()
+            .is_some_and(|p| weak(cb.route_states(rid, path_steps(p)), E)),
+        twins: Vec::new(),
+    };
     // Why: the declaring routine on a route of that behavior — a listed
     // path's, else the found route's, else (boundary) one beyond it.
     let why = |bit: u8| -> Option<String> {
@@ -4451,7 +4503,9 @@ fn split_commit_part(
         commit_ix,
         commit_extra,
         commit_twins,
+        may_skip,
         error_ix,
+        error_may_skip,
         error_extra,
         error_reason,
         suppressed,
@@ -5356,6 +5410,7 @@ fn digest_one_root<'i>(
                             extra: None,
                             twins: None,
                             error_reason: None,
+                            may_skip: MaySkip::default(),
                         });
                         continue;
                     };
@@ -5370,6 +5425,7 @@ fn digest_one_root<'i>(
                             extra: split.commit_extra,
                             twins: Some(split.commit_twins),
                             error_reason: None,
+                            may_skip: split.may_skip,
                         });
                     }
                     if !split.error_ix.is_empty() || split.error_extra.is_some() {
@@ -5382,6 +5438,7 @@ fn digest_one_root<'i>(
                             error_reason: Some(split.error_reason.unwrap_or_else(|| {
                                 "CommitBehavior Error on a routine of its route".to_string()
                             })),
+                            may_skip: split.error_may_skip,
                         });
                     }
                 }
@@ -5394,7 +5451,17 @@ fn digest_one_root<'i>(
                         extra,
                         twins: twin_sel,
                         error_reason,
+                        may_skip,
                     } = offer;
+                    // Engine limits B2: a commit route on which a may-apply
+                    // declaration may suppress it is at most conditional.
+                    let weaken = |skip: bool, c| {
+                        if skip && c == crate::engine::l5::conditionality::UNCONDITIONAL {
+                            crate::engine::l5::conditionality::CONDITIONAL
+                        } else {
+                            c
+                        }
+                    };
                     // A commit turned into an error names why (B4/L16).
                     let detail = match &error_reason {
                         Some(r) => {
@@ -5434,7 +5501,14 @@ fn digest_one_root<'i>(
                             None => ix
                                 .iter()
                                 .map(|&i| {
-                                    compute_path_conditionality(&outcome.paths[i], cs_ctx, op_ctx)
+                                    weaken(
+                                        may_skip.ix.contains(&i),
+                                        compute_path_conditionality(
+                                            &outcome.paths[i],
+                                            cs_ctx,
+                                            op_ctx,
+                                        ),
+                                    )
                                 })
                                 .collect(),
                         };
@@ -5442,7 +5516,10 @@ fn digest_one_root<'i>(
                     // behavior no listed path shows.
                     if let Some(p) = &extra {
                         paths.push(ProjPath::from_hops(project_path(p, rid, &display, idx)));
-                        conds.push(compute_path_conditionality(p, cs_ctx, op_ctx));
+                        conds.push(weaken(
+                            may_skip.extra,
+                            compute_path_conditionality(p, cs_ctx, op_ctx),
+                        ));
                     }
                     let selected_twins: Vec<
                         crate::engine::l5::conditionality::EffectConditionality,
@@ -5452,7 +5529,10 @@ fn digest_one_root<'i>(
                             (Some(_), _) => &[],
                             (None, None) => &twin_conds,
                             (None, Some(sel)) => {
-                                selected_twins = sel.iter().map(|&t| twin_conds[t]).collect();
+                                selected_twins = sel
+                                    .iter()
+                                    .map(|&t| weaken(may_skip.twins.contains(&t), twin_conds[t]))
+                                    .collect();
                                 &selected_twins
                             }
                         };

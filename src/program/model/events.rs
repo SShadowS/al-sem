@@ -831,6 +831,7 @@ mod tests {
                 })
                 .collect(),
             raw: String::new(),
+            conditional: false,
         }
     }
 

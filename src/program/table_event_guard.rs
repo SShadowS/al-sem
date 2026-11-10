@@ -351,11 +351,17 @@ pub fn receiver_declared_temporary(
 /// property, which this does not read (not known temporary).
 #[must_use]
 pub fn page_source_table_temporary(o: &al_syntax::ir::ObjectDecl) -> bool {
+    // Every build must set it (engine limits B2): an `#if`-only
+    // `SourceTableTemporary = true` leaves the default (`false`) possible, and
+    // reading the page's `Rec` as temporary there drops its database writes.
+    let entries = || {
+        o.properties
+            .iter()
+            .filter(|p| p.name.eq_ignore_ascii_case("sourcetabletemporary"))
+    };
     o.kind == al_syntax::ir::ObjectKind::Page
-        && o.properties.iter().any(|p| {
-            p.name.eq_ignore_ascii_case("sourcetabletemporary")
-                && p.value.trim().eq_ignore_ascii_case("true")
-        })
+        && entries().any(|p| !p.conditional)
+        && entries().all(|p| p.value.trim().eq_ignore_ascii_case("true"))
 }
 
 fn ends_with_temporary(ty: &str) -> bool {
