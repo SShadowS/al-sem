@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Design, ready for a new session to start from. Nothing is built, split or measured. |
+| **Status** | Phase 0 measured (2026-11-10, ENG-04; note `docs/superpowers/notes/2026-11-10-crate-split-phase0.md`). Its recommendation: stop the split, keep C's reduced form (section 3.1). Waiting for the owner's stop/go 0. Nothing is built or split. |
 | **Written** | 2026-11-10, against master `4bb454f7` and the wave-2 tree `integrate/w2` at `37c734e5`. |
 | **Start when** | Engine-limits wave 2 and the tree-sitter-al 5.0.0 upgrade have landed, in the kraken-alsem container. |
 | **Reviewed by** | Fable (verdict on v1: sound with changes) and gpt-6-astra via pi (verdict on v1: rework). This document folds in both. |
@@ -138,6 +138,24 @@ second row, and on al-program edits not getting worse. Phase 0 must time both, a
 
 Every number above must be replaced by a measurement before it is quoted. That is what Phases 0, 1b, 3 and 4 are for.
 
+**Measured in Phase 0** (2026-11-10, master `bc6ed1c0`, 22 cores, warm unless stated; note
+`docs/superpowers/notes/2026-11-10-crate-split-phase0.md`, sections 8–9):
+
+| | Single crate today |
+|---|---|
+| Cold test build (`cargo test --no-run -p al-sem -p al-syntax`) | 142 s, of which the dependencies are 51 s and our two crates 91 s |
+| Warm edit-to-test, one lib test (detector, substrate, model) | 15–19 s |
+| Warm edit-to-build, every test target | 18–19 s |
+| Task gate (`ci-steps task`) | 160 s, of which running the 5,754 tests is 113 s |
+| An `al-syntax` edit, its own test | 1–1.4 s |
+| Rerunning the unchanged `al-sem` after an `al-syntax` edit | about 12 s, which is 75–85% of an edit inside it |
+
+**So the table above has a ceiling.** A split can take at most part of a 15–19 s inner loop,
+and at most part of the 47 s of the task gate that is not test running. By the measured rerun
+cost, a crate above an edit saves only 15–25% of its own rebuild. Only crates an edit does not
+reach save their full cost, and by the lowest crate a commit touches that is the case for 41% of
+commits.
+
 ### 3.1 Three candidate shapes: Phase 0 chooses
 
 The third review found the design consistent, but could not say it is the right one. Two doubts:
@@ -168,6 +186,33 @@ the question is which one the next week of work goes to.
 
 **Stop/go 0.** The owner picks A, B, C or a mix from these numbers. Before choosing B, cost its cuts: one day with the
 module-graph tool that produced section 2's cycle count.
+
+**The three numbers, measured** (Phase 0 note, sections 6, 8 and 9):
+1. **Cold or warm:**
+   - Of 10.6 h of cargo time in 74 gate runs, 42% was cold dependency builds, 55% warm rebuilds
+     and 3% no-ops.
+   - 62% of all gate build time is the fat-LTO `release` build, which no shape changes.
+   - In the dev and test profiles, 25% cold and 57% warm.
+   - A cold build is 142 s, of which the dependencies are 51 s.
+2. **The rerun cost:** rerunning an unchanged `al-sem` above an edit costs 75–85% of the wall
+   time of an edit inside it. A crate above an edit saves only 15–25%.
+3. **Where rustc spends the time:** front end about 34%, code generation 38%, saving incremental
+   state 13%, linking 5%.
+
+**What they say about each shape:**
+- **A gains only on the 41% of commits that skip al-program**, and then only part of a 15 s loop.
+  The other 59% gain nothing.
+- **B has the same rerun cost above each edit.**
+- **C as designed fails.** A copied folder keeps the dependencies warm (the copy takes 1 s on
+  btrfs), but at a new worktree path cargo and rustc rebuild `al-sem` and `al-syntax` in full
+  (93–118 s, the same CPU as a cold workspace build). So C saves 51 s per fresh worktree, not
+  the whole cold build.
+
+**The note's recommendation:**
+- Stop the split after Phase 0.
+- Keep C's reduced form: seed the dependencies; possibly a fixed build path per lane, untested.
+- Turn to what the numbers show is larger: the task gate's 113 s of test running, and the
+  fat-LTO release build.
 
 ---
 
@@ -546,7 +591,24 @@ Stopping after Phase 1 costs about 2 days. Stopping after Phase 1b costs about a
 
 ## 11. What nobody has checked yet
 
-- Any timing in this document, including the 3-minute baseline on an idle machine and all gain estimates.
+- **Phase 0 checked (2026-11-10), see its note:**
+  - The baseline timings: section 3. The "3 minutes plus 3" cold build is in fact 142 s for both
+    together.
+  - The line counts (`src/` 447k).
+  - The module edges: 24 back-edge file pairs, 4 of them new since section 6. These come from a
+    scan that does not see `super::` paths, so they are a floor.
+  - The commit table by lowest crate touched: 59% al-program or below.
+  - The exact test count: 5,754 under nextest.
+  - The cold share, the rerun cost and rustc's time split.
+  - That a copied warm folder does not survive a new path.
+- Still open after Phase 0:
+  - The gain of any split shape: no prototype exists. Section 3's ceiling bounds it.
+  - Whether a worktree built at the warm folder's own path keeps our crates warm (C's reduced
+    form).
+  - `output_cdo` and `cdo-gate` times on this tree.
+  - The renderer and MCP edit sites (dropped as redundant: same crate, same cost).
+  - Every Phase 0 timing on a host that other projects did not load: server1 is shared, and the
+    note names each run that was noisy.
 - That rustfmt, clippy, rustdoc and rust-analyzer cope with crate roots in `src/` and a `[lib] path` outside the package.
 - Exact test counts and that every lib test keeps its name.
 - Which `pub(crate)` items really cross a boundary; only the compiler can tell.
