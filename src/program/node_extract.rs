@@ -8,8 +8,8 @@ use crate::engine::deps::symbol_reference::SubtypeTag;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
 use crate::program::resolve::edge::{AbiEventKind, AbiRoutineKind};
 use crate::program::resolve::event::{
-    ParsedSubscriberArgs, PublisherKind, is_event_publisher, parse_event_subscriber_ir,
-    publisher_include_sender, publisher_isolated, read_event_subscriber_instance,
+    ParsedSubscriberArgs, PublisherKind, is_event_publisher, publisher_include_sender,
+    publisher_isolated, read_event_subscriber_instance, read_event_subscriber_ir,
 };
 use crate::program::resolve::receiver::unquote_identifier;
 use crate::program::sig_fp::source_routine_node_id;
@@ -1177,7 +1177,8 @@ pub fn extract_nodes(
                 r.attributes_parsed
                     .iter()
                     .filter(|a| a.name.eq_ignore_ascii_case("eventsubscriber"))
-                    .filter_map(|a| parse_event_subscriber_ir(a, &file.ir))
+                    // An unreadable one stays, as a gap (engine limits B2).
+                    .map(|a| read_event_subscriber_ir(a, &file.ir))
                     .collect()
             } else {
                 vec![]

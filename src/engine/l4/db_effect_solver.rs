@@ -862,7 +862,11 @@ pub fn reconstruct_via(
 pub(crate) fn is_callsite_local_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "member-not-found" | "external-target" | "ambiguous-overload" | "interface-open-world"
+        "member-not-found"
+            | "external-target"
+            | "ambiguous-overload"
+            | "interface-open-world"
+            | super::combined_graph::UNREADABLE_SUBSCRIBER
     )
 }
 

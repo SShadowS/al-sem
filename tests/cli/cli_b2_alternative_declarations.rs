@@ -1027,6 +1027,224 @@ fn a_direct_call_reaches_every_declaration_of_a_split_subscriber() {
 }
 
 // ---------------------------------------------------------------------------
+// An [EventSubscriber] the engine cannot read is a gap, never a definite `no`
+// ---------------------------------------------------------------------------
+
+/// An `AD Sub`.`H` under `[EventSubscriber(<attr>)]` running `body`.
+fn sub_with_attr(attr: &str, body: &str) -> String {
+    format!(
+        "codeunit 50481 \"AD Sub\"\n{{\n    [EventSubscriber({attr})]\n    procedure H()\n    begin\n{body}    end;\n}}\n"
+    )
+}
+
+const PARENS_ON_X: &str = "ObjectType::Codeunit, (Codeunit::\"AD Pub\"), 'OnX', '', false, false";
+
+const FOO_ON_X: &str = "ObjectType::Foo, Codeunit::\"AD Pub\", 'OnX', '', false, false";
+
+/// Whether a `prove` result's blockers name the unreadable attribute.
+fn blocked_by_unreadable(r: &Value) -> bool {
+    r["blockedBy"].as_array().is_some_and(|b| {
+        b.iter().any(|x| {
+            x["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("[EventSubscriber] the engine could not read"))
+        })
+    })
+}
+
+/// P1, one declaration: each attribute shape the parser cannot read left the
+/// routine with no subscription, so `RaiseX may-commit` said a definite `no`
+/// although `H` may subscribe to `OnX` and commits. Now `unknown`, naming the
+/// reason. The readable parts narrow it (`RaiseY`).
+#[test]
+fn an_unreadable_subscriber_never_gives_a_definite_no() {
+    // (shape, attribute, `RaiseY`'s answer).
+    let shapes = [
+        (
+            "an integer object type",
+            "5, Codeunit::\"AD Pub\", 'OnX', '', false, false",
+            "no",
+        ),
+        (
+            "two arguments only",
+            "ObjectType::Codeunit, Codeunit::\"AD Pub\"",
+            "unknown",
+        ),
+        ("a parenthesised publisher", PARENS_ON_X, "no"),
+        (
+            "a computed event name",
+            "ObjectType::Codeunit, Codeunit::\"AD Pub\", 'On' + 'X', '', false, false",
+            "unknown",
+        ),
+        (
+            "an object type no event is published on",
+            "ObjectType::Foo, Codeunit::\"AD Pub\", 'OnX', '', false, false",
+            "no",
+        ),
+        (
+            "a bare identifier as the publisher",
+            "ObjectType::Codeunit, Foo, 'OnX', '', false, false",
+            "no",
+        ),
+    ];
+    for (shape, attr, raise_y) in shapes {
+        let sub = sub_with_attr(attr, "        Commit();\n");
+        let t = workspace(&[("s.al", &sub), ("p.al", PUB_XY)]);
+        for extra in [&["--single-app"][..], &[]] {
+            let r = prove_with(t.path(), "AD Pub::RaiseX", "may-commit", extra);
+            assert_eq!(r["answer"], "unknown", "{shape} {extra:?}: {r:#}");
+            assert!(blocked_by_unreadable(&r), "{shape} {extra:?}: {r:#}");
+            let y = prove_with(t.path(), "AD Pub::RaiseY", "may-commit", extra);
+            assert_eq!(y["answer"], raise_y, "{shape} {extra:?}: {y:#}");
+        }
+    }
+}
+
+/// The gap reaches explain, digest and the queries too: `RaiseX` shows no
+/// effect there, and none of them says the answer is complete.
+#[test]
+fn an_unreadable_subscriber_shows_in_explain_digest_and_query() {
+    let sub = sub_with_attr(PARENS_ON_X, "        Commit();\n");
+    let t = workspace(&[("s.al", &sub), ("p.al", PUB_XY), ("w.al", W_TABLE)]);
+    let text = |args: &[&str]| String::from_utf8(run(t.path(), args)).unwrap();
+    let explain = text(&[
+        "explain",
+        ".",
+        "--routine",
+        "AD Pub::RaiseX",
+        "--format",
+        "human",
+    ]);
+    assert!(explain.contains("analysis partial"), "{explain}");
+    let digest = text(&["digest", ".", "--routine", "AD Pub::RaiseX"]);
+    assert!(digest.contains("unreadable-event-subscriber"), "{digest}");
+    let effects = text(&["query", "effects", "--routine", "AD Pub::RaiseX", "."]);
+    assert!(effects.contains("analysis partial"), "{effects}");
+    let touches = text(&["query", "touches", ".", "--table", "AD W"]);
+    assert!(touches.contains("could not read"), "{touches}");
+}
+
+/// A table event is raised by a record operation, with no publisher routine
+/// to carry the gap. `(Database::"AD W")` hides the table, `OnAfterInsertEvent`
+/// is readable: `Insert` is `unknown`, `Modify` raises another event and stays
+/// `no`.
+#[test]
+fn an_unreadable_table_subscriber_is_a_gap_at_the_record_operation() {
+    let sub = sub_with_attr(
+        "ObjectType::Table, (Database::\"AD W\"), 'OnAfterInsertEvent', '', false, false",
+        "        Commit();\n",
+    );
+    let writer = "codeunit 50492 \"AD Writer\"\n{\n    procedure Ins()\n    var\n        W: Record \"AD W\";\n    begin\n        W.Insert();\n    end;\n\n    procedure Mod()\n    var\n        W: Record \"AD W\";\n    begin\n        W.Modify();\n    end;\n}\n";
+    let t = workspace(&[("s.al", &sub), ("w.al", W_TABLE), ("v.al", writer)]);
+    for extra in [&["--single-app"][..], &[]] {
+        let r = prove_with(t.path(), "AD Writer::Ins", "may-commit", extra);
+        assert_eq!(r["answer"], "unknown", "{extra:?}: {r:#}");
+        let m = prove_with(t.path(), "AD Writer::Mod", "may-commit", extra);
+        assert_eq!(m["answer"], "no", "{extra:?}: {m:#}");
+    }
+}
+
+/// P1, the split (probe u2): one declaration's subscription reads `OnX`, the
+/// other's `(Codeunit::"AD Pub")` cannot be read and it commits. The two
+/// subscription lists differed, so the routine split and the committing body
+/// was reachable from no dispatch: `RaiseX may-commit` said `no`. An unreadable
+/// declaration does not count as subscribing differently, so the routine stays
+/// whole and `RaiseX` reaches the commit.
+#[test]
+fn an_unreadable_declaration_does_not_split_its_routine() {
+    let readable = sub_decl("AD Pub", "OnX", "", "", "");
+    let unreadable = sub_with_attr(PARENS_ON_X, "        Commit();\n");
+    each_shape(
+        &readable,
+        &unreadable,
+        &[("p.al", PUB_XY)],
+        |ws, extra, at| {
+            let r = prove_with(ws, "AD Pub::RaiseX", "may-commit", extra);
+            assert_eq!(r["answer"], "yes", "{at}: {r:#}");
+            // Not split: one routine, without a declaration suffix.
+            let out = String::from_utf8(run(ws, &["graph", "."])).unwrap();
+            let ids: Vec<String> = out
+                .lines()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap())
+                .filter(|v| v["t"] == "node" && v["v"]["objectName"] == "AD Sub")
+                .filter_map(|v| v["v"]["stableRoutineId"].as_str().map(str::to_string))
+                .collect();
+            assert_eq!(ids.len(), 1, "{at}: {ids:?}");
+            assert!(!ids[0].contains('~'), "{at}: {ids:?}");
+        },
+    );
+}
+
+/// P1, a split that happens for other declarations: two readable declarations
+/// subscribe differently, so they split; the third cannot be read and commits.
+/// It stays reachable from both readable events.
+#[test]
+fn an_unreadable_declaration_stays_reachable_when_the_others_split() {
+    let on_x = format!("#if A\n{}#endif\n", sub_decl("AD Pub", "OnX", "", "", ""));
+    let on_y = format!("#if B\n{}#endif\n", sub_decl("AD Pub", "OnY", "", "", ""));
+    let odd = format!(
+        "#if C\n{}#endif\n",
+        sub_with_attr(PARENS_ON_X, "        Commit();\n")
+    );
+    let t = workspace(&[
+        ("a.al", &on_x),
+        ("b.al", &on_y),
+        ("c.al", &odd),
+        ("p.al", PUB_XY),
+    ]);
+    for (raise, at) in [("AD Pub::RaiseX", "OnX"), ("AD Pub::RaiseY", "OnY")] {
+        let r = prove_with(t.path(), raise, "may-commit", &[]);
+        assert_eq!(r["answer"], "yes", "{at}: {r:#}");
+    }
+}
+
+/// The callers' walker starts at a routine and goes up: a subscriber whose
+/// attribute cannot be read has dispatchers the graph does not show, so a
+/// `[TryFunction]` above one of them cannot be ruled out. `AD Q::C` runs
+/// under it: not a definite `no`.
+#[test]
+fn an_unreadable_subscribers_callers_are_not_all_known() {
+    // An `ObjectType::Foo`: it parses, so no parse recovery hides the question.
+    let sub = sub_with_attr(FOO_ON_X, "        Q.C();\n").replace(
+        "    begin\n",
+        "    var\n        Q: Codeunit \"AD Q\";\n    begin\n",
+    );
+    let t = workspace(&[("s.al", &sub), ("p.al", PUB_XY), ("q.al", Q_ERRORS)]);
+    let r = prove_with(
+        t.path(),
+        "AD Q::C",
+        "callers-intercept-errors",
+        &["--no-dependents"],
+    );
+    assert_eq!(r["answer"], "unknown", "{r:#}");
+}
+
+/// The same, when the routine also has a readable subscription: the node has
+/// a bound event, and still dispatchers the graph does not show.
+#[test]
+fn a_subscriber_with_a_bound_event_and_an_unreadable_one_has_hidden_callers() {
+    let readable = sub_decl("AD Pub", "OnX", "", "", "");
+    let unreadable = sub_with_attr(FOO_ON_X, "        Q.C();\n").replace(
+        "    begin\n",
+        "    var\n        Q: Codeunit \"AD Q\";\n    begin\n",
+    );
+    each_shape(
+        &readable,
+        &unreadable,
+        &[("p.al", PUB_XY), ("q.al", Q_ERRORS)],
+        |ws, _, at| {
+            let r = prove_with(
+                ws,
+                "AD Q::C",
+                "callers-intercept-errors",
+                &["--no-dependents"],
+            );
+            assert_eq!(r["answer"], "unknown", "{at}: {r:#}");
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The program graph splits too: one node per subscriber declaration
 // ---------------------------------------------------------------------------
 

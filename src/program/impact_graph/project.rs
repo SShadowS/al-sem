@@ -1388,7 +1388,12 @@ impl<'a> Builder<'a> {
                     }
                 }
             }
-            if !r.event_subscribers.is_empty() && !incoming_event.contains(&r.id) {
+            // An `[EventSubscriber]` the engine cannot read may be for any
+            // event, so even a node with bound events has hidden callers.
+            if !r.event_subscribers.is_empty()
+                && (!incoming_event.contains(&r.id)
+                    || r.event_subscribers.iter().any(|s| s.is_unreadable()))
+            {
                 flags.push("unboundSubscriber");
             }
             if r.is_trigger

@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 final review follow-up 4: an unreadable `[EventSubscriber]` is a gap)
+
+- **An `[EventSubscriber]` the engine cannot read never gives a definite `no`.** Probe u2
+  (review of 38738f3b): `a.al` subscribes to `OnX` and is empty, `b.al`'s
+  `[EventSubscriber(ObjectType::Codeunit, (Codeunit::"AD Pub"), 'OnX', …)]` commits. The
+  parentheses made the attribute unreadable, so the subscription lists differed, the
+  routine split, `b.al`'s body was reachable from no dispatch and `RaiseX may-commit` said
+  `no` (true answer `yes`). The same for one declaration, older, in
+  `parse_event_subscriber_ir`: an integer object type, two arguments, a parenthesised
+  publisher, `'On' + 'X'`, `ObjectType::Foo`, a bare identifier as the publisher: each
+  dropped the attribute and answered a definite `no` with no gap.
+- `resolve::event::read_event_subscriber_ir` keeps the attribute with the parts it could
+  read (`ParsedSubscriberArgs::is_unreadable`: an empty object type, publisher or event).
+  A part is unreadable for an object type no event is published on, a bare identifier as
+  the publisher (AL writes `Codeunit::"X"`), or an argument list longer than the
+  attribute's six (the grammar reads `'On' + 'X'` as three items).
+- **Split:** a declaration with an unreadable subscription never counts as subscribing
+  differently (only the readable copies are compared), so `u2` stays one routine and its
+  body stays reachable. When the readable copies differ and it does split, the unreadable
+  copy also subscribes to every event its readable siblings do.
+- **The gap:** `model::events` records one `unreadable` event edge per attribute of any
+  app (`unknown/unreadable/…`), and `combined_graph` puts an uncertainty
+  (`unreadable-event-subscriber`, a coverage reason) on every publisher routine and every
+  record operation (for a table event) it may be for, narrowed by the readable parts: a
+  readable event name, object type or publisher leaves the others alone (`RaiseY` stays
+  `no` when only `OnX` is named). Prove says `unknown` (the blocker names the attribute),
+  `explain` and `digest` report it as the coverage reason, `query effects` and `query
+  touches` as `analysis partial`. A subscriber with an unreadable subscription has
+  `hiddenCallers: unboundSubscriber` in `alsem graph` even when another subscription of
+  its binds, so the callers' questions say `unknown`.
+- Real code: **0 of 3,629** `[EventSubscriber]` attributes in the CDO baseline and its
+  dependencies are unreadable (`aldump --program-call-graph-stats`, every parsed attribute
+  counted, 2026-11-10), so no answer on CDO moved; the guards are for shapes nothing has
+  shown yet.
+- `PACK_SCHEMA` 16 (entries for unreadable attributes), `SUMMARY_SCHEMA` 8. `alsem graph`
+  schema unchanged.
+- Dependency selectors are scoped to the workspace app (a name finds no dependency
+  routine, a stable id does), for every routine, not only a split subscriber; unchanged.
+- Tests (`tests/cli/cli_b2_alternative_declarations.rs`) with proofs, break with Edit,
+  red, revert with Edit, green:
+  - Unreadable copies compared too (`.filter(|&i| true || …)`): not-split test red (two
+    nodes). Prove alone stayed green, since the union also makes the body reachable, so the
+    test pins the single node.
+  - No union on a split: `stays_reachable_when_the_others_split` red (`unknown`).
+  - Attributes dropped at extraction: every `an_unreadable…` test red (`no`).
+  - No gap at publishers: definite `no`, red.
+  - No narrowing by the event: `RaiseY` red (`unknown`).
+  - No gap at record operations: table test red (`no`).
+  - No `hiddenCallers` for a bound subscriber with an unreadable one: callers test red
+    (`no`; the proof first passed because the parenthesised attribute also trips parse
+    recovery, so the test uses `ObjectType::Foo`).
+  - `query effects` and `query touches` gaps: red (no `analysis partial`).
+
 ### Fixed (engine limits wave 2, B2 final review follow-up 3: the program graph splits too)
 
 - **The program graph has one routine node per declaration of a subscriber whose

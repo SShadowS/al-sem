@@ -147,6 +147,84 @@ pub fn encode_event_id(publisher_object_id: &str, event_name: &str) -> String {
     format!("{publisher_object_id}/event/{}", event_name.to_lowercase())
 }
 
+/// `EventEdge::resolution` of an `[EventSubscriber]` the engine could not read.
+pub const UNREADABLE_RESOLUTION: &str = "unreadable";
+
+/// What an unreadable `[EventSubscriber]` may be for: the parts the engine
+/// could read; `None` means that part is unknown and matches anything. Read
+/// from an `unreadable` edge's event id (`program_event_graph`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableGap<'a> {
+    pub object_type_lc: Option<&'a str>,
+    pub publisher_id: Option<i64>,
+    pub publisher_name_lc: Option<&'a str>,
+    pub event_lc: Option<&'a str>,
+}
+
+impl UnreadableGap<'_> {
+    /// Whether the subscription may be to an event of this publisher. A
+    /// publisher of an extension object is checked by kind alone: the event is
+    /// published on the extended object (`index::PublisherExtensions`), whose
+    /// name the attribute would give.
+    #[must_use]
+    pub fn may_match(&self, object_type: &str, name: &str, number: i64, event: &str) -> bool {
+        let object_type = object_type.to_lowercase();
+        let extension = object_type.ends_with("extension");
+        let publisher_known = self.publisher_id.is_some() || self.publisher_name_lc.is_some();
+        self.object_type_lc
+            .is_none_or(|t| t == object_type || (extension && object_type.starts_with(t)))
+            && (!publisher_known
+                || extension
+                || self.publisher_id == Some(number)
+                || self.publisher_name_lc == Some(name.to_lowercase().as_str()))
+            && self.event_lc.is_none_or(|e| e == event.to_lowercase())
+    }
+
+    /// Whether the subscription may be to the table event record operation
+    /// `op` raises on the table with this name (`None`: table not known).
+    #[must_use]
+    pub fn may_match_table_op(&self, op: &str, table_name: Option<&str>) -> bool {
+        let stem = match op.to_lowercase().as_str() {
+            "insert" => "insert",
+            "modify" | "modifyall" => "modify",
+            "delete" | "deleteall" => "delete",
+            "rename" => "rename",
+            "validate" => "validate",
+            _ => return false,
+        };
+        self.object_type_lc
+            .is_none_or(|t| t == "table" || t == "tableextension")
+            && self.event_lc.is_none_or(|e| {
+                e == format!("onbefore{stem}event") || e == format!("onafter{stem}event")
+            })
+            && match (self.publisher_name_lc, table_name) {
+                (Some(want), Some(name)) => want == name.to_lowercase(),
+                _ => true,
+            }
+    }
+}
+
+/// The gap an `unreadable` edge states; `None` for any other edge.
+#[must_use]
+pub fn unreadable_gap(edge: &EventEdge) -> Option<UnreadableGap<'_>> {
+    if edge.resolution != UNREADABLE_RESOLUTION {
+        return None;
+    }
+    let rest = edge.event_id.strip_prefix("unknown/unreadable/")?;
+    let (parts, event) = rest.rsplit_once("/event/")?;
+    let (object_type, parts) = parts.split_once(':')?;
+    let (number, name) = parts.split_once(':')?;
+    fn part(s: &str) -> Option<&str> {
+        (!s.is_empty()).then_some(s)
+    }
+    Some(UnreadableGap {
+        object_type_lc: part(object_type),
+        publisher_id: number.parse().ok(),
+        publisher_name_lc: part(name),
+        event_lc: part(event),
+    })
+}
+
 /// Build the EventSymbol for a real publisher routine.
 pub fn build_event_symbol(routine: &ModelRoutine) -> EventSymbol {
     let isolated = parse_isolated(&routine.attributes_parsed);
@@ -627,6 +705,46 @@ pub fn program_event_graph(
                 mixed_readings: s.conditional_any && s.conditions.is_empty(),
             };
             edges.push(edge);
+        }
+    }
+    // Engine limits B2: every `[EventSubscriber]` the engine could not read, of
+    // any app (a subscriber with no model row still may run): one edge per
+    // attribute, `unreadable`, naming the event it may be for by the parts it
+    // could read (`unreadable_gap`). `combined_graph` turns it into a coverage
+    // gap at each publisher it may match.
+    for r in graph.routines.iter() {
+        for s in r.event_subscribers.iter().filter(|s| s.is_unreadable()) {
+            let row = row_nodes
+                .j2_row
+                .get(&r.id)
+                .map(|&ri| &ws.routines[ri as usize]);
+            edges.push(EventEdge {
+                event_id: format!(
+                    "unknown/unreadable/{}:{}:{}/event/{}",
+                    s.publisher_object_type,
+                    s.publisher_id.map(|n| n.to_string()).unwrap_or_default(),
+                    s.publisher_name,
+                    s.event_name
+                ),
+                subscriber_routine_id: row.map_or_else(
+                    || {
+                        format!(
+                            "{}/{}",
+                            super::model_object_id(graph, &r.id.object),
+                            r.id.name_lc
+                        )
+                    },
+                    |row| row.id.clone(),
+                ),
+                subscriber_stable_routine_id: row
+                    .map(|row| row.stable_routine_id.clone())
+                    .unwrap_or_default(),
+                subscriber_app_id: graph.apps.resolve(r.id.object.app).guid.clone(),
+                resolution: UNREADABLE_RESOLUTION.to_string(),
+                provenance: vec![Evidence::tree_sitter()],
+                conditional: false,
+                mixed_readings: false,
+            });
         }
     }
     c.unmapped_subscribers = unmapped

@@ -110,6 +110,7 @@ fn alias_capped_by(kind: &str) -> Option<&'static str> {
         // #22: a symbol-only routine's own body is unseen, like an opaque callee's.
         "opaque-body" => Some("opaque-callee"),
         "interface-open-world" => Some("dynamic-dispatch"),
+        "unreadable-event-subscriber" => Some("dynamic-dispatch"),
         _ => None,
     }
 }
