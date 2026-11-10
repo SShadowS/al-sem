@@ -1792,6 +1792,25 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
 /// other. The workspace raises both events through the dependency's `RaiseA`
 /// and `RaiseB`.
 fn if_dup_dependency_workspace(dir: &Path) {
+    if_dup_dependency_workspace_with(dir, false);
+}
+
+/// [`if_dup_dependency_workspace`], or (`alike`) with BOTH arms subscribing
+/// `OnA` and `OnB`: declarations that subscribe alike keep one routine id
+/// (engine limits B2, wave 2 final review: declarations that subscribe
+/// differently are split into one routine each).
+fn if_dup_dependency_workspace_with(dir: &Path, alike: bool) {
+    let (first, second) = if alike {
+        (
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnB', '', false, false)]\n",
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnB', '', false, false)]\n",
+        )
+    } else {
+        (
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnA', '', false, false)]\n",
+            "    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"Dep Pub\", 'OnB', '', false, false)]\n",
+        )
+    };
     write(
         &dir.join("app.json"),
         &format!(
@@ -1813,8 +1832,9 @@ fn if_dup_dependency_workspace(dir: &Path) {
         &symbols,
         &[(
             "src/Pub.al",
-            r#"codeunit 50171 "Dep Pub"
-{
+            format!(
+                r#"codeunit 50171 "Dep Pub"
+{{
     procedure RaiseA()
     begin
         OnA();
@@ -1836,20 +1856,20 @@ fn if_dup_dependency_workspace(dir: &Path) {
     end;
 
 #if XSYM
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnA', '', false, false)]
-    local procedure H()
+{first}    local procedure H()
     begin
         Commit();
     end;
 #else
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Dep Pub", 'OnB', '', false, false)]
-    local procedure H()
+{second}    local procedure H()
     begin
         Commit();
     end;
 #endif
-}
-"#,
+}}
+"#
+            )
+            .as_str(),
         )],
         "",
     );
@@ -1935,12 +1955,15 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
 /// does not know) before the production `program_event_graph` runs
 /// (`cross_app_event_graph_after`). H still gets each of its edges exactly
 /// once, from its second row. Break 8 (mark an id processed before its row
-/// maps) loses both edges.
+/// maps) loses both edges. Both arms subscribe `OnA` and `OnB` here, so they
+/// keep one routine id (engine limits B2, wave 2 final review: arms that
+/// subscribe differently are split into one routine each, and no longer share
+/// the id this guard is about).
 #[test]
 fn a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once() {
     use al_sem::program::model::program_calls::cross_app_event_graph_after;
     let dir = tempfile::tempdir().unwrap();
-    if_dup_dependency_workspace(dir.path());
+    if_dup_dependency_workspace_with(dir.path(), true);
     let mut h_ids: Vec<String> = Vec::new();
     let graph = cross_app_event_graph_after(&read(dir.path()), |rows| {
         let h: Vec<usize> = rows

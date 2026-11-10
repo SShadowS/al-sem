@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 final review follow-up 2: one routine per subscriber declaration)
+
+- **Every walker reaches only the declaration that subscribes.** Follow-up 1 below tied a
+  subscription to its declarations in the cone alone, and said the other walkers could
+  not give a wrong answer. They could (review of 600e6943):
+  - N1: the match read the event NAME only. `a.al`'s `H` subscribes to `"AD Pub".OnX`
+    and commits, `b.al`'s to `"AD Pub2".OnX` and does nothing: `prove . "AD
+    Pub2::RaiseX2" may-commit` said `yes`, citing `a.al`.
+  - N2: the commit-scope graph sent a dispatch to the routine's hub, which reaches every
+    declaration. The `OnX` declaration under `[CommitBehavior(Error)]`, the `OnY` one
+    with none, both calling a committing `Q.C()`: `RaiseY throws-error` said `yes`
+    ("CommitBehavior Error on H"), and so did digest; `RaiseX may-commit` said `yes`
+    under `Error` and under `Ignore`.
+  - N3: the L4 summary solver entered every declaration: `query touches --table "AD W"`
+    listed `RaiseY` and `OnY` for the `OnX` declaration's insert, and `query effects
+    --routine RaiseY` counted it.
+- **The fix, in the shared layer.** Every walker reaches a routine through its id, so a
+  subscriber whose declarations (`#if` arms of a member list, whole-object arms, two
+  files) carry different `[EventSubscriber]` sets is now one ROUTINE per declaration
+  (`workspace::split_subscriber_declarations`, a step of the model join): a new internal
+  id (`{scope}/{sha256(id, the declaration's source unit, its ordinal among the
+  routine's declarations in that file)}`), a stable id `{stable}~{8 hex}`, and its site
+  and record-variable ids moved to the new id (a debug build asserts no field was
+  missed). The id depends on the declaration's own file only, so the row cache and a
+  session refresh stay as they were (checked below). Then:
+  - the event graph (`program_event_graph`) gives each declaration only the
+    subscriptions it declares, matched on the full identity
+    (`events::row_declares_subscription`: publisher object kind, the object by name or
+    by number, event, element);
+  - the table-event edges go to the declarations that declare that table event (the
+    same match, the publisher table's name and number from the model's objects), and a
+    direct call goes to every declaration, each a possible build
+    (`program_calls::split_declaration_edges`, after the conversion, which names one
+    declaration through the program graph's one node);
+  - the cone, the commit-scope graph, the L4 summary solver, the digest's witness
+    search, the detectors and `alsem impact` (built on the model) all walk those edges,
+    so all of them reach only the declaration that subscribes. The cone-only mechanism
+    of follow-up 1 (`arm_subscriber_nodes`, `rows_declaring_subscription`) is removed.
+    `alsem graph` (`program::impact_graph`) is built from the program graph's nodes, one
+    per subscriber: it stays a may-execute graph that can list a declaration's callees
+    under a dispatch it does not subscribe to. Its contract is an over-approximation
+    (bc-dev-mcp selects MORE tests from it, never fewer), so it gives no wrong definite
+    answer.
+  Declarations that subscribe alike keep one id (the B2 per-arm reading, as before).
+- **What is still a limit, and why it gives no wrong definite answer.** A part of an
+  `[EventSubscriber]` the engine cannot read (an argument in no readable form) matches,
+  and a table-event edge whose event no declaration's attribute matches goes to every
+  declaration: a declaration that MAY subscribe is kept, which only adds possible
+  routes. A selector naming a split subscriber (`"AD Sub::H"`) is ambiguous between its
+  declarations (each listed as a candidate, by its own stable id).
+- **The site-block overflow check holds in release.** `file_site_blocks` gets the
+  largest site number of the routine's rows: one that does not fit a 100,000-wide block
+  widens every file's block to the next power of ten (as many blocks as `u32` holds);
+  when that leaves fewer blocks than files, the files keep their shared ids and an error
+  is logged (it was a `debug_assert`).
+- **Wording:** follow-up 1's "Left (stated)" bullet below said the other walkers could
+  not give a wrong answer; corrected there and in engine-limits B2.
+- **Outside consumers.** A split subscriber's declarations get new routine ids, stable
+  ids (`…#{hash}~{8 hex}`) and site ids; selectors, digests, snapshots, `diff`,
+  `alsem graph` and fingerprints see one routine per declaration (each displayed by the
+  routine's name). The impact summary schema is 6. No golden moved.
+- Tests: CLI `cli_b2_alternative_declarations` (each in one file `#if`/`#else` and in two
+  files, both orders, single-app and cross-app): `a_subscription_is_matched_on_its_publisher_too`
+  (N1), `a_dispatch_runs_under_its_own_declarations_commit_behavior` (N2, `Error` and
+  `Ignore`), `the_table_queries_follow_only_the_subscribing_declaration` (N3),
+  `a_table_event_reaches_only_the_declaration_that_subscribes`,
+  `a_direct_call_reaches_every_declaration_of_a_split_subscriber`; unit
+  `site_blocks_widen_past_a_full_block`. `r4_cross_app_program::a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once`
+  stated two rows of one id subscribing differently, which the split makes two
+  routines; its fixture now has both arms subscribe alike (the guard it pins is about
+  rows that share an id).
+- Session: `program::session::workspace::tests::{default_mode,low_mem}` green;
+  `aldump --session-refresh <copy> --verify` on a copy with the review's `ce` (split
+  subscriber, two files) and `c2` probes, `--file` on each split file and the callee,
+  default and `--low-mem`: every step `equalToCold: true`.
+- Discrimination proofs (break with Edit, narrowest test RED, revert with Edit, GREEN;
+  CLI = `cargo test --test cli cli_b2_alternative_declarations::`; three rounds, each
+  round's reverts seen green in the next, the last round's in a final run, 15/15):
+  1. The split off (`true ||` on the early return): RED N1, N2, N3, the B1 dispatch
+     test and the table-event test.
+  2. The overflow widening off (`true ||`): RED `site_blocks_widen_past_a_full_block`.
+  3. The publisher match off (`true || object_ok`): RED N1 (`RaiseX2` `yes`).
+  4. The table-event filter off (every declaration): RED
+     `a_table_event_reaches_only_…` (`Mod` `yes`).
+  5. A direct call to the converted declaration only: RED
+     `a_direct_call_reaches_every_…` (`no` when the empty declaration was the one).
+  6. The event graph's per-declaration filter off: RED the B1 dispatch test, N1, N2,
+     N3.
+
 ### Fixed (engine limits wave 2, B2 final review follow-up: each declaration's own body)
 
 - **A dispatch reaches only the declarations that subscribe** (review blocking B1). The
@@ -58,7 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second file starts or stops declaring it, and when its own path changes; two files
   whose hashes pick one block take the next free one in source-unit order (the one case
   where another file, by its path, never its content, moves a file's ids); a file with
-  100,000 sites in one routine would overflow its block (debug-asserted). Deterministic,
+  100,000 sites in one routine would overflow its block (debug-asserted here; follow-up 2
+  makes it a release check that widens the blocks). Deterministic,
   so a session refresh equals a cold build (checked below). The rejected option, a path
   text in the id (`…/op0@b.al`), would have changed the id format for every reader.
 - **`CollidedRows::order` covers every row of a collided id** (non-blocking 3): it
@@ -85,11 +175,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declaration lacks. The impact summary schema is 5
   (`impact::keys::SUMMARY_SCHEMA`, the impact JSON field `summarySchema`). No golden
   moved.
-- **Left (stated):** only the cone ties a subscription to its declarations; the other
-  walkers of a dispatch edge (the digest's witness search, the commit-scope graph, the
-  L4 summary solver and the advisory detectors on it) still enter every declaration of
-  the subscriber, so a witness route or an advisory finding may pass through a
-  declaration that does not subscribe; the facts and the answers come from the cone.
+- **Left (stated here, and wrong):** "only the cone ties a subscription to its
+  declarations; the other walkers … may pass through a declaration that does not
+  subscribe; the facts and the answers come from the cone". The answers did not all
+  come from the cone: the commit-scope graph gave `throws-error: yes` and `may-commit:
+  yes` through a declaration that does not subscribe, and the L4 summary solver gave
+  `query touches`/`query effects` a write no build has. Fixed by follow-up 2 above (one
+  routine per declaration, so every walker inherits it).
 - Tests: CLI `cli_b2_alternative_declarations`:
   `a_dispatch_reaches_only_the_declarations_that_subscribe` (one file and two files,
   the `OnX` declaration first and second, single-app and cross-app; `RaiseX` stays

@@ -764,3 +764,264 @@ fn a_files_site_ids_do_not_move_when_another_file_changes() {
     let renamed = b_ids(&[("z.al", WORK_A), ("b.al", WORK_B), ("t.al", WORK_T)]);
     assert_eq!(base, renamed, "a.al renamed to sort after b.al");
 }
+
+// ---------------------------------------------------------------------------
+// One routine per declaration of a subscriber (review of 600e6943: N1-N3)
+// ---------------------------------------------------------------------------
+
+/// One declaration of `"AD Sub"::H` subscribing to `publisher`'s `event`,
+/// with `extra` attribute lines, `vars` and `body`.
+fn sub_decl(publisher: &str, event: &str, extra: &str, vars: &str, body: &str) -> String {
+    format!(
+        "codeunit 50481 \"AD Sub\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"{publisher}\", '{event}', '', false, false)]\n{extra}    procedure H()\n{vars}    begin\n{body}    end;\n}}\n"
+    )
+}
+
+/// The three places two declarations `first` and `second` can sit (one
+/// file `#if`/`#else`, two files), each in both orders: (shape, files).
+fn decl_shapes(first: &str, second: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out = Vec::new();
+    for (tag, x, y) in [("first", first, second), ("second", second, first)] {
+        out.push((
+            format!("one file, the {tag} declaration first"),
+            vec![("s.al".to_string(), format!("#if A\n{x}#else\n{y}#endif\n"))],
+        ));
+        out.push((
+            format!("two files, the {tag} declaration in a.al"),
+            vec![
+                ("a.al".to_string(), format!("#if A\n{x}#endif\n")),
+                ("b.al".to_string(), format!("#if not A\n{y}#endif\n")),
+            ],
+        ));
+    }
+    out
+}
+
+/// Runs `check` on every shape of `first`/`second` plus `extra_files`, in the
+/// single-app and the cross-app model.
+fn each_shape(
+    first: &str,
+    second: &str,
+    extra_files: &[(&str, &str)],
+    check: impl Fn(&Path, &[&str], &str),
+) {
+    for (shape, files) in decl_shapes(first, second) {
+        let mut all: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect();
+        all.extend_from_slice(extra_files);
+        let t = workspace(&all);
+        for extra in [&["--single-app"][..], &[]] {
+            check(t.path(), extra, &format!("{shape} {extra:?}"));
+        }
+    }
+}
+
+const PUB_TWO: &str = r#"codeunit 50480 "AD Pub"
+{
+    procedure RaiseX()
+    begin
+        OnX();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnX()
+    begin
+    end;
+}
+
+codeunit 50482 "AD Pub2"
+{
+    procedure RaiseX2()
+    begin
+        OnX();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnX()
+    begin
+    end;
+}
+"#;
+
+/// N1 (probe e3): the two declarations subscribe to events of the SAME name
+/// on two publishers: `"AD Pub".OnX` (commits) and `"AD Pub2".OnX` (does
+/// nothing). A subscription is matched on its full identity (publisher kind
+/// and object, event, element), so raising `"AD Pub2".OnX` runs only the
+/// empty declaration: `RaiseX2 may-commit` is `no` (it was `yes`, citing the
+/// other declaration's `Commit`: the match read the event name only).
+/// Control: `RaiseX` commits.
+#[test]
+fn a_subscription_is_matched_on_its_publisher_too() {
+    let commits = sub_decl("AD Pub", "OnX", "", "", "        Commit();\n");
+    let empty = sub_decl("AD Pub2", "OnX", "", "", "");
+    each_shape(&commits, &empty, &[("p.al", PUB_TWO)], |ws, extra, at| {
+        let r = prove_with(ws, "AD Pub2::RaiseX2", "may-commit", extra);
+        assert_eq!(r["answer"], "no", "{at}: {r:#}");
+        let r = prove_with(ws, "AD Pub::RaiseX", "may-commit", extra);
+        assert_eq!(r["answer"], "yes", "{at}: {r:#}");
+    });
+}
+
+const Q_COMMITS: &str = r#"codeunit 50490 "AD Q"
+{
+    procedure C()
+    begin
+        Commit();
+    end;
+}
+"#;
+
+/// N2 (probes ce, ci): the `OnX` declaration carries
+/// `[CommitBehavior(Error|Ignore)]`, the `OnY` one none; both call `Q.C()`,
+/// which commits. The commit-scope graph reached every declaration through
+/// a dispatch, so `RaiseY throws-error` said `yes` ("CommitBehavior Error on
+/// H") and `RaiseX may-commit` `yes`. Each dispatch reaches only its own
+/// declaration: under `Error`, `RaiseX` raises the error and never commits,
+/// `RaiseY` commits and raises nothing; under `Ignore`, `RaiseX` commits
+/// nothing.
+#[test]
+fn a_dispatch_runs_under_its_own_declarations_commit_behavior() {
+    let vars = "    var\n        Q: Codeunit \"AD Q\";\n";
+    let call = "        Q.C();\n";
+    for behavior in ["Error", "Ignore"] {
+        let attr = format!("    [CommitBehavior(CommitBehavior::{behavior})]\n");
+        let x = sub_decl("AD Pub", "OnX", &attr, vars, call);
+        let y = sub_decl("AD Pub", "OnY", "", vars, call);
+        each_shape(
+            &x,
+            &y,
+            &[("p.al", PUB_XY), ("q.al", Q_COMMITS)],
+            |ws, extra, at| {
+                let ask = |r: &str, q: &str| prove_with(ws, r, q, extra)["answer"].clone();
+                assert_eq!(ask("AD Pub::RaiseX", "may-commit"), "no", "{behavior} {at}");
+                assert_eq!(
+                    ask("AD Pub::RaiseY", "may-commit"),
+                    "yes",
+                    "{behavior} {at}"
+                );
+                if behavior == "Error" {
+                    assert_eq!(ask("AD Pub::RaiseY", "throws-error"), "no", "{at}");
+                    assert_eq!(ask("AD Pub::RaiseX", "throws-error"), "yes", "{at}");
+                }
+            },
+        );
+    }
+}
+
+const W_TABLE: &str = r#"table 50495 "AD W"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { } }
+}
+"#;
+
+/// N3 (probe e4): the `OnX` declaration inserts into `AD W`, the `OnY` one
+/// writes nothing. The L4 summary solver entered every declaration through
+/// a dispatch, so `query touches --table "AD W"` listed `RaiseY` and `OnY`,
+/// and `query effects --routine RaiseY` counted the insert. Now neither:
+/// `RaiseX` and `OnX` touch it, `RaiseY` reaches no operation.
+#[test]
+fn the_table_queries_follow_only_the_subscribing_declaration() {
+    let vars = "    var\n        W: Record \"AD W\";\n";
+    let x = sub_decl("AD Pub", "OnX", "", vars, "        W.Insert();\n");
+    let y = sub_decl("AD Pub", "OnY", "", "", "");
+    each_shape(
+        &x,
+        &y,
+        &[("p.al", PUB_XY), ("w.al", W_TABLE)],
+        |ws, extra, at| {
+            let mut args = vec!["query", "touches", ".", "--table", "AD W", "--all"];
+            args.extend_from_slice(extra);
+            let touches = String::from_utf8(run(ws, &args)).unwrap();
+            assert!(touches.contains("\"AD Pub\"::RaiseX"), "{at}: {touches}");
+            assert!(!touches.contains("RaiseY"), "{at}: {touches}");
+            assert!(!touches.contains("::OnY"), "{at}: {touches}");
+            let mut args = vec!["query", "effects", "--routine", "AD Pub::RaiseY", "."];
+            args.extend_from_slice(extra);
+            let effects = String::from_utf8(run(ws, &args)).unwrap();
+            assert!(effects.contains("answer: 0 operations"), "{at}: {effects}");
+        },
+    );
+}
+
+/// A table event's declaration of `"AD Sub"::H`: subscribes to `event` of
+/// table `AD W`, runs `body`.
+fn table_sub_decl(event: &str, body: &str) -> String {
+    format!(
+        "codeunit 50481 \"AD Sub\"\n{{\n    [EventSubscriber(ObjectType::Table, Database::\"AD W\", '{event}', '', false, false)]\n    procedure H(var Rec: Record \"AD W\"; RunTrigger: Boolean)\n    begin\n{body}    end;\n}}\n"
+    )
+}
+
+const TABLE_WRITERS: &str = r#"codeunit 50496 "AD TW"
+{
+    procedure Ins()
+    var
+        W: Record "AD W";
+    begin
+        W.Insert(true);
+    end;
+
+    procedure Mod()
+    var
+        W: Record "AD W";
+    begin
+        W.Modify(true);
+    end;
+}
+"#;
+
+/// A table event subscribed by only one declaration of a split subscriber
+/// reaches only that one (the table-event edges, `program_calls`): the
+/// `OnAfterInsertEvent` declaration commits, the `OnAfterModifyEvent` one
+/// does nothing. `Ins` may commit; `Mod` may not (before the split, the
+/// dispatch reached both bodies). Both orders, both shapes, single-app and
+/// cross-app.
+#[test]
+fn a_table_event_reaches_only_the_declaration_that_subscribes() {
+    let ins = table_sub_decl("OnAfterInsertEvent", "        Commit();\n");
+    let modify = table_sub_decl("OnAfterModifyEvent", "");
+    each_shape(
+        &ins,
+        &modify,
+        &[("w.al", W_TABLE), ("t.al", TABLE_WRITERS)],
+        |ws, extra, at| {
+            let r = prove_with(ws, "AD TW::Ins", "may-commit", extra);
+            assert_eq!(r["answer"], "yes", "{at}: {r:#}");
+            let r = prove_with(ws, "AD TW::Mod", "may-commit", extra);
+            assert_eq!(r["answer"], "no", "{at}: {r:#}");
+        },
+    );
+}
+
+const H_CALLER: &str = r#"codeunit 50497 "AD Caller"
+{
+    procedure Go()
+    var
+        S: Codeunit "AD Sub";
+    begin
+        S.H();
+    end;
+}
+"#;
+
+/// A DIRECT call to a split subscriber reaches every declaration (each is a
+/// possible build): the declaration that commits is the first, then the
+/// second (the conversion names one of them; that one alone was the empty
+/// declaration in one of the orders). `Go may-commit` is `yes` in every
+/// shape and order.
+#[test]
+fn a_direct_call_reaches_every_declaration_of_a_split_subscriber() {
+    let commits = sub_decl("AD Pub", "OnX", "", "", "        Commit();\n");
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    each_shape(
+        &commits,
+        &empty,
+        &[("p.al", PUB_XY), ("c.al", H_CALLER)],
+        |ws, extra, at| {
+            let r = prove_with(ws, "AD Caller::Go", "may-commit", extra);
+            assert_eq!(r["answer"], "yes", "{at}: {r:#}");
+        },
+    );
+}

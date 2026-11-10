@@ -493,12 +493,6 @@ fn window<'p, T>(pool: &'p [T], r: &Range<u32>) -> &'p [T] {
 }
 
 impl ConeDerivedStore {
-    /// Drop `routine_id`'s row (its pool windows stay): for a cone node no
-    /// reader asks for (`capability_cone::arm_subscriber_nodes`).
-    pub(crate) fn remove_row(&mut self, routine_id: &str) {
-        self.rows.remove(routine_id);
-    }
-
     /// This routine's row, or the empty row when it has none.
     pub fn row(&self, routine_id: &str) -> &ConeDerivedRow {
         self.rows.get(routine_id).unwrap_or(&EMPTY_ROW)

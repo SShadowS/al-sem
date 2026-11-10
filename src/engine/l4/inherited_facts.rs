@@ -163,12 +163,6 @@ struct SubjectRefs {
 }
 
 impl InheritedFacts {
-    /// Drop `subject`'s refs (the shared tables keep their rows): for a cone
-    /// node no reader asks for (`capability_cone::arm_subscriber_nodes`).
-    pub(crate) fn remove_subject(&mut self, subject: &str) {
-        self.by_subject.remove(subject);
-    }
-
     /// The table set of segment `seg`.
     fn seg(&self, seg: u32) -> &Arc<InheritedTables> {
         match seg {
