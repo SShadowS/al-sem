@@ -1232,20 +1232,41 @@ fn split_declarations(
                 .copied()
                 .filter(|&i| !unreadable(i, routines))
                 .collect();
+            // An unreadable copy whose readable parts rule out every readable
+            // subscription of the routine does subscribe differently.
+            let ruled_out = ixs.iter().any(|&i| {
+                let own: Vec<_> = routines[i]
+                    .event_subscribers
+                    .iter()
+                    .filter(|s| s.is_unreadable())
+                    .collect();
+                !own.is_empty()
+                    && readable
+                        .iter()
+                        .flat_map(|&j| routines[j].event_subscribers.iter())
+                        .next()
+                        .is_some()
+                    && !readable
+                        .iter()
+                        .flat_map(|&j| routines[j].event_subscribers.iter())
+                        .any(|r| own.iter().any(|s| s.may_be(r)))
+            });
             ixs.len() >= 2
                 && ixs
                     .iter()
                     .any(|&i| !routines[i].event_subscribers.is_empty())
-                && readable.iter().any(|&i| {
-                    !same(
-                        &routines[i].event_subscribers,
-                        &routines[readable[0]].event_subscribers,
-                    )
-                })
+                && (ruled_out
+                    || readable.iter().any(|&i| {
+                        !same(
+                            &routines[i].event_subscribers,
+                            &routines[readable[0]].event_subscribers,
+                        )
+                    }))
         })
         .collect();
     // A split that happens for other copies: the unreadable copy stays
-    // reachable from every event its routine's readable copies subscribe to.
+    // reachable from each event of its routine's readable copies that its own
+    // readable parts allow.
     for group in &groups {
         let union: Vec<_> = group
             .iter()
@@ -1255,7 +1276,11 @@ fn split_declarations(
         for &i in group {
             if unreadable(i, routines) {
                 for s in &union {
-                    if !routines[i].event_subscribers.contains(s) {
+                    let allowed = routines[i]
+                        .event_subscribers
+                        .iter()
+                        .any(|o| o.is_unreadable() && o.may_be(s));
+                    if allowed && !routines[i].event_subscribers.contains(s) {
                         routines[i].event_subscribers.push(s.clone());
                     }
                 }

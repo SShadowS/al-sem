@@ -64,7 +64,8 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// ids). 7 (follow-up 3): the program graph splits it too, and the model's
 /// ids of a split declaration derive from the graph's (they all move once).
 /// 8: an `[EventSubscriber]` the engine cannot read is a coverage gap.
-pub const SUMMARY_SCHEMA: u32 = 8;
+/// 9: also one whose validate-event field cannot be read.
+pub const SUMMARY_SCHEMA: u32 = 9;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

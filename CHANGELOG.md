@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 final review follow-up 5: the rest of the unreadable `[EventSubscriber]`)
+
+- **An unreadable field of a table's validate event is a gap too** (review of 1dbb302c).
+  `[EventSubscriber(ObjectType::Table, Database::"AD T", 'OnAfterValidateEvent', (Amt), …)]`
+  read as "no field", so it listened to no field event and `R.Validate(Amt, 1) may-commit`
+  said `no` (the same for `5` and `Rec.Amt`). A fourth argument present but not readable, on
+  a table's validate event, is now unreadable (`resolve::event::UNREADABLE_ELEMENT`) and the
+  gap applies to a `Validate` on that table, any field. On any other event the element is
+  not read by the dispatch, so it stays as it was.
+- **A readable field narrows the gap:** an unreadable publisher with `'OnAfterValidateEvent',
+  'Amt'` is a gap for a `Validate` of `Amt`, and a `Validate` of another field stays
+  definite.
+- **The publisher now narrows a record operation's gap.** The lookup used the object ids
+  while a record operation holds a model table id (`{guid}/table/{n}`), so it found nothing
+  and matched every table, and a publisher by number was not read. It now reads the model's
+  tables, by name or by number: an `Insert` on an unrelated table stays `no` and complete.
+- **An unreadable declaration's readable parts narrow what it borrows.** It takes only the
+  sibling subscriptions its own parts allow; when they rule out every readable
+  subscription of the routine it does subscribe differently, so the routine splits (probe
+  `cw`: `RaiseY` stays `no`, `RaiseX` is the gap). Names are compared with `fold_identifier`
+  on both sides.
+- `PACK_SCHEMA` 17, `SUMMARY_SCHEMA` 9.
+- Tests (`tests/cli/cli_b2_alternative_declarations.rs`) with proofs, break with Edit, red,
+  revert with Edit, green:
+  - Unreadable element left as "no element": `an_unreadable_element…` red (`no`).
+  - Table lookup left empty: `a_record_operation_gap…` red (`unknown` on the other table).
+  - Publisher number not compared: the same test red, on its by-number pass.
+  - Field not compared: `a_readable_element_narrows…` red (`unknown` on `Name`).
+  - Borrowing not narrowed: both `an_unreadable_declaration` narrowing tests red (`yes`).
+  - No split when the parts rule the routine's subscriptions out: `…ruled_out…` red (`yes`).
+
 ### Fixed (engine limits wave 2, B2 final review follow-up 4: an unreadable `[EventSubscriber]` is a gap)
 
 - **An `[EventSubscriber]` the engine cannot read never gives a definite `no`.** Probe u2

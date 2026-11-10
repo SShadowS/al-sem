@@ -159,6 +159,16 @@ pub struct UnreadableGap<'a> {
     pub publisher_id: Option<i64>,
     pub publisher_name_lc: Option<&'a str>,
     pub event_lc: Option<&'a str>,
+    /// The field, when the attribute named one the engine could read.
+    pub element_lc: Option<&'a str>,
+}
+
+/// A table a record operation runs on, as an unreadable subscription's
+/// publisher is matched against it (`None` where the table is not known).
+#[derive(Debug, Clone, Copy)]
+pub struct OpTable<'a> {
+    pub name: &'a str,
+    pub number: i64,
 }
 
 impl UnreadableGap<'_> {
@@ -168,6 +178,7 @@ impl UnreadableGap<'_> {
     /// name the attribute would give.
     #[must_use]
     pub fn may_match(&self, object_type: &str, name: &str, number: i64, event: &str) -> bool {
+        use al_syntax::IdentifierFoldExt;
         let object_type = object_type.to_lowercase();
         let extension = object_type.ends_with("extension");
         let publisher_known = self.publisher_id.is_some() || self.publisher_name_lc.is_some();
@@ -176,14 +187,25 @@ impl UnreadableGap<'_> {
             && (!publisher_known
                 || extension
                 || self.publisher_id == Some(number)
-                || self.publisher_name_lc == Some(name.to_lowercase().as_str()))
-            && self.event_lc.is_none_or(|e| e == event.to_lowercase())
+                || self
+                    .publisher_name_lc
+                    .is_some_and(|n| n.fold_identifier() == name.fold_identifier()))
+            && self
+                .event_lc
+                .is_none_or(|e| e.fold_identifier() == event.fold_identifier())
     }
 
     /// Whether the subscription may be to the table event record operation
-    /// `op` raises on the table with this name (`None`: table not known).
+    /// `op` raises on `table` (`None`: table not known), with `field` the
+    /// operation's own field when it is a `Validate` of one.
     #[must_use]
-    pub fn may_match_table_op(&self, op: &str, table_name: Option<&str>) -> bool {
+    pub fn may_match_table_op(
+        &self,
+        op: &str,
+        table: Option<OpTable<'_>>,
+        field: Option<&str>,
+    ) -> bool {
+        use al_syntax::IdentifierFoldExt;
         let stem = match op.to_lowercase().as_str() {
             "insert" => "insert",
             "modify" | "modifyall" => "modify",
@@ -197,8 +219,15 @@ impl UnreadableGap<'_> {
             && self.event_lc.is_none_or(|e| {
                 e == format!("onbefore{stem}event") || e == format!("onafter{stem}event")
             })
-            && match (self.publisher_name_lc, table_name) {
-                (Some(want), Some(name)) => want == name.to_lowercase(),
+            && match (table, self.publisher_id, self.publisher_name_lc) {
+                (Some(t), Some(n), _) => n == t.number,
+                (Some(t), None, Some(want)) => want.fold_identifier() == t.name.fold_identifier(),
+                _ => true,
+            }
+            && match (stem, self.element_lc, field) {
+                ("validate", Some(want), Some(f)) => {
+                    want.fold_identifier() == f.trim().trim_matches('"').fold_identifier()
+                }
                 _ => true,
             }
     }
@@ -213,7 +242,8 @@ pub fn unreadable_gap(edge: &EventEdge) -> Option<UnreadableGap<'_>> {
     let rest = edge.event_id.strip_prefix("unknown/unreadable/")?;
     let (parts, event) = rest.rsplit_once("/event/")?;
     let (object_type, parts) = parts.split_once(':')?;
-    let (number, name) = parts.split_once(':')?;
+    let (number, parts) = parts.split_once(':')?;
+    let (name, element) = parts.rsplit_once('\u{1f}')?;
     fn part(s: &str) -> Option<&str> {
         (!s.is_empty()).then_some(s)
     }
@@ -222,6 +252,7 @@ pub fn unreadable_gap(edge: &EventEdge) -> Option<UnreadableGap<'_>> {
         publisher_id: number.parse().ok(),
         publisher_name_lc: part(name),
         event_lc: part(event),
+        element_lc: part(element),
     })
 }
 
@@ -720,10 +751,14 @@ pub fn program_event_graph(
                 .map(|&ri| &ws.routines[ri as usize]);
             edges.push(EventEdge {
                 event_id: format!(
-                    "unknown/unreadable/{}:{}:{}/event/{}",
+                    "unknown/unreadable/{}:{}:{}\u{1f}{}/event/{}",
                     s.publisher_object_type,
                     s.publisher_id.map(|n| n.to_string()).unwrap_or_default(),
                     s.publisher_name,
+                    s.element
+                        .as_deref()
+                        .filter(|e| *e != crate::program::resolve::event::UNREADABLE_ELEMENT)
+                        .unwrap_or_default(),
                     s.event_name
                 ),
                 subscriber_routine_id: row.map_or_else(
