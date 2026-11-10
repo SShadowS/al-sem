@@ -11,7 +11,7 @@
   "routines": [
     {
       "analysis": "partial",
-      "answer": "may write 412 tables (12 owned by this app, 400 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 21; file 2; background tasks 5; isolated storage 17; telemetry 23; errors 296; analysis partial (interface-open-world; object-run-unresolved; 260 interface calls open world, 21 dynamic calls not resolved)",
+      "answer": "may write 412 tables (12 owned by this app, 400 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 21; file 3; background tasks 6; isolated storage 18; telemetry 23; errors 275; analysis partial (interface-open-world; object-run-unresolved; 260 interface calls open world, 25 dynamic calls not resolved)",
       "index": 1,
       "selector": "Codeunit \"CDO E-Mail Handler\"::RunReportID"
     }
@@ -20,6 +20,6 @@
   "rowDetail": "compact: each row names its result-index row (`index`), which holds its signature, stable id, full answer and totals",
   "shared": {},
   "testStatus": "not requested",
-  "totalEffects": 765,
-  "totalUnresolved": 281
+  "totalEffects": 773,
+  "totalUnresolved": 285
 }

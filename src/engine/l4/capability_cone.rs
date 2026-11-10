@@ -8485,11 +8485,17 @@ codeunit 50100 C
                 // RunTrigger`, so most subscriber self-loops close no cycle any more
                 // (self-loops 65 -> 31, recursive SCCs 106 -> 71, the largest
                 // 650 -> 633, routines 34,118 -> 34,119).
+                // 972 -> 1039 on 2026-11-10 (engine limits wave 2, B6): a report's
+                // SaveAs*/Execute/Print and a query's Open/SaveAs* now run the
+                // object's triggers, which adds call edges. Measured on the
+                // pinned baseline: with `dataset::starts_object` answering no
+                // for those methods and nothing else changed, this count is
+                // exactly 972 again.
                 assert_eq!(
-                    stats.recursive_members_emitted, 972,
+                    stats.recursive_members_emitted, 1039,
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
-                     972 since the temp-record table-event guards (2026-11-07); a \
-                     different number means the input moved and the spec's numbers are stale"
+                     1039 since report saves and query opens run their triggers (2026-11-10); \
+                     a different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s
                 // fixtures reach none of them), so a moved baseline must not drop them

@@ -1341,10 +1341,10 @@ impl EventFacts {
     /// `.dependencies/`) says the same, or, when stale, adds its facts as
     /// possible subscriptions. The union is what the node subscribes to in
     /// SOME build; it does not say which declaration's body a subscription
-    /// runs. That is decided where the bodies are read: the cone sends a
-    /// dispatch only into the declarations that subscribe
-    /// (`capability_cone::arm_subscriber_nodes`), else one declaration's
-    /// subscription reached another's body (a wrong definite `yes`). A copy
+    /// runs. Declarations that subscribe differently are therefore split into
+    /// one node each before the dedup ([`split_declarations`]), else one
+    /// declaration's subscription reached another's body (a wrong definite
+    /// `yes`), so the copies merged here subscribe alike. A copy
     /// with no source unit (never stamped by a build) is merged with nothing.
     fn of_arms(copies: &[&RoutineNode]) -> Option<Self> {
         let (survivor, rest) = copies.split_first()?;

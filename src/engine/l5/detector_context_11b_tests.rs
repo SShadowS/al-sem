@@ -3214,9 +3214,9 @@ fn natural_object_arms_in_one_file_number_apart() {
         m.workspace.routines[rows[1]].id
     );
     assert_eq!((op(rows[0]), op(rows[1])), ("/op0".into(), "/op1".into()));
-    // `lift_arm_declarations` counts the declarations per file too, so each
-    // object arm's top-level insert is only `conditional` (a build compiles
-    // one object). Break: count per object -> `top-level`.
+    // `join_alternative_declarations` counts every declaration of the id, so
+    // each object arm's top-level insert is only `conditional` (a build
+    // compiles one object). Break: skip the lift -> `top-level`.
     for &ri in &rows {
         assert_eq!(
             m.workspace.routines[ri].operation_sites[0]

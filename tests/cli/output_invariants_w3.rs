@@ -1646,7 +1646,10 @@ pub(crate) fn cdo_round2_size_ratchets() {
             "c08",
             "alsem_query_effects",
             json!({"routine": "Codeunit \"CDO eDocs Sending Profile Subs\"::OnBeforeSendCustomer", "format": "json"}),
-            606_000,
+            // Engine limits wave 2 (2026-11-10): the platform's dataset
+            // operations (B6) and FlowField reads (B5) are new true rows
+            // (614,211 B, then 624,702 B on the final tree).
+            640_000,
         ),
         (
             "c17",

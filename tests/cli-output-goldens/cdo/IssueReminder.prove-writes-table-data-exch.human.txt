@@ -1,28 +1,16 @@
 prove Codeunit "CDO Issue Document"::IssueReminder writes-table:Data Exch. (table 1220, Base Application)   [cross-app]
-answer: unknown (blocked by: interface dispatch (open world) 258, call not resolved 21, write on a table not resolved 2, and 1 more kind) — no matching effect was found in the analyzed cone
-analysis partial (21 calls not resolved (6 in this workspace), 258 interface calls open world (7 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
-more: detail: true lists every blocker and row; format: "json" for every evidence row and its hops
-  plain reading: no matching effect was found in the analyzed cone; unknown because of interface dispatch (open world) 258, call not resolved 21, write on a table not resolved 2, and 1 more kind
-  not established: that it never writes Data Exch.
-  re-analysis under an assumption: alsem_prove {"routine": "Codeunit \"CDO Issue Document\"::IssueReminder", "question": "writes-table:Data Exch.", "closedWorld": true} — only if the deployment has no other implementations of these interfaces; it changes the assumption, not what runs; removes interface dispatch (open world) 258; stay: call not resolved 21, write on a table not resolved 2, coverage incomplete 1
-  blockedBy: 282 blockers in 4 kinds (at most 3 each, workspace ones first; detail: true lists every one)
-    coverage incomplete: 1
-      coverage status: partial
-    interface dispatch (open world): 258 (7 in this workspace, 251 in dependency code)
-      DispatcherFactory.CreateeDocumentDispatcher in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
-      DispatcherFactory.CreateLegacyeDocDispatcher in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81
-      DocumentDispatcher.DispatchDocument in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:83
-      … +255 blockers (of 258 blockers; detail: true lists them)
-    write on a table not resolved: 2 (2 in this workspace)
-      DB_INSERT on a table that is not known @ ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:307
-      DB_MODIFY on a table that is not known @ ws:src/Features/HandledState/CDOHandledFieldsManagement.Codeunit.al:247
-    call not resolved: 21 (6 in this workspace, 15 in dependency code)
-      Codeunit.Run(<dynamic>) in ValidateDocument @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:140
-      Codeunit.Run(<dynamic>) in HandleDelivery @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:186
-      Report.RunModal in TryRunReport @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:244
-      … +18 blockers (of 21 blockers; detail: true lists them)
+answer: yes — DB_INSERT at dep:Base Application:src/System/DataExchange/DataExch.Table.al:97, beyond Codeunit "CTS-CDN Network Doc. Mgt."::CreateEDocument, entered at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:307 (24 guards, 32 earlier exits on the route; 2 guards and 5 exits evaluated), and 1 more
+analysis partial (25 calls not resolved (9 in this workspace), 260 interface calls open world (7 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+more: format: "json" for every evidence row and its hops
+  evidence: 2 effects
+    [DB_INSERT] at dep:Base Application:src/System/DataExchange/DataExch.Table.al:97, beyond Codeunit "CTS-CDN Network Doc. Mgt."::CreateEDocument, entered at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:307
+      condition: earlier exit if not VariantRec.IsRecord: false, evaluated (RunReport line 237); earlier exit if IsHandled: false, evaluated (RunReport line 250); UseQueue: false, evaluated (RunReportID line 423); case OutputActionInt: this arm, evaluated (RunReportID line 426); … shown (4 of 24 enclosing conditions and 32 earlier exits)
+      path: [segment S1: 33 hops] → SetSourceForDataExch → Table "Data Exch." (1220)::InsertRec (Insert at dep:Base Application:src/System/DataExchange/DataExch.Table.al:97)
+    [DB_MODIFY] at dep:Base Application:src/System/DataExchange/IncomingDocwithDataExch.Codeunit.al:74, beyond Codeunit "CTS-CDN Network Doc. Mgt."::CreateEDocument, entered at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:307
+      condition: the same guards as the row above (2 rows with them)
+      path: [S1] → SetSourceForDataExch (Modify at dep:Base Application:src/System/DataExchange/IncomingDocwithDataExch.Codeunit.al:74)
+    path segments (each [Sn] in a path above stands for these hops):
+      S1: IssueReminder → Codeunit "CDO E-Mail Handler"::DocHandle → RunReport → RunReportID → Table "CDO Document Template Line"::HandleDoc → SendMail(var RecordRef, var Variant, Boolean, Boolean, Integer) → Codeunit "CDO E-Mail Template Management"::CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer) → CreateAndSendMail(var Record "CDO Document Template Line", var RecordRef, var Variant, var Record "CDO File", Boolean, Boolean, Integer, Dictionary of [Code[10], Text]) → CreateDocuments(var RecordRef, Record "CDO E-Mail Template Header", Record "CDO Document Template Line", Integer, Boolean, Boolean, Boolean, var Record "CDO File", var Record "CDO File", var Record "CDO File") → CreateDocumentsForRecord → Codeunit "CDO Electronic Document Mgt."::SendElectronicDocument(var Variant, Record "CDO Send Code", Record "CDO Document Template Line", Boolean, Boolean, Boolean, Boolean) → [interface] Codeunit "CDO eDocuments Dispatcher"::DispatchDocument → DoDispatch → SendEDocument → ExportDocument → Codeunit "CTS-CDN Network Doc. Mgt." (6225516)::CreateEDocument → Codeunit "CTS-CDN Create eOrder" (6225532)::CreateEOrderDocument → CreateEOrderHeader → Codeunit "CTS-CDN Handle eDoc Attachment" (6225535)::AttachPdfToeOrder → GeneretePdf → Table "Report Selections" (77)::SaveReportAsPDFInTempBlob → OnBeforeSaveReportAsPDF → [event] Codeunit "Customer Statement Subscr" (8812)::OnBeforeSaveReportAsPDF → Report "Standard Statement" (1316)::OnPostReport → [event] Codeunit "Workflow Event Handling" (1520)::RunWorkflowOnCustomerChanged → Codeunit "Workflow Management" (1501)::HandleEventWithxRec → ExecuteResponses → Codeunit "Workflow Response Handling" (1521)::ExecuteResponse → CreateReleasedDocFromIncomingDoc → Table "Incoming Document" (130)::CreateReleasedDocumentWithDataExchange → CreateWithDataExchange → [run] Codeunit "Incoming Doc. with Data. Exch." (1216)::OnRun → ProcessWithDataExch
   ruled out by literal arguments: 5 call sites not resolved that no route from here can reach (not counted as blockers)
   fixed by literal arguments: 2 interface calls whose implementation every route's enum value selects (not open world, not counted as blockers)
-  top callees not resolved: Codeunit.Run(<dynamic>) ×16, Report.RunModal ×2, Page.RunModal ×1
-  top interface dispatch (open world): CurrLineWithPrice.SetLine ×21, CurrLineWithPrice.GetLine ×8, CurrLineWithPrice.GetTableNo ×8
   next: alsem_explain {"routines": ["Codeunit \"CDO Issue Document\"::IssueReminder"]} — lists the workspace ones under gaps
