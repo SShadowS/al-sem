@@ -59,14 +59,81 @@ set -uo pipefail
 # its summary. Never skip it on a tree about to land without saying why.
 speed=1
 ws_arg=""
+summary_dir=""
 usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
+    echo "       scripts/cdo-gate --summary=<run folder>   (a past run's summary, from its logs)" >&2
 }
+
+loud_no_speed() {
+    echo "cdo-gate: ****************************************************************"
+    echo "cdo-gate: **  SPEED AND MEMORY WERE NOT CHECKED (--no-speed).            **"
+    echo "cdo-gate: **  A slowdown or a memory rise on CDO passes this gate unseen.  **"
+    echo "cdo-gate: ****************************************************************"
+}
+
+# The summary: every phase's result from its status file (a missing one is a
+# failure), its `test result:` lines, and a failed phase's failures. Reads
+# `$logs` and `$speed`; returns the gate's status.
+# ⟨TLS-10⟩ A test phase that exits 0 having passed no test FAILS ("no test
+# ran"): `cargo test` with a filter that matches nothing (a renamed member or
+# module) exits 0 on "0 passed". The speed phase cannot pass on zero either:
+# `cdo-speed` fails on any timed call that does not exit 0.
+summarize() {
+    local phases=(program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo)
+    [[ "$speed" -eq 1 ]] && phases=(speed "${phases[@]}")
+    local status=0 name rc secs word counts passed bad=()
+    echo "cdo-gate: summary (wall seconds; logs in $logs)"
+    for name in "${phases[@]}"; do
+        if [[ -f "$logs/$name.status" ]]; then
+            read -r rc secs < "$logs/$name.status"
+        else
+            rc=missing secs=-
+        fi
+        counts="$(grep -hE '^ *[0-9]+ test result:' "$logs/$name.log" 2>/dev/null |
+            sed -E 's/^ *[0-9]+ test result: //' | paste -sd '|' -)"
+        passed="$(grep -hoE 'test result: [A-Za-z]+\. [0-9]+ passed' "$logs/$name.log" 2>/dev/null |
+            grep -oE '[0-9]+ passed' | awk '{n += $1} END {print n + 0}')"
+        if [[ "$name" == "speed" ]]; then
+            counts="$(grep -hE 'cdo-speed: (PASS|FAIL)' "$logs/speed.log" 2>/dev/null |
+                sed -E 's/^ *[0-9]+ cdo-speed: //' | paste -sd '|' -)"
+        fi
+        if [[ "$rc" != "0" ]]; then
+            word="FAILED ($rc)"
+        elif [[ "$name" != "speed" && "$passed" -eq 0 ]]; then
+            word="FAILED (no test ran)"
+        else
+            word="ok"
+        fi
+        [[ "$word" == ok ]] || { status=1; bad+=("$name"); }
+        printf 'cdo-gate:   %-26s %-20s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
+    done
+    [[ "$speed" -eq 0 ]] && loud_no_speed
+
+    if [[ "$status" -ne 0 ]]; then
+        for name in "${bad[@]}"; do
+            echo "cdo-gate: ---- $name ($logs/$name.log) ----"
+            if grep -qE '^ *[0-9]+ failures:' "$logs/$name.log" 2>/dev/null; then
+                sed -En '/^ *[0-9]+ failures:/,$p' "$logs/$name.log"
+            else
+                tail -n 60 "$logs/$name.log" 2>/dev/null
+            fi
+        done
+        echo "cdo-gate: FAIL"
+    elif [[ "$speed" -eq 0 ]]; then
+        echo "cdo-gate: PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)"
+    else
+        echo "cdo-gate: PASS"
+    fi
+    return "$status"
+}
+
 # `--no-speed` in any position; anything else unknown stops the gate (a flag it
 # silently ignored would run a different gate than the caller asked for).
 for arg in "$@"; do
     case "$arg" in
         --no-speed) speed=0 ;;
+        --summary=*) summary_dir="${arg#--summary=}" ;;
         -*)
             echo "cdo-gate: error: unknown option: $arg" >&2
             usage
@@ -83,6 +150,14 @@ for arg in "$@"; do
     esac
 done
 [[ "${CDO_GATE_NO_SPEED:-}" == "1" ]] && speed=0
+
+# A past run's summary: the run had a speed phase when it left a status for one.
+if [[ -n "$summary_dir" ]]; then
+    logs="$summary_dir"
+    [[ -f "$logs/speed.status" ]] && speed=1 || speed=0
+    summarize
+    exit $?
+fi
 
 ws="${ws_arg:-${CDO_WS:-}}"
 
@@ -164,12 +239,6 @@ run_phase() {
 # then only check freshness, so two of them can run at once.
 # ---------------------------------------------------------------------------
 if [[ "$speed" -eq 0 ]]; then
-    loud_no_speed() {
-        echo "cdo-gate: ****************************************************************"
-        echo "cdo-gate: **  SPEED AND MEMORY WERE NOT CHECKED (--no-speed).            **"
-        echo "cdo-gate: **  A slowdown or a memory rise on CDO passes this gate unseen.  **"
-        echo "cdo-gate: ****************************************************************"
-    }
     loud_no_speed
 else
     # The speed phase's two release-fast binaries (the working tree's, and the
@@ -299,56 +368,5 @@ else
     wait "$lane1"
 fi
 
-# ---------------------------------------------------------------------------
-# The summary: every phase's result from its status file (a missing one is a
-# failure), its `test result:` lines, and a failed phase's failures.
-# ---------------------------------------------------------------------------
-phases=(program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo)
-[[ "$speed" -eq 1 ]] && phases=(speed "${phases[@]}")
-# A phase's exit status and wall seconds; "missing -" when it never ended.
-phase_result() {
-    if [[ -f "$logs/$1.status" ]]; then
-        cat "$logs/$1.status"
-    else
-        echo "missing -"
-    fi
-}
-status=0
-echo "cdo-gate: summary (wall seconds; logs in $logs)"
-for name in "${phases[@]}"; do
-    read -r rc secs <<< "$(phase_result "$name")"
-    if [[ "$rc" == "0" ]]; then
-        word="ok"
-    else
-        word="FAILED ($rc)"
-        status=1
-    fi
-    counts="$(grep -hE '^ *[0-9]+ test result:' "$logs/$name.log" 2>/dev/null |
-        sed -E 's/^ *[0-9]+ test result: //' | paste -sd '|' -)"
-    if [[ "$name" == "speed" ]]; then
-        counts="$(grep -hE 'cdo-speed: (PASS|FAIL)' "$logs/speed.log" 2>/dev/null |
-            sed -E 's/^ *[0-9]+ cdo-speed: //' | paste -sd '|' -)"
-    fi
-    printf 'cdo-gate:   %-26s %-12s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
-done
-[[ "$speed" -eq 0 ]] && loud_no_speed
-
-if [[ "$status" -ne 0 ]]; then
-    for name in "${phases[@]}"; do
-        read -r rc _ <<< "$(phase_result "$name")"
-        [[ "$rc" == "0" ]] && continue
-        echo "cdo-gate: ---- $name ($logs/$name.log) ----"
-        if grep -qE '^ *[0-9]+ failures:' "$logs/$name.log" 2>/dev/null; then
-            sed -En '/^ *[0-9]+ failures:/,$p' "$logs/$name.log"
-        else
-            tail -n 60 "$logs/$name.log" 2>/dev/null
-        fi
-    done
-    echo "cdo-gate: FAIL"
-elif [[ "$speed" -eq 0 ]]; then
-    echo "cdo-gate: PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)"
-else
-    echo "cdo-gate: PASS"
-fi
-
-exit "$status"
+summarize
+exit $?

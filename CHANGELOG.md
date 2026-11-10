@@ -154,6 +154,22 @@ Terms used in the wave-2 sections below:
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
 
+### Fixed (TLS-10: the CDO gate passed on failed calls)
+
+- **`scripts/cdo-speed` fails when a timed call fails.** Given a wrong workspace, every call
+  exited 1 in about 0.01 s on both sides, and the speed phase still printed `PASS` on the
+  ratios of those failures (2026-11-10, `/work/src/cdo-baseline` for its `Cloud` folder). A
+  call that exits non-zero, or fails in the engine, on either side now stops the run at once
+  with exit 1, naming the round, the call, the side, the exit code and the call's first stderr
+  lines; nothing is judged on a failed call. Every call exits 0 on CDO (the gate's runs of
+  2026-11-10), so a correct run is unchanged.
+- **`scripts/cdo-gate` fails a test phase that ran no test.** A phase whose `cargo test`
+  filter matches nothing (a renamed member or module) exits 0 on "0 passed"; the summary now
+  calls it `FAILED (no test ran)`. Every other phase already failed on a wrong workspace
+  (`ENFORCE_CDO_WS=1`): only the speed phase could pass on nothing. `cdo-gate
+  --summary=<run folder>` prints a past run's summary from its logs.
+- Tests: `tests/cli/gate_scripts.rs` (Linux/Unix), each with a discrimination proof.
+
 ### Fixed (engine limits wave 2, B2 final review follow-up 5: the rest of the unreadable `[EventSubscriber]`)
 
 - **An unreadable field of a table's validate event is a gap too** (review of 1dbb302c).
