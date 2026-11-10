@@ -200,8 +200,8 @@ pub fn detect_d46(
     // Pre-build RoutineId → commit operation sites for O(1) terminal lookup.
     // Engine limits B2: a routine declared in two `#if` arms is two rows of one
     // id, each with its own commit sites: the id's list holds every row's (a
-    // site shared by two rows, one id in two files, once: its LAST owning
-    // row's, class P).
+    // site shared by two rows, as a test states by assignment, once: its LAST
+    // owning row's, class P).
     let mut commit_sites_by_routine: HashMap<String, Vec<&POperationSite>> = HashMap::new();
     for r in &ws.routines {
         for s in r.operation_sites.iter().filter(|s| s.kind == "commit") {

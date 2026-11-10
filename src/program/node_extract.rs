@@ -109,6 +109,40 @@ pub struct DatasetNode {
     pub may_export: bool,
 }
 
+impl DatasetNode {
+    /// Merge another declaration of the same object, which no build compiles
+    /// together with this one (two `#if` arms, or two files; engine limits B2):
+    /// a direction either allows is allowed, an item only one declares is kept,
+    /// and an item both declare keeps a property only where they agree (`None`
+    /// otherwise, as for `#if` arms inside one item).
+    pub fn merge(&mut self, other: DatasetNode) {
+        self.known &= other.known;
+        self.may_import |= other.may_import;
+        self.may_export |= other.may_export;
+        for item in other.items {
+            let same = self.items.iter_mut().find(|k| {
+                k.kind == item.kind
+                    && k.name.eq_ignore_ascii_case(&item.name)
+                    && k.source_table == item.source_table
+            });
+            match same {
+                Some(k) => {
+                    let agree = |a: &mut Option<bool>, b: Option<bool>| {
+                        if *a != b {
+                            *a = None;
+                        }
+                    };
+                    agree(&mut k.use_temporary, item.use_temporary);
+                    agree(&mut k.auto_save, item.auto_save);
+                    agree(&mut k.auto_update, item.auto_update);
+                    agree(&mut k.auto_replace, item.auto_replace);
+                }
+                None => self.items.push(item),
+            }
+        }
+    }
+}
+
 /// One item of a [`DatasetNode`] (`al_syntax::ir::DatasetItemDecl`, its table
 /// parsed like `SourceTable`). Each property is `None` when builds disagree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

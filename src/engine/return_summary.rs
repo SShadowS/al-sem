@@ -498,6 +498,14 @@ pub fn compute_return_summaries(
             summary.clone()
         };
 
+        // Engine limits B2 (wave 2 final review): an id declared more than
+        // once (`#if` arms, or two files) is one summary over every row; the
+        // last row alone decided it.
+        let effective_summary = match result.get(&r.id) {
+            Some(earlier) => merge_alternative_summaries(earlier, &effective_summary),
+            None => effective_summary,
+        };
+
         // Key by internal RoutineId (slash format).
         result.insert(r.id.clone(), effective_summary.clone());
 
@@ -508,6 +516,44 @@ pub fn compute_return_summaries(
     }
 
     result
+}
+
+/// The summary of one routine id whose rows `a` and `b` are alternative
+/// builds (two `#if` arms, or two files; engine limits B2): a value they
+/// disagree on is not known (`"unknown"`, and `"conditional"` for the commit
+/// behavior), a "may" flag holds when either has it, and the coverage is
+/// `partial` when either is.
+#[must_use]
+pub fn merge_alternative_summaries(
+    a: &RoutineReturnSummary,
+    b: &RoutineReturnSummary,
+) -> RoutineReturnSummary {
+    let agree = |x: &JsonValue, y: &JsonValue| {
+        if x == y {
+            x.clone()
+        } else {
+            JsonValue::String("unknown".to_string())
+        }
+    };
+    RoutineReturnSummary {
+        has_normal_return_path: agree(&a.has_normal_return_path, &b.has_normal_return_path),
+        all_paths_error: agree(&a.all_paths_error, &b.all_paths_error),
+        has_try_function_boundary: a.has_try_function_boundary || b.has_try_function_boundary,
+        try_function_conditional: a.try_function_conditional
+            || b.try_function_conditional
+            || a.has_try_function_boundary != b.has_try_function_boundary,
+        has_error_behavior_collect: a.has_error_behavior_collect || b.has_error_behavior_collect,
+        coverage: if a.coverage == "partial" || b.coverage == "partial" {
+            "partial"
+        } else {
+            a.coverage
+        },
+        commit_behavior: if a.commit_behavior == b.commit_behavior {
+            a.commit_behavior
+        } else {
+            "conditional"
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

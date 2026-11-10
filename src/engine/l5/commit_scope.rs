@@ -410,9 +410,10 @@ impl CommitScopes {
         }
         let mut by_routine: HashMap<String, Declared> = HashMap::new();
         // The ids with a row that declares nothing: that row's build runs
-        // its commits normally (the lowerer marks an attribute one arm of a
-        // FILE lacks as conditional, but rows of one id in two files are
-        // not compared there).
+        // its commits normally. (The model join marks an attribute one row
+        // of an id lacks as conditional, in one file or across files,
+        // `workspace::join_alternative_declarations`; this rule keeps the
+        // reading right on rows built without it, e.g. a test's.)
         let mut plain_row: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for r in &ws.routines {
             let d = match objects.get(r.object_id.as_str()) {

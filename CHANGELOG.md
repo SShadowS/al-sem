@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 final review: one id declared in several places)
+
+- **Two declarations of one id that never compile together are alternatives, wherever
+  they are.** One app can declare a routine, an object or a table twice only where no
+  build compiles both: two `#if` arms of one member list, two whole-object `#if` arms
+  (`#if X codeunit 50 "A" {…} #else codeunit 50 "A" {…} #endif`, or two separate `#if`
+  blocks), or two FILES (one under `#if A`, one under `#if not A`). The engine treated
+  them as alternatives only inside one object declaration in one file. Found by the
+  wave 2 final review:
+  - A `[TryFunction]` in one of two whole-object arms, or in one of two files, trapped
+    the call in every build: `prove … throws-error` answered a wrong definite `no`
+    ("caught on every route by a trap"; the pre-wave-2 binary said `yes`). The
+    lowerer's `mark_attributes_some_arm_lacks` compared the routines of ONE object
+    declaration, and `LiteralReach::new` and `callers_context` read the id's first row.
+    With two files the answer depended on which file sorted first.
+  - One routine in two files was never lifted: `lift_arm_declarations` counted
+    declarations per file, so each file's write read `unconditional on success`
+    (`commits-on-success-path: yes`, though a build of the other file never commits).
+    The two files' rows also shared their site ids, so a write was cited at the other
+    file's line.
+  - `TableType = Temporary` in one file's declaration of a table made the table
+    temporary in every build when that row was read (a wrong `writes-table: no`, which
+    depended on file order).
+  - A subscriber or an XmlPort `Direction` in one file only was lost: the program graph
+    kept the FIRST file's copy (`EventFacts::of_arms` merged copies of one file only, a
+    #103 rule; `dedup_objects` did not merge the dataset).
+- **The fix: a model-level join** (`workspace::join_alternative_declarations`), run on the
+  assembled raw rows in every assembly entry (single-app, cross-app and the test entry),
+  before `RowNodes`, the record resolution and the attach. It reads other files' rows, so
+  it never runs in `project_ir`, and a file's cached raw rows (`row_cache`) stay a
+  function of that file alone. For the source rows of one routine id (any object
+  declaration, any file):
+  - an attribute not every row carries (same text, whitespace removed, lowercased) is
+    conditional on every row. So `has_definite_attribute` on ANY row is "every row has
+    it", and every reader that takes one row of an id (`traps::is_try_function` in
+    `LiteralReach::new` and `callers_context`, `return_summary::parse_commit_behavior`,
+    `commit_scope::declared`, `model::events::isolated_in_some_builds_only`) reads the
+    definite answer only when every declaration agrees;
+  - a `top-level` site is `conditional` (it replaces `lift_arm_declarations`);
+  - the rows of a later file continue the site numbering of the earlier files' (`op`,
+    `cs`, `loop`, `u`, `rule`), as `#if` arms in one file already did, so a site id
+    names one site. The rewrite covers every field that holds a site id; a debug build
+    asserts it (the row's `Debug` text after equals the rewrite of its text before).
+    Decided: distinct, not shared, so no reader needs the class-P "last owning row"
+    rule for real source any more.
+  - A table declared more than once is temporary only when every declaration is.
+  - **Objects are not joined.** A `ModelObject` row is read by the routines it declares
+    (#279: `SingleInstance`, page permissions, `SourceTableTemporary`,
+    `InherentCommitBehavior`), and its properties hold in exactly the builds in which
+    those routines exist. A first version joined them (a value the declarations
+    disagree on read as not known); it lost #279's exact per-arm findings (d57, d39,
+    `cli_split_object_readers` R7/R8) and was dropped. The readers that ask about an
+    object from outside merge its declarations themselves: `commit_scope` (every object
+    row), the program graph's `dedup_objects`, and the return summaries below.
+- **The program graph merges the copies of one object or routine from any file.**
+  `dedup_objects` now merges an XmlPort's dataset (`DatasetNode::merge`: a direction
+  either copy allows, every item, an item property only where the copies agree).
+  `EventFacts::of_arms` unions the event facts of every stamped copy, not only the
+  survivor's own file's. The #103 tests that pinned first-wins across files are decided
+  again: `copies_from_a_second_file_add_their_subscriptions`,
+  `opposite_arms_in_two_files_are_merged` (a stale second read of one app adds possible
+  subscriptions; first-wins could lose the current file's).
+- **The return summaries merge the rows of an id** (`compute_return_summaries`, new
+  `merge_alternative_summaries`): a value the rows disagree on is `unknown` (normal
+  return, all paths error) or `conditional` (commit behavior), a "may" flag holds when
+  either row has it, coverage is `partial` when either is. It was the last row's.
+- **A two-arm callee's `Commit` does not dominate its caller's return.** The snapshot
+  clears `dominates_success_return` on every row of a collided id
+  (`CollidedRows::order`), as no row's site is `top-level`. A caller of `#if A … Insert;
+  Commit; #else … Insert; if k = 1 then exit; Commit; #endif` got a root-scope
+  `COMMIT_DOMINATES_RETURN`, valid for refutation, on arm A's commit (the review's
+  non-blocking item 1; `prove commits-on-success-path` already said `unknown`).
+- **A caller's digest names each reached site by its own operation id.** The review's
+  `ord` probe (`digest --routine Ord::CallsTwoArm`) printed `…/op1` for arm A's commit
+  at line 128 and for arm B's at line 137 (and `…/op0` for both inserts), which
+  contradicted "B2 per-arm ids" below. The ids were right; the digest was not. An
+  inherited effect enumerated per site (`reconstruct_site_witnesses`) carries the
+  site's own fact for its detail and line, but `origin_operation_ids` (the terminal's
+  `operationId`) took the REPRESENTATIVE fact's id. Plain AL had the same defect: a
+  callee with two `Commit`s printed one id at both lines. Now the site's own id.
+- **Outside consumers.** Persisted ids: a routine declared in two files has its second
+  file's site ids moved (`…/opN`, `…/csN` and the digest `factId`s, snapshot and `diff`
+  operation ids built on them); fingerprints strip site segments, so baselines do not
+  move. Digest: a caller's `paths[].terminal.operationId` now names the site whose line
+  it prints (any callee with two sites of one kind). The impact-base cache's summary
+  schema is 4 (`impact::keys::SUMMARY_SCHEMA`; the impact JSON field `summarySchema`
+  reads `4`): a base cached before holds the old ids and readings. `alsem graph` may gain
+  subscription edges (a subscriber declared in a second file). No snapshot schema bump
+  (its shape did not change). No golden moved.
+- **CDO** (`bc3ccb18`, counted from source, not run): the workspace declares no object
+  twice. Dependencies: Continia System Application declares 6 object numbers in two
+  files (codeunits 6225900, 6225911, 6225935, 6225936, 6225937 and enum 6225900): one
+  of each pair is a whole object under `#if USEFILEPROVIDERS` (or `#if
+  USEFILESERVICE`), the other an unconditional object with ANOTHER name. The ids key on
+  the number, so the join reads them as alternatives; their routine ids collide only
+  where the two objects share a routine signature. No app declares
+  one object twice in one file (Microsoft System Application's codeunit 8998 and enum
+  8889 split only their header by `#if`: one declaration each). The wave 2 per-arm
+  census on the cross-app model found 2 collision groups, both in one file (Base App
+  `PageManagement`, routine arms). The CDO run is left to the branch gate.
+- Tests: CLI `cli_b2_alternative_declarations.rs`, from the reviewers' probes, each
+  stating its precondition in its source and testing both file orders:
+  `a_try_function_one_declaration_lacks_traps_nothing_for_certain` (one file
+  `#if`/`#else`, one file two `#if` blocks, two files; the attribute on the first and on
+  the second declaration; single-app and cross-app; control: on both, `no`),
+  `a_routine_declared_in_two_files_is_conditional_and_cites_its_own_file`,
+  `a_table_temporary_in_one_file_only_may_be_written` (control: both temporary, `no`),
+  `a_subscription_in_one_file_only_is_possible` (control: neither, `no`),
+  `a_direction_in_one_file_only_may_still_import` (control: `Export` in both, `no`),
+  `a_callers_digest_names_each_site_by_its_own_operation` (two-arm and plain AL),
+  `a_two_arm_callees_commit_does_not_dominate_the_callers_return` (control: a routine
+  declared once keeps the label). Model `declarations_in_two_files_are_alternatives`.
+  The L4 host oracle's `t1u_collided_site_callee` needed two files to share a site,
+  which no source can do now: its precondition is now one site per row, and the
+  solve-global digest's `collided_site_callee` input has no discrimination proof
+  through that oracle any more (a stated limit; the class-P rules stay for rows that
+  share ids by assignment, `share_collided_site_ids`).
+- Session: `program::session::workspace::tests::{default_mode,low_mem}` green;
+  `aldump --session-refresh <copy> --verify` on a two-file fixture copy (the review's
+  `twofile-commit` and `ws6s` probes in one workspace), editing the tool's own pick and
+  each split file (`--file src/b.al`, `--file src/ta.al`), default and `--low-mem`:
+  every step `equalToCold: true`.
+- Discrimination proofs (break with Edit, run the narrowest test, revert with Edit, run
+  green; `cargo test --test cli cli_b2_alternative_declarations::` unless named):
+  1. The attribute join (`false &&`): RED `a_try_function_…` (`one file, #if/#else`,
+     first only: `no`).
+  2. The `top-level` lift (`false &&`): RED `a_routine_declared_in_two_files_…`
+     (`AD A`: `unconditional-on-success`).
+  3. The cross-file renumbering (`true ||`, skip): RED the same test (`AD A` cited at
+     `ws:src/b.al`).
+  4. The table join (`false &&`): RED `a_table_temporary_…` (`b.al` temporary: `no`).
+  5. `dedup_objects`' dataset merge (call commented out): RED `a_direction_…`
+     (`Export` in `a.al`: `no`).
+  6. `EventFacts::of_arms` back to the survivor's file: RED `a_subscription_…`
+     (subscriber in `b.al`: `no`).
+  7. The digest's origin back to the representative's id: RED
+     `a_callers_digest_…` (`…/op0` at lines 14 and 22; the plain-AL control printed
+     `…/op1` at 33 and 35 under the same break).
+  8. `CollidedRows::order` keeps `dominates_success_return`: RED
+     `a_two_arm_callees_commit_…`.
+  9. The return-summary merge off (last row wins): RED
+     `cargo test -p al-sem --lib declarations_in_two_files_are_alternatives` (`P`'s
+     `[TryFunction]` boundary lost).
+  10. The join call in the cross-app entry removed: RED `a_try_function_…` (the
+      cross-app run: `no`).
+  Each was GREEN once reverted (the module 7/7, the model test 1/1).
+
 ### Fixed (engine limits wave 2, B2 per-arm ids: the readers that look a site up)
 
 - **A routine declared in two `#if` arms is read through the arm that holds each
@@ -38,16 +185,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     integrate/w2 said 3 (it also counted arm B's `AP Log B`, which no build compiling
     arm A writes before that Commit); `Work`'s d9 finding sits at arm A's declaration.
   - **Whole-object arms in one file are `conditional`.** `lift_arm_declarations`
-    counts the declarations per FILE now (it was per object), so `#if A codeunit X {…}
-    #else codeunit X {…} #endif` in one file reads each object's top-level sites as
+    counted the declarations per FILE (it was per object), so `#if A codeunit X {…}
+    #else codeunit X {…} #endif` in one file read each object's top-level sites as
     `conditional` (a build compiles one object), pinned by
-    `natural_object_arms_in_one_file_number_apart`.
+    `natural_object_arms_in_one_file_number_apart`. (Superseded by the final review
+    above: the lift is now a model-level join over every row of an id, so it covers
+    two FILES too, which this per-file count never saw.)
   - **Stated limits.** A routine-level location (a finding's routine) is the arm that
     holds the finding's site, and the id's last row when the finding has none. The
     literal flow program is built for a routine's first row only: another arm's call
     reads no flow value (no literal pruning there, the conservative side).
     `closed_world_temp` still refuses to prove a routine with several rows. Two FILES
-    that declare one id still share site ids (B2 below).
+    that declared one id still shared site ids here; the final review above numbers
+    them apart.
   - **CDO** (`bc3ccb18`, release-fast, against the `integrate/w2` run): `alsem analyze`
     has the same 2,255 findings, byte for byte; only d43's `skipped.other` grows by 2
     (the two `PageManagement` arms' dispatch sites are now read, then skipped). The
@@ -108,10 +258,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     their own per-arm ids; the callee row is read only for its kind and name), the
     commit graph (per node), B5's FlowField pass (`attach_flow_field_reads` walks every
     row; locals are never shared across rows), B6's dataset operations (keyed by call
-    site, every row walked), B2 round 2's attribute readers (the lowerer makes one id's
-    rows agree: an attribute one arm lacks is conditional on every row), B7's trap
-    callee test (kind and name only), and the per-row evidence and operation index of
-    B5.
+    site, every row walked), and the per-row evidence and operation index of B5. This
+    list also named "B2 round 2's attribute readers (the lowerer makes one id's rows
+    agree)" and "B7's trap callee test (kind and name only)". Both were false: the
+    lowerer compared the rows of ONE object declaration only, and the trap test reads
+    the callee row's `[TryFunction]` (`LiteralReach::new`, the id's first row, and
+    `callers_context`). The final review above fixes them with a model-level join.
 
 ### Fixed (engine limits wave 2, B2 per-arm ids)
 
@@ -145,8 +297,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `query effects` anchors each arm's operation at its own arm
       (`query_effects_origin_is_each_arms_own_operation`).
   - **The 11b collision rules stay**, for rows that share site ids for other reasons:
-    one id declared in two FILES still shares them (numbering never crosses a file,
-    the unit the session's row cache reuses). The 11b tests now state the shared ids
+    one id declared in two FILES still shared them here (numbering never crosses a
+    file, the unit the session's row cache reuses; the final review above numbers
+    them apart in the model-level join instead). The 11b tests now state the shared ids
     BY ASSIGNMENT: `workspace::share_collided_site_ids` renumbers every collided row's
     sites from 0 on the raw rows before the attach (and asserts it missed no field,
     by comparing the row's `Debug` text), through the test entries
@@ -300,7 +453,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type; lowercased, no whitespace, so at least as coarse as `compute_routine_id`) and
   marks an attribute conditional on every row when another row of the same routine does
   not carry the same attribute text (`mark_attributes_some_arm_lacks`). The same
-  attribute on both arms stays definite.
+  attribute on both arms stays definite. (This compared the routines of ONE object
+  declaration only: two whole-object arms, or two files, were not compared. The final
+  review above moves the rule to the model, over every row of an id.)
 - **Third review of B2: an `#if`-only page permission blocks nothing.** `page_ui`'s
   block needed every entry of `Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`
   to be `false`, so `#if CLEAN99 DeleteAllowed = false; #endif` blocked deletes in every
@@ -337,7 +492,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arm's body, so no arm's site runs on every success path; each arm's `Insert` read
   `unconditional on success` through its callers. The model builder now lifts the
   `top-level` sites of every row of a collided id to `conditional`
-  (`program::model::workspace::lift_arm_declarations`).
+  (`program::model::workspace::lift_arm_declarations`). (It counted the declarations
+  per file, so one id in two files was not lifted; the final review above replaces it
+  with the model-level join, `join_alternative_declarations`.)
 - **Not fixed here (fixed by "B2 per-arm ids" above): a routine declared in two `#if`
   arms still cited one arm's line for the other's write.** Both arms minted the same site
   ids (`{routine}/op0`), and readers resolve an id to one row (#160 step 11b, class P:

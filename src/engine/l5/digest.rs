@@ -5417,6 +5417,11 @@ fn digest_one_root<'i>(
                     Some(s) => effect_detail_of(s, &idx.stable_id_to_display),
                     None => detail.clone(),
                 };
+                // ...and its own operation: the representative's names ONE site,
+                // so two sites of one carrier (two `Commit`s, or one per `#if`
+                // arm) would both carry it, each row with its own line but the
+                // same `operationId` (wave 2 final review, B2 item 2).
+                let origin_op = site.unwrap_or(fact).witness_operation_id();
                 // Project all paths to QueryWitnessHop[][] AND compute each raw path's
                 // conditionality from its OWN terminal hop (#8 — must be done before
                 // projection, which strips terminals).
@@ -5653,7 +5658,7 @@ fn digest_one_root<'i>(
                                 .group_ops
                                 .entry(r.to_string())
                                 .or_insert_with(|| Some(BTreeSet::new()));
-                            match (fact.witness_operation_id(), ops.as_mut()) {
+                            match (origin_op, ops.as_mut()) {
                                 (Some(op), Some(set)) => {
                                     set.insert(op.to_string());
                                 }
@@ -5671,7 +5676,7 @@ fn digest_one_root<'i>(
                         acc.temp_state = merged_temp;
                         if acc.group.is_none() {
                             acc.origin_operation_ids
-                                .extend(fact.witness_operation_id().map(str::to_string));
+                                .extend(origin_op.map(str::to_string));
                         }
                         pos
                     } else {
@@ -5696,10 +5701,7 @@ fn digest_one_root<'i>(
                             origin_operation_ids: if bnd.is_some() {
                                 BTreeSet::new()
                             } else {
-                                fact.witness_operation_id()
-                                    .map(str::to_string)
-                                    .into_iter()
-                                    .collect()
+                                origin_op.map(str::to_string).into_iter().collect()
                             },
                             group: bnd.clone().map(|b| (b, BTreeMap::new())),
                             group_ops: BTreeMap::new(),

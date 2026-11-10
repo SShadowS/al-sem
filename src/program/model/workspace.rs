@@ -1627,23 +1627,18 @@ fn project_ir(
 ) -> Vec<(usize, usize)> {
     // The `(object, routine)` position in `ir_file` of each row pushed, in order.
     let mut positions = Vec::new();
-    // Engine limits B2: how many declarations of each internal id this file
-    // has. A routine declared in two `#if` arms (of a member list, or of two
-    // declarations of its whole object in this file) is two rows under one id
-    // (#160 step 11b); `lift_arm_declarations` reads the count once the file's
-    // rows are built.
-    let mut arms_by_id: HashMap<String, u32> = HashMap::new();
     // Engine limits B2 (per-arm ids): where the next declaration of each id
     // starts numbering its sites and rules. The first declaration starts at 0
     // (the ids of a routine declared once); a later `#if` arm continues where
     // the earlier ones stopped, so no two arms share a site id and each fact
     // cites its own arm's line (`ir_walk::SiteIdBase`). Per file: the file is
     // the unit the session's row cache reuses (`row_cache`), so a row's ids
-    // never depend on another file. Declarations of one id in two FILES still
-    // share their site ids (a collision the #160 step 11b rules handle).
+    // never depend on another file. Declarations of one id in two FILES are
+    // numbered apart by the model-level join
+    // ([`join_alternative_declarations`]), which also reads every row of an
+    // id as one alternative of the others.
     let mut next_base_by_id: HashMap<String, (crate::program::body::ir_walk::SiteIdBase, u32)> =
         HashMap::new();
-    let first_row = workspace.routines.len();
     for (oi, routine_ixs) in population {
         let oi = *oi;
         let o = &ir_file.objects[oi];
@@ -1938,7 +1933,6 @@ fn project_ir(
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
                 );
-                *arms_by_id.entry(rid.clone()).or_insert(0) += 1;
                 let base = next_base_by_id
                     .get(&rid)
                     .map_or_else(Default::default, |&(b, _)| b);
@@ -2462,33 +2456,180 @@ fn project_ir(
             });
         }
     }
-    lift_arm_declarations(&mut workspace.routines[first_row..], &arms_by_id);
     positions
 }
 
-/// Engine limits B2: a routine declared in several `#if` arms runs ONE arm's
-/// body per build, so no arm's site runs on every success path of the routine:
-/// a `top-level` site of such a row is only `conditional`. Without this, a
-/// caller of `#if X procedure P() Insert(A) #else procedure P() Insert(B)
-/// #endif` read BOTH inserts as unconditional. No configuration is chosen yet
-/// (later L22 steps), so every arm stays a possible build.
-fn lift_arm_declarations(rows: &mut [ModelRoutine], arms_by_id: &HashMap<String, u32>) {
+/// Engine limits B2 (wave 2 final review): the model-level join of the
+/// declarations of one id. One app can declare a routine, an object or a table
+/// more than once only where no build compiles two of them: two `#if` arms of
+/// one member list, two `#if` arms that each declare the whole object (in one
+/// file, or in two separate `#if` blocks), or two FILES (`#if A` in one, `#if
+/// not A` in the other; an object id twice in one compiled app does not
+/// compile). No configuration is chosen (later L22 steps), so each declaration
+/// is one possible build, and a fact one of them lacks is a "may":
+///
+/// - **Routines** (rows of one id, [`join_routine_declarations`]): an
+///   attribute not every row carries (same text) is conditional on every row,
+///   so a reader that takes ONE row and asks for a definite attribute
+///   (`has_definite_attribute`: a trap, a suppressed or erroring commit) gets
+///   the answer every row gives; a `top-level` site is only `conditional` (a
+///   build runs one row's body); and the rows of two files are numbered apart
+///   (the second file's site ids continue after the first's), as `#if` arms in
+///   one file already are, so a site id names one site.
+/// - **Tables** ([`join_table_declarations`]): `TableType = Temporary` holds
+///   only when every declaration is temporary. A table is read by its id from
+///   anywhere (a `Record "T"` variable), so one declaration's property
+///   decided every build.
+///
+/// **Objects are not joined.** A `ModelObject` row is read by the routines it
+/// declares (`declaring::DeclaringObjects`, #279: a routine reads its OWN
+/// declaration's `SingleInstance`, page permissions, `SourceTableTemporary`,
+/// `InherentCommitBehavior`), and that row's properties hold in exactly the
+/// builds in which that routine exists: exact, not a "may". A reader that asks
+/// about the object from outside merges the declarations itself:
+/// `commit_scope` (every object row's `InherentCommitBehavior`), the program
+/// graph's `dedup_objects` (page UI blocks, an XmlPort's dataset, the source
+/// table), `compute_return_summaries` (per id, after each row's own object).
+///
+/// It runs on the assembled raw rows, before `RowNodes`, the record
+/// resolution and the attach, in every assembly entry. It reads other files'
+/// rows, so it never runs in `project_ir`: a file's cached raw rows
+/// (`row_cache`) stay a function of that file alone.
+pub(crate) fn join_alternative_declarations(ws: &mut ModelEntities) {
+    join_routine_declarations(&mut ws.routines);
+    join_table_declarations(&mut ws.tables);
+}
+
+/// Attribute text as [`join_routine_declarations`] compares it: whitespace
+/// removed, lowercased (the lowerer's `mark_attributes_some_arm_lacks` rule).
+fn attribute_text_key(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The routine half of [`join_alternative_declarations`]. Only source rows
+/// (`ws:`/`dep:` units) take part: a symbol-only row is one compiled build, and
+/// a group of them is an ABI overload collapse, not alternatives (a group never
+/// mixes roles, `projection::mixed_role_groups`).
+fn join_routine_declarations(rows: &mut [ModelRoutine]) {
     const TOP: &str = "top-level";
     const COND: &str = "conditional";
-    for r in rows
-        .iter_mut()
-        .filter(|r| arms_by_id.get(&r.id).is_some_and(|&n| n >= 2))
-    {
-        for c in r
-            .call_sites
-            .iter_mut()
-            .map(|s| &mut s.control_context)
-            .chain(r.operation_sites.iter_mut().map(|s| &mut s.control_context))
-        {
-            if c.as_deref() == Some(TOP) {
-                *c = Some(COND.to_string());
+    let is_source = |r: &ModelRoutine| {
+        let u = &r.source_anchor.source_unit_id;
+        u.starts_with("ws:") || u.starts_with("dep:")
+    };
+    let groups: Vec<Vec<usize>> = {
+        let mut count: HashMap<&str, u32> = HashMap::new();
+        for r in rows.iter().filter(|r| is_source(r)) {
+            *count.entry(r.id.as_str()).or_default() += 1;
+        }
+        let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, r) in rows.iter().enumerate() {
+            if is_source(r) && count.get(r.id.as_str()).is_some_and(|&n| n >= 2) {
+                by_id.entry(r.id.as_str()).or_default().push(i);
             }
         }
+        let mut groups: Vec<Vec<usize>> = by_id.into_values().collect();
+        groups.sort_unstable();
+        groups
+    };
+    for group in groups {
+        // 1. An attribute some row lacks is conditional on every row.
+        let texts: Vec<Vec<String>> = group
+            .iter()
+            .map(|&i| {
+                rows[i]
+                    .attributes_parsed
+                    .iter()
+                    .map(|a| attribute_text_key(&a.raw))
+                    .collect()
+            })
+            .collect();
+        for (&i, own) in group.iter().zip(&texts) {
+            for (a, text) in rows[i].attributes_parsed.iter_mut().zip(own) {
+                if !texts.iter().all(|t| t.contains(text)) {
+                    a.conditional = true;
+                }
+            }
+        }
+        // 2. No row's site runs on every success path of the routine.
+        for &i in &group {
+            let r = &mut rows[i];
+            for c in r
+                .call_sites
+                .iter_mut()
+                .map(|s| &mut s.control_context)
+                .chain(r.operation_sites.iter_mut().map(|s| &mut s.control_context))
+            {
+                if c.as_deref() == Some(TOP) {
+                    *c = Some(COND.to_string());
+                }
+            }
+        }
+        // 3. The rows of a later file continue the numbering of the earlier
+        // files' (one file's rows are numbered apart by `project_ir`, and
+        // are contiguous here: the assembly appends file by file).
+        let units: Vec<String> = group
+            .iter()
+            .map(|&i| rows[i].source_anchor.source_unit_id.clone())
+            .collect();
+        if units.iter().all(|u| *u == units[0]) {
+            continue;
+        }
+        let id = rows[group[0]].id.clone();
+        let mut next: HashMap<&'static str, u32> = HashMap::new();
+        let mut offset: HashMap<&'static str, u32> = HashMap::new();
+        let mut file: Option<String> = None;
+        for (&i, u) in group.iter().zip(units) {
+            if file.as_ref() != Some(&u) {
+                offset.clone_from(&next);
+                file = Some(u);
+            }
+            if offset.values().any(|&o| o > 0) {
+                let map = |tag: &'static str, n: u32| n + offset.get(tag).copied().unwrap_or(0);
+                let f = |s: &str| rebase_site_ids(s, &id, &map);
+                #[cfg(debug_assertions)]
+                let before = format!("{:?}", rows[i]);
+                rewrite_routine_site_ids(&mut rows[i], &f);
+                #[cfg(debug_assertions)]
+                assert_eq!(
+                    format!("{:?}", rows[i]),
+                    f(&before),
+                    "join_alternative_declarations: a field of {id} holds a site id the \
+                     rewrite missed"
+                );
+            }
+            for (tag, (_, max)) in site_id_extremes(&format!("{:?}", rows[i]), &id) {
+                let n = next.entry(tag).or_insert(0);
+                *n = (*n).max(max + 1);
+            }
+        }
+    }
+}
+
+/// The table half of [`join_alternative_declarations`]: a table declared more
+/// than once (not a `tableextension` stub sharing its id) is temporary only when
+/// every declaration is (`TableType = Temporary` in one file alone left the
+/// table's database writes out in every build).
+fn join_table_declarations(tables: &mut [ModelTable]) {
+    let mut by_id: HashMap<&str, (usize, bool)> = HashMap::new();
+    for t in tables.iter().filter(|t| !t.is_extension_stub) {
+        let e = by_id.entry(t.id.as_str()).or_insert((0, true));
+        e.0 += 1;
+        e.1 &= t.is_temporary;
+    }
+    let not_every: std::collections::HashSet<String> = by_id
+        .into_iter()
+        .filter(|(_, (n, every))| *n >= 2 && !every)
+        .map(|(id, _)| id.to_string())
+        .collect();
+    for t in tables
+        .iter_mut()
+        .filter(|t| !t.is_extension_stub && not_every.contains(&t.id))
+    {
+        t.is_temporary = false;
     }
 }
 
@@ -2565,7 +2706,9 @@ pub fn assemble_and_resolve_workspace_from_program(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
-    let (ws, node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
+    let (mut ws, node_of) =
+        assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
+    join_alternative_declarations(&mut ws);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
@@ -2622,6 +2765,7 @@ pub fn assemble_and_resolve_workspace_from_program_edited(
 ) -> Option<ModelRows> {
     let (mut ws, mut node_of) =
         assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
+    join_alternative_declarations(&mut ws);
     edit(&mut ws, &mut node_of);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
@@ -2631,9 +2775,8 @@ pub fn assemble_and_resolve_workspace_from_program_edited(
 /// rules' `rule` tag.
 const SITE_ID_TAGS: [&str; 5] = ["op", "cs", "loop", "u", "rule"];
 
-/// `s` with every `{id}/{tag}{n}` site id renumbered to `{id}/{tag}{n - min}`,
-/// `min` the tag's entry of `mins` (a tag without one keeps its numbers).
-fn rebase_site_ids(s: &str, id: &str, mins: &HashMap<&'static str, u32>) -> String {
+/// `s` with every `{id}/{tag}{n}` site id renumbered to `{id}/{tag}{map(tag, n)}`.
+fn rebase_site_ids(s: &str, id: &str, map: &dyn Fn(&'static str, u32) -> u32) -> String {
     let prefix = format!("{id}/");
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -2650,17 +2793,17 @@ fn rebase_site_ids(s: &str, id: &str, mins: &HashMap<&'static str, u32>) -> Stri
         };
         let n: u32 = digits.parse().expect("a site number fits u32");
         out.push_str(tag);
-        out.push_str(&(n - mins.get(tag).copied().unwrap_or(0)).to_string());
+        out.push_str(&map(tag, n).to_string());
         rest = &after[tag.len() + digits.len()..];
     }
     out.push_str(rest);
     out
 }
 
-/// The smallest number of each site-id tag of `id` in `text`.
-fn site_id_mins(text: &str, id: &str) -> HashMap<&'static str, u32> {
+/// The smallest and the largest number of each site-id tag of `id` in `text`.
+fn site_id_extremes(text: &str, id: &str) -> HashMap<&'static str, (u32, u32)> {
     let prefix = format!("{id}/");
-    let mut mins: HashMap<&'static str, u32> = HashMap::new();
+    let mut out: HashMap<&'static str, (u32, u32)> = HashMap::new();
     for (at, _) in text.match_indices(&prefix) {
         let after = &text[at + prefix.len()..];
         for t in SITE_ID_TAGS {
@@ -2670,13 +2813,73 @@ fn site_id_mins(text: &str, id: &str) -> HashMap<&'static str, u32> {
             let n = d.bytes().take_while(u8::is_ascii_digit).count();
             if n > 0 {
                 let v: u32 = d[..n].parse().expect("a site number fits u32");
-                let m = mins.entry(t).or_insert(v);
-                *m = (*m).min(v);
+                let m = out.entry(t).or_insert((v, v));
+                *m = (m.0.min(v), m.1.max(v));
             }
             break;
         }
     }
-    mins
+    out
+}
+
+/// Rewrite every site id row `r` holds with `f`. The caller checks that no
+/// field was missed: `r`'s `Debug` text after the rewrite must equal `f`
+/// applied to its `Debug` text before ([`share_collided_site_ids`] asserts it,
+/// [`join_alternative_declarations`] in debug builds).
+fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
+    use crate::program::body::features::PCFNNode;
+    fn tree(n: &mut PCFNNode, f: &dyn Fn(&str) -> String) {
+        for s in [&mut n.operation_id, &mut n.callsite_id]
+            .into_iter()
+            .flatten()
+        {
+            *s = f(s);
+        }
+        for kids in [
+            &mut n.condition_leaves,
+            &mut n.children,
+            &mut n.else_children,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for k in kids {
+                tree(k, f);
+            }
+        }
+    }
+    let all = |v: &mut Vec<String>| v.iter_mut().for_each(|s| *s = f(s));
+    for o in &mut r.record_operations {
+        o.id = f(&o.id);
+        all(&mut o.loop_stack);
+    }
+    for c in &mut r.call_sites {
+        c.id = f(&c.id);
+        c.operation_id = f(&c.operation_id);
+        all(&mut c.loop_stack);
+    }
+    for o in &mut r.operation_sites {
+        o.id = f(&o.id);
+        all(&mut o.loop_stack);
+    }
+    for l in &mut r.loops {
+        l.id = f(&l.id);
+        if let Some((a, b)) = &mut l.exhausting_advance {
+            (*a, *b) = (f(a), f(b));
+        }
+    }
+    for u in &mut r.unreachable_statements {
+        u.id = f(&u.id);
+    }
+    if let Some(t) = &mut r.statement_tree {
+        tree(std::sync::Arc::make_mut(t), f);
+    }
+    for rule in r.rules.iter_mut().flatten() {
+        rule.id = f(&rule.id);
+    }
+    for d in r.rule_drafts.iter_mut().flatten() {
+        d.rekey_ids(f);
+    }
 }
 
 /// #160 step 11b's collided-id contract, stated BY ASSIGNMENT (engine limits
@@ -2700,27 +2903,6 @@ fn site_id_mins(text: &str, id: &str) -> HashMap<&'static str, u32> {
 /// When a row's rewrite misses a field that holds one of its site ids.
 #[doc(hidden)]
 pub fn share_collided_site_ids(routines: &mut [ModelRoutine]) -> usize {
-    use crate::program::body::features::PCFNNode;
-    fn tree(n: &mut PCFNNode, f: &dyn Fn(&str) -> String) {
-        for s in [&mut n.operation_id, &mut n.callsite_id]
-            .into_iter()
-            .flatten()
-        {
-            *s = f(s);
-        }
-        for kids in [
-            &mut n.condition_leaves,
-            &mut n.children,
-            &mut n.else_children,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for k in kids {
-                tree(k, f);
-            }
-        }
-    }
     let mut groups: HashMap<String, usize> = HashMap::new();
     for r in routines.iter() {
         *groups.entry(r.id.clone()).or_default() += 1;
@@ -2732,43 +2914,13 @@ pub fn share_collided_site_ids(routines: &mut [ModelRoutine]) -> usize {
     {
         let id = r.id.clone();
         let before = format!("{r:?}");
-        let mins = site_id_mins(&before, &id);
-        if mins.values().all(|&m| m == 0) {
+        let mins = site_id_extremes(&before, &id);
+        if mins.values().all(|&(m, _)| m == 0) {
             continue;
         }
-        let f = |s: &str| rebase_site_ids(s, &id, &mins);
-        let all = |v: &mut Vec<String>| v.iter_mut().for_each(|s| *s = f(s));
-        for o in &mut r.record_operations {
-            o.id = f(&o.id);
-            all(&mut o.loop_stack);
-        }
-        for c in &mut r.call_sites {
-            c.id = f(&c.id);
-            c.operation_id = f(&c.operation_id);
-            all(&mut c.loop_stack);
-        }
-        for o in &mut r.operation_sites {
-            o.id = f(&o.id);
-            all(&mut o.loop_stack);
-        }
-        for l in &mut r.loops {
-            l.id = f(&l.id);
-            if let Some((a, b)) = &mut l.exhausting_advance {
-                (*a, *b) = (f(a), f(b));
-            }
-        }
-        for u in &mut r.unreachable_statements {
-            u.id = f(&u.id);
-        }
-        if let Some(t) = &mut r.statement_tree {
-            tree(std::sync::Arc::make_mut(t), &f);
-        }
-        for rule in r.rules.iter_mut().flatten() {
-            rule.id = f(&rule.id);
-        }
-        for d in r.rule_drafts.iter_mut().flatten() {
-            d.rekey_ids(&f);
-        }
+        let map = |tag: &'static str, n: u32| n - mins.get(tag).map_or(0, |&(m, _)| m);
+        let f = |s: &str| rebase_site_ids(s, &id, &map);
+        rewrite_routine_site_ids(r, &f);
         assert_eq!(
             format!("{r:?}"),
             f(&before),
@@ -2839,6 +2991,7 @@ pub(crate) fn assemble_and_resolve_cross_app_from_program_cached(
         let _s = pt::span("l3", "l3.dependency_rows");
         append_dependency_rows(&mut ws, &mut node_of, ctx, demand, parenless, needs, cache)
     };
+    join_alternative_declarations(&mut ws);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
@@ -3751,8 +3904,9 @@ pub struct CollisionCensus {
     /// the projection's role check makes. Must read 0.
     pub groups_mixed_role: usize,
     /// Groups whose rows all come from one source file (engine limits B2,
-    /// per-arm ids): `#if` arms numbered apart, so they share no site id. The
-    /// other groups (rows from several files) still share their site ids.
+    /// per-arm ids): `#if` arms numbered apart by `project_ir`. The other
+    /// groups (rows from several files) are numbered apart by the model join
+    /// (`join_alternative_declarations`); neither shares a site id.
     pub groups_one_file: usize,
 }
 
@@ -4520,6 +4674,117 @@ codeunit 50816 "T5 F3 Dedup"
         };
         assert_eq!(cb("IcbArm"), "conditional");
         assert_eq!(cb("IcbAll"), "ignore");
+    }
+
+    /// Engine limits B2, wave 2 final review: declarations of one id in two
+    /// FILES (`#if A` in `a.al`, `#if not A` in `b.al`) are alternative
+    /// builds, joined at the model level (`join_alternative_declarations`).
+    /// Stated: `a.al`'s `Cu` carries `InherentCommitBehavior = Ignore` and
+    /// `P`'s `[TryFunction]`, and its `Q` always raises; `b.al`'s carries
+    /// neither and its `Q` returns. `BothCu` carries them in both files (the
+    /// control), `Once` is declared once. An attribute `b.al` lacks is
+    /// conditional on BOTH rows; a summary value the rows disagree on is
+    /// `unknown`/`conditional` (`compute_return_summaries`: the last row's
+    /// alone before). Each object row keeps its own properties (#279).
+    #[test]
+    fn declarations_in_two_files_are_alternatives() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("src")).unwrap();
+        std::fs::write(
+            t.path().join("app.json"),
+            r#"{"id":"b2b2b2b2-0000-4000-8000-0000000000f8","name":"B2J","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+        )
+        .unwrap();
+        let cu = |props: &str, attr: &str, q: &str| {
+            format!(
+                "codeunit 50112 Cu\n{{\n{props}{attr}    procedure P()\n    begin\n        Error('x');\n    end;\n\n    procedure Q()\n    begin\n{q}    end;\n}}\n"
+            )
+        };
+        let both = "codeunit 50113 BothCu\n{\n    InherentCommitBehavior = Ignore;\n    [TryFunction]\n    procedure P()\n    begin\n        Error('x');\n    end;\n}\n";
+        let a = format!(
+            "#if A\n{}{}#endif\n",
+            cu(
+                "    InherentCommitBehavior = Ignore;\n",
+                "    [TryFunction]\n",
+                "        Error('x');\n"
+            ),
+            both
+        );
+        let b = format!(
+            "#if not A\n{}{}#endif\n",
+            cu("", "", "        Commit();\n"),
+            both
+        );
+        std::fs::write(t.path().join("src/a.al"), a).unwrap();
+        std::fs::write(t.path().join("src/b.al"), b).unwrap();
+        std::fs::write(
+            t.path().join("src/t.al"),
+            "codeunit 50114 Once\n{\n    [TryFunction]\n    procedure P()\n    begin\n        Error('x');\n    end;\n}\n",
+        )
+        .unwrap();
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(
+                t.path(),
+            )
+            .expect("assemble");
+        let objs = |name: &str| -> Vec<&ModelObject> {
+            let v: Vec<_> = resolved
+                .workspace
+                .objects
+                .iter()
+                .filter(|o| o.name == name)
+                .collect();
+            assert!(!v.is_empty(), "{name}");
+            v
+        };
+        let icb: Vec<Option<&str>> = objs("Cu")
+            .iter()
+            .map(|o| o.inherent_commit_behavior.as_deref())
+            .collect();
+        assert_eq!(icb, [Some("ignore"), None], "each row its own (#279)");
+        let rows = |object: &str| -> Vec<&ModelRoutine> {
+            let ids: Vec<&str> = objs(object).iter().map(|o| o.id.as_str()).collect();
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| ids.contains(&r.object_id.as_str()))
+                .collect()
+        };
+        let try_fn = |r: &ModelRoutine| {
+            r.attributes_parsed
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case("TryFunction"))
+                .map(|a| a.conditional)
+        };
+        let named = |object: &str, name: &str| -> Vec<&ModelRoutine> {
+            rows(object)
+                .into_iter()
+                .filter(|r| r.name == name)
+                .collect()
+        };
+        let p_rows = named("Cu", "P");
+        assert_eq!(p_rows.len(), 2, "precondition: one row per file");
+        assert_eq!(try_fn(p_rows[0]), Some(true), "a.al's row");
+        assert_eq!(try_fn(p_rows[1]), None, "b.al's row has none");
+        for r in rows("BothCu") {
+            assert_eq!(try_fn(r), Some(false), "control: both rows carry it");
+        }
+        let summaries = crate::engine::return_summary::compute_return_summaries(
+            &resolved.workspace.routines,
+            Some(resolved.workspace.objects.as_slice()),
+        );
+        let s = &summaries[&p_rows[0].id];
+        assert!(s.has_try_function_boundary && s.try_function_conditional);
+        assert_eq!(s.commit_behavior, "conditional");
+        let q = &summaries[&named("Cu", "Q")[0].id];
+        assert_eq!(q.all_paths_error, serde_json::json!("unknown"));
+        assert_eq!(q.has_normal_return_path, serde_json::json!("unknown"));
+        assert_eq!(q.commit_behavior, "conditional");
+        let both_p = &summaries[&rows("BothCu")[0].id];
+        assert_eq!(both_p.commit_behavior, "ignore", "control");
+        let once = &summaries[&rows("Once")[0].id];
+        assert!(once.has_try_function_boundary && !once.try_function_conditional);
     }
 
     // Task 3 (BCQuality wave): `PVariableSymbol.scope` forwards onto `ModelVariable` —
