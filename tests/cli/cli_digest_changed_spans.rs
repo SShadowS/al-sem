@@ -3562,9 +3562,11 @@ fn digest_argv(ws: &Path, rest: &[&str]) -> Vec<String> {
     crate::cli_batch_plan::argv(&a)
 }
 
-/// Runs `batches` as one manifest (every batch but the last in a worker),
-/// asserts each job's exit, stdout and stderr equal its standalone run's, and
-/// returns the exits. Both runs start in `cwd` (the test's own when `None`).
+/// Runs `batches` as one manifest, asserts each job's exit, stdout and stderr
+/// equal its standalone run's, and returns the exits. With two or more
+/// batches EVERY batch runs in a worker; a one-batch manifest runs in the
+/// parent (`run_batch_cmd`). Both runs start in `cwd` (the test's own when
+/// `None`).
 fn batches_as_standalone(
     t: &Path,
     batches: &[Vec<Vec<String>>],
@@ -4262,19 +4264,18 @@ fn file_input_with_a_diff_of_the_same_file() {
     assert_eq!(entries(&doc), entries(&base), "{doc}");
 }
 
-/// #339 A3(f). Under the git top, an absolute path to a workspace file and a
-/// wrong-case prefix folder stay `file-unmatched` (stated limits).
+/// #339 A3(f). Under the git top, a wrong-case prefix folder stays
+/// `file-unmatched` (a stated limit). An absolute path to a workspace file
+/// resolves since #363 (`absolute_file_input_resolves_in_every_root_mode`).
 #[test]
 fn file_input_boundaries_under_git_top() {
     let t = tempfile::tempdir().unwrap();
     let ws = repo_ws(t.path());
-    let abs = ws.join("src/posting.al");
-    for file in [arg(&abs), "cloud/src/posting.al"] {
-        let (doc, code) = digest(&ws, &["--file", file], None);
-        assert_eq!(diags(&doc), file_unmatched(file), "{doc}");
-        assert!(roots(&doc).is_empty(), "{doc}");
-        assert_eq!(code, 2, "{doc}");
-    }
+    let file = "cloud/src/posting.al";
+    let (doc, code) = digest(&ws, &["--file", file], None);
+    assert_eq!(diags(&doc), file_unmatched(file), "{doc}");
+    assert!(roots(&doc).is_empty(), "{doc}");
+    assert_eq!(code, 2, "{doc}");
 }
 
 /// #339 A4. A batch decides the path root for a file-only job as standalone
@@ -4394,4 +4395,532 @@ fn batch_reads_a_changed_al_path_as_standalone() {
         batches_as_standalone(t.path(), &[vec![job()], vec![job()]], Some(&repo)),
         vec![Some(0), Some(0)],
     );
+}
+
+// ---------------------------------------------------------------------------
+// #363: an absolute path below the workspace names that file, in every root
+// mode and for every changed path (file inputs, diff headers, `Only in`, the
+// malformed-record veto), in digest, explain, tests and impact, on every
+// route. Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md`
+// §7, rows A1-A11 (A8b and A8d, `impact --base`, are in `cli_impact_base`).
+// Every absolute path is built from the test's temporary folder.
+// ---------------------------------------------------------------------------
+
+/// Line 9 of the d8 `posting.al` (inside `PostSalesDoc`), as the post-change
+/// text of a one-line change.
+const LINE9_TEXT: &str = "        Header.\"Status Posted\" := true;";
+
+/// `<ws>/src/posting.al`, absolute when `ws` is (every caller's is).
+fn abs_posting(ws: &Path) -> String {
+    arg(&ws.join("src/posting.al")).to_string()
+}
+
+/// A plain `diff -u` record whose `---` and `+++` headers are both `path`.
+fn record(path: &str, hunk: &str) -> String {
+    format!("--- {path}\n+++ {path}\n{hunk}")
+}
+
+/// A record of `path` whose hunk header the parser rejects (#72).
+fn malformed(path: &str) -> String {
+    record(path, &format!("@@ garbage @@\n{LINE9_BODY}"))
+}
+
+/// #363 A1. `--file <ws-abs>/src/posting.al` roots `src/posting.al`'s routines
+/// in every root mode, with the entries of that mode's relative baseline: under
+/// the git top (`repo_ws`) and with no `.git` (the workspace root) against
+/// `--file src/posting.al`; with `--diff-root <t>/repo` (explicit, S1) against
+/// `--file Cloud/src/posting.al`. So does `--changed <ws-abs>/src/posting.al`,
+/// and `--file <ws-abs>/src/posting.al` with the workspace passed relative
+/// (`repo/Cloud`, run from `<t>`).
+///
+/// Mutation: `path_readings` drops the anchor reading -> `file_unmatched(<abs>)`.
+#[test]
+fn absolute_file_input_resolves_in_every_root_mode() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let abs = abs_posting(&ws);
+    let repo = t.path().join("repo");
+    let plain = t.path().join("plain/Cloud");
+    d8_workspace(&plain, &d8_posting());
+    let plain_abs = abs_posting(&plain);
+    let explicit = ["--diff-root", arg(&repo)];
+    let cases = [
+        (
+            ws.as_path(),
+            vec!["--file", "src/posting.al"],
+            vec!["--file", abs.as_str()],
+            "git top",
+        ),
+        (
+            plain.as_path(),
+            vec!["--file", "src/posting.al"],
+            vec!["--file", plain_abs.as_str()],
+            "no .git",
+        ),
+        (
+            ws.as_path(),
+            vec![explicit[0], explicit[1], "--file", "Cloud/src/posting.al"],
+            vec![explicit[0], explicit[1], "--file", abs.as_str()],
+            "--diff-root",
+        ),
+    ];
+    for (w, relative, absolute, mode) in &cases {
+        let (base, code) = digest(w, relative, None);
+        assert_posting_file(&base, code, &format!("precondition, {mode}"));
+        let (doc, code) = digest(w, absolute, None);
+        assert_posting_file(&doc, code, mode);
+        assert_eq!(entries(&doc), entries(&base), "{mode}");
+    }
+
+    let (base, _) = digest(&ws, &["--file", "src/posting.al"], None);
+    let (doc, code) = digest(&ws, &["--changed", abs.as_str()], None);
+    assert_posting_file(&doc, code, "--changed");
+    assert_eq!(entries(&doc), entries(&base), "--changed");
+    let (doc, code) = digest_in(t.path(), Path::new("repo/Cloud"), &["--file", abs.as_str()]);
+    assert_posting_file(&doc, code, "relative workspace");
+    assert_eq!(entries(&doc), entries(&base), "relative workspace");
+}
+
+/// #363 A2. What is not below the workspace stays `file-unmatched` (no roots,
+/// exit 2): a real copy of the file at `<t>/other/Cloud/src/posting.al` (the
+/// workspace's depth, so only the anchor's folder names tell them apart), the
+/// workspace file spelled through `..` (`<ws-abs>/src/../src/posting.al`: `..`
+/// is never cancelled, #76), and the workspace folder itself (no rest below
+/// the anchor).
+///
+/// Mutation: match an absolute path on its tail, or on the anchor's depth
+/// without its folder names -> the copy resolves.
+#[test]
+fn absolute_path_outside_the_workspace_stays_unmatched() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let other = t.path().join("other/Cloud");
+    write(&other.join("src/posting.al"), &d8_posting());
+    let copy = abs_posting(&other);
+    let dotted = format!("{}/src/../src/posting.al", arg(&ws));
+    for file in [copy.as_str(), dotted.as_str(), arg(&ws)] {
+        let (doc, code) = digest(&ws, &["--file", file], None);
+        assert_eq!(diags(&doc), file_unmatched(file), "{file}: {doc}");
+        assert!(roots(&doc).is_empty(), "{file}: {doc}");
+        assert_eq!(code, 2, "{file}: {doc}");
+    }
+}
+
+/// #363 A3. A symlinked workspace (`<t>/link/Cloud`, `link` -> `repo`) has two
+/// anchors, the spelling it was given and its real path: `--file` through
+/// each resolves `src/posting.al`'s routines with the relative run's entries.
+///
+/// Mutation: drop the canonical anchor (`anchors_of(lexical, None)`) -> the
+/// real spelling is `file-unmatched`.
+#[cfg(unix)]
+#[test]
+fn symlinked_workspace_resolves_its_link_and_real_spellings() {
+    let t = tempfile::tempdir().unwrap();
+    repo_ws(t.path());
+    std::os::unix::fs::symlink("repo", t.path().join("link")).unwrap();
+    let ws = t.path().join("link/Cloud");
+    let real = std::fs::canonicalize(t.path().join("repo/Cloud")).unwrap();
+    let (link_abs, real_abs) = (abs_posting(&ws), abs_posting(&real));
+    assert_ne!(link_abs, real_abs, "precondition: two spellings");
+    let (base, code) = digest(&ws, &["--file", "src/posting.al"], None);
+    assert_posting_file(&base, code, "precondition");
+    for file in [link_abs.as_str(), real_abs.as_str()] {
+        let (doc, code) = digest(&ws, &["--file", file], None);
+        assert_posting_file(&doc, code, file);
+        assert_eq!(entries(&doc), entries(&base), "{file}");
+    }
+}
+
+/// #363 A4. A diff whose `---` and `+++` headers are both
+/// `<ws-abs>/src/posting.al` (as `diff -u /abs/a /abs/b` writes them; plain and
+/// with GNU's timestamp) roots exactly `PostSalesDoc`, no diagnostic, exit 0,
+/// with the relative-header diff's entries.
+///
+/// Mutation: apply the anchors to file inputs only (not to diff paths) ->
+/// `diff-file-unmatched` on the absolute path.
+#[test]
+fn absolute_diff_headers_resolve() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let abs = abs_posting(&ws);
+    let (rel, code) = digest(&ws, &[], Some(&record("src/posting.al", D8_POSTING_HUNK)));
+    assert_posting_root(&rel, code, "precondition");
+    let stamped = format!(
+        "--- {abs}\t2026-10-21 13:02:30.262374453 +0000\n+++ {abs}\t2026-10-21 13:02:06.656738697 +0000\n{D8_POSTING_HUNK}"
+    );
+    for diff in [record(&abs, D8_POSTING_HUNK), stamped] {
+        let (doc, code) = digest(&ws, &[], Some(&diff));
+        assert_posting_root(&doc, code, &diff);
+        assert_eq!(entries(&doc), entries(&rel), "{diff}");
+    }
+}
+
+/// #363 A5 (S3). Absolute `Only in` paths. `Only in <ws-abs>/src:
+/// subscriber.al` (a workspace file) roots its routine `HandlePosted`, no
+/// diagnostic, exit 0. The workspace's `src` folder, the workspace itself and
+/// its parent (`Only in <ws-abs>: src`, `Only in <t>/repo: Cloud`, `Only in
+/// <t>: repo`) hold workspace files, so they keep #353's `diff-file-unmatched`
+/// (their roots lost, the existing limit); a folder beside them (`Only in
+/// <t>/elsewhere: x`) is `diff-file-not-al`. In diff order, exit 2.
+///
+/// Mutation: drop the anchor branch of `holds_workspace_files` ->
+/// `diff-file-not-al` for `<t>/repo/Cloud` and `<t>/repo`.
+#[test]
+fn absolute_only_in_paths_read_through_the_anchor() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let repo = t.path().join("repo");
+    let (w, r, top) = (arg(&ws), arg(&repo), arg(t.path()));
+    let only = format!("Only in {w}/src: subscriber.al\n");
+    let (doc, code) = digest(&ws, &[], Some(&only));
+    assert!(diags(&doc).is_empty(), "{only}: {doc}");
+    assert_eq!(roots(&doc), vec!["HandlePosted"], "{only}: {doc}");
+    assert_eq!(code, 0, "{only}: {doc}");
+
+    let elsewhere = format!("{top}/elsewhere");
+    let lines = [
+        (w, "src"),
+        (r, "Cloud"),
+        (top, "repo"),
+        (elsewhere.as_str(), "x"),
+    ];
+    let diff: String = lines
+        .iter()
+        .map(|(dir, name)| format!("Only in {dir}: {name}\n"))
+        .collect();
+    let files: Vec<String> = lines
+        .iter()
+        .map(|(dir, name)| format!("{dir}/{name}"))
+        .collect();
+    let (doc, code) = digest(&ws, &[], Some(&diff));
+    assert_eq!(
+        diags(&doc),
+        kinds_on(&[
+            ("diff-file-unmatched", files[0].as_str()),
+            ("diff-file-unmatched", files[1].as_str()),
+            ("diff-file-unmatched", files[2].as_str()),
+            ("diff-file-not-al", files[3].as_str()),
+        ]),
+        "{diff}: {doc}"
+    );
+    assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+    assert_eq!(code, 2, "{diff}: {doc}");
+}
+
+/// #363 A6 (I3). digest's malformed-record veto reads the record's absolute
+/// path through the anchor: a malformed record on `<ws-abs>/src/posting.al`
+/// and a healthy one on `src/posting.al`, in both orders, give no roots and the
+/// one parse error (naming the absolute spelling), exit 2.
+///
+/// Precondition: the healthy record alone roots `PostSalesDoc`.
+/// Mutation: the poison set is read without the anchors -> the healthy
+/// record's `PostSalesDoc` appears.
+#[test]
+fn absolute_malformed_record_vetoes_the_relative_one() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let abs = abs_posting(&ws);
+    let healthy = one_line_diff("src/posting.al", 9, LINE9_TEXT);
+    let (doc, code) = digest(&ws, &[], Some(&healthy));
+    assert_posting_root(&doc, code, "precondition");
+    let bad = malformed(&abs);
+    for diff in [format!("{bad}{healthy}"), format!("{healthy}{bad}")] {
+        let (doc, code) = digest(&ws, &[], Some(&diff));
+        assert_malformed_error_of(&doc, &abs, &diff);
+        assert_eq!(diag_kinds(&doc), vec!["diff-parse-error"], "{diff}: {doc}");
+        assert!(roots(&doc).is_empty(), "{diff}: {doc}");
+        assert_eq!(code, 2, "{diff}: {doc}");
+    }
+}
+
+/// #363 A7. A batch reads `--file <ws-abs>/src/posting.al` as standalone does:
+/// a one-batch manifest (its job runs in the parent) and a two-batch manifest
+/// (every batch runs in a worker, the decision shipped with its
+/// `pathAnchors`), each job equal to its standalone run, exit 0.
+///
+/// Mutation: the worker drops the shipped anchors (`decision_from_wire(root,
+/// &[])` in `run_worker`) -> the worker jobs are `file-unmatched` (exit 2)
+/// while standalone resolves.
+#[test]
+fn batch_reads_an_absolute_file_as_standalone() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let abs = abs_posting(&ws);
+    let job = || digest_argv(&ws, &["--file", abs.as_str()]);
+    let (one, two) = (t.path().join("one"), t.path().join("two"));
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::create_dir_all(&two).unwrap();
+    assert_eq!(
+        batches_as_standalone(&one, &[vec![job()]], None),
+        vec![Some(0)],
+        "the parent"
+    );
+    assert_eq!(
+        batches_as_standalone(&two, &[vec![job()], vec![job()]], None),
+        vec![Some(0), Some(0)],
+        "the workers"
+    );
+}
+
+/// `alsem impact <ws> --diff <diff> --no-tests --format json` -> (doc, exit).
+fn impact_json(ws: &Path, diff: &str) -> (Value, i32) {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("change.diff");
+    std::fs::write(&p, diff).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("impact")
+        .arg(ws)
+        .arg("--diff")
+        .arg(&p)
+        .args(["--no-tests", "--format", "json"])
+        .output()
+        .expect("spawn alsem");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let doc: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "{e}: stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    (doc, out.status.code().unwrap_or(-1))
+}
+
+/// The routine names (after the last `::`) of an impact answer's roots, sorted.
+fn impact_roots(doc: &Value) -> Vec<String> {
+    let mut r: Vec<String> = doc["roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let display = r["display"].as_str().unwrap();
+            display.rsplit("::").next().unwrap().to_string()
+        })
+        .collect();
+    r.sort();
+    r
+}
+
+/// #363 A8. `impact <ws> --diff` with absolute headers accounts the hunk to
+/// `PostSalesDoc` as the relative-header diff does: the same roots and line
+/// totals, nothing unmapped, exit 0.
+///
+/// Mutation: `account` ignores the anchors (reads with
+/// `PathRoot::from(root.root.clone())`) -> the file is unmapped
+/// (`not-in-workspace`), no root.
+#[test]
+fn impact_accounts_absolute_diff_headers() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let (rel, code) = impact_json(&ws, &record("src/posting.al", D8_POSTING_HUNK));
+    assert_eq!(code, 0, "precondition: {rel}");
+    assert_eq!(
+        impact_roots(&rel),
+        vec!["PostSalesDoc"],
+        "precondition: {rel}"
+    );
+    let (doc, code) = impact_json(&ws, &record(&abs_posting(&ws), D8_POSTING_HUNK));
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(impact_roots(&doc), vec!["PostSalesDoc"], "{doc}");
+    let totals = |d: &Value| d["input"]["accounting"]["totals"].clone();
+    assert_eq!(totals(&doc), totals(&rel), "{doc}");
+    assert_eq!(totals(&doc)["unmapped"]["total"], 0, "{doc}");
+}
+
+/// #363 A8c (N3, sol r3). impact's veto reads paths as digest's does: by every
+/// key a malformed record's path names, not by its spelling.
+/// (a) The shared-key cases, as digest (A6, #76 T4): a malformed
+/// `<ws-abs>/src/posting.al` or `./src/posting.al` record vetoes a healthy
+/// `src/posting.al` record, in both orders.
+/// (b) impact only (digest has no `old_path` veto, so no parity is claimed): a
+/// rename `src/subscriber.al` -> `src/posting.al` with a hunk is vetoed by a
+/// malformed record naming its OLD file as `./src/subscriber.al` or
+/// `<ws-abs>/src/subscriber.al` (the malformed record first: a plain record
+/// after a `diff --git` section is not what this pins).
+/// Vetoed: nothing in a routine body, the healthy record's two lines unmapped
+/// as `diff-parse-error`; in (a) also no root. (b) asserts no root count: the
+/// roots come from digest's resolver, which keeps the rename's new file (as on
+/// master with a raw-spelled old path).
+///
+/// Preconditions: the healthy record alone, and the rename alone, each root
+/// `PostSalesDoc`.
+/// Mutation: veto by the raw spelling again (`poisoned_raw` only) -> the
+/// healthy record and the rename are accounted (`PostSalesDoc`).
+#[test]
+fn impact_vetoes_by_every_key_a_malformed_record_names() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let healthy = one_line_diff("src/posting.al", 9, LINE9_TEXT);
+    let rename = format!(
+        "diff --git a/src/subscriber.al b/src/posting.al\nsimilarity index 90%\nrename from src/subscriber.al\nrename to src/posting.al\n--- a/src/subscriber.al\n+++ b/src/posting.al\n@@ -9,1 +9,1 @@\n-x\n+{LINE9_TEXT}\n"
+    );
+    for alone in [&healthy, &rename] {
+        let (doc, code) = impact_json(&ws, alone);
+        assert_eq!(code, 0, "precondition {alone}: {doc}");
+        assert_eq!(
+            impact_roots(&doc),
+            vec!["PostSalesDoc"],
+            "precondition {alone}: {doc}"
+        );
+    }
+    let bad_abs = malformed(&abs_posting(&ws));
+    let bad_dot = malformed("./src/posting.al");
+    let diffs = [
+        (format!("{bad_abs}{healthy}"), true),
+        (format!("{healthy}{bad_abs}"), true),
+        (format!("{bad_dot}{healthy}"), true),
+        (format!("{healthy}{bad_dot}"), true),
+        (
+            format!("{}{rename}", malformed("./src/subscriber.al")),
+            false,
+        ),
+        (
+            format!("{}{rename}", malformed(arg(&ws.join("src/subscriber.al")))),
+            false,
+        ),
+    ];
+    for (diff, no_roots) in &diffs {
+        let (doc, _) = impact_json(&ws, diff);
+        if *no_roots {
+            assert!(impact_roots(&doc).is_empty(), "{diff}: {doc}");
+        }
+        let totals = &doc["input"]["accounting"]["totals"];
+        assert_eq!(totals["routineBody"], 0, "{diff}: {doc}");
+        assert_eq!(
+            totals["unmapped"]["byReason"]["diff-parse-error"], 2,
+            "{diff}: {doc}"
+        );
+    }
+}
+
+/// `alsem <args>` -> (stdout as JSON, exit).
+fn alsem_json(args: &[&str]) -> (Value, i32) {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .output()
+        .expect("spawn alsem");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let doc: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "{args:?}: {e}: stdout={stdout} stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    (doc, out.status.code().unwrap_or(-1))
+}
+
+/// #363 A9 (I2). `explain --diff` and `tests --diff` read absolute headers
+/// through their decision's anchors: each names the changed routine
+/// (`PostSalesDoc`) its relative-header run names, with the same diagnostics
+/// and exit.
+///
+/// Mutation: the explain (or tests) call site builds its `PathRoot` with no
+/// anchors -> the absolute header is unmatched: no card (no changed routine).
+#[test]
+fn explain_and_tests_diff_read_absolute_headers() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let (rel, abs) = (
+        t.path().join("diffs/rel.diff"),
+        t.path().join("diffs/abs.diff"),
+    );
+    write(&rel, &record("src/posting.al", D8_POSTING_HUNK));
+    write(&abs, &record(&abs_posting(&ws), D8_POSTING_HUNK));
+    let run = |command: &str, diff: &Path| {
+        alsem_json(&[command, arg(&ws), "--diff", arg(diff), "--format", "json"])
+    };
+
+    let cards = |d: &Value| -> Vec<Value> {
+        d["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["routine"].clone())
+            .collect()
+    };
+    let (want, want_code) = run("explain", &rel);
+    assert_eq!(want_code, 0, "precondition: {want}");
+    assert_eq!(cards(&want).len(), 1, "precondition: {want}");
+    assert!(
+        cards(&want)[0].to_string().contains("PostSalesDoc"),
+        "precondition: {want}"
+    );
+    let (got, code) = run("explain", &abs);
+    assert_eq!(cards(&got), cards(&want), "explain: {got}");
+    assert_eq!(got["diagnostics"], want["diagnostics"], "explain: {got}");
+    assert_eq!(code, want_code, "explain: {got}");
+
+    let (want, want_code) = run("tests", &rel);
+    assert!(
+        want["changed"].to_string().contains("PostSalesDoc"),
+        "precondition: {want}"
+    );
+    let (got, code) = run("tests", &abs);
+    assert_eq!(got["changed"], want["changed"], "tests: {got}");
+    assert_eq!(got["diagnostics"], want["diagnostics"], "tests: {got}");
+    assert_eq!(code, want_code, "tests: {got}");
+}
+
+/// #363 A10 (I2, sol r2). Every front end carries the anchors. The CLI run of
+/// `digest <ws> --file <ws-abs>/src/posting.al --deterministic` roots the
+/// file's routines on its own, exit 0; `engine-ask -- <that argv>` (its
+/// decision shipped in `Decisions.pathAnchors`) prints the same stdout and
+/// stderr with the same exit; and the MCP `alsem_digest` with `files:
+/// [<ws-abs>/src/posting.al]` (`CliDecide`) answers the CLI's own bytes and
+/// exit for the argv it builds (`--format json --deterministic
+/// --surface=mcp`).
+///
+/// Mutation: a front end sends no `pathAnchors` (`decision_to_wire` returns
+/// none) -> `file-unmatched`, exit 2, through engine-ask and MCP.
+#[test]
+fn engine_routes_carry_the_anchors() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = repo_ws(t.path());
+    let abs = abs_posting(&ws);
+    let w = arg(&ws);
+    let (doc, code) = digest(&ws, &["--file", abs.as_str()], None);
+    assert_posting_file(&doc, code, "the CLI on its own");
+
+    let run = |argv: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(argv)
+            .output()
+            .expect("spawn alsem");
+        (out.stdout, out.stderr, out.status.code())
+    };
+    let argv = ["digest", w, "--file", abs.as_str(), "--deterministic"];
+    let direct = run(&argv);
+    assert_eq!(direct.2, Some(0), "{}", String::from_utf8_lossy(&direct.1));
+    let mut via = vec!["engine-ask", "--"];
+    via.extend(argv);
+    assert_eq!(run(&via), direct, "engine-ask");
+
+    let expected = run(&[
+        "digest",
+        w,
+        "--file",
+        abs.as_str(),
+        "--format",
+        "json",
+        "--deterministic",
+        "--surface=mcp",
+    ]);
+    assert_eq!(
+        expected.2,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&expected.1)
+    );
+    let mut s = crate::mcp_server::Server::ready(&ws, None);
+    let env = crate::mcp_server::envelope(&s.call(
+        1,
+        "alsem_digest",
+        serde_json::json!({"files": [abs.as_str()], "deterministic": true}),
+    ));
+    let (stdout, stderr, exit) = crate::mcp_server::cli_bytes(&env);
+    assert_eq!(
+        (stdout, stderr, Some(i32::from(exit))),
+        expected,
+        "MCP alsem_digest"
+    );
+    assert!(s.finish().success());
 }

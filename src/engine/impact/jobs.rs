@@ -27,7 +27,7 @@ use crate::engine::batch::output::JobOutput;
 use crate::engine::l4::effect_query_cli::OwnerIndex;
 use crate::engine::l5::diff_parser::parse_unified_diff;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, ChangedRootsDiagnostic, ChangedRootsResult, DbTempStates, DiffRoot,
+    ChangedInput, ChangedRootsDiagnostic, ChangedRootsResult, DbTempStates, PathRoot,
     changed_roots_diagnostic_human, finish_default_run, primary_guid_of, resolve_changed_roots,
     run_digest_query_full_from_entries,
 };
@@ -46,7 +46,11 @@ pub const MAIN_SCHEMA: &str = "al-sem.impact-main";
 pub enum MainAsk {
     Routines(Vec<String>),
     Files(Vec<String>),
-    Diff { text: String, root: DiffRoot },
+    /// The diff's text and what its paths are read against (#363: with anchors).
+    Diff {
+        text: String,
+        root: PathRoot,
+    },
 }
 
 /// The main part (see the module doc).
@@ -198,8 +202,8 @@ impl Job for MainJob<'_> {
         let inputs = cx.inputs();
         let owners = OwnerIndex::build(model);
         let (files, routines, diff_text, diff_root) = match &self.ask {
-            MainAsk::Routines(r) => (None, Some(r.clone()), None, DiffRoot::default()),
-            MainAsk::Files(f) => (Some(f.clone()), None, None, DiffRoot::default()),
+            MainAsk::Routines(r) => (None, Some(r.clone()), None, PathRoot::default()),
+            MainAsk::Files(f) => (Some(f.clone()), None, None, PathRoot::default()),
             MainAsk::Diff { text, root } => (None, None, Some(text.clone()), root.clone()),
         };
         let mut changed = resolve_changed_roots(

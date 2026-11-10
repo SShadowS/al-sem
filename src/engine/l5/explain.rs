@@ -61,8 +61,8 @@ use crate::engine::l5::cross_rules::{
     CallerRule, CrossRules, CrossRulesIndex, EXPANSION_BUDGET, Inh, MAX_DEPTH,
 };
 use crate::engine::l5::digest_cli::{
-    ChangedInput, ChangedRootsDiagnostic, ChangedRootsResult, DbTempStates, DiffRoot,
-    DigestEffectFull, DigestEffects, DigestEntryFull, FullAnchor, anchor_to_value,
+    ChangedInput, ChangedRootsDiagnostic, ChangedRootsResult, DbTempStates, DigestEffectFull,
+    DigestEffects, DigestEntryFull, FullAnchor, PathRoot, anchor_to_value,
     changed_roots_diagnostic_human, changed_roots_diagnostic_to_value, primary_guid_of,
     resolve_changed_roots, run_digest_query_full_from_entries,
 };
@@ -115,8 +115,9 @@ pub enum ExplainMode {
     /// `--routine <selector>`, given once or more (context-server design r3
     /// §6.12): never empty.
     Routines(Vec<String>),
-    /// `--diff <patch>`: the diff's text and what its paths are relative to.
-    Diff { text: String, root: DiffRoot },
+    /// `--diff <patch>`: the diff's text and what its paths are read against
+    /// (the diff root and the workspace's anchors, #363).
+    Diff { text: String, root: PathRoot },
     /// `--table <T> --field <F>`.
     Field { table: String, field: String },
 }
@@ -313,7 +314,7 @@ impl Job for ExplainJob<'_> {
                             files: None,
                             routines: Some(vec![selector.clone()]),
                             diff_text: None,
-                            diff_root: DiffRoot::default(),
+                            diff_root: PathRoot::default(),
                             workspace_files: &[],
                         },
                         primary_guid_of(model),

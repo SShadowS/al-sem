@@ -36,6 +36,9 @@ pub struct BaseCx<'a> {
     pub scratch: PathBuf,
     /// The change's diff text (its reverse is the base part's stdin).
     pub diff_text: String,
+    /// The live workspace's anchors as the current side decided them (#363
+    /// spec §5): the base run on the copy reads absolute paths with these.
+    pub anchors: Vec<String>,
     pub run: Box<RunBase<'a>>,
 }
 
@@ -162,6 +165,36 @@ fn base_source_deps(workspace: &Path, commit: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The cache key of a reversed diff's base result (#363 spec §5): the same text
+/// maps differently under another `rel` (the copy's layout) and, when it holds
+/// an absolute path, under other anchors. A versioned, length-prefixed tuple;
+/// a relative-only diff's key does not depend on where the checkout lives.
+fn base_diff_key(reversed: &str, rel: &str, anchors: &[String]) -> String {
+    use crate::engine::l5::digest_cli::is_rooted_path;
+    let parsed = crate::engine::l5::diff_parser::parse_unified_diff(reversed);
+    let rooted = parsed
+        .files
+        .iter()
+        .flat_map(|f| std::iter::once(f.path.as_str()).chain(f.old_path.as_deref()))
+        .chain(parsed.file_errors.iter().map(|e| e.path.as_str()))
+        .chain(parsed.only_in.iter().map(String::as_str))
+        .any(is_rooted_path);
+    let mut h = blake3::Hasher::new();
+    let mut put = |s: &str| {
+        h.update(&(s.len() as u64).to_le_bytes());
+        h.update(s.as_bytes());
+    };
+    put("rdh-v2");
+    put(reversed);
+    put(rel);
+    if rooted {
+        for a in anchors {
+            put(a);
+        }
+    }
+    format!("blake3:{}", h.finalize().to_hex())
+}
+
 fn ids(doc: &Value) -> Vec<String> {
     doc["roots"]
         .as_array()
@@ -216,7 +249,7 @@ pub fn base_side(
     };
     let key = parts.key();
     let reversed = reverse_diff(diff_text);
-    let rdh = super::compare::diff_hash(&reversed);
+    let rdh = base_diff_key(&reversed, &rel, &cx.anchors);
     let wanted = ids(new_main);
     let mut cache_note = json!({"status": "off"});
     let mut entry: Option<Value> = None;
@@ -276,6 +309,11 @@ pub fn base_side(
     }
     for id in &wanted {
         argv.push(format!("--root-id={id}"));
+    }
+    // The live workspace's anchors, not the copy's (#363 spec §5): an absolute
+    // path in the diff names the live workspace.
+    for a in &cx.anchors {
+        argv.push(format!("--path-anchor={a}"));
     }
     if single_app {
         argv.push("--single-app".into());
@@ -417,4 +455,44 @@ fn block(
             "build": built.map(|b| b.1),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base_diff_key;
+
+    const REL: &str = "--- a/src/x.al\n+++ b/src/x.al\n@@ -1 +1 @@\n-a\n+b\n";
+    const ABS: &str =
+        "--- /t/repo/Cloud/src/x.al\n+++ /t/repo/Cloud/src/x.al\n@@ -1 +1 @@\n-a\n+b\n";
+
+    /// #363 spec §5: the base cache key follows `rel` always and the anchors
+    /// (in order) only when the diff holds an absolute path.
+    #[test]
+    fn base_diff_key_tuple() {
+        let a = ["/t/repo/Cloud".to_string(), "/u/Cloud".to_string()];
+        let b = ["/elsewhere/Cloud".to_string()];
+        let swapped = [a[1].clone(), a[0].clone()];
+        // A relative diff: the checkout's location does not matter, `rel` does.
+        assert_eq!(
+            base_diff_key(REL, "Cloud", &a),
+            base_diff_key(REL, "Cloud", &b)
+        );
+        assert_ne!(base_diff_key(REL, "Cloud", &a), base_diff_key(REL, "", &a));
+        // An absolute one: the anchors and their order are part of the key.
+        assert_ne!(
+            base_diff_key(ABS, "Cloud", &a),
+            base_diff_key(ABS, "Cloud", &b)
+        );
+        assert_ne!(
+            base_diff_key(ABS, "Cloud", &a),
+            base_diff_key(ABS, "Cloud", &swapped)
+        );
+        // So is the text itself, and the key's version tag sets it apart from
+        // the old plain text hash.
+        assert_ne!(base_diff_key(REL, "", &[]), base_diff_key(ABS, "", &[]));
+        assert_ne!(
+            base_diff_key(REL, "", &[]),
+            super::super::compare::diff_hash(REL)
+        );
+    }
 }

@@ -105,6 +105,10 @@ pub struct WorkerJob {
     /// `digest`: the parent's diff-root decision, failure included (#77);
     /// `None` for every other command.
     pub diff_root: Option<Result<crate::engine::l5::digest_cli::DiffRoot, String>>,
+    /// The decision's anchors (#363 spec §4), beside it so the root keeps its
+    /// shape; an older parent sends none.
+    #[serde(rename = "pathAnchors", default, skip_serializing_if = "Vec::is_empty")]
+    pub path_anchors: Vec<String>,
 }
 
 /// The parent's stdin read: its text, or the read failed.

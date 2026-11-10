@@ -88,7 +88,8 @@ use al_sem::engine::gate::run::{AnalyzeArgs, AnalyzeJob, OutputFormat};
 use al_sem::engine::gate::version::driver_version;
 use al_sem::engine::l4::effect_query_cli::{Direction, QueryJob};
 use al_sem::engine::l5::digest_cli::{
-    ChangedAutoDetect, DiffRoot, DigestJob, DigestRequest, auto_detect_changed_with,
+    ChangedAutoDetect, DiffRoot, DigestJob, DigestRequest, PathRoot, anchors_of,
+    auto_detect_changed_with, decision_from_wire, decision_to_wire,
 };
 use al_sem::engine::l5::event_flow::Scope as EventScope;
 use al_sem::engine::l5::fingerprint_cli::{
@@ -482,6 +483,12 @@ struct ImpactCli {
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
+    /// Internal (`--part main --diff` only): the live workspace's anchors for a
+    /// base run on a copy (#363 spec §5). Replaces the anchors the decision
+    /// would build; repeatable, in order.
+    #[arg(long = "path-anchor", hide = true)]
+    path_anchor: Vec<String>,
+
     /// Compare the working tree with the merge base of REV and HEAD
     /// (committed, staged, unstaged and untracked .al files): the base is
     /// built from that commit's files under the current packages and each
@@ -585,6 +592,10 @@ impl ImpactCli {
 
 /// The selector and mode rules of `alsem impact` (spec §12.1), shared with
 /// the MCP front end's wording: exactly one of routines, files, diff, base.
+/// `--path-anchor` outside the base part (#363 spec §5).
+const PATH_ANCHOR_SCOPE: &str =
+    "al-sem: impact: --path-anchor is internal: it goes with --part main --diff only";
+
 fn impact_modes(t: &ImpactCli) -> Result<(), String> {
     // `--base` with `--diff` is one mode: the diff against that base (B2).
     let modes = [
@@ -599,6 +610,9 @@ fn impact_modes(t: &ImpactCli) -> Result<(), String> {
     }
     if t.diff_root.is_some() && t.diff.is_none() {
         return Err("al-sem: impact: --diff-root goes with --diff".into());
+    }
+    if !t.path_anchor.is_empty() {
+        return Err(PATH_ANCHOR_SCOPE.into());
     }
     if (t.no_delta || t.no_base_cache) && t.base.is_none() {
         return Err("al-sem: impact: --no-delta and --no-base-cache go with --base".into());
@@ -1386,8 +1400,9 @@ struct DigestCli {
 
     /// Source file(s) to treat as changed: a path relative to the workspace or
     /// to the git top level, or a `ws:` id naming one workspace file exactly.
-    /// With --diff-root, a path is read relative to that folder only. May be
-    /// repeated. Mutually exclusive with --order (rejected).
+    /// With --diff-root, a path is read relative to that folder only. An
+    /// absolute path below the workspace names that file. May be repeated.
+    /// Mutually exclusive with --order (rejected).
     #[arg(long = "file", action = clap::ArgAction::Append)]
     file: Vec<String>,
 
@@ -1414,7 +1429,8 @@ struct DigestCli {
     /// ways is reported `diff-file-ambiguous` (a diff path) or `file-ambiguous`
     /// (a file input) and gives no roots. With no enclosing repository, paths
     /// are workspace-relative. Folder names compare exactly, case included, on
-    /// every platform.
+    /// every platform. Under every root, an absolute path below the workspace
+    /// (as spelled or its real path) names that file.
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
@@ -1698,7 +1714,7 @@ fn plan(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
 
 /// A batch parent's decisions for its worker's job: `--changed` names a diff
 /// file, and the diff root.
-type Shipped = (Option<bool>, Option<Result<DiffRoot, String>>);
+type Shipped = (Option<bool>, Option<Result<PathRoot, String>>);
 
 /// The decoded request's file-system questions, decided by its caller before
 /// planning (context-server design r3 §4.3; review r2 #16): whether
@@ -2001,11 +2017,15 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
                     .jobs
                     .iter()
                     .zip(decided)
-                    .map(|(j, (c, root))| WorkerJob {
-                        argv: j.argv.clone(),
-                        streams: j.streams.clone(),
-                        changed_is_file: *c,
-                        diff_root: root.clone(),
+                    .map(|(j, (c, root))| {
+                        let (diff_root, path_anchors) = decision_to_wire(root);
+                        WorkerJob {
+                            argv: j.argv.clone(),
+                            streams: j.streams.clone(),
+                            changed_is_file: *c,
+                            diff_root,
+                            path_anchors,
+                        }
                     })
                     .collect(),
                 stdin: stdin.clone(),
@@ -2047,7 +2067,10 @@ fn run_worker(b: u32) -> ExitCode {
         match parse_job(&job.argv) {
             Ok(c) => {
                 // Decided by the parent: the worker probes nothing.
-                let shipped = Some((job.changed_is_file, job.diff_root.clone()));
+                let shipped = Some((
+                    job.changed_is_file,
+                    decision_from_wire(job.diff_root.clone(), &job.path_anchors),
+                ));
                 let (c, cx) = decide(c, PlanCx::new(&reads), shipped);
                 planned.push(plan(c, true, &cx));
             }
@@ -2629,10 +2652,20 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
         .flatten()
         .map(|d| al_sem::engine::impact::cache::Cache::new(d, Default::default()));
     let scratch = al_sem::engine::impact::before::scratch_for(cache.as_ref());
+    // The live workspace's anchors, decided once by the decision the main part
+    // makes (same builder, this process), for the base run (#363 spec §5).
+    let anchors = {
+        let reads = PlanReads::process();
+        match diff_root_of(&Commands::Impact(t.clone()), &PlanCx::new(&reads)) {
+            Some(Ok(p)) => p.anchor_spellings(),
+            _ => Vec::new(),
+        }
+    };
     let mut bcx = req.delta.then(|| al_sem::engine::impact::before::BaseCx {
         cache,
         scratch,
         diff_text: diff_text.clone().unwrap_or_default(),
+        anchors,
         run: Box::new(|argv: Vec<String>, stdin: String| run_part_with_stdin(&argv, Some(stdin))),
     });
     match al_sem::engine::impact::run::orchestrate(&req, cmp, opts, &mut run, bcx.as_mut()) {
@@ -2989,10 +3022,10 @@ fn detect_changed(d: &DigestCli, value: &str) -> ChangedAutoDetect {
 /// A plan that reads no changed path needs none (the workspace); one that does
 /// and finds none is a caller that skipped [`decide`]: planning never decides
 /// it itself.
-fn decided_root(cx: &PlanCx, reads_paths: bool) -> Result<DiffRoot, String> {
+fn decided_root(cx: &PlanCx, reads_paths: bool) -> Result<PathRoot, String> {
     match &cx.diff_root_decided {
         Some(root) => root.clone(),
-        None if !reads_paths => Ok(DiffRoot::Workspace),
+        None if !reads_paths => Ok(PathRoot::default()),
         None => panic!("the caller decides the diff root before planning (decide)"),
     }
 }
@@ -3000,7 +3033,7 @@ fn decided_root(cx: &PlanCx, reads_paths: bool) -> Result<DiffRoot, String> {
 /// A digest's or explain's diff root (#77), decided once through `cx` (its
 /// probes are the request's touched reads); `None` for every other command.
 /// `--changed` must be pinned first ([`pin_changed`]).
-fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<DiffRoot, String>> {
+fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<PathRoot, String>> {
     match command {
         Commands::Digest(d) => Some(decide_diff_root(
             "digest",
@@ -3008,6 +3041,7 @@ fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<DiffRoot, Stri
             d.diff_root.as_deref(),
             DigestInputs::of(d).reads_paths(),
             cx,
+            None,
         )),
         // `explain --diff` reads its diff paths as digest does (one decision).
         Commands::Explain(e) => Some(decide_diff_root(
@@ -3016,6 +3050,7 @@ fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<DiffRoot, Stri
             e.diff_root.as_deref(),
             e.diff.is_some(),
             cx,
+            None,
         )),
         // `tests --diff` reads its diff paths as digest does (the roots part).
         Commands::Tests(t) if t.part.as_deref() != Some("select") => Some(decide_diff_root(
@@ -3024,13 +3059,23 @@ fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<DiffRoot, Stri
             t.diff_root.as_deref(),
             t.diff.is_some(),
             cx,
+            None,
         )),
+        // `--path-anchor`: only the base part (`--part main --diff`) takes it,
+        // and then it replaces the anchors (#363 spec §5).
+        Commands::Impact(t)
+            if !(t.path_anchor.is_empty()
+                || t.part.as_deref() == Some("main") && t.diff.is_some()) =>
+        {
+            Some(Err(PATH_ANCHOR_SCOPE.into()))
+        }
         Commands::Impact(t) if t.part.as_deref() != Some("up") => Some(decide_diff_root(
             "impact",
             &t.workspace,
             t.diff_root.as_deref(),
             t.diff.is_some(),
             cx,
+            (!t.path_anchor.is_empty()).then_some(t.path_anchor.as_slice()),
         )),
         _ => None,
     }
@@ -3091,27 +3136,46 @@ impl DigestInputs {
 /// request's [`PlanCx`]: a captured input, never the process directly
 /// (review r2 #16).
 /// `command` names the command in an error line (`digest`, `explain`).
+///
+/// With the root come the workspace's anchors (#363 spec §2, §4): its lexical
+/// and canonical absolute locations ([`anchors_of`], the one builder), asked of
+/// `cx` like every other probe, in every branch that reads paths; a failed probe
+/// is no anchor, never an error. `anchors` (`impact --path-anchor`, the base
+/// part) replaces them: given values that all drop give no anchors.
 fn decide_diff_root(
     command: &str,
     workspace: &str,
     diff_root: Option<&str>,
     reads_paths: bool,
     cx: &PlanCx,
-) -> Result<DiffRoot, String> {
+    anchors: Option<&[String]>,
+) -> Result<PathRoot, String> {
     if !reads_paths {
-        return Ok(DiffRoot::Workspace);
+        return Ok(PathRoot::default());
     }
     cx.touch(Path::new(workspace));
     let canonical_ws = cx.canonicalize(Path::new(workspace));
+    let anchors = match anchors {
+        Some(spellings) => PathRoot::with_spellings(DiffRoot::Workspace, spellings).anchors,
+        None => anchors_of(
+            cx.absolute(Path::new(workspace)).ok().as_deref(),
+            canonical_ws.as_deref().ok(),
+        ),
+    };
+    let with = |root: DiffRoot| PathRoot {
+        root,
+        anchors: anchors.clone(),
+    };
     let Some(root) = diff_root else {
         let Ok(ws) = canonical_ws else {
-            return Ok(DiffRoot::Workspace);
+            return Ok(with(DiffRoot::Workspace));
         };
-        return Ok(ws
-            .ancestors()
-            .find(|dir| cx.exists(&dir.join(".git")))
-            .and_then(|top| ws.strip_prefix(top).ok())
-            .map_or(DiffRoot::Workspace, |rel| DiffRoot::below(rel, false)));
+        return Ok(with(
+            ws.ancestors()
+                .find(|dir| cx.exists(&dir.join(".git")))
+                .and_then(|top| ws.strip_prefix(top).ok())
+                .map_or(DiffRoot::Workspace, |rel| DiffRoot::below(rel, false)),
+        ));
     };
     // Checked first, so a lexical containment cannot pass a missing root.
     cx.touch(Path::new(root));
@@ -3127,7 +3191,7 @@ fn decide_diff_root(
     // A workspace that does not resolve is left to the load, which reports it
     // (exit 1) however it is spelled, as in auto mode.
     let Ok(ws) = canonical_ws else {
-        return Ok(DiffRoot::Workspace);
+        return Ok(with(DiffRoot::Workspace));
     };
     let lexical = cx
         .absolute(Path::new(workspace))
@@ -3151,7 +3215,7 @@ fn decide_diff_root(
             })?
         }
     };
-    Ok(DiffRoot::below(&rel, true))
+    Ok(with(DiffRoot::below(&rel, true)))
 }
 
 fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
@@ -4382,7 +4446,7 @@ mod engine {
             );
         }
         let mut cx = cx;
-        cx.diff_root_decided = decisions.diff_root;
+        cx.diff_root_decided = decision_from_wire(decisions.diff_root, &decisions.path_anchors);
         Ok((command, cx))
     }
 
@@ -4762,9 +4826,11 @@ mod engine {
     ) -> AskParams {
         let plan_reads = PlanReads::process();
         let (command, cx) = decide(command, PlanCx::new(&plan_reads), None);
+        let (diff_root, path_anchors) = decision_to_wire(&cx.diff_root_decided);
         let decisions = Decisions {
             changed_is_file: changed_is_file(&command),
-            diff_root: cx.diff_root_decided.clone(),
+            diff_root,
+            path_anchors,
         };
         let diff_text = reads_stdin(&command)
             .then(|| cx.stdin_text().map(str::to_string))
@@ -4798,9 +4864,11 @@ mod engine {
             .ok()?;
             let reads = PlanReads::request(diff_text.map(str::to_string), Box::new(ProcessFs));
             let (command, cx) = decide(cli.command, PlanCx::new(&reads), None);
+            let (diff_root, path_anchors) = decision_to_wire(&cx.diff_root_decided);
             Some(Decisions {
                 changed_is_file: changed_is_file(&command),
-                diff_root: cx.diff_root_decided.clone(),
+                diff_root,
+                path_anchors,
             })
         }
     }
@@ -5326,16 +5394,31 @@ mod tests {
             }
         }
         let cx = PlanCx::new(&PlanReads::request(None, Box::new(Virtual)));
-        // Auto mode: the nearest `.git` above the canonical workspace.
+        // The decided root and its anchors' spellings.
+        let decided = |ws: &str, root: Option<&str>| {
+            decide_diff_root("digest", ws, root, true, &cx, None)
+                .map(|p| (p.root.clone(), p.anchor_spellings()))
+        };
+        // Auto mode: the nearest `.git` above the canonical workspace; the
+        // anchors (#363) are the context's lexical then canonical workspace.
         assert_eq!(
-            decide_diff_root("digest", "ws", None, true, &cx),
-            Ok(DiffRoot::GitTop("apps/ws".into()))
+            decided("ws", None),
+            Ok((
+                DiffRoot::GitTop("apps/ws".into()),
+                vec!["/virtual/repo/ws".into(), "/virtual/repo/apps/ws".into()]
+            ))
         );
         // `--diff-root`: a folder only the context has, then a lexical
         // containment through the context's current directory.
         assert_eq!(
-            decide_diff_root("digest", "vroot/ws", Some("vroot"), true, &cx),
-            Ok(DiffRoot::Explicit("ws".into()))
+            decided("vroot/ws", Some("vroot")),
+            Ok((
+                DiffRoot::Explicit("ws".into()),
+                vec![
+                    "/virtual/repo/vroot/ws".into(),
+                    "/virtual/repo/apps/vroot/ws".into()
+                ]
+            ))
         );
         assert_eq!(
             cx.take_touched(),
@@ -5348,6 +5431,41 @@ mod tests {
                 PathBuf::from("vroot"),
             ]
         );
+
+        // #363 spec §5: `impact --path-anchor` replaces the anchors, exactly its
+        // values in order (`..` dropped; all dropped is none, never the probed
+        // ones), and only the base part (`--part main --diff`) takes it.
+        let impact = |extra: &[&str]| {
+            let argv = ["alsem", "impact", "ws", "--diff", "-"].iter().chain(extra);
+            let command = Cli::try_parse_from(argv).unwrap().command;
+            diff_root_of(&command, &cx).map(|d| d.map(|p| p.anchor_spellings()))
+        };
+        let main = ["--part", "main"];
+        assert_eq!(
+            impact(&[&main[..], &["--path-anchor=/b/ws", "--path-anchor=/a/ws"]].concat()),
+            Some(Ok(vec!["/b/ws".to_string(), "/a/ws".to_string()]))
+        );
+        assert_eq!(
+            impact(&[&main[..], &["--path-anchor=/t/../ws"]].concat()),
+            Some(Ok(vec![]))
+        );
+        assert_eq!(
+            impact(&["--path-anchor=/b/ws"]),
+            Some(Err(PATH_ANCHOR_SCOPE.to_string()))
+        );
+        assert_eq!(
+            impact(&["--part", "up", "--path-anchor=/b/ws"]),
+            Some(Err(PATH_ANCHOR_SCOPE.to_string()))
+        );
+        // Without it, the main part's anchors are the probed ones.
+        assert_eq!(
+            impact(&main),
+            Some(Ok(vec![
+                "/virtual/repo/ws".into(),
+                "/virtual/repo/apps/ws".into()
+            ]))
+        );
+        cx.take_touched();
     }
 
     /// r3 §4.3: `make_job` (planning) probes no file system. A request whose
@@ -5383,7 +5501,7 @@ mod tests {
         ] {
             let decoded = Cli::try_parse_from(argv).unwrap().command;
             let reads = PlanReads::request(Some(DIFF_POST.into()), Box::new(Refuses));
-            let shipped = Some((None, Some(Ok(DiffRoot::GitTop("apps/ws".into())))));
+            let shipped = Some((None, Some(Ok(DiffRoot::GitTop("apps/ws".into()).into()))));
             let (decoded, cx) = decide(decoded, PlanCx::new(&reads), shipped);
             let planned = plan(decoded, false, &cx);
             assert!(matches!(planned, Planned::Ready { .. }), "{argv:?}");

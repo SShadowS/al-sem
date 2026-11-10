@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (#363: an absolute path to a workspace file names that file)
+
+Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-approved).
+
+- **An absolute path below the workspace now names that file**, in every root mode (the git
+  top, `--diff-root`, or none): `--file` and `--changed <abs>.al` (digest), the `---`/`+++`
+  headers of a diff (digest, `explain --diff`, `tests --diff`, `impact --diff`), the
+  malformed-record veto and `Only in` lines. Before, every such path was unmatched
+  (`file-unmatched`, `diff-file-unmatched`). The workspace may be written as given or as its
+  real path (a symlinked workspace): both are its **anchors**, decided once with the diff root
+  and carried to batch workers and the engine child beside it (`pathAnchors` on the wire; the
+  protocol stays version 1 and an older peer simply reads no anchors). A path below an anchor
+  has exactly one reading, so it is never ambiguous. Folders compare exactly, case included;
+  only a Windows disk letter compares in any case. An absolute `Only in` naming the workspace
+  or a folder above it follows #353's folder rule (`diff-file-unmatched`) instead of
+  `diff-file-not-al`.
+- **`impact --base` reads absolute headers on the base side too**: the base run on the
+  workspace copy gets the live workspace's anchors (hidden `--path-anchor`). The base cache key
+  for a diff now also holds the workspace's path below the root (`rel`), which changes what the
+  same text maps to (a pre-existing gap: `--diff-root` and the git top could share an entry),
+  and, for a diff holding an absolute path, the anchors. Older entries miss once.
+- **impact's malformed-record veto now goes by file, not spelling**, as digest's does (#76):
+  a malformed `./src/x.al` record now also vetoes a healthy `src/x.al` record (before, the
+  healthy one was accounted), and under the git top a malformed path that reads two ways
+  vetoes both files. impact keeps its `old_path` veto, now also by file.
+- Limits: an absolute path with `..`, through a symlink that is neither the workspace's
+  spelling nor its real path, or with a folder above the workspace in another case; `\\?\`
+  and `\\?\UNC\` inputs; `impact --file` and `tests --file` stay workspace-relative (#376);
+  `impact --base` still cannot map a record whose original old path lies outside the workspace,
+  and drops it silently (#377); the in-process `run_digest_pipeline*` APIs (tests only) have
+  no anchors.
+
 ### Fixed (#362: `digest --changed path.al` is a file input wherever you run it)
 
 - **A `--changed` value with a `.al` entry is now always read like `--file`.** Before,
@@ -10041,9 +10073,9 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   `file-unmatched`). A `ws:` id that names no workspace file is read as a path, so a
   workspace folder literally named `ws:Cloud` still resolves under `--diff-root`, as a
   diff path does. `app:<guid>:` inputs are paths, as before. A batch decides the root
-  for a file-only job as a standalone run does. Limits: absolute paths stay
-  `file-unmatched` (#363); prefix folders compare exactly, case included
-  (`cloud/src/posting.al` under `Cloud` stays `file-unmatched`).
+  for a file-only job as a standalone run does. Limit: prefix folders compare exactly, case
+  included (`cloud/src/posting.al` under `Cloud` stays `file-unmatched`). (Absolute paths:
+  #363, above.)
 
 - **d39 no longer reports a record that a later helper saves on every path** (#343).
   Before, d39's `callerPersists` skip counted only the caller's own `Modify` / `Insert`

@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 use super::scan::{DeclKind, LineKind, Scanner, body_start};
 use crate::engine::l5::diff_parser::{DiffFileKind, DiffParseResult, HunkChange};
-use crate::engine::l5::digest_cli::{DiffRoot, RoutineSpanIndex, file_key, is_al_path, path_keys};
+use crate::engine::l5::digest_cli::{PathRoot, RoutineSpanIndex, file_key, is_al_path, path_keys};
 use crate::program::inputs::WsFile;
 
 /// Why a file's lines map to no declaration.
@@ -398,7 +398,7 @@ impl Accounting {
 #[must_use]
 pub fn account(
     diff: &DiffParseResult,
-    root: &DiffRoot,
+    root: &PathRoot,
     files: &[WsFile],
     spans: &RoutineSpanIndex,
 ) -> Accounting {
@@ -425,7 +425,20 @@ pub fn account(
             _ => Err(Unmapped::Ambiguous),
         }
     };
-    let poisoned: BTreeSet<&str> = diff.file_errors.iter().map(|e| e.path.as_str()).collect();
+    // A malformed record vetoes every record naming the same file, by spelling
+    // or by any key its path reads to (#363, as digest's veto, #76 T4).
+    let poisoned_raw: BTreeSet<&str> = diff.file_errors.iter().map(|e| e.path.as_str()).collect();
+    let poisoned_keys: BTreeSet<String> = diff
+        .file_errors
+        .iter()
+        .flat_map(|e| path_keys(root, &e.path))
+        .collect();
+    let poisoned = |path: &str| {
+        poisoned_raw.contains(path)
+            || path_keys(root, path)
+                .iter()
+                .any(|k| poisoned_keys.contains(k))
+    };
     let mut out = Accounting {
         errors: diff.errors.clone(),
         ..Accounting::default()
@@ -470,9 +483,7 @@ pub fn account(
             })
         } else if !is_al_path(&df.path) {
             Some(Unmapped::NotAl)
-        } else if poisoned.contains(df.path.as_str())
-            || df.old_path.as_deref().is_some_and(|p| poisoned.contains(p))
-        {
+        } else if poisoned(&df.path) || df.old_path.as_deref().is_some_and(&poisoned) {
             Some(Unmapped::DiffParseError)
         } else {
             None

@@ -88,7 +88,7 @@ fn job(cmd: Cmd, f: &Fixture) -> Box<dyn Job + '_> {
                 single_app: f.single_app,
                 tests: false,
                 include_reads: matches!(cmd, Cmd::DigestReads),
-                diff_root: DiffRoot::Workspace,
+                diff_root: DiffRoot::Workspace.into(),
             },
             false,
             None,

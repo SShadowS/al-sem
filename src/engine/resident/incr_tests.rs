@@ -74,7 +74,7 @@ pub(super) fn job<'a>(
                 single_app: false,
                 tests: false,
                 include_reads: false,
-                diff_root: DiffRoot::Workspace,
+                diff_root: DiffRoot::Workspace.into(),
             },
             false,
             None,
