@@ -109,6 +109,7 @@ pub fn resolve_temp_along_path(
         path,
         terminal_state,
         routine_by_id,
+        &crate::program::model::projection::ArmRows::default(),
         edge_kind_by_callsite,
         &ClosedWorldTempParams::new(),
     )
@@ -130,6 +131,7 @@ pub fn resolve_temp_along_path_closed_world(
     path: &[EvidenceStep],
     terminal_state: TempStateKind,
     routine_by_id: &HashMap<&str, &ModelRoutine>,
+    arms: &crate::program::model::projection::ArmRows<'_>,
     edge_kind_by_callsite: &HashMap<&str, &str>,
     closed_world_temp_params: &ClosedWorldTempParams,
 ) -> TempStateKind {
@@ -187,8 +189,13 @@ pub fn resolve_temp_along_path_closed_world(
 
         // The hop's parent routine (it OWNS the callsite). `routine_id` is the
         // caller (edge.from); `callsite_id` is the call site in that caller.
-        let parent = routine_by_id.get(hop.routine_id.as_str()).copied();
+        // Engine limits B2: the parent's row that holds the call site (its
+        // `#if` arm), else its id's row.
         let cs_id = hop.callsite_id.as_deref();
+        let parent = routine_by_id
+            .get(hop.routine_id.as_str())
+            .copied()
+            .map(|r| cs_id.map_or(r, |cs| arms.row_for(&hop.routine_id, cs, r)));
         state = step_one_frame(parent, cs_id, i, edge_kind);
         // A PD result of the substitution is re-anchored to the PARENT frame.
         frame_routine = Some(hop.routine_id.as_str());

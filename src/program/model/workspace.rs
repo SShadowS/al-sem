@@ -1627,6 +1627,23 @@ fn project_ir(
 ) -> Vec<(usize, usize)> {
     // The `(object, routine)` position in `ir_file` of each row pushed, in order.
     let mut positions = Vec::new();
+    // Engine limits B2: how many declarations of each internal id this file
+    // has. A routine declared in two `#if` arms (of a member list, or of two
+    // declarations of its whole object in this file) is two rows under one id
+    // (#160 step 11b); `lift_arm_declarations` reads the count once the file's
+    // rows are built.
+    let mut arms_by_id: HashMap<String, u32> = HashMap::new();
+    // Engine limits B2 (per-arm ids): where the next declaration of each id
+    // starts numbering its sites and rules. The first declaration starts at 0
+    // (the ids of a routine declared once); a later `#if` arm continues where
+    // the earlier ones stopped, so no two arms share a site id and each fact
+    // cites its own arm's line (`ir_walk::SiteIdBase`). Per file: the file is
+    // the unit the session's row cache reuses (`row_cache`), so a row's ids
+    // never depend on another file. Declarations of one id in two FILES still
+    // share their site ids (a collision the #160 step 11b rules handle).
+    let mut next_base_by_id: HashMap<String, (crate::program::body::ir_walk::SiteIdBase, u32)> =
+        HashMap::new();
+    let first_row = workspace.routines.len();
     for (oi, routine_ixs) in population {
         let oi = *oi;
         let o = &ir_file.objects[oi];
@@ -1893,12 +1910,6 @@ fn project_ir(
 
         // #288: whether the object's source is free of directives, scanned once.
         let mut object_clean: Option<bool> = None;
-        // Engine limits B2: how many declarations of each internal id this
-        // object has. A routine declared in two `#if` arms is two rows under one
-        // id (#160 step 11b); `lift_arm_declarations` reads the count once the
-        // object's rows are built.
-        let mut arms_by_id: HashMap<String, u32> = HashMap::new();
-        let first_row = workspace.routines.len();
         for (rix, ir_routine) in routine_ixs.iter().map(|&ri| (ri, &o.routines[ri])) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
@@ -1928,7 +1939,10 @@ fn project_ir(
                     ir_routine.return_type.as_deref(),
                 );
                 *arms_by_id.entry(rid.clone()).or_insert(0) += 1;
-                let (feats, site_exprs, implicit) =
+                let base = next_base_by_id
+                    .get(&rid)
+                    .map_or_else(Default::default, |&(b, _)| b);
+                let (feats, site_exprs, implicit, next) =
                     crate::program::body::ir_walk::project_routine_features_ir_with(
                         ir_file,
                         oi,
@@ -1938,7 +1952,9 @@ fn project_ir(
                         source_unit_id,
                         source_table_name.as_deref(),
                         parenless_calls,
+                        base,
                     );
+                next_base_by_id.entry(rid.clone()).or_default().0 = next;
                 (rid, feats, site_exprs, implicit)
             };
 
@@ -2345,7 +2361,8 @@ fn project_ir(
                     .iter()
                     .map(|rv| (rv.name.clone(), rv.table_name.clone()))
                     .collect();
-                crate::program::body::rules::build_rule_drafts(
+                let rule_base = next_base_by_id.get(&routine_id).map_or(0, |&(_, r)| r);
+                let drafts = crate::program::body::rules::build_rule_drafts(
                     &crate::program::body::rules::RuleInputs {
                         file: ir_file,
                         object: o,
@@ -2358,8 +2375,13 @@ fn project_ir(
                         record_variables: &record_vars,
                         object_clean: clean,
                         anchor: &|origin| anchor_from_origin(origin, source_unit_id, cols),
+                        rule_base,
                     },
-                )
+                );
+                if let Some(e) = next_base_by_id.get_mut(&routine_id) {
+                    e.1 = rule_base + u32::try_from(drafts.len()).expect("a rule count fits u32");
+                }
+                drafts
             });
             // V3 §2.1: the member's kind and caption, for the routine display.
             let member_detail = enclosing_member
@@ -2439,8 +2461,8 @@ fn project_ir(
                 site_guards,
             });
         }
-        lift_arm_declarations(&mut workspace.routines[first_row..], &arms_by_id);
     }
+    lift_arm_declarations(&mut workspace.routines[first_row..], &arms_by_id);
     positions
 }
 
@@ -2561,23 +2583,200 @@ pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
+    assemble_and_resolve_workspace_from_program_edited(
+        inputs,
+        skip_roots_config,
+        ctx,
+        parenless,
+        needs,
+        |ws, node_of| {
+            let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+            for (ri, r) in ws.routines.iter().enumerate() {
+                by_id.entry(r.id.clone()).or_default().push(ri);
+            }
+            for rows in by_id.values().filter(|rows| rows.len() > 1) {
+                let (mut i, mut j) = (0, rows.len() - 1);
+                while i < j {
+                    ws.routines.swap(rows[i], rows[j]);
+                    node_of.swap(rows[i], rows[j]);
+                    i += 1;
+                    j -= 1;
+                }
+            }
+        },
+    )
+}
+
+/// [`assemble_and_resolve_workspace_from_program`] with `edit` applied to the
+/// raw rows (and their nodes, by row position) before `RowNodes` and the
+/// attach, so a test can state a precondition by assignment and every later
+/// stage sees it. Test entry.
+#[doc(hidden)]
+pub fn assemble_and_resolve_workspace_from_program_edited(
+    inputs: &crate::program::inputs::WorkspaceInputs,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
+    edit: impl FnOnce(&mut ModelEntities, &mut Vec<Option<crate::program::node::RoutineNodeId>>),
+) -> Option<ModelRows> {
     let (mut ws, mut node_of) =
         assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
-    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
-    for (ri, r) in ws.routines.iter().enumerate() {
-        by_id.entry(r.id.clone()).or_default().push(ri);
-    }
-    for rows in by_id.values().filter(|rows| rows.len() > 1) {
-        let (mut i, mut j) = (0, rows.len() - 1);
-        while i < j {
-            ws.routines.swap(rows[i], rows[j]);
-            node_of.swap(rows[i], rows[j]);
-            i += 1;
-            j -= 1;
-        }
-    }
+    edit(&mut ws, &mut node_of);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
+}
+
+/// The site-id tags a routine's walk mints (`ir_walk::SiteIdBase`), plus the
+/// rules' `rule` tag.
+const SITE_ID_TAGS: [&str; 5] = ["op", "cs", "loop", "u", "rule"];
+
+/// `s` with every `{id}/{tag}{n}` site id renumbered to `{id}/{tag}{n - min}`,
+/// `min` the tag's entry of `mins` (a tag without one keeps its numbers).
+fn rebase_site_ids(s: &str, id: &str, mins: &HashMap<&'static str, u32>) -> String {
+    let prefix = format!("{id}/");
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find(&prefix) {
+        let after = &rest[at + prefix.len()..];
+        out.push_str(&rest[..at + prefix.len()]);
+        rest = after;
+        let Some((tag, digits)) = SITE_ID_TAGS.iter().find_map(|t| {
+            let d = after.strip_prefix(t)?;
+            let n = d.bytes().take_while(u8::is_ascii_digit).count();
+            (n > 0).then_some((*t, &d[..n]))
+        }) else {
+            continue;
+        };
+        let n: u32 = digits.parse().expect("a site number fits u32");
+        out.push_str(tag);
+        out.push_str(&(n - mins.get(tag).copied().unwrap_or(0)).to_string());
+        rest = &after[tag.len() + digits.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The smallest number of each site-id tag of `id` in `text`.
+fn site_id_mins(text: &str, id: &str) -> HashMap<&'static str, u32> {
+    let prefix = format!("{id}/");
+    let mut mins: HashMap<&'static str, u32> = HashMap::new();
+    for (at, _) in text.match_indices(&prefix) {
+        let after = &text[at + prefix.len()..];
+        for t in SITE_ID_TAGS {
+            let Some(d) = after.strip_prefix(t) else {
+                continue;
+            };
+            let n = d.bytes().take_while(u8::is_ascii_digit).count();
+            if n > 0 {
+                let v: u32 = d[..n].parse().expect("a site number fits u32");
+                let m = mins.entry(t).or_insert(v);
+                *m = (*m).min(v);
+            }
+            break;
+        }
+    }
+    mins
+}
+
+/// #160 step 11b's collided-id contract, stated BY ASSIGNMENT (engine limits
+/// B2, per-arm ids). Production now gives each `#if` arm of a routine its own
+/// site ids (`ir_walk::SiteIdBase`), so two declarations of one id no longer
+/// share `{id}/op0`; rows that DO share their site ids (for any other reason)
+/// must still be handled by the 11b rules. This renumbers every row of each
+/// collision group (rows sharing one `id`) so its site ids start at 0 again,
+/// the shape the 11b tests state: after it, the rows of a group share their
+/// site ids, as two declarations numbered on their own would. Returns how many
+/// rows changed.
+///
+/// Every field of a row that holds a site id is rewritten, and the function
+/// asserts it: the row's `Debug` text after the rewrite must equal the rewrite
+/// applied to its `Debug` text before, so a field added later that holds a
+/// site id fails here instead of leaving a half-renumbered row. Run it on
+/// the raw rows ([`assemble_and_resolve_workspace_from_program_edited`]) so
+/// the attach builds the calls from the renumbered sites. Test entry.
+///
+/// # Panics
+/// When a row's rewrite misses a field that holds one of its site ids.
+#[doc(hidden)]
+pub fn share_collided_site_ids(routines: &mut [ModelRoutine]) -> usize {
+    use crate::program::body::features::PCFNNode;
+    fn tree(n: &mut PCFNNode, f: &dyn Fn(&str) -> String) {
+        for s in [&mut n.operation_id, &mut n.callsite_id]
+            .into_iter()
+            .flatten()
+        {
+            *s = f(s);
+        }
+        for kids in [
+            &mut n.condition_leaves,
+            &mut n.children,
+            &mut n.else_children,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for k in kids {
+                tree(k, f);
+            }
+        }
+    }
+    let mut groups: HashMap<String, usize> = HashMap::new();
+    for r in routines.iter() {
+        *groups.entry(r.id.clone()).or_default() += 1;
+    }
+    let mut changed = 0;
+    for r in routines
+        .iter_mut()
+        .filter(|r| groups.get(&r.id).is_some_and(|&n| n > 1))
+    {
+        let id = r.id.clone();
+        let before = format!("{r:?}");
+        let mins = site_id_mins(&before, &id);
+        if mins.values().all(|&m| m == 0) {
+            continue;
+        }
+        let f = |s: &str| rebase_site_ids(s, &id, &mins);
+        let all = |v: &mut Vec<String>| v.iter_mut().for_each(|s| *s = f(s));
+        for o in &mut r.record_operations {
+            o.id = f(&o.id);
+            all(&mut o.loop_stack);
+        }
+        for c in &mut r.call_sites {
+            c.id = f(&c.id);
+            c.operation_id = f(&c.operation_id);
+            all(&mut c.loop_stack);
+        }
+        for o in &mut r.operation_sites {
+            o.id = f(&o.id);
+            all(&mut o.loop_stack);
+        }
+        for l in &mut r.loops {
+            l.id = f(&l.id);
+            if let Some((a, b)) = &mut l.exhausting_advance {
+                (*a, *b) = (f(a), f(b));
+            }
+        }
+        for u in &mut r.unreachable_statements {
+            u.id = f(&u.id);
+        }
+        if let Some(t) = &mut r.statement_tree {
+            tree(std::sync::Arc::make_mut(t), &f);
+        }
+        for rule in r.rules.iter_mut().flatten() {
+            rule.id = f(&rule.id);
+        }
+        for d in r.rule_drafts.iter_mut().flatten() {
+            d.rekey_ids(&f);
+        }
+        assert_eq!(
+            format!("{r:?}"),
+            f(&before),
+            "share_collided_site_ids: a field of {id} holds a site id the rewrite missed"
+        );
+        changed += 1;
+    }
+    changed
 }
 
 /// The CROSS-APP detector model (engine-switch S7.2): the workspace's rows exactly as
@@ -3551,6 +3750,10 @@ pub struct CollisionCensus {
     /// Groups whose rows do not share one role (#160 step 11b §4.3): the count
     /// the projection's role check makes. Must read 0.
     pub groups_mixed_role: usize,
+    /// Groups whose rows all come from one source file (engine limits B2,
+    /// per-arm ids): `#if` arms numbered apart, so they share no site id. The
+    /// other groups (rows from several files) still share their site ids.
+    pub groups_one_file: usize,
 }
 
 impl CollisionCensus {
@@ -3561,7 +3764,8 @@ impl CollisionCensus {
         eprintln!(
             "[retained-census] collision routine_rows={} distinct_ids={} collision_groups={} \
              collision_rows={} groups_one_node={} groups_several_nodes={} rows_primary={} \
-             rows_dependency_source={} rows_symbol_only={} groups_mixed_role={}",
+             rows_dependency_source={} rows_symbol_only={} groups_mixed_role={} \
+             groups_one_file={}",
             c.routine_rows,
             c.distinct_ids,
             c.collision_groups,
@@ -3571,7 +3775,8 @@ impl CollisionCensus {
             c.rows_primary,
             c.rows_dependency_source,
             c.rows_symbol_only,
-            c.groups_mixed_role
+            c.groups_mixed_role,
+            c.groups_one_file
         );
     }
 }
@@ -3599,6 +3804,10 @@ pub fn collision_census(ws: &ModelEntities, row_nodes: &RowNodes) -> CollisionCe
             c.groups_one_node += 1;
         } else {
             c.groups_several_nodes += 1;
+        }
+        let unit = |ri: usize| &ws.routines[ri].source_anchor.source_unit_id;
+        if rows.iter().all(|&ri| unit(ri) == unit(rows[0])) {
+            c.groups_one_file += 1;
         }
         for &ri in rows {
             let unit = &ws.routines[ri].source_anchor.source_unit_id;

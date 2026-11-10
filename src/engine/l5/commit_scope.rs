@@ -276,6 +276,21 @@ pub struct Declared {
 }
 
 impl Declared {
+    /// Two declarations of one id (two `#if` arms, engine limits B2): every
+    /// behavior either may set. The source stays the first's unless the
+    /// second is a definite attribute.
+    #[must_use]
+    pub fn union(self, other: Declared) -> Declared {
+        Declared {
+            states: self.states | other.states,
+            source: if other.source == DeclSource::Attribute {
+                other.source
+            } else {
+                self.source
+            },
+        }
+    }
+
     /// The declared value's word: `Ignore` or `Error`.
     #[must_use]
     pub fn word(self) -> &'static str {
@@ -381,20 +396,47 @@ impl CommitScopes {
         dependency_calls: &[crate::program::model::calls::CallEdge],
     ) -> CommitScopes {
         let ws = &model.workspace;
-        let objects: HashMap<&str, &ModelObject> = ws
+        // Engine limits B2 (per-arm ids): an object or a routine declared in
+        // two `#if` arms is one row per arm under one id. Each build runs one
+        // arm, so the id's declaration is every row's possibilities together
+        // (a union of the behavior sets), never the last row's alone.
+        let mut objects: HashMap<&str, Vec<&ModelObject>> = HashMap::new();
+        for o in ws
             .objects
             .iter()
             .filter(|o| o.inherent_commit_behavior.is_some())
-            .map(|o| (o.id.as_str(), o))
-            .collect();
-        let by_routine: HashMap<String, Declared> = ws
-            .routines
-            .iter()
-            .filter_map(|r| {
-                declared(r, objects.get(r.object_id.as_str()).copied())
-                    .map(|d| (r.stable_routine_id.clone(), d))
-            })
-            .collect();
+        {
+            objects.entry(o.id.as_str()).or_default().push(o);
+        }
+        let mut by_routine: HashMap<String, Declared> = HashMap::new();
+        // The ids with a row that declares nothing: that row's build runs
+        // its commits normally (the lowerer marks an attribute one arm of a
+        // FILE lacks as conditional, but rows of one id in two files are
+        // not compared there).
+        let mut plain_row: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for r in &ws.routines {
+            let d = match objects.get(r.object_id.as_str()) {
+                None => declared(r, None),
+                Some(rows) => rows
+                    .iter()
+                    .filter_map(|o| declared(r, Some(o)))
+                    .reduce(Declared::union),
+            };
+            match d {
+                None => {
+                    plain_row.insert(r.stable_routine_id.as_str());
+                }
+                Some(d) => {
+                    let slot = by_routine.entry(r.stable_routine_id.clone()).or_insert(d);
+                    *slot = slot.union(d);
+                }
+            }
+        }
+        for (id, d) in &mut by_routine {
+            if plain_row.contains(id.as_str()) {
+                d.states |= N;
+            }
+        }
         if by_routine.is_empty() {
             return CommitScopes::default();
         }
@@ -1191,5 +1233,73 @@ codeunit 50381 "BC"
         assert_eq!(scopes.step(Some(&print)), Step::Plain);
         assert_eq!(scopes.step(Some(&undecided)), Step::Run);
         assert_eq!(scopes.step(Some(&builtin)), Step::Run);
+    }
+
+    /// Engine limits B2 (per-arm ids) x B4: an id declared in two `#if` arms
+    /// is one row per arm, and its declaration is every row's possibilities
+    /// together. `Two` declares Ignore in arm A and Error in arm B (each is
+    /// conditional: the other arm lacks it), so it may run normally, ignored
+    /// or as an error. `Obj` is a whole object in two arms, Ignore in one and
+    /// Error in the other (`InherentCommitBehavior`). The last-wins map kept
+    /// arm B's `N|E` for both. Break: keep the last row's declaration -> `Two`
+    /// and `Obj::Q` read `N|E`. (No CLI answer moves: every row here already
+    /// holds `N`, so no definite answer rests on the lost bit; the two-file
+    /// case where it does is `cli_b2_arm_readers::a_declaration_one_files_row_lacks_only_may_apply`.)
+    #[test]
+    fn every_arm_adds_its_declaration() {
+        let src = r#"codeunit 50396 "Arms"
+{
+#if A
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure Two()
+    begin
+        Commit();
+    end;
+#else
+    [CommitBehavior(CommitBehavior::Error)]
+    procedure Two()
+    begin
+        Commit();
+    end;
+#endif
+}
+#if A
+codeunit 50397 "Obj"
+{
+    InherentCommitBehavior = Ignore;
+    procedure Q()
+    begin
+        Commit();
+    end;
+}
+#else
+codeunit 50397 "Obj"
+{
+    InherentCommitBehavior = Error;
+    procedure Q()
+    begin
+        Commit();
+    end;
+}
+#endif
+"#;
+        let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+            &[("src/A.al".to_string(), src.to_string())],
+            "33333333-0000-0000-0000-0000000000b7",
+        );
+        let scopes = CommitScopes::of_model(&m, &[]);
+        for name in ["Two", "Q"] {
+            let rows: Vec<&ModelRoutine> = m
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.name == name)
+                .collect();
+            assert_eq!(rows.len(), 2, "precondition: {name} has two rows");
+            let d = scopes
+                .get(&rows[0].stable_routine_id)
+                .unwrap_or_else(|| panic!("{name} declares"));
+            assert_eq!(d.states, N | I | E, "{name}");
+        }
     }
 }

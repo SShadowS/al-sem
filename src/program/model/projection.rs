@@ -327,6 +327,177 @@ pub fn sites_of<'a>(
         .unwrap_or_else(|| routine.call_sites.iter().collect())
 }
 
+/// Engine limits B2 (per-arm ids): the rows of every COLLIDED id, so a reader
+/// that holds one row of an id (the last, from a by-id map) can find the row
+/// that holds a given SITE, or walk every row of the id.
+///
+/// A routine declared in two `#if` arms of one file is two rows of one id,
+/// and each arm numbers its own sites (`ir_walk::SiteIdBase`): arm A's
+/// `{id}/cs0` is in arm A's row only. A reader that looks a site up in the
+/// id's LAST row misses arm A's sites (it drops their facts, or falls back to
+/// the whole body, or cites the other arm's line). Rows that share their site
+/// ids (one id declared in two files) are found too: the owner of a shared
+/// site is its LAST holding row (class P, #160 step 11b §4.6).
+///
+/// Transient like [`RowsOfId`] (R1-12): build it from the current rows. A
+/// single-row id is absent, so [`ArmRows::owner`] is `None` and the reader
+/// keeps its own row.
+#[derive(Default)]
+pub struct ArmRows<'a> {
+    // A `Vec` (covariant), so a reader can borrow it beside shorter-lived
+    // lookups under one lifetime.
+    rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,
+}
+
+impl<'a> ArmRows<'a> {
+    /// The rows of every collided id of `routines`, in row order.
+    #[must_use]
+    pub fn build(routines: &'a [ModelRoutine]) -> Self {
+        Self::build_from(routines.iter())
+    }
+
+    /// [`ArmRows::build`] over any iterator of rows (a reader that holds
+    /// references).
+    #[must_use]
+    pub fn build_from(routines: impl IntoIterator<Item = &'a ModelRoutine>) -> Self {
+        let mut all: HashMap<&'a str, Vec<&'a ModelRoutine>> = HashMap::new();
+        for r in routines {
+            all.entry(r.id.as_str()).or_default().push(r);
+        }
+        all.retain(|_, rows| rows.len() > 1);
+        ArmRows { rows: all }
+    }
+
+    /// Whether `id` has two or more rows.
+    #[must_use]
+    pub fn is_collided(&self, id: &str) -> bool {
+        self.rows.contains_key(id)
+    }
+
+    /// The rows of a collided `id`, in row order; `None` for a single-row id.
+    #[must_use]
+    pub fn rows(&self, id: &str) -> Option<&[&'a ModelRoutine]> {
+        self.rows.get(id).map(|v| v.as_slice())
+    }
+
+    /// The rows of `id`: every row of a collided id, else `one` alone.
+    #[must_use]
+    pub fn rows_or(&self, id: &str, one: &'a ModelRoutine) -> SmallVec<[&'a ModelRoutine; 2]> {
+        self.rows
+            .get(id)
+            .map_or_else(|| smallvec::smallvec![one], |v| v.iter().copied().collect())
+    }
+
+    /// The LAST row of a collided `id` that holds the site `site` (a call
+    /// site, its operation id, an operation, a record operation, a loop or an
+    /// unreachable statement). `None` when `id` has one row, or no row of it
+    /// holds `site`.
+    #[must_use]
+    pub fn owner(&self, id: &str, site: &str) -> Option<&'a ModelRoutine> {
+        self.rows
+            .get(id)?
+            .iter()
+            .rev()
+            .copied()
+            .find(|r| row_holds_site(r, site))
+    }
+
+    /// The row a reader should read `site` of `id` from: its owner
+    /// ([`ArmRows::owner`]), else `fallback` (the reader's own row).
+    #[must_use]
+    pub fn row_for(&self, id: &str, site: &str, fallback: &'a ModelRoutine) -> &'a ModelRoutine {
+        self.owner(id, site).unwrap_or(fallback)
+    }
+}
+
+/// For every COLLIDED id, one owned SITE-UNION row (engine limits B2, per-arm
+/// ids): the id's last row, with the call sites, operation sites, record
+/// operations, `FieldRef` operations (B5), loops and unreachable statements
+/// of every row of the id (each
+/// site once; a site two rows share, its LAST holding row's copy, class P).
+///
+/// For the readers that take one row per id and only look SITES up in it (a
+/// call site's argument bindings, a record operation's temp state): the cone's
+/// PD substitution and its guard carry. Row-level fields (name, parameters,
+/// the statement tree) stay the last row's, as the by-id pick gave before; a
+/// reader that walks the statement tree to a site uses [`ArmRows::owner`].
+#[must_use]
+pub fn merged_site_rows(routines: &[ModelRoutine]) -> Vec<ModelRoutine> {
+    let arms = ArmRows::build(routines);
+    let mut ids: Vec<&str> = arms.rows.keys().copied().collect();
+    ids.sort_unstable();
+    ids.into_iter()
+        .map(|id| {
+            let rows = &arms.rows[id];
+            let last = *rows.last().expect("a collided id has rows");
+            let mut m = last.clone();
+            fn add<T: Clone>(out: &mut Vec<T>, more: &[T], key: impl Fn(&T) -> &str) {
+                for x in more {
+                    match out.iter_mut().find(|o| key(o) == key(x)) {
+                        Some(o) => *o = x.clone(),
+                        None => out.push(x.clone()),
+                    }
+                }
+            }
+            m.call_sites.clear();
+            m.operation_sites.clear();
+            m.record_operations.clear();
+            m.field_ref_operations.clear();
+            m.loops.clear();
+            m.unreachable_statements.clear();
+            for r in rows {
+                add(&mut m.call_sites, &r.call_sites, |c| c.id.as_str());
+                add(&mut m.operation_sites, &r.operation_sites, |o| {
+                    o.id.as_str()
+                });
+                add(&mut m.record_operations, &r.record_operations, |o| {
+                    o.id.as_str()
+                });
+                add(&mut m.field_ref_operations, &r.field_ref_operations, |o| {
+                    o.id.as_str()
+                });
+                add(&mut m.loops, &r.loops, |l| l.id.as_str());
+                add(
+                    &mut m.unreachable_statements,
+                    &r.unreachable_statements,
+                    |u| u.id.as_str(),
+                );
+            }
+            m
+        })
+        .collect()
+}
+
+/// A by-id map over `routines` (the LAST row of an id, class P) whose
+/// collided ids point at their [`merged_site_rows`] row instead.
+#[must_use]
+pub fn by_id_with_site_unions<'a>(
+    routines: &'a [ModelRoutine],
+    unions: &'a [ModelRoutine],
+) -> HashMap<&'a str, &'a ModelRoutine> {
+    let mut out: HashMap<&'a str, &'a ModelRoutine> =
+        routines.iter().map(|r| (r.id.as_str(), r)).collect();
+    for u in unions {
+        out.insert(u.id.as_str(), u);
+    }
+    out
+}
+
+/// Whether row `r` holds the site id `site` (see [`ArmRows::owner`]).
+#[must_use]
+pub fn row_holds_site(r: &ModelRoutine, site: &str) -> bool {
+    r.call_sites
+        .iter()
+        .any(|c| c.id == site || c.operation_id == site)
+        || r.operation_sites.iter().any(|o| o.id == site)
+        || r.record_operations.iter().any(|o| o.id == site)
+        // Engine limits B5: a `FieldRef` operation (`{call site}/fieldref`)
+        // is its row's too.
+        || r.field_ref_operations.iter().any(|o| o.id == site)
+        || r.loops.iter().any(|l| l.id == site)
+        || r.unreachable_statements.iter().any(|u| u.id == site)
+}
+
 /// One call site, as the per-site consumers (d37, `compose_roles_only`) read it
 /// (spec §4.6 `site_pick`).
 pub struct SitePick<'a, B> {
@@ -364,6 +535,93 @@ pub fn site_pick<'a, B>(
 
 #[cfg(test)]
 mod tests {
+    /// Engine limits B5 x B2 (per-arm ids, merge of fix/w2-b2-arm-ids into
+    /// integrate/w2): a `FieldRef` operation (`{call site}/fieldref`) belongs
+    /// to the row (`#if` arm) whose call site it stands for. `Fr` is declared
+    /// in two arms, each with its own `FR.CalcField()`; each arm's FieldRef
+    /// operation is owned by its own row, and the site-union row holds both.
+    /// No CLI reader asks the owner of a FieldRef operation today (they are
+    /// reads, which no `prove` slice or detector looks up by site), so this
+    /// pins the helpers. Break: `row_holds_site` skips `field_ref_operations`
+    /// -> no owner is found; `merged_site_rows` keeps the last row's alone ->
+    /// arm A's operation is missing from the union.
+    #[test]
+    fn a_field_ref_operation_is_owned_by_its_arm() {
+        let src = r#"
+table 50100 "H"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(4; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("L" where("No." = field("No.")));
+        }
+    }
+}
+table 50101 "L"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}
+codeunit 50102 "C"
+{
+#if A
+    procedure Fr()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"H");
+        FR := RR.Field(4);
+        FR.CalcField();
+    end;
+#else
+    procedure Fr()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"H");
+        FR := RR.Field(4);
+        FR.CalcField();
+    end;
+#endif
+}
+"#;
+        let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+            &[("src/C.al".to_string(), src.to_string())],
+            "33333333-0000-0000-0000-0000000000b6",
+        );
+        let routines = &m.workspace.routines;
+        let rows: Vec<&super::ModelRoutine> = routines.iter().filter(|r| r.name == "Fr").collect();
+        assert_eq!(rows.len(), 2, "precondition: two arms");
+        let ops: Vec<&str> = rows
+            .iter()
+            .map(|r| {
+                assert_eq!(r.field_ref_operations.len(), 1, "precondition: one per arm");
+                r.field_ref_operations[0].id.as_str()
+            })
+            .collect();
+        assert_ne!(ops[0], ops[1], "precondition: per-arm ids");
+        let arms = super::ArmRows::build(routines);
+        for (row, op) in rows.iter().zip(&ops) {
+            let owner = arms.owner(&row.id, op).expect("an owner");
+            assert!(std::ptr::eq(owner, *row), "{op} is its own arm's");
+        }
+        let unions = super::merged_site_rows(routines);
+        let u = unions.iter().find(|u| u.id == rows[0].id).expect("a union");
+        let mut held: Vec<&str> = u
+            .field_ref_operations
+            .iter()
+            .map(|o| o.id.as_str())
+            .collect();
+        held.sort_unstable();
+        let mut want = ops.clone();
+        want.sort_unstable();
+        assert_eq!(held, want);
+    }
+
     /// T1-cov's second case (spec §5.1), on the helper `merge_per_id` calls at
     /// R2a/R2b/R2c (T1-cov pins that production use through the reasons): a
     /// `partial` row and a `complete` row make `partial`, in either row order,

@@ -95,10 +95,14 @@ fn loose_subject(loop_object_id: &str, terminal: &IoTerminal) -> LooseSubject {
 /// `directIoTerminalsFor` — LOCAL/DIRECT IO effects of a routine. Uses
 /// `capability_facts_direct` only (`provenance == "direct"`), filtered to http/file
 /// with a witness callsite. Anchored via the witness callsite (loop_stack →
-/// localLoopDepth).
+/// localLoopDepth). `own_sites_only` (engine limits B2: one `#if` arm of a
+/// routine declared in two): the summary's facts are its id's union over the
+/// arms, so a fact whose witness site this row does not hold is another
+/// arm's, read from that row.
 fn direct_io_terminals_for(
     routine: &ModelRoutine,
     summary: &FullRoutineSummary,
+    own_sites_only: bool,
 ) -> Vec<IoTerminal> {
     if summary.capability_facts_direct.is_empty() {
         return Vec::new();
@@ -121,6 +125,9 @@ fn direct_io_terminals_for(
             continue;
         };
         let cs = cs_by_id.get(witness.as_str()).copied();
+        if own_sites_only && cs.is_none() {
+            continue;
+        }
         let source_anchor = match cs {
             Some(cs) => anchor_of(&cs.source_anchor, routine),
             None => anchor_of(&routine.source_anchor, routine),
@@ -169,6 +176,8 @@ fn io_method_note(io_kind: &str, method_name: Option<&str>) -> String {
 /// witness callsite id stashed in `op_id`.
 struct D48Policy<'a> {
     routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
+    /// Engine limits B2: the row (`#if` arm) that holds a site.
+    arms: &'a crate::program::model::projection::ArmRows<'a>,
     /// ⟨C1 Task 2⟩ The derived cone substrate `expand`'s IO pruning gate reads.
     cone_derived: &'a ConeDerivedStore,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
@@ -208,7 +217,16 @@ impl<'a> WalkPolicy for D48Policy<'a> {
     }
 
     fn build_hop_step(&self, edge: &CombinedEdge, _ctx: &PathCtx) -> EvidenceStep {
-        let from_routine = self.routine_by_id.get(edge.from.as_str()).copied();
+        // Engine limits B2: the caller's row (its `#if` arm) that holds the call.
+        let from_routine = self
+            .routine_by_id
+            .get(edge.from.as_str())
+            .copied()
+            .map(|r| {
+                edge.callsite_id
+                    .as_deref()
+                    .map_or(r, |cid| self.arms.row_for(&edge.from, cid, r))
+            });
         let cs = edge.callsite_id.as_ref().and_then(|cid| {
             from_routine.and_then(|fr| fr.call_sites.iter().find(|c| &c.id == cid))
         });
@@ -304,15 +322,29 @@ pub fn detect_d48(
     let mut io_terminals_by_routine: HashMap<String, Vec<IoTerminal>> = HashMap::new();
     for r in &ws.routines {
         if let Some(summary) = ctx.summaries.get(&r.id) {
-            let terms = direct_io_terminals_for(r, summary);
-            if !terms.is_empty() {
+            // Engine limits B2: each `#if` arm (row) gives the terminals of its
+            // own sites; the id's list holds every arm's (a shared site's from
+            // its LAST owning row).
+            let collided = ctx.arm_rows.is_collided(&r.id);
+            let terms = direct_io_terminals_for(r, summary, collided);
+            if terms.is_empty() {
+                continue;
+            }
+            if !collided {
                 io_terminals_by_routine.insert(r.id.clone(), terms);
+                continue;
+            }
+            let list = io_terminals_by_routine.entry(r.id.clone()).or_default();
+            for t in terms {
+                list.retain(|x| x.witness_callsite_id != t.witness_callsite_id);
+                list.push(t);
             }
         }
     }
 
     let policy = D48Policy {
         routine_by_id: &ctx.routine_by_id,
+        arms: &ctx.arm_rows,
         cone_derived: &ctx.cone_derived,
         edges_by_from: &ctx.graph.edges_by_from,
         io_terminals_by_routine: &io_terminals_by_routine,

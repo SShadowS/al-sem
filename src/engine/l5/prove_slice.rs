@@ -804,17 +804,18 @@ fn outcome(req: &SliceRequest, site: &SliceSite, caller_dependent: bool) -> Outc
 }
 
 /// The guards of each site on `path` (module doc, rules 2 and 3): each
-/// step's call site in its caller, then the terminal site `(owner, anchor)`.
+/// step's call site in its caller, then the terminal site `(owner row,
+/// anchor)`. Each site's guards are its own row's (engine limits B2: the
+/// `#if` arm that holds it, [`LiteralReach::row_at`]).
 fn route_sites<'a>(
     reach: &LiteralReach<'a>,
     root: &str,
     path: &GroupPath,
-    terminal: (&str, Option<&PAnchor>),
+    terminal: (Option<&'a ModelRoutine>, Option<&PAnchor>),
 ) -> Vec<RouteSite> {
     let mut out = Vec::new();
     let mut caller = root.to_string();
-    let mut at = |routine: &str, anchor: Option<&PAnchor>| {
-        let r = reach.routine(routine);
+    let mut at = |r: Option<&ModelRoutine>, anchor: Option<&PAnchor>| {
         let (shown, total) = match (r, anchor) {
             (Some(r), Some(a)) => {
                 let arms = r.site_guards().enclosing(a);
@@ -836,11 +837,15 @@ fn route_sites<'a>(
         });
     };
     for s in &path.steps {
+        let row = s
+            .edge_id
+            .as_deref()
+            .map_or_else(|| reach.routine(&caller), |id| reach.row_at(&caller, id));
         let anchor = s
             .edge_id
             .as_deref()
-            .and_then(|id| reach.routine(&caller).and_then(|r| anchor_in(r, id)));
-        at(&caller, anchor);
+            .and_then(|id| row.and_then(|r| anchor_in(r, id)));
+        at(row, anchor);
         caller = s.to.clone();
     }
     at(terminal.0, terminal.1);
@@ -984,7 +989,8 @@ pub(crate) fn compute_slice(
         if !seen.insert((rec.effect_type, rec.owner, rec.terminal.id())) {
             continue;
         }
-        let r = reach.routine(rec.owner);
+        // Engine limits B2: the owner's row (`#if` arm) that holds the site.
+        let r = reach.row_at(rec.owner, rec.terminal.id());
         if rec.terminal == TerminalSite::None {
             // A fact with no site (a platform native that may error): in
             // reach, but with no place, text or route.
@@ -1105,7 +1111,8 @@ pub(crate) fn compute_slice(
             continue;
         };
         let owner = sites[i].0.owner.clone();
-        let anchor = reach.routine(&owner).and_then(|r| anchor_in(r, &ops[0]));
+        let owner_row = reach.row_at(&owner, &ops[0]);
+        let anchor = owner_row.and_then(|r| anchor_in(r, &ops[0]));
         // B7/L23: a site that escapes on some routes only prints a route
         // that crosses no trap (the first route found is trapped).
         let open = match (&sites[i].0.trap, &scope) {
@@ -1118,7 +1125,7 @@ pub(crate) fn compute_slice(
         sites[i].0.route_trap_free = open.is_some();
         let route = match open.map_or_else(|| group_paths.own_path(&reach, Some(live), &ops), Ok) {
             Ok(path) => {
-                let rs = route_sites(&reach, root, &path, (&owner, anchor));
+                let rs = route_sites(&reach, root, &path, (owner_row, anchor));
                 Ok(SliceRoute { path, sites: rs })
             }
             Err(n) => Err(n.reason),
@@ -1137,7 +1144,7 @@ pub(crate) fn compute_slice(
                 .iter()
                 .map(|steps| {
                     let path = group_paths.path_of(&reach, steps, &ops[0]);
-                    let rs = route_sites(&reach, root, &path, (&owner, anchor));
+                    let rs = route_sites(&reach, root, &path, (owner_row, anchor));
                     SliceRoute { path, sites: rs }
                 })
                 .collect();

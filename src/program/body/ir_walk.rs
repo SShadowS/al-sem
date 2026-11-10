@@ -120,6 +120,35 @@ pub struct IrSpine {
     /// comparison (`=`, `<>`, `in`) that is a literal or a label. The CFN
     /// builder reads it for [`super::features::ValueFact`].
     pub value_labels: HashMap<ExprId, ValueLabel>,
+    /// Where the numbering of the next declaration of the same routine id
+    /// starts ([`SiteIdBase`]).
+    pub next_base: SiteIdBase,
+}
+
+/// Engine limits B2 (per-arm ids): the first number of each site-id tag
+/// (`{routine}/op{N}`, `/cs{N}`, `/loop{N}`, `/u{N}`) a routine's walk mints.
+///
+/// A routine declared in two arms of an `#if` (`#if A procedure P() … #else
+/// procedure P() … #endif`) is two declarations under ONE routine id (#160
+/// step 11b). Each declaration used to number its sites from 0, so both arms
+/// minted `P/op0`, and every reader that resolves a site id to one row cited
+/// one arm's line for the other arm's fact. The model builder now walks the
+/// declarations of one id in document order and starts each one where the
+/// previous one stopped ([`IrSpine::next_base`]): the first declaration keeps
+/// today's ids, and the ids of one id never repeat across its declarations.
+/// A routine declared once is walked from [`SiteIdBase::default`], so its ids
+/// do not move.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteIdBase {
+    /// The first `op` number (record operations, commits, errors, then each
+    /// call site's `operation_id`).
+    pub op: u32,
+    /// The first `cs` number.
+    pub cs: u32,
+    /// The first `loop` number.
+    pub loops: u32,
+    /// The first `u` (unreachable statement) number.
+    pub unreachable: u32,
 }
 
 /// An implicit-receiver frame (table-method base `Rec` seed / `with` body). Carries
@@ -437,6 +466,8 @@ struct SpineCtx<'a> {
     source: &'a str,
     cols: &'a Utf16Cols<'a>,
     source_unit_id: &'a str,
+    /// Where this declaration's site numbering starts ([`SiteIdBase`]).
+    base: SiteIdBase,
     op_index: u32,
     cs_index: u32,
     loop_count: u32,
@@ -801,7 +832,7 @@ impl<'a> SpineCtx<'a> {
     fn enter_loop(&mut self, loop_type: &str, origin: &Origin) {
         let n = self.loops.len() as u32;
         // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
-        let id = format!("{}/loop{}", self.routine_id, n);
+        let id = format!("{}/loop{}", self.routine_id, self.base.loops + n);
         let source_anchor = self.anchor(origin);
         self.loops.push(PLoop {
             id,
@@ -906,7 +937,7 @@ impl<'a> SpineCtx<'a> {
         self.cur_loops
             .iter()
             // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
-            .map(|n| format!("{}/loop{}", self.routine_id, n))
+            .map(|n| format!("{}/loop{}", self.routine_id, self.base.loops + n))
             .collect()
     }
 
@@ -1578,7 +1609,8 @@ impl<'a> SpineCtx<'a> {
 }
 
 /// Walk the routine body, producing the op/cs id maps + has_branching + the
-/// anchored `loops` and `field_accesses`.
+/// anchored `loops` and `field_accesses`. Site ids are numbered from `base`
+/// ([`SiteIdBase`]).
 #[allow(clippy::too_many_arguments)]
 pub fn walk_spine(
     file: &AlFile,
@@ -1590,6 +1622,7 @@ pub fn walk_spine(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
+    base: SiteIdBase,
 ) -> IrSpine {
     let (scope, implicit_rec) = build_scope(file, object_idx, routine, source_table_name);
     let mut ctx = SpineCtx {
@@ -1600,8 +1633,9 @@ pub fn walk_spine(
         source,
         cols,
         source_unit_id,
-        op_index: 0,
-        cs_index: 0,
+        base,
+        op_index: base.op,
+        cs_index: base.cs,
         loop_count: 0,
         has_branching: false,
         // Base implicit frame: an object with an implicit `Rec` (table/tableext/
@@ -1622,7 +1656,7 @@ pub fn walk_spine(
         condition_references: Vec::new(),
         identifier_ref_set: HashSet::new(),
         unreachable_statements: Vec::new(),
-        unreachable_index: 0,
+        unreachable_index: base.unreachable,
         record_operations: Vec::new(),
         operation_sites: Vec::new(),
         assert_depth: 0,
@@ -1647,6 +1681,15 @@ pub fn walk_spine(
         // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
         cs.operation_id = format!("{}/op{}", routine_id, op_count + i as u32);
     }
+    // The next declaration of this id starts after every number minted here:
+    // the call sites' `operation_id`s follow the ops.
+    let call_count = u32::try_from(ctx.call_sites.len()).expect("a call-site count fits u32");
+    let next_base = SiteIdBase {
+        op: op_count + call_count,
+        cs: ctx.cs_index,
+        loops: base.loops + u32::try_from(ctx.loops.len()).expect("a loop count fits u32"),
+        unreachable: ctx.unreachable_index,
+    };
     // Post-pass ordering to match legacy: var_assignments by source anchor,
     // condition_references by reference anchor, identifier_references sorted+deduped.
     let mut var_assignments = ctx.var_assignments;
@@ -1685,6 +1728,7 @@ pub fn walk_spine(
         site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
         value_labels: ctx.value_labels,
+        next_base,
     }
 }
 
@@ -2695,11 +2739,14 @@ pub struct IrPartialFeatures {
     pub call_sites: Vec<PCallSite>,
     /// #160 §4.2: each site's expression index (see [`IrSpine::site_exprs`]).
     pub site_exprs: crate::program::site_key::SiteExprs,
+    /// [`IrSpine::next_base`].
+    pub next_base: SiteIdBase,
 }
 
 /// Build the validated slice of `PFeatures` from the owned IR for one routine.
 /// `source_table_name` gates the page implicit `Rec` for `ir_record_variables`
 /// (which supplies the record-op temp_state/record_variable_id backfill).
+/// Site ids are numbered from `base` ([`SiteIdBase`]).
 #[allow(clippy::too_many_arguments)]
 pub fn routine_features_partial(
     file: &AlFile,
@@ -2710,6 +2757,7 @@ pub fn routine_features_partial(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
+    base: SiteIdBase,
 ) -> IrPartialFeatures {
     let cols = Utf16Cols::new(source);
     let spine = walk_spine(
@@ -2722,6 +2770,7 @@ pub fn routine_features_partial(
         source_unit_id,
         source_table_name,
         parenless_calls,
+        base,
     );
     let statement_tree = routine.body.map(|b| {
         let cfn = IrCfn {
@@ -2866,6 +2915,7 @@ pub fn routine_features_partial(
         operation_sites: spine.operation_sites,
         call_sites,
         site_exprs: spine.site_exprs,
+        next_base: spine.next_base,
     }
 }
 
@@ -2873,6 +2923,7 @@ pub fn routine_features_partial(
 /// `project_routine_features_ir`. `order` / `control_context` / `scope_frames` are
 /// left empty (post-pass fields that `extract_body_features` also leaves empty;
 /// the L2 emitter applies operation_order/control_context on the `statement_tree`).
+/// Site ids start at 0 ([`SiteIdBase::default`]): the routine's only declaration.
 #[allow(clippy::too_many_arguments)]
 pub fn project_routine_features_ir(
     file: &AlFile,
@@ -2883,7 +2934,33 @@ pub fn project_routine_features_ir(
     source_unit_id: &str,
     source_table_name: Option<&str>,
 ) -> super::features::PFeatures {
-    project_routine_features_ir_with(
+    project_routine_features_ir_at(
+        file,
+        object_idx,
+        routine,
+        routine_id,
+        source,
+        source_unit_id,
+        source_table_name,
+        SiteIdBase::default(),
+    )
+    .0
+}
+
+/// [`project_routine_features_ir`] with site ids numbered from `base`, plus
+/// where the next declaration of the same id starts ([`SiteIdBase`]).
+#[allow(clippy::too_many_arguments)]
+pub fn project_routine_features_ir_at(
+    file: &AlFile,
+    object_idx: usize,
+    routine: &RoutineDecl,
+    routine_id: &str,
+    source: &str,
+    source_unit_id: &str,
+    source_table_name: Option<&str>,
+    base: SiteIdBase,
+) -> (super::features::PFeatures, SiteIdBase) {
+    let (features, _, _, next) = project_routine_features_ir_with(
         file,
         object_idx,
         routine,
@@ -2892,15 +2969,18 @@ pub fn project_routine_features_ir(
         source_unit_id,
         source_table_name,
         &HashSet::new(),
-    )
-    .0
+        base,
+    );
+    (features, next)
 }
 
 /// [`project_routine_features_ir`] with the parens-less value reads the program
 /// resolver kept as calls (`program::resolve::full::ParenlessCalls`), plus each
 /// site's expression index (#160 §4.2) and the implicit-record field accesses
 /// ([`IrSpine::implicit_field_accesses`]), both kept apart from `PFeatures` so
-/// the L2 snapshot (a `Debug` hash of `PFeatures`) does not see them.
+/// the L2 snapshot (a `Debug` hash of `PFeatures`) does not see them. Site ids
+/// are numbered from `base`; the last item is where the next declaration of
+/// the same id starts ([`SiteIdBase`]).
 #[allow(clippy::too_many_arguments)]
 pub fn project_routine_features_ir_with(
     file: &AlFile,
@@ -2911,10 +2991,12 @@ pub fn project_routine_features_ir_with(
     source_unit_id: &str,
     source_table_name: Option<&str>,
     parenless_calls: &HashSet<ExprId>,
+    base: SiteIdBase,
 ) -> (
     super::features::PFeatures,
     crate::program::site_key::SiteExprs,
     Vec<PFieldAccess>,
+    SiteIdBase,
 ) {
     let p = routine_features_partial(
         file,
@@ -2925,6 +3007,7 @@ pub fn project_routine_features_ir_with(
         source_unit_id,
         source_table_name,
         parenless_calls,
+        base,
     );
     let record_variables =
         ir_record_variables(file, object_idx, routine, routine_id, source_table_name);
@@ -2946,7 +3029,12 @@ pub fn project_routine_features_ir_with(
         statement_tree: p.statement_tree,
         scope_frames: Vec::new(),
     };
-    (features, p.site_exprs, p.implicit_field_accesses)
+    (
+        features,
+        p.site_exprs,
+        p.implicit_field_accesses,
+        p.next_base,
+    )
 }
 
 // ---- record_variables (params + locals + implicit Rec) ----
@@ -4079,6 +4167,7 @@ codeunit 50101 C
                         "u",
                         None,
                         &std::collections::HashSet::new(),
+                        super::SiteIdBase::default(),
                     )
                     .2
                     .into_iter()

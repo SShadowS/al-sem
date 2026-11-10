@@ -2212,6 +2212,12 @@ fn event_graph_reads_node_of() {
 /// row: `op0` is arm B's (its top-level frame), `op1` arm A's (the only owner),
 /// and every op's frame is in the entry. Break: today's pairing (frames LAST,
 /// ops FIRST). Stage B.
+///
+/// Engine limits B2 (per-arm ids): production numbers arm B's op after arm
+/// A's, so the arms no longer share `op0`. The shared ids this test is about are
+/// stated BY ASSIGNMENT on the model's rows
+/// (`workspace::share_collided_site_ids`) before the artifacts are built; `Work`
+/// has no call site, so no call edge carries an id the assignment changes.
 #[test]
 fn dep_order_index_pairs_frames_and_ops_of_one_row() {
     use al_sem::engine::deps::dep_artifact_l4::{
@@ -2272,7 +2278,7 @@ codeunit 50172 "Dep Ord"
         )],
         "",
     );
-    let x = assemble_and_resolve_cross_app_program(&read(dir), false, BASE).expect("model");
+    let mut x = assemble_and_resolve_cross_app_program(&read(dir), false, BASE).expect("model");
     let rows: Vec<usize> = x
         .resolved
         .workspace
@@ -2283,6 +2289,12 @@ codeunit 50172 "Dep Ord"
         .map(|(ri, _)| ri)
         .collect();
     assert_eq!(rows.len(), 2, "precondition: Work is two rows");
+    assert!(
+        rows.iter()
+            .all(|&ri| x.resolved.workspace.routines[ri].call_sites.is_empty()),
+        "precondition: Work makes no call (no call edge holds its site ids)"
+    );
+    al_sem::program::model::workspace::share_collided_site_ids(&mut x.resolved.workspace.routines);
     let row = |ri: usize| &x.resolved.workspace.routines[ri];
     let id = row(rows[0]).id.clone();
     assert_eq!(row(rows[1]).id, id, "precondition: one id");
@@ -2293,6 +2305,11 @@ codeunit 50172 "Dep Ord"
         ),
         (2, 1),
         "precondition: arm A has two record ops, arm B (the last row) one"
+    );
+    assert_eq!(
+        row(rows[0]).record_operations[0].id,
+        row(rows[1]).record_operations[0].id,
+        "precondition (by assignment): both arms own op0"
     );
     let arts = dep_artifacts_from_model(&x);
     let mut consumer = ConsumerModel::with_routine_ids(

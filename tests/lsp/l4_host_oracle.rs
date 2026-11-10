@@ -1016,8 +1016,11 @@ fn t1t_uncertainty_kind() {
 }
 
 /// T1u (final r1 FX-6, `collided_site_callee` in R0's solve half alone):
-/// `K(var R)` is declared in an `#if A` / `#else` pair whose rows call
-/// `V.Go(R)` on `V: Codeunit Foo` and `V: Codeunit Bar`. The site's callee
+/// `K(var R)` is declared twice, in two files whose whole codeunit sits in
+/// `#if A` and `#if not A`; the rows call `V.Go(R)` on `V: Codeunit Foo` and
+/// `V: Codeunit Bar`. (Engine limits B2: two `#if` arms in ONE file now number
+/// their sites apart, so they share no site; declarations in two files still
+/// share `{id}/cs0`, the collision this test needs.) The site's callee
 /// is the LAST row's (`Bar.Go`, which does nothing; `Foo.Go` resets `R`).
 /// The edit swaps the two object names (headers only), so the last row now
 /// reaches the resetting `Go`. `K`'s rows, its out-edge union and both `Go`
@@ -1043,11 +1046,11 @@ fn t1u_collided_site_callee() {
     let ws = fixture(&[
         (
             "src/K.al",
-            cu(
-                50105,
-                "K",
-                &format!("#if A\n{}#else\n{}#endif\n", arm("Foo"), arm("Bar")),
-            ),
+            format!("#if A\n{}#endif\n", cu(50105, "K", &arm("Foo"))),
+        ),
+        (
+            "src/K2.al",
+            format!("#if not A\n{}#endif\n", cu(50105, "K", &arm("Bar"))),
         ),
         go(50103, "src/X.al", "Foo", "        R.Reset();\n"),
         go(50104, "src/Y.al", "Bar", ""),

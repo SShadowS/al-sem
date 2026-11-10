@@ -8877,11 +8877,117 @@ codeunit 50101 "T7b Temp Classes"
         assert_eq!(depth, 1, "{:?}", out.diagnostics);
     }
 
-    /// A routine id declared twice (two `#if` arms) is ONE producer: the solve
-    /// seeds it once, and its short and its longer proof both survive cap 2.
+    /// Two declarations of one routine id that SHARE their site ids are ONE
+    /// producer: the solve seeds it once, and its short and its longer proof
+    /// both survive cap 2. Engine limits B2: production gives each `#if` arm
+    /// its own site ids, so the shared ids are stated by assignment
+    /// (`assemble_and_resolve_inline_program_shared_site_ids`);
+    /// `per_arm_declarations_are_one_producer_each` pins the production answer.
     #[test]
     fn duplicated_declaration_is_one_producer() {
-        let src = r#"
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_shared_site_ids(
+                &[("DupProducer.al".to_string(), DUP_PRODUCER_SRC.to_string())],
+                "00000000-0000-0000-0000-00000000d1a2",
+                false,
+            );
+        let named = |n: &str| -> Vec<&crate::program::model::workspace::ModelRoutine> {
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| r.name == n)
+                .collect()
+        };
+        let h = named("H");
+        assert_eq!(h.len(), 2, "precondition: two declarations of H");
+        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
+        assert_eq!(
+            h[0].record_operations[0].id, h[1].record_operations[0].id,
+            "precondition: the declarations share their insert's site id"
+        );
+        let snap = compose_snapshot(&resolved);
+        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
+        assert_eq!(seeds, 1, "H's insert is one producer");
+        let root = &named("Root")[0].stable_routine_id;
+        let f = snap
+            .capability_facts
+            .iter()
+            .find(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert")
+            .expect("Root inherits H's insert");
+        let idx = build_fingerprint_indexes(&snap);
+        let out = reconstruct_witness_paths(
+            root,
+            f,
+            &idx,
+            2,
+            &mut HopCache::default(),
+            &mut DagCache::default(),
+            &CarrierCache::default(),
+        );
+        let lens: Vec<usize> = out.paths.iter().map(|p| p.hops.len()).collect();
+        assert_eq!(lens, vec![3, 4], "Root→A→H and Root→A→B→H, each + terminal");
+    }
+
+    /// Engine limits B2 (per-arm ids, owner decision 2026-11-09): the two `#if`
+    /// arms of `H` are two declarations that never coexist in one build, each
+    /// with its own site id, so each arm's insert is its own producer (two
+    /// seeds), and each cites its own arm's line. One producer per arm is the
+    /// reading that matches BC: whichever arm a build compiles, its insert is
+    /// the one that runs. Root still inherits an insert.
+    #[test]
+    fn per_arm_declarations_are_one_producer_each() {
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &[("DupProducer.al".to_string(), DUP_PRODUCER_SRC.to_string())],
+                "00000000-0000-0000-0000-00000000d1a3",
+            );
+        let h: Vec<&crate::program::model::workspace::ModelRoutine> = resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == "H")
+            .collect();
+        assert_eq!(h.len(), 2, "precondition: two declarations of H");
+        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
+        let ins = |r: &crate::program::model::workspace::ModelRoutine| {
+            let o = &r.record_operations[0];
+            (o.id.clone(), o.source_anchor.start_line)
+        };
+        let (a, b) = (ins(h[0]), ins(h[1]));
+        assert_ne!(a.0, b.0, "each arm's insert has its own site id");
+        let lines = |text: &str| -> Vec<u32> {
+            DUP_PRODUCER_SRC
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| l.contains(text))
+                .map(|(i, _)| i as u32)
+                .collect()
+        };
+        assert_eq!(
+            vec![a.1, b.1],
+            lines("R.Insert();"),
+            "each insert cites its own arm's (0-based) line"
+        );
+        let snap = compose_snapshot(&resolved);
+        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
+        assert_eq!(seeds, 2, "one producer per arm");
+        let root = &resolved
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Root")
+            .unwrap()
+            .stable_routine_id;
+        assert!(
+            snap.capability_facts
+                .iter()
+                .any(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert"),
+            "Root inherits H's insert"
+        );
+    }
+
+    const DUP_PRODUCER_SRC: &str = r#"
 table 50410 "Dup Tab"
 {
     fields
@@ -8923,44 +9029,6 @@ codeunit 50410 DupProducer
 #endif
 }
 "#;
-        let resolved =
-            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
-                &[("DupProducer.al".to_string(), src.to_string())],
-                "00000000-0000-0000-0000-00000000d1a2",
-            );
-        let named = |n: &str| -> Vec<&crate::program::model::workspace::ModelRoutine> {
-            resolved
-                .workspace
-                .routines
-                .iter()
-                .filter(|r| r.name == n)
-                .collect()
-        };
-        let h = named("H");
-        assert_eq!(h.len(), 2, "precondition: two declarations of H");
-        assert_eq!(h[0].id, h[1].id, "precondition: one routine id");
-        let snap = compose_snapshot(&resolved);
-        let seeds = snap.pd_solution.states.iter().filter(|s| s.seed).count();
-        assert_eq!(seeds, 1, "H's insert is one producer");
-        let root = &named("Root")[0].stable_routine_id;
-        let f = snap
-            .capability_facts
-            .iter()
-            .find(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert")
-            .expect("Root inherits H's insert");
-        let idx = build_fingerprint_indexes(&snap);
-        let out = reconstruct_witness_paths(
-            root,
-            f,
-            &idx,
-            2,
-            &mut HopCache::default(),
-            &mut DagCache::default(),
-            &CarrierCache::default(),
-        );
-        let lens: Vec<usize> = out.paths.iter().map(|p| p.hops.len()).collect();
-        assert_eq!(lens, vec![3, 4], "Root→A→H and Root→A→B→H, each + terminal");
-    }
 
     // -----------------------------------------------------------------------
     // #97 — the ORDINARY witness: a capped witness is the prefix of the

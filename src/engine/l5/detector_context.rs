@@ -1075,6 +1075,11 @@ pub struct DetectorContext<'v> {
     /// demanded `substrate::RULES` and filled it BEFORE the detector loop.
     pub rules: Option<&'v RulesIndex>,
     pub routine_by_id: HashMap<&'v str, &'v ModelRoutine>,
+    /// Every row of a collided id (engine limits B2, per-arm ids): a reader
+    /// that holds a SITE of a routine reads it through
+    /// [`DetectorContext::routine_for_site`], the row (the `#if` arm) that
+    /// holds the site, not `routine_by_id`'s last row.
+    pub arm_rows: projection::ArmRows<'v>,
     /// A routine's object is its DECLARING row (#279): an `#if`-split object
     /// has several rows under one id, so there is no id -> object map here.
     pub declaring: DeclaringObjects<'v>,
@@ -1130,6 +1135,7 @@ impl<'v> DetectorContext<'v> {
             ordering,
             rules,
             routine_by_id,
+            arm_rows: projection::ArmRows::build(routines),
             declaring,
             table_by_id,
             call_site_by_id,
@@ -1142,6 +1148,16 @@ impl<'v> DetectorContext<'v> {
             census_borrowed_maps(&ctx);
         }
         ctx
+    }
+
+    /// The row of routine `id` that holds the site `site` (a call site, an
+    /// operation, a loop or an unreachable statement): for a routine declared
+    /// in two `#if` arms, the arm whose site it is (engine limits B2,
+    /// [`projection::ArmRows`]); otherwise the id's row (`routine_by_id`).
+    #[must_use]
+    pub fn routine_for_site(&self, id: &str, site: &str) -> Option<&'v ModelRoutine> {
+        let row = *self.routine_by_id.get(id)?;
+        Some(self.arm_rows.row_for(id, site, row))
     }
 
     /// The L4.5 ordering facts, keyed by `StableRoutineId`. d47/d49/d51 look up
@@ -3400,6 +3416,12 @@ page 50813 "CP3 Wizard"
 #[cfg(test)]
 #[path = "detector_context_11b_tests.rs"]
 mod tests_11b;
+
+// Engine limits B2 (per-arm ids): the readers that look a site up in a
+// routine declared in two `#if` arms.
+#[cfg(test)]
+#[path = "detector_context_arm_tests.rs"]
+mod tests_arm_readers;
 
 // #160 step 5 acceptance tests (one coverage policy): a child module, for
 // private access to `det_cone_inputs`.

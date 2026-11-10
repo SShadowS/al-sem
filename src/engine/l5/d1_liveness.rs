@@ -175,6 +175,11 @@ pub(crate) fn compute_liveness<'a>(
             for edge in &graph.edges[node_ix] {
                 let callee_ix = edge.to as usize;
                 let callee_id = graph.node_ids[callee_ix];
+                // Engine limits B2: the caller's row (its `#if` arm) that
+                // holds the call.
+                let caller = edge.callsite_id.map_or(caller, |cs| {
+                    ctx.arm_rows.row_for(graph.node_ids[node_ix], cs, caller)
+                });
                 // Snapshot the callee's CURRENT need before mutating this
                 // node's own set — guards the self-loop / mutual-recursion
                 // case (callee_ix could equal node_ix); the snapshot only
@@ -217,6 +222,11 @@ pub(crate) fn compute_liveness<'a>(
             let callee_ix = edge.to as usize;
             let callee_id = graph.node_ids[callee_ix];
             let mut transfers: Vec<ParamTransfer> = Vec::with_capacity(need_vecs[callee_ix].len());
+            // Engine limits B2: the caller's row that holds the call.
+            let caller = caller.map(|c| {
+                edge.callsite_id
+                    .map_or(c, |cs| ctx.arm_rows.row_for(graph.node_ids[node_ix], cs, c))
+            });
             for &p in &need_vecs[callee_ix] {
                 let transfer = match caller {
                     Some(caller) => match classify_edge_param(caller, edge, callee_id, p, cw) {

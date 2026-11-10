@@ -63,6 +63,8 @@ fn uncertainty_lites(uncertainties: &[Uncertainty]) -> Vec<UncertaintyLite> {
 /// the commit operation id; `build_terminal_step` recovers its anchor.
 struct D46Policy<'a> {
     routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
+    /// Engine limits B2: the row (`#if` arm) that holds a site.
+    arms: &'a crate::program::model::projection::ArmRows<'a>,
     /// RoutineId → its commit operation sites (precomputed for O(1) lookup).
     commit_sites_by_routine: &'a HashMap<String, Vec<&'a POperationSite>>,
     edges_by_from: &'a HashMap<String, Vec<CombinedEdge>>,
@@ -99,8 +101,17 @@ impl<'a> WalkPolicy for D46Policy<'a> {
     }
 
     fn build_hop_step(&self, edge: &CombinedEdge, _ctx: &PathCtx) -> EvidenceStep {
-        // Look up the callsite anchor (CombinedEdge has no sourceAnchor itself).
-        let from_routine = self.routine_by_id.get(edge.from.as_str()).copied();
+        // Look up the callsite anchor (CombinedEdge has no sourceAnchor itself),
+        // in the caller's row (its `#if` arm, engine limits B2) that holds it.
+        let from_routine = self
+            .routine_by_id
+            .get(edge.from.as_str())
+            .copied()
+            .map(|r| {
+                edge.callsite_id
+                    .as_deref()
+                    .map_or(r, |cid| self.arms.row_for(&edge.from, cid, r))
+            });
         let cs: Option<&PCallSite> = edge.callsite_id.as_ref().and_then(|cid| {
             from_routine.and_then(|fr| fr.call_sites.iter().find(|c| &c.id == cid))
         });
@@ -187,20 +198,24 @@ pub fn detect_d46(
     let fp_index = &ctx.fingerprint_index;
 
     // Pre-build RoutineId → commit operation sites for O(1) terminal lookup.
+    // Engine limits B2: a routine declared in two `#if` arms is two rows of one
+    // id, each with its own commit sites: the id's list holds every row's (a
+    // site shared by two rows, one id in two files, once: its LAST owning
+    // row's, class P).
     let mut commit_sites_by_routine: HashMap<String, Vec<&POperationSite>> = HashMap::new();
     for r in &ws.routines {
-        let commits: Vec<&POperationSite> = r
-            .operation_sites
-            .iter()
-            .filter(|s| s.kind == "commit")
-            .collect();
-        if !commits.is_empty() {
-            commit_sites_by_routine.insert(r.id.clone(), commits);
+        for s in r.operation_sites.iter().filter(|s| s.kind == "commit") {
+            let list = commit_sites_by_routine.entry(r.id.clone()).or_default();
+            match list.iter_mut().find(|o| o.id == s.id) {
+                Some(o) => *o = s,
+                None => list.push(s),
+            }
         }
     }
 
     let policy = D46Policy {
         routine_by_id: &ctx.routine_by_id,
+        arms: &ctx.arm_rows,
         commit_sites_by_routine: &commit_sites_by_routine,
         edges_by_from: &ctx.graph.edges_by_from,
     };

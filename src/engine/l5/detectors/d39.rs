@@ -131,8 +131,10 @@ pub fn detect_d39(
                     Some(c) => c,
                     None => continue,
                 };
-                let caller = match ctx.routine_by_id.get(edge.from.as_str()) {
-                    Some(c) => *c,
+                // Engine limits B2: the caller's row (its `#if` arm) that holds
+                // the call.
+                let caller = match ctx.routine_for_site(&edge.from, callsite_id) {
+                    Some(c) => c,
                     None => continue,
                 };
                 // roleOf(caller) !== "primary" → skip. Source-only ⇒ all primary.

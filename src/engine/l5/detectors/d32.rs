@@ -173,6 +173,9 @@ pub fn detect_d32(
                         break;
                     }
                 };
+                // Engine limits B2: in the caller's row (its `#if` arm) that
+                // holds the call.
+                let caller = ctx.arm_rows.row_for(&e.from, callsite_id, caller);
                 let cs = caller.call_sites.iter().find(|cs| cs.id == callsite_id);
                 let cs = match cs {
                     Some(c) => c,

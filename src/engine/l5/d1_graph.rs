@@ -336,8 +336,15 @@ pub(crate) fn build_d1_graph<'a>(
         }
         edges.push(node_edges);
 
+        // Engine limits B2: every `#if` arm (row) of the routine holds its own
+        // record operations; each is a terminal, owned by its own row.
         let node_terminals = match ctx.routine_by_id.get(id).copied() {
-            Some(routine) => terminals_of(routine, &ctx.table_by_id),
+            Some(routine) => ctx
+                .arm_rows
+                .rows_or(id, routine)
+                .into_iter()
+                .flat_map(|r| terminals_of(r, &ctx.table_by_id))
+                .collect(),
             None => Vec::new(),
         };
         terminals.push(node_terminals);

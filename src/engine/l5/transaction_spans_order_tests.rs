@@ -514,3 +514,249 @@ fn a_caller_opened_late_in_the_walk_still_has_its_callers_walked() {
         ["TO A", "TO D"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Engine limits B2 (per-arm ids): a span member declared in two `#if` arms is
+// two rows of one id, each holding its own call sites. Every walk reads the
+// row (the arm) that holds the site.
+// ---------------------------------------------------------------------------
+
+/// The rows of `name`: asserts they are two rows of one id, each with its
+/// own first call site.
+fn two_arms<'m>(m: &'m Model, name: &str) -> (String, Vec<&'m ModelRoutine>) {
+    let rows: Vec<&ModelRoutine> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == name)
+        .collect();
+    assert_eq!(rows.len(), 2, "precondition: {name} is two rows");
+    assert_eq!(rows[0].id, rows[1].id, "precondition: one id");
+    assert_ne!(
+        rows[0].call_sites[0].id, rows[1].call_sites[0].id,
+        "precondition: each arm has its own call site"
+    );
+    (rows[0].id.clone(), rows)
+}
+
+/// `Work`'s arms each write a table, then call `DoCommit`: arm A writes
+/// `TO A`, arm B `TO B`. Whichever arm a build compiles, its write is pending
+/// at the Commit, so the span holds both. Break: read only the id's last row
+/// (`rows_before` over `[last]`) -> arm A's call is not in it, the walk falls
+/// back to arm B's whole body, and `TO A` is lost.
+#[test]
+fn a_two_arm_member_has_every_arms_writes_pending() {
+    let m = build(
+        r#"codeunit 50101 "TO Work"
+{
+    procedure DoCommit()
+    begin
+        Commit();
+    end;
+
+#if A
+    procedure Work()
+    var
+        R: Record "TO A";
+    begin
+        R.Modify();
+        DoCommit();
+    end;
+#else
+    procedure Work()
+    var
+        R: Record "TO B";
+    begin
+        R.Modify();
+        DoCommit();
+    end;
+#endif
+
+    procedure Entry()
+    begin
+        Work();
+    end;
+}
+"#,
+    );
+    two_arms(&m, "Work");
+    let commit = id_in(&m.workspace.routines, "DoCommit");
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let spans = spans_of(&ctx.transaction_spans, &m, &commit);
+    assert_eq!(spans.len(), 1, "precondition: one Commit");
+    assert_eq!(
+        table_names(&spans[0].pending_physical_tables),
+        ["TO A", "TO B"],
+        "both arms' writes are pending at the Commit"
+    );
+}
+
+/// `Work`'s arm B commits before its call to `DoCommit`, arm A does not. In a
+/// build of arm A, `Entry`'s write is pending at `DoCommit`'s Commit, so
+/// `Entry` is in the span and `TO C` pending. Break: `closes_span` reads the
+/// id's last row (arm B) for arm A's call -> the call is not in it, the order
+/// is unknown, and the span closes at `Work`.
+#[test]
+fn a_two_arm_caller_closes_the_span_only_in_the_arm_that_commits() {
+    let m = build(
+        r#"codeunit 50101 "TO Work"
+{
+    procedure DoCommit()
+    var
+        R: Record "TO A";
+    begin
+        R.Modify();
+        Commit();
+    end;
+
+#if A
+    procedure Work()
+    begin
+        DoCommit();
+    end;
+#else
+    procedure Work()
+    begin
+        Commit();
+        DoCommit();
+    end;
+#endif
+
+    procedure Entry()
+    var
+        R: Record "TO C";
+    begin
+        R.Modify();
+        Work();
+    end;
+}
+"#,
+    );
+    let (work, _) = two_arms(&m, "Work");
+    let [commit, entry] = ["DoCommit", "Entry"].map(|n| id_in(&m.workspace.routines, n));
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let spans = spans_of(&ctx.transaction_spans, &m, &commit);
+    assert_eq!(spans.len(), 1, "precondition: one Commit in DoCommit");
+    assert_eq!(
+        spans[0].routines_in_span,
+        sorted(&[&commit, &entry, &work]),
+        "arm A keeps the transaction open up to Entry"
+    );
+    assert_eq!(
+        table_names(&spans[0].pending_physical_tables),
+        ["TO A", "TO C"]
+    );
+}
+
+/// d9 places a span at the row (the arm) that holds its Commit: `Work`'s
+/// Commit is in arm A, so the finding's location is arm A's declaration, not
+/// arm B's (the id's last row). Break: d9 reads `routine_by_id` -> arm B's
+/// line.
+#[test]
+fn d9_locates_a_two_arm_commit_in_its_own_arm() {
+    let src = r#"codeunit 50101 "TO Work"
+{
+    local procedure Touch()
+    begin
+    end;
+
+#if A
+    procedure Work()
+    var
+        R: Record "TO A";
+        S: Record "TO B";
+    begin
+        R.Modify();
+        S.Modify();
+        Touch();
+        Commit();
+    end;
+#else
+    procedure Work()
+    var
+        R: Record "TO A";
+    begin
+        Touch();
+        R.Modify();
+    end;
+#endif
+
+    procedure Entry()
+    begin
+        Work();
+    end;
+}
+"#;
+    let m = build(src);
+    let (work, rows) = two_arms(&m, "Work");
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let d9 = detect_d9(&m, &ctx).expect("d9 runs");
+    let mine: Vec<u32> = d9
+        .findings
+        .iter()
+        .filter(|f| f.evidence_path[0].routine_id == work)
+        .map(|f| f.primary_location.start_line)
+        .collect();
+    assert_eq!(
+        mine,
+        vec![rows[0].source_anchor.start_line],
+        "the finding sits at arm A's declaration (arm B: line {})",
+        rows[1].source_anchor.start_line
+    );
+}
+
+/// `Work`'s arms each reach the committing `OnRun` only through a CHECKED
+/// `Codeunit.Run` (its own transaction), so `Work` is not in that span. The
+/// backward walk reads each call in the arm that holds it. Break: it looks
+/// the call up in the id's last row -> arm A's call is not found, is not
+/// seen as a checked run, and `Work` joins the span.
+#[test]
+fn a_two_arm_checked_run_is_read_in_its_own_arm() {
+    let m = build(
+        r#"codeunit 50102 "TO Runner"
+{
+    trigger OnRun()
+    var
+        R: Record "TO A";
+    begin
+        R.Modify();
+        Commit();
+    end;
+}
+
+codeunit 50101 "TO Work"
+{
+    local procedure Touch()
+    begin
+    end;
+
+#if A
+    procedure Work()
+    begin
+        if Codeunit.Run(Codeunit::"TO Runner") then;
+    end;
+#else
+    procedure Work()
+    begin
+        Touch();
+        if Codeunit.Run(Codeunit::"TO Runner") then;
+    end;
+#endif
+}
+"#,
+    );
+    let (work, _) = two_arms(&m, "Work");
+    let run = id_in(&m.workspace.routines, "OnRun");
+    let owned = build_detector_context(&m, substrate::ALL);
+    let ctx = owned.ctx();
+    let spans = spans_of(&ctx.transaction_spans, &m, &run);
+    assert_eq!(spans.len(), 1, "precondition: one Commit in OnRun");
+    assert!(
+        !spans[0].routines_in_span.contains(&work),
+        "a checked run is its own transaction: {:?}",
+        spans[0].routines_in_span
+    );
+}

@@ -1078,7 +1078,18 @@ impl<'a, 'c> Visitor<'a, 'c> {
             return self.eval_intercept_dispatch(from, site, c);
         }
         let unit = st.anchor.map(|a| g.unit(a.unit).to_string());
-        let Some(r) = self.ix.row_for(g, c, unit.as_deref()) else {
+        // Engine limits B2: of the routine's rows in the site's file (two
+        // `#if` arms of one routine are two rows of one file), the one whose
+        // body holds the site.
+        let holding = match (&st.anchor, &unit) {
+            (Some(a), Some(u)) => self
+                .ix
+                .rows_of(g, c)
+                .into_iter()
+                .find(|r| body_site(r, u, a).is_some()),
+            _ => None,
+        };
+        let Some(r) = holding.or_else(|| self.ix.row_for(g, c, unit.as_deref())) else {
             let d = self.ix.display(g, c);
             self.block(
                 "order-unknown",

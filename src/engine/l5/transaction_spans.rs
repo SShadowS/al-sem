@@ -59,10 +59,11 @@ use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
     Before, ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_of,
-    sites_before, toward_sites,
+    rows_before, sites_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::{PCallSite, PCallee};
+use crate::program::model::projection::ArmRows;
 use crate::program::model::workspace::ModelRoutine;
 
 const MAX_DEPTH: usize = 50;
@@ -136,9 +137,11 @@ fn closes_span(caller: &str, site: Option<&str>, inputs: &SpanInputs<'_>) -> boo
     if !inputs.commits_by_routine.contains_key(caller) {
         return false;
     }
-    let (Some(r), Some(site)) = (inputs.routine_by_id.get(caller), site) else {
+    let (Some(&r), Some(site)) = (inputs.routine_by_id.get(caller), site) else {
         return true;
     };
+    // Engine limits B2: the call is in the row (the `#if` arm) that holds it.
+    let r = inputs.arms.row_for(caller, site, r);
     let before = sites_before(r, &[site], false);
     before.all || before.committed
 }
@@ -190,7 +193,19 @@ fn backward_cone(
             continue;
         };
         for caller in callers {
-            let caller_routine = inputs.routine_by_id.get(caller.from.as_str()).copied();
+            // Engine limits B2: the caller's row that holds the call (its `#if`
+            // arm), for the site, its guard frame and its order.
+            let caller_site = caller
+                .callsite_id
+                .as_deref()
+                .or(caller.operation_id.as_deref());
+            let caller_routine = inputs
+                .routine_by_id
+                .get(caller.from.as_str())
+                .copied()
+                .map(|r| {
+                    caller_site.map_or(r, |s| inputs.arms.row_for(caller.from.as_str(), s, r))
+                });
             let cs = caller.callsite_id.as_deref().and_then(|cs_id| {
                 caller_routine.and_then(|r| r.call_sites.iter().find(|c| c.id == cs_id))
             });
@@ -202,7 +217,7 @@ fn backward_cone(
             }
             let frame = caller_routine.and_then(|r| {
                 frames
-                    .entry(r.id.clone())
+                    .entry(frame_key(r))
                     .or_insert_with(|| {
                         let callees_at = |cs_id: &str| -> Vec<&str> {
                             inputs
@@ -496,6 +511,9 @@ struct SpanInputs<'a> {
     summaries: &'a HashMap<String, FullRoutineSummary>,
     cone_derived: &'a ConeDerivedStore,
     routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
+    /// Every row of a collided id (engine limits B2): the row that holds a
+    /// site, and the arms a member walk reads.
+    arms: &'a ArmRows<'a>,
     fwd: &'a ForwardSites<'a>,
     /// [`pending_of`]'s lookups (the ones above, and the collided ids).
     pending: &'a PendingCtx<'a>,
@@ -505,14 +523,24 @@ struct SpanInputs<'a> {
 /// template (allocated ONCE for the whole run — see `aggregate_span`) plus the
 /// census counters.
 struct SpanScratch {
-    /// Guard frames, computed on first use (`backward_cone`).
-    frames: HashMap<String, Option<FrameGuards>>,
+    /// Guard frames, computed on first use (`backward_cone`), per ROW
+    /// ([`frame_key`]).
+    frames: HashMap<(String, usize), Option<FrameGuards>>,
     /// [`closes_span`] per `(caller, site)`, computed on first use.
     closes: HashMap<(String, Option<String>), bool>,
     writes: ResBitset,
     events: ResBitset,
     phys_writes: ResBitset,
     census: TxSpanCensus,
+}
+
+/// The guard-frame cache key of row `r`: its id and its address. A routine
+/// declared in two `#if` arms is two rows of one id, each with its own sites
+/// and its own frame (#160 step 11b §4.6, every piece of a key from one row;
+/// engine limits B2, per-arm ids): a frame is read from the row that holds
+/// the site.
+fn frame_key(r: &ModelRoutine) -> (String, usize) {
+    (r.id.clone(), std::ptr::from_ref(r) as usize)
 }
 
 /// A CHECKED `Codeunit.Run` (its return value is used): an implicit commit
@@ -550,19 +578,9 @@ fn seed_reqs(
             .and_then(|f| f.by_site.get(site).cloned())
             .unwrap_or_default()
     };
-    // The id's cached frame is its row in `routine_by_id` (the LAST row, class
-    // G, which `backward_cone` reads). An earlier row of a collided id that
-    // seeds (it owns the Commit or checked run) reads its OWN frame, uncached,
-    // so its site's requirements come from the row that has the site (#160 step
-    // 11b §4.6).
-    if inputs
-        .routine_by_id
-        .get(r.id.as_str())
-        .is_some_and(|&last| !std::ptr::eq(last, r))
-    {
-        return reqs(&compute());
-    }
-    reqs(scratch.frames.entry(r.id.clone()).or_insert_with(compute))
+    // The frame is the seed row's own (the row that has the site, #160 step
+    // 11b §4.6), cached per row as `backward_cone` caches it.
+    reqs(scratch.frames.entry(frame_key(r)).or_insert_with(compute))
 }
 
 fn span_template<'c>(
@@ -601,13 +619,20 @@ fn span_template<'c>(
                 continue;
             };
             let (targets, unsited) = toward_sites(rid, |to| visited.contains(to), inputs.fwd);
-            let before = sites_before(r, &targets, unsited);
-            others_coverage_complete &=
-                member_coverage_complete(rid, Some(r), Some(&before), inputs);
-            let p = pending_of(r, &before, &targets, inputs.pending);
-            pending_by_routine.insert(rid.clone(), p.tables.len());
-            pending_others.tables.extend(p.tables);
-            pending_others.events.extend(p.events);
+            // Engine limits B2: every `#if` arm (row) of the member that calls
+            // toward the Commit, each up to its own call.
+            let rows = inputs.arms.rows_or(rid, r);
+            let mut member = Pending::default();
+            for (row, own, before) in rows_before(&rows, &targets, unsited) {
+                others_coverage_complete &=
+                    member_coverage_complete(rid, Some(row), Some(&before), inputs);
+                let p = pending_of(row, &before, &own, inputs.pending);
+                member.tables.extend(p.tables);
+                member.events.extend(p.events);
+            }
+            pending_by_routine.insert(rid.clone(), member.tables.len());
+            pending_others.tables.extend(member.tables);
+            pending_others.events.extend(member.events);
         }
         cache.insert(
             key.clone(),
@@ -716,6 +741,7 @@ pub fn compute_transaction_spans(
         );
     let collided: HashSet<&str> = rows.collided().map(|(id, _)| id).collect();
     drop(rows);
+    let arms = ArmRows::build(routines);
     let fwd = forward_sites(reverse);
     let pending = PendingCtx {
         fwd: &fwd,
@@ -730,6 +756,7 @@ pub fn compute_transaction_spans(
         summaries,
         cone_derived,
         routine_by_id: &routine_by_id,
+        arms: &arms,
         fwd: &fwd,
         pending: &pending,
     };

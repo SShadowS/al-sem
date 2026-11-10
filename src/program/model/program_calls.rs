@@ -813,6 +813,85 @@ pub fn assemble_and_resolve_inline_program_reversed_groups(
     attach_program_calls(rows, program).0
 }
 
+/// [`assemble_and_resolve_inline_program_default`] with the #160 step 11b
+/// collided-id contract stated BY ASSIGNMENT: before `RowNodes` and the attach,
+/// every row of a collision group has its site ids renumbered from 0
+/// ([`crate::program::model::workspace::share_collided_site_ids`]), so the rows
+/// of one id share `{id}/op0`, `{id}/cs0`, … as two declarations numbered on
+/// their own would. Production gives each `#if` arm its own ids (engine limits
+/// B2); this is how a test states a collision of site ids. `reversed` also
+/// reverses each group's rows (as
+/// [`assemble_and_resolve_inline_program_reversed_groups`]). Test entry.
+///
+/// A group whose later rows mint no site renumbers nothing; a test that needs
+/// shared sites asserts them on the rows it reads.
+///
+/// # Panics
+/// On a failed build.
+#[doc(hidden)]
+#[must_use]
+pub fn assemble_and_resolve_inline_program_shared_site_ids(
+    files: &[(String, String)],
+    app_guid: &str,
+    reversed: bool,
+) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
+    assemble_and_resolve_workspace_program_shared_site_ids(
+        &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
+        true,
+        reversed,
+    )
+}
+
+/// The single-app model of `inputs` with the #160 step 11b shared site ids
+/// stated by assignment, as
+/// [`assemble_and_resolve_inline_program_shared_site_ids`] states them. Test
+/// entry.
+///
+/// # Panics
+/// On a failed build.
+#[doc(hidden)]
+#[must_use]
+pub fn assemble_and_resolve_workspace_program_shared_site_ids(
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    skip_roots_config: bool,
+    reversed: bool,
+) -> crate::program::model::workspace::Model {
+    use crate::program::model::workspace::{
+        assemble_and_resolve_workspace_from_program_edited, share_collided_site_ids,
+    };
+    let program = ResolvedProgram::build(inputs, ProgramScope::Workspace)
+        .unwrap_or_else(|_| panic!("program build failed for the workspace"));
+    let rows = assemble_and_resolve_workspace_from_program_edited(
+        inputs,
+        skip_roots_config,
+        &program.body().ctx,
+        &program.body().parenless_calls,
+        AssemblyNeeds::BASE,
+        |ws, node_of| {
+            share_collided_site_ids(&mut ws.routines);
+            if reversed {
+                let mut by_id: std::collections::HashMap<String, Vec<usize>> =
+                    std::collections::HashMap::new();
+                for (ri, r) in ws.routines.iter().enumerate() {
+                    by_id.entry(r.id.clone()).or_default().push(ri);
+                }
+                for rows in by_id.values().filter(|rows| rows.len() > 1) {
+                    let (mut i, mut j) = (0, rows.len() - 1);
+                    while i < j {
+                        ws.routines.swap(rows[i], rows[j]);
+                        node_of.swap(rows[i], rows[j]);
+                        i += 1;
+                        j -= 1;
+                    }
+                }
+            }
+        },
+    )
+    .unwrap_or_else(|| panic!("model assembly failed for the workspace"));
+    attach_program_calls(rows, program).0
+}
+
 /// The inline files and an `app.json` with id `app_guid`, written to a fresh
 /// temporary directory (see [`assemble_and_resolve_inline_program`]).
 fn write_inline_workspace(files: &[(String, String)], app_guid: &str) -> tempfile::TempDir {

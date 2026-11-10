@@ -1510,6 +1510,9 @@ fn solve_v2(
     let _t = summaries_census::start();
     let routines_by_id: HashMap<String, &ModelRoutine> =
         projection::last_per_id(&rows, routines.iter().map(Some).collect());
+    // Engine limits B2: the row (`#if` arm) that holds an edge's site, for the
+    // PD substitution's bindings.
+    let arm_rows = projection::ArmRows::build(routines);
     summaries_census::add_since(&summaries_census::ROUTINES_BY_ID_NANOS, _t);
 
     let _t = summaries_census::start();
@@ -1767,6 +1770,7 @@ fn solve_v2(
             scc_entry,
             graph,
             &routines_by_id,
+            &arm_rows,
             &v2_map,
             &base_summaries,
             upgraded_bindings,

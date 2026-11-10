@@ -7,6 +7,172 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine limits wave 2, B2 per-arm ids: the readers that look a site up)
+
+- **A routine declared in two `#if` arms is read through the arm that holds each
+  site.** With per-arm ids (below), arm A's `{id}/cs0` is in arm A's row only. Many
+  readers took ONE row per routine id (the last, from a by-id map; or the first, by
+  stable id) and looked a site up in it: they dropped the other arm's facts, fell back
+  to the whole body, or cited the other arm's line. Found in review: d9 counted
+  `writes 1 known table` where 2 were pending (`AP Log A` and `AP Log B`, the review
+  probe), because the span walk read the member's last row only.
+  - `projection::ArmRows` (the rows of each collided id, and the row that holds a site)
+    and `DetectorContext::routine_for_site`; `LiteralReach::row_at` for the readers
+    keyed by stable id; `projection::merged_site_rows` for the cone's by-id map.
+  - Fixed readers: the transaction spans (`closes_span`, the backward walk's call and
+    guard frame, now cached per row; each span member's pending writes read EVERY arm
+    that calls toward the Commit, `pending_writes::rows_before`), d9's and d8's
+    location (the arm that holds the Commit), d1 (its graph's terminals: every arm's
+    operations; its hop and terminal steps; the liveness pass's bindings), d2 (its
+    terminals, hop and terminal steps), d46 (every arm's commits; hop steps), d48 (each
+    arm's IO terminals at their own lines; hop steps), d32, d39, d43 (the caller's
+    call), d35 (another arm's site is not "partly analysed"), the summary solver's
+    temp substitution (`db_effect_solver::edge_caller`), the cone's guard frames
+    (every row's sites), the literal search (trap edges and places, guard frames,
+    table and value frames, pending writes before a checked run, route guards), prove's
+    witness steps and terminal (`group_path`) and its sites and route sites
+    (`prove_slice`), the callers' context (the row whose body holds the call), impact's
+    own keys and callers (every arm), impact's effect evidence (`assigns`).
+  - **Output on the review probe** (`ws2`): d9 at `Go`'s Commit `writes 2 known
+    table(s)` again; d9 at `Work`'s Commit `writes 2` (`AP Log A`, `AP Log C`), where
+    integrate/w2 said 3 (it also counted arm B's `AP Log B`, which no build compiling
+    arm A writes before that Commit); `Work`'s d9 finding sits at arm A's declaration.
+  - **Whole-object arms in one file are `conditional`.** `lift_arm_declarations`
+    counts the declarations per FILE now (it was per object), so `#if A codeunit X {…}
+    #else codeunit X {…} #endif` in one file reads each object's top-level sites as
+    `conditional` (a build compiles one object), pinned by
+    `natural_object_arms_in_one_file_number_apart`.
+  - **Stated limits.** A routine-level location (a finding's routine) is the arm that
+    holds the finding's site, and the id's last row when the finding has none. The
+    literal flow program is built for a routine's first row only: another arm's call
+    reads no flow value (no literal pruning there, the conservative side).
+    `closed_world_temp` still refuses to prove a routine with several rows. Two FILES
+    that declare one id still share site ids (B2 below).
+  - **CDO** (`bc3ccb18`, release-fast, against the `integrate/w2` run): `alsem analyze`
+    has the same 2,255 findings, byte for byte; only d43's `skipped.other` grows by 2
+    (the two `PageManagement` arms' dispatch sites are now read, then skipped). The
+    three `output_cdo` routines' explain, digest and prove answers are byte-identical,
+    so the CDO goldens are not expected to move. No golden moved.
+  - **No snapshot schema bump.** `SNAPSHOT_SCHEMA_VERSION` versions the snapshot's
+    shape, which did not change. A baseline saved before holds the second arm's facts
+    at shared ids with the first arm's lines; `diff` against it reports those facts as
+    changed, which they were (their old lines were wrong), so a stale baseline does not
+    mislead.
+  - Tests: `detector_context_arm_tests.rs` (d1, d1's temp verdict and its forwarded
+    parameter, d2, d8, d32, d39, d43, d46, d48, impact's effect evidence),
+    `transaction_spans_order_tests.rs` (pending writes of every arm, closing only in
+    the committing arm, a checked run read in its own arm, d9's location),
+    `impact::keys` (`a_two_arm_routine_summarizes_every_arm`), CLI
+    `cli_b2_arm_readers.rs` (prove's route and witness through a second arm, a literal
+    guard in each arm, the callers' question, a temporary argument in an arm, a site and
+    a trap in a second arm), `natural_arms_number_their_unreachable_statements_apart`
+    and `l2_numbers_two_arms_apart` (the `u` base and L2's numbering, review item 2).
+  - Discrimination proofs (break with Edit, run, revert, run green): every guard above
+    fails its test when its row pick is set back to the id's one row (`row_for` given an
+    unknown id, `rows_or` given an unknown id, `row_at` given an unknown site, the
+    merges set to keep one row); recorded per guard in the commit message. Stated
+    limits of the proofs: the cone's guard-frame merge and the literal search's frame
+    merge back each other (each break alone stays green, both together fail
+    `a_literal_guard_in_each_arm_rules_out_its_write`); the cone's site-union rows, the
+    literal `bind`, route-guard (`guards_at`), `local_pending` and `site_may_write`
+    picks, d2's affected-table pick and the d1 shadow oracle's (`d1_reach`,
+    `path_temp_resolve`) caller pick stay green under their breaks on these fixtures
+    (another path answers the same, or the path is test-only): fixed for consistency,
+    not pinned.
+- **Integration with wave 2 round 2 (merge into `integrate/w2`).** The per-arm ids
+  branched before round 2, so the readers round 2 added were audited on the merged tree:
+  - `LiteralReach::local_pending` (B7 round 2): whether a `Commit()` ends the write
+    before a checked run is decided in the row (arm) that holds the run, not in the
+    id's first row. Test `cli_b2_arm_readers::a_commit_an_arm_ignores_does_not_end_that_arms_write`
+    (arm A, the first row, has no commit; arm B's commit is ignored under
+    `[CommitBehavior(Ignore)]`: `throws-error yes`, `escapes-if-write-pending`). Proof:
+    reading the first row's commits → `no`.
+  - `commit_scope::CommitScopes::of_model` (B4): an id's declaration is the union of
+    every routine row's and every object row's (`Declared::union`), and a row that
+    declares nothing adds `Normal`; the last-wins maps kept one row. Tests
+    `cli_b2_arm_readers::a_declaration_one_files_row_lacks_only_may_apply` (one id in two
+    files, only one declares `Ignore`: `may-commit yes`; it was a definite `no`) and
+    `commit_scope::tests::every_arm_adds_its_declaration` (attribute and
+    `InherentCommitBehavior` per arm: `N|I|E`). Proofs: no `Normal` for a plain row →
+    the CLI test answers `no`; last routine row wins → `Two` reads `N|E`; last object
+    row wins → `Q` reads `N|E`. Where every row already holds `Normal` no CLI answer
+    moves (stated in the unit test).
+  - `projection::row_holds_site` and `merged_site_rows` (B5): a `FieldRef` operation
+    (`{call site}/fieldref`) is its arm's. Test
+    `projection::tests::a_field_ref_operation_is_owned_by_its_arm`. Proofs: skip
+    `field_ref_operations` in `row_holds_site` → no owner; skip them in the union → the
+    union holds none. No CLI reader asks a FieldRef operation's owner today (they are
+    reads; no `prove` slice or detector looks one up by site), so only the helpers are
+    pinned.
+  - Checked and left as they are: `commit_scope::object_runs` (call sites keyed by
+    their own per-arm ids; the callee row is read only for its kind and name), the
+    commit graph (per node), B5's FlowField pass (`attach_flow_field_reads` walks every
+    row; locals are never shared across rows), B6's dataset operations (keyed by call
+    site, every row walked), B2 round 2's attribute readers (the lowerer makes one id's
+    rows agree: an attribute one arm lacks is conditional on every row), B7's trap
+    callee test (kind and name only), and the per-row evidence and operation index of
+    B5.
+
+### Fixed (engine limits wave 2, B2 per-arm ids)
+
+- **A routine declared in two `#if` arms cites each arm's own line.** `#if A procedure
+  P() … #else procedure P() … #endif` is two declarations under one routine id (#160
+  step 11b). Each declaration numbered its sites from 0, so both arms minted
+  `{id}/op0`, `{id}/cs0`, and every reader that resolves a site id to one row (the
+  last) cited arm B's line for arm A's fact: `prove CallsOnlyInClean writes-table:"Log
+  A"` on the values probe answered `:58` (arm B's `LogB.Insert`) where the write is at
+  `:51`. Owner decision 2026-11-09: give each arm its own ids.
+  - The model builder (`workspace::project_ir`) walks the declarations of one id in a
+    FILE in document order and starts each one where the earlier ones stopped
+    (`ir_walk::SiteIdBase`: `op`, `cs`, `loop`, `u`; the rules' `rule` too). A routine
+    declared once keeps its ids, and so does the first arm. The L2 projection
+    (`l2_workspace`) numbers the same way. Two `#if` arms of a whole object in one file
+    count as one file's declarations too.
+  - `prove`, `explain` and `digest` now cite `:51` for Log A and `:58` for Log B on the
+    probe; every such answer stays `conditional` (a build runs one arm).
+  - **The #160 step 11b answers, decided again for per-arm ids** (BC compiles one arm
+    per build; no reading turns a possible effect into a definite "no"):
+    - a duplicated declaration's write is one producer PER ARM (two seeds), each citing
+      its own line (`digest::tests::per_arm_declarations_are_one_producer_each`);
+    - an interface call in each arm is one call site per arm, each dispatching to every
+      implementer with `candidate_count` = the number of implementers (2 sites × 2
+      implementers = 4 edges, never a count of 4 candidates;
+      `natural_interface_call_counts_per_arm_site`);
+    - d1 seeds each arm's in-loop call at its own site with its own callee
+      (`natural_d1_seeds_each_arm_at_its_own_site`);
+    - d35's closed arm has its own closed site; the open arm's site stays open and the
+      unknown-Commit finding stays (`i264_fo1`);
+    - `query effects` anchors each arm's operation at its own arm
+      (`query_effects_origin_is_each_arms_own_operation`).
+  - **The 11b collision rules stay**, for rows that share site ids for other reasons:
+    one id declared in two FILES still shares them (numbering never crosses a file,
+    the unit the session's row cache reuses). The 11b tests now state the shared ids
+    BY ASSIGNMENT: `workspace::share_collided_site_ids` renumbers every collided row's
+    sites from 0 on the raw rows before the attach (and asserts it missed no field,
+    by comparing the row's `Debug` text), through the test entries
+    `assemble_and_resolve_inline_program_shared_site_ids` /
+    `assemble_and_resolve_workspace_program_shared_site_ids`; their assertions about
+    collision handling are unchanged. `collided()` asserts the shared `cs0`/`op0`.
+    The L4 host oracle `t1u` takes its collision from two files.
+  - The collision census line gains `groups_one_file` (groups whose rows come from
+    one file: numbered apart now).
+- **Output and ids outside consumers read.** Only routines declared in two arms of one
+  file move: their second arm's site ids (`…/opN`, `…/csN`) and lines, and so the
+  digest `factId`s and `evidenceOperationId`/`callsiteId`s of its facts, the snapshot
+  and `diff` operation ids, and `explain`/`prove` lines. Fingerprints strip site
+  segments (`fingerprint::ROUTINE_SITE_TAGS`), so baselines do not move; `alsem graph`
+  takes its sites from the program graph, not these ids, so it does not move. Routine
+  ids and stable ids do not change. No golden moved.
+- **CDO** (`bc3ccb18`, release-fast, measured 2026-11-10): the cross-app model has 2
+  collision groups, both in one file of a dependency (Base App `PageManagement`:
+  `GetSalesHeaderPageID`, `GetPurchaseHeaderPageID`; census `groups_one_file=2`); the
+  workspace has none. Against an `integrate/w2` build, `alsem analyze` (cross-app JSON)
+  and `explain` (human and JSON), `digest` and `prove may-commit` for the three
+  `output_cdo` routines (IssueReminder, RunReportID, UpdateLastUpload) are
+  byte-identical but for the timestamp, so the CDO goldens are not expected to move.
+- **The impact-base cache's summary schema is 3** (`impact::keys::SUMMARY_SCHEMA`): a
+  base cached before could cite the other arm's line for a site, so it is not read.
+
 ### Fixed (engine limits wave 2, B2)
 
 - **The arms of a statement `#if` are alternatives, not one sequence.** The lowerer spliced
@@ -172,16 +338,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unconditional on success` through its callers. The model builder now lifts the
   `top-level` sites of every row of a collided id to `conditional`
   (`program::model::workspace::lift_arm_declarations`).
-- **Not fixed: a routine declared in two `#if` arms still cites one arm's line for the
-  other's write.** Both arms mint the same site ids (`{routine}/op0`), and readers resolve
-  an id to one row (#160 step 11b, class P: the last row). Giving each arm its own ids
-  (a site-number stride per arm) fixes the citation, and was tried twice and reverted:
-  it breaks 19 tests that build their collided-site precondition from two `#if` arms
-  (the 11b acceptance tests, `cli_11b_policy_collision`, d35's `i264_fo1`, the r4
-  dep-order test, the L4 host oracle `t1u`), and it changes real answers the 11b design
-  settled (two producers for one duplicated declaration, an interface call counted per
-  arm, d1 keeping one seed instead of both). That is a change to an accepted design, so
-  it needs the owner's decision. Recorded in `docs/engine-limits.md` (B2).
+- **Not fixed here (fixed by "B2 per-arm ids" above): a routine declared in two `#if`
+  arms still cited one arm's line for the other's write.** Both arms minted the same site
+  ids (`{routine}/op0`), and readers resolve an id to one row (#160 step 11b, class P:
+  the last row).
 - The #288 trust-gate tests G1/G2 state their dead marks by assignment: production no
   longer marks the code after an arm's `exit` unreachable, which those tests relied on.
 - Leading-guard readers that stop at the first non-statement now stop at a group too

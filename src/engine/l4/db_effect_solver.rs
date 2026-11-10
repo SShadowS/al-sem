@@ -35,7 +35,24 @@ use crate::engine::l4::summary_runner::{
     FieldIndex, base_intraprocedural_summary, substitute_pd_temp_state,
 };
 use crate::program::model::calls::UpgradedBinding;
+use crate::program::model::projection::ArmRows;
 use crate::program::model::workspace::ModelRoutine;
+
+/// The caller row that holds `edge`'s site (its call site, or the record
+/// operation of a trigger edge): engine limits B2, a routine declared in two
+/// `#if` arms is two rows of one id, each with its own sites and bindings.
+/// `fallback` is the id's row (`routines_by_id`).
+fn edge_caller<'r>(
+    arms: &ArmRows<'r>,
+    from: &str,
+    edge: &CombinedEdge,
+    fallback: &'r ModelRoutine,
+) -> &'r ModelRoutine {
+    edge.callsite_id
+        .as_deref()
+        .or(edge.operation_id.as_deref())
+        .map_or(fallback, |s| arms.row_for(from, s, fallback))
+}
 
 /// Re-decompose one Tarjan `Scc` into its *effective* SCCs: the strongly-connected
 /// components of the subgraph induced by keeping only members for which
@@ -217,10 +234,14 @@ fn apply_pd_transition(
 /// composition, today in `summary_runner::compose_roles_only`) — kept in the
 /// signature for parity with
 /// the plan's other Step functions / Task 8's uniform per-SCC ctx wiring.
-pub fn solve_pd_reachability(
+/// `arms` (engine limits B2): each edge's site is read in the caller row
+/// that holds it ([`edge_caller`]).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_pd_reachability<'r>(
     eff: &Scc,
     graph: &PrimaryGraph,
-    routines_by_id: &HashMap<String, &ModelRoutine>,
+    routines_by_id: &HashMap<String, &'r ModelRoutine>,
+    arms: &ArmRows<'r>,
     settled_db: &SummaryBundleBuilder,
     _upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
     universe: &GrowingEffectUniverse,
@@ -314,7 +335,7 @@ pub fn solve_pd_reachability(
                 let outcome = substitute_pd_temp_state(
                     e,
                     j,
-                    caller_routine,
+                    edge_caller(arms, m, e, caller_routine),
                     routines_by_id.get(e.to.as_str()).copied(),
                 );
                 apply_pd_transition(
@@ -345,7 +366,7 @@ pub fn solve_pd_reachability(
                 let outcome = substitute_pd_temp_state(
                     edge,
                     idx,
-                    caller_routine,
+                    edge_caller(arms, v, edge, caller_routine),
                     routines_by_id.get(edge.to.as_str()).copied(),
                 );
                 apply_pd_transition(
@@ -1258,12 +1279,13 @@ pub(crate) fn build_rvid_by_opid(
 /// the max-merge is order-INDEPENDENT — so splitting the contributor set across
 /// two passes yields byte-identical `via` to the old single fold.
 #[allow(clippy::too_many_arguments)]
-fn attribute_pd_substituted_via(
+fn attribute_pd_substituted_via<'r>(
     eff: &Scc,
     graph: &PrimaryGraph,
     presence: &SccPresence,
     settled_db: &SummaryBundleBuilder,
-    routines_by_id: &HashMap<String, &ModelRoutine>,
+    routines_by_id: &HashMap<String, &'r ModelRoutine>,
+    arms: &ArmRows<'r>,
     universe: &GrowingEffectUniverse,
     interner: &RoutineInterner,
     via_map: &mut HashMap<(SolveIx, EffectId), ViaRank>,
@@ -1317,7 +1339,7 @@ fn attribute_pd_substituted_via(
                 let outcome = substitute_pd_temp_state(
                     edge,
                     pd_index,
-                    caller_routine,
+                    edge_caller(arms, m, edge, caller_routine),
                     routines_by_id.get(edge.to.as_str()).copied(),
                 );
                 let produced = EffectIdentity {
@@ -1398,10 +1420,11 @@ fn materialize_member_row(
 /// `(uncertainties, has_unresolved_calls)`; db_effects are recorded as compact
 /// rows in `bundle` (projected lazily post-freeze).
 #[allow(clippy::too_many_arguments)]
-fn solve_one_effective_scc(
+fn solve_one_effective_scc<'r>(
     eff: &Scc,
     graph: &PrimaryGraph,
-    routines_by_id: &HashMap<String, &ModelRoutine>,
+    routines_by_id: &HashMap<String, &'r ModelRoutine>,
+    arms: &ArmRows<'r>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1422,6 +1445,7 @@ fn solve_one_effective_scc(
         eff,
         graph,
         routines_by_id,
+        arms,
         &*bundle,
         upgraded_bindings,
         &*universe,
@@ -1464,6 +1488,7 @@ fn solve_one_effective_scc(
         &presence,
         &*bundle,
         routines_by_id,
+        arms,
         &*universe,
         interner,
         &mut via_map,
@@ -1550,10 +1575,11 @@ fn solve_one_effective_scc(
 /// caller (`compute_summaries_v2_with_leaves_core`) BEFORE its per-Tarjan-SCC
 /// loop, not rebuilt here.
 #[allow(clippy::too_many_arguments)]
-pub fn solve_scc_db_effects(
+pub fn solve_scc_db_effects<'r>(
     scc_entry: &Scc,
     graph: &PrimaryGraph,
-    routines_by_id: &HashMap<String, &ModelRoutine>,
+    routines_by_id: &HashMap<String, &'r ModelRoutine>,
+    arms: &ArmRows<'r>,
     settled: &HashMap<String, RoutineSummary>,
     base_summaries: &HashMap<String, RoutineSummary>,
     upgraded_bindings: &HashMap<String, Vec<UpgradedBinding>>,
@@ -1578,6 +1604,7 @@ pub fn solve_scc_db_effects(
             &eff_sccs[0],
             graph,
             routines_by_id,
+            arms,
             settled,
             base_summaries,
             upgraded_bindings,
@@ -1604,6 +1631,7 @@ pub fn solve_scc_db_effects(
             eff,
             graph,
             routines_by_id,
+            arms,
             &local_settled,
             base_summaries,
             upgraded_bindings,
@@ -2125,8 +2153,16 @@ pub(crate) mod tests {
         let universe = GrowingEffectUniverse::new();
         let ub: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
 
-        let (pd_facts, terminals) =
-            solve_pd_reachability(&eff, &graph, &rbid, &settled_db, &ub, &universe, &interner);
+        let (pd_facts, terminals) = solve_pd_reachability(
+            &eff,
+            &graph,
+            &rbid,
+            &ArmRows::default(),
+            &settled_db,
+            &ub,
+            &universe,
+            &interner,
+        );
 
         let base = ("Insert".to_string(), "t1".to_string(), "c_op1".to_string());
         let expected_facts: HashSet<PdFact> = [
@@ -2190,8 +2226,16 @@ pub(crate) mod tests {
         let universe = GrowingEffectUniverse::new();
         let ub: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
 
-        let (pd_facts, terminals) =
-            solve_pd_reachability(&eff, &graph, &rbid, &settled_db, &ub, &universe, &interner);
+        let (pd_facts, terminals) = solve_pd_reachability(
+            &eff,
+            &graph,
+            &rbid,
+            &ArmRows::default(),
+            &settled_db,
+            &ub,
+            &universe,
+            &interner,
+        );
 
         let base = (
             "Insert".to_string(),
@@ -2255,8 +2299,16 @@ pub(crate) mod tests {
         let universe = GrowingEffectUniverse::new();
         let ub: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
 
-        let (pd_facts, terminals) =
-            solve_pd_reachability(&eff, &graph, &rbid, &settled_db, &ub, &universe, &interner);
+        let (pd_facts, terminals) = solve_pd_reachability(
+            &eff,
+            &graph,
+            &rbid,
+            &ArmRows::default(),
+            &settled_db,
+            &ub,
+            &universe,
+            &interner,
+        );
 
         let base = (
             "Insert".to_string(),
@@ -2335,8 +2387,16 @@ pub(crate) mod tests {
         );
         let ub: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
 
-        let (pd_facts, terminals) =
-            solve_pd_reachability(&eff, &graph, &rbid, &settled_db, &ub, &universe, &interner);
+        let (pd_facts, terminals) = solve_pd_reachability(
+            &eff,
+            &graph,
+            &rbid,
+            &ArmRows::default(),
+            &settled_db,
+            &ub,
+            &universe,
+            &interner,
+        );
 
         let expected_facts: HashSet<PdFact> = [PdFact {
             routine_id: "a".to_string(),
@@ -2383,8 +2443,16 @@ pub(crate) mod tests {
         let universe = GrowingEffectUniverse::new();
         let ub: HashMap<String, Vec<UpgradedBinding>> = HashMap::new();
 
-        let (pd_facts, terminals) =
-            solve_pd_reachability(&eff, &graph, &rbid, &settled_db, &ub, &universe, &interner);
+        let (pd_facts, terminals) = solve_pd_reachability(
+            &eff,
+            &graph,
+            &rbid,
+            &ArmRows::default(),
+            &settled_db,
+            &ub,
+            &universe,
+            &interner,
+        );
 
         let base = ("Insert".to_string(), "t1".to_string(), "a_op1".to_string());
         let expected_facts: HashSet<PdFact> = [PdFact {

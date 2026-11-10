@@ -400,6 +400,7 @@ fn materialize_transitive<'a>(
         let to_id = graph.node_ids[edge.to as usize];
         witness.push(hop_step(
             &ctx.routine_by_id,
+            &ctx.arm_rows,
             from_id,
             to_id,
             edge.kind,
@@ -408,6 +409,7 @@ fn materialize_transitive<'a>(
     }
     witness.push(terminal_step(
         &ctx.routine_by_id,
+        &ctx.arm_rows,
         &ctx.table_by_id,
         terminal_owner.id.as_str(),
         Some(terminal_op.id.as_str()),
@@ -502,6 +504,11 @@ pub(crate) fn process_group<'g, 'a>(
         for edge in &graph.edges[node as usize] {
             let to_id = graph.node_ids[edge.to as usize];
             let child_depth = (parent_depth + edge.loop_depth).min(2);
+            // Engine limits B2: the caller's row (its `#if` arm) that holds
+            // the call, for its argument bindings.
+            let caller = edge
+                .callsite_id
+                .map_or(caller, |cs| ctx.arm_rows.row_for(from_id, cs, caller));
             let child_temp = cross_hop(
                 &parent_temp,
                 caller,
@@ -623,6 +630,7 @@ pub(crate) fn process_group<'g, 'a>(
                 // uncertainties (the walker hardcoded `uncertainties: Vec::new()`).
                 let op_step = terminal_step(
                     &ctx.routine_by_id,
+                    &ctx.arm_rows,
                     &ctx.table_by_id,
                     routine.id.as_str(),
                     Some(op.id.as_str()),
