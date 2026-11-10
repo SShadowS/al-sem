@@ -1,0 +1,29 @@
+junit-A1.xml: wall 108.0 s, summed 1984 s, floor 90.2 s, last full-width second 88 s, tail 20.0 s
+     0-10   s  average running  22.0
+    10-20   s  average running  22.0
+    20-30   s  average running  22.0
+    30-40   s  average running  22.0
+    40-50   s  average running  22.0
+    50-60   s  average running  21.9
+    60-70   s  average running  22.0
+    70-80   s  average running  21.9
+    80-90   s  average running  19.9
+    90-100  s  average running   1.9
+   100-110  s  average running   0.9
+
+running after 88 s (start, end, binary, test):
+    88.4 ->  108.0  ( 19.5 s)  al-syntax  lower::tests::attribute_flow_scales_linearly
+    61.9 ->   94.2  ( 32.3 s)  al-sem  engine::l5::digest_cli::tests_rule_b::prove_scoped_equals_unscoped
+    61.8 ->   92.4  ( 30.6 s)  al-sem  engine::l5::digest_cli::tests_rule_b::fingerprint_query_scoped_equals_unscoped
+    87.2 ->   91.2  (  4.0 s)  al-sem::program_resolve_harness  adapter_loses_nothing_cross_app_on_the_fixtures
+    86.8 ->   90.9  (  4.1 s)  al-sem::lsp  lsp_engine::call_hierarchy_answers_while_an_engine_request_runs
+    88.0 ->   90.8  (  2.8 s)  al-sem::resident_memory_bound  live_heap_stays_bounded_across_refreshes_in_both_modes
+    87.2 ->   90.0  (  2.8 s)  al-sem::program_resolve_harness  adapter_loses_no_site_or_route_on_the_fixtures
+    86.8 ->   89.9  (  3.1 s)  al-sem::lsp  lsp_engine::cancel_request_cancels_the_engine_request
+    88.3 ->   88.7  (  0.4 s)  al-sem::bin/al-call-hierarchy  server::tests::t12d_disabling_every_detector_clears_published_diagnostics
+    88.5 ->   88.7  (  0.1 s)  al-syntax  parse::tests::deep_binary_expression_degrades_instead_of_overflowing_small_stack
+    88.4 ->   88.6  (  0.2 s)  al-sem::bin/alsem  tests::sequential_diff_requests_get_their_own_bytes
+    88.6 ->   88.6  (  0.0 s)  al-syntax  parse::tests::deep_nested_case_groups_degrade_instead_of_overflowing_small_stack
+    88.6 ->   88.6  (  0.0 s)  al-syntax  parse::tests::deep_parenthesized_expression_degrades_instead_of_overflowing_small_stack
+    88.6 ->   88.6  (  0.0 s)  al-syntax  raw::tests::all_is_positional_and_round_trips_every_kind
+    88.6 ->   88.6  (  0.0 s)  al-syntax  raw::tests::unknown_kind_panics
