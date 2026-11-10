@@ -6,6 +6,7 @@
 | **Written** | 2026-11-10, against master `4bb454f7` and the wave-2 tree `integrate/w2` at `37c734e5`. |
 | **Start when** | Engine-limits wave 2 and the tree-sitter-al 5.0.0 upgrade have landed, in the kraken-alsem container. |
 | **Reviewed by** | Fable (verdict on v1: sound with changes) and gpt-6-astra via pi (verdict on v1: rework). This document folds in both. |
+| **Third review** | Fable, 2026-11-10, against master `b8858256` (after wave 2 and grammar 5.0.0). Verdict: sound; gains re-weighted by where edits land (section 2), the rehearsal moved ahead of the cuts (Phase 1b), two-sided stop/go limits. It could not confirm the chain is the right shape: section 3.1 now lists three candidates and Phase 0 chooses. Folded in below. gpt-6-astra has not reviewed this version. |
 | **Must also be reviewed** | By Fable and gpt-6-astra again before Phase 2, and on each phase's diff (owner's instruction). |
 | **Who runs it** | A supervised session. The autonomous issue flow cannot: `scripts/agentflow/protect.py` blocks edits under `scripts/`. |
 
@@ -55,13 +56,36 @@ binary, wire string or golden.
 | `src/lsp`, `src/mcp`, `src/wire` | 22k | 8k |
 | `src/bin` (alsem 5.4k, aldump 2.4k, mint-goldens 0.3k) | 8k | |
 
-`tests/` holds another 158k lines in 15 test binaries. `tests/cli/` alone is 81k.
+`tests/` holds another 158k lines in 15 test binaries. `tests/cli/` alone is 81k. (Recount on master `b8858256`:
+`src/` is 447k lines, and `ls tests/*.rs tests/*/main.rs` gives 14 test binaries. Redo both in Phase 0.)
 
 ### Which code changes most
 
 Commits touching each area since 2026-09-10 (600 commits on master): `engine/l5` 254, `program/resolve` 178,
 `engine/l4` 160, `bin` 107, `program/model` 100, `gate` 87, `mcp` 64, `lsp` 47. By file-touch counts on the
 wave-2 tree: l5 1,366, program/resolve 459, l4 386, program/model 295, gate 210, mcp 109, lsp 81.
+
+**The same count per planned crate** (third review; 710 commits touching `src/` since 2026-09-10, on master
+`b8858256`; a commit counts once for each crate it touches). The per-directory numbers above hide this:
+
+| Planned crate | Commits touching it |
+|---|---|
+| al-program (`program/` without `impact_graph`, `snapshot/`) | 317 |
+| al-engine: upper engine (`gate`, `batch`, `session`, `resident`, `impact`, `test_select`, `host`, `wire`, `impact_graph`) | 232 |
+| facade (`lsp`, `mcp`, `bin`, `analysis`) | 190 |
+| al-engine-core: l5 substrate | 187 |
+| al-engine: l5 command files (prove, explain, digest, …) | 184 |
+| al-engine-core: l4 | 174 |
+| al-detectors | 80 |
+
+Commits that stay inside one layer: core plus engine only 179; al-program only 106; facade only 14; detectors
+only fewer than 10. So:
+- **Detector-only edits are about 1% of commits.** Of the 254 `l5` commits, 80 touch a detector at all.
+- **About 45% of commits touch al-program**, the bottom crate, where the split gives nothing in the inner loop
+  and may slow the task gate.
+- **The common case that gains is an edit inside core or engine** (179 commits): it skips al-program entirely.
+
+Commits are a stand-in for edit-test cycles, not the same thing. It is the only stand-in this design has.
 
 ### The module graph is one big cycle, with few upward edges
 
@@ -76,7 +100,13 @@ point upward are few and mostly small items. They are listed in section 6.
   impl on a type from another planned crate. The two exceptions (`impl Model` in `l4/combined_graph.rs`, `impl
   Tally` in `engine/census.rs`) move with their types. The scan is approximate; the compiler has the final word.
 - **Macros**: no `macro_rules!` crosses a planned boundary.
-- **Global allocator**: only in `lib.rs` under `cfg(test)`, and in `bin/alsem.rs`.
+- **Global allocator**: in `lib.rs` under `cfg(test)`, and in `bin/alsem.rs`. Also in three leaf programs that the
+  split does not touch: `tests/cone_memory_bound.rs`, `tests/resident_memory_bound.rs`, `tools/census-probe`.
+- **Detectors below the upper engine**: no file under `l5/detectors/` (57 files, tests included) imports `gate`,
+  `batch`, `session`, `resident`, `impact`, `test_select`, `host` or an l5 command file. al-detectors can sit
+  below al-engine as drawn.
+- **Edges into the facade**: production code below it imports `lsp` in only two files, `program/dep_cache.rs` and
+  `test_quality.rs` (both in section 6). This is what makes the early rehearsal (Phase 1b) cheap.
 - **`build.rs`**: matters only to `src/server.rs:376` (the telemetry connection string), so it stays in the root.
 - **Declared-needs**: `Plan` fields are private (`engine/session.rs`). `BuildProfile` is built only at
   `program/resolved.rs:52`, `program/session/workspace.rs:110` and `resolve/full.rs`, all planned for al-program.
@@ -94,18 +124,54 @@ An earlier estimate counted "lines rebuilt". Both reviewers rejected that model,
 - For a change low in the graph, the front-end work becomes a **serial chain** of crates. Cargo overlaps only code
   generation (pipelining).
 
-| Edit in | Inner loop (a target to test, not a forecast) | Task gate |
-|---|---|---|
-| a detector or `l5` | 40–60% shorter | a smaller gain; unknown until measured |
-| MCP or LSP | large | limited by the test-binary floor; no 80–90% promise |
-| the model or the IR | about the same | **may be slower** |
-| cold build | little (10–25% at best) | |
+| Edit in | Share of commits (section 2) | Inner loop (a target to test, not a forecast) | Task gate |
+|---|---|---|---|
+| a detector only | about 1% | 40–60% shorter | a smaller gain; unknown until measured |
+| core or engine only (l4, l5 substrate, prove, explain, digest, gate) | about 25% | skips al-program (about 140k lines); size of the gain unknown | a smaller gain; unknown until measured |
+| MCP or LSP only | about 2% | large | limited by the test-binary floor; no 80–90% promise |
+| al-program (the model, the resolver, the IR) | about 45% touch it | about the same | **may be slower** |
+| cold build | | little (10–25% at best) | |
 
-Every number above must be replaced by a measurement before it is quoted. That is what Phases 0, 3 and 4 are for.
+**Read the table by its share column.** The best row is the rarest edit. The case for the split rests on the
+second row, and on al-program edits not getting worse. Phase 0 must time both, and the stop/go limits (section
+10) are two-sided for that reason.
+
+Every number above must be replaced by a measurement before it is quoted. That is what Phases 0, 1b, 3 and 4 are for.
+
+### 3.1 Three candidate shapes: Phase 0 chooses
+
+The third review found the design consistent, but could not say it is the right one. Two doubts:
+
+- **The graph in section 4.1 is a chain, and the busiest code is at its bottom.** A chain is the worst shape for
+  build time: an edit rebuilds every crate above it, one after another. The chain follows the engine's pipeline,
+  not the edits (section 2: about 45% of commits touch al-program).
+- **Section 1 names cold builds in fresh worktrees as where the time went, and a split barely helps a cold build.**
+
+So sections 4–7 describe **candidate A**. Nothing after Phase 1 starts until Phase 0 has compared it with the other two.
+
+| | Shape | Helps | Cost | Not known |
+|---|---|---|---|---|
+| **A. The chain** (sections 4–7) | syntax → program → core → detectors → engine → facade | warm edits in core and engine (about 25% of commits) | 4–6 weeks; the cuts are listed | the size of the gain; whether al-program edits get slower |
+| **B. Wide and shallow** | A stable base (IR facts, ids, the model's types), with the busy parts as siblings above it: the resolver beside the model builder; prove, explain, digest, gate, impact and test selection side by side over the l4/l5 substrate | warm edits in most places, al-program's included; sibling crates compile in parallel | more cuts than A, because the modules form one cycle (section 2) and siblings must not import each other. Not costed. | whether the cycle can be cut this way at all; the cut list |
+| **C. No split: never build cold** | One crate, as now. A new worktree starts from a warm build folder (a copy-on-write copy of a warm `target/`, or a compiler cache for the dependencies, which build at opt-level 2 and are not incremental) | cold builds, the stated pain | days, not weeks | whether cargo reuses a copied folder under another path (section 8 rules out a *shared* folder because paths are baked into binaries; a copy that is then rebuilt in place is a different thing and is untested); how much of a cold build the dependencies are |
+
+A and C can be combined, and B can start as A's first step (al-program out) and then widen. They are not exclusive;
+the question is which one the next week of work goes to.
+
+**The three numbers that choose** (all in Phase 0):
+1. **Cold or warm.** Of real build time in a working week, how much is cold builds? Sources: `/work/.al-sem/flow-timings.jsonl`
+   and the run-timer records of the build commands. Mostly cold → C first. Mostly warm → A or B.
+2. **The rerun cost** (the `al-syntax` test in Phase 0). If rerunning an unchanged large crate costs nearly as much as editing
+   it, a crate above the edit saves nothing: only B's siblings and skipped lower crates help, and A's chain gains little.
+3. **Where rustc spends the time** (`-Ztime-passes`). Mostly front end → crate size matters, so A or B. Mostly linking and
+   test binaries → none of the three; go to the test-binary floor (section 8, "Split only the tests") instead.
+
+**Stop/go 0.** The owner picks A, B, C or a mix from these numbers. Before choosing B, cost its cuts: one day with the
+module-graph tool that produced section 2's cycle count.
 
 ---
 
-## 4. The design
+## 4. The design (candidate A)
 
 ### 4.1 Target crate graph
 
@@ -189,6 +255,10 @@ renames, so blame is not a strong reason to keep the unusual layout forever.
 
 **Hazard:** with this layout, a module file no crate root declares is simply not built, and nothing reports it.
 Test accounting (section 7) guards against this.
+
+**The opposite hazard:** a file declared by two crate roots is compiled twice. Each crate gets its own copy of
+the file's types, and nothing reports that either. The layering test (section 7) must check that every file
+under `src/` is declared by exactly one root.
 
 ### 4.5 Keeping the old paths working
 
@@ -294,10 +364,10 @@ Each must be checked for its own dependency closure when moved. Each lands as it
 
 **`program/impact_graph` → engine** (`impact_graph` moves up instead): `mod.rs` → `engine::batch::{job, output::job_line}`; `reverse.rs` → `l4::summary::build_routine_stable_map`; `sited.rs` → `l5::routine_rollup`; `facts.rs` → `root_classification::{RootShape, root_kind_mask}`. Needs `facts::property_object_ref` down (used at `resolve/full.rs:958`) and `vocab`'s `EntryKind`/`Tier` down.
 
-**Other program and snapshot files**: `body/ir_walk.rs:1842` → `l5::literal_values::VARIANT_TESTS`; `program/dep_cache.rs:105,117` → `lsp::encoding::LineIndex`, `lsp::snapshot::DepEventLinks` (move the plain data down rather than use `Any`); `test_quality.rs:21` → `lsp::snapshot::LspSnapshot` (split the file).
+**Other program and snapshot files**: `body/ir_walk.rs:1935` → `l5::literal_reach::values::VARIANT_TESTS`; `program/dep_cache.rs:105,117` → `lsp::encoding::LineIndex`, `lsp::snapshot::DepEventLinks` (move the plain data down rather than use `Any`); `test_quality.rs:21` → `lsp::snapshot::LspSnapshot` (split the file).
 
 **Missed by the first plan, found by the reviews**
-- `l4/combined_graph.rs:1311` → `l4::analysis::graph_scc`. Move **only** `graph_scc` (a small function) beside `scc`, with its counter. Do not move `analysis`, which imports the solver and `l5::detector_context`.
+- `l4/combined_graph.rs:1404` → `l4::analysis::graph_scc`. Move **only** `graph_scc` (a small function) beside `scc`, with its counter. Do not move `analysis`, which imports the solver and `l5::detector_context`.
 - `l4/combined_graph.rs:479` → `summary_runner::summaries_census::mixed_readings`. Move these counters to `engine::census`.
 - `cones_census::add_compose_stats` takes `capability_cone::ComposeStats`. Move the counters and reporting down; keep this typed adapter above them, or move a neutral stats type down. `capability_cone.rs` has 126 `cones_census` call sites.
 - `detectors/d1.rs:2085` → `detectors::d14::provably_dead_routine_ids` (a core-to-detectors edge).
@@ -317,9 +387,13 @@ Every step is a pure refactor. No golden moves; any golden diff is a bug.
 
 1. **Layering test.** It fails when a file in the planned lower set references a module outside it. A scanner of about 150 lines
    can be a test or a `ci-steps` step. Start it as a ratchet: the list of remaining violations can only shrink.
+   Once crate roots exist it also checks that every file under `src/` is declared by exactly one root (section 4.4).
 2. **Test accounting, from the first change.** Compare package, target, test name, ignored status and doctests, against an explicit
    relocation map. Checking `.d` dependency files is **not** a proof: old files survive, `include_str!` inputs appear there, and a file's test module can vanish while its production module stays.
-3. **Full gates per step**: `scripts/ci-steps task`, `scripts/check-goldens`, `scripts/cdo-gate <CDO_WS>` including its speed phase, `scripts/ci-steps all`.
+3. **Gates.** Every cut in Phase 2 passes `scripts/ci-steps task` (which runs every golden target) on its own. The branch gate
+   (`scripts/ci-steps all`, `scripts/cdo-gate` including its speed phase) runs once per landed batch of cuts, on the exact tree
+   about to merge. `cdo-gate` takes 15–20 minutes and must run alone, so one run for each of about 40 cuts is not affordable.
+   Every extraction in Phases 1b and 4 gets the full branch gate on its own.
 4. **Runtime.** `cdo-speed` covers release-fast only. Also measure the shipped fat-LTO build and the `cdo` workload (`output_cdo` is about 780 s).
    The `cdo` profile (no cross-crate LTO, 16 codegen units) can lose inlining of small `Model` accessors. Measure first; prefer `#[inline]` on hot accessors. Do not prescribe ThinLTO before measuring build plus run.
 
@@ -354,8 +428,8 @@ Every step is a pure refactor. No golden moves; any golden diff is a bug.
 | **mold linker** | Measure first. Confirm the actual linker (Rust 1.96 uses rust-lld on x86_64 Linux). The claim that links are a minority is unmeasured. |
 | **Dev profile tweaks** | Measure on total build-plus-test time. Dependency opt-level 2 also affects generic sharing. |
 | **Split only the tests** | Moving public-API-heavy tests out can reduce the big lib-test compile. Splitting `tests/cli` trades more parallel compile for more links and repeated helpers; keep CDO tests that share expensive process-local state together. Keep as optional later work. |
-| **sccache** | Little use: it does not cache incremental builds, which all workspace crates are in dev. |
-| **A shared target folder across worktrees** | Ruled out: paths are baked into binaries (`scripts/agentflow/worktrees.py`). |
+| **sccache** | Little use for warm edits: it does not cache incremental builds, which all workspace crates are in dev. For cold builds in fresh worktrees it can cache the dependencies; measure under candidate C (section 3.1). |
+| **A shared target folder across worktrees** | Ruled out: paths are baked into binaries (`scripts/agentflow/worktrees.py`). A *copied* warm folder is a different thing: candidate C. |
 | **Cranelift backend, `-Zthreads` parallel front end** | Nightly only; `rust-toolchain.toml` pins stable 1.96 for clippy. `-Zthreads` targets the real bottleneck, so revisit if it stabilises. |
 | **`codegen-units`** | About zero expected: dev already uses 256 units with incremental. |
 
@@ -374,6 +448,16 @@ Record the exact tree, grammar, toolchain, flags and test inventory. Then, on an
 - Edits to time, each **output-preserving** (a changed message could fail a test and falsify the timing): one detector, one substrate file, the model, a renderer, MCP.
 - Record peak memory, rustc invocation count, link time, build-to-test feature churn, `output_cdo` runtime and full cdo-gate time, and the per-unit durations from `cargo build --timings`.
 - Once, for diagnosis: `RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Ztime-passes` on a warm lib-test build. It shows the split between parse, type check, metadata, codegen and link, which every estimate here depends on.
+- **The rerun-cost test.** Change one function body in `al-syntax` (output-preserving), then time the warm rebuild of the
+  `al-sem` lib-test. Nothing in `al-sem` changed, so this is the price of rerunning rustc on an unchanged large crate: the
+  price every upper crate pays after the split. Compare it with the warm edit-to-test time for an edit inside `al-sem`. If
+  the two are close, the split gains little above the edited crate and only the skipped lower crates count.
+- Redo the per-crate commit table of section 2, and weight every timing by it.
+- **Cold or warm:** the share of a working week's build time that is cold builds (section 3.1, number 1).
+- For candidate C: copy a warm `target/` into a fresh worktree (copy-on-write) and time the first build there against a
+  cold one. Record what cargo rebuilds. Also time a dependency-only cold build, to size what a compiler cache could save.
+
+**Stop/go 0.** Section 3.1: the owner picks the shape. Phase 1 goes ahead under every choice.
 
 ### Phase 1: cheap wins (1–2 days)
 
@@ -381,9 +465,33 @@ The rows of section 8 marked "do first" or "measure first". Keep the full merge 
 
 **Stop/go 1.** Re-measure. If the inner loop is acceptable, stop here.
 
+### Phase 1b: rehearsal, the facade split (3–5 days)
+
+Phases 1b to 4 are candidate A's plan. They run only if stop/go 0 chose A (or B, which shares Phase 1b).
+
+Moved here from Phase 4 by the third review, so that the first real numbers arrive before the 2–3 weeks of cuts and not after.
+
+Extract everything below `lsp`, `mcp` and `analysis` as one crate, using the in-place layout of section 4.4. It needs only the
+two facade cuts (`program/dep_cache.rs`, `test_quality.rs`), the scaffolding (Phase 4 step 1) and test accounting. It gives:
+- a test of the layout against cargo metadata, per-package rustfmt, clippy, rustdoc and rust-analyzer;
+- a test of the scripts, the gates and CI on a real second crate;
+- the first measured cost of a crate boundary, on this code: the task gate, the cold build, `cdo-gate` and its speed phase,
+  before and after.
+
+Its direct gain is small (about 2% of commits touch only the facade). It is kept if it is green and no slower; it is not
+throwaway.
+
+**Stop/go 1b.** With these numbers and Phase 0's rerun-cost test, forecast the gain for a core-or-engine edit and the cost
+for an al-program edit. Stop here if the forecast misses the limits in section 10.
+
 ### Phase 2: cuts inside the single crate (about 2–3 weeks)
 
-Small, green, independently reviewable changes. No workspace change yet, and every cut stands as a cleanup even if the rest stops.
+Small, green, independently reviewable changes. No further workspace change yet, and every cut stands as a cleanup even if the rest stops.
+
+**Beside other work.** The cuts move `Diagnostic`, split `detectors/mod.rs` (2,601 lines) and move about 6,900 test lines out of
+`capability_cone.rs`. An engine-limits wave on the other lane touches the same files. Rules: one cut per branch, landed the day
+it is green; a large move (a file split, a test relocation) lands only while no wave branch is open on that file, and the
+orchestrator orders the two; a wave is never rebased across a half-landed move.
 1. Add the layering test and test accounting.
 2. Inventory every inline test module and `cfg(test)` helper that crosses a planned boundary. Re-estimate.
 3. Do the cuts in section 6.
@@ -393,18 +501,19 @@ Fable and gpt-6-astra review the updated design before this phase starts.
 
 ### Phase 3: prototype (2–3 days, throwaway)
 
-Build a compiling, test-enabled `al-program` with its wrapper modules. Check cargo metadata, per-package rustfmt, clippy, rustdoc and rust-analyzer against the in-place layout. Re-estimate from what it shows.
+Build a compiling, test-enabled `al-program` with its wrapper modules. The tooling checks were done in Phase 1b; this one tests the
+split modules (`engine::l4`, `program`) and the wrapper re-exports of section 4.5. Re-estimate from what it shows.
 
 **Stop/go 2.** The owner approves the graph and the numbers.
 
 ### Phase 4: extraction (1–2 weeks; one mechanical change per crate; re-measure and stop/go after each)
 
 The recommended order:
-1. **Scaffolding** (`[workspace.package]`, `[workspace.dependencies]`, the repo-root helper, scripts taking a package list).
-2. **Engine and program out of the facade, as a rehearsal.** Little cut work, because it avoids the internal cycle. It proves the layout, scripts, gates and CI. Its direct gain is small: about 6% of edits touch MCP or LSP.
-3. **al-program.** The biggest structural gain.
+1. **Scaffolding** (`[workspace.package]`, `[workspace.dependencies]`, the repo-root helper, scripts taking a package list). Done in Phase 1b.
+2. **Engine and program out of the facade.** Done in Phase 1b.
+3. **al-program.** The biggest structural gain: every core-or-engine edit skips it.
 4. **al-engine-core and al-engine.**
-5. **al-detectors.** Prototype a detector-first cut with explicit catalog injection first; it may give a better return for detector work than the order above.
+5. **al-detectors.** Last, and only if measured: detector-only edits are about 1% of commits (section 2), so a detector-first order is no longer recommended.
 
 Optional afterwards: make al-detectors a leaf (section 4.8), and lower the test-binary floor (move suitable test targets into al-program's own tests; split `tests/cli`). Both need their own measurement.
 
@@ -414,19 +523,24 @@ Optional afterwards: make al-detectors a leaf (section 4.8), and lower the test-
 |---|---|
 | 0 baseline | ½–1 day |
 | 1 cheap wins | 1–2 days |
+| 1b rehearsal (facade split) | 3–5 days |
 | 2 cuts and test separation | 2–3 weeks |
 | 3 prototype | 2–3 days |
-| 4 extraction | 1–2 weeks |
+| 4 extraction (the rest) | 1–2 weeks |
 | **Total, if run to the end** | **about 4–6 weeks** |
 
-Stopping after Phase 1 costs about 2 days.
+Stopping after Phase 1 costs about 2 days. Stopping after Phase 1b costs about a week and leaves a working two-crate workspace.
 
 ---
 
 ## 10. Open questions for the owner (at the start of the new session)
 
-1. **First extraction.** Recommended: the rehearsal (engine and program out of the facade), then al-program. Alternatives: al-program directly, or detector-first if its prototype shows a better return.
-2. **Stop/go thresholds.** Suggested: continue past Phase 1 only if a warm edit-to-test inner-loop run still takes over about 90 seconds on an idle machine; continue past each extraction only if it saves at least 20% on its target edit.
+0. **The shape** (section 3.1), after Phase 0: the chain (A), wide and shallow (B), no split with warm worktrees (C), or a mix. Questions 1, 3 and 4 apply only to A and B.
+1. **First extraction.** Recommended: the rehearsal (Phase 1b, before the cuts), then al-program. Alternative: al-program directly. Detector-first is dropped (section 2).
+2. **Stop/go thresholds, two-sided.** Suggested:
+   - Continue past Phase 1 only if a warm edit-to-test inner-loop run still takes over about 90 seconds on an idle machine.
+   - Continue past Phase 1b, and past each later extraction, only if a core-or-engine edit gets (or is forecast to get) at least 20% shorter edit-to-test, **and** nothing gets worse than these limits: an al-program edit's inner loop and task gate 10% slower; the cold build 15% slower; `cdo-gate` and its speed phase within their existing limits.
+   - Judge the total by the commit shares of section 2, not by the best row.
 3. **File layout.** Keep files in `src/` during the migration (recommended). Decide later on moving them.
 4. **Crate names.** al-program, al-engine-core, al-detectors, al-engine.
 
@@ -437,4 +551,7 @@ Stopping after Phase 1 costs about 2 days.
 - Exact test counts and that every lib test keeps its name.
 - Which `pub(crate)` items really cross a boundary; only the compiler can tell.
 - Any effect on `cdo-gate`'s speed phase, memory or runtime.
-- The line counts, edge counts and test lists after wave 2 and the grammar upgrade. Redo them in Phase 0.
+- The line counts, edge counts and test lists after wave 2 and the grammar upgrade. Redo them in Phase 0. The third review spot-checked nine cited lines on master `b8858256` and corrected the two that had moved; the rest of section 6 is unchecked.
+- Candidates B and C (section 3.1): neither is costed, prototyped or reviewed. B's sibling layout is a sketch, not a cut list.
+- That commits per crate (section 2) match edit-test cycles per crate.
+- The limits suggested in section 10 (10%, 15%, 20%): they are proposals with no measurement behind them.
