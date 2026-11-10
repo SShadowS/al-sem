@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::worker::{PlanFiles, StdinRead};
-use crate::engine::l5::digest_cli::DiffRoot;
+use crate::engine::l5::digest_cli::PathRoot;
 use crate::program::inputs::WorkspaceInputs;
 
 /// The file-system questions planning asks. [`ProcessFs`] answers them from
@@ -226,8 +226,8 @@ pub struct PlanCx {
     /// `digest` / `explain`: what the changed paths are relative to, decided
     /// by the caller (`decide_diff_root` through this context, or shipped by
     /// a batch's parent or a front end); `None` for every other command.
-    /// Planning never decides it itself.
-    pub diff_root_decided: Option<Result<DiffRoot, String>>,
+    /// Planning never decides it itself. With the workspace's anchors (#363).
+    pub diff_root_decided: Option<Result<PathRoot, String>>,
     /// The workspace read the request's job uses (a resident revision's);
     /// `None`: the job reads its workspace through the run's reader, as the
     /// CLI always has. An argv naming another workspace, or needing more than

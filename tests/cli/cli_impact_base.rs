@@ -656,6 +656,364 @@ fn a_diff_not_matching_the_base_is_refused() {
     );
 }
 
+// #363: an absolute diff header names the live workspace's file on BOTH
+// sides of a base (the base run reads it through the live workspace's
+// anchors, `--path-anchor`), and the base cache key holds the workspace's
+// layout. Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md`
+// §5, §7 rows A8b and A8d (the other rows are in `cli_digest_changed_spans`).
+
+/// B-4's base: `Caller` calls `Gone`, which deletes from FX One.
+const BASE_GONE: &str = r#"codeunit 50810 "FX Core"
+{
+    procedure Caller()
+    begin
+        Gone();
+    end;
+
+    procedure Gone()
+    var
+        One: Record "FX One";
+    begin
+        One.Delete();
+    end;
+}
+"#;
+
+/// [`BASE_GONE`] with `Gone` and its call deleted.
+const GONE_REMOVED: &str = r#"codeunit 50810 "FX Core"
+{
+    procedure Caller()
+    begin
+    end;
+}
+"#;
+
+/// `git diff` of the working tree against HEAD in `dir` as a plain `diff -u`
+/// text: the `diff --git`, `index` and file-mode lines dropped, so the `---`
+/// and `+++` headers alone name each file (and can be respelled).
+fn plain_diff(dir: &Path) -> String {
+    let out = crate::git::run(dir, &["diff", "--no-color", "--no-ext-diff"]);
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .filter(|l| {
+            ![
+                "diff --git ",
+                "index ",
+                "deleted file mode ",
+                "new file mode ",
+            ]
+            .iter()
+            .any(|p| l.starts_with(p))
+        })
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
+/// `text` with its one `from` replaced by `to` (asserted to occur once, so a
+/// respelling never silently does nothing).
+fn respell(text: &str, from: &str, to: &str) -> String {
+    assert_eq!(text.matches(from).count(), 1, "one {from:?} in: {text}");
+    text.replace(from, to)
+}
+
+/// `alsem impact <ws> --base HEAD --diff <diff> --no-tests --format json
+/// <extra>`, the cache in the test's own folder (exit 0 or 2).
+fn impact_diff(r: &Repo, ws: &Path, diff: &str, extra: &[&str]) -> Value {
+    let p = r.dir.path().join("change.diff");
+    std::fs::write(&p, diff).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("impact")
+        .arg(ws)
+        .args(["--base", "HEAD", "--diff"])
+        .arg(&p)
+        .args(["--no-tests", "--format", "json"])
+        .args(extra)
+        .env("AL_SEM_IMPACT_BASE_CACHE", r.cache())
+        .output()
+        .expect("spawn alsem");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        matches!(out.status.code(), Some(0 | 2)),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{e}: {stdout}"))
+}
+
+/// What a before/after answer says, without its timings, cache block or the
+/// input's spelling: per root its id, display, status and delta; the deleted
+/// routines; the behavior counts; the base side's pre-image mismatches and
+/// refusal.
+fn delta_view(v: &Value) -> Value {
+    let roots: Vec<Value> = v["roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "stableId": r["stableId"],
+                "display": r["display"],
+                "status": r["status"],
+                "delta": r["delta"],
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "roots": roots,
+        "deleted": v["deleted"],
+        "behavior": v["behavior"],
+        "preimageMismatches": v["base"]["preimageMismatches"],
+        "notComputed": v["base"]["notComputed"],
+    })
+}
+
+/// #363 A8b (I1, sol r2, Opus r2 N2). `impact --base --diff` with ABSOLUTE
+/// headers (`---` and `+++` both `<ws-abs>/src/Core.al`), cache off
+/// (`--no-base-cache`, so every run builds its base).
+/// (i) A diff that deletes `Gone`, a routine only the base has (so the
+/// working tree's roots, passed as `--root-id`, cannot supply it): the delta
+/// view (each root with its delta, `deleted`, the behavior counts, no
+/// mismatch) equals the relative-header run's, which deletes `Gone`.
+/// (ii) That diff with one pre-image line the base does not have: refused with
+/// the relative run's pre-image mismatch, the file named as the diff spells it.
+///
+/// Mutation: `base_side` passes no `--path-anchor` (the base run on the copy
+/// gets the copy's own anchors) -> (i) `Gone` and its delta are missing, (ii)
+/// no mismatch is reported and the delta is computed.
+#[test]
+fn absolute_headers_map_on_both_sides_of_a_base() {
+    let r = repo(BASE_GONE);
+    r.write("src/Core.al", GONE_REMOVED);
+    let rel = plain_diff(&r.ws());
+    let abs_path = r.ws().join("src/Core.al").to_string_lossy().into_owned();
+    let abs = respell(
+        &respell(&rel, "--- a/src/Core.al\n", &format!("--- {abs_path}\n")),
+        "+++ b/src/Core.al\n",
+        &format!("+++ {abs_path}\n"),
+    );
+    let off = ["--no-base-cache"];
+
+    // (i)
+    let want = impact_diff(&r, &r.ws(), &rel, &off);
+    assert_eq!(want["base"]["cache"]["status"], "off", "{:#}", want["base"]);
+    let deleted = want["deleted"].as_array().unwrap();
+    assert_eq!(deleted.len(), 1, "precondition: {want:#}");
+    assert_eq!(deleted[0]["display"], "Codeunit \"FX Core\"::Gone");
+    let got = impact_diff(&r, &r.ws(), &abs, &off);
+    assert_eq!(got["base"]["cache"]["status"], "off", "{:#}", got["base"]);
+    assert_eq!(delta_view(&got), delta_view(&want), "{got:#}");
+
+    // (ii)
+    let (old, new) = ("-        One.Delete();\n", "-        One.Insert();\n");
+    for (diff, file) in [
+        (respell(&rel, old, new), "src/Core.al"),
+        (respell(&abs, old, new), abs_path.as_str()),
+    ] {
+        let v = impact_diff(&r, &r.ws(), &diff, &off);
+        assert_eq!(
+            v["base"]["notComputed"],
+            format!(
+                "refused: the diff's pre-images do not match the comparison base in 1 file ({file})"
+            ),
+            "{diff}: {:#}",
+            v["base"]
+        );
+    }
+}
+
+/// A8d's `src/A.al`: `Keep` commits.
+const KEEP: &str = r#"codeunit 50811 "FX Keep"
+{
+    procedure Keep()
+    begin
+        Commit();
+    end;
+}
+"#;
+
+/// A8d's `src/B.al`, deleted by the change: `Gone` deletes from FX One.
+const GONE_FILE: &str = r#"codeunit 50812 "FX Gone"
+{
+    procedure Gone()
+    var
+        One: Record "FX One";
+    begin
+        One.Delete();
+    end;
+}
+"#;
+
+/// #363 A8d (sol r3, Opus r3 I-A). The base cache key holds `rel`, the
+/// workspace's path below the diff's root: one diff text maps differently in
+/// two layouts. The workspace is `Cloud` below the git top; the diff changes
+/// `src/A.al` (`Keep`, the same file under either root) and deletes the file
+/// `Cloud/src/B.al` (`Gone`). Run warm (one cache folder) first with
+/// `--diff-root <ws>` (`rel` empty: `Cloud/src/B.al` names no file, nothing
+/// is deleted), then with the git-top default (`rel` = `Cloud`: it names
+/// `src/B.al`, so `Gone` is deleted). Each warm run's delta view equals its
+/// own cold run's (`--no-base-cache`); the second warm run finds the first's
+/// entry (`partial`, its diff not known) and builds the base again.
+///
+/// Fixture: spec A8d names `Cloud/src/posting.al` rooting `PostSalesDoc` on
+/// the base side. That cannot go wrong through the cache: a cached base
+/// answers only with a summary of every working-tree root, so a root the first
+/// run lacked always rebuilds. Here both runs' working-tree roots are `Keep`,
+/// and what depends on the layout is a base-only DELETED routine.
+///
+/// Mutation: `base_diff_key` drops `rel` -> the second warm run is a cache
+/// `hit` on the first's base mapping: no `Gone` in `deleted`.
+#[test]
+fn the_base_cache_key_holds_the_workspaces_layout() {
+    let r = Repo {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let (top, ws) = (r.ws(), r.ws().join("Cloud"));
+    r.write("Cloud/app.json", APP_JSON);
+    r.write("Cloud/src/Tables.al", TABLES);
+    r.write("Cloud/src/A.al", KEEP);
+    r.write("Cloud/src/B.al", GONE_FILE);
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "."]);
+    git(&top, &["commit", "-qm", "base"]);
+    r.write(
+        "Cloud/src/A.al",
+        &KEEP.replace(
+            "        Commit();\n",
+            "        Commit();\n        Commit();\n",
+        ),
+    );
+    std::fs::remove_file(ws.join("src/B.al")).unwrap();
+    let diff = respell(
+        &respell(
+            &plain_diff(&top),
+            "--- a/Cloud/src/A.al\n",
+            "--- a/src/A.al\n",
+        ),
+        "+++ b/Cloud/src/A.al\n",
+        "+++ b/src/A.al\n",
+    );
+    assert_eq!(
+        diff.matches("Cloud/src/B.al").count(),
+        1,
+        "the deleted file keeps its git-top path: {diff}"
+    );
+    let ws_s = ws.to_str().unwrap();
+    let below_ws = ["--diff-root", ws_s];
+
+    // The cold runs: each layout's own answer.
+    let cold_ws = impact_diff(
+        &r,
+        &ws,
+        &diff,
+        &[below_ws[0], below_ws[1], "--no-base-cache"],
+    );
+    let cold_top = impact_diff(&r, &ws, &diff, &["--no-base-cache"]);
+    assert_eq!(
+        cold_ws["deleted"],
+        serde_json::json!([]),
+        "precondition: {cold_ws:#}"
+    );
+    let deleted = cold_top["deleted"].as_array().unwrap();
+    assert_eq!(deleted.len(), 1, "precondition: {cold_top:#}");
+    assert_eq!(deleted[0]["display"], "Codeunit \"FX Gone\"::Gone");
+
+    // Warm, in that order, one cache folder.
+    let warm_ws = impact_diff(&r, &ws, &diff, &below_ws);
+    assert_eq!(
+        warm_ws["base"]["cache"]["status"], "miss",
+        "{:#}",
+        warm_ws["base"]
+    );
+    assert_eq!(delta_view(&warm_ws), delta_view(&cold_ws), "{warm_ws:#}");
+    let warm_top = impact_diff(&r, &ws, &diff, &[]);
+    let cache = &warm_top["base"]["cache"];
+    assert_eq!(cache["status"], "partial", "{cache:#}");
+    assert_eq!(cache["diffKnown"], false, "{cache:#}");
+    assert_eq!(delta_view(&warm_top), delta_view(&cold_top), "{warm_top:#}");
+}
+
+/// #363 (Opus code r1 M2). For a diff holding an absolute path the base cache
+/// key holds the anchors, at the call site: the same text and `rel` map
+/// differently under another set of anchors. The repo is also reached through
+/// a symlink `<t2>/link` -> the git top; the diff deletes the file spelled
+/// `<t2>/link/Cloud/src/B.al`. Run from the real path (anchors: the real path)
+/// that names no file, so nothing is deleted; run through the link (anchors:
+/// the link and the real path) it names `src/B.al`, so `Gone` is deleted.
+/// Warm, real path first: the link run must not reuse the first entry's
+/// mapping; its delta view equals its own cold run's.
+///
+/// Mutation: the call site passes no anchors to `base_diff_key` -> the link
+/// run is a cache `hit` on the real-path mapping: no `Gone` in `deleted`.
+#[cfg(unix)]
+#[test]
+fn the_base_cache_key_holds_the_anchors_of_an_absolute_diff() {
+    let r = Repo {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let (top, ws) = (r.ws(), r.ws().join("Cloud"));
+    r.write("Cloud/app.json", APP_JSON);
+    r.write("Cloud/src/Tables.al", TABLES);
+    r.write("Cloud/src/A.al", KEEP);
+    r.write("Cloud/src/B.al", GONE_FILE);
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "."]);
+    git(&top, &["commit", "-qm", "base"]);
+    r.write(
+        "Cloud/src/A.al",
+        &KEEP.replace(
+            "        Commit();\n",
+            "        Commit();\n        Commit();\n",
+        ),
+    );
+    std::fs::remove_file(ws.join("src/B.al")).unwrap();
+    let t2 = tempfile::tempdir().unwrap();
+    let link = t2.path().join("link");
+    std::os::unix::fs::symlink(&top, &link).unwrap();
+    let link_ws = link.join("Cloud");
+    let diff = respell(
+        &respell(
+            &respell(
+                &plain_diff(&top),
+                "--- a/Cloud/src/A.al\n",
+                "--- a/src/A.al\n",
+            ),
+            "+++ b/Cloud/src/A.al\n",
+            "+++ b/src/A.al\n",
+        ),
+        "--- a/Cloud/src/B.al\n",
+        &format!("--- {}/src/B.al\n", link_ws.to_str().unwrap()),
+    );
+
+    // The cold runs: each spelling's own answer.
+    let cold_real = impact_diff(&r, &ws, &diff, &["--no-base-cache"]);
+    let cold_link = impact_diff(&r, &link_ws, &diff, &["--no-base-cache"]);
+    assert_eq!(
+        cold_real["deleted"],
+        serde_json::json!([]),
+        "precondition: {cold_real:#}"
+    );
+    let deleted = cold_link["deleted"].as_array().unwrap();
+    assert_eq!(deleted.len(), 1, "precondition: {cold_link:#}");
+    assert_eq!(deleted[0]["display"], "Codeunit \"FX Gone\"::Gone");
+
+    // Warm, in that order, one cache folder.
+    let warm_real = impact_diff(&r, &ws, &diff, &[]);
+    assert_eq!(
+        delta_view(&warm_real),
+        delta_view(&cold_real),
+        "{warm_real:#}"
+    );
+    let warm_link = impact_diff(&r, &link_ws, &diff, &[]);
+    let cache = &warm_link["base"]["cache"];
+    assert_ne!(cache["status"], "hit", "{cache:#}");
+    assert_eq!(
+        delta_view(&warm_link),
+        delta_view(&cold_link),
+        "{warm_link:#}"
+    );
+}
+
 /// `(kind, normalizedStableId)` of the schema findings of a findings list.
 fn schema_findings(findings: &Value) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = findings

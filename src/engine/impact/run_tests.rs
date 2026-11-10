@@ -237,6 +237,7 @@ fn a_base_not_admitted_keeps_the_current_side_and_says_why() {
         cache: None,
         scratch: std::env::temp_dir(),
         diff_text: String::new(),
+        anchors: Vec::new(),
         run: Box::new(|_, _| Err("base not built: every place is held".into())),
     };
     let r = orchestrate(

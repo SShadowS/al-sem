@@ -927,10 +927,18 @@ impl Pool {
                     let cache = crate::engine::impact::cache::Cache::default_dir()
                         .map(|d| crate::engine::impact::cache::Cache::new(d, Default::default()));
                     let scratch = crate::engine::impact::before::scratch_for(cache.as_ref());
+                    // The live workspace's anchors, from the front end's own
+                    // decision on the impact argv (#363 spec §5).
+                    let anchors = shared
+                        .decide
+                        .decide(&call.command.argv, call.command.diff_text.as_deref())
+                        .map(|d| d.path_anchors)
+                        .unwrap_or_default();
                     crate::engine::impact::before::BaseCx {
                         cache,
                         scratch,
                         diff_text: diff_text.clone().unwrap_or_default(),
+                        anchors,
                         run: Box::new(|argv: Vec<String>, stdin: String| {
                             let waited = Instant::now();
                             let slot = self.admit_oneshot(base_admit_wait(), &base_cancel)?;
