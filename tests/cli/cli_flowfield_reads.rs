@@ -720,6 +720,62 @@ codeunit 50113 "B5 Round2"
         FR.CalcField();
         exit(true);
     end;
+
+    // FR is bound to "No." here, but Bind's `var` parameter rebinds it to
+    // "Line Count" before the CalcField.
+    procedure FieldRefPassed(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.FindFirst();
+        FR := RR.Field(1);
+        Bind(FR);
+        FR.CalcField();
+        exit(true);
+    end;
+
+    local procedure Bind(var FR: FieldRef)
+    var
+        Other: RecordRef;
+    begin
+        Other.Open(Database::"B5 Header");
+        FR := Other.Field(4);
+    end;
+
+    // Two assignments to different fields: the first ("No.") is not the one
+    // calculated.
+    procedure FieldRefTwoFields(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.FindFirst();
+        FR := RR.Field(1);
+        FR := RR.Field(4);
+        FR.CalcField();
+        exit(true);
+    end;
+
+    // Two assignments of field 2 on different tables: on "B5 Node" field 2
+    // is the Normal field "Parent No.", on "B5 Header" it is the FlowField
+    // "Total Amount" (a sum over "B5 Line").
+    procedure FieldRefTwoTables(): Boolean
+    var
+        NodeRR: RecordRef;
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        NodeRR.Open(Database::"B5 Node");
+        HeaderRR.Open(Database::"B5 Header");
+        HeaderRR.FindFirst();
+        FR := NodeRR.Field(2);
+        FR := HeaderRR.Field(2);
+        FR.CalcField();
+        exit(true);
+    end;
 }
 "#;
 
@@ -864,6 +920,27 @@ fn record_ref_and_field_ref_flowfield_reads() {
         "unknown",
         "FieldIndex(2) does not say which field",
     );
+    // A local FieldRef passed to a call: a `var` parameter can rebind it, so
+    // its own assignment does not decide the field.
+    assert_down(
+        ws,
+        "FieldRefPassed",
+        "unknown",
+        "Bind(FR) can rebind FR to \"Line Count\"",
+    );
+    // Assignments that disagree decide neither the field nor the table.
+    assert_down(
+        ws,
+        "FieldRefTwoFields",
+        "unknown",
+        "FR is \"No.\" or \"Line Count\"",
+    );
+    assert_down(
+        ws,
+        "FieldRefTwoTables",
+        "unknown",
+        "field 2 of \"B5 Node\" or of \"B5 Header\"",
+    );
 
     // Field 4 of "B5 Header" is "Line Count": found by its number.
     let out = alsem(&["query", "effects", ws, "--routine", "RecRefAuto", "--all"]);
@@ -885,13 +962,21 @@ fn record_ref_and_field_ref_flowfield_reads() {
         "json",
     ]);
     let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let line_reads = doc["payload"]["entries"][0]["effects"]
+    let entry = &doc["payload"]["entries"][0];
+    let line_reads: Vec<&serde_json::Value> = entry["effects"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|f| f["type"] == "DB_READ" && f["detail"]["resourceDisplay"] == "B5 Line")
-        .count();
-    assert_eq!(line_reads, 1, "{out}");
+        .collect();
+    assert_eq!(line_reads.len(), 1, "{out}");
+    // Its evidence cites the CalcField's own line (`FR.CalcField();`, line
+    // 166 of Round2.al), not `unavailable`.
+    let ev = &line_reads[0]["evidence"];
+    assert_eq!(ev["sourceKind"], "source", "{out}");
+    assert_eq!(ev["file"], "ws:src/Round2.al", "{out}");
+    assert_eq!(ev["line"], 166, "{out}");
+    assert_eq!(entry["entryDiagnostics"], serde_json::json!([]), "{out}");
     let out = alsem(&["query", "touches", ws, "--table", "B5 Line"]);
     assert!(
         out.contains("RecRefCalc"),

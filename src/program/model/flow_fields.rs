@@ -838,7 +838,7 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
             continue;
         }
         out.push(ModelRecordOperation {
-            id: format!("{}/fieldref", cs.id),
+            id: format!("{}{}", cs.id, super::workspace::FIELD_REF_OP_SUFFIX),
             op: op.to_string(),
             record_variable_name: receiver.clone(),
             record_variable_id: None,
@@ -931,6 +931,90 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `FieldRef` operation has no operation site, so the full snapshot's
+    /// operation evidence (`derive_operation_evidence`) takes its control
+    /// context and `asserterror` flag from its call site. Precondition, stated:
+    /// each routine holds exactly one `FieldRef` operation, and its call site
+    /// carries the context asserted (a conditional `if`, an `asserterror`).
+    #[test]
+    fn field_ref_operation_evidence_cites_its_call_site() {
+        let src = r#"
+table 50100 "H"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(4; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("L" where("No." = field("No.")));
+        }
+    }
+}
+table 50101 "L"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}
+codeunit 50102 "C"
+{
+    procedure CondFr(B: Boolean)
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"H");
+        FR := RR.Field(4);
+        if B then
+            FR.CalcField();
+    end;
+
+    procedure AsErrFr()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"H");
+        FR := RR.Field(4);
+        asserterror FR.CalcField();
+    end;
+}
+"#;
+        let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+            &[("src/C.al".to_string(), src.to_string())],
+            "33333333-0000-0000-0000-0000000000b5",
+        );
+        let snap = crate::engine::l5::snapshot::compose_snapshot(&m);
+        for (name, line, cond, asserterror) in [
+            ("CondFr", 28, true, None),
+            ("AsErrFr", 38, false, Some(true)),
+        ] {
+            let r = m
+                .workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap();
+            assert_eq!(r.field_ref_operations.len(), 1, "precondition: {name}");
+            let op = &r.field_ref_operations[0];
+            let site = super::super::workspace::field_ref_op_call_site(&op.id).unwrap();
+            let cs = r.call_sites.iter().find(|c| c.id == site).unwrap();
+            assert_eq!(
+                cs.control_context.as_deref() != Some("top-level"),
+                cond,
+                "precondition: {name}'s call site context {:?}",
+                cs.control_context
+            );
+            let ev = snap
+                .operation_index
+                .iter()
+                .find(|e| e.operation_id == op.id)
+                .unwrap_or_else(|| panic!("{name}: no evidence for {}", op.id));
+            assert_eq!(ev.start_line + 1, line, "{name}");
+            assert_eq!(ev.control_context, cs.control_context, "{name}");
+            assert_eq!(ev.under_asserterror, asserterror, "{name}");
+        }
+    }
 
     #[test]
     fn field_arguments_name_their_field() {

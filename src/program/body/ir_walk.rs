@@ -1389,15 +1389,18 @@ impl<'a> SpineCtx<'a> {
                 } else {
                     (None, None)
                 };
-                // The record a bare record method is called on
+                // The record a bare `SetAutoCalcFields` is called on
                 // (`PCallSite::implicit_receiver`): the innermost record frame,
-                // unless the name is one of the object's own routines.
+                // unless the name is one of the object's own routines. Only
+                // that name is recorded (its one reader), so other bare calls
+                // allocate nothing.
                 let implicit_receiver = match &callee {
                     PCallee::Bare { name }
-                        if !self
-                            .scope
-                            .object_procedure_names
-                            .contains(&name.to_ascii_lowercase()) =>
+                        if name.eq_ignore_ascii_case("setautocalcfields")
+                            && !self
+                                .scope
+                                .object_procedure_names
+                                .contains(&name.to_ascii_lowercase()) =>
                     {
                         self.implicit
                             .iter()

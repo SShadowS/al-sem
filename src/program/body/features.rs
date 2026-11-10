@@ -276,15 +276,16 @@ pub struct PCallSite {
     /// `in_statement_position`.
     #[serde(skip)]
     pub receiver_temp_state: Option<PTempState>,
-    /// For a BARE call (`PCallee::Bare`), the record it is made on when it is a
-    /// record method: the receiver text of the innermost implicit frame that
+    /// For a BARE `SetAutoCalcFields` call, the record it is made on: the
+    /// receiver text of the innermost implicit frame that
     /// is a record, `with X do`'s `X` or the object's implicit `Rec`, the same
     /// frame a bare record operation takes its `record_variable_name` from.
     /// AL looks a bare name up among the `with` record's members first, then
     /// outward, so a `with` on a non-record does not hide the outer `Rec`.
-    /// `None` for a member call, for a bare name that is one of the object's
-    /// own routines, and where no record frame is in scope. Read by the
-    /// FlowField rule for a bare `SetAutoCalcFields`
+    /// `None` for every other call (only this name is recorded, so the other
+    /// bare calls allocate nothing), for a `SetAutoCalcFields` that is one of
+    /// the object's own routines, and where no record frame is in scope. Read
+    /// by the FlowField rule for a bare `SetAutoCalcFields`
     /// (`program::model::flow_fields`, engine limits B5).
     ///
     /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as

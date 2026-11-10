@@ -197,7 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     an obsolete `with X do`. That fired in routines with no `with` at all:
     `SetAutoCalcFields("Line Count"); Other.FindFirst()` in a table procedure answered
     `yes`, though `Rec`'s setting does not apply to `Other`. The fallback is gone. The body
-    walk now records, for each bare call, the record of its innermost implicit record
+    walk now records, for each bare `SetAutoCalcFields` call (round 3: only that name, so
+    no other call allocates), the record of its innermost implicit record
     frame (`PCallSite::implicit_receiver`): the `with` record, else `Rec`. That is the same
     frame a bare `FindFirst()` takes its record from, so a bare call inside `with X do`
     reaches `X`'s retrievals and nothing else. AL looks a bare name up in the `with`
@@ -227,7 +228,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`ModelRoutine::field_ref_operations`) so detectors see exactly what they saw before;
     the effect builders read both lists (`ModelRoutine::effect_operations`: the base
     summary, the capability cone's table family, the operation index behind `query
-    effects`, `query touches`' table mode and the dependency evidence). The field comes
+    effects`, `query touches`' table mode and the dependency evidence; round 3 adds the
+    digest/prove snapshot evidence). The field comes
     from `FR := RecRef.Field(<number> | '<name>' | Rec.FieldNo(<field>))` (a local
     FieldRef that nothing else binds), the table from the RecordRef's resolved
     operations or its provable `Open`/`GetTable` bindings. A `CalcField` whose table is
@@ -290,6 +292,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     [RecordRef.SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/recordref/recordref-setautocalcfields-method),
     [RecordRef data type](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/recordref/recordref-data-type),
     [Page extension object](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-page-ext-object).
+- **Round 3 (review of round 2).**
+  - *Two FieldRef guards had no test.* A local FieldRef passed to a call is not decided
+    by its own assignment (a `var` parameter can rebind it), and assignments that
+    disagree decide neither the field nor the table. Both were right but unpinned. New
+    fixtures in `record_ref_and_field_ref_flowfield_reads`, each answering `down:
+    unknown`: `FieldRefPassed` (`FR := RR.Field(1); Bind(FR); FR.CalcField()`, where
+    `Bind` rebinds `FR` to `"Line Count"`), `FieldRefTwoFields` (`Field(1)` then
+    `Field(4)`) and `FieldRefTwoTables` (field 2 of `"B5 Node"`, a Normal field, then
+    field 2 of `"B5 Header"`, a FlowField over `"B5 Line"`).
+  - *FieldRef operations had no evidence in digest and prove.* The snapshot's
+    operation evidence (the whole derivation in `snapshot.rs` and the per-row one in
+    `snapshot_view.rs`) looped over `record_operations` only, so a FieldRef read's
+    `DB_READ` cited `sourceKind: unavailable` and added an `evidence-unavailable` entry
+    diagnostic. Both now read `effect_operations`. A FieldRef operation has no operation
+    site, so its control context, order and `asserterror` flag come from its call site
+    (`ModelRoutine::effect_operation_site`; the id is the call site's id plus
+    `/fieldref`, `FIELD_REF_OP_SUFFIX`). A record operation keeps its operation site's
+    context and order as before.
+  - *Memory.* `PCallSite::implicit_receiver` is now set only for a bare
+    `SetAutoCalcFields` (its one reader); round 2 allocated `"Rec"` for every bare call in
+    an object with an implicit `Rec`. `tests/ir-l2-goldens/l2_features.snapshot` moves 11
+    lines back (it hashes `PCallSite`'s Debug text).
+  - Tests: the three fixtures above; the RecRefCalc digest now also asserts the
+    `DB_READ`'s evidence is `ws:src/Round2.al` line 166 and the entry has no
+    diagnostics; lib test `flow_fields::field_ref_operation_evidence_cites_its_call_site`
+    (the full snapshot's evidence for a FieldRef `CalcField` under `if` and under
+    `asserterror`).
+  - Discrimination proofs (break with Edit, narrowest test, revert, pass):
+    (21) Rebinding guard (`if passed` made `if passed && false`): `FieldRefPassed`
+    answered `down: no (every candidate decided)`.
+    (22) Field agreement (`true ||` before the `all`): `FieldRefTwoFields` answered
+    `down: no`.
+    (23) Table agreement (`true ||` before `tables_of.all`): `FieldRefTwoTables`
+    answered `down: no`. (A first fixture with field 4 of `"B5 Line"` then of `"B5
+    Header"` answered `yes` under the break, a wrong reason that happens to give the
+    right word; it was replaced by the `"B5 Node"` one, whose break gives `no`.)
+    (24) Per-row evidence reads `effect_operations` (back to `record_operations`): the
+    RecRefCalc digest's evidence was `unavailable`, want `source`.
+    (25) Whole-derivation evidence reads them (back to `record_operations`): the lib test
+    found no evidence for `…/cs2/fieldref`. This break passed the CLI test, which goes
+    through the per-row path only, hence the lib test.
+    (26) A FieldRef operation takes its call site's context (the branch disabled): the lib
+    test's `CondFr` evidence had control context `None`, want `conditional`.
+    After all reverts: 10/10 `cli_flowfield_reads` and the 7 `flow_field` lib tests pass.
 - **Still open (rest of L19):** (1) a page that shows a FlowField calculates it when it
   is displayed, which no routine's cone holds; that needs L2's page column index. A
   report dataitem's `CalcFields` property is the same kind of declared read and is not
@@ -305,7 +351,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FieldRef or RecordRef received from a caller: its table and field are not known here
   (a `CalcField` on it answers `unknown`, a filter on it adds nothing). (3)
   `Record.GetBySystemId` is not a record operation at all (engine limits L35), so a
-  `SetAutoCalcFields` read at it, and its own host read, are missing.
+  `SetAutoCalcFields` read at it, and its own host read, are missing. (4) The implicit
+  `Rec` is shared by every routine of the object and its extensions, without telling
+  instances apart: `X.TabFetchBare()` from a codeunit whose own `X` never calls
+  `SetAutoCalcFields` answers a plain `yes` because another routine set up some other
+  `Rec` (a may-read, never a lost one). (5) A record array element
+  (`Recs[1].FindFirst()`, `with Recs[1] do`) produces no record operation at all, so even
+  the record's own table can answer `no` (engine limits L36; predates wave 2). (6) The
+  temp state of a RecordRef known only from `Open(Database::X)` is not inferred from
+  `Open`'s default (not temporary), so a FieldRef read on it says "temp state not
+  resolved" (safe, not precise).
 - Learn: [CalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-calcfields-method),
   [SetAutoCalcFields](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/record/record-setautocalcfields-method),
   [FlowFields overview](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-flowfields).
