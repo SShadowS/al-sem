@@ -149,6 +149,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         entry_temp_guard_receiver: None,
         table_event_exits: Default::default(),
         recordref_bindings: Vec::new(),
+        field_ref_operations: Vec::new(),
         rules: None,
         rule_drafts: None,
         card_text: None,

@@ -503,3 +503,483 @@ fn flowfield_over_its_own_table_is_one_read() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Round 2 (second review of the integrated tree): which record a bare
+// `SetAutoCalcFields` is on, the implicit `Rec` across an object and its
+// extensions, a qualified field argument, and RecordRef / FieldRef shapes.
+// Built from the reviewer's probes (`w2rr-b5/ws1`, `ws2`).
+// ---------------------------------------------------------------------------
+
+/// Precondition stated in the AL: "B5 Line" is read only through the
+/// FlowFields of "B5 Header" ("Total Amount", field 2; "Line Count", field 4)
+/// and "B5 Owner2" ("Line Count"). Nothing else names "B5 Line".
+const ROUND2: &str = r#"
+table 50106 "B5 Owner2"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("B5 Line" where("Header No." = field("No.")));
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    // The bare call is on THIS table's Rec; Other is another record.
+    procedure NoWithOther(): Integer
+    var
+        Other: Record "B5 Owner2";
+    begin
+        SetAutoCalcFields("Line Count");
+        Other.SetRange("No.", 'A');
+        if Other.FindFirst() then
+            exit(1);
+    end;
+
+    // The implicit Rec set up in one procedure, retrieved bare in another.
+    procedure TabPrep()
+    begin
+        SetAutoCalcFields("Line Count");
+    end;
+
+    procedure TabFetchBare(): Integer
+    begin
+        if FindSet() then
+            exit("Line Count");
+    end;
+}
+
+table 50107 "B5 Plain"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("B5 Line" where("Header No." = field("No.")));
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+}
+
+// The table's Rec is shared with its extension's procedures.
+tableextension 50108 "B5 Plain Ext" extends "B5 Plain"
+{
+    procedure ExtFetch(): Integer
+    begin
+        if FindSet() then
+            exit("Line Count");
+    end;
+}
+
+table 50109 "B5 Plain2"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("B5 Line" where("Header No." = field("No.")));
+        }
+    }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    procedure BasePrep()
+    begin
+        SetAutoCalcFields("Line Count");
+    end;
+}
+
+tableextension 50110 "B5 Plain2 Ext" extends "B5 Plain2"
+{
+    procedure Ext2Fetch(): Integer
+    begin
+        if FindSet() then
+            exit("Line Count");
+    end;
+}
+
+page 50111 "B5 Card"
+{
+    SourceTable = "B5 Plain";
+    layout { area(Content) { field(No; Rec."No.") { } } }
+    trigger OnOpenPage()
+    begin
+        Rec.SetAutoCalcFields("Line Count");
+    end;
+}
+
+// The action runs on the extended page's Rec.
+pageextension 50112 "B5 Card Ext" extends "B5 Card"
+{
+    actions
+    {
+        addlast(Processing)
+        {
+            action(ExtFetchAction)
+            {
+                trigger OnAction()
+                begin
+                    if Rec.FindSet() then;
+                end;
+            }
+        }
+    }
+}
+
+codeunit 50113 "B5 Round2"
+{
+    procedure WithAuto(): Integer
+    var
+        X: Record "B5 Header";
+    begin
+        with X do begin
+            SetAutoCalcFields("Line Count");
+            if FindFirst() then
+                exit("Line Count");
+        end;
+    end;
+
+    procedure QualifiedFilter(): Boolean
+    var
+        X: Record "B5 Header";
+    begin
+        X.SetFilter(X."Total Amount", '>0');
+        exit(X.FindFirst());
+    end;
+
+    procedure QualifiedCalc(): Decimal
+    var
+        X: Record "B5 Header";
+    begin
+        X.Get('A');
+        X.CalcFields(X."Total Amount");
+        exit(X."Total Amount");
+    end;
+
+    // An argument naming no field of a table that has FlowFields.
+    procedure MissingFilter(): Boolean
+    var
+        X: Record "B5 Header";
+    begin
+        X.SetFilter(X.Missing, '>0');
+        exit(X.FindFirst());
+    end;
+
+    procedure RecRefCalc(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.FindFirst();
+        FR := RR.Field(4);
+        FR.CalcField();
+        exit(true);
+    end;
+
+    procedure RecRefAuto(): Boolean
+    var
+        RR: RecordRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.SetAutoCalcFields(4);
+        exit(RR.FindFirst());
+    end;
+
+    procedure FieldRefFilter(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+        H: Record "B5 Header";
+    begin
+        RR.Open(Database::"B5 Header");
+        FR := RR.Field(H.FieldNo("Total Amount"));
+        FR.SetFilter('>0');
+        exit(RR.IsEmpty());
+    end;
+
+    procedure FieldRefParam(FR: FieldRef)
+    begin
+        FR.CalcField();
+    end;
+
+    procedure FieldRefByIndex(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.FindFirst();
+        FR := RR.FieldIndex(2);
+        FR.CalcField();
+        exit(true);
+    end;
+
+    // FR is bound to "No." here, but Bind's `var` parameter rebinds it to
+    // "Line Count" before the CalcField.
+    procedure FieldRefPassed(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.FindFirst();
+        FR := RR.Field(1);
+        Bind(FR);
+        FR.CalcField();
+        exit(true);
+    end;
+
+    local procedure Bind(var FR: FieldRef)
+    var
+        Other: RecordRef;
+    begin
+        Other.Open(Database::"B5 Header");
+        FR := Other.Field(4);
+    end;
+
+    // Two assignments to different fields: the first ("No.") is not the one
+    // calculated.
+    procedure FieldRefTwoFields(): Boolean
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"B5 Header");
+        RR.FindFirst();
+        FR := RR.Field(1);
+        FR := RR.Field(4);
+        FR.CalcField();
+        exit(true);
+    end;
+
+    // Two assignments of field 2 on different tables: on "B5 Node" field 2
+    // is the Normal field "Parent No.", on "B5 Header" it is the FlowField
+    // "Total Amount" (a sum over "B5 Line").
+    procedure FieldRefTwoTables(): Boolean
+    var
+        NodeRR: RecordRef;
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        NodeRR.Open(Database::"B5 Node");
+        HeaderRR.Open(Database::"B5 Header");
+        HeaderRR.FindFirst();
+        FR := NodeRR.Field(2);
+        FR := HeaderRR.Field(2);
+        FR.CalcField();
+        exit(true);
+    end;
+}
+"#;
+
+fn round2(dir: &Path) {
+    workspace_only(dir);
+    write(&dir.join("src/Round2.al"), ROUND2);
+}
+
+fn assert_down(ws: &str, from: &str, want: &str, why: &str) {
+    let out = touches_down(ws, "B5 Line", from);
+    assert!(
+        answer_line(&out).starts_with(&format!("answer: down: {want}")),
+        "{from}: {why}: {out}"
+    );
+}
+
+/// A bare `SetAutoCalcFields` is a call on the record of its implicit frame:
+/// this table's `Rec`, or the `X` of `with X do`. It never reaches another
+/// record's retrieval (the first round's blanket fallback did).
+#[test]
+fn bare_set_auto_calc_fields_is_on_its_implicit_record() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    round2(&ws);
+    let ws = ws.to_str().unwrap();
+    assert_down(
+        ws,
+        "NoWithOther",
+        "no",
+        "Rec's SetAutoCalcFields does not apply to Other",
+    );
+    assert_down(
+        ws,
+        "WithAuto",
+        "yes",
+        "inside `with X do`, the bare call is on X",
+    );
+}
+
+/// The implicit `Rec` is one record across the routines of a table, of a
+/// page, and of every extension of the same base object.
+#[test]
+fn implicit_rec_is_shared_across_an_object_and_its_extensions() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    round2(&ws);
+    let ws = ws.to_str().unwrap();
+    assert_down(ws, "TabFetchBare", "yes", "TabPrep set up the same Rec");
+    // The fixture's one action trigger (the extension's ExtFetchAction).
+    let out = touches_down(ws, "B5 Line", "OnAction");
+    assert!(
+        out.contains("PageExtension \"B5 Card Ext\".action(ExtFetchAction)::OnAction"),
+        "{out}"
+    );
+    assert!(
+        answer_line(&out).starts_with("answer: down: yes"),
+        "the page's OnOpenPage set up the Rec the extension's action retrieves: {out}"
+    );
+    assert_down(
+        ws,
+        "Ext2Fetch",
+        "yes",
+        "the table's BasePrep set up the Rec the extension's procedure retrieves",
+    );
+    // The table "B5 Plain" itself does nothing, but its page's OnOpenPage
+    // sets up a PAGE's Rec, not every "B5 Plain" record: the table
+    // extension's procedure is a different record.
+    assert_down(
+        ws,
+        "ExtFetch",
+        "no",
+        "no SetAutoCalcFields on the table's own Rec",
+    );
+}
+
+/// A field argument written with its record names the field after the dot.
+/// An argument that names no field of a table with FlowFields is not decided.
+#[test]
+fn qualified_and_unknown_field_arguments() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    round2(&ws);
+    let ws = ws.to_str().unwrap();
+    assert_down(
+        ws,
+        "QualifiedFilter",
+        "yes",
+        "X.\"Total Amount\" is the FlowField",
+    );
+    let out = alsem(&[
+        "query",
+        "effects",
+        ws,
+        "--routine",
+        "QualifiedCalc",
+        "--all",
+    ]);
+    assert!(
+        out.contains("[CalcFields] on B5 Line through FlowField \"Total Amount\""),
+        "X.CalcFields(X.\"Total Amount\") reads B5 Line, decided: {out}"
+    );
+    assert_down(
+        ws,
+        "MissingFilter",
+        "unknown",
+        "a filter on no known field of a table with FlowFields is not decided",
+    );
+}
+
+/// RecordRef and FieldRef shapes: `RecRef.SetAutoCalcFields(<number>)`,
+/// `FieldRef.CalcField()` and a FieldRef filter on a FlowField.
+#[test]
+fn record_ref_and_field_ref_flowfield_reads() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    round2(&ws);
+    let ws = ws.to_str().unwrap();
+
+    assert_down(
+        ws,
+        "RecRefCalc",
+        "yes",
+        "FR := RR.Field(4); FR.CalcField() calculates \"Line Count\"",
+    );
+    assert_down(
+        ws,
+        "FieldRefFilter",
+        "yes",
+        "a FieldRef filter on \"Total Amount\"",
+    );
+    // A FieldRef whose table is not known: a read of a table not resolved.
+    assert_down(
+        ws,
+        "FieldRefParam",
+        "unknown",
+        "a FieldRef parameter's table is decided by the caller",
+    );
+    // A FieldRef by index on a table with FlowFields: not decided.
+    assert_down(
+        ws,
+        "FieldRefByIndex",
+        "unknown",
+        "FieldIndex(2) does not say which field",
+    );
+    // A local FieldRef passed to a call: a `var` parameter can rebind it, so
+    // its own assignment does not decide the field.
+    assert_down(
+        ws,
+        "FieldRefPassed",
+        "unknown",
+        "Bind(FR) can rebind FR to \"Line Count\"",
+    );
+    // Assignments that disagree decide neither the field nor the table.
+    assert_down(
+        ws,
+        "FieldRefTwoFields",
+        "unknown",
+        "FR is \"No.\" or \"Line Count\"",
+    );
+    assert_down(
+        ws,
+        "FieldRefTwoTables",
+        "unknown",
+        "field 2 of \"B5 Node\" or of \"B5 Header\"",
+    );
+
+    // Field 4 of "B5 Header" is "Line Count": found by its number.
+    let out = alsem(&["query", "effects", ws, "--routine", "RecRefAuto", "--all"]);
+    assert!(
+        out.contains("[CalcFields] on B5 Line through FlowField \"Line Count\""),
+        "{out}"
+    );
+
+    // The FieldRef read reaches the capability cone and table mode too.
+    let out = alsem(&[
+        "digest",
+        ws,
+        "--routine",
+        "RecRefCalc",
+        "--include-reads",
+        "--schema",
+        "2",
+        "--format",
+        "json",
+    ]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let entry = &doc["payload"]["entries"][0];
+    let line_reads: Vec<&serde_json::Value> = entry["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["type"] == "DB_READ" && f["detail"]["resourceDisplay"] == "B5 Line")
+        .collect();
+    assert_eq!(line_reads.len(), 1, "{out}");
+    // Its evidence cites the CalcField's own line (`FR.CalcField();`, line
+    // 166 of Round2.al), not `unavailable`.
+    let ev = &line_reads[0]["evidence"];
+    assert_eq!(ev["sourceKind"], "source", "{out}");
+    assert_eq!(ev["file"], "ws:src/Round2.al", "{out}");
+    assert_eq!(ev["line"], 166, "{out}");
+    assert_eq!(entry["entryDiagnostics"], serde_json::json!([]), "{out}");
+    let out = alsem(&["query", "touches", ws, "--table", "B5 Line"]);
+    assert!(
+        out.contains("RecRefCalc"),
+        "table mode lists the FieldRef CalcField site: {out}"
+    );
+}

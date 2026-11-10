@@ -30,6 +30,7 @@
 //!   - `PCallSite.in_statement_position`
 //!   - `PCallSite.result_tested`
 //!   - `PCallSite.receiver_temp_state`
+//!   - `PCallSite.implicit_receiver`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -275,6 +276,22 @@ pub struct PCallSite {
     /// `in_statement_position`.
     #[serde(skip)]
     pub receiver_temp_state: Option<PTempState>,
+    /// For a BARE `SetAutoCalcFields` call, the record it is made on: the
+    /// receiver text of the innermost implicit frame that
+    /// is a record, `with X do`'s `X` or the object's implicit `Rec`, the same
+    /// frame a bare record operation takes its `record_variable_name` from.
+    /// AL looks a bare name up among the `with` record's members first, then
+    /// outward, so a `with` on a non-record does not hide the outer `Rec`.
+    /// `None` for every other call (only this name is recorded, so the other
+    /// bare calls allocate nothing), for a `SetAutoCalcFields` that is one of
+    /// the object's own routines, and where no record frame is in scope. Read
+    /// by the FlowField rule for a bare `SetAutoCalcFields`
+    /// (`program::model::flow_fields`, engine limits B5).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`.
+    #[serde(skip)]
+    pub implicit_receiver: Option<String>,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -1182,7 +1199,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 22, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 23, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

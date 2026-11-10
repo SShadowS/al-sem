@@ -270,6 +270,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         entry_temp_guard_receiver: None,
         table_event_exits: Default::default(),
         recordref_bindings: Vec::new(),
+        field_ref_operations: Vec::new(),
     }
 }
 

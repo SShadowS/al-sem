@@ -797,6 +797,17 @@ pub struct ModelRoutine {
     /// `record_types` gives their operations the one table the bindings
     /// name. Empty for most routines.
     pub recordref_bindings: Vec<(String, Vec<crate::program::recordref_table::Binding>)>,
+    /// Engine limits B5: the record reads a `FieldRef` call makes, each as an
+    /// operation on the FieldRef's record (`FieldRef.CalcField()` as a
+    /// `CalcFields`, `FieldRef.SetFilter` / `SetRange` as that filter), with
+    /// its FlowField reads ([`ModelRecordOperation::flow_field_reads`]).
+    /// Written at L3 resolve by
+    /// [`super::flow_fields::attach_flow_field_reads`]; ids are
+    /// `{call site id}/fieldref`. Kept apart from `record_operations`, so the
+    /// detectors see exactly the operations they saw before; the effect
+    /// builders read both ([`ModelRoutine::effect_operations`]). Empty for
+    /// most routines.
+    pub field_ref_operations: Vec<ModelRecordOperation>,
     /// The routine's rules (intent-evidence spec §4.2): `None` when the view
     /// did not declare `ViewNeeds::rules` (not built), `Some(vec![])` when they
     /// were built and the routine has none (a routine with no body, a
@@ -924,6 +935,54 @@ impl ModelRoutine {
         )
     }
 
+    /// Every operation the effect builders read: the record operations, then
+    /// the `FieldRef` operations (`field_ref_operations`, engine limits B5).
+    /// The ONE list the base summary, the capability cone's table family, the
+    /// operation index and `query touches`' table mode share, so an effect
+    /// row always finds its operation. Detectors read `record_operations`.
+    pub fn effect_operations(&self) -> impl Iterator<Item = &ModelRecordOperation> {
+        self.record_operations
+            .iter()
+            .chain(&self.field_ref_operations)
+    }
+
+    /// The operation at index `i` of [`Self::effect_operations`].
+    #[must_use]
+    pub fn effect_operation(&self, i: usize) -> Option<&ModelRecordOperation> {
+        self.record_operations.get(i).or_else(|| {
+            self.field_ref_operations
+                .get(i.checked_sub(self.record_operations.len())?)
+        })
+    }
+
+    /// The control context, order and `asserterror` flag the evidence of the
+    /// effect operation `ro` cites, from the sites in `call_sites` /
+    /// `operation_sites` (the caller passes the ordered copies when it
+    /// re-stamps order): a record operation takes its operation site's
+    /// context and order and no `asserterror` flag (as before), a `FieldRef`
+    /// operation takes its call site's.
+    #[must_use]
+    pub fn effect_operation_site<'s>(
+        ro: &ModelRecordOperation,
+        call_sites: &'s [crate::program::body::features::PCallSite],
+        operation_sites: &'s [crate::program::body::features::POperationSite],
+    ) -> EffectOperationSite<'s> {
+        if let Some(site) = field_ref_op_call_site(&ro.id) {
+            let cs = call_sites.iter().find(|cs| cs.id == site);
+            return EffectOperationSite {
+                control_context: cs.and_then(|c| c.control_context.as_deref()),
+                order: cs.and_then(|c| c.order.as_ref()),
+                under_asserterror: cs.is_some_and(|c| c.under_asserterror == Some(true)),
+            };
+        }
+        let op = operation_sites.iter().find(|op| op.id == ro.id);
+        EffectOperationSite {
+            control_context: op.and_then(|o| o.control_context.as_deref()),
+            order: op.and_then(|o| o.order.as_ref()),
+            under_asserterror: false,
+        }
+    }
+
     /// The routine's rules. Reading them from a model built without
     /// `ViewNeeds::rules` is a bug and panics, in every build
     /// (`get_ordering_facts`'s pattern), so "not built" never reads as "none".
@@ -960,6 +1019,25 @@ impl ModelRoutine {
     pub(crate) fn site_is_dead_marked(&self, control_context: Option<&str>) -> bool {
         self.dead_marks_trusted && control_context == Some("unreachable")
     }
+}
+
+/// The suffix of a `FieldRef` operation's id
+/// ([`ModelRoutine::field_ref_operations`]): `{call site id}/fieldref`.
+pub const FIELD_REF_OP_SUFFIX: &str = "/fieldref";
+
+/// The call site a `FieldRef` operation id stands for, `None` for any other
+/// operation id. A `FieldRef` operation has no operation site of its own, so
+/// its control context, order and `asserterror` state are its call site's.
+#[must_use]
+pub fn field_ref_op_call_site(op_id: &str) -> Option<&str> {
+    op_id.strip_suffix(FIELD_REF_OP_SUFFIX)
+}
+
+/// What [`ModelRoutine::effect_operation_site`] returns.
+pub struct EffectOperationSite<'s> {
+    pub control_context: Option<&'s str>,
+    pub order: Option<&'s crate::program::body::operation_order::OperationOrder>,
+    pub under_asserterror: bool,
 }
 
 /// The assembled workspace L3 model (pre-resolve until `resolve` runs).
@@ -2354,6 +2432,7 @@ fn project_ir(
                 recordref_bindings: crate::program::recordref_table::local_recordref_bindings_all(
                     ir_file, ir_routine,
                 ),
+                field_ref_operations: Vec::new(),
                 rules: None,
                 rule_drafts,
                 card_text,

@@ -1408,8 +1408,9 @@ impl<'a> OwnerIndex<'a> {
 /// real memberships are `inherited`: the effect surfaces on the routine you
 /// asked about, but the `Cust.Modify()` itself sits in a callee possibly twelve
 /// frames down. `operation_id` is the store's own per-operation identity, and
-/// every db effect originates in some routine's `record_operations` entry — so
-/// the anchor is a plain lookup, not an inference.
+/// every db effect originates in some routine's `record_operations` or
+/// `field_ref_operations` entry (`ModelRoutine::effect_operations`) — so the
+/// anchor is a plain lookup, not an inference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRef {
     pub owner: RoutineRef,
@@ -2587,7 +2588,8 @@ fn render_query_touches_body(
             let mut dep_routines: BTreeSet<&str> = BTreeSet::new();
             for r in &resolved.workspace.routines {
                 let primary = is_primary_routine(resolved, r);
-                for o in &r.record_operations {
+                // The record operations and the `FieldRef` operations (B5).
+                for o in r.effect_operations() {
                     let hit = match o.table_id.as_deref() {
                         Some(t) => t == table.id || (unknown && is_unknown_table(t)),
                         None => unknown,

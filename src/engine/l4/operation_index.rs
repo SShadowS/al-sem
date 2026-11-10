@@ -34,7 +34,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpClaim {
     pub row: u32,
-    /// Index into the row's `record_operations`.
+    /// Index into the row's `record_operations`, then its
+    /// `field_ref_operations` ([`ModelRoutine::effect_operation`]).
     pub record_operation: Option<u32>,
     /// Index into the row's `operation_sites`.
     pub operation_site: Option<u32>,
@@ -102,7 +103,9 @@ impl<'m> OperationIndex<'m> {
         let mut call_sites: HashMap<&'m str, SmallVec<[(u32, u32); 1]>> = HashMap::new();
         for (ri, r) in model.workspace.routines.iter().enumerate() {
             let row = u32::try_from(ri).expect("a routine row fits u32");
-            for (i, op) in r.record_operations.iter().enumerate() {
+            // The record operations, then the `FieldRef` operations (engine
+            // limits B5): every operation an effect row can name.
+            for (i, op) in r.effect_operations().enumerate() {
                 claim_mut(ops.entry(op.id.as_str()).or_default(), row).record_operation =
                     Some(u32::try_from(i).expect("fits u32"));
             }
@@ -182,7 +185,8 @@ impl<'m> OperationIndex<'m> {
     #[must_use]
     pub fn record_operation(&self, c: &OpClaim) -> Option<&'m ModelRecordOperation> {
         let r = self.routine(c);
-        c.record_operation.map(|i| &r.record_operations[i as usize])
+        c.record_operation
+            .and_then(|i| r.effect_operation(i as usize))
     }
 
     /// The operation site of a claim, if the id names one.

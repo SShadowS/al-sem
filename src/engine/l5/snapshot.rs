@@ -3230,11 +3230,6 @@ fn derive_operation_evidence<'r>(
         let stable = stable_routine_id(&r.id, base.routine_to_stable);
         // Re-stamp op/callsite order (L3 assembly does not).
         let order = compute_routine_order(r);
-        let op_order_by_id: HashMap<&str, &OperationOrder> = order
-            .operation_sites
-            .iter()
-            .filter_map(|op| op.order.as_ref().map(|o| (op.id.as_str(), o)))
-            .collect();
 
         // operationSites first.
         for op in &order.operation_sites {
@@ -3263,12 +3258,14 @@ fn derive_operation_evidence<'r>(
         }
         // recordOperations OVERWRITE the operationSites entry for the same id
         // (richer displayText `Var.Op`); preserves controlContext + order from the
-        // matching operationSite.
-        for ro in &r.record_operations {
+        // matching operationSite. The FieldRef operations (engine limits B5)
+        // follow, citing their call site's context, order and asserterror.
+        for ro in r.effect_operations() {
             if !referenced.contains(&ro.id) {
                 continue;
             }
-            let matching = r.operation_sites.iter().find(|op| op.id == ro.id);
+            let site =
+                ModelRoutine::effect_operation_site(ro, &order.call_sites, &order.operation_sites);
             let a = &ro.source_anchor;
             let display = ro.evidence_text();
             let entry = SnapshotOperationEvidence {
@@ -3280,12 +3277,9 @@ fn derive_operation_evidence<'r>(
                 end_line: a.end_line,
                 end_column: a.end_column,
                 display_text: display,
-                control_context: matching.and_then(|op| op.control_context.clone()),
-                order: collided.order(
-                    ri,
-                    matching.and_then(|_| op_order_by_id.get(ro.id.as_str()).map(|o| **o)),
-                ),
-                under_asserterror: None,
+                control_context: site.control_context.map(str::to_string),
+                order: collided.order(ri, site.order.copied()),
+                under_asserterror: site.under_asserterror.then_some(true),
             };
             by_id.insert(ro.id.clone(), entry);
         }

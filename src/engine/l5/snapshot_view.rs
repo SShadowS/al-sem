@@ -34,8 +34,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{
-    CollidedRows, EdgeIx, FactRef, InheritedSlice, ModelRoutine, NO_HOP, OperationOrder, PdArena,
-    PdEdgeKey, RoutineOrder, RoutineOrderFrames, ScopeFrame, SkippedEdgeKeys, SnapRep, SnapTables,
+    CollidedRows, EdgeIx, FactRef, InheritedSlice, ModelRoutine, NO_HOP, PdArena, PdEdgeKey,
+    RoutineOrder, RoutineOrderFrames, ScopeFrame, SkippedEdgeKeys, SnapRep, SnapTables,
     SnapTablesBuilder, SnapshotCallsiteEvidence, SnapshotCapabilityFact, SnapshotGraphEdge,
     SnapshotOperationEvidence, StateNode, TreeInputs, capability_fact_sort_fields,
     compute_routine_order, render_callee, stable_routine_id,
@@ -88,8 +88,9 @@ fn row_u32(ri: usize) -> u32 {
 /// Row `ri`'s operation-evidence candidates in the whole derivation's order
 /// (`derive_operation_evidence`): its operation sites, then its record
 /// operations (each replaces an operation site of the same id, keeping that
-/// site's control context and order). An id `keep` accepts goes to `out`;
-/// any other id to `skip`.
+/// site's control context and order), then its `FieldRef` operations (their
+/// call site's context, order and asserterror; engine limits B5). An id
+/// `keep` accepts goes to `out`; any other id to `skip`.
 #[allow(clippy::too_many_arguments)]
 fn op_candidates(
     ri: usize,
@@ -101,11 +102,6 @@ fn op_candidates(
     out: &mut Vec<(String, SnapshotOperationEvidence)>,
     skip: &mut dyn FnMut(&str),
 ) {
-    let op_order_by_id: HashMap<&str, &OperationOrder> = order
-        .operation_sites
-        .iter()
-        .filter_map(|op| op.order.as_ref().map(|o| (op.id.as_str(), o)))
-        .collect();
     for op in &order.operation_sites {
         if !keep(&op.id) {
             skip(&op.id);
@@ -131,12 +127,13 @@ fn op_candidates(
         };
         out.push((op.id.clone(), entry));
     }
-    for ro in &r.record_operations {
+    for ro in r.effect_operations() {
         if !keep(&ro.id) {
             skip(&ro.id);
             continue;
         }
-        let matching = r.operation_sites.iter().find(|op| op.id == ro.id);
+        let site =
+            ModelRoutine::effect_operation_site(ro, &order.call_sites, &order.operation_sites);
         let a = &ro.source_anchor;
         let display = ro.evidence_text();
         let entry = SnapshotOperationEvidence {
@@ -148,12 +145,9 @@ fn op_candidates(
             end_line: a.end_line,
             end_column: a.end_column,
             display_text: display,
-            control_context: matching.and_then(|op| op.control_context.clone()),
-            order: collided.order(
-                ri,
-                matching.and_then(|_| op_order_by_id.get(ro.id.as_str()).map(|o| **o)),
-            ),
-            under_asserterror: None,
+            control_context: site.control_context.map(str::to_string),
+            order: collided.order(ri, site.order.copied()),
+            under_asserterror: site.under_asserterror.then_some(true),
         };
         out.push((ro.id.clone(), entry));
     }
@@ -1266,7 +1260,7 @@ pub(super) mod tests {
             let site_rows = rows_with(&|r| r.call_sites.iter().any(|c| c.id == site));
             let op_rows = rows_with(&|r| {
                 r.operation_sites.iter().any(|o| o.id == op)
-                    || r.record_operations.iter().any(|o| o.id == op)
+                    || r.effect_operations().any(|o| o.id == op)
             });
             let mut moved = base.clone();
             let ev = &mut moved.view.evidence;

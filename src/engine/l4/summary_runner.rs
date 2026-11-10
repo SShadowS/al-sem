@@ -556,7 +556,8 @@ pub fn base_intraprocedural_summary(
 
     // Body available + parsed — derive direct facts from the operation stream.
     let mut db_effects: Vec<DbEffect> = Vec::new();
-    for op in &routine.record_operations {
+    // The record operations and the `FieldRef` operations (engine limits B5).
+    for op in routine.effect_operations() {
         // Engine limits B5: the FlowField destination tables this operation
         // reads (`program::model::flow_fields`), each a `CalcFields` read of
         // that table at this operation, its temp state the table's own.
