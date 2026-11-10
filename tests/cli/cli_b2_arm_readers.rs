@@ -521,3 +521,47 @@ fn a_declaration_one_files_row_lacks_only_may_apply() {
     let r = &v["payload"]["result"];
     assert_eq!(r["answer"], "yes", "{r:#}");
 }
+
+/// `alsem query`'s routine selector (`resolve_routine_selector`) takes a
+/// routine declared in two arms (`Mid`: two rows of one stable id) as ONE
+/// routine, and its answer covers both arms: arm A (the first row) writes
+/// `RT A`, arm B writes `RT B`. Before the final wave-2 review the two rows
+/// were two identical candidates (`names 2 routines`), so no selector but
+/// the stable id could address the routine. Break: drop the stable-id dedupe
+/// -> `ambiguous`.
+#[test]
+fn a_query_selector_takes_a_two_arm_routine_as_one() {
+    let t = workspace();
+    let ws = t.path().to_string_lossy().into_owned();
+    for selector in ["Mid", "RT Work::Mid", "RT Work.Mid"] {
+        let v = alsem(&[
+            "query",
+            "effects",
+            &ws,
+            "--routine",
+            selector,
+            "--format",
+            "json",
+        ]);
+        let routine = &v["payload"]["routine"];
+        assert_eq!(routine["resolution"], "resolved", "{selector}: {v:#}");
+    }
+    for table in ["RT A", "RT B"] {
+        let v = alsem(&[
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            table,
+            "--from",
+            "Mid",
+            "--direction",
+            "down",
+            "--format",
+            "json",
+        ]);
+        let p = &v["payload"];
+        assert_eq!(p["from"]["resolution"], "resolved", "{table}: {v:#}");
+        assert_eq!(p["down"]["touches"], true, "{table}: {v:#}");
+    }
+}

@@ -1178,6 +1178,11 @@ pub fn resolve_routine_selector<'a>(
         bare
     };
     let mut hits = hits;
+    // A routine declared in two `#if` arms is two rows of ONE stable id
+    // (engine limits B2): one candidate, its first row in workspace order,
+    // the row a `stableRoutineId` selector takes above.
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|r| seen.insert(r.stable_routine_id.as_str()));
     hits.sort_by(|a, b| a.id.cmp(&b.id));
     match hits.len() {
         0 => Resolution::Unmatched,

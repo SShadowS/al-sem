@@ -52,7 +52,12 @@
 //!   table off the RecordRef's resolved operations or provable bindings. A
 //!   `CalcField` whose table is not known is a read of a table not resolved
 //!   ("unknown"); a field that is not known on a table with FlowFields is
-//!   "not decided".
+//!   "not decided". A filter reads what every binding of the FieldRef reads
+//!   (two assignments on two tables: both); a binding whose table is not
+//!   known, or a FieldRef whose bindings are not readable (a parameter, a
+//!   global, a local passed to a call), is "not decided". So a FieldRef
+//!   filter is never dropped unless every binding is decided and none names a
+//!   FlowField.
 //!
 //! A field argument written with its record (`X.SetFilter(X."Total
 //! Amount", ...)`, `X.CalcFields(X."F")`) names the field after the last dot.
@@ -65,9 +70,10 @@
 //! `Find*` on the record it received gives no read in either routine, so the
 //! callee's own answer, and a caller's answer through a `SetAutoCalcFields` it
 //! makes, can still be a "no". A filter in the caller is placed at the filter
-//! (above), so the caller's answer is right in that case. Likewise a FieldRef
-//! or RecordRef received as a parameter or from a call (its table and field
-//! are then not known).
+//! (above), so the caller's answer is right in that case. A FieldRef received
+//! as a parameter or from a call is not linked to the caller's either: its
+//! table and field are not known, so a `CalcField` or a filter on it answers
+//! "unknown" (never "no").
 //!
 //! Each entry is one destination table, or [`FlowFieldSource::Undecided`] with
 //! its reason when the engine cannot tell which table the field reads (no
@@ -176,6 +182,8 @@ pub(crate) const FIELD_NOT_FOUND: &str = "the argument names no field of the rec
 pub(crate) const HOST_NOT_LOADED: &str = "the record's table is not loaded";
 pub(crate) const FIELD_REF_FIELD_UNKNOWN: &str =
     "the FieldRef's field is not known, and its table has FlowFields";
+pub(crate) const FIELD_REF_TABLE_UNKNOWN: &str =
+    "the FieldRef's table is not known, so its field may be a FlowField";
 
 /// The destination table NAME of a `CalcFormula` (logical: quotes stripped,
 /// `""` read as `"`), or `None` when the text does not have the documented
@@ -822,20 +830,57 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
         }
         let calculates = op == "CalcFields";
         let mut reads = Vec::new();
-        if let Some(t) = &table_id {
-            tables.sel_reads(
-                t,
-                &field,
-                receiver,
-                calculates,
-                FIELD_REF_FIELD_UNKNOWN,
-                &mut reads,
-            );
-        }
-        // A filter that reads no FlowField is no effect; a `CalcField` is a
-        // read of its record (an unresolved one when the table is not known).
-        if !calculates && reads.is_empty() {
-            continue;
+        if calculates {
+            // A `CalcField` is a read of its record (an unresolved one when
+            // the bindings do not agree on one table), and of the field's
+            // FlowField table.
+            if let Some(t) = &table_id {
+                tables.sel_reads(
+                    t,
+                    &field,
+                    receiver,
+                    true,
+                    FIELD_REF_FIELD_UNKNOWN,
+                    &mut reads,
+                );
+            }
+        } else {
+            // A filter is no read of its own: it reads what a FlowField it
+            // names reads. That is the reads of every (table, field) the
+            // FieldRef can be bound to (a may-read); a binding whose table is
+            // not known, or a FieldRef whose bindings are not readable (a
+            // parameter, a global, one passed to a call), may be a FlowField
+            // and is not decided. Only when every binding is decided and none
+            // is a FlowField is the filter no effect.
+            match &sources {
+                Some(sources) => {
+                    for (recref, sel) in sources {
+                        match record_ref_table(routine, recref, tables).0 {
+                            Some(t) => tables.sel_reads(
+                                &t,
+                                sel,
+                                receiver,
+                                false,
+                                FIELD_REF_FIELD_UNKNOWN,
+                                &mut reads,
+                            ),
+                            None => push(
+                                &mut reads,
+                                receiver,
+                                FlowFieldSource::Undecided(FIELD_REF_TABLE_UNKNOWN),
+                            ),
+                        }
+                    }
+                }
+                None => push(
+                    &mut reads,
+                    receiver,
+                    FlowFieldSource::Undecided(FIELD_REF_TABLE_UNKNOWN),
+                ),
+            }
+            if reads.is_empty() {
+                continue;
+            }
         }
         out.push(ModelRecordOperation {
             id: format!("{}{}", cs.id, super::workspace::FIELD_REF_OP_SUFFIX),
