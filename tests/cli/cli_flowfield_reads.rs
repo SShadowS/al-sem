@@ -983,3 +983,180 @@ fn record_ref_and_field_ref_flowfield_reads() {
         "table mode lists the FieldRef CalcField site: {out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Final review of wave 2: a FieldRef FILTER whose bindings disagree, or are
+// not readable, was dropped (a definite "no"). Built from the reviewer's
+// probes (`w2final-b5/ws`, `FilterCondTables`, `FilterTwoTables`,
+// `FilterPassedRecord`).
+// ---------------------------------------------------------------------------
+
+/// Precondition stated in the AL: field 2 of "B5 Header" is the FlowField
+/// "Total Amount" (a sum over "B5 Line"); field 2 of "B5 Node" is the Normal
+/// field "Parent No."; field 1 of either table is Normal. No routine here
+/// names "B5 Line" as a record, so any touch of it is through the filter.
+const FIELD_REF_FILTERS: &str = r#"
+codeunit 50120 "B5 FR Filters"
+{
+    // Either table's field 2: when X is false the filter is on "Total Amount".
+    procedure FilterCondTables(X: Boolean): Boolean
+    var
+        NodeRR: RecordRef;
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        NodeRR.Open(Database::"B5 Node");
+        HeaderRR.Open(Database::"B5 Header");
+        if X then
+            FR := NodeRR.Field(2)
+        else
+            FR := HeaderRR.Field(2);
+        FR.SetFilter('>0');
+        exit(HeaderRR.FindFirst());
+    end;
+
+    // The first binding ("B5 Node" field 2) is not a FlowField; the second is.
+    procedure FilterTwoTables(): Boolean
+    var
+        NodeRR: RecordRef;
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        NodeRR.Open(Database::"B5 Node");
+        HeaderRR.Open(Database::"B5 Header");
+        FR := NodeRR.Field(2);
+        FR := HeaderRR.Field(2);
+        FR.SetFilter('>0');
+        exit(HeaderRR.FindFirst());
+    end;
+
+    // One table, two fields: "No." then "Total Amount".
+    procedure FilterTwoFields(): Boolean
+    var
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        HeaderRR.Open(Database::"B5 Header");
+        FR := HeaderRR.Field(1);
+        FR := HeaderRR.Field(2);
+        FR.SetRange(0);
+        exit(HeaderRR.FindFirst());
+    end;
+
+    // Two bindings, both decided, neither a FlowField.
+    procedure FilterTwoTablesPlain(): Boolean
+    var
+        NodeRR: RecordRef;
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        NodeRR.Open(Database::"B5 Node");
+        HeaderRR.Open(Database::"B5 Header");
+        FR := NodeRR.Field(2);
+        FR := HeaderRR.Field(1);
+        FR.SetFilter('>0');
+        exit(HeaderRR.FindFirst());
+    end;
+
+    // FR is bound to "No." here, but Rebind's `var` parameter rebinds it to
+    // field 2 ("Total Amount") of the same record before the filter.
+    procedure FilterPassed(): Boolean
+    var
+        HeaderRR: RecordRef;
+        FR: FieldRef;
+    begin
+        HeaderRR.Open(Database::"B5 Header");
+        FR := HeaderRR.Field(1);
+        Rebind(FR);
+        FR.SetFilter('>0');
+        exit(HeaderRR.FindFirst());
+    end;
+
+    local procedure Rebind(var FR: FieldRef)
+    var
+        R: RecordRef;
+    begin
+        R := FR.Record();
+        FR := R.Field(2);
+    end;
+
+    // A FieldRef parameter: the caller decides its table and field.
+    procedure FilterParam(FR: FieldRef)
+    begin
+        FR.SetFilter('>0');
+    end;
+
+    // A local FieldRef on a RecordRef parameter: its table is not known.
+    procedure FilterOnRecRefParam(RR: RecordRef)
+    var
+        FR: FieldRef;
+    begin
+        FR := RR.Field(2);
+        FR.SetFilter('>0');
+    end;
+}
+"#;
+
+/// A FieldRef filter reads what every binding of the FieldRef reads; a
+/// binding whose table is not known, or a FieldRef whose bindings are not
+/// readable, is not decided (`unknown`). It is never silently dropped.
+#[test]
+fn field_ref_filter_is_never_a_silent_no() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    workspace_only(&ws);
+    write(&ws.join("src/FieldRefFilters.al"), FIELD_REF_FILTERS);
+    let ws = ws.to_str().unwrap();
+
+    // Every binding is decided: the reads of each one.
+    assert_down(
+        ws,
+        "FilterCondTables",
+        "yes",
+        "the else branch filters \"Total Amount\"",
+    );
+    assert_down(
+        ws,
+        "FilterTwoTables",
+        "yes",
+        "the second binding is \"Total Amount\"",
+    );
+    assert_down(
+        ws,
+        "FilterTwoFields",
+        "yes",
+        "the second binding is \"Total Amount\"",
+    );
+    assert_down(
+        ws,
+        "FilterTwoTablesPlain",
+        "no",
+        "both bindings are decided and neither is a FlowField",
+    );
+    // Bindings that are not readable: not decided.
+    assert_down(
+        ws,
+        "FilterPassed",
+        "unknown",
+        "Rebind(FR) can rebind FR to \"Total Amount\"",
+    );
+    assert_down(
+        ws,
+        "FilterParam",
+        "unknown",
+        "a FieldRef parameter's field is decided by the caller",
+    );
+    // A binding whose table is not known: not decided.
+    assert_down(
+        ws,
+        "FilterOnRecRefParam",
+        "unknown",
+        "field 2 of a RecordRef parameter may be a FlowField",
+    );
+
+    let out = alsem(&["query", "effects", ws, "--routine", "FilterPassed", "--all"]);
+    assert!(
+        out.contains("[CalcFields] on table not decided (the FieldRef's table is not known, so its field may be a FlowField)"),
+        "{out}"
+    );
+}

@@ -400,11 +400,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       (`proven_suppressed`). Breaking instead the `maybe_declared` computation in the
       engine stayed GREEN on the CLI: on the fixture the chain is not proven anyway,
       so the CLI test pins `parse_commit_behavior`, not this rule (a stated limit).
-  15. Digest: a commit route under a may-apply declaration is conditional (`false &&`):
-      RED `a_commit_behavior_only_…` (`unconditional on success`) and
+  15. *(Superseded by 15' below: the merge with B4 removed B2's `MaySkip` copy of this
+      rule.)* Digest: a commit route under a may-apply declaration is conditional
+      (`false &&`): RED `a_commit_behavior_only_…` (`unconditional on success`) and
       `an_attribute_a_routine_…`.
-  16. Digest: the same for an error route: RED `a_commit_behavior_only_…` (ArmError's
-      error row `unconditional on success`); B4's 16 CLI tests stayed GREEN.
+  16. *(Superseded by 16' below, for the same reason.)* Digest: the same for an error
+      route: RED `a_commit_behavior_only_…` (ArmError's error row `unconditional on
+      success`); B4's 16 CLI tests stayed GREEN.
   17. `traps::is_try_function` definite (back to `has_attribute`): RED
       `a_try_function_only_…` (`no`).
   18. `InherentCommitBehavior` strictest (back to the first value): RED
@@ -850,6 +852,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (26) A FieldRef operation takes its call site's context (the branch disabled): the lib
     test's `CondFr` evidence had control context `None`, want `conditional`.
     After all reverts: 10/10 `cli_flowfield_reads` and the 7 `flow_field` lib tests pass.
+- **Round 4 (final review of wave 2).**
+  - *A wrong `no` for a FieldRef FILTER whose bindings disagree or cannot be read.*
+    Round 3 pinned the rebinding and table-agreement guards for `CalcField` only. For
+    `SetFilter`/`SetRange` the same guard result left the table unknown, nothing was
+    looked up, and the filter was dropped as "reads no FlowField". So
+    `if X then FR := NodeRR.Field(2) else FR := HeaderRR.Field(2); FR.SetFilter('>0');
+    HeaderRR.FindFirst()` answered `down: no (every candidate decided)` for `"B5 Line"`,
+    though field 2 of `"B5 Header"` is a FlowField over it; so did a FieldRef rebound by a
+    call (`Rebind(FR)`). That contradicted this section's own rule (an undecided read is
+    `unknown`, never `no`). Master answered `no` too (it had no FieldRef operations), so
+    this was not a regression. Now a FieldRef filter reads what EVERY binding of the
+    FieldRef reads (each `FR := RecRef.Field(..)` assignment, each on its own table and
+    field: a may-read), and is "not decided" (`unknown`) when a binding's table is not
+    known or the bindings cannot be read (a FieldRef parameter or global, a local passed
+    to a call). It is dropped only when every binding is decided and none is a FlowField.
+    The two-table and if/else probes now answer `yes`; `Field(1)` then `Field(2)` on one
+    table also answers `yes` (it was "not decided"); the rebound, parameter and
+    RecordRef-parameter forms answer `unknown`. `CalcField` is unchanged.
+  - *Audit of every other early exit in the B5 code.* A record operation with no table
+    (`attach_flow_field_reads`) gets no FlowField read, but then the record's own
+    retrieval or `CalcFields` is itself a read of an unresolved table, so the answer is
+    already `unknown`. A filter on a record whose table is not loaded adds nothing: such a
+    table comes from a dependency that is not loaded, and its FlowFields can name only
+    tables that are not loaded either; a workspace table extension's FlowField is in the
+    loaded extension stub. Probe: a table extension's FlowField on a dependency's
+    `Customer`, filtered, answers `yes` cross-app and `unknown` with `--single-app`.
+    A bare `SetAutoCalcFields` with no implicit record frame is not a record method.
+    Nothing else drops an operation.
+  - *`alsem query` could not address a routine declared in two `#if` arms* (B2, found in
+    this review): `query effects --routine ArmFr` and `query touches --from ArmFr`
+    answered `names 2 routines (differs in: the parameter lists)` and listed two
+    identical candidates, so the suggested selectors looped. The two rows are one routine
+    (one stable id); `resolve_routine_selector` now keeps one candidate per stable id
+    (its first row, the one a stable-id selector already took). explain, prove, digest
+    and fingerprint resolve through the identity table and were not affected.
+  - Tests: `cli_flowfield_reads::field_ref_filter_is_never_a_silent_no` (the
+    reviewer's `FilterCondTables`, `FilterTwoTables` and `FilterPassedRecord` probes, plus
+    two fields on one table, two plain bindings (`no`), a FieldRef parameter and a
+    FieldRef on a RecordRef parameter) and
+    `cli_b2_arm_readers::a_query_selector_takes_a_two_arm_routine_as_one`.
+  - Discrimination proofs (break with Edit, narrowest test, revert, pass):
+    (27) Every binding is read (the loop made `sources.iter().take(1)`):
+    `FilterCondTables` answered `down: no (every candidate decided)`.
+    (28) Unreadable bindings are not decided (the `None` arm pushes nothing):
+    `FilterPassed` answered `down: no`.
+    (29) A binding with no known table is not decided (that arm pushes nothing):
+    `FilterOnRecRefParam` answered `down: no`.
+    (30) One query candidate per stable id (the `retain` kept every row): `query effects
+    --routine Mid` exited 2 (ambiguous). A first break that deduped by the internal id
+    instead stayed green: the two arm rows share the internal id too, so it was no break.
+    After all reverts: 11/11 `cli_flowfield_reads` and 9/9 `cli_b2_arm_readers` pass.
 - **Still open (rest of L19):** (1) a page that shows a FlowField calculates it when it
   is displayed, which no routine's cone holds; that needs L2's page column index. A
   report dataitem's `CalcFields` property is the same kind of declared read and is not
@@ -863,7 +916,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not a record operation, so a read cannot be placed at it. CDO has no such
   `SetAutoCalcFields` case; the filter case was not counted. The same holds for a
   FieldRef or RecordRef received from a caller: its table and field are not known here
-  (a `CalcField` on it answers `unknown`, a filter on it adds nothing). (3)
+  (a `CalcField` or, since round 4, a filter on it answers `unknown`). (3)
   `Record.GetBySystemId` is not a record operation at all (engine limits L35), so a
   `SetAutoCalcFields` read at it, and its own host read, are missing. (4) The implicit
   `Rec` is shared by every routine of the object and its extensions, without telling
@@ -1068,8 +1121,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the graph's dataset edges (effects filtered out): FAILED, `ImportStatic`'s only edge
     was `run`.
   Guards from the first fix-up whose proofs were not recorded, rerun now:
-  - variable report/query saves dispatch to the run (`is_run_by_other_name = false &&
-    …`): FAILED, `SaveTrigVariable: answer: no`;
+  - *(Superseded: B4 round 2 replaced `is_run_by_other_name`, and the merge rebuilt the
+    member arm on `member_starts_object`; redone on the merged code below.)* variable
+    report/query saves dispatch to the run (`is_run_by_other_name = false && …`):
+    FAILED, `SaveTrigVariable: answer: no`;
+    redone in the final wave-2 review on `resolver.rs`'s member arm: the
+    `ObjectStart::Yes` → `dispatch_entry_trigger` branch made to skip every method with
+    a built-in run signature (`&& builtin_run_signatures(*kind, method_lc).is_empty()`,
+    so a bound `Rep.SaveAsPdf`/`Q.Open` falls to the procedure lookup): FAILED,
+    `cli_dataset_operations::a_run_by_another_name_runs_the_triggers_and_a_dynamic_one_is_unknown`
+    at `SaveTrigVariable: answer: no — no write site on DS Side`; GREEN once reverted
+    (9/9 `cli_dataset_operations`);
   - static `Report.SaveAs*/Execute/Print` are runs (`&& false` on the report clause in
     `extract::classify_call`): FAILED, `SaveTrig: answer: no`;
   - a dynamic report id is a dynamic run (the clause kept only for a static id):
