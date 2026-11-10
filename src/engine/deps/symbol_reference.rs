@@ -873,6 +873,7 @@ fn abi_attribute_info(a: &RawAttr) -> AttributeInfo {
         raw,
         // A compiled symbol has no `#if` left.
         conditional: false,
+        another_declaration_lacks: false,
     }
 }
 

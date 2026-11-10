@@ -2469,13 +2469,17 @@ fn project_ir(
 /// is one possible build, and a fact one of them lacks is a "may":
 ///
 /// - **Routines** (rows of one id, [`join_routine_declarations`]): an
-///   attribute not every row carries (same text) is conditional on every row,
-///   so a reader that takes ONE row and asks for a definite attribute
-///   (`has_definite_attribute`: a trap, a suppressed or erroring commit) gets
-///   the answer every row gives; a `top-level` site is only `conditional` (a
-///   build runs one row's body); and the rows of two files are numbered apart
-///   (the second file's site ids continue after the first's), as `#if` arms in
-///   one file already are, so a site id names one site.
+///   attribute not every row carries (same text) is marked
+///   `another_declaration_lacks` on every row that has it, so a reader that
+///   takes ONE row and asks whether the ROUTINE has it
+///   (`has_definite_attribute`: a caller's trap) gets the answer every row
+///   gives, while a reader of that row's own body
+///   (`find_own_definite_attribute`: its own commits) still reads it as
+///   definite; a `top-level` site is only `conditional` (a build runs one
+///   row's body); and the rows of two files are numbered apart (each file's
+///   site numbers in a block picked from its own path,
+///   [`file_site_blocks`]), as `#if` arms in one file already are, so a site
+///   id names one site.
 /// - **Tables** ([`join_table_declarations`]): `TableType = Temporary` holds
 ///   only when every declaration is temporary. A table is read by its id from
 ///   anywhere (a `Record "T"` variable), so one declaration's property
@@ -2509,25 +2513,26 @@ fn attribute_text_key(raw: &str) -> String {
         .collect()
 }
 
-/// The routine half of [`join_alternative_declarations`]. Only source rows
-/// (`ws:`/`dep:` units) take part: a symbol-only row is one compiled build, and
-/// a group of them is an ABI overload collapse, not alternatives (a group never
-/// mixes roles, `projection::mixed_role_groups`).
+/// The routine half of [`join_alternative_declarations`], over EVERY group of
+/// rows that share an id. A group never mixes roles
+/// (`projection::mixed_role_groups`). A symbol-only group is an ABI overload
+/// collapse (two overloads whose signatures hash alike): they compile
+/// together, but a caller bound to the id cannot tell which one it reaches,
+/// so an attribute one of them lacks is a "may" for that caller too, the same
+/// reading `return_summary::compute_return_summaries` gives every group
+/// (`merge_alternative_summaries`). Steps 2 and 3 touch sites, which a
+/// symbol-only row has none of.
 fn join_routine_declarations(rows: &mut [ModelRoutine]) {
     const TOP: &str = "top-level";
     const COND: &str = "conditional";
-    let is_source = |r: &ModelRoutine| {
-        let u = &r.source_anchor.source_unit_id;
-        u.starts_with("ws:") || u.starts_with("dep:")
-    };
     let groups: Vec<Vec<usize>> = {
         let mut count: HashMap<&str, u32> = HashMap::new();
-        for r in rows.iter().filter(|r| is_source(r)) {
+        for r in rows.iter() {
             *count.entry(r.id.as_str()).or_default() += 1;
         }
         let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, r) in rows.iter().enumerate() {
-            if is_source(r) && count.get(r.id.as_str()).is_some_and(|&n| n >= 2) {
+            if count.get(r.id.as_str()).is_some_and(|&n| n >= 2) {
                 by_id.entry(r.id.as_str()).or_default().push(i);
             }
         }
@@ -2536,7 +2541,9 @@ fn join_routine_declarations(rows: &mut [ModelRoutine]) {
         groups
     };
     for group in groups {
-        // 1. An attribute some row lacks is conditional on every row.
+        // 1. An attribute some row lacks is marked on every row that has it
+        // (`another_declaration_lacks`: a "may" for the id, definite for the
+        // row's own builds).
         let texts: Vec<Vec<String>> = group
             .iter()
             .map(|&i| {
@@ -2550,7 +2557,7 @@ fn join_routine_declarations(rows: &mut [ModelRoutine]) {
         for (&i, own) in group.iter().zip(&texts) {
             for (a, text) in rows[i].attributes_parsed.iter_mut().zip(own) {
                 if !texts.iter().all(|t| t.contains(text)) {
-                    a.conditional = true;
+                    a.another_declaration_lacks = true;
                 }
             }
         }
@@ -2568,9 +2575,9 @@ fn join_routine_declarations(rows: &mut [ModelRoutine]) {
                 }
             }
         }
-        // 3. The rows of a later file continue the numbering of the earlier
-        // files' (one file's rows are numbered apart by `project_ir`, and
-        // are contiguous here: the assembly appends file by file).
+        // 3. Rows from several files: each file's numbering (from 0, its
+        // own `#if` arms apart, `project_ir`) moves into a block of its own
+        // (`file_site_blocks`).
         let units: Vec<String> = group
             .iter()
             .map(|&i| rows[i].source_anchor.source_unit_id.clone())
@@ -2578,35 +2585,66 @@ fn join_routine_declarations(rows: &mut [ModelRoutine]) {
         if units.iter().all(|u| *u == units[0]) {
             continue;
         }
+        let unit_refs: Vec<&str> = units.iter().map(String::as_str).collect();
+        let blocks = file_site_blocks(&unit_refs);
         let id = rows[group[0]].id.clone();
-        let mut next: HashMap<&'static str, u32> = HashMap::new();
-        let mut offset: HashMap<&'static str, u32> = HashMap::new();
-        let mut file: Option<String> = None;
-        for (&i, u) in group.iter().zip(units) {
-            if file.as_ref() != Some(&u) {
-                offset.clone_from(&next);
-                file = Some(u);
-            }
-            if offset.values().any(|&o| o > 0) {
-                let map = |tag: &'static str, n: u32| n + offset.get(tag).copied().unwrap_or(0);
-                let f = |s: &str| rebase_site_ids(s, &id, &map);
-                #[cfg(debug_assertions)]
-                let before = format!("{:?}", rows[i]);
-                rewrite_routine_site_ids(&mut rows[i], &f);
-                #[cfg(debug_assertions)]
-                assert_eq!(
-                    format!("{:?}", rows[i]),
-                    f(&before),
-                    "join_alternative_declarations: a field of {id} holds a site id the \
-                     rewrite missed"
-                );
-            }
-            for (tag, (_, max)) in site_id_extremes(&format!("{:?}", rows[i]), &id) {
-                let n = next.entry(tag).or_insert(0);
-                *n = (*n).max(max + 1);
-            }
+        for (&i, unit) in group.iter().zip(&units) {
+            let offset = blocks[unit.as_str()];
+            let map = |_: &'static str, n: u32| {
+                debug_assert!(n < SITE_BLOCK, "{id}: {n} sites in one file");
+                offset + n
+            };
+            let f = |s: &str| rebase_site_ids(s, &id, &map);
+            #[cfg(debug_assertions)]
+            let before = format!("{:?}", rows[i]);
+            rewrite_routine_site_ids(&mut rows[i], &f);
+            #[cfg(debug_assertions)]
+            assert_eq!(
+                format!("{:?}", rows[i]),
+                f(&before),
+                "join_alternative_declarations: a field of {id} holds a site id the \
+                 rewrite missed"
+            );
         }
     }
+}
+
+/// The width of one file's block of site numbers ([`file_site_blocks`]): a
+/// file numbers a routine's sites from 0, far below this.
+const SITE_BLOCK: u32 = 100_000;
+
+/// How many blocks a file's own path picks from (so a number stays below
+/// `u32::MAX`: `(SITE_BLOCKS + 1) * SITE_BLOCK`).
+const SITE_BLOCKS: u32 = 9_999;
+
+/// Engine limits B2 (wave 2 final review, item 2): where each file's site
+/// numbers start for a routine id declared in several files (`units`: the
+/// rows' source units). Each file numbers the id's sites from 0 by itself
+/// (`project_ir`, the session's per-file row cache), so two files would share
+/// `{id}/op0`. Each file's numbers move by `block * SITE_BLOCK`, its block
+/// picked from a hash of its OWN source unit (`1..=SITE_BLOCKS`; 0 stays the
+/// numbering of a routine declared in one file), so a declaration's site ids
+/// do not depend on another file's content, its name or its sort order. Two
+/// files whose hashes pick one block take the next free one, in source-unit
+/// order: the only case in which another file (its path, never its content)
+/// moves a file's ids. Deterministic, so a session refresh equals a cold
+/// build.
+fn file_site_blocks<'u>(units: &[&'u str]) -> HashMap<&'u str, u32> {
+    let mut distinct: Vec<&str> = units.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let mut taken: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut out = HashMap::new();
+    for u in distinct {
+        let h = blake3::hash(u.as_bytes());
+        let mut b =
+            1 + u32::from_le_bytes(h.as_bytes()[..4].try_into().expect("4 bytes")) % SITE_BLOCKS;
+        while !taken.insert(b) {
+            b = b % SITE_BLOCKS + 1;
+        }
+        out.insert(u, b * SITE_BLOCK);
+    }
+    out
 }
 
 /// The table half of [`join_alternative_declarations`]: a table declared more
@@ -4682,8 +4720,9 @@ codeunit 50816 "T5 F3 Dedup"
     /// Stated: `a.al`'s `Cu` carries `InherentCommitBehavior = Ignore` and
     /// `P`'s `[TryFunction]`, and its `Q` always raises; `b.al`'s carries
     /// neither and its `Q` returns. `BothCu` carries them in both files (the
-    /// control), `Once` is declared once. An attribute `b.al` lacks is
-    /// conditional on BOTH rows; a summary value the rows disagree on is
+    /// control), `Once` is declared once. An attribute `b.al` lacks is marked
+    /// `another_declaration_lacks` on the row that has it (never
+    /// `conditional`: its own builds all have it); a summary value the rows disagree on is
     /// `unknown`/`conditional` (`compute_return_summaries`: the last row's
     /// alone before). Each object row keeps its own properties (#279).
     #[test]
@@ -4755,7 +4794,10 @@ codeunit 50816 "T5 F3 Dedup"
             r.attributes_parsed
                 .iter()
                 .find(|a| a.name.eq_ignore_ascii_case("TryFunction"))
-                .map(|a| a.conditional)
+                .map(|a| {
+                    assert!(!a.conditional, "each row's own builds all have it");
+                    a.another_declaration_lacks
+                })
         };
         let named = |object: &str, name: &str| -> Vec<&ModelRoutine> {
             rows(object)

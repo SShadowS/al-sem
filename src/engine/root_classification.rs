@@ -1254,6 +1254,7 @@ mod tests {
             args: Vec::new(),
             raw: "[Test]".to_string(),
             conditional: false,
+            another_declaration_lacks: false,
         }];
         routines.push(test_proc);
 

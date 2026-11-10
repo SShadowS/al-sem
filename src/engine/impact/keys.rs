@@ -55,8 +55,12 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// it would report a moved site that did not move. 4 (engine limits B2, wave 2
 /// final review): one id declared in two FILES numbers its rows apart too
 /// (the second file's site ids move), and its rows are read as alternatives
-/// (an attribute or a property one declaration lacks is a "may").
-pub const SUMMARY_SCHEMA: u32 = 4;
+/// (an attribute or a property one declaration lacks is a "may"). 5 (the
+/// follow-up): each file's site numbers of such a routine sit in a block of
+/// its own (every file's ids move once), a declaration's own attribute is
+/// definite for its own body, and a dispatch reaches only the declarations
+/// that subscribe.
+pub const SUMMARY_SCHEMA: u32 = 5;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

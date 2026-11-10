@@ -1689,8 +1689,9 @@ fn collect_routines<'t>(
 /// and a build runs exactly one of them. An attribute that one row carries and
 /// another does not (`#if X [TryFunction] procedure P() #else procedure P()
 /// #endif`) is therefore missing from some build of the routine, though its own
-/// row has it on every build of that row. Readers take an attribute from whichever
-/// row has it, so it must be conditional on every row that has it.
+/// row has it on every build of that row: it is marked
+/// [`crate::ir::AttributeIr::another_declaration_lacks`] on the row that has it
+/// (not `conditional`, which is about the row's own builds).
 ///
 /// This compares the routines of ONE object declaration only (the IR's unit).
 /// The model compares every row of a routine id, across whole-object `#if` arms
@@ -1743,7 +1744,7 @@ fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
         for (&i, own) in rows.iter().zip(&texts) {
             for (a, text) in routines[i].attributes_parsed.iter_mut().zip(own) {
                 if !texts.iter().all(|t| t.contains(text)) {
-                    a.conditional = true;
+                    a.another_declaration_lacks = true;
                 }
             }
         }
@@ -2627,6 +2628,7 @@ fn lower_routine<'t>(
             args,
             origin: origin_of(item),
             conditional,
+            another_declaration_lacks: false,
         });
     }
     let name = arm_field(FieldName::Name)
@@ -7634,14 +7636,41 @@ pageextension 50117 PE extends P
         );
     }
 
-    /// Engine limits B2 (third review): one routine declared in two `#if` arms
-    /// is one row per arm; an attribute that one row carries and another does
-    /// not is missing from the builds of the other arm, so it is conditional
-    /// on every row. The same attribute on every row is not. An overload (other
-    /// parameters) is another routine and is not compared.
+    /// `(routine name, [(attribute name, another_declaration_lacks)])` of
+    /// every routine; asserts no attribute here is `conditional` (each sits in
+    /// its own declaration's arm).
+    fn attr_lacks(src: &str) -> Vec<(String, Vec<(String, bool)>)> {
+        let af = parse(src);
+        af.objects[0]
+            .routines
+            .iter()
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    r.attributes_parsed
+                        .iter()
+                        .map(|a| {
+                            assert!(!a.conditional, "{}: own arm, every build", a.name);
+                            (a.name.clone(), a.another_declaration_lacks)
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Engine limits B2 (third review, final review): one routine declared in
+    /// two `#if` arms is one row per arm; an attribute that one row carries
+    /// and another does not is missing from the builds of the other arm, so
+    /// it is marked `another_declaration_lacks` on the row that has it (a
+    /// "may" for a reader judging the routine from outside), while its own
+    /// row's builds all have it (not `conditional`). The same attribute on
+    /// every row is not marked. An overload (other parameters) is another
+    /// routine and is not compared.
     #[test]
     fn an_attribute_one_arm_of_a_routine_lacks_is_conditional() {
         let t = |name: &str, c: bool| (name.to_string(), c);
+        let attr_conditionality = attr_lacks;
         // Two whole declarations.
         assert_eq!(
             attr_conditionality(

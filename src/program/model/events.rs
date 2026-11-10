@@ -147,6 +147,48 @@ pub fn encode_event_id(publisher_object_id: &str, event_name: &str) -> String {
     format!("{publisher_object_id}/event/{}", event_name.to_lowercase())
 }
 
+/// Engine limits B2 (wave 2 final review): which declarations (`rows`, the
+/// model rows of ONE subscriber routine id) can declare the subscription to
+/// event `event_id` (`{publisher object}/event/{name}`, `/{element}` for a
+/// platform event). A row that has no `[EventSubscriber]` naming that event
+/// (and that element, when both name one) cannot: no build of that row
+/// subscribes. Any other row may (a reading that cannot be told apart stays
+/// in). `None` when every row may, or when the id cannot be read: then every
+/// row stands for the subscription, as before.
+///
+/// The program graph keeps one node per subscriber id and unions every
+/// declaration's subscriptions onto it (`EventFacts::of_arms`), so a
+/// dispatch edge alone names no declaration; this tells the dispatch which
+/// declarations' bodies it runs (`capability_cone`'s arm subscriber nodes).
+#[must_use]
+pub fn rows_declaring_subscription(rows: &[&ModelRoutine], event_id: &str) -> Option<Vec<bool>> {
+    let (_, rest) = event_id.rsplit_once("/event/")?;
+    let (name, element) = match rest.split_once('/') {
+        Some((n, e)) => (n, Some(e)),
+        None => (rest, None),
+    };
+    let declares = |r: &&ModelRoutine| {
+        r.attributes_parsed
+            .iter()
+            .filter(|a| a.name.eq_ignore_ascii_case("EventSubscriber"))
+            .any(|a| {
+                let Some(ev) = crate::program::attributes::string_arg(a, 2) else {
+                    // An event name we cannot read: it may be this one.
+                    return true;
+                };
+                ev.eq_ignore_ascii_case(name)
+                    && match (element, crate::program::attributes::string_arg(a, 3)) {
+                        (Some(want), Some(got)) if !got.is_empty() => {
+                            got.eq_ignore_ascii_case(want)
+                        }
+                        _ => true,
+                    }
+            })
+    };
+    let out: Vec<bool> = rows.iter().map(declares).collect();
+    (out.iter().any(|&d| d) && !out.iter().all(|&d| d)).then_some(out)
+}
+
 /// Build the EventSymbol for a real publisher routine.
 pub fn build_event_symbol(routine: &ModelRoutine) -> EventSymbol {
     let isolated = parse_isolated(&routine.attributes_parsed);
@@ -868,6 +910,7 @@ mod tests {
                 .collect(),
             raw: String::new(),
             conditional: false,
+            another_declaration_lacks: false,
         }
     }
 

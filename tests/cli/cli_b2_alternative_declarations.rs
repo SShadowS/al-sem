@@ -542,3 +542,225 @@ fn a_two_arm_callees_commit_does_not_dominate_the_callers_return() {
     assert!(!root_dominance("AD Ord::CallsTwoArm"));
     assert!(root_dominance("AD Ord::CallsOneArm"), "control");
 }
+
+// ---------------------------------------------------------------------------
+// A dispatch reaches only the declarations that subscribe (review B1)
+// ---------------------------------------------------------------------------
+
+const PUB_XY: &str = r#"codeunit 50480 "AD Pub"
+{
+    procedure RaiseX()
+    begin
+        OnX();
+    end;
+
+    procedure RaiseY()
+    begin
+        OnY();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnX()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnY()
+    begin
+    end;
+}
+"#;
+
+/// One declaration of `"AD Sub"` whose `H` subscribes to `event` and runs
+/// `body`, wrapped in `open` and `close`.
+fn sub_on(event: &str, body: &str, open: &str, close: &str) -> String {
+    format!(
+        "{open}codeunit 50481 \"AD Sub\"\n{{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::\"AD Pub\", '{event}', '', false, false)]\n    procedure H()\n    begin\n{body}    end;\n}}\n{close}"
+    )
+}
+
+/// `H` is declared twice: the declaration that subscribes to `OnX` commits,
+/// the one that subscribes to `OnY` does nothing. No build runs the
+/// committing body when `OnY` is raised, so `RaiseY may-commit` is `no`
+/// (the review's probes e1 and e2: `yes`, citing the `OnX` declaration's
+/// `Commit`, since #103 in one file and since the per-file rule was dropped
+/// for two files). `RaiseX` still commits (control). Shapes: one file
+/// `#if`/`#else` (the `OnX` declaration first, then second), two files (the
+/// `OnX` declaration in `a.al`, then in `b.al`).
+#[test]
+fn a_dispatch_reaches_only_the_declarations_that_subscribe() {
+    let commit = "        Commit();\n";
+    for x_first in [true, false] {
+        let (first, second) = if x_first {
+            (("OnX", commit), ("OnY", ""))
+        } else {
+            (("OnY", ""), ("OnX", commit))
+        };
+        let one_file = sub_on(first.0, first.1, "#if A\n", "#else\n")
+            + &sub_on(second.0, second.1, "", "#endif\n");
+        let a = sub_on(first.0, first.1, "#if A\n", "#endif\n");
+        let b = sub_on(second.0, second.1, "#if not A\n", "#endif\n");
+        let shapes: [(&str, Vec<(&str, &str)>); 2] = [
+            (
+                "one file",
+                vec![("s.al", one_file.as_str()), ("p.al", PUB_XY)],
+            ),
+            (
+                "two files",
+                vec![("a.al", a.as_str()), ("b.al", b.as_str()), ("p.al", PUB_XY)],
+            ),
+        ];
+        for (shape, files) in shapes {
+            let t = workspace(&files);
+            for extra in [&["--single-app"][..], &[]] {
+                let y = prove_with(t.path(), "AD Pub::RaiseY", "may-commit", extra);
+                assert_eq!(
+                    y["answer"], "no",
+                    "{shape} x_first={x_first} {extra:?}: {y:#}"
+                );
+                let x = prove_with(t.path(), "AD Pub::RaiseX", "may-commit", extra);
+                assert_eq!(
+                    x["answer"], "yes",
+                    "{shape} x_first={x_first} {extra:?}: {x:#}"
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A declaration's own [CommitBehavior] is definite for its own commits
+// ---------------------------------------------------------------------------
+
+const CB_TOP: &str = r#"codeunit 50501 "CBTop"
+{
+    procedure Run()
+    var
+        C: Codeunit "CB";
+    begin
+        C.P();
+    end;
+}
+"#;
+
+/// One declaration of `CB::P` (the routine only), with
+/// `[CommitBehavior(Ignore)]` (`ignore`) or not, its body `body`.
+fn cb_decl(ignore: bool, body: &str) -> String {
+    let attr = if ignore {
+        "    [CommitBehavior(CommitBehavior::Ignore)]\n"
+    } else {
+        ""
+    };
+    format!("{attr}    procedure P()\n    begin\n{body}    end;\n")
+}
+
+/// The review's probes c1, c2 and c3: `[CommitBehavior(Ignore)]` on ONE
+/// declaration of `P`, and the `Commit` in that same declaration. No build
+/// commits (the build that has the commit ignores it), so `may-commit` is
+/// `no` for `P` and its caller (before: `yes (conditional)`: the attribute
+/// was read as "may" on its own row, and the id's rows were one node of the
+/// commit-scope graph). Control: the `Commit` in the OTHER declaration, which
+/// no attribute covers: `yes`. Shapes: member-list arms (c1), two files (c2),
+/// whole-object `#if`/`#else` (c3).
+#[test]
+fn an_own_commit_behavior_is_definite_for_its_own_commit() {
+    let commit = "        Commit();\n";
+    for (commit_in_ignoring, want) in [(true, "no"), (false, "yes")] {
+        let (a_body, b_body) = if commit_in_ignoring {
+            (commit, "")
+        } else {
+            ("", commit)
+        };
+        let obj = |inner: &str| format!("codeunit 50500 \"CB\"\n{{\n{inner}}}\n");
+        let c1 = obj(&format!(
+            "#if A\n{}#else\n{}#endif\n",
+            cb_decl(true, a_body),
+            cb_decl(false, b_body)
+        ));
+        let c2a = format!("#if A\n{}#endif\n", obj(&cb_decl(true, a_body)));
+        let c2b = format!("#if not A\n{}#endif\n", obj(&cb_decl(false, b_body)));
+        let c3 = format!(
+            "#if A\n{}#else\n{}#endif\n",
+            obj(&cb_decl(true, a_body)),
+            obj(&cb_decl(false, b_body))
+        );
+        let shapes: [(&str, Vec<(&str, &str)>); 3] = [
+            (
+                "c1 member arms",
+                vec![("a.al", c1.as_str()), ("t.al", CB_TOP)],
+            ),
+            (
+                "c2 two files",
+                vec![
+                    ("a.al", c2a.as_str()),
+                    ("b.al", c2b.as_str()),
+                    ("t.al", CB_TOP),
+                ],
+            ),
+            (
+                "c3 whole objects",
+                vec![("s.al", c3.as_str()), ("t.al", CB_TOP)],
+            ),
+        ];
+        for (shape, files) in shapes {
+            let t = workspace(&files);
+            for routine in ["CBTop::Run", "CB::P"] {
+                let r = prove(t.path(), routine, "may-commit");
+                assert_eq!(
+                    r["answer"], want,
+                    "{shape} {routine} commit_in_ignoring={commit_in_ignoring}: {r:#}"
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A declaration's site ids do not depend on another file's content or order
+// ---------------------------------------------------------------------------
+
+/// The operation id of every terminal `(file, line)` in `--routine`'s
+/// digest.
+fn op_ids_by_place(ws: &Path, routine: &str) -> std::collections::BTreeMap<(String, u64), String> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in digest_effects(ws, routine) {
+        for p in e["paths"].as_array().cloned().unwrap_or_default() {
+            let t = &p["terminal"];
+            if let (Some(f), Some(l), Some(op)) = (
+                t["file"].as_str(),
+                t["line"].as_u64(),
+                t["operationId"].as_str(),
+            ) {
+                out.insert((f.to_string(), l), op.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// `P` is declared in two files. `b.al`'s sites keep their ids when `a.al`
+/// gains sites (the review: `op5` became `op7`) and when `a.al` is renamed
+/// so it sorts after `b.al`: each file's numbers sit in a block picked from
+/// its own path. Precondition stated: `b.al` is byte-identical in all three
+/// workspaces; the two `a.al` variants differ in their number of sites.
+#[test]
+fn a_files_site_ids_do_not_move_when_another_file_changes() {
+    let more_a = WORK_A.replace(
+        "        R.Insert();\n",
+        "        R.Insert();\n        R.Modify();\n        R.Delete();\n",
+    );
+    assert_ne!(more_a, WORK_A, "precondition: a.al gains sites");
+    let b_ids = |files: &[(&str, &str)]| {
+        let t = workspace(files);
+        op_ids_by_place(t.path(), "AD Work::P")
+            .into_iter()
+            .filter(|((f, _), _)| f == "ws:src/b.al")
+            .collect::<Vec<_>>()
+    };
+    let base = b_ids(&[("a.al", WORK_A), ("b.al", WORK_B), ("t.al", WORK_T)]);
+    assert!(!base.is_empty(), "precondition: b.al's sites are listed");
+    let grown = b_ids(&[("a.al", &more_a), ("b.al", WORK_B), ("t.al", WORK_T)]);
+    assert_eq!(base, grown, "a.al gained sites");
+    let renamed = b_ids(&[("z.al", WORK_A), ("b.al", WORK_B), ("t.al", WORK_T)]);
+    assert_eq!(base, renamed, "a.al renamed to sort after b.al");
+}

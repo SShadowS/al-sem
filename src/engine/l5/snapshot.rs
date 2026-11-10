@@ -1559,6 +1559,8 @@ struct CollidedRows<'a> {
     frame_offset: HashMap<usize, i64>,
     /// Collided id -> its one frame table.
     frames: HashMap<&'a str, Vec<ScopeFrame>>,
+    /// Every row of a collided id, with or without frames ([`Self::order`]).
+    collided_row: std::collections::HashSet<usize>,
 }
 
 impl<'a> CollidedRows<'a> {
@@ -1568,7 +1570,9 @@ impl<'a> CollidedRows<'a> {
         let site_owner = site_owners(&rows, routines);
         let mut frame_offset = HashMap::new();
         let mut frames = HashMap::new();
+        let mut collided_row = std::collections::HashSet::new();
         for (id, ixs) in rows.collided() {
+            collided_row.extend(ixs.iter().map(|ix| ix.get()));
             let mut per_row: Vec<(usize, Vec<ScopeFrame>)> = ixs
                 .iter()
                 .map(|ix| {
@@ -1611,6 +1615,7 @@ impl<'a> CollidedRows<'a> {
             site_owner,
             frame_offset,
             frames,
+            collided_row,
         }
     }
 
@@ -1623,14 +1628,17 @@ impl<'a> CollidedRows<'a> {
     /// `workspace::join_alternative_declarations`). Without this, a caller of
     /// a two-arm routine got a root-scope `COMMIT_DOMINATES_RETURN`, valid for
     /// refutation, on one arm's `Commit`, though the other arm may return
-    /// before its own.
+    /// before its own. Every row of a collided id is read so, with or without
+    /// scope frames (a row with none carries no order today: a TryFunction's
+    /// walk and a bodiless row stamp none; the rule does not rest on that).
     fn order(&self, ri: usize, order: Option<OperationOrder>) -> Option<OperationOrder> {
-        let off = self.frame_offset.get(&ri).copied();
+        let off = self.frame_offset.get(&ri).copied().unwrap_or(0);
+        let collided = self.collided_row.contains(&ri);
         order.map(|mut o| {
-            if let Some(off) = off {
-                if o.frame_id >= 0 {
-                    o.frame_id += off;
-                }
+            if o.frame_id >= 0 {
+                o.frame_id += off;
+            }
+            if collided {
                 o.dominates_success_return = false;
             }
             o
@@ -5465,5 +5473,36 @@ mod cone_memory_step2_tests {
         assert_eq!(edited.subject(), "edited#");
         assert!(!std::sync::Arc::ptr_eq(edited.tables(), rows[0].tables()));
         assert_eq!(fields_of(&rows), before, "the composed rows are unchanged");
+    }
+}
+
+#[cfg(test)]
+mod collided_rows_order_tests {
+    use super::*;
+
+    /// Engine limits B2 (wave 2 final review, item 3): every row of a
+    /// collided id is read as not dominating its routine's success return,
+    /// whether or not it has scope frames. Stated by assignment: row 3 is a
+    /// collided row with NO frame offset (a row whose walk stamped no frame),
+    /// row 4 a row of a single-row id; both carry an order that dominates.
+    #[test]
+    fn a_collided_row_without_frames_does_not_dominate() {
+        let c = CollidedRows {
+            site_owner: HashMap::new(),
+            frame_offset: HashMap::new(),
+            frames: HashMap::new(),
+            collided_row: [3].into_iter().collect(),
+        };
+        let o = OperationOrder {
+            order_id: 1,
+            frame_id: 0,
+            on_success_path: true,
+            dominates_success_return: true,
+        };
+        assert!(!c.order(3, Some(o)).unwrap().dominates_success_return);
+        assert!(
+            c.order(4, Some(o)).unwrap().dominates_success_return,
+            "control: a single-row id keeps it"
+        );
     }
 }
