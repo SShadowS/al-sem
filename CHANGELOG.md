@@ -33,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   segment because objects carry no namespace. `extends 50101` is kept as the number's text and
   raises a `SyntaxIssue`: targets are looked up by name, so a numeric base is not resolved.
 
+### Fixed (FW2: an ABI ingest failure is pinned all the way to the user)
+
+- **`ProgramGraph::abi_ingest_errors` already had a production reader; now a test pins it.**
+  The dependency ledger (`dependency_ledger`, `src/program/resolve/full.rs`) copies each
+  failure onto its declared dependency, `FreshCoverage::dependency_diagnostics` reports it
+  as a `dependencies` warning ("could not be read: …") and the preflight degrades
+  ("unreadable dependency app(s)"). This has worked since S5.2a/#91, but no test covered
+  the step from the graph into the ledger, so deleting it left everything green. The new
+  test `abi_ingest_error_reaches_the_dependency_diagnostics_and_the_preflight`
+  (`src/program/abi_ingest.rs`) fails when that lookup is broken (proof run 2026-11-10).
+  No behavior or golden changed. On real input this path is rare: the dependency loader
+  parses `SymbolReference.json` first, so a corrupt file usually makes the whole package
+  unreadable before ABI ingest runs.
+
 ### Outside consumers (wave 2)
 
 One list of every field and value wave 2 changed for a program that reads al-sem's output
