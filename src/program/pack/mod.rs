@@ -77,7 +77,9 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 13: `ObjectNode::page_ui`.
 /// 14: `RoutineNode::publisher_isolated`.
 /// 15: `ObjectNode::dataset` (B6, the platform's dataset operations).
-pub const PACK_SCHEMA: u32 = 15;
+/// 16: `RoutineNode::event_subscribers` keeps the attributes the engine cannot
+/// read, as entries with empty parts (engine limits B2).
+pub const PACK_SCHEMA: u32 = 16;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -545,7 +547,7 @@ mod tests {
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 15);
+        assert_eq!(PACK_SCHEMA, 16);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         pack.files[0].routines[0].publisher_isolated = true;

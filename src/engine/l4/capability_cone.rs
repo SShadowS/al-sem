@@ -7561,6 +7561,8 @@ codeunit 50111 "Cell Calls"
     /// The four kinds the fold maps, written out (not read from the classifier).
     /// A deliberate hand-stated copy of `is_callsite_local_kind`'s list: the
     /// test's expectation must not come from the code under test.
+    /// (The fifth, `unreadable-event-subscriber`, has no fixture site here: it
+    /// is produced at a publisher, and tests/cli's B2 tests pin it.)
     const KINDS: [&str; 4] = [
         "ambiguous-overload",
         "external-target",

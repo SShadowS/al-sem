@@ -1824,6 +1824,10 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
         h.analysis = Analysis::NotAnalyzed("the input did not resolve".to_string());
     } else if payload.pointer("/down/answer").and_then(Value::as_str) == Some("unknown") {
         h.analysis = Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
+    } else if payload.get("unreadableEventSubscribers").is_some() {
+        h.analysis = Analysis::Partial(vec![
+            "an [EventSubscriber] the engine could not read may also run for these routines".into(),
+        ]);
     }
     let depth = if kind == "query.effects" {
         "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
@@ -2376,6 +2380,15 @@ fn finish_human(
         hc,
         families.as_ref(),
     );
+    // Engine limits B2: the header says what `payload.result.scope` says.
+    if r.json_text.contains("\"unreadableEventSubscribers\"") {
+        r.human_text = r.human_text.replacen(
+            "analysis complete",
+            "analysis partial (an [EventSubscriber] the engine could not read may also run for \
+             these routines)",
+            1,
+        );
+    }
     // Round-2 G40: an ambiguous routine selector offers the complete calls,
     // one per candidate, in this surface's words.
     if r.exit_code == 2
@@ -3099,6 +3112,20 @@ fn render_query_touches_body(
         }
     }
 
+    // Engine limits B2: an `[EventSubscriber]` the engine could not read may
+    // run for an event raised anywhere, so the routines that reach a touch
+    // through it are not all listed.
+    let unreadable = substrate
+        .resolved()
+        .events
+        .graph
+        .edges
+        .iter()
+        .filter(|e| e.resolution == crate::program::model::events::UNREADABLE_RESOLUTION)
+        .count();
+    if unreadable > 0 {
+        payload.insert("unreadableEventSubscribers".into(), unreadable.into());
+    }
     let summary = touches_summary(&payload);
     QueryRunResult {
         json_text: envelope(
@@ -5323,7 +5350,15 @@ fn render_query_effects_body(
             .iter()
             .filter(|u| u.open_world == Some(true))
             .count();
-        (b.entry.unresolved.len() - open, open)
+        // An `[EventSubscriber]` the engine cannot read is one more thing the
+        // cone could not follow (engine limits B2).
+        let unreadable = usize::from(
+            b.entry
+                .coverage_reasons
+                .iter()
+                .any(|r| r == crate::engine::l4::combined_graph::UNREADABLE_SUBSCRIBER),
+        );
+        (b.entry.unresolved.len() - open + unreadable, open)
     });
     // Engine limits B8: the operations are inventoried one dependency
     // routine deep, which limits them only when the cone enters dependency

@@ -1215,22 +1215,54 @@ fn split_declarations(
                 b: &[crate::program::resolve::event::ParsedSubscriberArgs]| {
         a.iter().all(|x| b.contains(x)) && b.iter().all(|x| a.contains(x))
     };
-    let mut split: Vec<usize> = by_id
+    // A copy with an `[EventSubscriber]` the engine cannot read may subscribe to
+    // anything, so it never counts as subscribing differently: only the copies
+    // whose subscriptions are all readable are compared.
+    let unreadable = |i: usize, routines: &[RoutineNode]| {
+        routines[i]
+            .event_subscribers
+            .iter()
+            .any(|s| s.is_unreadable())
+    };
+    let groups: Vec<Vec<usize>> = by_id
         .into_values()
         .filter(|ixs| {
+            let readable: Vec<usize> = ixs
+                .iter()
+                .copied()
+                .filter(|&i| !unreadable(i, routines))
+                .collect();
             ixs.len() >= 2
                 && ixs
                     .iter()
                     .any(|&i| !routines[i].event_subscribers.is_empty())
-                && ixs.iter().any(|&i| {
+                && readable.iter().any(|&i| {
                     !same(
                         &routines[i].event_subscribers,
-                        &routines[ixs[0]].event_subscribers,
+                        &routines[readable[0]].event_subscribers,
                     )
                 })
         })
-        .flatten()
         .collect();
+    // A split that happens for other copies: the unreadable copy stays
+    // reachable from every event its routine's readable copies subscribe to.
+    for group in &groups {
+        let union: Vec<_> = group
+            .iter()
+            .filter(|&&i| !unreadable(i, routines))
+            .flat_map(|&i| routines[i].event_subscribers.iter().cloned())
+            .collect();
+        for &i in group {
+            if unreadable(i, routines) {
+                for s in &union {
+                    if !routines[i].event_subscribers.contains(s) {
+                        routines[i].event_subscribers.push(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut split: Vec<usize> = groups.into_iter().flatten().collect();
     let mut out = SplitDecls::default();
     if split.is_empty() {
         return out;

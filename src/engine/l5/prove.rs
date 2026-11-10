@@ -618,7 +618,19 @@ fn build_obligation_blockers(
     if !oblg.coverage_complete && !coverage_reasons_listed(&entry.coverage_reasons, &blockers) {
         blockers.push(ProveBlocker {
             kind: "coverage-incomplete",
-            detail: format!("coverage status: {}", entry.coverage_status),
+            detail: if entry
+                .coverage_reasons
+                .iter()
+                .any(|r| r == crate::engine::l4::combined_graph::UNREADABLE_SUBSCRIBER)
+            {
+                format!(
+                    "coverage status: {} (an [EventSubscriber] the engine could not read may run \
+                     for an event raised here)",
+                    entry.coverage_status
+                )
+            } else {
+                format!("coverage status: {}", entry.coverage_status)
+            },
             anchor: None,
         });
     }
