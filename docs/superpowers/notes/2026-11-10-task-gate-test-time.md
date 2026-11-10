@@ -138,3 +138,32 @@ checks at the pipeline level, and the CDO gate is already the longest gate).
   above), not measured. The per-call cost of `run_fingerprint_pipeline` and `run_prove_pipeline`
   was not profiled.
 - The task gate's other ~47 s (fmt, clippy, gen-syntax, `cargo test --doc`) was not measured here.
+
+## TLS-11: proposal 1 applied, re-measured (2026-11-11)
+
+Applied in `.config/nextest.toml`: priority 70 for the cli fingerprint parity test, priority 60
+for the 14 lib and `al-syntax` tests of `b_override.toml` (15 tests in all; `cargo nextest list`
+with the two filters selects exactly them). Every run also writes a JUnit report, and
+`scripts/ci-steps test` then runs `scripts/nextest-priority-check`, a warning only.
+
+Measured on master `761581b3` (grammar v5.1.0, `abc77b25`), 6 alternating runs through
+`timeit.py`, "before" = master's config, "after" = this branch's (both with a JUnit path; the
+engine lane held idle by the orchestrator). Every run was still flagged noisy: the host was 62-74%
+idle at each start, from other projects on server1. Records: `task-gate-test-time/tls11-runs.jsonl`.
+
+| Pair | Before wall | After wall | Difference | Before tail | After tail |
+|------|-------------|------------|------------|-------------|------------|
+| 4 | 149.1 | 129.4 | -19.7 | 22.6 | 3.6 |
+| 5 | 150.7 | 122.0 | -28.6 | 27.0 | 3.5 |
+| 6 | 138.3 | 122.6 | -15.7 | 24.8 | 3.1 |
+| median | 149.1 | 122.6 | -19.7 (of the pairs; -26.5 between the medians) | 24.8 | 3.5 |
+
+An earlier set of 6 the same day, beside the engine lane's builds (host 0-69% idle), gave walls
+too noisy to use (one run 243 s) but the same tails: before 26.0, 24.1, 25.7 s; after 8.2, 3.7,
+3.0 s. The tail is the robust number: about 21 s of it is gone in every pair, as TLS-07 measured
+(20 s to 3.5 s). The run now ends at its floor (the summed test time over 22 slots), so the next
+saving is less total work (proposal 2, TLS-12).
+
+Walls on this master are about 30 s longer than TLS-07's on `4abbed93` for both configs (summed
+test time 2,550-2,900 s against 1,980-2,530 s); not investigated (more tests, the new grammar
+or the host's load).

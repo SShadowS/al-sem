@@ -232,6 +232,21 @@ Terms used in the wave-2 sections below:
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
 
+### Changed (TLS-11: the long tests start first)
+
+- **`.config/nextest.toml` gives the longest tests a priority.** The task gate's test run was
+  limited by its tail: three long tests in the lib and `al-syntax` started 60-90 s into the run,
+  and the run waited about 20 s on them (TLS-07,
+  `docs/superpowers/notes/2026-11-10-task-gate-test-time.md`). Every test with a median of 15 s
+  or more now has priority 60 (14 tests, by name), and the cli fingerprint parity test (70-87 s,
+  the longest) priority 70. Priority only reorders; every test still runs. Measured on master
+  `761581b3`, 3 alternating pairs: the tail 22.6-27.0 s -> 3.1-3.6 s, the median wall
+  149.1 -> 122.6 s (pairs -15.7 to -28.6 s; the host was shared, see the note).
+- **Every nextest run writes a JUnit report** (`target/nextest/<profile>/junit.xml`). After the
+  full suite, `scripts/ci-steps test` runs `scripts/nextest-priority-check`, which names any test
+  of 15 s or more that no priority override selects (asking nextest which tests each override's
+  filter selects). It only warns: one run's durations swing with the machine's load.
+
 ### Fixed (TLS-10: the CDO gate passed on failed calls)
 
 - **`scripts/cdo-speed` fails when a timed call fails.** Given a wrong workspace, every call

@@ -128,6 +128,8 @@ run_test() {
     local stamp_before stamp_after stamp_file
     stamp_before="$("$(dirname "$0")/tree-stamp")" || return 1
     env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace || return 1
+    # ⟨TLS-11⟩ A warning only: a long test with no nextest priority (the run's JUnit report).
+    "$(dirname "$0")/nextest-priority-check" || true
     env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo test --workspace --doc || return 1
     stamp_after="$("$(dirname "$0")/tree-stamp")" || return 0
     if [[ "$stamp_before" == "$stamp_after" ]]; then
