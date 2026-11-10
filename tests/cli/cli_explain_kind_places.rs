@@ -123,7 +123,7 @@ fn explain_names_a_dependency_routine_entered_at_many_places_once() {
     assert_eq!(
         errors.trim(),
         "errors at 3 places: ERROR_IMPLICIT beyond Codeunit \"Grp Dep\" (50600)::Make (3 places, \
-         entered at ws:src/Grp.Codeunit.al:7, ws:src/Grp.Codeunit.al:8, ws:src/Grp.Codeunit.al:9)",
+         entered at ws:src/Grp.Codeunit.al lines 7, 8, 9)",
         "{text}"
     );
     assert_eq!(errors.matches("::Make").count(), 1, "named once: {errors}");

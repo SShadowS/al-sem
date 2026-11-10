@@ -5583,6 +5583,19 @@ impl Card {
                 rf_plural(shown.len(), "gap", "gaps")
             ));
         }
+        // Engine limits wave 2 (compact card): consecutive gaps that say the
+        // same thing (kind, callee, status, …) in the same file print on one
+        // line with their lines (`at ws:a.al lines 171, 173, 175`); a gap
+        // with skipped rules keeps its own line.
+        let mut pending: Option<(String, Vec<String>)> = None;
+        let flush = |pending: &mut Option<(String, Vec<String>)>, line: &mut dyn FnMut(&str)| {
+            if let Some((head, sites)) = pending.take() {
+                line(&format!(
+                    "  {head} at {}",
+                    crate::engine::l5::routine_rollup::sites_words(&sites)
+                ));
+            }
+        };
         for g in shown {
             let kind = g.json["kind"].as_str().unwrap_or("");
             let what = ["callee", "routine", "what", "table", "app", "status"]
@@ -5590,21 +5603,43 @@ impl Card {
                 .filter_map(|k| g.json[*k].as_str().map(|v| format!("{k} {v}")))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let at = g
-                .json
-                .get("anchor")
-                .map(|a| format!(" at {}", anchor_value_human(a)))
-                .unwrap_or_default();
-            line(&format!(
-                "  gap: {kind}{}{at}",
+            let head = format!(
+                "gap: {kind}{}",
                 if what.is_empty() {
                     String::new()
                 } else {
                     format!(" ({what})")
                 }
-            ));
+            );
+            let anchor = g.json.get("anchor").map(anchor_value_human);
+            let rules = g.json["rules"].as_array().filter(|r| !r.is_empty());
+            // A gap whose anchor is `file:line` and has no rules may join
+            // the run before it.
+            let site = anchor.as_deref().filter(|a| {
+                rules.is_none()
+                    && a.rsplit_once(':')
+                        .is_some_and(|(_, l)| l.parse::<usize>().is_ok())
+            });
+            if let Some(site) = site {
+                let file = |s: &str| s.rsplit_once(':').map(|(f, _)| f.to_string());
+                match &mut pending {
+                    Some((h, sites))
+                        if *h == head && sites.last().and_then(|s| file(s)) == file(site) =>
+                    {
+                        sites.push(site.to_string());
+                    }
+                    _ => {
+                        flush(&mut pending, &mut line);
+                        pending = Some((head, vec![site.to_string()]));
+                    }
+                }
+                continue;
+            }
+            flush(&mut pending, &mut line);
+            let at = anchor.map(|a| format!(" at {a}")).unwrap_or_default();
+            line(&format!("  {head}{at}"));
             // The skipped table-trigger rules, one line each.
-            for r in g.json["rules"].as_array().into_iter().flatten() {
+            for r in rules.into_iter().flatten() {
                 let when = r["whenText"].as_str().unwrap_or("");
                 line(&format!(
                     "    skips {}: {}  [{} {}]",
@@ -5619,6 +5654,7 @@ impl Card {
                 ));
             }
         }
+        flush(&mut pending, &mut line);
         // 21: gaps in dependency code, as counts.
         for l in &s.dependency_gaps {
             line(l);

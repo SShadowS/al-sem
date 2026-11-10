@@ -491,12 +491,9 @@ fn every_resource_less_site_is_a_place_and_entry_points_say_at_least() {
     ]);
     assert_eq!(code, Some(0), "{stdout}");
     assert!(stdout.contains("UI at 2 places:"), "{stdout}");
+    // Engine limits wave 2 (compact card): both places, their file once.
     assert!(
-        stdout.contains("UI_MESSAGE at ws:src/KindMgt.Codeunit.al:14"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("UI_MESSAGE at ws:src/KindMgt.Codeunit.al:27"),
+        stdout.contains("UI_MESSAGE at ws:src/KindMgt.Codeunit.al lines 14, 27"),
         "{stdout}"
     );
     assert!(

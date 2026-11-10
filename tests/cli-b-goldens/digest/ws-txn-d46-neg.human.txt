@@ -11,7 +11,7 @@ computed: current effects of the 2 routines these files touches, in the working 
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/NormalCU.al:36 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
+    My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; no table-event subscriber loaded
       Insert at ws:src/NormalCU.al:34
       path: DoSetup (in the routine itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (1 guard on the route, 0 evaluated)
@@ -25,7 +25,7 @@ computed: current effects of the 2 routines these files touches, in the working 
     COMMIT at ws:src/NormalCU.al:36 (unconditional on success)
       path: RunSetup → DoSetup
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; table-event subscribers: none in the loaded program
+    My Setup: Insert 1 — known persistent; runs: no OnInsert trigger run; no table-event subscriber loaded
       Insert at ws:src/NormalCU.al:34
       path: RunSetup → DoSetup
   errors at 1 place: ERROR_IMPLICIT at ws:src/NormalCU.al:34 (1 guard on the route, 0 evaluated)

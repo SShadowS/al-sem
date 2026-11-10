@@ -10,9 +10,9 @@ computed: current effects of the 1 routine these files touches, in the working t
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Sender.Codeunit.al:19 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
-    D47 Rec: Modify 1 — known persistent; runs: no OnModify trigger run; table-event subscribers: none in the loaded program
+    D47 Rec: Modify 1 — known persistent; runs: no OnModify trigger run; no table-event subscriber loaded
       Modify at ws:src/Sender.Codeunit.al:17
       path: SendThenCommit (in the routine itself)
   HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:18 (unconditional on success)
-  errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:15 (unconditional on success); ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:17 (unconditional on success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al lines 15, 17 (unconditional on success)
 changed-roots: file-unmatched src/Rec.Table.al

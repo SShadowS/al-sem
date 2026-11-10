@@ -154,6 +154,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       cross-app run: `no`).
   Each was GREEN once reverted (the module 7/7, the model test 1/1).
 
+### Changed (engine limits wave 2, compact explain card)
+
+- **explain's card says the same facts in fewer bytes.** Wave 2's new content (errors
+  caught by a trap, the dataset tables, more gaps) had pushed `CDO E-Mail
+  Handler::RunReportID`'s card to 41,509 bytes, over the MCP inline cap's margin. No
+  place, count or reason is dropped; repeated text is said once:
+  - places in one file print the file once: `ERROR_IMPLICIT at ws:a.al:29 (…), line 43
+    (…)`, and places that also share their note print `lines 351, 623 (…)`. This holds
+    for the kind-family lines (UI, HTTP, errors, …), the errors caught by a trap and
+    every `entered at` site list (`ws:a.al lines 204, 228, 308`);
+  - a trap in the error's own file is named by its line (`by the TryFunction with its
+    result used at line 234`), and the caught-errors line now says that `--detail`
+    (`detail: true`) lists the places it folds;
+  - a route's guard words with earlier exits give both counts first:
+    `9 guards, 3 earlier exits on the route; none evaluated` (was `9 guards on the
+    route, 0 evaluated; 3 earlier exits, 0 evaluated`), or `…; 1 exit evaluated`,
+    `…; 1 guard and 1 exit evaluated`. prove and digest print the same words;
+  - workspace gaps that say the same thing in one file share a line: `gap:
+    unresolved-call (callee Report.SaveAs, status dynamic-target) at
+    ws:src/Foundation/CDOFile.Table.al lines 171, 173, 175`;
+  - a write with no table-event subscriber says `no table-event subscriber loaded` (was
+    `table-event subscribers: none in the loaded program`);
+  - a `writes beyond dependency calls` entry whose effect types are the entry above's
+    says `also the same 15 effect types as the routine above` when that is shorter.
+
+  On CDO (`bc3ccb18`): RunReportID 41,509 → 38,631 bytes as the CLI prints it (38,694
+  as the MCP answer, 2,266 bytes under the 40 KiB inline cap); IssueReminder's MCP card
+  35,481 → 33,519.
+
 ### Fixed (engine limits wave 2, B2 per-arm ids: the readers that look a site up)
 
 - **A routine declared in two `#if` arms is read through the arm that holds each
