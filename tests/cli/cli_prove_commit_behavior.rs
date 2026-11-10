@@ -920,6 +920,23 @@ const DEP_RUNNER: &str = r#"codeunit 10 "Dep Lib"
         Cust.Insert();
         Commit();
     end;
+
+    procedure Outer2()
+    begin
+        Codeunit.Run(Codeunit::"Dep Runner");
+    end;
+
+    procedure Outer3()
+    begin
+        if Codeunit.Run(Codeunit::"Dep Runner") then;
+    end;
+
+    procedure Outer4()
+    var
+        R: Codeunit "Dep Runner";
+    begin
+        R.Run();
+    end;
 }
 
 codeunit 12 "Dep Runner"
@@ -969,21 +986,41 @@ const DEP_RUN_CALLERS: &str = r#"codeunit 50176 "Ws Runs"
     begin
         L.Outer();
     end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreNestedDepRun()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer2();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreNestedDepChecked()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer3();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure IgnoreNestedDepMember()
+    var
+        L: Codeunit "Dep Lib";
+    begin
+        L.Outer4();
+    end;
 }
 "#;
 
-#[test]
-fn an_object_run_into_a_dependency_keeps_its_commit() {
-    // B4 review, finding A: the crossing edge into a dependency was composed
-    // as a plain call whatever its step, so a run of a dependency codeunit
-    // under Ignore gave a definite (wrong) `no`. Learn ("Codeunit.Run"): a
-    // checked run commits at its end and that commit "isn't affected by
-    // CommitBehavior"; an unchecked run only MAY carry the scope.
+/// The workspace `DEP_RUN_CALLERS` over a dependency app `XBase` built from
+/// source (`DEP_RUNNER`): the cross-app model loads the dependency's bodies.
+fn dep_run_workspace() -> tempfile::TempDir {
     use crate::dep_dispatch_fixture as dd;
     let dir = tempfile::tempdir().unwrap();
     dd::write_workspace(dir.path(), DEP_RUN_CALLERS);
     let symbols = format!(
-        r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":10,"Name":"Dep Lib","Methods":[{{"Name":"Outer","Parameters":[]}}]}},{{"Id":12,"Name":"Dep Runner","Methods":[]}}],"AppId":"{}","Name":"XBase","Publisher":"probe","Version":"1.0.0.0"}}"#,
+        r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":10,"Name":"Dep Lib","Methods":[{{"Name":"Outer","Parameters":[]}},{{"Name":"Outer2","Parameters":[]}},{{"Name":"Outer3","Parameters":[]}},{{"Name":"Outer4","Parameters":[]}}]}},{{"Id":12,"Name":"Dep Runner","Methods":[]}}],"AppId":"{}","Name":"XBase","Publisher":"probe","Version":"1.0.0.0"}}"#,
         dd::DEP_GUID
     );
     let customer = "table 18 Customer\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20])\n        {\n        }\n    }\n}\n";
@@ -996,19 +1033,33 @@ fn an_object_run_into_a_dependency_keeps_its_commit() {
         &[("src/Customer.al", customer), ("src/Lib.al", DEP_RUNNER)],
         "",
     );
-    let ask = |routine: &str, q: &str| {
-        json(
-            dir.path(),
-            &[
-                "prove",
-                ".",
-                &format!("Codeunit \"Ws Runs\"::{routine}"),
-                q,
-                "--deterministic",
-            ],
-        )["payload"]["result"]
-            .clone()
-    };
+    dir
+}
+
+/// `prove <Ws Runs::routine> <q>` over the workspace at `dir`: its result.
+fn ask_ws_runs(dir: &Path, routine: &str, q: &str) -> serde_json::Value {
+    json(
+        dir,
+        &[
+            "prove",
+            ".",
+            &format!("Codeunit \"Ws Runs\"::{routine}"),
+            q,
+            "--deterministic",
+        ],
+    )["payload"]["result"]
+        .clone()
+}
+
+#[test]
+fn an_object_run_into_a_dependency_keeps_its_commit() {
+    // B4 review, finding A: the crossing edge into a dependency was composed
+    // as a plain call whatever its step, so a run of a dependency codeunit
+    // under Ignore gave a definite (wrong) `no`. Learn ("Codeunit.Run"): a
+    // checked run commits at its end and that commit "isn't affected by
+    // CommitBehavior"; an unchecked run only MAY carry the scope.
+    let dir = dep_run_workspace();
+    let ask = |routine: &str, q: &str| ask_ws_runs(dir.path(), routine, q);
     // Control: a plain call into the dependency is ignored for certain.
     let plain = ask("IgnorePlainDep", "may-commit");
     assert_eq!(plain["answer"], "no", "precondition: {plain}");
@@ -1028,6 +1079,52 @@ fn an_object_run_into_a_dependency_keeps_its_commit() {
         evidence(&e).iter().all(|(_, cb)| cb.is_none()),
         "no commit error row past a checked run: {e}"
     );
+}
+
+#[test]
+fn an_object_run_inside_dependency_code_keeps_its_commit() {
+    // B4 round-2 review: the run is INSIDE the dependency's own code
+    // (`Dep Lib::Outer2/3/4` start `Dep Runner`, which commits), reached by a
+    // plain call from an Ignore scope. The cross-app tree keeps the
+    // dependency code's calls apart from the model's (`dependency_calls`),
+    // and the run steps were read from the model's calls alone, so the run
+    // edge was a plain step and the commit beyond read as ignored: a definite
+    // (wrong) `no`. The scope only MAY follow into a started object (Learn
+    // does not say it does), and a checked run's commit is not affected by
+    // CommitBehavior (Learn, "Codeunit.Run"), so the commit stays possible.
+    let dir = dep_run_workspace();
+    let ask = |routine: &str, q: &str| ask_ws_runs(dir.path(), routine, q);
+    // Precondition (control): a plain call into the dependency, whose own
+    // commit is not behind a run, is ignored for certain.
+    let plain = ask("IgnorePlainDep", "may-commit");
+    assert_eq!(plain["answer"], "no", "precondition: {plain}");
+    for routine in [
+        "IgnoreNestedDepRun",
+        "IgnoreNestedDepChecked",
+        "IgnoreNestedDepMember",
+    ] {
+        let r = ask(routine, "may-commit");
+        assert_eq!(r["answer"], "yes", "{routine}: {r}");
+        assert!(r.get("suppressedCommits").is_none(), "{routine}: {r}");
+        // On one reading only: never a definite answer either way.
+        let s = ask(routine, "commits-on-success-path");
+        assert_eq!(s["answer"], "unknown", "{routine}: {s}");
+        // The digest reads the same rule.
+        let out = run(
+            dir.path(),
+            &[
+                "digest",
+                ".",
+                "--routine",
+                &format!("Codeunit \"Ws Runs\"::{routine}"),
+                "--format",
+                "human",
+            ],
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("commits: may"), "{routine}: {text}");
+        assert!(!text.contains("are ignored"), "{routine}: {text}");
+    }
 }
 
 const TRAPS: &str = r#"codeunit 50350 "CB Traps"

@@ -336,9 +336,14 @@ pub struct CommitScopes {
 
 impl CommitScopes {
     /// The declarations of `model`'s routines, and (when there is one) its
-    /// object-run call sites.
+    /// object-run call sites: those of `model.calls` and of
+    /// `dependency_calls`, the calls of dependency code a cross-app base keeps
+    /// apart from the model (empty when the model holds every call).
     #[must_use]
-    pub fn of_model(model: &Model) -> CommitScopes {
+    pub fn of_model(
+        model: &Model,
+        dependency_calls: &[crate::program::model::calls::CallEdge],
+    ) -> CommitScopes {
         let ws = &model.workspace;
         let objects: HashMap<&str, &ModelObject> = ws
             .objects
@@ -359,7 +364,7 @@ impl CommitScopes {
         }
         CommitScopes {
             by_routine,
-            runs: object_runs(model),
+            runs: object_runs(model, dependency_calls),
         }
     }
 
@@ -399,11 +404,20 @@ impl CommitScopes {
 /// ([`crate::engine::l5::traps::is_checked_run`]). A dataset operation of a
 /// started object (its trigger and table-event edges are keyed by the
 /// operation) takes its run's step.
-fn object_runs(model: &Model) -> HashMap<String, Step> {
+///
+/// `dependency_calls` are the calls dependency routines make, when the
+/// cross-app base moved them out of `model.calls` (the execution relation's
+/// split, `capability_cone`): the graph walks them too, so a run inside
+/// dependency code needs its step as much as a workspace one (B4 round 3).
+fn object_runs(
+    model: &Model,
+    dependency_calls: &[crate::program::model::calls::CallEdge],
+) -> HashMap<String, Step> {
     use crate::engine::l5::traps::is_checked_run;
     let ws = &model.workspace;
     let mut runs: HashMap<String, Step> = HashMap::new();
-    if !model.calls.edges.iter().any(|e| e.starts_object) {
+    let edges = || model.calls.edges.iter().chain(dependency_calls);
+    if !edges().any(|e| e.starts_object) {
         return runs;
     }
     let by_id: HashMap<&str, &ModelRoutine> =
@@ -413,7 +427,7 @@ fn object_runs(model: &Model) -> HashMap<String, Step> {
         .iter()
         .flat_map(|r| r.call_sites.iter().map(|cs| (cs.id.as_str(), cs)))
         .collect();
-    for e in model.calls.edges.iter().filter(|e| e.starts_object) {
+    for e in edges().filter(|e| e.starts_object) {
         let Some(cs) = sites.get(e.callsite_id.as_str()) else {
             continue;
         };
@@ -474,6 +488,17 @@ pub(crate) struct CbGraph<'a> {
 
 /// A route the graph found: its edges, root side first.
 pub(crate) type Route<'a> = Vec<&'a SnapshotGraphEdge>;
+
+/// What each routine one root reaches runs under ([`CbGraph::states_from`]).
+pub(crate) struct RootStates(HashMap<u32, u8>);
+
+impl RootStates {
+    /// The behaviors node `x` runs under from the root; 0 when the root does
+    /// not reach it.
+    fn get(&self, x: u32) -> u8 {
+        self.0.get(&x).copied().unwrap_or(0)
+    }
+}
 
 impl<'a> CbGraph<'a> {
     /// The graph of a tree: its typed edges and the routines with a direct
@@ -709,15 +734,50 @@ impl<'a> CbGraph<'a> {
         step.enter(prefix, self.decl_of(entry))
     }
 
+    /// What every routine reachable from `root` runs under ([`P`]/[`X`]
+    /// kept), over every route of the graph: one forward pass over the
+    /// root's reach. It equals [`Self::raw_states_at`] for each routine (the
+    /// steps distribute over a union of values), at the cost of one walk of
+    /// the root's reach instead of a whole-graph backward pass per routine
+    /// asked. The digest builds it once per root ([`Self::beyond`]).
+    pub(crate) fn states_from(&self, root: &str) -> RootStates {
+        let mut s: HashMap<u32, u8> = HashMap::new();
+        let Some(r) = self.node(root) else {
+            return RootStates(s);
+        };
+        s.insert(r, self.decl[r as usize]);
+        let mut stack = vec![r];
+        while let Some(x) = stack.pop() {
+            let sx = s[&x];
+            for &(y, _, step) in &self.succ[x as usize] {
+                let add = step.enter(sx, self.decl[y as usize]);
+                let slot = s.entry(y).or_insert(0);
+                if *slot | add != *slot {
+                    *slot |= add;
+                    stack.push(y);
+                }
+            }
+        }
+        RootStates(s)
+    }
+
     /// The behaviors a commit beyond a crossing can run under: the crossing
     /// edge `from → entry` of `step` is entered from the listed prefix
     /// (`prefix`, from [`Self::route_states`]) and from every other route of
-    /// the graph from `root` to `from` (a prefix the witness did not list may
-    /// pass another declaration), and each commit `entry` reaches is composed
+    /// the graph from the root to `from` (`at_root`, the root's
+    /// [`Self::states_from`]: a prefix the witness did not list may pass
+    /// another declaration), and each commit `entry` reaches is composed
     /// with that. When the graph knows no commit beyond `entry`, the commit
     /// runs under what `entry` itself runs under.
-    pub(crate) fn beyond(&self, root: &str, prefix: u8, from: &str, entry: &str, step: Step) -> u8 {
-        let pfx = prefix | self.raw_states_at(root, from).unwrap_or(0);
+    pub(crate) fn beyond(
+        &self,
+        at_root: &RootStates,
+        prefix: u8,
+        from: &str,
+        entry: &str,
+        step: Step,
+    ) -> u8 {
+        let pfx = prefix | self.node(from).map_or(0, |f| at_root.get(f));
         let entered = self.entered(pfx, step, entry);
         let reach = self
             .node(entry)
@@ -901,6 +961,14 @@ mod tests {
         // A route that commits normally is found (it is the may-not-follow
         // reading of the run).
         assert!(g.route_to("Root", "B", N).is_some());
+        // The forward pass from the root (the digest's prefix at a crossing)
+        // reads every routine as the backward pass does.
+        let at = g.states_from("Root");
+        for id in ["Root", "A", "B"] {
+            let x = g.node(id).expect("a node");
+            assert_eq!(at.get(x), g.raw_states_at("Root", id).unwrap(), "{id}");
+        }
+        assert_eq!(at.get(g.node("B").unwrap()), N | I);
         // Control: the same call as a plain call is ignored for certain.
         let plain = CommitScopes {
             by_routine: scopes.by_routine.clone(),

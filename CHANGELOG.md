@@ -130,6 +130,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Codeunit.Run(Codeunit::"Dep Runner")` (or `if R.Run() then;`) of a dependency codeunit
   under `Ignore` answered a definite (wrong) `may-commit no`, `commits-on-success-path no`
   and digest `commits: no`. The crossing edge now enters by its own step.
+- **A run inside dependency code follows the same rule (round 3).** Round 2 brought a
+  regression: a dependency routine that itself starts an object (`Dep Lib::Outer3` does
+  `if Codeunit.Run(Codeunit::"Dep Runner") then;`, and `Dep Runner` commits), reached by a
+  plain call from an `Ignore` scope, answered a definite (wrong) `may-commit no`,
+  `commits-on-success-path no` and digest `commits: no` with a false "ignored" line (the
+  unchecked `Codeunit.Run(…)` and member `R.Run()` forms did so before round 2 too). The
+  cross-app tree keeps the calls of dependency code apart from the model's
+  (`dependency_calls`, walked by the commit search like the rest), but the run steps were
+  read from the model's calls alone, so the run inside the dependency was a plain step.
+  `CommitScopes::of_model` now reads both lists. The ledger's cut graph (built over the
+  model's calls alone) passes none.
+- **The prefix at a crossing is one walk per root.** Round 2 counted every route from the
+  root to the routine a crossing leaves with a whole-graph backward search per such
+  routine. It is now one forward walk of the root's reach (`CbGraph::states_from`), built
+  on the root's first crossing that needs it and dropped with the root. The answer is the
+  same (each step distributes over a union of behaviors; the unit test compares the two),
+  and the cost now follows the root's reach instead of the number of crossing routines.
 - **The filtered slice traps a commit turned into an error.** `prove … throws-error --site`
   (also `--match`, `--op`) ruled the trap by the site's own row type, which is `COMMIT` for
   such a site, so a commit under `Error` inside a used `[TryFunction]` answered `yes` while
@@ -154,8 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it `unconditional on success`. For a commit inside the workspace's reach (a part with no
   rule-B boundary), a route the witness search did not list (it lists shortest paths only)
   is found and shown; for a boundary part, every route from the root to the routine the
-  crossing leaves counts (the same search, with that routine as its target), without a
-  shown route. A commit beyond a rule-B crossing follows the
+  crossing leaves counts (a forward walk of the root's reach), without a shown route. A commit beyond a rule-B crossing follows the
   dependency's declarations (Base Application has 16: 15 `Ignore`, 1 `Error` on posting
   preview). The filtered `prove --site/--match` slice applies the same rule.
 - **`InherentCommitBehavior` is not on Microsoft Learn.** It is read as *may* apply: the
@@ -171,13 +187,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a procedure call and the routine's own insert answer `no`),
   `an_object_run_into_a_dependency_keeps_its_commit` (a dependency `.app` with a run
   codeunit; control: a plain call into it answers `no`),
+  `an_object_run_inside_dependency_code_keeps_its_commit` (the same dependency, whose
+  `Outer2/3/4` start `Dep Runner` by unchecked, checked and member run; prove `may-commit
+  yes`, `commits-on-success-path unknown`, digest `commits: may`; same control),
   `the_filtered_slice_traps_a_commit_turned_into_an_error` (control: a plain `Error` in a
   used TryFunction), and `a_checked_run_inside_an_ignore_scope_still_commits` (now also
   `commits-on-success-path unknown` under `Error`); unit test
-  `commit_scope::a_run_below_a_declaration_keeps_its_may` (hand-stated graph). Five
+  `commit_scope::a_run_below_a_declaration_keeps_its_may` (hand-stated graph; it also
+  compares the per-root forward walk with the backward search). Five
   adapter tests (`program_calls_adapter_tests`) now expect `starts_object` on run edges.
 - **Discrimination proofs** (break with Edit, run the narrowest test, revert, rerun: all
-  19 tests of `cli_prove_commit_behavior` and the 3 `commit_scope` unit tests pass after
+  20 tests of `cli_prove_commit_behavior` and the 3 `commit_scope` unit tests pass after
   every revert):
   1. crossing edge entered as `Step::Plain` in `split_commit_part` →
      `an_object_run_into_a_dependency_keeps_its_commit` FAILS (`IgnoreCheckedDepRun`
@@ -198,12 +218,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7. `at_least_conditional` disabled → `every_way_…` FAILS (`ReportRun` answers
      `commits-on-success-path yes`) and `a_checked_run_…` FAILS.
   8. the all-routes prefix at a crossing dropped (`CbGraph::beyond`, the guard that
-     replaced round 1's `anc_primary` widening) →
+     replaced round 1's `anc_primary` widening; redone in round 3 on the per-root walk:
+     `at_root.get(f) & 0`) →
      `a_longer_normal_prefix_to_a_crossing_keeps_the_commit_beyond` FAILS (`Root` answers
      `no`).
   9. round 1's found normal route dropped (`commit_extra` = `None`) →
      `a_longer_normal_route_keeps_a_commit_the_listed_routes_ignore` FAILS (`no`); this
      records the proof round 1 left unrecorded.
+  10. the dependency code's calls left out of the run steps (`object_runs` chained
+      `&dependency_calls[..0]`) → `an_object_run_inside_dependency_code_keeps_its_commit`
+      FAILS (`IgnoreNestedDepRun` answers `no`).
+  11. the per-root forward walk entering every edge as `Step::Plain`
+      (`CbGraph::states_from`) → `a_run_below_a_declaration_keeps_its_may` FAILS (`B`:
+      `2` = Ignore, want `3` = `N|I`).
 
 ### Fixed (engine limits wave 2, B5)
 

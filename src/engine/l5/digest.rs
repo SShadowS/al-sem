@@ -4322,6 +4322,7 @@ fn path_over(
 ///   routine reaches ([`CbGraph::beyond`]).
 fn split_commit_part(
     cb: &CbGraph<'_>,
+    cb_root: &std::cell::OnceCell<crate::engine::l5::commit_scope::RootStates>,
     rid: &str,
     outcome: &WitnessOutcomeExt,
     bnd: Option<&BoundaryEnd>,
@@ -4365,6 +4366,7 @@ fn split_commit_part(
         }
         Some(b) => {
             let crossing = idx.crossings.get(&b.id)?;
+            let at_root = cb_root.get_or_init(|| cb.states_from(rid));
             for &i in ix {
                 let p = &outcome.paths[i];
                 let from = path_routines(p).last().unwrap_or(rid);
@@ -4378,7 +4380,7 @@ fn split_commit_part(
                     .filter(|e| e.from == from)
                     .fold(0u8, |acc, e| {
                         let step = cb.step_at(e.site.guarded_id());
-                        acc | cb.beyond(rid, prefix, from, &e.to, step)
+                        acc | cb.beyond(at_root, prefix, from, &e.to, step)
                     });
                 states.push(if s == 0 { norm(prefix) } else { s });
             }
@@ -4426,6 +4428,9 @@ fn split_commit_part(
     let error_extra = found(E, &error_ix);
     // An error route that errors on one reading only.
     let errs_maybe = |s: u8| s & E != 0 && s != E;
+    // The error row counts no twins (its offer selects none), so a twin
+    // never makes it `unconditional`; its listed paths and found route are
+    // each at least `conditional` when they error on one reading only.
     let error_uncertain = Uncertain {
         ix: ix
             .iter()
@@ -4438,7 +4443,8 @@ fn split_commit_part(
             .is_some_and(|p| errs_maybe(norm(cb.route_states(rid, path_steps(p))))),
         twins: Vec::new(),
     };
-    // Twins (equal projection, so the same routines) follow their path.
+    // Twins (equal projection: the same hops, so the same steps; only the
+    // terminal differs) follow their path.
     let twin_states: Vec<u8> = outcome
         .twins
         .iter()
@@ -5155,6 +5161,10 @@ fn digest_one_root<'i>(
         // B4/L16: the `[CommitBehavior]` graph, when a declaring routine is
         // on some route from this root.
         let cb = commit_scopes.filter(|cb| !cb.root_unaffected(rid));
+        // What each routine this root reaches runs under, built on the first
+        // crossing that needs it (one walk of the root's reach).
+        let cb_root: std::cell::OnceCell<crate::engine::l5::commit_scope::RootStates> =
+            std::cell::OnceCell::new();
         let mut suppressed_commits: BTreeSet<SuppressedCommit> = BTreeSet::new();
 
         let empty_facts: Vec<&Fact> = Vec::new();
@@ -5417,7 +5427,7 @@ fn digest_one_root<'i>(
                 for (bnd, ix) in parts {
                     let split = match cb {
                         Some(cb) if effect_type == "COMMIT" => {
-                            split_commit_part(cb, rid, &outcome, bnd.as_deref(), &ix, idx)
+                            split_commit_part(cb, &cb_root, rid, &outcome, bnd.as_deref(), &ix, idx)
                         }
                         _ => None,
                     };
