@@ -3,8 +3,10 @@
 For the design `docs/superpowers/specs/2026-11-10-crate-split-design.md`, section 9 "Phase 0".
 Task ENG-04 (kraken lane engine).
 
-**Status.** Part 1 (no build: counts, commits, tests, cold-or-warm share) is done. Part 2 (the
-timings on an idle machine) has not run yet. Its plan is in section 6.
+**Status.** Done. Part 1 (no build: counts, commits, tests, the cold-or-warm share) is sections
+2–6; part 2 (the timings, 2026-11-10 17:54–20:45) is sections 7–8; the answer for stop/go 0 is
+section 9. Raw records: `/work/eng04-target/results.jsonl` (one JSON line per run, with its
+`uptime`, idle share and log) — outside the repository, so the numbers below copy them.
 
 ## 1. What was measured on
 
@@ -219,29 +221,188 @@ Reading:
 - The task gates, which the logs cannot class, look mostly warm.
 - The largest single block of build time is the fat-LTO release build, which no shape changes.
 
-## 7. Part 2: the timing plan (not run yet)
+## 7. Part 2: how the timings were taken
 
 Every batch runs only on an idle machine (`uptime` load under 2, no other cargo or rustc
 process), announced to the orchestrator first, which holds lane tools' builds and `cdo-gate`.
 server1 is shared with other kraken projects that nobody here can hold, so `timeit.py` records
-`uptime` before every run, waits up to 10 minutes for a 1-minute load under 2, and marks a run
-that started above it `noisy`. Such a run is reported as noisy, never silently mixed into a median.
-Each timing is the median of 3, in its own target folder (`CARGO_TARGET_DIR=/work/eng04-target/<name>`)
-so no peer's folder is touched. Peak memory comes from a Python wrapper reading
-`resource.getrusage(RUSAGE_CHILDREN).ru_maxrss` (there is no `/usr/bin/time`). rustc invocation
-counts come from `cargo … -v`. Every build passes `--timings` and the HTML report is kept.
+`uptime` before every run and marks a run `noisy` when the machine was busy before it. The first
+guard (a 1-minute load under 2) never passed: the host's background load sat at 3–13, and the
+load average trails a build by minutes. From the second T1 pair on, the guard samples host-wide
+idle CPU over 5 seconds (`/proc/stat`), waits up to 3 minutes for 90%, and runs anyway with the
+flag. From 19:08 to 19:35 another project held the host at 0% idle; the runs were paused. Below,
+a median is of the quiet runs where there are three; otherwise every value is given and the
+noisy ones are named. CPU seconds (user + system of all children) are given beside wall time:
+they are less sensitive to a busy host, though not immune (contention on shared cores inflates
+them too, see the model rows).
+Every run has its own target folder under `/work/eng04-target/`, so no peer's folder is touched.
+Peak memory is the largest single child process (`resource.getrusage(RUSAGE_CHILDREN).ru_maxrss`
+in `timeit.py`; there is no `/usr/bin/time`). The T1 builds passed `--timings`; their reports are in
+`/work/eng04-target/timings-t1-*`.
 
-| Batch | What | Commands | Expected wall time |
+**What ran, against the plan:**
+- **T1 (cold):** as planned, for `cargo test --no-run -p al-sem -p al-syntax` (both libraries'
+  tests, the 14 test binaries and the bins). There was no separate dependency-only build: the
+  dependencies' share is the dependency-cold time minus the workspace-cold time (same command,
+  same folder).
+- **T2 (warm), in T1's third folder:**
+  - Each edit adds or removes `std::hint::black_box(());` as the first statement of a function,
+    with the Edit tool. The function body changes, the output does not, and clippy stays clean.
+    Every edit was reverted afterwards.
+  - Sites: `detectors/d60.rs::range_within`, `l5/pending_writes.rs::forward_sites`,
+    `program/model/workspace.rs::member_detail_of`, and `al-syntax` `lower/mod.rs::collect_comments`.
+  - **The renderer and MCP sites were dropped.** They are in the same crate, and the detector,
+    substrate and model sites already showed that every edit inside `al-sem` costs about the
+    same.
+  - Edit-to-test runs `cargo test -p al-sem --lib rollup_multi_contributor_group` (one test,
+    3,277 filtered out), so every site pays the same test run.
+  - Edit-to-build runs `cargo test --no-run -p al-sem -p al-syntax`.
+  - The task gate ran once, after the detector edit, following an untimed warm-up gate (clippy
+    had never run in that folder).
+- **T3:** `RUSTC_BOOTSTRAP=1 cargo rustc -p al-sem --lib --profile test -- -Ztime-passes` after a
+  model edit, in a second warm folder. The variant was warmed by one run first.
+- **T4:** a reflink copy of the warm folder, then the same build in a fresh worktree
+  (`/work/eng04-wt`, the same commit) at another path. Three runs, each from a fresh copy, with
+  cargo's fingerprint log.
+- **T5:** in the warm folder: `cargo build --bins`, `cargo test --no-run`, then single packages
+  and the whole workspace.
+
+`output_cdo` and the full `cdo-gate` time are **still open**: they are to come from the
+orchestrator's next real `cdo-gate` run, and there has been none. CLAUDE.md's figures from
+2026-11-09 (the lanes 756–910 s, about 1,300 s with the speed phase) are the only ones.
+
+## 8. Part 2: results
+
+Commit `bc6ed1c0` plus this note's docs (no source change). Wall time in seconds; CPU = user +
+system seconds of all child processes; peak = the largest single process.
+
+**Cold (T1).**
+
+| Build | Runs (wall) | CPU | Peak | Compiled |
+|---|---|---|---|---|
+| Dependency-cold: empty folder | 143.8, 141.3, **143.1** | ~1,270 | 5.0 GiB | 255 crates |
+| Workspace-cold: deps warm, `al-sem` + `al-syntax` cleaned | 91.0, **91.3**, 92.6 | ~375 | 5.0 GiB | 2 packages |
+
+Runs 1 of each (and depcold-2) started under the first guard at a 1-minute load of 3–21, so they
+are flagged noisy. They agree with the quiet runs to within 2%. **So the dependencies are about
+51 s of a 142 s cold build (36% of the wall time, 70% of the CPU; they compile in parallel),
+and our own two crates are about 91 s.** The design guessed "about 3 minutes, plus about 3 for
+the tests" for a cold build.
+
+**Warm (T2).** Median of the quiet runs; in brackets, runs taken while the host was busy.
+
+| After | Edit-to-test (one lib test) | Edit-to-build (every test target) |
+|---|---|---|
+| nothing (no-op) | 0.14 | 0.16 |
+| a detector edit | **14.8** (14.8, 14.8; 15.4 noisy) | **18.5** (18.5, 18.4; 19.6 noisy) |
+| a substrate edit | 15.0 (one quiet; 14.1, 15.3 noisy) | 17.6–18.8 (all three noisy) |
+| a model edit | **17.0** (one quiet run of 17.0; 17.8, 19.9 at 65–85% idle; 33–37 at 1–2% idle) | **19.3** (one quiet run; 20.8–47.6 noisy) |
+| an `al-syntax` edit, its own test (`-p al-syntax`) | **1.0–1.4** (after one 19.6 s run that recompiled 5 dependencies, see T5) | |
+
+The model's two busiest runs also doubled the CPU seconds (54–57 against 27–28 on a quiet
+host), so contention, not the model, made them slow. The peak memory of a warm edit-to-test is
+3.1–3.8 GiB (the `al-sem` lib-test rustc).
+
+**The task gate** (`scripts/ci-steps task`, after the detector edit, quiet): **159.9 s**, 1,814 CPU s,
+peak 3.7 GiB. nextest's own summary: **112.8 s for 5,754 tests** (5,754 passed, 8 skipped). So
+building, fmt, clippy and `gen-syntax` are about 47 s of the gate, and running the tests is about
+113 s. This is the exact test inventory that section 5 could only estimate.
+
+**The rerun-cost test (T2, al-syntax edit, then the `al-sem` lib test).** `al-syntax` and the
+unchanged `al-sem` recompile:
+
+| Run | Wall | CPU | Idle before |
 |---|---|---|---|
-| T1 cold | dependency-cold, then workspace-cold (deps warm: `cargo clean -p al-sem -p al-syntax`), for `cargo test --no-run --workspace` (lib tests, the 14 test binaries, bins). The dependency share comes from `--timings` and from a dependency-only build (`cargo build` of the dependency list from `cargo metadata`) | 3 × 2 builds | ~35 min |
-| T2 warm | no-op, then for each of 6 edits: edit-to-build (`cargo build --tests`), edit-to-test (`cargo test -p al-sem --lib <one test>`), and once each, the task gate (`scripts/ci-steps task`). Edits are output-preserving `let _ = 0;` lines added and removed with Edit, one each in: a detector (`detectors/d60.rs`), a substrate file (`l5/pending_writes.rs`), the model (`program/model/workspace.rs`), a renderer (`gate/format_terminal` or the like), MCP (`mcp/` tool dispatch), and **al-syntax** (`lower/mod.rs`, the rerun-cost test) | 6 edits × 3 + 6 task gates | ~60 min |
-| T3 diagnosis | `RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Ztime-passes` on one warm lib-test rebuild after a model edit: parse/expand, type check, borrow check, metadata, codegen, link | 1 build | ~10 min |
-| T4 candidate C | reflink-copy (`cp -a --reflink=always`) a warm T2 folder into a fresh worktree at another path; time the first `cargo test --no-run` there against T1's cold build; record what cargo rebuilds and why (`CARGO_LOG=cargo::core::compiler::fingerprint=info`) | 3 builds | ~20 min |
-| T5 churn | after a warm `cargo build --bins`, count the units `cargo test --no-run` recompiles (feature unification between build and test) | 1 | ~5 min |
+| 1 | 21.8 | 23.2 | 33% |
+| 2 | 17.5 | 19.3 | 51% |
+| 3 | 12.5 | 14.6 | 84% |
+| 4 | 12.2 | 13.8 | 79% |
 
-`output_cdo` runtime and the full `cdo-gate` time are taken from the orchestrator's next real
-`cdo-gate` run (its phase logs), not from an extra run: the gate needs the whole machine and its
-memory question is open. **Open: no such run yet.** CLAUDE.md's figures from 2026-11-09 (lanes
-756–910 s, ~1,300 s with the speed phase) are the only ones until then.
+All four are flagged noisy. The two quietest give **about 12.3 s against 14.8 s** for an edit
+inside `al-sem` (CPU about 14 against 22–25). **So recompiling an unchanged large crate above an
+edit costs about 75–85% of the wall time of editing it (55–65% of its CPU).** A crate above an
+edit saves about 15–25% of its own rebuild; a crate an edit does not reach at all saves 100%.
 
-Total machine time for T1–T5: about 2–2.5 hours of an idle machine.
+**Where rustc spends the time (T3)**, a warm `al-sem` lib-test rebuild after a model edit, 18.7 s
+inside rustc (19.0 s wall, at 55% idle):
+
+| Part | Seconds | Share |
+|---|---|---|
+| Code generation (`codegen_crate`: LLVM IR 4.0, LLVM passes 4.1, with monomorphization and partitioning) | 7.1 | 38% |
+| Front end: macro expansion 1.9, name resolution 0.8, type check 2.1, borrow check 0.5, other checks 1.1 | ~6.3 | ~34% |
+| Saving incremental state (dependency graph 1.6, result cache 0.9) | ~2.5 | ~13% |
+| Link (`rust-lld`, including the packed debug info step `run_thorin` 0.17) | 0.9 | 5% |
+| Other | ~1.9 | ~10% |
+
+**Candidate C (T4).** A reflink copy of the 20 GB warm folder takes **1.0 s**. The first build in
+the fresh worktree with that copy:
+
+| Run | Wall | CPU | Compiled |
+|---|---|---|---|
+| 1 | 118.2 | 461 | 2 packages |
+| 2 | 98.1 | 395 | 2 packages |
+| 3 | 93.3 | 379 | 2 packages |
+
+Every dependency stayed fresh. `al-sem` and `al-syntax` rebuilt in full. Cargo's reason:
+`stale: changed "/work/eng04-wt/build.rs"`, so the source paths and file times differ. rustc then
+reused nothing from the incremental cache: the CPU time equals a workspace-cold build (about
+375 s), because the cache belongs to the crate's identity, which includes the package path. **So
+C, as designed (copy a warm folder into a new worktree), saves exactly the dependencies: about
+51 s of a 142 s cold build, never the 91 s of our own crates.** A worktree built at the path the
+folder was built at (for example, one fixed path per lane) might keep the rest; that was not tested.
+
+**Build-to-test churn (T5).**
+- `cargo build --bins` and `cargo test --no-run` share every artifact: 0 units recompiled either
+  way.
+- `cargo test --no-run -p al-sem` alone also recompiled nothing.
+- **`cargo test -p al-syntax` alone resolves dependency features differently.** The first time,
+  it recompiled `regex`, `regex-syntax`, `regex-automata`, `aho-corasick`, `cc` and `tree-sitter`
+  (19.6 s). After that it was warm (both variants are kept).
+- `--workspace` adds `al-sem-benches` (42 s, once).
+
+A split's per-crate test runs (`-p <crate>`) would meet that churn once per folder.
+
+## 9. Stop/go 0: the three numbers, and a recommendation
+
+**The bound.** On this machine, today, a warm edit-to-test in the single crate already takes
+**15–19 s**. The task gate takes **160 s**, of which **113 s is running the tests**. These two
+numbers bound what any split can gain:
+- In the inner loop, a split can save at most part of 15–19 s.
+- In the task gate, it can save at most part of the 47 s that is not test running.
+
+The design's own suggested limit (section 10) was to continue past Phase 1 only if a warm
+edit-to-test still took over about 90 s. **It takes 15–19 s before Phase 1.**
+
+**The three numbers of section 3.1:**
+1. **Cold or warm.** Of 10.6 h of cargo time in 74 gate runs, 42% was cold dependency builds and
+   55% warm rebuilds. 62% of all gate build time was the fat-LTO `release` build, which no shape
+   changes. In the dev and test profiles a split targets, 25% was cold and 57% warm. A cold build
+   is 142 s, and only 51 s of it is dependencies.
+2. **The rerun cost.** Recompiling an unchanged `al-sem` above an `al-syntax` edit costs about
+   75–85% of the wall time of editing it. A crate above an edit saves about 15–25%. So candidate
+   A's chain gains only where an edit skips crates entirely: commits that touch neither
+   al-program nor al-syntax, 41% of them (section 4). The other 59% gain nothing in the inner
+   loop.
+3. **Where rustc spends the time.** About 34% front end, 38% code generation, 13% saving
+   incremental state, and 5% linking. Crate size matters (front end and codegen), so this number
+   alone does not rule out A or B. Linking does not matter.
+
+**Recommendation: none of A, B or C as designed. Stop the split after Phase 0, and put the next
+week into the costs these numbers show are larger.**
+- **A (the chain):** the best case is an edit in core or engine (41% of commits) that skips
+  al-program. That saves part of a 15 s loop: by section 2's line counts, perhaps 5–8 s, unmeasured
+  until a prototype. The al-program edits (59%) get nothing, may get slower, and meet per-crate
+  feature churn. 4–6 weeks for that is poor value.
+- **B (wide and shallow):** it has the same rerun cost above each edit and more cuts. Not costed,
+  and the numbers do not invite costing it.
+- **C (a warm copy):** as designed it saves only the dependencies, about 51 s per fresh worktree
+  per profile, and the copy costs 1 s. It is worth doing in that reduced form, which takes days,
+  not weeks: seed each new worktree's folder with a reflink copy, or a compiler cache for the
+  dependencies. A fixed build path per lane might also keep our own crates warm. That is a
+  separate, small test.
+- **What the numbers point at instead:**
+  - The task gate's 113 s of test running.
+  - The fat-LTO `release` build, 62% of gate build time, run by `ci-steps all` and CI.
+  - Section 8's cheap rows: `split-debuginfo = "packed"` applies on Linux too (`run_thorin` is
+    small, so expect little); `task-affected` still builds every test binary.
+  - Phase 1 (ENG-05) stays useful as that measurement, and goes ahead under every choice.
