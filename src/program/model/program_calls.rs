@@ -601,8 +601,11 @@ fn attach_program_calls_with(
     }
     // B6: the platform's dataset operations join their call site's row, after
     // the operations written in code (no site key: the site keys end above).
-    for (ri, ops) in dataset_ops {
+    for (ri, ops) in dataset_ops.ops {
         rows.workspace.routines[ri].record_operations.extend(ops);
+    }
+    for (ri, ci) in dataset_ops.may_fail_sites {
+        rows.workspace.routines[ri].call_sites[ci].start_may_fail = true;
     }
     // The pages that block a user's record operation, from the graph (the
     // sited graph's page lifecycle reads the same function).
@@ -1704,7 +1707,7 @@ fn convert<'a>(
                 .collect()
         };
     let mut background_starts: HashMap<String, BackgroundStart> = HashMap::new();
-    let mut dataset_ops: Vec<(usize, Vec<ModelRecordOperation>)> = Vec::new();
+    let mut dataset_ops = DatasetOps::default();
     let mut dataset_edges: Vec<CallEdge> = Vec::new();
     // ENG-06 (`ResolvedCalls::loaded_only_tables`).
     let mut loaded_only_tables: std::collections::HashSet<String> =
@@ -1750,7 +1753,13 @@ fn convert<'a>(
                 let (ops, op_edges) = conv.dataset_operations(ix, r, cs, run, &event_flow, &mut c);
                 dataset_edges.extend(op_edges);
                 if !ops.is_empty() {
-                    dataset_ops.push((ri, ops));
+                    dataset_ops.ops.push((ri, ops));
+                }
+                if conv.graph.object(&run.object).is_some_and(|o| {
+                    use crate::program::resolve::dataset::{direction_refused, import_export};
+                    import_export(run.mode, o).0 || direction_refused(run.mode, o)
+                }) {
+                    dataset_ops.may_fail_sites.push((ri, ci));
                 }
             }
             // ENG-06 (B9): a `FieldRef.Validate(…)` validates a field.
@@ -1770,7 +1779,7 @@ fn convert<'a>(
                     loaded_only_tables.insert(r.stable_routine_id.clone());
                 }
                 dataset_edges.extend(op_edges);
-                dataset_ops.push((ri, vec![op]));
+                dataset_ops.ops.push((ri, vec![op]));
             }
         }
     }
@@ -1831,10 +1840,17 @@ fn convert<'a>(
     )
 }
 
-/// B6: per row index, the platform's dataset operations of its call sites
-/// ([`Converter::dataset_operations`]), for [`attach_program_calls`] to append
-/// to the row's `record_operations`.
-type DatasetOps = Vec<(usize, Vec<ModelRecordOperation>)>;
+/// What the resolution adds to the rows, for [`attach_program_calls`].
+#[derive(Default)]
+struct DatasetOps {
+    /// B6: per row index, the platform's dataset operations of its call
+    /// sites ([`Converter::dataset_operations`]), appended to the row's
+    /// `record_operations`.
+    ops: Vec<(usize, Vec<ModelRecordOperation>)>,
+    /// ENG-08: the (row, call site) indexes whose XmlPort start may fail
+    /// (`PCallSite::start_may_fail`).
+    may_fail_sites: Vec<(usize, usize)>,
+}
 
 /// Where a route's target lives relative to the model (engine-switch S7.3).
 enum Target<'a> {

@@ -233,6 +233,7 @@ mod cli_digest_test_coverage;
 mod cli_dotnet_var_overload;
 mod cli_dump_dependency_source;
 mod cli_eng07_request_page;
+mod cli_eng08_xmlport_import_error;
 mod cli_envelope_detector_set;
 mod cli_error_boundary;
 mod cli_escaped_object_names;

@@ -374,6 +374,7 @@ mod tests {
             result_tested: false,
             receiver_temp_state: None,
             implicit_receiver: None,
+            start_may_fail: false,
         }
     }
 

@@ -1461,6 +1461,8 @@ impl<'a> SpineCtx<'a> {
                     result_tested: self.tested_calls.contains(&eid),
                     receiver_temp_state: None,
                     implicit_receiver,
+                    // Set after resolution (`program_calls`), never here.
+                    start_may_fail: false,
                 });
                 self.cs_arg_exprs.push(args.clone());
             }

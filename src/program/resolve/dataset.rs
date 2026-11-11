@@ -197,6 +197,36 @@ pub fn dataset_mode(kind: ObjectKind, method_lc: &str) -> Option<DatasetMode> {
     }
 }
 
+/// Whether a run of `obj` in `mode` may import and may export. `XmlPort.Run`
+/// follows `Direction`; an explicit import or export (`Import`, `Export`, a
+/// literal `Run` argument) runs only when `Direction` allows it, and fails
+/// otherwise ([`direction_refused`]). A dataset not known has no `Direction`
+/// either, so it allows both.
+#[must_use]
+pub fn import_export(mode: DatasetMode, obj: &ObjectNode) -> (bool, bool) {
+    let (may_import, may_export) = if obj.dataset.known {
+        (obj.dataset.may_import, obj.dataset.may_export)
+    } else {
+        (true, true)
+    };
+    match mode {
+        DatasetMode::Read => (false, false),
+        DatasetMode::Import => (may_import, false),
+        DatasetMode::Export => (false, may_export),
+        DatasetMode::XmlPortRun => (may_import, may_export),
+    }
+}
+
+/// ENG-08: an explicit import or export that `obj`'s `Direction` does not
+/// allow. It fails before any trigger runs, measured on BC 28 (`Xmlport.Run(X,
+/// false, false)` on a `Direction = Import` XmlPort: "The XMLPort 'X' is
+/// designed for import only."; the export case alike).
+#[must_use]
+pub fn direction_refused(mode: DatasetMode, obj: &ObjectNode) -> bool {
+    matches!(mode, DatasetMode::Import | DatasetMode::Export)
+        && import_export(mode, obj) == (false, false)
+}
+
 /// The platform's operations when `object` runs in `mode`, with the triggers
 /// and table events each insert or modify reaches. See the module doc.
 #[must_use]
@@ -221,14 +251,7 @@ pub fn dataset_effects(
                 .filter_map(|e| graph.object_first(e)),
         );
     }
-    let (import, export) = match mode {
-        DatasetMode::Read => (false, false),
-        DatasetMode::Import => (true, false),
-        DatasetMode::Export => (false, true),
-        // A dataset not known has no `Direction` either: both.
-        DatasetMode::XmlPortRun if !obj.dataset.known => (true, true),
-        DatasetMode::XmlPortRun => (obj.dataset.may_import, obj.dataset.may_export),
-    };
+    let (import, export) = import_export(mode, obj);
     let mut out = Vec::new();
     for owner in owners {
         let push = |out: &mut Vec<DatasetEffect>,
