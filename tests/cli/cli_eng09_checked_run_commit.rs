@@ -327,3 +327,125 @@ fn a_checked_runs_commit_is_no_d35_finding() {
         .collect();
     assert_eq!(flagged, vec!["SubCommit"], "{doc}");
 }
+
+const DEP_GUID: &str = "e09e09e0-0000-4000-8000-0000000000d1";
+
+const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"13.0","Codeunits":[{"Id":50960,"Name":"CRD Both","Methods":[{"Name":"Both","Parameters":[]}]},{"Id":50961,"Name":"CRD Worker","Methods":[]}],"AppId":"e09e09e0-0000-4000-8000-0000000000d1","Name":"CRDep","Publisher":"probe","Version":"1.0.0.0"}"#;
+
+/// One dependency routine that holds both kinds of commit: a `Commit()` and a
+/// checked run.
+const DEP_SOURCE: &str = r#"codeunit 50960 "CRD Both"
+{
+    procedure Both()
+    begin
+        Commit();
+        if Codeunit.Run(Codeunit::"CRD Worker") then;
+    end;
+}
+codeunit 50961 "CRD Worker"
+{
+    trigger OnRun()
+    begin
+    end;
+}
+"#;
+
+const WS_SOURCE: &str = r#"codeunit 50970 "CRX Root"
+{
+    procedure Plain()
+    var
+        D: Codeunit "CRD Both";
+    begin
+        D.Both();
+    end;
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure UnderIgnore()
+    var
+        D: Codeunit "CRD Both";
+    begin
+        D.Both();
+    end;
+}
+"#;
+
+fn dep_workspace() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        format!(
+            r#"{{"id":"e09e09e0-0000-4000-8000-0000000000d2","name":"CRX","publisher":"t","version":"1.0.0.0",
+            "dependencies":[{{"id":"{DEP_GUID}","name":"CRDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Root.al"), WS_SOURCE).unwrap();
+    crate::symbol_app::write_source_app(
+        &ws.join(".alpackages/probe_CRDep_1.0.0.0.app"),
+        DEP_GUID,
+        "CRDep",
+        "1.0.0.0",
+        DEP_SYMBOLS,
+        &[("src/CRDBoth.Codeunit.al", DEP_SOURCE)],
+        "",
+    );
+    t
+}
+
+/// Beyond a dependency crossing, a `Commit()` and a checked run's commit are
+/// two rows, never one: the run's row is marked `checked-run` and is
+/// `conditional`, and under `Ignore` only the run's row is left.
+#[test]
+fn beyond_a_crossing_the_two_kinds_of_commit_stay_apart() {
+    let t = dep_workspace();
+    let ws = t.path().to_str().unwrap();
+    let prove = |routine: &str| -> Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(["prove", ws, &format!("CRX Root::{routine}"), "may-commit"])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("spawn alsem");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<Value>(&out.stdout).expect("json")["payload"]["result"].clone()
+    };
+    // Each COMMIT row beyond the crossing: (is it the run's, the dependency
+    // site its witness ends on: `cs…` a call site, `op…` an operation).
+    let rows = |r: &Value| -> Vec<(bool, String)> {
+        let mut v: Vec<(bool, String)> = r["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["type"] == "COMMIT" && e["detail"]["boundary"].is_string())
+            .map(|e| {
+                let site = e["groupWitness"]["terminal"]["operationId"]
+                    .as_str()
+                    .and_then(|id| id.rsplit('/').next())
+                    .unwrap_or("none")
+                    .to_string();
+                (e["detail"]["resourceId"] == "checked-run", site)
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let r = prove("Plain");
+    assert_eq!(r["answer"], "yes", "{r}");
+    assert_eq!(
+        rows(&r),
+        vec![(false, "op0".to_string()), (true, "cs0".to_string())],
+        "the Commit() and the run, apart, each ending on its own site: {r}"
+    );
+    let r = prove("UnderIgnore");
+    assert_eq!(r["answer"], "yes", "{r}");
+    assert_eq!(
+        rows(&r),
+        vec![(true, "cs0".to_string())],
+        "under Ignore only the run's commit is left: {r}"
+    );
+}

@@ -5653,9 +5653,11 @@ fn digest_one_root<'i>(
                             }
                         };
                     let key = match &bnd {
-                        // (effect type with its temp class, boundary identity).
+                        // (effect type with its temp class, boundary identity);
+                        // ENG-09: a checked run's commit is its own group.
                         Some(b) => format!(
-                            "B|{effect_type}|{}|{}",
+                            "B|{effect_type}{}|{}|{}",
+                            if run_commit { "|run" } else { "" },
                             if is_known_temp_snap(fact) { "kt" } else { "nt" },
                             b.id
                         ),
@@ -5687,8 +5689,10 @@ fn digest_one_root<'i>(
                         {
                             acc.group_unresolved += 1;
                         }
+                        // ENG-09: `checked-run` marks the commit's kind; it
+                        // is no resource the group touches.
                         if let (Some((_, resources)), Some(r)) =
-                            (&mut acc.group, fact.resource_id())
+                            (&mut acc.group, fact.resource_id().filter(|_| !run_commit))
                         {
                             resources.entry(r.to_string()).or_insert_with(|| {
                                 resource_display_of(fact, &idx.stable_id_to_display)
@@ -5858,10 +5862,16 @@ fn digest_one_root<'i>(
                         ));
                     }
                     // B4/L16: a group of commits that raise an error says why.
+                    // ENG-09: a group of checked runs' commits says so (its
+                    // readers: the ordering flag, its terminal witness).
                     d.extend(
                         acc.detail
                             .iter()
-                            .filter(|(k, _)| k == "commitBehavior")
+                            .filter(|(k, v)| {
+                                k == "commitBehavior"
+                                    || (k == "resourceId"
+                                        && v == crate::engine::l4::capability_cone::RUN_COMMIT)
+                            })
                             .cloned(),
                     );
                     d

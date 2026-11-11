@@ -35,11 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the run's commit as an error site; the slice applies the same rule as the unfiltered answer.
   Review (astra, Fable): with a witness-shape identity, a root reaching both a `Commit()` and a
   checked run kept one inherited commit for both, so `[CommitBehavior(Ignore)]` over a `Commit()`
-  and a deeper run answered `may-commit no`; the resource id fixes it.
-- Tests: `tests/cli/cli_eng09_checked_run_commit.rs` (5 tests; discrimination proofs: no commit
+  and a deeper run answered `may-commit no`; the resource id fixes it. Round 2 (Fable): beyond a
+  dependency crossing the two kinds were still one group row (its key had no resource), and a
+  run's group ended its witness on a `Commit()`; now they are two rows (the run's says
+  `resourceId: checked-run`), each ending on its own site. `alsem impact` keys a new checked run's
+  commit as `commit|checked-run`, the twin of its cone row, so it is listed once.
+- Tests: `tests/cli/cli_eng09_checked_run_commit.rs` (6 tests, one cross-app) and
+  `impact::delta::tests::a_new_checked_runs_commit_is_one_change`; discrimination proofs: no commit
   fact, no `conditional` floor, the digest's or the slice's `[CommitBehavior]` split applied to the
-  run's commit, no variable-form mark, one cone key for both kinds of commit, and the run's commit
-  in d35's "may commit" flag each fail them;
+  run's commit, no variable-form mark, one cone key for both kinds of commit, the run's commit in
+  d35's "may commit" flag, one crossing group for both kinds, the run group's witness looked up as
+  a `Commit()`'s, and no impact twin each fail them;
   leaving the ordering exclusion out moves the d49 run-boundary goldens). `cli_prove_traps`: a
   checked run's digest now has a live commit row beside its caught error.
 - Goldens: `l2_features.snapshot` (the new internal field only, proven by stripping it against the

@@ -2476,7 +2476,12 @@ fn literal_reach_entries<'t>(
                     } else {
                         e.effect_type.as_str()
                     };
-                    let ops = vec![(String::new(), reach.terminal_ops(ty))];
+                    // ENG-09: a group of checked runs' commits ends on one.
+                    let run = crate::engine::l4::capability_cone::RUN_COMMIT;
+                    let marker = (ty == "COMMIT"
+                        && e.detail.iter().any(|(k, v)| k == "resourceId" && v == run))
+                    .then_some(run);
+                    let ops = vec![(String::new(), reach.terminal_ops((ty, marker)))];
                     e.group_terminal_path = group_paths
                         .paths(reach, tree, entries, e, &ops, suffixes, &never)
                         .pop()

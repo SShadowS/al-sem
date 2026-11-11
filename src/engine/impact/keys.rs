@@ -482,7 +482,12 @@ fn own_keys(
                 )
             }
             ("table", _) | ("event", "subscribe") => continue,
-            ("transaction", "commit") => ("commit".into(), "commit".into()),
+            // ENG-09: a checked run's commit keys as its cone row does
+            // (`COMMIT|checked-run`, `delta::cone_twin`).
+            ("transaction", "commit") => match f.resource_id.as_deref() {
+                Some(r) => (format!("commit|{r}"), "commit (checked run)".into()),
+                None => ("commit".into(), "commit".into()),
+            },
             ("error", op) => {
                 let msg = if op == "error-throw" {
                     let r = f

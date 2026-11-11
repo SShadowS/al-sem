@@ -169,12 +169,12 @@ pub struct CoverageRecord {
 // publisher injection.
 // ===========================================================================
 
-/// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
 /// ENG-09: the resource of a checked `Codeunit.Run`'s own commit (the run's
 /// transaction), on a `commit`/`transaction` fact. An explicit `Commit()` has
-/// none.
+/// none. A marker of the commit's kind, not a table or event id.
 pub(crate) const RUN_COMMIT: &str = "checked-run";
 
+/// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
 fn object_type_to_resource_kind(object_type: &str) -> &'static str {
     match object_type {
         "Codeunit" => "codeunit",
@@ -1476,8 +1476,8 @@ fn build_typed_edge_graph(
 /// source` yields `static` / `userDynamic` / `configDynamic` / `unresolved`, and
 /// the r3a3 manifest records both `unresolved` and `configDynamic`. It is safe
 /// because **no one of those four values is a prefix of another, and
-/// `resource_id` is only ever a table id or an event id, neither of which can
-/// contain `|`.** Add a `dynamic` confidence alongside `dynamicX`, or a rid that
+/// `resource_id` is only ever a table id, an event id or [`RUN_COMMIT`], none of
+/// which can contain `|`.** Add a `dynamic` confidence alongside `dynamicX`, or a rid that
 /// can carry a `|`, and this breaks.
 ///
 /// What this buys is CONSERVATIVE FOR THE PHYSICAL-WRITE AND PHYSICAL-READ SETS

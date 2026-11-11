@@ -3686,12 +3686,13 @@ impl<'a> LiteralReach<'a> {
 
     /// W2-6 (2f, design §3.4.2): the operations a resource-less group of
     /// `effect_type` (COMMIT, HTTP, UI, …) could end at: every direct fact of
-    /// that type with no resource, sorted. `None` when one names no
+    /// that type with no resource (or, ENG-09, a checked run's commit: its
+    /// `RUN_COMMIT` marker), sorted. `None` when one names no
     /// operation (it cannot be witnessed).
-    pub(crate) fn terminal_ops(&self, effect_type: &str) -> Option<Vec<String>> {
+    pub(crate) fn terminal_ops(&self, kind: (&str, Option<&str>)) -> Option<Vec<String>> {
         use crate::engine::l5::terminal_facts::TerminalSite;
         let mut out = Vec::new();
-        for r in self.terminals.of_kind((effect_type, None)) {
+        for r in self.terminals.of_kind(kind) {
             match r.terminal {
                 TerminalSite::None => return None,
                 t => out.push(t.id().to_string()),
