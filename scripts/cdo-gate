@@ -60,16 +60,54 @@ set -uo pipefail
 speed=1
 ws_arg=""
 summary_dir=""
+speed_skipped=""
+product_paths_only=0
 usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
     echo "       scripts/cdo-gate --summary=<run folder>   (a past run's summary, from its logs)" >&2
 }
 
 loud_no_speed() {
+    if [[ -n "$speed_skipped" ]]; then
+        echo "cdo-gate: speed: skipped, $speed_skipped (nothing in it can change alsem's speed)"
+        return
+    fi
     echo "cdo-gate: ****************************************************************"
     echo "cdo-gate: **  SPEED AND MEMORY WERE NOT CHECKED (--no-speed).            **"
     echo "cdo-gate: **  A slowdown or a memory rise on CDO passes this gate unseen.  **"
     echo "cdo-gate: ****************************************************************"
+}
+
+# ⟨TLS-20, owner 2026-11-11⟩ The changed paths that can reach the `alsem` binary
+# (read on stdin, one per line). An allow-list of paths never compiled into it:
+# tests (goldens included), docs, scripts other than the speed check itself,
+# the nextest config and the CHANGELOG. Everything else, `src/`, `crates/`,
+# `Cargo.*`, `build.rs`, `.cargo/`, a new top-level file, counts: the safe
+# direction. (`include_str!`/`include_bytes!` in product code read only files
+# under `src/` and `crates/`, checked 2026-11-11.)
+product_paths() {
+    local f
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        case "$f" in
+            scripts/cdo-speed) echo "$f" ;;
+            tests/* | docs/* | scripts/* | .config/nextest.toml | CHANGELOG.md) ;;
+            *) echo "$f" ;;
+        esac
+    done
+}
+
+# The paths the working tree changes against the base the speed check times it
+# against (`cdo-speed`'s own choice: the merge base with master, or on a clean
+# master HEAD's first parent), with untracked files.
+changed_paths() {
+    local base head
+    head=$(git -C "$repo" rev-parse HEAD) || return 1
+    base=$(git -C "$repo" merge-base HEAD master) || return 1
+    if [[ "$base" == "$head" && -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]; then
+        base=$(git -C "$repo" rev-parse --verify -q 'HEAD^1') || return 1
+    fi
+    { git -C "$repo" diff --name-only "$base"; git -C "$repo" ls-files --others --exclude-standard; } | sort -u
 }
 
 # The summary: every phase's result from its status file (a missing one is a
@@ -81,6 +119,9 @@ loud_no_speed() {
 # `cdo-speed` fails on any timed call that does not exit 0.
 summarize() {
     local phases=(program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo)
+    # ⟨TLS-19⟩ A run that split the impact ratchets off says so (an older run's
+    # `output_cdo` held them); in a run that did, a missing status fails as any.
+    [[ -f "$logs/split-impact" ]] && phases+=(output_cdo_impact)
     [[ "$speed" -eq 1 ]] && phases=(speed "${phases[@]}")
     local status=0 name rc secs word counts passed bad=()
     echo "cdo-gate: summary (wall seconds; logs in $logs)"
@@ -108,6 +149,16 @@ summarize() {
         [[ "$word" == ok ]] || { status=1; bad+=("$name"); }
         printf 'cdo-gate:   %-26s %-20s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
     done
+    # ⟨TLS-19⟩ The container's peak memory during the test lanes (a report, not a verdict).
+    if [[ -f "$logs/memory.peak" ]]; then
+        local peak limit
+        read -r peak limit < "$logs/memory.peak"
+        if [[ "$limit" =~ ^[0-9]+$ ]]; then
+            echo "cdo-gate:   peak memory (container) $((peak >> 20)) MiB of $((limit >> 20)) MiB, headroom $(((limit - peak) >> 20)) MiB"
+        else
+            echo "cdo-gate:   peak memory (container) $((peak >> 20)) MiB (no limit)"
+        fi
+    fi
     [[ "$speed" -eq 0 ]] && loud_no_speed
 
     if [[ "$status" -ne 0 ]]; then
@@ -120,6 +171,8 @@ summarize() {
             fi
         done
         echo "cdo-gate: FAIL"
+    elif [[ -n "$speed_skipped" ]]; then
+        echo "cdo-gate: PASS (behaviour only: speed skipped, $speed_skipped)"
     elif [[ "$speed" -eq 0 ]]; then
         echo "cdo-gate: PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)"
     else
@@ -134,6 +187,7 @@ for arg in "$@"; do
     case "$arg" in
         --no-speed) speed=0 ;;
         --summary=*) summary_dir="${arg#--summary=}" ;;
+        --product-paths) product_paths_only=1 ;;
         -*)
             echo "cdo-gate: error: unknown option: $arg" >&2
             usage
@@ -151,10 +205,17 @@ for arg in "$@"; do
 done
 [[ "${CDO_GATE_NO_SPEED:-}" == "1" ]] && speed=0
 
+# ⟨TLS-20⟩ `--product-paths`: the rule alone, for its test (paths on stdin).
+if [[ "$product_paths_only" == 1 ]]; then
+    product_paths
+    exit 0
+fi
+
 # A past run's summary: the run had a speed phase when it left a status for one.
 if [[ -n "$summary_dir" ]]; then
     logs="$summary_dir"
     [[ -f "$logs/speed.status" ]] && speed=1 || speed=0
+    [[ -f "$logs/speed-skipped" ]] && speed_skipped=$(cat "$logs/speed-skipped")
     summarize
     exit $?
 fi
@@ -205,6 +266,8 @@ find "$logs_root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>
 logs="$logs_root/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$logs" || exit 1
 echo "cdo-gate: logs in $logs"
+# ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
+: > "$logs/split-impact"
 
 # Each output line prefixed with the gate's clock (seconds since it started),
 # so a log shows when each test ended.
@@ -238,6 +301,17 @@ run_phase() {
 # Build every phase's test target once. The phases' own `cargo test` calls
 # then only check freshness, so two of them can run at once.
 # ---------------------------------------------------------------------------
+# ⟨TLS-20⟩ A diff that touches no product code builds the same `alsem` as its
+# base: the speed phase would time a binary against itself. An empty diff, or a
+# diff that cannot be read, keeps the phase.
+if [[ "$speed" -eq 1 ]]; then
+    changed=$(changed_paths) || changed=""
+    if [[ -n "$changed" && -z "$(product_paths <<<"$changed")" ]]; then
+        speed=0
+        speed_skipped="diff touches no product code"
+        echo "$speed_skipped" > "$logs/speed-skipped"
+    fi
+fi
 if [[ "$speed" -eq 0 ]]; then
     loud_no_speed
 else
@@ -293,8 +367,19 @@ fi
 # MCP answers come off ONE `alsem mcp` server per process (one resident
 # build), so its tests share a process: plain `cargo test`, filtered to the
 # member.
+# ⟨TLS-19⟩ Without its two impact ratchets, which have a lane of their own
+# (`phase_output_cdo_impact`): the two phases together run every `output_cdo::`
+# test (`on_the_cdo_gate` and `cdo_gate_run_set_matches_the_script` state it).
 phase_output_cdo() {
-    run_phase output_cdo cargo test "${profile[@]}" --test cli output_cdo::
+    run_phase output_cdo cargo test "${profile[@]}" --test cli output_cdo:: -- --skip output_cdo::cdo_impact
+}
+
+# ⟨TLS-19, owner 2026-11-11⟩ `cdo_impact_ratchets` and `cdo_impact_base_ratchets`
+# run one-shot `alsem impact` processes (each builds the CDO model; 4-7 min, on
+# about 3 cores) and held `output_cdo` open 470-700 s after its other tests
+# (TLS-16's note). They run beside everything else, also in serial mode.
+phase_output_cdo_impact() {
+    run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
 }
 
 # ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs
@@ -355,18 +440,36 @@ lane2() {
 # calls of 4-7 minutes that use only ~3 cores each. Starved at the start
 # (every other test busy) they ran longest; lane 2 now takes what they leave.
 lane2_nice=(nice -n 10)
+# ⟨TLS-19⟩ The container's memory while the test lanes run: the highest
+# `memory.current` of this cgroup, sampled every 2 s (container-wide: what its
+# `memory.max` limit counts), against that limit, in the summary.
+memory_sampler() {
+    local cg=/sys/fs/cgroup peak=0 cur
+    [[ -r "$cg/memory.current" ]] || return 0
+    while :; do
+        read -r cur < "$cg/memory.current" || break
+        ((cur > peak)) && peak=$cur && echo "$peak $(cat "$cg/memory.max" 2>/dev/null)" > "$logs/memory.peak"
+        sleep 2
+    done
+}
+# A Ctrl-C or kill stops the background lanes too.
+trap 'kill 0' INT TERM
+memory_sampler &
+sampler=$!
+phase_output_cdo_impact &
+impact_lane=$!
 if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
     lane2_nice=()
     lane2
     phase_output_cdo
 else
-    # A Ctrl-C or kill stops the background lane too.
-    trap 'kill 0' INT TERM
     phase_output_cdo &
     lane1=$!
     lane2
     wait "$lane1"
 fi
+wait "$impact_lane"
+kill "$sampler" 2>/dev/null
 
 summarize
 exit $?

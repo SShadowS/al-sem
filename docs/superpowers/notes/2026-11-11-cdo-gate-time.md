@@ -153,3 +153,25 @@ Ranking after the traces: P1, then P7, then P2 (product); G1 (impact ratchets as
 shrinks to whatever P1 and P7 leave. The four traces and the script that ran them are in
 `cdo-gate-time/` next to this note (`scripts/trace_summary.py cdo-gate-time/trace-*.json`
 reprints the table).
+
+## TLS-17: the cones' indexes built once (measured)
+
+The unresolved cones' four snapshot indexes, rebuilt for every root, are built once per read
+(`ConeIndexes` in a `OnceLock` on `FinishCx`; spec `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`).
+Measured on CDO, release-fast, one job at a time, alternating: before = the speed cache's binary of
+`3f180c94` (master's product code), after = TLS-17. Every run was flagged noisy (host 37-80% idle).
+Records: `cdo-gate-time/tls17-runs.jsonl`.
+
+| Call | `digest.unresolved_cones` (self) | Wall | CPU | Peak RSS |
+|------|----------------------------------|------|-----|----------|
+| `impact --diff` (699 roots) | 30.4 -> 3.6 s | 318.0 -> 338.6 s | 729 -> 780 s | 3,283 -> 3,273 MiB |
+| `impact --base`, JSON | 41.8 -> 4.0 s | 408.1 -> 371.0 s | 906 -> 866 s | 3,663 -> 3,680 MiB |
+
+- The span falls by about 88% in both calls: the index builds were nearly all of it.
+- The walls and CPU move with the host's load, not with the change: the diff call's "after" run had
+  a host 37% idle, and its untouched `prove.reach_effects` grew from 87.6 s to 118.3 s with it; the
+  base call's runs had comparable hosts and fell 37 s. The span is the clean number.
+- Peak RSS is unchanged within noise (-0.3%, +0.5%).
+- Output: the `--diff` answers are identical; the `--base` answers differ only in the base cache's
+  temporary folder and the base build's `ms` timings, which change on every run.
+- What is left of the span (3.6-4.0 s) includes `count_gaps_in_cone`; not worth a task now.
