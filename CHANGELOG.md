@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (GRM-02: tree-sitter-al 5.2.0, main `f8c6d8b6`)
+
+- **Grammar 5.1.0 (`abc77b25`) -> 5.2.0 (`f8c6d8b6`).** The parser has 46.8% fewer states and
+  `parser.c` is half the size (70.3 -> 34.7 MB). `gen-syntax`: no new kind (still 513 named
+  kinds, 79 fields), only the node-types hash moves. `node-types.json` gains one child type,
+  `preproc_pragma_only`, under `preproc_conditional_var_block`, the conditional and split
+  procedure and trigger preambles, and itself (an empty `#if` group right after a routine
+  header, grammar item 102). `kind_policy` already classes it structural and the lowerer
+  descends through it, so a var section after such a group still gives the routine its locals
+  (new test `an_empty_group_after_a_routine_header_keeps_the_var_section`; on 5.1.0 the first
+  shape is `Recovered` and the test fails). `CACHE_VERSION_GRAMMAR` is
+  `tree-sitter-al-v5.2.0-f8c6d8b6-native` (and the two fixture-cache stamps, the kept one's
+  content hash recomputed).
+- Measured (old = master `f12bf250` on 5.1.0, new = this branch on 5.2.0):
+  - Trees: all 12,351 `.al` files (CDO's 10,881 dependency sources, the whole CDO baseline and
+    this repo's fixtures) give byte-identical S-expressions, parse status, issue count and
+    lowered routines. The grammar's own 61 item-102 inputs: 14 go `Recovered` -> `Clean`, 4 of
+    them gain a local the error had swallowed, none regress.
+  - Tests: the whole suite passes on 5.2.0 with no golden regenerated (5,812 tests).
+  - Build: an `al-syntax` rebuild (release, its build script compiles `parser.c`) took
+    9.9-12.4 s on 5.1.0 and 8.6-9.9 s on 5.2.0 (3 runs each, machine shared).
+
 ### Changed (TLS-19 and TLS-20: the CDO gate's impact lane and speed skip)
 
 - **`scripts/cdo-gate` runs the impact ratchets last again, not beside the other phases** (TLS-23,

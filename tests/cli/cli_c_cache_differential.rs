@@ -398,7 +398,7 @@ fn current_versions_json(extra_key: Option<(&str, &str)>) -> String {
     map.insert("devFingerprint".into(), "dev".into());
     map.insert(
         "grammar".into(),
-        "tree-sitter-al-v5.1.0-abc77b25-native".into(),
+        "tree-sitter-al-v5.2.0-f8c6d8b6-native".into(),
     );
     map.insert("resourcePolicy".into(), "1".into());
     map.insert("summarySchema".into(), "33".into());
