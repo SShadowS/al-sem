@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-17: the unresolved cones build their indexes once per read)
+
+- **A multi-root digest, prove or impact no longer rebuilds the snapshot's indexes for every
+  root's unresolved cone.** `unresolved_cone` built four indexes over the whole snapshot (identities,
+  the call-site index, the typed edges with sorted buckets, the ledger) before each root's search:
+  699 times for a 699-root impact. They are now built once per read (`ConeIndexes`, in a `OnceLock`
+  on `FinishCx`) and looked up by every root's search. Output is unchanged byte for byte (every
+  golden; the CDO runs below). Measured on CDO (release-fast, TLS-16's note): the
+  `digest.unresolved_cones` span 30.4 -> 3.6 s on `impact --diff` and 41.8 -> 4.0 s on
+  `impact --base`; peak RSS unchanged within noise. Tests: the old function kept verbatim as a
+  test-only oracle, compared through `FinishCx::finish` on every r0 dir and the dependency
+  fixtures, a hand-built visit-cap case for the bucket order, and a one-build-per-read counter, each
+  with a discrimination proof. Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`,
+  which also records why a parallel literal reach is not built yet (ENG-18, TLS-22).
+
 ### Fixed (ENG-06: `FieldRef.Validate` and record operations on a table not known, engine limits B9, B10)
 
 - **B9: `FieldRef.Validate` validates its field.** `FR := RR.Field(2); FR.Validate(1);` now
