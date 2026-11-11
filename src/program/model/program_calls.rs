@@ -1715,9 +1715,6 @@ fn convert<'a>(
     // ENG-06 (`ResolvedCalls::loaded_only_tables`).
     let mut loaded_only_tables: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    // ENG-09: a call edge's callee row, for `traps::is_checked_run`.
-    let row_by_id: HashMap<&str, &ModelRoutine> =
-        ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order), then the dataset
     // operations' trigger and table-event edges (B6).
@@ -1749,18 +1746,31 @@ fn convert<'a>(
                     no_program_edge(ix, r, cs)
                 }
             };
-            // ENG-09: a checked `Codeunit.Run` commits at its end. Decided as
-            // the commit scope decides its checked-run step (`commit_scope`):
-            // the keyword form by its shape (a run-time id included), the
-            // variable form by the edge into `OnRun`.
+            // ENG-09: a checked `Codeunit.Run` commits at its end. The keyword
+            // form by its shape (a run-time id included); the variable form
+            // when the resolver decided the call starts the codeunit (not a
+            // procedure named `Run`), whether or not its `OnRun` is a row here
+            // (none declared, or a symbol-only dependency).
+            let starts_codeunit = program_edge
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .is_some_and(|f| {
+                    f.starts_object == crate::program::resolve::dataset::ObjectStart::Yes
+                        && f.receiver.as_ref().is_some_and(|r| {
+                            matches!(
+                                r.ty,
+                                crate::program::resolve::full::ReceiverFactType::Object {
+                                    kind: ObjectKind::Codeunit,
+                                    ..
+                                }
+                            )
+                        })
+                });
             if crate::engine::l5::traps::is_checked_run(cs, None)
-                || site_edges.iter().any(|e| {
-                    e.starts_object == crate::program::resolve::dataset::ObjectStart::Yes
-                        && crate::engine::l5::traps::is_checked_run(
-                            cs,
-                            e.to.as_deref().and_then(|t| row_by_id.get(t)).copied(),
-                        )
-                })
+                || (starts_codeunit
+                    && crate::engine::l5::traps::checked_run(
+                        cs,
+                        crate::engine::l5::traps::TrapCallee::Object { codeunit: true },
+                    ))
             {
                 dataset_ops.checked_run_sites.push((ri, ci));
             }

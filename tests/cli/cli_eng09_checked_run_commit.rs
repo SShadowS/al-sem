@@ -73,6 +73,67 @@ codeunit 50920 "CR Caller"
     begin
         if Codeunit.Run(Codeunit::"CR Writer") then;
     end;
+    procedure CheckedEmpty()
+    var
+        E: Codeunit "CR Empty";
+    begin
+        if E.Run() then;
+    end;
+    procedure CommitOnly()
+    begin
+        Commit();
+    end;
+    procedure Via()
+    begin
+        Checked();
+    end;
+    procedure ViaCommit()
+    begin
+        CommitOnly();
+    end;
+    [CommitBehavior(CommitBehavior::Ignore)]
+    procedure MixedIgnore()
+    begin
+        CommitOnly();
+        Via();
+    end;
+    [CommitBehavior(CommitBehavior::Error)]
+    procedure MixedError()
+    begin
+        Checked();
+        ViaCommit();
+    end;
+}
+codeunit 50930 "CR Empty"
+{
+}
+codeunit 50950 "CR Pub"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnThing()
+    begin
+    end;
+}
+codeunit 50951 "CR Subs"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"CR Pub", 'OnThing', '', false, false)]
+    local procedure SubRun()
+    begin
+        RunHelper();
+    end;
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"CR Pub", 'OnThing', '', false, false)]
+    local procedure SubCommit()
+    begin
+        CommitHelper();
+    end;
+    local procedure RunHelper()
+    begin
+        if Codeunit.Run(Codeunit::"CR Writer") then;
+    end;
+    local procedure CommitHelper()
+    begin
+        Commit();
+    end;
 }
 "#;
 
@@ -131,6 +192,8 @@ fn a_checked_run_commits_at_its_call_site() {
         ("CheckedAssigned", "Codeunit.Run("),
         ("CheckedVar", "W.Run()"),
         ("CheckedDynamic", "Codeunit.Run(Id)"),
+        // A codeunit with no `OnRun`: the run still starts it and commits.
+        ("CheckedEmpty", "E.Run()"),
     ] {
         let r = ask(ws, routine, "may-commit", &["--single-app"]);
         assert_eq!(r["answer"], "yes", "{routine}: {r}");
@@ -202,4 +265,65 @@ fn commit_behavior_does_not_change_a_checked_runs_commit() {
         assert_eq!(r["answer"], "no", "{routine} --match: {r}");
         assert_eq!(r["otherSites"], serde_json::json!([]), "{routine}: {r}");
     }
+}
+
+/// A root that reaches both a `Commit()` and a checked run: the scope applies
+/// to the `Commit()` only, whichever of the two is nearer. Under `Ignore` the
+/// run still commits (and only the run: the `Commit()` is ignored); under
+/// `Error` the farther `Commit()` still raises its error.
+#[test]
+fn a_commit_and_a_checked_run_under_one_scope_stay_apart() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let r = ask(ws, "MixedIgnore", "may-commit", &["--single-app"]);
+    assert_eq!(r["answer"], "yes", "{r}");
+    let lines: Vec<u64> = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["evidence"]["line"].as_u64())
+        .collect();
+    assert_eq!(
+        lines,
+        vec![line_of("Codeunit.Run(", "procedure Checked(")],
+        "only the run's commit survives Ignore: {r}"
+    );
+    let r = ask(ws, "MixedError", "throws-error", &["--single-app"]);
+    assert_eq!(r["answer"], "yes", "the Commit() under Error: {r}");
+    let r = ask(ws, "MixedError", "may-commit", &["--single-app"]);
+    assert_eq!(r["answer"], "yes", "the run still commits: {r}");
+}
+
+/// d35 (a `Commit()` reachable from an event subscriber) asks about a commit
+/// of the publisher's work, which a checked run's own commit never is: a
+/// subscriber whose helper runs a codeunit checked is no finding, the
+/// `Commit()` control is.
+#[test]
+fn a_checked_runs_commit_is_no_d35_finding() {
+    let t = workspace();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "analyze",
+            t.path().to_str().unwrap(),
+            "--detector",
+            "d35-commit-in-event-subscriber",
+            "--format",
+            "json",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: Value = serde_json::from_slice(&out.stdout).expect("json");
+    let flagged: Vec<&str> = doc["payload"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|f| f["primaryLocation"]["routineName"].as_str())
+        .collect();
+    assert_eq!(flagged, vec!["SubCommit"], "{doc}");
 }

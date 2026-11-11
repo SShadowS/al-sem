@@ -325,20 +325,28 @@ callers' question reads (`commit_scope::declared`).
    the caller's `[CommitBehavior(Ignore)]` and `(Error)` (no error) and for `Ok := W.Run()` on a
    codeunit variable. So `program_calls` marks each checked run (`PCallSite::checked_run`, by
    `traps::is_checked_run`: the keyword form by its shape, a run-time id included, the variable
-   form by its edge into `OnRun`), and the capability cone gives the site a commit fact witnessed
-   by the call site (`commit_scope::is_run_commit`: a commit with no operation). No
-   `[CommitBehavior]` rule applies to it (the digest's split, `CbGraph`'s commits, the
-   `--site/--match` slice). A failed run commits nothing and the caller carries on, so it is at
-   least `conditional`, never `unconditional on success`. In the ordering engine it is
-   `COMMIT_REACHABLE` only: it commits the run's own transaction, never a write of the caller (one
-   pending at the run is L28's error, one after it is not in the run). The explicit commit inside a
-   run is still read as the run's commit too (above).
+   form when the resolver decided the call starts a codeunit, with or without an `OnRun` row), and
+   the capability cone gives the site a commit fact witnessed by the call site, with the resource
+   id `checked-run` (`capability_cone::RUN_COMMIT`, read by `commit_scope::is_run_commit`). The
+   resource gives it its own cone entry and witness carriers: review round 1 (astra, Fable) found
+   that without it a root reaching both a `Commit()` and a checked run had ONE inherited commit
+   whose representative decided the `[CommitBehavior]` rule for both (`[Ignore]` over a `Commit()`
+   and a deeper run gave a wrong `may-commit no`). No `[CommitBehavior]` rule applies to it (the
+   digest's split, `CbGraph`'s commits, the `--site/--match` slice). A failed run commits nothing
+   and the caller carries on, so it is at least `conditional`, never `unconditional on success`.
+   In the ordering engine it is `COMMIT_REACHABLE` only: it commits the run's own transaction,
+   never a write of the caller (one pending at the run is L28's error, one after it is not in the
+   run); for the same reason no IO of the caller is "before" it (`EXTERNAL_IO_BEFORE_COMMIT`). It
+   does not set the cone's `MAY_COMMIT` flag, so d34 and d35 (which ask about a `Commit()` that
+   commits the caller's work) find what they found before. The explicit commit inside a run is
+   still read as the run's commit too (above).
    Left: a run that always fails (its `OnRun` raises an error on every path) still answers
-   `may-commit yes` (an over-statement, never a wrong `no`); the `CbGraph` carrier exclusion has no
-   test that reaches it (only an `#if`-arms routine where one arm holds only a checked run and
-   another a `Commit()` would differ); and a codeunit variable's `.Run()` into a symbol-only
-   dependency has no `OnRun` row, so it is not marked (that callee is opaque, so the answer is
-   already not a definite `no`; not probed).
+   `may-commit yes` (an over-statement, never a wrong `no`); `Ok := Codeunit.Run(X); if not Ok
+   then Error(…)` answers `commits-on-success-path unknown` where `yes` holds (an under-statement);
+   the `CbGraph` carrier exclusion has no test that reaches it (only an `#if`-arms routine where one
+   arm holds only a checked run and another a `Commit()` would differ); d34 counts a `Commit()`
+   only, so a checked run in a loop is no finding; and `transaction_spans` and d50 (older than
+   ENG-09) still read a checked run as committing the caller's posting, which L28 contradicts.
 3. `alsem fingerprint` (and `policy check`, which reads its capabilities) does not apply the rule:
    it says `commit: yes` for a root whose only commit is ignored or errors. That over-states; it
    never says a wrong `no`.

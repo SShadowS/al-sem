@@ -91,14 +91,14 @@ pub const P: u8 = 8;
 pub const X: u8 = 16;
 
 /// Whether `f` is the commit of a checked `Codeunit.Run` (ENG-09,
-/// `capability_cone`): a commit fact with no operation witness, direct or
-/// inherited (an inherited fact keeps its source's operation id). Learn: "the
+/// `capability_cone`): its resource is `RUN_COMMIT`, direct or inherited (an
+/// inherited fact keeps its source's resource, and its own cone key). Learn: "the
 /// implicit commit by `Codeunit.Run` isn't affected by `CommitBehavior`"
 /// (measured on BC 28 under `Ignore` and `Error`), so no rule of this module
 /// applies to it.
 #[must_use]
 pub(crate) fn is_run_commit(f: &crate::engine::l5::snapshot::SnapshotCapabilityFact) -> bool {
-    f.op() == "commit" && f.witness_operation_id().is_none()
+    f.op() == "commit" && f.resource_id() == Some(crate::engine::l4::capability_cone::RUN_COMMIT)
 }
 
 /// The five behavior values a route can carry, in index order.

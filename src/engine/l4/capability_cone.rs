@@ -170,6 +170,11 @@ pub struct CoverageRecord {
 // ===========================================================================
 
 /// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
+/// ENG-09: the resource of a checked `Codeunit.Run`'s own commit (the run's
+/// transaction), on a `commit`/`transaction` fact. An explicit `Commit()` has
+/// none.
+pub(crate) const RUN_COMMIT: &str = "checked-run";
+
 fn object_type_to_resource_kind(object_type: &str) -> &'static str {
     match object_type {
         "Codeunit" => "codeunit",
@@ -732,16 +737,17 @@ pub(crate) fn direct_facts_for_routine(
     }
     // ENG-09: a checked `Codeunit.Run` commits its own changes when it ends
     // without an error (Learn; measured on BC 28: also under
-    // `[CommitBehavior(Ignore)]` and `(Error)`). Its witness is the call site,
-    // never an operation: that is how `commit_scope::is_run_commit` tells it
-    // from a `Commit()`, which `[CommitBehavior]` does change.
+    // `[CommitBehavior(Ignore)]` and `(Error)`), witnessed by its call site.
+    // Its resource ([`RUN_COMMIT`]) keeps it apart from a `Commit()`, which
+    // `[CommitBehavior]` does change: its own cone entry, its own witness
+    // carriers (`is_bfs_carrier`), `commit_scope::is_run_commit`.
     for cs in &call_sites {
         if cs.checked_run {
             facts.push(CapabilityFact {
                 subject: routine.id.clone(),
                 op: "commit",
                 resource_kind: "transaction",
-                resource_id: None,
+                resource_id: Some(RUN_COMMIT.to_string()),
                 resource_arg_source: None,
                 confidence: "static",
                 provenance: "direct",

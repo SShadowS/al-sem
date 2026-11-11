@@ -310,8 +310,9 @@ pub struct PCallSite {
     #[serde(skip)]
     pub start_may_fail: bool,
     /// True iff the resolver decided this call is a checked `Codeunit.Run`
-    /// (`traps::is_checked_run`: its result used, keyword form or a codeunit
-    /// variable's `.Run()` into `OnRun`). Such a run commits its own changes
+    /// (`traps::checked_run`: its result used; the keyword form, or a codeunit
+    /// variable's `.Run()` the resolver decided starts the codeunit). Such a run
+    /// commits its own changes
     /// when it ends without an error, and no `[CommitBehavior]` changes that
     /// (ENG-09, Learn, measured on BC 28), so the capability cone gives the
     /// site a commit of its own. Set by `program_calls` after resolution,

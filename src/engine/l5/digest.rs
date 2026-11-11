@@ -6052,14 +6052,12 @@ fn digest_one_root<'i>(
                             occurrence_id: e.fact_id.clone(),
                             conditionality: e.conditionality,
                             boundary: e.boundary_group,
-                            // `commit_scope::is_run_commit`, read off the row:
-                            // a commit witnessed by a call site and no
-                            // operation (an inherited `Commit()` keeps its
-                            // operation, a rule-B boundary group has neither).
+                            // `commit_scope::is_run_commit`, read off the row.
                             run_commit: e.effect_type == "COMMIT"
-                                && !e.boundary_group
-                                && e.evidence_operation_id.is_none()
-                                && e.evidence_callsite_id.is_some(),
+                                && e.detail.iter().any(|(k, v)| {
+                                    k == "resourceId"
+                                        && v == crate::engine::l4::capability_cone::RUN_COMMIT
+                                }),
                         }
                     })
                     .collect();
