@@ -1229,7 +1229,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 24, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 25, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 
