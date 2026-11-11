@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/seed-target <worktree>`** (TLS-08): makes a new worktree's `target/` a
+  copy-on-write copy of the main checkout's, so its first build reuses every compiled
+  dependency. Measured 2026-11-11 (master `c498fd98`, 3 rounds): the first
+  `cargo nextest run --workspace --no-run` took 94.3 s seeded (+1.6 s copy) against
+  146.3 s cold, 3 units compiled against 257. Where a reflink copy fails it removes the
+  partial copy and the build runs cold. Note: `docs/superpowers/notes/2026-11-11-warm-deps.md`.
+
 ### Fixed (ENG-08: an XmlPort import can raise an error, engine limits L20)
 
 - **A statement that starts an XmlPort import no longer answers `throws-error: no`.** A
