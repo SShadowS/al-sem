@@ -376,7 +376,7 @@ fi
 # MCP answers come off ONE `alsem mcp` server per process (one resident
 # build), so its tests share a process: plain `cargo test`, filtered to the
 # member.
-# ⟨TLS-19⟩ Without its two impact ratchets, which have a lane of their own
+# ⟨TLS-19⟩ Without its two impact ratchets, which are a phase of their own
 # (`phase_output_cdo_impact`): the two phases together run every `output_cdo::`
 # test (`on_the_cdo_gate` and `cdo_gate_run_set_matches_the_script` state it).
 phase_output_cdo() {
@@ -386,13 +386,17 @@ phase_output_cdo() {
 # ⟨TLS-19, owner 2026-11-11⟩ `cdo_impact_ratchets` and `cdo_impact_base_ratchets`
 # run one-shot `alsem impact` processes (each builds the CDO model; 4-7 min, on
 # about 3 cores) and held `output_cdo` open 470-700 s after its other tests
-# (TLS-16's note). They run beside everything else, also in serial mode.
-# ⟨TLS-23⟩ One after the other: each test runs its own calls at once (the diff
-# three, the base two), so together they held five CDO models (~3.3-3.7 GB
-# each) beside the other lane, and the second gate kept only 2.8 GiB of the
-# owner's 4 GiB headroom. One at a time, at most three.
+# (TLS-16's note). They are their own phase, run LAST, after every other phase
+# (both tests at once: five CDO models, ~14 GB, with no other phase beside them).
+# ⟨TLS-23, 2026-11-11⟩ TLS-19 ran them beside the other phases. Three gates on
+# the shared kraken host: test phases 874 s and 1,232 s with both tests at once
+# (the second with 2,836 MiB headroom, under the owner's 4 GiB rule: lib_cdo's
+# test process alone reaches 25-29 GB), then 1,641 s one test at a time (8 GiB
+# headroom, slower than the 1,170 s the phases took one after another). A lane
+# staged to fit the memory would have saved little more. Serial again; the
+# memory sampler stays (note `2026-11-11-cdo-gate-time.md`, "TLS-19/TLS-23").
 phase_output_cdo_impact() {
-    run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact -- --test-threads=1
+    run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
 }
 
 # ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs
@@ -502,8 +506,6 @@ gate_pid=$$
 trap 'kill 0' INT TERM
 memory_sampler &
 sampler=$!
-phase_output_cdo_impact &
-impact_lane=$!
 if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
     lane2_nice=()
     lane2
@@ -514,7 +516,7 @@ else
     lane2
     wait "$lane1"
 fi
-wait "$impact_lane"
+phase_output_cdo_impact
 kill "$sampler" 2>/dev/null
 cp /sys/fs/cgroup/memory.events "$logs/memory.events.end" 2>/dev/null
 
