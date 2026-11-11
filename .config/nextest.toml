@@ -19,6 +19,43 @@ fail-fast = true
 # Surface slow tests (parse-heavy differentials) without killing them.
 slow-timeout = { period = "60s" }
 
+# Every run writes a JUnit report (`target/nextest/<profile>/junit.xml`, each test's
+# start and duration): `scripts/nextest-priority-check` reads it after `ci-steps test`
+# and warns about a long test that no priority below starts early.
+[profile.default.junit]
+path = "junit.xml"
+
+# ⟨TLS-11⟩ The longest tests start first. Overrides apply in order (the first match
+# sets a test's priority), so these come before the binary-wide one below.
+# How the list was chosen (TLS-07, docs/superpowers/notes/2026-11-10-task-gate-test-time.md):
+# every test with a median of at least 15 s over 3 runs of the task gate. Without a
+# priority the lib's and al-syntax's long tests started 60-90 s into the run and the
+# run waited ~20 s on them (tail 19.8-23.3 s; with these, 3.1-3.9 s; median wall
+# 118.8 -> 98.6 s). The cli fingerprint parity test (70-87 s, the longest) goes first.
+# A test that grows past 15 s without being listed here is named by
+# `scripts/nextest-priority-check` (a warning, never a failure); add it here.
+[[profile.default.overrides]]
+filter = 'binary(cli) & test(=cli_fingerprint_routine_cross_app::no_dependency_parity_fingerprint_routine)'
+priority = 70
+
+[[profile.default.overrides]]
+filter = '''
+  (package(al-syntax) & test(=lower::tests::attribute_flow_scales_linearly))
+  | (package(al-sem) & kind(lib) & (
+      test(=engine::gate::run::builders_tests::single_app_builders_agree)
+    | test(=engine::gate::policy::policy_engine::facts_oracle_tests::policy_selects_the_parents_facts_per_primary_routine)
+    | test(=engine::l4::capability_cone::scc_set_tests::derived_only_matches_raw_fold_on_fixtures)
+    | test(=engine::l4::exec_relation::tests::relation_equals_the_legacy_base_per_field)
+    | test(=engine::l4::pd_solve::tests::parallel_solve_equals_the_serial_walk_on_every_fixture)
+    | test(=engine::l5::detector_context::tests_l5::parallel_direct_facts_equal_serial_on_fixtures)
+    | test(=engine::l5::digest_cli::tests_rule_b::scoped_reads_equal_unscoped_on_the_corpus)
+    | test(=engine::l5::snapshot::step0_sort_tests::t6_every_corpus_app_gives_the_old_table_and_pd_arena)
+    | test(=engine::l5::snapshot::step6_tree_tests::callsite_resolutions_alone_equal_the_snapshot_rows)
+    | test(=engine::resident::revision::tests::an_explain_answer_does_not_depend_on_earlier_requests)
+  ))
+'''
+priority = 60
+
 # Start the slow binaries first. The r3 oracle tests (~10-12 s each, every one
 # re-resolves every fixture) and the cli cross-app contract tests (15-19 s) used to
 # be scheduled last, so the suite ended with a ~10 s tail of a few busy slots

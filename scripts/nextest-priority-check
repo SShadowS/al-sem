@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""scripts/nextest-priority-check: name the long tests no nextest priority starts early.
+
+Usage:
+  scripts/nextest-priority-check [--junit PATH] [--seconds N]
+
+TLS-11 (docs/superpowers/notes/2026-11-10-task-gate-test-time.md): the task gate's
+test run is limited by its tail when a long test starts late, so `.config/nextest.toml`
+gives the long tests a priority, by name. This check keeps that list honest: it reads
+the last run's JUnit report (`target/nextest/default/junit.xml`, written by every
+`cargo nextest run`) and lists every test of at least N seconds (default 15) that no
+override with a positive priority selects. Which tests an override selects is asked of
+nextest itself (`cargo nextest list -E <filter>`), so the check never re-implements
+nextest's filter language.
+
+It only WARNS: one run's durations swing with the machine's load, and a missing
+priority costs time, not correctness. Exit 0 always, except 2 when it cannot run
+(no report, nextest missing); `scripts/ci-steps test` ignores even that.
+"""
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tomllib
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def log(msg):
+    print(f"nextest-priority-check: {msg}", flush=True)
+
+
+def long_tests(junit, seconds):
+    """(seconds, binary id, test name) of every test at or over `seconds`."""
+    text = open(junit, errors="replace").read()
+    out = []
+    for m in re.finditer(r'<testcase name="([^"]+)" classname="([^"]+)"[^>]*\btime="([\d.]+)"',
+                         text):
+        t = float(m.group(3))
+        if t >= seconds:
+            out.append((t, m.group(2), m.group(1)))
+    return sorted(out, reverse=True)
+
+
+def prioritized():
+    """Every (binary id, test name) a positive-priority override selects."""
+    with open(os.path.join(REPO, ".config", "nextest.toml"), "rb") as f:
+        cfg = tomllib.load(f)
+    filters = [o["filter"] for o in cfg.get("profile", {}).get("default", {}).get("overrides", [])
+               if o.get("priority", 0) > 0 and "filter" in o]
+    if not filters:
+        return set()
+    expr = " | ".join(f"({f.strip()})" for f in filters)
+    env = {k: v for k, v in os.environ.items() if k not in ("CDO_WS", "ENFORCE_CDO_WS")}
+    r = subprocess.run(["cargo", "nextest", "list", "--workspace", "--message-format", "oneline",
+                        "-E", expr], cwd=REPO, env=env, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"cargo nextest list failed:\n{r.stderr[-2000:]}")
+    return {tuple(line.split(" ", 1)) for line in r.stdout.splitlines() if " " in line}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    target = os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO, "target")
+    ap.add_argument("--junit", default=os.path.join(target, "nextest", "default", "junit.xml"))
+    ap.add_argument("--seconds", type=float, default=15.0)
+    args = ap.parse_args()
+    if not os.path.exists(args.junit):
+        log(f"no JUnit report at {args.junit} (run cargo nextest first)")
+        return 2
+    long = long_tests(args.junit, args.seconds)
+    try:
+        have = prioritized()
+    except SystemExit as e:
+        log(str(e))
+        return 2
+    missing = [t for t in long if (t[1], t[2]) not in have]
+    if not missing:
+        log(f"every test of {args.seconds:g} s or more in the last run has a priority "
+            f"({len(long)} such tests)")
+        return 0
+    log(f"WARNING: {len(missing)} test(s) of {args.seconds:g} s or more start with no priority; "
+        "add them to the priority list in .config/nextest.toml (TLS-11) if they stay this long:")
+    for t, b, n in missing:
+        log(f"  {t:6.1f} s  {b}  {n}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

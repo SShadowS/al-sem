@@ -1,6 +1,7 @@
 # Faster linking: rust-lld ships with the MSVC toolchain and is far faster than
-# link.exe. This matters a lot here — 151 integration-test binaries + 4 [[bin]]s
-# means link time dominates incremental test builds.
+# link.exe. On Windows this mattered when there were 151 integration-test binaries;
+# since the umbrella consolidation there are 14 test binaries + 5 [[bin]]s. (On Linux,
+# Phase 0 of the crate split measured linking at 5% of a warm lib-test rebuild, 2026-11-10.)
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"
 # Link the C runtime statically so the exe does not need VCRUNTIME140.dll.

@@ -54,6 +54,20 @@ Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-appr
 
 ### Changed
 
+- **`scripts/ci-steps task-affected` builds only the test binaries it runs** (crate split Phase 1,
+  ENG-05). It used to pass `--workspace` with an `-E` filter: the filter chose which tests ran, but
+  every test binary was still built. It now passes the filter's own targets (the `al-sem` lib tests,
+  `--test X` for each `binary(X)`, `-p al-syntax` for `package(al-syntax)`) and keeps `-E` inside
+  them. A filter part with no known target falls back to the whole suite. `task` and `all` are
+  unchanged. TLS-13 re-check (TLS-12's tree): for every filter `affected_filter` can build, each
+  path class alone and all 13 parts together, both forms list the identical tests (3,282 to 5,724).
+  Measured (an edit simulated by touching one file, build and test, alternating, 3 each; every run on
+  a busy host, 0-69% idle): `src/lsp/handlers.rs` wall 66.3 -> 64.9 s, CPU 556 -> 514 s (every pair
+  lower); `src/program/resolve/full.rs` CPU 716 -> 704 s, wall within the noise (73.8 -> 84.7 s,
+  pairs -11, +18, -15 s); `src/engine/l5/digest_cli.rs` inconclusive (2 of 3 old runs stopped at a
+  load-sensitive test, `mcp_server::faults::status_answers_during_a_heavy_call`, 223-227 ms against
+  its 200 ms bound). The saving is the skipped test binaries' linking: real in CPU, small in wall.
+
 - **Grammar: tree-sitter-al v5.1.0, `abc77b25`** (was v5.0.0, `18c988e8`). Seven new `RawKind`s,
   all `Structural`; `NAMED_KIND_COUNT` is 513. `CACHE_VERSION_GRAMMAR` is now
   `tree-sitter-al-v5.1.0-abc77b25-native` (same length, so `dry-run.txt` did not move).
@@ -231,6 +245,36 @@ Terms used in the wave-2 sections below:
 - **Per-value transfer function** (`commit_scope::Transfer`): one result per `[CommitBehavior]`
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
+
+### Changed (TLS-12: the slowest tests build each model once)
+
+- **Four `tests_rule_b` corpus tests are one test**, `scoped_reads_equal_unscoped_on_the_corpus`:
+  its arms (T3, the streamed read, prove, the fingerprint query) share each target per universe
+  and the trees two arms build alike, on 4 threads (about 127 s -> 11.5 s alone). Under nextest
+  each test is its own process, so a build is shared only inside one test.
+- **`no_dependency_parity_fingerprint_routine` runs each dir's cases as one in-process batch**
+  (`batch_in_process` over `engine::batch::run_batch`): one model per universe instead of one per
+  case. Every root of every 5th dir also runs each job alone through `standalone_output`, the path
+  `alsem fingerprint` runs (87 s -> 21 s alone). `ids_parent_baseline` batches its SARIF and JSON
+  analyses the same way.
+- Every assertion and failure message is kept; no golden moved. Measured (3 alternating pairs):
+  children's CPU per run -200 s (-12%), median wall 154.5 -> 123.0 s. See
+  `docs/superpowers/notes/2026-11-10-task-gate-test-time.md`.
+
+### Changed (TLS-11: the long tests start first)
+
+- **`.config/nextest.toml` gives the longest tests a priority.** The task gate's test run was
+  limited by its tail: three long tests in the lib and `al-syntax` started 60-90 s into the run,
+  and the run waited about 20 s on them (TLS-07,
+  `docs/superpowers/notes/2026-11-10-task-gate-test-time.md`). Every test with a median of 15 s
+  or more now has priority 60 (14 tests, by name), and the cli fingerprint parity test (70-87 s,
+  the longest) priority 70. Priority only reorders; every test still runs. Measured on master
+  `761581b3`, 3 alternating pairs: the tail 22.6-27.0 s -> 3.1-3.6 s, the median wall
+  149.1 -> 122.6 s (pairs -15.7 to -28.6 s; the host was shared, see the note).
+- **Every nextest run writes a JUnit report** (`target/nextest/<profile>/junit.xml`). After the
+  full suite, `scripts/ci-steps test` runs `scripts/nextest-priority-check`, which names any test
+  of 15 s or more that no priority override selects (asking nextest which tests each override's
+  filter selects). It only warns: one run's durations swing with the machine's load.
 
 ### Fixed (TLS-10: the CDO gate passed on failed calls)
 
