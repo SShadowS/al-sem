@@ -232,6 +232,21 @@ Terms used in the wave-2 sections below:
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
 
+### Changed (TLS-12: the slowest tests build each model once)
+
+- **Four `tests_rule_b` corpus tests are one test**, `scoped_reads_equal_unscoped_on_the_corpus`:
+  its arms (T3, the streamed read, prove, the fingerprint query) share each target per universe
+  and the trees two arms build alike, on 4 threads (about 127 s -> 11.5 s alone). Under nextest
+  each test is its own process, so a build is shared only inside one test.
+- **`no_dependency_parity_fingerprint_routine` runs each dir's cases as one in-process batch**
+  (`batch_in_process` over `engine::batch::run_batch`): one model per universe instead of one per
+  case. Every root of every 5th dir also runs each job alone through `standalone_output`, the path
+  `alsem fingerprint` runs (87 s -> 21 s alone). `ids_parent_baseline` batches its SARIF and JSON
+  analyses the same way.
+- Every assertion and failure message is kept; no golden moved. Measured (3 alternating pairs):
+  children's CPU per run -200 s (-12%), median wall 154.5 -> 123.0 s. See
+  `docs/superpowers/notes/2026-11-10-task-gate-test-time.md`.
+
 ### Changed (TLS-11: the long tests start first)
 
 - **`.config/nextest.toml` gives the longest tests a priority.** The task gate's test run was
