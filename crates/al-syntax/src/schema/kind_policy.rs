@@ -257,6 +257,20 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocConditionalReturn
         | RawKind::PreprocConditionalReturnType
         | RawKind::PreprocSplitTriggerPreamble
+        // Grammar 5.1.0 (abc77b25). Structure; the lowerer owns descent.
+        // `preproc_conditional_procedure_preamble` / `_trigger_preamble` are nested
+        // groups of header + `var` section in a split preamble's arm (one routine per
+        // arm, `header_arms`). The label/caption/ML/namespace groups are `#if` groups in
+        // a label's attributes or text, a caption's attributes and an ML or `Namespaces`
+        // pair list: a grouped label `Locked` makes the label no constant
+        // (`label_value`); the rest the lowerer reads no arm of.
+        | RawKind::PreprocConditionalProcedurePreamble
+        | RawKind::PreprocConditionalTriggerPreamble
+        | RawKind::PreprocConditionalLabelAttributes
+        | RawKind::PreprocConditionalReportLabelAttributes
+        | RawKind::PreprocConditionalCaptionSubfields
+        | RawKind::PreprocConditionalMlPairs
+        | RawKind::PreprocConditionalNamespacePairs
         | RawKind::ActionAreaSection
         | RawKind::ActionBody
         | RawKind::ActionDeclaration

@@ -6424,6 +6424,23 @@ impl<'t> RawPreprocConditionalAttributeArgs<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalCaptionSubfields<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalCaptionSubfields<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalCaptionSubfields {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalCase<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalCase<'t> {
     #[inline]
@@ -6627,6 +6644,30 @@ impl<'t> RawPreprocConditionalKeys<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalLabelAttributes<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalLabelAttributes<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalLabelAttributes {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn value(self) -> Vec<StringLiteralOrVerbatimString<'t>> {
+        self.0
+            .children_by_field(FieldName::Value)
+            .into_iter()
+            .filter_map(StringLiteralOrVerbatimString::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalLabels<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalLabels<'t> {
     #[inline]
@@ -6712,6 +6753,23 @@ impl<'t> RawPreprocConditionalListElements<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalMlPairs<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalMlPairs<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalMlPairs {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalMoveArgs<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalMoveArgs<'t> {
     #[inline]
@@ -6749,6 +6807,23 @@ impl<'t> RawPreprocConditionalMoveElements<'t> {
             .into_iter()
             .filter_map(IdentifierOrQuotedIdentifier::cast)
             .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalNamespacePairs<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalNamespacePairs<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalNamespacePairs {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
     }
 }
 
@@ -6913,6 +6988,58 @@ impl<'t> RawPreprocConditionalProcedureHeader<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalProcedurePreamble<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalProcedurePreamble<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalProcedurePreamble {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn modifier(self) -> Vec<RawProcedureModifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Modifier)
+            .into_iter()
+            .filter_map(RawProcedureModifier::cast)
+            .collect()
+    }
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn parameters(self) -> Vec<RawParameterList<'t>> {
+        self.0
+            .children_by_field(FieldName::Parameters)
+            .into_iter()
+            .filter_map(RawParameterList::cast)
+            .collect()
+    }
+    pub fn return_type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnType)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
+    }
+    pub fn return_value(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnValue)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalPropertyValue<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalPropertyValue<'t> {
     #[inline]
@@ -7004,6 +7131,51 @@ impl<'t> RawPreprocConditionalReport<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalReportLabelAttributes<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalReportLabelAttributes<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalReportLabelAttributes {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn comment(self) -> Vec<RawStringLiteral<'t>> {
+        self.0
+            .children_by_field(FieldName::Comment)
+            .into_iter()
+            .filter_map(RawStringLiteral::cast)
+            .collect()
+    }
+    pub fn locked(self) -> Vec<RawBoolean<'t>> {
+        self.0
+            .children_by_field(FieldName::Locked)
+            .into_iter()
+            .filter_map(RawBoolean::cast)
+            .collect()
+    }
+    pub fn maxlength(self) -> Vec<RawInteger<'t>> {
+        self.0
+            .children_by_field(FieldName::Maxlength)
+            .into_iter()
+            .filter_map(RawInteger::cast)
+            .collect()
+    }
+    pub fn value(self) -> Vec<StringLiteralOrVerbatimString<'t>> {
+        self.0
+            .children_by_field(FieldName::Value)
+            .into_iter()
+            .filter_map(StringLiteralOrVerbatimString::cast)
+            .collect()
     }
 }
 
@@ -7110,6 +7282,51 @@ impl<'t> RawPreprocConditionalTableRelation<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalTriggerPreamble<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalTriggerPreamble<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalTriggerPreamble {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn name(self) -> Vec<IdentifierOrMemberTriggerNameOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrMemberTriggerNameOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn parameters(self) -> Vec<RawParameterList<'t>> {
+        self.0
+            .children_by_field(FieldName::Parameters)
+            .into_iter()
+            .filter_map(RawParameterList::cast)
+            .collect()
+    }
+    pub fn return_type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnType)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
+    }
+    pub fn return_value(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::ReturnValue)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 
