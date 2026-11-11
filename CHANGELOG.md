@@ -15,9 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `output_cdo` open 470-700 s after its other tests. They now run as the phase `output_cdo_impact`,
   started in the background before the test lanes; `output_cdo` runs the rest. Together the two
   phases run every `output_cdo::` test, and each is summarized and counted. The gate now samples the
-  container's `memory.current` while its lanes run and prints the peak against `memory.max` with
-  the headroom (the owner's rule: keep at least 4 GiB, or go back to serial and say why). To be
-  measured: two gates with the change.
+  container's unreclaimable memory (`memory.stat`: anon + shmem + kernel − slab_reclaimable) while
+  its lanes run and prints the peak against `memory.max` with the headroom (the owner's rule: keep
+  at least 4 GiB, or go back to serial and say why), plus the `max`/`oom`/`oom_kill` counts of
+  `memory.events` the run added. The first version sampled `memory.current`, which counts page
+  cache the kernel reclaims: on the first gate (2026-11-11) it read 49151 of 49152 MiB with no OOM.
+  Measured on two gates (2026-11-11): the test phases took 874 s and 1,232 s (busy host), against
+  1,170-1,174 s (quiet) and 1,594 s (busy) one after another; peak unreclaimable memory 42,822 of
+  49,152 MiB (6,329 MiB headroom), no OOM. Details:
+  `docs/superpowers/notes/2026-11-11-cdo-gate-time.md`, "TLS-19".
 - **`scripts/cdo-gate` skips its speed phase when the diff touches no product code** (TLS-20, owner
   approval 2026-11-11). Against the base the speed check itself would use (the merge base with
   master, or on a clean master HEAD's first parent), every changed path, untracked ones included,
@@ -56,6 +62,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixtures, a hand-built visit-cap case for the bucket order, and a one-build-per-read counter, each
   with a discrimination proof. Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`,
   which also records why a parallel literal reach is not built yet (ENG-18, TLS-22).
+
+### Fixed (ENG-18: a literal-reach answer no longer depends on what else the read asked)
+
+- **The RecordRef flow evaluates each question from fresh state.** `RecRefFlow` (the
+  table-under-inputs evaluation behind literal reach, G35) kept ONE memo, one set of final
+  values and one budget of 200,000 evaluations for a whole read, and a value its depth cutoff
+  (48 calls) turned into "anything" was folded into its callers' memo and marked final. So a
+  root's answer could depend on which roots the same read asked first: `prove` on one root and
+  `impact` or a digest over many could answer the same root differently. Each top-level
+  evaluation now starts from a fresh state (its own budget, depth, memo and final marks) that is
+  dropped afterwards, and its answer is kept by its key (routine, input tables, globals), so an
+  answer depends on its key alone. Found by TLS-17's spec review.
+- Measured on CDO before the fix (2 of 15 chunks of the workspace's files, one digest read
+  each, 362k top-level evaluations): no depth cutoff, no budget cutoff, no unsettled
+  evaluation, under 1,000 of the budget used per read; on those two chunks the fixed and the
+  old binary give byte-identical digests. Time on the same chunks, alternating which runs
+  first: +1.8% and +2% (one earlier pair, fixed second, read +37%; it did not reproduce). Peak
+  RSS equal (7.0 and 8.4 GB). Landing gate speed phase: prove x0.99, model build x1.12.
+- **The history dependence does fire on CDO, without any cutoff.** In one `prove` of
+  `CDO E-Mail Handler::RunReportID` (`writes-table:CDO E-Mail Log`), a probe build of the old
+  code that also computed every top-level evaluation's key from fresh state found 1,410 of
+  ~4,400 evaluations (11 routines) whose answer differed: every one of the 2,002 differing
+  variables was "anything" in the shared state and a precise table set fresh (none the other
+  way). The old answer is reproduced asked alone, so it is the read's own earlier evaluations,
+  not a batch of questions. With the fix that `prove`'s answer is unchanged and one witness row
+  takes another route (`RunReportID.prove-writes-table.human.txt`: 25 → 30 guards, through
+  Base App's `Workflow Management::ExecuteResponses`).
+- Limits (panel review: gpt-6-astra, Fable): the budget is per top-level key, so the worst
+  case per read is no longer bounded by one 200,000 (a shape where many keys share a deep
+  sensitive subtree recomputes it per key; CDO shows no such shape); inside one evaluation a key
+  reached first past the cutoff and later shallower still answers by call-edge order (stable,
+  and sound: it over-approximates); the test pins depth contamination in both orders, not budget
+  exhaustion. The old shared `done` marks and the `touched` sets are gone (dead with fresh
+  state).
 
 ### Fixed (ENG-06: `FieldRef.Validate` and record operations on a table not known, engine limits B9, B10)
 

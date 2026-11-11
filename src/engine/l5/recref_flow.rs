@@ -198,7 +198,13 @@ pub(crate) struct RecRefFlow<'a> {
     converged: bool,
     /// G35: per routine, whether it is evaluated under its inputs.
     sensitive: Vec<bool>,
+    /// The state of the top-level evaluation running now: fresh for each
+    /// ([`RecRefFlow::evaluate`]).
     eval: RefCell<EvalState>,
+    /// ENG-18: each top-level evaluation's answer, by its key. An answer is
+    /// computed from a fresh [`EvalState`] (its own budget, depth and memo), so
+    /// it is the key's alone: what else the read asked before cannot change it.
+    results: RefCell<HashMap<EvalKey, Option<HashMap<String, Val>>>>,
 }
 
 /// One evaluation's key: the routine, its tracked parameters' input tables,
@@ -210,9 +216,6 @@ type EvalKey = (usize, Vec<(u32, Val)>, Vec<(Arc<str>, Val)>);
 #[derive(Default)]
 struct EvalState {
     memo: HashMap<EvalKey, HashMap<String, Val>>,
-    /// Keys whose value is final (computed in an iteration that changed
-    /// nothing).
-    done: HashSet<EvalKey>,
     in_progress: HashSet<EvalKey>,
     /// An in-progress value was read, or a memo value grew, this iteration.
     read_partial: bool,
@@ -221,7 +224,7 @@ struct EvalState {
     budget: usize,
 }
 
-/// Evaluations one `RecRefFlow` may run in all.
+/// Evaluations one top-level evaluation ([`RecRefFlow::evaluate`]) may run.
 const EVAL_BUDGET: usize = 200_000;
 /// The deepest chain of calls one evaluation follows.
 const EVAL_DEPTH: usize = 48;
@@ -383,10 +386,8 @@ impl<'a> RecRefFlow<'a> {
             self_escapes,
             converged: false,
             sensitive: Vec::new(),
-            eval: RefCell::new(EvalState {
-                budget: EVAL_BUDGET,
-                ..Default::default()
-            }),
+            eval: RefCell::new(EvalState::default()),
+            results: RefCell::new(HashMap::new()),
         };
         flow.solve_alias_reach();
         flow.solve();
@@ -572,27 +573,47 @@ impl<'a> RecRefFlow<'a> {
     /// Evaluates `i` under its inputs to a fixpoint over recursive calls:
     /// repeats while an iteration read a value still being computed and some
     /// value grew. `None` when it does not settle.
+    ///
+    /// ENG-18: every top-level evaluation starts from a fresh [`EvalState`]:
+    /// its own budget ([`EVAL_BUDGET`]), depth cutoff ([`EVAL_DEPTH`]), memo
+    /// and fixpoint rounds. A cut-off ("anything") never outlives the
+    /// evaluation that made it, and a value one evaluation memoized never
+    /// starts another, so the answer depends on the key alone, never on what
+    /// else the same read asked first (`prove` on one root and `impact` on
+    /// many answer it the same). Its answer is kept by key ([`Self::results`]).
     fn evaluate(
         &self,
         i: usize,
         inputs: Vec<(u32, Val)>,
         globals: Vec<(Arc<str>, Val)>,
     ) -> Option<HashMap<String, Val>> {
+        let key: EvalKey = (i, inputs.clone(), globals.clone());
+        if let Some(answer) = self.results.borrow().get(&key) {
+            return answer.clone();
+        }
+        *self.eval.borrow_mut() = EvalState {
+            budget: EVAL_BUDGET,
+            ..Default::default()
+        };
+        let mut answer = None;
         for _ in 0..12 {
-            let mut touched = HashSet::new();
             {
                 let mut st = self.eval.borrow_mut();
                 st.read_partial = false;
                 st.grew = false;
             }
-            let vals = self.eval_routine(i, &inputs, &globals, 0, &mut touched);
-            let mut st = self.eval.borrow_mut();
+            let vals = self.eval_routine(i, &inputs, &globals, 0);
+            let st = self.eval.borrow();
             if !(st.read_partial && st.grew) {
-                st.done.extend(touched);
-                return Some(vals);
+                answer = Some(vals);
+                break;
             }
         }
-        None
+        // The next top-level evaluation starts fresh; nothing of this one's
+        // state is read again.
+        *self.eval.borrow_mut() = EvalState::default();
+        self.results.borrow_mut().insert(key, answer.clone());
+        answer
     }
 
     /// The starting values of `i`'s tracked own variables: a parameter its
@@ -621,7 +642,6 @@ impl<'a> RecRefFlow<'a> {
         inputs: &[(u32, Val)],
         globals: &[(Arc<str>, Val)],
         depth: usize,
-        touched: &mut HashSet<EvalKey>,
     ) -> HashMap<String, Val> {
         // A routine that is not sensitive reads its summary: no memo, no budget.
         if !self.sensitive[i] {
@@ -641,9 +661,6 @@ impl<'a> RecRefFlow<'a> {
         };
         {
             let mut st = self.eval.borrow_mut();
-            if st.done.contains(&key) {
-                return st.memo[&key].clone();
-            }
             if st.in_progress.contains(&key) {
                 st.read_partial = true;
                 return st
@@ -658,7 +675,6 @@ impl<'a> RecRefFlow<'a> {
             st.budget -= 1;
             st.in_progress.insert(key.clone());
         }
-        touched.insert(key.clone());
         let mut vals = self.initial_vals(i, inputs);
         if let Some(prev) = self.eval.borrow().memo.get(&key) {
             for (k, v) in prev {
@@ -699,9 +715,7 @@ impl<'a> RecRefFlow<'a> {
                     if !self.conds_hold(i, &f.passed_conds[n], &vals, globals) {
                         continue;
                     }
-                    if let Some(add) =
-                        self.out_val(i, &vals, globals, *ci, *k as u32, depth, touched)
-                    {
+                    if let Some(add) = self.out_val(i, &vals, globals, *ci, *k as u32, depth) {
                         merge(&mut vals, v, add);
                     }
                 }
@@ -777,7 +791,6 @@ impl<'a> RecRefFlow<'a> {
         ci: usize,
         k: u32,
         depth: usize,
-        touched: &mut HashSet<EvalKey>,
     ) -> Option<Val> {
         let r = &self.routines[i];
         let cs = &r.call_sites[ci];
@@ -806,17 +819,8 @@ impl<'a> RecRefFlow<'a> {
                         .parameters
                         .iter()
                         .find(|p| lc(&p.name) == pname)
-                        && let Some(o) = self.callee_out(
-                            i,
-                            vals,
-                            globals,
-                            cs,
-                            s,
-                            sp,
-                            Some(callee),
-                            depth,
-                            touched,
-                        )
+                        && let Some(o) =
+                            self.callee_out(i, vals, globals, cs, s, sp, Some(callee), depth)
                     {
                         out = union_val(&out, &o);
                     }
@@ -826,7 +830,7 @@ impl<'a> RecRefFlow<'a> {
             let Some(p) = callee.parameters.iter().find(|p| p.index == k) else {
                 return Some(None);
             };
-            if let Some(o) = self.callee_out(i, vals, globals, cs, t, p, None, depth, touched) {
+            if let Some(o) = self.callee_out(i, vals, globals, cs, t, p, None, depth) {
                 out = union_val(&out, &o);
             }
         }
@@ -847,7 +851,6 @@ impl<'a> RecRefFlow<'a> {
         p: &ModelParameter,
         publisher: Option<&ModelRoutine>,
         depth: usize,
-        touched: &mut HashSet<EvalKey>,
     ) -> Option<Val> {
         let callee = &self.routines[t];
         if !callee.body_available || callee.parse_incomplete {
@@ -884,7 +887,7 @@ impl<'a> RecRefFlow<'a> {
             } else {
                 Vec::new()
             };
-        let res = self.eval_routine(t, &inputs, &g, depth + 1, touched);
+        let res = self.eval_routine(t, &inputs, &g, depth + 1);
         Some(res.get(&pname).cloned().unwrap_or(None))
     }
 
