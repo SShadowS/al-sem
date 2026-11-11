@@ -9,15 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (TLS-19 and TLS-20: the CDO gate's impact lane and speed skip)
 
-- **`scripts/cdo-gate`'s impact lane runs its two tests one after the other** (TLS-23). Each test
-  starts its own `alsem impact` calls at once (the diff test three, the base test two), so together
-  they held five CDO models (~3.3-3.7 GB each) beside the other lane; the second gate with the lane
-  kept 2,836 MiB of the owner's 4 GiB headroom (peak 46,315 of 49,152 MiB, no OOM). With
-  `--test-threads=1` the lane holds at most three. The memory sampler now also writes
-  `memory.timeline` (every 2 s: the container's unreclaimable MiB, the RSS sum of the gate's own
-  process tree, its three largest processes) and `phases.times`, and the summary names the gate's
-  own share at the container's peak, since the container counts every agent's processes. To be
-  measured: two gates.
+- **`scripts/cdo-gate` runs the impact ratchets last again, not beside the other phases** (TLS-23,
+  2026-11-11). They stay their own phase, `output_cdo_impact`, now run after every other phase with
+  both tests at once. Three gates with the background lane (TLS-19, below) on the shared kraken host:
+  test phases 874 s and 1,232 s with both tests at once, the second keeping only 2,836 MiB of the
+  owner's 4 GiB headroom (peak 46,315 of 49,152 MiB, no OOM); then 1,641 s with one test at a time
+  (8,087 MiB headroom), slower than the 1,170 s the phases took one after another. The timeline
+  showed why: `lib_cdo`'s test process alone reaches 25-29 GB and `output_cdo` about 24 GB, so only
+  the base test (2 calls, ~5.7 GB) fits beside them, and a lane staged to fit would have saved
+  little. The memory sampler stays and now also writes `memory.timeline` (every 2 s: the
+  container's unreclaimable MiB, the RSS sum of the gate's own process tree, its three largest
+  processes) and `phases.times`; the summary names the gate's own share at the container's peak,
+  since the container counts every agent's processes.
 
 - **`scripts/cdo-gate` runs the two impact ratchets as their own lane, also in serial mode**
   (TLS-19, owner approval 2026-11-11). `output_cdo::cdo_impact_ratchets` and

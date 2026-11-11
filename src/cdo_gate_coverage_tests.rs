@@ -119,7 +119,7 @@ fn cdo_gate_run_set_matches_the_script() {
         "--test l4_summary_differential\n",
         // TLS-19: output_cdo in two phases that together run every `output_cdo::` test.
         "--test cli output_cdo:: -- --skip output_cdo::cdo_impact\n",
-        "--test cli output_cdo::cdo_impact -- --test-threads=1\n",
+        "--test cli output_cdo::cdo_impact\n",
         "-p al-sem --lib cdo -- ",
     ] {
         assert!(

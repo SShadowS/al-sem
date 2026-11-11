@@ -200,6 +200,29 @@ still run one after another. Two gates on 2026-11-11, seconds:
   (`memory.stat` anon + shmem + kernel - slab_reclaimable): peak 42,822 of 49,152 MiB, headroom
   6,329 MiB, against the owner's rule of at least 4 GiB. Its `memory.events` added max +24,119
   (the limit reached and page cache reclaimed), oom +0, oom_kill +0.
-- Verdict: keep the lane. Both runs are faster than the serial phases they replace, and the one run
-  with a real memory reading keeps 6.2 GiB of headroom. A run with less than 4 GiB means going back
-  to serial (the owner's rule).
+- First verdict (superseded below): keep the lane. Both runs were faster than the serial phases
+  they replaced, and the one run with a real memory reading kept 6.2 GiB of headroom.
+
+## TLS-23: back to serial (measured)
+
+Two more gates on 2026-11-11, with the timeline sampler (`memory.timeline`, `phases.times`):
+
+| Gate | impact lane | chain | unreclaimable peak | headroom | gate's own then | oom |
+|------|-------------|-------|--------------------|----------|-----------------|-----|
+| ENG-18 + TLS-19 re-gate (both tests at once) | - | - | 46,315 MiB | 2,836 MiB | (not sampled) | 0 |
+| TLS-23 (`--test-threads=1`) | 1,641 s | 859 s | 41,064 MiB | 8,087 MiB | 30,838 MiB | 0 |
+
+- The re-gate broke the owner's rule (at least 4 GiB headroom).
+- The timeline of the TLS-23 gate (run `20261111-144019-3962977`) shows where the memory goes:
+  - `lib_cdo`'s single test process grows to 25-29 GB.
+  - `output_cdo` holds about 24 GB of its own (three `alsem` at ~6 GB plus the test process).
+  - The base impact test (2 calls) holds ~5.7 GB, the diff test (3 calls) ~8.5 GB.
+  - The peak was during `lib_cdo` with the base test beside it; other agents held ~10 GB of it.
+- Only the base test fits beside `lib_cdo` or `output_cdo`. One test at a time made the lane the
+  bottleneck: the base test took 1,047 s beside the chain (428 s alone), then the diff test ~570 s.
+  1,641 s is slower than the 1,170 s the phases took one after another on a quiet host.
+- A lane staged to fit (the base test beside the chain, the diff test after it) was estimated at
+  1,260-1,430 s with the same headroom: no clear gain on a shared host, for more script logic.
+- Verdict (orchestrator, 2026-11-11): serial. The impact tests stay their own phase,
+  `output_cdo_impact`, run after every other phase with both tests at once (~14 GB, nothing else of
+  the gate beside them). The sampler, timeline and phase times stay.
