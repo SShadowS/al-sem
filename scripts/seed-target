@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# scripts/seed-target — start a new worktree's build folder as a copy-on-write
+# copy of a warm one, so its first build does not rebuild every dependency.
+#
+# TLS-08 (owner decision 2026-11-10, crate-split Phase 0 candidate C): a reflink
+# copy of a 20 GB warm target/ takes about 1 s, and the first build then reuses
+# every dependency and rebuilds only al-sem and al-syntax (their source paths
+# differ, so cargo and rustc's incremental cache treat them as new). The same
+# rule agentflow uses for its issue worktrees (`scripts/agentflow/worktrees.py`,
+# `seed_target`); this is the one for every other new worktree (kraken lanes,
+# a worktree made by hand).
+#
+# The whole folder is copied: with reflinks that costs the same 1 s as a
+# dependencies-only subset, and the copied workspace units take no disk until
+# cargo overwrites them. rust-analyzer's own builds (flycheck0) and tmp/ are
+# left out. A filesystem without reflinks makes `cp --reflink=always` fail
+# rather than copy 20 GB: then nothing is left behind and the first build is
+# cold, as before.
+#
+# Usage: scripts/seed-target <new-worktree> [--from <warm target folder>]
+#        (default source: the main checkout's target/)
+# Exit: 0 seeded; 1 refused or failed (cold build, nothing changed).
+set -uo pipefail
+
+die() {
+    echo "seed-target: $*" >&2
+    exit 1
+}
+
+wt="${1:-}"
+[[ -n "$wt" ]] || die "usage: scripts/seed-target <new-worktree> [--from <warm target folder>]"
+src=""
+if [[ "${2:-}" == "--from" ]]; then
+    src="${3:-}"
+    [[ -n "$src" ]] || die "--from needs a folder"
+fi
+[[ -d "$wt" ]] || die "no worktree at $wt"
+if [[ -z "$src" ]]; then
+    common=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir) || die "$wt is not a git checkout"
+    src="$(dirname "$common")/target"
+fi
+[[ -d "$src" ]] || die "no warm target folder at $src; the first build is cold"
+dst="$wt/target"
+[[ -e "$dst" ]] && die "$dst exists; nothing changed"
+
+mkdir "$dst" || die "cannot create $dst"
+for entry in "$src"/* "$src"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    case "$(basename "$entry")" in
+        flycheck0 | tmp) continue ;;
+    esac
+    if ! cp -a --reflink=always "$entry" "$dst"/ 2>/dev/null; then
+        rm -rf "$dst"
+        die "reflink copy of $entry failed (no reflinks on this filesystem?); removed $dst, the first build is cold"
+    fi
+done
+echo "seed-target: $dst seeded from $src (copy-on-write)"
