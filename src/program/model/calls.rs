@@ -97,6 +97,12 @@ pub enum UnknownReason {
     /// has no routine for). Engine-switch S3: these used to fall back to the legacy
     /// resolver; now they are an honest unknown.
     NoProgramSite,
+    /// ENG-06: a record operation that can fire a table trigger, or a
+    /// `FieldRef.Validate`, whose table (or field) is not known: it may run any
+    /// table's triggers and table events. Carried by a to-less
+    /// `ImplicitTrigger` edge keyed by the operation; the combined graph makes
+    /// it the `record-table-unresolved` uncertainty.
+    RecordTableUnresolved,
 }
 
 impl UnknownReason {
@@ -115,6 +121,7 @@ impl UnknownReason {
             UnknownReason::DynamicObjectRunTarget => "dynamic-objectrun-target",
             UnknownReason::DynamicReceiver => "dynamic-receiver",
             UnknownReason::NoProgramSite => "no-program-site",
+            UnknownReason::RecordTableUnresolved => "record-table-unresolved",
         }
     }
 }

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-06: `FieldRef.Validate` and record operations on a table not known, engine limits B9, B10)
+
+- **B9: `FieldRef.Validate` validates its field.** `FR := RR.Field(2); FR.Validate(1);` now
+  runs the field's `OnValidate` and reaches the subscribers of that field's
+  `OnBefore/OnAfterValidateEvent`, as `Rec.Validate(Field, …)` does. Before, it was a plain
+  built-in call and `prove … may-commit` answered a definite `no` for a subscriber that commits.
+  The FieldRef is followed to `RecRef.Field(<number>)`, `Field('<name>')` or
+  `Field(Rec.FieldNo(F))`, written in place or bound to a local FieldRef only that way, and the
+  RecordRef to its one literal table (`Open(Database::X)`, `GetTable` of a known record). The
+  call site gets a `Validate` record operation of that table and field (`…/fieldref-validate`).
+- **An undecided FieldRef, and B10: a trigger-capable record operation on a table not known,
+  is `unknown`, never `no`.** A FieldRef whose table or field is not provable here (a parameter,
+  a global, passed to a call, `FieldIndex`, a computed number, bindings that name different
+  fields), and `Insert`/`Modify`/`Delete`/`Rename`/`Validate`/… on a record whose table does not
+  resolve, may run code the engine did not follow. They now carry an open edge
+  (`UnknownReason::RecordTableUnresolved`) and the call-site-local uncertainty and coverage
+  reason `record-table-unresolved`: `prove` answers `unknown` and its `coverage-incomplete`
+  blocker names the operation, `query effects` counts it in its scope, and finding confidence is
+  capped by `dynamic-dispatch`. Before, all were `no (every candidate decided)`, for the routine
+  and every caller. When code may run there (`SiteFacts::record_table_unresolved`):
+  - a record of a named table the program does not hold (`Record "G/L Entry"` without its app):
+    whenever the operation fires that table's trigger (`Validate` always, `Insert`/`Modify`/
+    `Delete`/`Rename` with RunTrigger), since its triggers are code the engine cannot see;
+  - a RecordRef that may hold any table (`RR.Modify(true)` with `RR` a parameter) and an
+    undecided FieldRef: only when a loaded table has a trigger of that operation's family, or a
+    readable subscriber to its table events. With none, nothing loaded can run there, and the
+    answer stays `no` within the loaded apps it states (`RR.Insert(true)` with no insert trigger
+    anywhere; `RR.Modify()` with no modify-event subscriber).
+  On the corpus this adds eight gaps, all `Record Customer`/`"G/L Entry"`/a dependency's
+  undeclared table in fixtures that do not load it.
+- `FieldNode` (the program graph's table field) carries the field's number (source `field(<no>;
+  …)`, the symbols' `Id`), with a new index lookup by number, recorded for the incremental
+  session like the lookup by name. `PACK_SCHEMA` is 18: dependency packs built before are
+  rebuilt once.
+
 ### Fixed (#363: an absolute path to a workspace file names that file)
 
 Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-approved).

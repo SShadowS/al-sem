@@ -7,9 +7,11 @@
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#04db63ab2b7a77057515802cbab0226c92037a3eebfe6d4b6e4ba5bb50a17eb4",
 				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc200:Codeunit:50200#2387ac7eebaec0fdb8b460c5fe1d7ca1ac1ea8da4bb7ce5642902828951cd1ff"
+				]
 			}
 		},
 		{
@@ -56,10 +58,12 @@
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#2387ac7eebaec0fdb8b460c5fe1d7ca1ac1ea8da4bb7ce5642902828951cd1ff",
-				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"directStatus": "partial",
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc200:Codeunit:50200#2387ac7eebaec0fdb8b460c5fe1d7ca1ac1ea8da4bb7ce5642902828951cd1ff"
+				]
 			}
 		},
 		{
@@ -69,9 +73,11 @@
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#23c33fa0989f81e7701abd7c3f35b00789299d8c24cae6593b1143a593bcf26e",
 				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc200:Codeunit:50200#2387ac7eebaec0fdb8b460c5fe1d7ca1ac1ea8da4bb7ce5642902828951cd1ff"
+				]
 			}
 		},
 		{

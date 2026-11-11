@@ -237,6 +237,131 @@ pub struct SiteFacts {
     /// never a definite answer. The model carries it on the call's edges
     /// (`CallEdge::starts_object`).
     pub starts_object: crate::program::resolve::dataset::ObjectStart,
+    /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
+    /// validates ([`field_ref_validate`]). `None` for any other call.
+    pub field_ref_validate: Option<FieldRefValidate>,
+    /// ENG-06: a record operation that can fire a table trigger (`Insert`,
+    /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
+    /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
+    /// site. The model makes it an open edge when code may run there, and
+    /// every answer through that edge is `unknown`, never `no`.
+    pub record_table_unresolved: Option<UnresolvedTable>,
+}
+
+/// How a record operation's table failed to resolve (ENG-06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnresolvedTable {
+    /// A record whose type is not one table (a `RecordRef` parameter or global,
+    /// one opened on a computed number): any table's triggers and table events
+    /// may run, of the loaded tables in the world an answer states.
+    AnyTable,
+    /// A record of a named table the program does not hold (`Record "G/L
+    /// Entry"` without its app): that table's own triggers are code the engine
+    /// cannot see, so a trigger-firing operation on it is always open.
+    NotLoaded,
+}
+
+/// What a `FieldRef.Validate(…)` call validates (engine limits B9). The
+/// platform runs the field's `OnValidate` trigger and raises the table's
+/// `OnBeforeValidateEvent`/`OnAfterValidateEvent` for that field, as
+/// `Rec.Validate(Field, …)` does; the FieldRef only hides which table and field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldRefValidate {
+    /// Every binding of the FieldRef names this table's field.
+    Decided {
+        table: ObjectNodeId,
+        /// The field's name, folded, as the triggers' `enclosing_member_lc`.
+        field: String,
+        /// That field's `OnValidate` triggers (the table's and its extensions').
+        triggers: Vec<Route>,
+        /// The table's validate-event publishers
+        /// ([`crate::program::resolve::resolver::resolve_table_events`]).
+        table_events: Vec<Route>,
+    },
+    /// The table or the field is not provable here: why. Any table's field
+    /// may be validated, so this is never a "no".
+    Undecided(&'static str),
+}
+
+pub(crate) const FIELDREF_BINDING_UNREADABLE: &str =
+    "the FieldRef is not bound here (a parameter, a global, or passed to a call)";
+pub(crate) const FIELDREF_TABLE_UNKNOWN: &str = "the FieldRef's RecordRef has no one known table";
+pub(crate) const FIELDREF_FIELD_UNKNOWN: &str = "the FieldRef's field is not a literal";
+pub(crate) const FIELDREF_FIELD_NOT_FOUND: &str = "the table has no such field";
+pub(crate) const FIELDREF_BINDINGS_DIFFER: &str = "the FieldRef's bindings name different fields";
+
+/// [`FieldRefValidate`] of a `FieldRef.Validate(…)` call whose receiver is
+/// `receiver` (B9). The FieldRef's sources come from
+/// [`crate::program::recordref_table::fieldref_sources`], each RecordRef's
+/// table from [`recordref_constant_table`], each field from the table's
+/// visible surface (by number or name).
+#[allow(clippy::too_many_arguments)]
+fn field_ref_validate(
+    receiver: Option<al_syntax::ir::ExprId>,
+    routine: &al_syntax::ir::RoutineDecl,
+    obj: &al_syntax::ir::ObjectDecl,
+    file: &al_syntax::ir::AlFile,
+    obj_node: &ObjectNode,
+    caller_app: AppRef,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+) -> FieldRefValidate {
+    use crate::program::recordref_table::{FieldArg, fieldref_sources};
+    let Some(sources) = receiver.and_then(|r| fieldref_sources(file, routine, r)) else {
+        return FieldRefValidate::Undecided(FIELDREF_BINDING_UNREADABLE);
+    };
+    let mut decided: Option<(&ObjectNode, String)> = None;
+    for src in &sources {
+        let Some(table) = recordref_constant_table(
+            &src.recordref,
+            routine,
+            obj,
+            file,
+            obj_node,
+            caller_app,
+            graph,
+            index,
+        ) else {
+            return FieldRefValidate::Undecided(FIELDREF_TABLE_UNKNOWN);
+        };
+        let found = match &src.field {
+            FieldArg::Number(n) => index.field_numbered_in_table(graph, obj_node, &table.id, *n),
+            FieldArg::Name(name) => {
+                index.field_with_owner_in_table(graph, obj_node, &table.id, &name.fold_identifier())
+            }
+            FieldArg::Unknown => return FieldRefValidate::Undecided(FIELDREF_FIELD_UNKNOWN),
+        };
+        let Some((field, _)) = found else {
+            return FieldRefValidate::Undecided(FIELDREF_FIELD_NOT_FOUND);
+        };
+        let field = field.name_lc.to_string();
+        match &decided {
+            None => decided = Some((table, field)),
+            Some((t, f)) if t.id == table.id && *f == field => {}
+            Some(_) => return FieldRefValidate::Undecided(FIELDREF_BINDINGS_DIFFER),
+        }
+    }
+    let Some((table, field)) = decided else {
+        return FieldRefValidate::Undecided(FIELDREF_BINDING_UNREADABLE);
+    };
+    let (_, _, mut triggers) = crate::program::resolve::resolver::resolve_implicit_trigger(
+        "validate", table, graph, index, surface,
+    );
+    // The field's own `OnValidate` only, as `TriggerSiteRule::admits` keeps for
+    // `Rec.Validate(F, …)`; a non-routine route (an honest unknown) stays.
+    triggers.retain(|r| match &r.target {
+        RouteTarget::Routine(id) => id.enclosing_member_lc.as_deref() == Some(field.as_str()),
+        _ => true,
+    });
+    let table_events =
+        crate::program::resolve::resolver::resolve_table_events("validate", table, graph);
+    FieldRefValidate::Decided {
+        table: table.id.clone(),
+        field,
+        triggers,
+        table_events,
+    }
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -853,6 +978,16 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
+                // B9: a `FieldRef.Validate(…)` validates a field of the table
+                // the FieldRef holds.
+                if r.iter().any(|rt| {
+                    matches!(&rt.target, RouteTarget::Builtin(b) if b.0 == "FieldRef::validate")
+                }) {
+                    facts_out.field_ref_validate = Some(field_ref_validate(
+                        *receiver, routine, obj, file, obj_node, caller_app, graph, index,
+                        surface,
+                    ));
+                }
                 // B4 + B6: whether the call starts its object, by the member
                 // arm's own rule (`resolver::member_starts_object`), and the
                 // dataset that start runs.
@@ -1098,6 +1233,10 @@ fn resolve_call_site_obligation(
 
             // Infer the record type from the receiver and look up its table
             // ObjectNode.  Falls back to honest-empty when the table is not found.
+            // ENG-06: a record of a NAMED table the graph does not hold
+            // (`Record "G/L Entry"` without its app) differs from a RecordRef
+            // that may hold any table ([`UnresolvedTable`]).
+            let mut named_not_loaded = false;
             let table_node_opt: Option<&ObjectNode> = if let Some(obj_node) = obj_node_opt {
                 // `RecordOp` carries no `ExprId` (Task 2 scoped the primitive
                 // to `CalleeShape::Member` only) — `None`/`None` here is
@@ -1117,6 +1256,10 @@ fn resolve_call_site_obligation(
                     ReceiverType::Record {
                         table: Some(ref tid),
                     } => graph.object_first(tid),
+                    ReceiverType::Record { table: None } => {
+                        named_not_loaded = true;
+                        None
+                    }
                     // A local RecordRef bound only to one literal table
                     // (`R.Open(Database::"T")`): that table's operations,
                     // triggers and events, not the open record hub.
@@ -1197,6 +1340,11 @@ fn resolve_call_site_obligation(
                         &op_lc, call_args, file, text,
                     );
                     facts_out.open.push(OpenBound::record(op, &rule));
+                    facts_out.record_table_unresolved = Some(if named_not_loaded {
+                        UnresolvedTable::NotLoaded
+                    } else {
+                        UnresolvedTable::AnyTable
+                    });
                 }
                 (
                     DispatchShape::Multicast,

@@ -8,7 +8,7 @@ Written 2026-11-09, at master `58d0c94e`.
 - **L27–L34** are further limits the probes noticed along the way.
 - **L35–L36** are limits the wave-2 B5 review found (2026-11-10).
 - **B1–B8** are wrong answers or a crash that the probes found. **B9** is a wrong answer the
-  wave-2 review probes found. A wrong answer is worse than a limit: limits are stated in answers,
+  wave-2 review probes found, and **B10** one that ENG-06 found while fixing B9. A wrong answer is worse than a limit: limits are stated in answers,
   these are not. They come first in the order.
 
 **Where the evidence is:**
@@ -30,7 +30,7 @@ estimates from reading the code. Nothing has been measured.
   mention, the list says "wrong answer left". By this document's own rule those are B-class
   (see above); they stay with their limit until someone opens a B row for them.
 
-## 1. Wrong answers and a crash (B1–B9)
+## 1. Wrong answers and a crash (B1–B10)
 
 Each of these gives a definite answer that the source contradicts, or kills the engine. None is
 stated as a limit in the answer.
@@ -54,7 +54,8 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
 | B6 | **`prove writes-table` says a definite `no` for a table written only by an XmlPort's automatic insert.** **Fixed in wave 2** (`fix/w2-b6-dataset-ops`): the platform's dataset operations are record operations of the running call, with their reason. Round 2 (`fix/w2r2-b6`): a call to the object's own `Print`/`Execute`/`SaveAs*`/`Open` procedure binds by AL's overload rule (alc-probed), not as a run; a run's per-record triggers are conditional, never `unconditional on success`; `alsem graph` follows an import into its tables' trigger and events; see L20 for what is left. | declarations/out | M (L20) |
 | B7 | **An error behind a trap is reported as escaping.** A trap is a checked `Codeunit.Run`, a `[TryFunction]` whose result is used, or an isolated event. `throws-error --site/--match` answers `yes`, and the condition reads `unconditional on success`, which describes the callee and not the route. **Fixed in wave 2** (`fix/w2-b7-traps`, CHANGELOG): an error a definite trap catches on every route is no longer counted by prove (with or without a filter), explain or digest; an isolated event's error stays `yes` and states its condition; a route trapped on some paths says which. A checked run with a write that may be pending is no definite trap for an error that has a row in the answer (L28; a commit that `[CommitBehavior(Error)]` turns into an error inside a checked run has no row, see [L16 in detail](#l16-in-detail)), and a TryFunction traps only where its value is tested. Round 2 (`fix/w2r2-b7`): a `Commit()` that `[CommitBehavior(Ignore)]` or `(Error)` stops no longer ends the write before a checked run, and explain and digest state the callers' assumption a caught ruling rests on, as prove does. Left: see L23 and L28. | errors/p9.out, cdo-sendqueue-site.out | M (L23) |
 | B8 | **Small wrong output.** Each item is S. |  | S together |
-| B9 | **`FieldRef.Validate` does not raise a table's validate events.** `FR := RR.Field(2); FR.Validate(1);` under a fully readable `[EventSubscriber(ObjectType::Table, Database::"AD T", 'OnAfterValidateEvent', 'Amt', …)] H: Commit();` answers a definite `may-commit: no`; `R.Validate(Amt, 1)` answers `yes`. The engine does not follow a `FieldRef` to the table and field it holds, so the subscriber's effects are not in the cone and no gap is reported. Older than the B2 work. | wave 2 review probes `t-read`, `t-val-read` (`DoFieldRefValidate`) | M |
+| B9 | **Fixed by ENG-06** (`alsem/eng-06-b9-fieldref-validate`, 2026-11-11). ~~**`FieldRef.Validate` does not raise a table's validate events.** `FR := RR.Field(2); FR.Validate(1);` under a fully readable `[EventSubscriber(ObjectType::Table, Database::"AD T", 'OnAfterValidateEvent', 'Amt', …)] H: Commit();` answers a definite `may-commit: no`; `R.Validate(Amt, 1)` answers `yes`.~~ The cause: `FieldRef.Validate` resolved as a plain built-in call, with no trigger or table-event edge; the resolver's "any validate trigger" bound was read only by the call-graph export. Now the resolver follows the FieldRef to its `RecRef.Field(<number>|'<name>'|Rec.FieldNo(F))` (written in place, or a local FieldRef bound only that way) and the RecordRef to its one literal table (`recordref_table`), and the call is a `Validate` record operation of that field: the field's `OnValidate` and the table's validate-event subscribers of that field, as for `Rec.Validate`. A FieldRef whose table or field is not provable (a parameter, a global, passed to a call, `FieldIndex`, a computed number, bindings that name different fields, a field the table does not have) is an open operation: `unknown` (`record-table-unresolved`), never `no`. A RecordRef bound by `GetTable(<record of a known table>)` counts as that table, as `recordref_table` reads it everywhere. Left: a FieldRef or RecordRef received from a caller stays `unknown` (L19 (2)). | wave 2 review probes `t-read`, `t-val-read` (`DoFieldRefValidate`); ENG-06 probe `tests/cli/cli_b9_fieldref_validate.rs` | M |
+| B10 | **Fixed by ENG-06** (found and fixed there, 2026-11-11). ~~**A record operation that can fire a table trigger, on a record whose table is not known, is a definite `no`.** `RR.Modify(true)` with `RR` a `var RR: RecordRef` parameter answers `may-commit: no (every candidate decided)`, and so does every caller.~~ Any table's `OnModify` and modify-event subscribers may run there. The resolver left such an operation (`Insert`, `Modify`, `ModifyAll`, `Delete`, `DeleteAll`, `Rename`, `Validate` on a table that does not resolve) with no route, and the model made no edge and no gap for it. Now it is an open edge when code may run there (`SiteFacts::record_table_unresolved`, the `record-table-unresolved` uncertainty): `prove` answers `unknown` and names it, and so does `query effects`' scope. Code may run there when the record is of a named table the program does not hold and the operation fires its trigger (that table's code is not seen), or, for a RecordRef that may hold any table, when a loaded table has a trigger of that family or a readable subscriber to its table events. With nothing loaded to run, the answer stays `no` within the loaded apps it states (the stated world; tables of apps not loaded that a RecordRef opens by number are outside it, as their subscribers are). The same operation on a local RecordRef opened on a literal table follows that table, as before. | ENG-06 probe (`DoRecRefModifyUnknown`), `tests/cli/cli_b9_fieldref_validate.rs` | S |
 
 The B8 items:
 - The human fingerprint prints `W` for an insert right (`fingerprint_query.rs:303-311`); AL uses
@@ -552,7 +553,8 @@ precision, then the larger capabilities in an order where each builds on the las
 | 8 | **L5** value domains (globals, data, arithmetic), **L10** step 2, **L6**, **L28**, **L22** later steps | Largest precision work, highest speed risk | open |
 
 L34 (the missing test libraries) is an owner decision on the pinned baseline, separate from these
-waves. B9, L35 and L36 were found during wave 2 and are not in a wave yet.
+waves. L35 and L36 were found during wave 2 and are not in a wave yet. B9, found then, and B10,
+found with it, are fixed by ENG-06 (2026-11-11).
 
 ## 4. Verification gaps (no limit suspected)
 

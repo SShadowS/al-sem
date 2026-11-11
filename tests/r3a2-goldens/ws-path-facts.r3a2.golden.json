@@ -26,7 +26,12 @@
           "via": "direct"
         }
       ],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#039b8b4873e1f02a907310193b5032e68231bef9d9877735da495ad4ff260e63/op1"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -53,7 +58,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#0fe5d16b3d194c2b0d867daf2d2d0529898fc991626e3d4042ef7e2fcbf973cb",
@@ -180,7 +185,12 @@
           "via": "direct"
         }
       ],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#177c4e6b6b917b66f56535028fd7ce0a2f89940d3c92315b756ddaee5f2c0d41/op1"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -207,7 +217,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#2be1c60fbef9f715465126d4d66432f2659cccaf27b5af0cb589d1c52e633a33",
@@ -313,7 +323,12 @@
           "via": "direct"
         }
       ],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#3df5154f53abbf325c04c4ad40a199bf7696b453b40e62bdcc2da9d0f5be12a2/op1"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -340,7 +355,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#9469ac8059566b395f7598e17ce7ed8b3a7d34b8c5684e371bfbf24c31672563",
@@ -412,7 +427,12 @@
           "via": "direct"
         }
       ],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#c4733eaa7574f04e35e3bda3aed1d473f4488bb7383e41341c557aaf1f627277/op1"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -439,7 +459,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#d342c18e119878ad459bb45bb516dc39f8b3647b3e176aa2704ca5643092b965",

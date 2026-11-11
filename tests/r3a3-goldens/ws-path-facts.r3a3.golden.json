@@ -57,10 +57,12 @@
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#039b8b4873e1f02a907310193b5032e68231bef9d9877735da495ad4ff260e63",
-				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"directStatus": "partial",
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc400:Codeunit:50400#039b8b4873e1f02a907310193b5032e68231bef9d9877735da495ad4ff260e63"
+				]
 			}
 		},
 		{
@@ -229,10 +231,12 @@
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#177c4e6b6b917b66f56535028fd7ce0a2f89940d3c92315b756ddaee5f2c0d41",
-				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"directStatus": "partial",
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc400:Codeunit:50400#177c4e6b6b917b66f56535028fd7ce0a2f89940d3c92315b756ddaee5f2c0d41"
+				]
 			}
 		},
 		{
@@ -351,10 +355,12 @@
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#3df5154f53abbf325c04c4ad40a199bf7696b453b40e62bdcc2da9d0f5be12a2",
-				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"directStatus": "partial",
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc400:Codeunit:50400#3df5154f53abbf325c04c4ad40a199bf7696b453b40e62bdcc2da9d0f5be12a2"
+				]
 			}
 		},
 		{
@@ -446,10 +452,12 @@
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "11111111-0000-0000-0000-000000abc400:Codeunit:50400#c4733eaa7574f04e35e3bda3aed1d473f4488bb7383e41341c557aaf1f627277",
-				"directStatus": "complete",
-				"inheritedStatus": "complete",
-				"reasons": [],
-				"unknownTargets": []
+				"directStatus": "partial",
+				"inheritedStatus": "partial",
+				"reasons": ["record-table-unresolved"],
+				"unknownTargets": [
+					"11111111-0000-0000-0000-000000abc400:Codeunit:50400#c4733eaa7574f04e35e3bda3aed1d473f4488bb7383e41341c557aaf1f627277"
+				]
 			}
 		},
 		{

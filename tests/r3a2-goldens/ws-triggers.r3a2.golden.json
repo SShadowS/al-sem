@@ -43,10 +43,15 @@
           "via": "direct"
         }
       ],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "77777777-7777-7777-7777-777777777777:Codeunit:51101#9c0af5fd7ebb8786915caac03824a333156b86e486f44eee5d58878ce952b5e4/op0"
+        }
+      ],
       "parameterRoles": [],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "77777777-7777-7777-7777-777777777777:Table:51100#39d3df51df588e25d7047af68e9a57805fe76352ed008f8992ef3bc5792b1eba",

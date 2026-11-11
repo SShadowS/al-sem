@@ -407,6 +407,21 @@ pub(crate) fn assemble(
             continue;
         }
         // to-less edge → typed uncertainty on the `from` routine.
+        if ce.dispatch_kind == DispatchKind::ImplicitTrigger {
+            // ENG-06: a record operation whose table is not known (the
+            // adapter's `open_record_edge`), keyed by the operation.
+            if ce.resolution
+                == Resolution::Unknown(
+                    crate::program::model::calls::UnknownReason::RecordTableUnresolved,
+                )
+            {
+                uncertainty_edges.push(UncertaintyEdge {
+                    from: ce.from.clone(),
+                    uncertainty: simple_uncertainty_op(RECORD_TABLE_UNRESOLVED, &ce.operation_id),
+                });
+            }
+            continue;
+        }
         if ce.dispatch_kind == DispatchKind::Interface {
             // Zero-impl interface dispatch → "interface-open-world". No
             // closed-site check here (#264): a to-less edge is an implementer
@@ -580,6 +595,12 @@ fn simple_uncertainty_cs(kind: &str, callsite_id: &str) -> Uncertainty {
 /// read may be part of. Every answer that reaches such a dispatch is `unknown`
 /// on it, never a definite `no` (engine limits B2).
 pub(crate) const UNREADABLE_SUBSCRIBER: &str = "unreadable-event-subscriber";
+
+/// The uncertainty kind of a record operation that can fire a table trigger,
+/// or a `FieldRef.Validate`, whose table or field is not known (ENG-06): it may
+/// run any table's triggers and table events, so every answer through it is
+/// `unknown`, never a definite `no`.
+pub(crate) const RECORD_TABLE_UNRESOLVED: &str = "record-table-unresolved";
 
 /// Engine limits B2: an uncertainty on each publisher routine, and each record
 /// operation (its table events), an `unreadable` subscription may be for

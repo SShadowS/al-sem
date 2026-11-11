@@ -111,6 +111,8 @@ fn alias_capped_by(kind: &str) -> Option<&'static str> {
         "opaque-body" => Some("opaque-callee"),
         "interface-open-world" => Some("dynamic-dispatch"),
         "unreadable-event-subscriber" => Some("dynamic-dispatch"),
+        // ENG-06: a record op on a table not known may run any table's triggers.
+        "record-table-unresolved" => Some("dynamic-dispatch"),
         _ => None,
     }
 }

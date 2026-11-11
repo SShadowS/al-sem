@@ -48,6 +48,9 @@ struct Walk<'a> {
     file: &'a AlFile,
     var: String,
     bindings: Vec<Binding>,
+    /// FieldRef mode ([`local_fieldref_sources`]): `var := R.Field(…)` is a
+    /// source, collected here; every other use of `var` is as in RecordRef mode.
+    field_sources: Option<Vec<FieldSource>>,
     ok: bool,
 }
 
@@ -80,7 +83,18 @@ impl Walk<'_> {
     fn stmt(&mut self, s: al_syntax::ir::StmtId) {
         match &self.file.ir.stmt(s).kind {
             StmtKind::Assignment { target, value, .. } => {
-                self.expr(*target);
+                if self.field_sources.is_some() && self.names_var(*target) {
+                    match field_call(self.file, *value) {
+                        Some(src) => {
+                            if let Some(s) = self.field_sources.as_mut() {
+                                s.push(src);
+                            }
+                        }
+                        None => self.ok = false,
+                    }
+                } else {
+                    self.expr(*target);
+                }
                 self.expr(*value);
             }
             StmtKind::Call(e) => self.expr(*e),
@@ -191,7 +205,9 @@ impl Walk<'_> {
                     // A parens-less member (`R.Number`, `R.Close`): a binding
                     // always takes an argument.
                     let m = member.trim().trim_matches('"').to_ascii_lowercase();
-                    if matches!(m.as_str(), "open" | "gettable" | "copy") {
+                    if self.field_sources.is_none()
+                        && matches!(m.as_str(), "open" | "gettable" | "copy")
+                    {
                         self.ok = false;
                     }
                 } else {
@@ -208,6 +224,10 @@ impl Walk<'_> {
     }
 
     fn method(&mut self, member: &str, args: &[ExprId]) {
+        if self.field_sources.is_some() {
+            // A FieldRef's own methods (`Validate`, `Value`, …) never rebind it.
+            return;
+        }
         let m = member.trim().trim_matches('"').to_ascii_lowercase();
         match m.as_str() {
             "open" => match args.first().and_then(|a| table_literal(self.file, *a)) {
@@ -295,6 +315,7 @@ pub fn local_recordref_bindings(file: &AlFile, r: &RoutineDecl, var: &str) -> Op
         file,
         var: name,
         bindings: Vec::new(),
+        field_sources: None,
         ok: true,
     };
     w.block(r.body?);
@@ -304,6 +325,141 @@ pub fn local_recordref_bindings(file: &AlFile, r: &RoutineDecl, var: &str) -> Op
     w.bindings.sort();
     w.bindings.dedup();
     Some(w.bindings)
+}
+
+/// How the argument of a `RecRef.Field(…)` names its field.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FieldArg {
+    /// An integer literal: the field's number.
+    Number(i64),
+    /// A text literal (`'No.'`) or `Rec.FieldNo(F)`: the field's name
+    /// (unquoted, as written).
+    Name(String),
+    /// `FieldIndex(…)`, a computed number, or anything else.
+    Unknown,
+}
+
+/// One `RecRef.Field(…)` a FieldRef can come from.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FieldSource {
+    /// The RecordRef, as written (an identifier).
+    pub recordref: String,
+    pub field: FieldArg,
+}
+
+/// `R.Field(<arg>)` or `R.FieldIndex(<arg>)` with `R` an identifier.
+fn field_call(file: &AlFile, e: ExprId) -> Option<FieldSource> {
+    let ExprKind::Call { function, args } = &file.ir.expr(e).kind else {
+        return None;
+    };
+    let ExprKind::Member { object, member, .. } = &file.ir.expr(*function).kind else {
+        return None;
+    };
+    let recordref = match &file.ir.expr(*object).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n.clone(),
+        _ => return None,
+    };
+    let field = match member
+        .trim()
+        .trim_matches('"')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "field" => args
+            .first()
+            .map_or(FieldArg::Unknown, |a| field_arg(file, *a)),
+        "fieldindex" => FieldArg::Unknown,
+        _ => return None,
+    };
+    Some(FieldSource { recordref, field })
+}
+
+/// [`FieldArg`] of one `Field(…)` argument.
+fn field_arg(file: &AlFile, e: ExprId) -> FieldArg {
+    match &file.ir.expr(e).kind {
+        ExprKind::Literal(Literal::Int(n)) => n
+            .trim()
+            .parse::<i64>()
+            .map_or(FieldArg::Unknown, FieldArg::Number),
+        ExprKind::Literal(Literal::Text(raw)) => {
+            al_syntax::ir::al_string_literal_text(raw).map_or(FieldArg::Unknown, FieldArg::Name)
+        }
+        // `Rec.FieldNo(F)` / `Rec.FieldNo("F")`: the field `F`.
+        ExprKind::Call { function, args } => {
+            let is_field_no = matches!(
+                &file.ir.expr(*function).kind,
+                ExprKind::Member { member, .. }
+                    if member.trim().trim_matches('"').eq_ignore_ascii_case("fieldno")
+            );
+            match (is_field_no, args.as_slice()) {
+                (true, [a]) => match &file.ir.expr(*a).kind {
+                    ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+                        FieldArg::Name(n.clone())
+                    }
+                    _ => FieldArg::Unknown,
+                },
+                _ => FieldArg::Unknown,
+            }
+        }
+        _ => FieldArg::Unknown,
+    }
+}
+
+/// The `RecRef.Field(…)` calls a FieldRef receiver `recv` (an expression of
+/// routine `r`) can be, when that is provable; `None` otherwise. A
+/// `R.Field(…)` written in place is itself. A LOCAL `FieldRef` variable is
+/// every `V := R.Field(…)` / `R.FieldIndex(…)` assigned to it, provided it
+/// is used otherwise only as a member receiver (`V.Validate(…)`, `V.Value`):
+/// passed as an argument (a `var` parameter could rebind it), assigned
+/// anything else, a parameter or a global declines, as for a RecordRef
+/// ([`local_recordref_bindings`], the module doc).
+#[must_use]
+pub fn fieldref_sources(file: &AlFile, r: &RoutineDecl, recv: ExprId) -> Option<Vec<FieldSource>> {
+    if let Some(src) = field_call(file, recv) {
+        return Some(vec![src]);
+    }
+    let name = match &file.ir.expr(recv).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n.clone(),
+        _ => return None,
+    };
+    local_fieldref_sources(file, r, &name)
+}
+
+/// [`fieldref_sources`] for a local FieldRef variable `var`, sorted and
+/// deduplicated; `None` when not provable or never assigned.
+#[must_use]
+pub fn local_fieldref_sources(
+    file: &AlFile,
+    r: &RoutineDecl,
+    var: &str,
+) -> Option<Vec<FieldSource>> {
+    let name = crate::program::body::node_util::strip_quotes(var.trim()).replace("\"\"", "\"");
+    if r.params.iter().any(|p| p.name.eq_fold_identifier(&name)) {
+        return None;
+    }
+    let local = r.locals.iter().find(|v| v.name.eq_fold_identifier(&name))?;
+    if !local
+        .ty
+        .as_deref()
+        .is_some_and(|t| t.trim().eq_ignore_ascii_case("fieldref"))
+    {
+        return None;
+    }
+    let mut w = Walk {
+        file,
+        var: name,
+        bindings: Vec::new(),
+        field_sources: Some(Vec::new()),
+        ok: true,
+    };
+    w.block(r.body?);
+    let mut sources = w.field_sources.take().unwrap_or_default();
+    if !w.ok || sources.is_empty() {
+        return None;
+    }
+    sources.sort();
+    sources.dedup();
+    Some(sources)
 }
 
 /// [`local_recordref_bindings`] for every local RecordRef of `r` that has

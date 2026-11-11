@@ -618,18 +618,36 @@ fn build_obligation_blockers(
     if !oblg.coverage_complete && !coverage_reasons_listed(&entry.coverage_reasons, &blockers) {
         blockers.push(ProveBlocker {
             kind: "coverage-incomplete",
-            detail: if entry
-                .coverage_reasons
-                .iter()
-                .any(|r| r == crate::engine::l4::combined_graph::UNREADABLE_SUBSCRIBER)
-            {
-                format!(
-                    "coverage status: {} (an [EventSubscriber] the engine could not read may run \
-                     for an event raised here)",
-                    entry.coverage_status
-                )
-            } else {
-                format!("coverage status: {}", entry.coverage_status)
+            detail: {
+                use crate::engine::l4::combined_graph::{
+                    RECORD_TABLE_UNRESOLVED, UNREADABLE_SUBSCRIBER,
+                };
+                let has = |k: &str| entry.coverage_reasons.iter().any(|r| r == k);
+                let notes: Vec<&str> = [
+                    (
+                        UNREADABLE_SUBSCRIBER,
+                        "an [EventSubscriber] the engine could not read may run for an event \
+                         raised here",
+                    ),
+                    (
+                        RECORD_TABLE_UNRESOLVED,
+                        "a record operation or FieldRef.Validate on a table not known here may \
+                         run any table's triggers and table events",
+                    ),
+                ]
+                .into_iter()
+                .filter(|(k, _)| has(k))
+                .map(|(_, note)| note)
+                .collect();
+                if notes.is_empty() {
+                    format!("coverage status: {}", entry.coverage_status)
+                } else {
+                    format!(
+                        "coverage status: {} ({})",
+                        entry.coverage_status,
+                        notes.join("; ")
+                    )
+                }
             },
             anchor: None,
         });
