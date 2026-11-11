@@ -54,6 +54,13 @@ Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-appr
 
 ### Changed
 
+- **`scripts/ci-steps task-affected` builds only the test binaries it runs** (crate split Phase 1,
+  ENG-05). It used to pass `--workspace` with an `-E` filter: the filter chose which tests ran, but
+  every test binary was still built. It now passes the filter's own targets (the `al-sem` lib tests,
+  `--test X` for each `binary(X)`, `-p al-syntax` for `package(al-syntax)`) and keeps `-E` inside
+  them. Checked on the l5/l4 + al-syntax filter: both forms list the same 5,344 tests. A filter part
+  with no known target falls back to the whole suite. `task` and `all` are unchanged.
+
 - **Grammar: tree-sitter-al v5.1.0, `abc77b25`** (was v5.0.0, `18c988e8`). Seven new `RawKind`s,
   all `Structural`; `NAMED_KIND_COUNT` is 513. `CACHE_VERSION_GRAMMAR` is now
   `tree-sitter-al-v5.1.0-abc77b25-native` (same length, so `dry-run.txt` did not move).

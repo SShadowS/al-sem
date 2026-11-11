@@ -183,9 +183,24 @@ run_task_affected() {
         env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace
         return
     fi
+    # ⟨2026-11-10, crate split Phase 1⟩ Build only what the filter runs. With `--workspace`,
+    # `-E` chose which tests RAN but every test binary was still BUILT. The targets below
+    # are exactly the filter's: the al-sem lib tests, `--test X` per `binary(X)`, and the
+    # al-syntax package for `package(al-syntax)`; `-E` still filters within them.
+    local targets=(-p al-sem --lib) part
+    for part in $(grep -oE '(binary|package)\([a-z0-9_-]+\)' <<<"$filter"); do
+        case "$part" in
+            binary\(*) part="${part#binary(}"; targets+=(--test "${part%)}") ;;
+            'package(al-syntax)') targets+=(-p al-syntax) ;;
+            *) echo "ci-steps: task-affected: no build target for '$part' -> the whole suite"
+               env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace
+               return ;;
+        esac
+    done
     filter="package(al-sem) & kind(lib)${filter:+ | $filter}"
     echo "ci-steps: task-affected: $filter"
-    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run --workspace -E "$filter"
+    echo "ci-steps: task-affected: builds ${targets[*]}"
+    env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run "${targets[@]}" -E "$filter"
 }
 
 run_build() { require_grammar || return 1; cargo build --release; }
