@@ -80,21 +80,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   items' triggers, so `prove writes-table` answered a definite `no` for a write in the request
   page's `OnOpenPage` through `Report.Run`, `RunModal`, `Execute` and a report variable's run
   (re-probed on master `a8a6c70a`). A run of a report, or of the report a report extension
-  extends, now follows its request page's `OnInit` (`unconditional on success`) and its
-  `OnOpenPage`, `OnQueryClosePage`, `OnClosePage` and record triggers (`conditional`). The list
-  also feeds the sited graph (`alsem graph`, `impact`) and explain's `reachedFrom`. Which trigger
+  extends, and of an XmlPort, now follows its request page's `OnInit` (`unconditional on
+  success`) and its `OnOpenPage`, `OnQueryClosePage`, `OnClosePage` and record triggers
+  (`conditional`). The list also feeds the sited graph (`alsem graph`, `impact`) and explain's
+  `reachedFrom`: `impact` on a request-page trigger now counts the runs as its code callers, where
+  it said "direct code callers: none found" and reached it by UI navigation only. Which trigger
   runs in which run was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
   `OnInit` ran in every run; `OnOpenPage`/`OnClosePage` not with `UseRequestPage` false;
   `OnQueryClosePage` not under `Execute` (the order is in `docs/engine-limits.md`, "L20 in
   detail").
 - **A run's triggers are triggers.** The resolver matched a run's triggers by name alone, so a
   procedure named like one (a report procedure `OnOpenPage`) was followed as if the run ran it.
-  It now takes routines declared as triggers only, for every object kind.
+  It now takes routines declared as triggers only, for a page, report, XmlPort and query run.
+- Left (engine limits, "L20 in detail"): `Report.RunRequestPage` is still not a run (a wrong
+  answer left); which request-page triggers one call runs is not read from the call (`RunModal(X,
+  false)` still reaches `OnOpenPage`, safe).
 - No Rust-owned golden moved: no fixture runs a report that has a request page.
-- Tests: `tests/cli/cli_eng07_request_page.rs` (4 tests; discrimination proofs: dropping the
-  request page's names brings the old `no` back, dropping their conditionality or making `OnInit`
-  conditional fails the conditionality pins, and dropping the trigger filter follows the
-  procedure).
+- Tests: `tests/cli/cli_eng07_request_page.rs` (6 tests; discrimination proofs: dropping the
+  report's or the XmlPort's request-page names brings the old `no` back, dropping their
+  conditionality or making `OnInit` conditional fails the conditionality pins, dropping the trigger
+  filter follows the procedure, and dropping `OnOpenPage` from the sited graph's rule fails the
+  `impact` pin).
+- Left: a report procedure with a request-page trigger's name and parameters still hides the
+  trigger (one routine id; alc accepts the pair), a wrong `no`.
 
 ### Fixed (ENG-18: a literal-reach answer no longer depends on what else the read asked)
 

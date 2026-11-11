@@ -498,17 +498,39 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
     `OnPreReport`, … Learn's "the OnOpen and OnClose triggers on the request page will run even
     though the request page is not shown" holds for `Execute`, not for `Run(…, false)`.
   - `SaveAs*` and `Print` were not measured; they are runs like `Execute`.
+  - A report extension's request page: its `OnOpenPage` runs after the base's, its `OnClosePage`
+    after the page; neither with `UseRequestPage` false. It cannot declare `OnInit` (alc AL0162).
+  - An XmlPort's request page: `OnInit` ran before `OnInitXmlPort` on `Export` to a stream and on
+    `Run(X, false)` and `Run(X, true)`; no `OnOpenPage` ran (in a test session the page did not
+    show, so its shown order was not seen).
 
   So the request page's `OnInit` is `unconditional on success`; its `OnOpenPage`, `OnQueryClosePage`,
   `OnClosePage` and record triggers (`OnAfterGetRecord`, …, for a request page with a
-  `SourceTable`) are `conditional`. A control's `OnValidate` stays unfollowed (a user's action). The
-  resolver's run follows triggers only, so a report procedure named `OnOpenPage` is not taken for
-  the trigger (this holds for every object kind's run; explain's `reachedFrom` already checked it).
-  Tests: `tests/cli/cli_eng07_request_page.rs`.
+  `SourceTable`) are `conditional`, for a report, a report extension and an XmlPort. A control's
+  `OnValidate` stays unfollowed (a user's action). The resolver's run follows triggers only, so a
+  report procedure named `OnOpenPage` is not taken for the trigger (for a page, report, XmlPort and
+  query run; explain's `reachedFrom` already checked it). `alsem impact` (the sited graph) now
+  counts the runs as code callers of a request-page trigger; before, it said "direct code callers:
+  none found" and reached it by UI navigation only. Tests: `tests/cli/cli_eng07_request_page.rs`.
 
 **Left.**
+- **`Report.RunRequestPage` is not a run: wrong answer left.** It runs the request page's `OnInit`,
+  `OnOpenPage`, `OnQueryClosePage` and `OnClosePage` (measured, above) but no `OnPreReport` and no
+  data item, and it resolves as a plain built-in, so a write in those triggers answers `no` through
+  it. CDO calls it twice, both with a run-time id. The fix needs the triggers one start method runs
+  (not the whole run's list), its keyword and variable forms, and B4's commit scope.
+- Which request-page triggers one call runs is not read from the call: `RunModal(X, false)` (and a
+  report with `UseRequestPage = false`) reaches `OnOpenPage`/`OnClosePage`, and `Execute` reaches
+  `OnQueryClosePage`, all `conditional` (safe, imprecise).
 - A request page's `SourceTable` does not type its `Rec`: a write through `Rec` in a request-page
   trigger is a table not known, so `unknown` (safe, imprecise).
+- **A report procedure with a request-page trigger's name and parameters hides the trigger: wrong
+  answer left.** Both get one routine id (object, name, no member, parameters), and the build keeps
+  the first one declared. alc accepts the pair (a report with `procedure OnOpenPage()` and a
+  request-page `trigger OnOpenPage()` compiles, checked with alc 2026-11-11). When the procedure
+  comes first, a run follows neither, so a write in the trigger answers `no` (before ENG-07 the run
+  followed the procedure's body, also not the trigger's). The root fix is a member for request-page
+  triggers in the lowerer, or `is_trigger` in the routine id; both move ids.
 - **An XmlPort import's error on an existing record is not an error fact: wrong answer left.** With
   AutoUpdate and AutoReplace both false, or a duplicate key, `throws-error` can say `no`.
 - The LSP call hierarchy still lacks the trigger and table-event edges (only the model and `alsem

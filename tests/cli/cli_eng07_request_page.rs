@@ -25,6 +25,14 @@ table 50904 "RP Rec Log" { fields { field(1; K; Integer) { } } keys { key(PK; K)
 table 50905 "RP Control Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 table 50906 "RP Proc Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 table 50907 "RP Ext Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50930 "RP Find Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50931 "RP Next Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50932 "RP Curr Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50933 "RP New Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50934 "RP Task Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50935 "RP TaskErr Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50936 "XP Init Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50937 "XP Open Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 report 50910 "RP Probe"
 {
     ProcessingOnly = true;
@@ -80,9 +88,71 @@ report 50910 "RP Probe"
         begin
             L.Insert();
         end;
+        trigger OnFindRecord(Which: Text): Boolean
+        var
+            L: Record "RP Find Log";
+        begin
+            L.Insert();
+        end;
+        trigger OnNextRecord(Steps: Integer): Integer
+        var
+            L: Record "RP Next Log";
+        begin
+            L.Insert();
+        end;
+        trigger OnAfterGetCurrRecord()
+        var
+            L: Record "RP Curr Log";
+        begin
+            L.Insert();
+        end;
+        trigger OnNewRecord(BelowxRec: Boolean)
+        var
+            L: Record "RP New Log";
+        begin
+            L.Insert();
+        end;
+        trigger OnPageBackgroundTaskCompleted(TaskId: Integer; Results: Dictionary of [Text, Text])
+        var
+            L: Record "RP Task Log";
+        begin
+            L.Insert();
+        end;
+        trigger OnPageBackgroundTaskError(TaskId: Integer; ErrorCode: Text; ErrorText: Text; ErrorCallStack: Text; var IsHandled: Boolean)
+        var
+            L: Record "RP TaskErr Log";
+        begin
+            L.Insert();
+        end;
     }
     var
         Opt: Boolean;
+}
+xmlport 50914 "XP Probe"
+{
+    Direction = Export;
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Num; Integer) { fieldattribute(N; Num.Number) { } }
+        }
+    }
+    requestpage
+    {
+        trigger OnInit()
+        var
+            L: Record "XP Init Log";
+        begin
+            L.Insert();
+        end;
+        trigger OnOpenPage()
+        var
+            L: Record "XP Open Log";
+        begin
+            L.Insert();
+        end;
+    }
 }
 report 50911 "RP Proc Probe"
 {
@@ -121,7 +191,7 @@ codeunit 50920 "RP Caller"
     end;
     procedure ViaRunModal()
     begin
-        Report.RunModal(Report::"RP Probe", false);
+        Report.RunModal(Report::"RP Probe");
     end;
     procedure ViaExecute(P: Text)
     begin
@@ -140,6 +210,10 @@ codeunit 50920 "RP Caller"
     procedure RunExtBase()
     begin
         Report.Run(Report::"RP Ext Base");
+    end;
+    procedure RunXmlPort()
+    begin
+        Xmlport.Run(Xmlport::"XP Probe");
     end;
 }
 "#;
@@ -187,7 +261,9 @@ fn yes_with(r: &Value) -> String {
 }
 
 /// Every run form reaches every request-page lifecycle trigger: `OnInit`
-/// unconditionally, the rest conditionally.
+/// unconditionally, the rest conditionally. Which triggers one call runs is
+/// not read from the call (`Execute` runs no `OnQueryClosePage`), so its
+/// `conditional` there is a safe over-approximation, not a measured fact.
 #[test]
 fn a_run_reaches_the_request_pages_triggers() {
     let t = workspace();
@@ -199,22 +275,83 @@ fn a_run_reaches_the_request_pages_triggers() {
             "RP Query Log",
             "RP Close Log",
             "RP Rec Log",
+            "RP Find Log",
+            "RP Next Log",
+            "RP Curr Log",
+            "RP New Log",
+            "RP Task Log",
+            "RP TaskErr Log",
         ]
         .into_iter()
         .map(|table| (table, yes_with(&writes(ws, routine, table))))
         .collect();
-        assert_eq!(
-            got,
-            vec![
-                ("RP Init Log", "unconditional-on-success".to_string()),
-                ("RP Open Log", "conditional".to_string()),
-                ("RP Query Log", "conditional".to_string()),
-                ("RP Close Log", "conditional".to_string()),
-                ("RP Rec Log", "conditional".to_string()),
-            ],
-            "{routine}"
-        );
+        let mut want = vec![("RP Init Log", "unconditional-on-success".to_string())];
+        for table in [
+            "RP Open Log",
+            "RP Query Log",
+            "RP Close Log",
+            "RP Rec Log",
+            "RP Find Log",
+            "RP Next Log",
+            "RP Curr Log",
+            "RP New Log",
+            "RP Task Log",
+            "RP TaskErr Log",
+        ] {
+            want.push((table, "conditional".to_string()));
+        }
+        assert_eq!(got, want, "{routine}");
     }
+}
+
+/// `impact` reads the same rule through the sited graph: the request page's
+/// `OnOpenPage` is reached by code from the four runs. Before ENG-07 it had
+/// no code caller and was reached only by "UI navigation".
+#[test]
+fn impact_counts_a_runs_code_callers_of_a_request_page_trigger() {
+    let t = workspace();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "impact",
+            t.path().to_str().unwrap(),
+            "--routine",
+            "RP Probe::OnOpenPage",
+            "--single-app",
+            "--no-tests",
+            "--format",
+            "json",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+    let up = &v["roots"][0]["up"];
+    assert_eq!(up["callers"]["count"], 4, "{up:#}");
+    let anc = &up["byRelation"]["ancestors"];
+    assert_eq!(anc["uiNavigation"]["local"], 0, "{anc:#}");
+    assert!(anc["code"]["local"].as_u64().unwrap() >= 4, "{anc:#}");
+}
+
+/// An XmlPort's request page alike: its `OnInit` ran on every run measured,
+/// its `OnOpenPage` only when the page shows.
+#[test]
+fn an_xmlport_run_reaches_its_request_pages_triggers() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    assert_eq!(
+        yes_with(&writes(ws, "RunXmlPort", "XP Init Log")),
+        "unconditional-on-success"
+    );
+    assert_eq!(
+        yes_with(&writes(ws, "RunXmlPort", "XP Open Log")),
+        "conditional"
+    );
 }
 
 /// A request-page control's `OnValidate` runs only when a user edits the

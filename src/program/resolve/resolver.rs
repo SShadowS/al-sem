@@ -2229,6 +2229,8 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
 /// shows or a head-less run (`Execute`) runs it (ENG-07, engine limits L20).
 /// Measured on the BC 28.4 Linux sidecar; Windows confirmation pending. Its
 /// record triggers mirror a page's, for a request page with a `SourceTable`.
+/// An XmlPort's request page the same: its `OnInit` ran on every `Run` and
+/// `Export` measured (before `OnInitXmlPort`).
 pub(crate) fn run_triggers(
     kind: ObjectKind,
 ) -> Option<(&'static [&'static str], &'static [&'static str])> {
@@ -2270,7 +2272,23 @@ pub(crate) fn run_triggers(
             &["onpredataitem", "onaftergetrecord", "onpostdataitem"],
         )),
         ObjectKind::XmlPort => Some((
-            &["oninitxmlport", "onprexmlport", "onpostxmlport"],
+            &[
+                "oninitxmlport",
+                "onprexmlport",
+                "onpostxmlport",
+                // The request page's, as a report's.
+                "oninit",
+                "onopenpage",
+                "onfindrecord",
+                "onnextrecord",
+                "onaftergetrecord",
+                "onaftergetcurrrecord",
+                "onnewrecord",
+                "onqueryclosepage",
+                "onclosepage",
+                "onpagebackgroundtaskcompleted",
+                "onpagebackgroundtaskerror",
+            ],
             &[
                 "onbeforepassvariable",
                 "onbeforepassfield",
@@ -2314,10 +2332,12 @@ pub(crate) fn run_triggers(
 ///   the BC 28.4 Linux sidecar, Windows confirmation pending): with
 ///   `UseRequestPage` false no `OnOpenPage`/`OnClosePage` runs, `Execute`
 ///   runs no `OnQueryClosePage`, and the record triggers need a record.
-///   `OnInit` ran in every run measured.
+///   `OnInit` ran in every run measured. An XmlPort's request-page triggers
+///   alike (no `OnOpenPage` ran in an `Export` to a stream).
 ///
-/// The report's own `OnInitReport`/`OnPreReport`/`OnPostReport`, an XmlPort's
-/// and a query's object-level triggers, and a page's
+/// The report's own `OnInitReport`/`OnPreReport`/`OnPostReport`, the
+/// XmlPort's own `OnInitXmlPort`/`OnPreXmlPort`/`OnPostXmlPort`, a query's
+/// trigger, and a page's
 /// `OnInit`/`OnOpenPage`/`OnFindRecord`/`OnQueryClosePage`/`OnClosePage`, are
 /// not decided here (a request page the user cancels is a separate limit).
 #[must_use]
@@ -2334,7 +2354,13 @@ pub(crate) fn run_trigger_may_not_run(
                     "oninitreport" | "onprereport" | "onpostreport" | "oninit"
                 )
         }
-        ObjectKind::XmlPort => member_level,
+        ObjectKind::XmlPort => {
+            member_level
+                || !matches!(
+                    trigger_lc,
+                    "oninitxmlport" | "onprexmlport" | "onpostxmlport" | "oninit"
+                )
+        }
         ObjectKind::Page | ObjectKind::PageExtension => {
             !member_level
                 && matches!(
