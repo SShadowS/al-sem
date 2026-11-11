@@ -246,6 +246,21 @@ Terms used in the wave-2 sections below:
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
 
+### Fixed (TLS-15: a status test that failed under host load)
+
+- **`mcp_server::faults::status_answers_during_a_heavy_call` no longer has a fixed 200 ms bound.**
+  It took 223-227 ms on a saturated host (2026-11-11, TLS-13's timing) and stopped the run. What it
+  guards is that `alsem_status` answers WHILE a heavy call runs: it still requires the status first
+  (before the explain) and naming the running call, and now times the status against the heavy call
+  itself in the same run: from the status request, the status must answer in under a quarter of the
+  time the explain still takes (about 2.5 s of a 3 s sleep). Host load stretches both alike.
+  Discrimination: a status that waits for the running call fails at "answered first"; a status
+  slowed by 1.5 s but still answered first fails the new ratio (1.50 s against 2.51 s).
+- Other fixed wall-clock bounds in `tests/cli/mcp_server.rs` and `engine_host.rs`: the 10-30 s
+  upper bounds are hang guards and the lower bounds cannot fail under load; one tight upper bound
+  remains, `engine_host::repeated_deaths_back_off_then_fail_until_reset`'s `< 100 ms` ("no
+  spawn", which the `spawns == 3` check beside it already pins), left for a follow-up.
+
 ### Changed (TLS-12: the slowest tests build each model once)
 
 - **Four `tests_rule_b` corpus tests are one test**, `scoped_reads_equal_unscoped_on_the_corpus`:
