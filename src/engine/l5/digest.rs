@@ -5496,23 +5496,41 @@ fn digest_one_root<'i>(
                 // routes into the paths that still commit and those that raise
                 // an error (an `ERROR_IMPLICIT` row of its own); a commit no
                 // route runs is listed as suppressed instead of as a row.
+                // ENG-09: a checked run's own commit is no `Commit()`: no
+                // `[CommitBehavior]` changes it, and it happens only when the
+                // run ends without an error, which the caller survives (the
+                // run returns `false`), so it is never `unconditional`.
+                let run_commit =
+                    effect_type == "COMMIT" && crate::engine::l5::commit_scope::is_run_commit(fact);
                 let mut offers: Vec<PartOffer> = Vec::with_capacity(parts.len());
                 for (bnd, ix) in parts {
                     let split = match cb {
-                        Some(cb) if effect_type == "COMMIT" => {
+                        Some(cb) if effect_type == "COMMIT" && !run_commit => {
                             split_commit_part(cb, &cb_root, rid, &outcome, bnd.as_deref(), &ix, idx)
                         }
                         _ => None,
                     };
                     let Some(split) = split else {
+                        let (twins, uncertain) = if run_commit {
+                            (
+                                Some((0..outcome.twins.len()).collect()),
+                                Uncertain {
+                                    ix: ix.clone(),
+                                    extra: false,
+                                    twins: (0..outcome.twins.len()).collect(),
+                                },
+                            )
+                        } else {
+                            (None, Uncertain::default())
+                        };
                         offers.push(PartOffer {
                             effect_type,
                             bnd,
                             ix,
                             extra: None,
-                            twins: None,
+                            twins,
                             error_reason: None,
-                            uncertain: Uncertain::default(),
+                            uncertain,
                         });
                         continue;
                     };
@@ -6034,6 +6052,14 @@ fn digest_one_root<'i>(
                             occurrence_id: e.fact_id.clone(),
                             conditionality: e.conditionality,
                             boundary: e.boundary_group,
+                            // `commit_scope::is_run_commit`, read off the row:
+                            // a commit witnessed by a call site and no
+                            // operation (an inherited `Commit()` keeps its
+                            // operation, a rule-B boundary group has neither).
+                            run_commit: e.effect_type == "COMMIT"
+                                && !e.boundary_group
+                                && e.evidence_operation_id.is_none()
+                                && e.evidence_callsite_id.is_some(),
                         }
                     })
                     .collect();

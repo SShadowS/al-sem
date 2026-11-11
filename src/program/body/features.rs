@@ -32,6 +32,7 @@
 //!   - `PCallSite.receiver_temp_state`
 //!   - `PCallSite.implicit_receiver`
 //!   - `PCallSite.start_may_fail`
+//!   - `PCallSite.checked_run`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -308,6 +309,18 @@ pub struct PCallSite {
     /// `in_statement_position`; deserialized rows default it to `false`.
     #[serde(skip)]
     pub start_may_fail: bool,
+    /// True iff the resolver decided this call is a checked `Codeunit.Run`
+    /// (`traps::is_checked_run`: its result used, keyword form or a codeunit
+    /// variable's `.Run()` into `OnRun`). Such a run commits its own changes
+    /// when it ends without an error, and no `[CommitBehavior]` changes that
+    /// (ENG-09, Learn, measured on BC 28), so the capability cone gives the
+    /// site a commit of its own. Set by `program_calls` after resolution,
+    /// never by the body walk.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`; deserialized rows default it to `false`.
+    #[serde(skip)]
+    pub checked_run: bool,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the

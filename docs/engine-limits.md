@@ -282,9 +282,9 @@ CHANGELOG "B2 per-arm ids").
 | L1 | Reads, locks and validations listed one dependency routine deep. Deep reads and lock facts already ride the cone, so this is mostly output. Validations need a new cone fact. | found | M | — |
 | L3 | No lock state along call paths and no lock order. Answers must list held tables, never give a "safe" verdict. Lock escalation and SQL range locks are not modeled. | found | L | L1, L15 |
 | L15 (P1) | `ReadIsolation` UpdLock/RepeatableRead and `FindSet(true)` are plain reads, never locks. On CDO, `RunMigration :307-308` takes an update lock and the answer says `locks: none`. Approach: record isolation per read in the body walk, then emit a lock fact. | confirmed | M | — |
-| L16 (P2) | **Fixed in wave 2 (B4).** `[CommitBehavior]` now decides every forward commit and error answer (prove, its `--site/--match` slice, digest, explain). What is left, numbered: [L16 in detail](#l16-in-detail). | fixed (remainder stated) | M | — |
+| L16 (P2) | **Fixed in wave 2 (B4).** `[CommitBehavior]` now decides every forward commit and error answer (prove, its `--site/--match` slice, digest, explain). ENG-09: a checked `Codeunit.Run` commits (item 2). What is left, numbered: [L16 in detail](#l16-in-detail). | fixed (remainder stated) | M | — |
 | L27 | `callers-have-pending-writes` says `no` when a caller holds a `LockTable` but wrote nothing, so an agent about to add a lock gets no hint. | new | S | L3 |
-| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. Nothing models it. CDO avoids it by committing first (`CDOQueueManagement:46`). Not probed on BC. **Wave 2 (B7 review):** the forward error answers read a pending write at the run, but the run's own error is still not an error site, so a run with a write pending and no other error answers a wrong `no`. Details: [L28 in detail](#l28-in-detail). | partial | M | L23 |
+| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. Nothing models it. CDO avoids it by committing first (`CDOQueueManagement:46`). Measured on the BC 28.4 Linux sidecar (ENG-09 probe): an `Insert` followed by a checked run fails at the run ("An error occurred and the transaction is stopped.", inside a `[TryFunction]`). **Wave 2 (B7 review):** the forward error answers read a pending write at the run, but the run's own error is still not an error site, so a run with a write pending and no other error answers a wrong `no`. Details: [L28 in detail](#l28-in-detail). | partial | M | L23 |
 
 #### L16 in detail
 
@@ -317,10 +317,28 @@ callers' question reads (`commit_scope::declared`).
 1. `InherentCommitBehavior` is parsed (the probe was wrong: `workspace.rs` reads it) but is not on
    Microsoft Learn, so it only *may* apply: it never removes a commit, and under `Error` adds a
    possible error.
-2. **The implicit commit of a checked `Codeunit.Run` has no fact.** A checked run whose codeunit
-   has no explicit `Commit()` answers `may-commit no` (on master too): wrong answer left. The rule
-   above uses an explicit commit inside the run as its stand-in, so only the no-explicit-commit
-   case is still wrong.
+2. **Fixed (ENG-09): the implicit commit of a checked `Codeunit.Run` is a fact.** Before, a
+   checked run whose codeunit has no `Commit()` answered `may-commit no`, and a run-time id
+   `unknown` (re-probed on master `c498fd98`). Measured on the BC 28.4 Linux sidecar: after
+   `if Codeunit.Run(W) then;`, where W inserts a row and never commits, a second checked run
+   succeeds, which BC refuses while a write is pending; so the run committed. The same held under
+   the caller's `[CommitBehavior(Ignore)]` and `(Error)` (no error) and for `Ok := W.Run()` on a
+   codeunit variable. So `program_calls` marks each checked run (`PCallSite::checked_run`, by
+   `traps::is_checked_run`: the keyword form by its shape, a run-time id included, the variable
+   form by its edge into `OnRun`), and the capability cone gives the site a commit fact witnessed
+   by the call site (`commit_scope::is_run_commit`: a commit with no operation). No
+   `[CommitBehavior]` rule applies to it (the digest's split, `CbGraph`'s commits, the
+   `--site/--match` slice). A failed run commits nothing and the caller carries on, so it is at
+   least `conditional`, never `unconditional on success`. In the ordering engine it is
+   `COMMIT_REACHABLE` only: it commits the run's own transaction, never a write of the caller (one
+   pending at the run is L28's error, one after it is not in the run). The explicit commit inside a
+   run is still read as the run's commit too (above).
+   Left: a run that always fails (its `OnRun` raises an error on every path) still answers
+   `may-commit yes` (an over-statement, never a wrong `no`); the `CbGraph` carrier exclusion has no
+   test that reaches it (only an `#if`-arms routine where one arm holds only a checked run and
+   another a `Commit()` would differ); and a codeunit variable's `.Run()` into a symbol-only
+   dependency has no `OnRun` row, so it is not marked (that callee is opaque, so the answer is
+   already not a definite `no`; not probed).
 3. `alsem fingerprint` (and `policy check`, which reads its capabilities) does not apply the rule:
    it says `commit: yes` for a root whose only commit is ignored or errors. That over-states; it
    never says a wrong `no`.
@@ -335,7 +353,7 @@ callers' question reads (`commit_scope::declared`).
 7. Whether the scope follows into a started object (checked or not) was not checked on a BC server
    (the BC 28 sidecar).
 8. A dynamic run (`Codeunit.Run(Id)`, `Report.Run(Id)` with a computed id) has no target, so a
-   commit in it is unknown, as before.
+   commit in it is unknown, as before. A checked `Codeunit.Run(Id)` commits all the same (item 2).
 9. Two body-level lists of the keyword run forms stay apart from `dataset::starts_object`:
    `combined_graph::keyword_run_kind` (the typed edge of a dynamic keyword run) and
    `ir_walk::object_run_kind` (the L2 callee shape). They answer other questions and move no commit

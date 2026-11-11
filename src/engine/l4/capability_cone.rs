@@ -730,6 +730,30 @@ pub(crate) fn direct_facts_for_routine(
             });
         }
     }
+    // ENG-09: a checked `Codeunit.Run` commits its own changes when it ends
+    // without an error (Learn; measured on BC 28: also under
+    // `[CommitBehavior(Ignore)]` and `(Error)`). Its witness is the call site,
+    // never an operation: that is how `commit_scope::is_run_commit` tells it
+    // from a `Commit()`, which `[CommitBehavior]` does change.
+    for cs in &call_sites {
+        if cs.checked_run {
+            facts.push(CapabilityFact {
+                subject: routine.id.clone(),
+                op: "commit",
+                resource_kind: "transaction",
+                resource_id: None,
+                resource_arg_source: None,
+                confidence: "static",
+                provenance: "direct",
+                via: "self",
+                witness_operation_id: None,
+                witness_callsite_id: Some(cs.id.clone()),
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+                extra: None,
+            });
+        }
+    }
 
     // ── dispatch family (al-sem dispatch.ts) ───────────────────────────────
     for cs in &call_sites {

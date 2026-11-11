@@ -1463,6 +1463,7 @@ impl<'a> SpineCtx<'a> {
                     implicit_receiver,
                     // Set after resolution (`program_calls`), never here.
                     start_may_fail: false,
+                    checked_run: false,
                 });
                 self.cs_arg_exprs.push(args.clone());
             }

@@ -17,8 +17,9 @@
 //!   implicit commit by `Codeunit.Run` isn't affected by `CommitBehavior`"
 //!   (Learn, "Codeunit.Run(Integer [, var Record]) Method",
 //!   <https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/codeunit/codeunit-run-method>).
-//!   The cone has no fact for that implicit commit (an older gap, engine
-//!   limits L16), so a commit inside a checked run stands in for it: once a
+//!   That implicit commit is a fact of its own since ENG-09: a commit at the
+//!   run's call site ([`is_run_commit`]), which no rule here applies to. A
+//!   commit inside a checked run is still read as the run's commit too: once a
 //!   route crosses a checked run ([`Step::CheckedRun`]) a commit that runs
 //!   normally or is ignored is the run's commit ([`P`], pinned). An error the
 //!   run's body raises is trapped by the run (it returns `false` and rolls
@@ -88,6 +89,17 @@ pub const P: u8 = 8;
 /// not follow into it, or the code may not reach the commit), so the answers
 /// read it as a commit that may not happen ([`norm`]: [`N`] and [`I`]).
 pub const X: u8 = 16;
+
+/// Whether `f` is the commit of a checked `Codeunit.Run` (ENG-09,
+/// `capability_cone`): a commit fact with no operation witness, direct or
+/// inherited (an inherited fact keeps its source's operation id). Learn: "the
+/// implicit commit by `Codeunit.Run` isn't affected by `CommitBehavior`"
+/// (measured on BC 28 under `Ignore` and `Error`), so no rule of this module
+/// applies to it.
+#[must_use]
+pub(crate) fn is_run_commit(f: &crate::engine::l5::snapshot::SnapshotCapabilityFact) -> bool {
+    f.op() == "commit" && f.witness_operation_id().is_none()
+}
 
 /// The five behavior values a route can carry, in index order.
 const VALUES: [u8; 5] = [N, I, E, P, X];
@@ -686,7 +698,7 @@ impl<'a> CbGraph<'a> {
             tree.typed_edges.iter(),
             tree.capability_facts
                 .iter()
-                .filter(|f| f.op() == "commit" && f.provenance() == "direct")
+                .filter(|f| f.op() == "commit" && f.provenance() == "direct" && !is_run_commit(f))
                 .map(|f| (f.subject(), f.witness_operation_id())),
         )
     }

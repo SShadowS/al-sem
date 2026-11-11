@@ -675,10 +675,20 @@ fn explain_and_digest_do_not_list_a_caught_error_as_the_routines_own() {
     let entry = &digest["payload"]["entries"][0];
     // One error place (its dialog row, `UI_ERROR`, is no error place).
     assert_eq!(entry["summary"]["caughtErrors"], 1, "{}", entry["summary"]);
-    let statuses: Vec<&str> = entry["effects"]
-        .as_array()
-        .unwrap()
+    let effects = entry["effects"].as_array().unwrap();
+    // ENG-09: the checked run's own commit is a live row of the routine;
+    // every other row is the caught error.
+    let is_commit = |e: &serde_json::Value| {
+        digest["payload"]["effects"][e["effect"].as_str().unwrap()]["type"] == "COMMIT"
+    };
+    let commits: Vec<&serde_json::Value> = effects.iter().filter(|e| is_commit(e)).collect();
+    assert!(
+        commits.len() == 1 && commits[0]["status"] == "live",
+        "the checked run's commit: {digest}"
+    );
+    let statuses: Vec<&str> = effects
         .iter()
+        .filter(|e| !is_commit(e))
         .filter_map(|e| e["status"].as_str())
         .collect();
     assert!(
