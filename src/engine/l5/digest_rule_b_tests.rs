@@ -754,13 +754,114 @@ fn t9a_a_routine_selector_reads_the_table_digest_builds() {
     );
 }
 
-/// T3 (digest arm, Decision 14): the production scope against an untouched
-/// `WitnessScope::All` on the same relation. For every reportable root of
-/// every r0 dir (single-app) and of the dependency fixtures (cross-app), the
-/// effects and unresolved cones of `Subjects(root)` equal `All`'s.
+/// One corpus case of the scoped-read parity arms below (TLS-12): a built
+/// target, read by every arm that wants it, and the trees two arms share,
+/// each composed at most once. Under nextest every test is its own process,
+/// so a build is shared only inside one test: the four arms (each formerly its
+/// own test) run in [`scoped_reads_equal_unscoped_on_the_corpus`].
+struct Case<'a> {
+    name: &'a str,
+    single: bool,
+    model: &'a Model,
+    rel: Arc<ExecRelation>,
+    calls: &'a [crate::program::model::calls::CallEdge],
+    sl: HashSet<String>,
+    /// `WitnessScope::All` (T3 and the streamed read).
+    all: std::cell::OnceCell<crate::engine::l5::snapshot::CapabilitySnapshot>,
+    /// `WitnessRequest::primary()` (the prove and query arms).
+    primary: std::cell::OnceCell<crate::engine::l5::snapshot::CapabilitySnapshot>,
+    /// `WitnessRequest::roots({root})`, per root (the prove and query arms).
+    roots:
+        std::cell::RefCell<HashMap<String, Arc<crate::engine::l5::snapshot::CapabilitySnapshot>>>,
+}
+
+impl Case<'_> {
+    fn tree(&self, raw: WitnessScope) -> crate::engine::l5::snapshot::CapabilitySnapshot {
+        tree_of(
+            self.model,
+            &self.rel,
+            self.calls,
+            &self.sl,
+            ConeScope {
+                derived: false,
+                raw,
+            },
+        )
+    }
+
+    fn all(&self) -> &crate::engine::l5::snapshot::CapabilitySnapshot {
+        self.all.get_or_init(|| self.tree(WitnessScope::All))
+    }
+
+    fn primary(&self) -> &crate::engine::l5::snapshot::CapabilitySnapshot {
+        use crate::engine::session::WitnessRequest;
+        self.primary
+            .get_or_init(|| self.tree(WitnessRequest::primary().scope(self.model)))
+    }
+
+    fn scoped_to(&self, root: &str) -> Arc<crate::engine::l5::snapshot::CapabilitySnapshot> {
+        use crate::engine::session::WitnessRequest;
+        let tree = self.roots.borrow().get(root).cloned();
+        tree.unwrap_or_else(|| {
+            let t = Arc::new(
+                self.tree(WitnessRequest::roots([root.to_string()].into()).scope(self.model)),
+            );
+            self.roots
+                .borrow_mut()
+                .insert(root.to_string(), Arc::clone(&t));
+            t
+        })
+    }
+}
+
+/// What the arms counted and the failures they found, summed over cases.
+#[derive(Default)]
+struct Seen {
+    t3_roots: usize,
+    t3_inherited: usize,
+    t3_failures: Vec<String>,
+    streamed_roots: usize,
+    streamed_dependency_roots: usize,
+    streamed_passed: usize,
+    prove_roots: usize,
+    prove_inherited: usize,
+    prove_gaps: usize,
+    prove_failures: Vec<String>,
+    query_roots: usize,
+    query_inherited: usize,
+    query_totals: usize,
+    query_failures: Vec<String>,
+}
+
+impl Seen {
+    fn add(&mut self, o: Seen) {
+        self.t3_roots += o.t3_roots;
+        self.t3_inherited += o.t3_inherited;
+        self.t3_failures.extend(o.t3_failures);
+        self.streamed_roots += o.streamed_roots;
+        self.streamed_dependency_roots += o.streamed_dependency_roots;
+        self.streamed_passed += o.streamed_passed;
+        self.prove_roots += o.prove_roots;
+        self.prove_inherited += o.prove_inherited;
+        self.prove_gaps += o.prove_gaps;
+        self.prove_failures.extend(o.prove_failures);
+        self.query_roots += o.query_roots;
+        self.query_inherited += o.query_inherited;
+        self.query_totals += o.query_totals;
+        self.query_failures.extend(o.query_failures);
+    }
+}
+
+/// The scoped-read parity arms over one corpus (TLS-12; each arm was its own
+/// test, and each still states its own cases, preconditions and failures):
+/// every r0 dir with an `app.json` and the four dependency fixtures, each
+/// built once per universe. T3 and the streamed read take the r0 dirs
+/// single-app and the first three fixtures cross-app, as they always did; the
+/// prove and query arms take every dir in both universes. The dirs run on 4
+/// threads (the 4 slots the four tests took).
 #[test]
-fn t3_digest_scoped_equals_unscoped() {
-    let mut dirs: Vec<(String, std::path::PathBuf, bool)> = Vec::new();
+fn scoped_reads_equal_unscoped_on_the_corpus() {
+    let mut dirs: Vec<(String, std::path::PathBuf, Option<usize>)> = Vec::new();
     let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
     let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
         .into_iter()
@@ -769,100 +870,181 @@ fn t3_digest_scoped_equals_unscoped() {
         .collect();
     r0_dirs.sort();
     for d in r0_dirs {
-        dirs.push((d.display().to_string(), d, true));
+        dirs.push((d.display().to_string(), d, None));
     }
-    let tmps: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let tmps: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
     write_fixture_rule_b(tmps[0].path());
     write_fixture_dep_ambiguous(tmps[1].path());
     write_fixture_dep_uncertainty(tmps[2].path());
+    write_fixture_symbol_only_dep(tmps[3].path());
     for (i, t) in tmps.iter().enumerate() {
         dirs.push((
             format!("dependency fixture {i}"),
             t.path().to_path_buf(),
-            false,
+            Some(i),
         ));
     }
-    let (mut roots_seen, mut inherited_seen) = (0usize, 0usize);
-    let mut failures: Vec<String> = Vec::new();
-    for (name, dir, single) in &dirs {
-        let Ok(target) = AnalysisTarget::build(&inputs(dir), *single, "digest") else {
-            continue;
-        };
-        let model = target.resolved();
-        let sl = source_less_of(&target);
-        let (rel, calls) = match &target {
-            AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-            AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
-        };
-        let roots = crate::engine::l5::digest::reportable_roots(model);
-        let all = tree_of(
-            model,
-            &rel,
-            calls,
-            &sl,
-            ConeScope {
-                derived: false,
-                raw: WitnessScope::All,
-            },
-        );
-        let unscoped = digest_effects(&all, model, &roots, false, false, false);
-        for root in &roots {
-            let subjects: BTreeSet<String> = model
-                .workspace
-                .routines
-                .iter()
-                .filter(|r| &r.stable_routine_id == root)
-                .map(|r| r.id.clone())
-                .collect();
-            let scoped_tree = tree_of(
-                model,
-                &rel,
-                calls,
-                &sl,
-                ConeScope {
-                    derived: false,
-                    raw: WitnessScope::Subjects(subjects),
-                },
-            );
-            let scoped = digest_effects(
-                &scoped_tree,
-                model,
-                std::slice::from_ref(root),
-                false,
-                false,
-                false,
-            );
-            let mut one = |e: &DigestEffects| {
-                let entry = e.entries.iter().find(|x| &x.routine_id == root);
-                inherited_seen += entry.map_or(0, |x| {
-                    x.effects
-                        .iter()
-                        .filter(|f| f.provenance == "transitive")
-                        .count()
-                });
-                let cone = &e.unresolved[root];
-                format!(
-                    "{:?}\n{:?}\n{:?}",
-                    entry.map(|x| &x.effects),
-                    cone.items,
-                    cone.traversal
-                )
-            };
-            if one(&scoped) != one(&unscoped) {
-                failures.push(format!("{name}: {root}"));
-            }
-            roots_seen += 1;
+    let seen = std::sync::Mutex::new(Seen::default());
+    let chunks: Vec<_> = dirs.chunks(dirs.len().div_ceil(4)).collect();
+    std::thread::scope(|s| {
+        for chunk in chunks {
+            let seen = &seen;
+            s.spawn(move || {
+                let mut mine = Seen::default();
+                for (name, dir, fixture) in chunk {
+                    for single in [true, false] {
+                        let Ok(target) = AnalysisTarget::build(&inputs(dir), single, "digest")
+                        else {
+                            continue;
+                        };
+                        let (rel, calls) = match &target {
+                            AnalysisTarget::SingleApp(m) => {
+                                (Arc::new(ExecRelation::single_app(m)), &[][..])
+                            }
+                            AnalysisTarget::CrossApp(b) => {
+                                (Arc::clone(b.rel()), b.dependency_calls_or_empty())
+                            }
+                        };
+                        let case = Case {
+                            name,
+                            single,
+                            model: target.resolved(),
+                            rel,
+                            calls,
+                            sl: source_less_of(&target),
+                            all: std::cell::OnceCell::new(),
+                            primary: std::cell::OnceCell::new(),
+                            roots: std::cell::RefCell::new(HashMap::new()),
+                        };
+                        // T3 and the streamed read: r0 single-app, fixtures 0-2 cross-app.
+                        if match fixture {
+                            None => single,
+                            Some(i) => *i < 3 && !single,
+                        } {
+                            t3_digest_scoped_equals_unscoped(&case, &mut mine);
+                            streamed_effects_equal_one_read(&case, &mut mine);
+                        }
+                        prove_scoped_equals_unscoped(&case, &mut mine);
+                        fingerprint_query_scoped_equals_unscoped(&case, &mut mine);
+                    }
+                }
+                seen.lock().unwrap().add(mine);
+            });
         }
-    }
+    });
+    let seen = seen.into_inner().unwrap();
+    // T3.
     assert!(
-        roots_seen > 100,
-        "precondition: roots compared ({roots_seen})"
+        seen.t3_roots > 100,
+        "precondition: roots compared ({})",
+        seen.t3_roots
     );
     assert!(
-        inherited_seen > 0,
+        seen.t3_inherited > 0,
         "precondition: transitive effects compared"
     );
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(
+        seen.t3_failures.is_empty(),
+        "{}",
+        seen.t3_failures.join("\n")
+    );
+    // The streamed read.
+    assert!(
+        seen.streamed_roots > 100,
+        "precondition: roots compared ({})",
+        seen.streamed_roots
+    );
+    assert!(
+        seen.streamed_dependency_roots > 0,
+        "precondition: a dependency root (rule B off) is read"
+    );
+    assert!(
+        seen.streamed_passed > 0,
+        "precondition: the literal pass marks an entry"
+    );
+    // Prove.
+    assert!(
+        seen.prove_roots > 200,
+        "precondition: roots compared ({})",
+        seen.prove_roots
+    );
+    assert!(
+        seen.prove_inherited > 0,
+        "precondition: transitive effects compared"
+    );
+    assert!(seen.prove_gaps > 0, "precondition: gap counts compared");
+    assert!(
+        seen.prove_failures.is_empty(),
+        "{}",
+        seen.prove_failures.join("\n")
+    );
+    // The fingerprint query.
+    assert!(
+        seen.query_roots > 200,
+        "precondition: roots compared ({})",
+        seen.query_roots
+    );
+    assert!(
+        seen.query_inherited > 0,
+        "precondition: inherited facts compared"
+    );
+    assert!(
+        seen.query_totals > 0,
+        "precondition: classification counts compared"
+    );
+    assert!(
+        seen.query_failures.is_empty(),
+        "{}",
+        seen.query_failures.join("\n")
+    );
+}
+
+/// T3 (digest arm, Decision 14): the production scope against an untouched
+/// `WitnessScope::All` on the same relation. For every reportable root of
+/// every r0 dir (single-app) and of the dependency fixtures (cross-app), the
+/// effects and unresolved cones of `Subjects(root)` equal `All`'s.
+fn t3_digest_scoped_equals_unscoped(case: &Case, seen: &mut Seen) {
+    let (model, name) = (case.model, case.name);
+    let roots = crate::engine::l5::digest::reportable_roots(model);
+    let unscoped = digest_effects(case.all(), model, &roots, false, false, false);
+    for root in &roots {
+        let subjects: BTreeSet<String> = model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| &r.stable_routine_id == root)
+            .map(|r| r.id.clone())
+            .collect();
+        let scoped_tree = case.tree(WitnessScope::Subjects(subjects));
+        let scoped = digest_effects(
+            &scoped_tree,
+            model,
+            std::slice::from_ref(root),
+            false,
+            false,
+            false,
+        );
+        let mut one = |e: &DigestEffects| {
+            let entry = e.entries.iter().find(|x| &x.routine_id == root);
+            seen.t3_inherited += entry.map_or(0, |x| {
+                x.effects
+                    .iter()
+                    .filter(|f| f.provenance == "transitive")
+                    .count()
+            });
+            let cone = &e.unresolved[root];
+            format!(
+                "{:?}\n{:?}\n{:?}",
+                entry.map(|x| &x.effects),
+                cone.items,
+                cone.traversal
+            )
+        };
+        if one(&scoped) != one(&unscoped) {
+            seen.t3_failures.push(format!("{name}: {root}"));
+        }
+        seen.t3_roots += 1;
+    }
 }
 
 /// A streamed read (`digest_effects_chunks`, agent-tasks impact follow-up:
@@ -876,30 +1058,8 @@ fn t3_digest_scoped_equals_unscoped() {
 ///
 /// Break: a batch read with rule B on for every root (`any_dependency`
 /// forced false) → the dependency roots' entries differ.
-#[test]
-fn streamed_effects_equal_one_read() {
-    let mut dirs: Vec<(String, std::path::PathBuf, bool)> = Vec::new();
-    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
-    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
-        .into_iter()
-        .map(|e| e.unwrap().into_path())
-        .filter(|p| p.join("app.json").is_file())
-        .collect();
-    r0_dirs.sort();
-    for d in r0_dirs {
-        dirs.push((d.display().to_string(), d, true));
-    }
-    let tmps: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
-    write_fixture_rule_b(tmps[0].path());
-    write_fixture_dep_ambiguous(tmps[1].path());
-    write_fixture_dep_uncertainty(tmps[2].path());
-    for (i, t) in tmps.iter().enumerate() {
-        dirs.push((
-            format!("dependency fixture {i}"),
-            t.path().to_path_buf(),
-            false,
-        ));
-    }
+fn streamed_effects_equal_one_read(case: &Case, seen: &mut Seen) {
+    let (model, name) = (case.model, case.name);
     let shown = |e: &DigestEffects| -> Vec<String> {
         let mut v: Vec<String> = e.entries.iter().map(|x| format!("{x:?}")).collect();
         v.extend(e.unresolved.iter().map(|(r, c)| {
@@ -910,32 +1070,13 @@ fn streamed_effects_equal_one_read() {
         }));
         v
     };
-    let (mut roots_seen, mut dependency_roots, mut passed_seen) = (0usize, 0usize, 0usize);
-    for (name, dir, single) in &dirs {
-        let Ok(target) = AnalysisTarget::build(&inputs(dir), *single, "digest") else {
-            continue;
-        };
-        let model = target.resolved();
-        let sl = source_less_of(&target);
-        let (rel, calls) = match &target {
-            AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-            AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
-        };
+    {
         let mut roots: Vec<String> = crate::engine::l5::digest::root_set(model)
             .into_iter()
             .collect();
         roots.sort();
-        let all = tree_of(
-            model,
-            &rel,
-            calls,
-            &sl,
-            ConeScope {
-                derived: false,
-                raw: WitnessScope::All,
-            },
-        );
-        dependency_roots += roots
+        let all = case.all();
+        seen.streamed_dependency_roots += roots
             .iter()
             .filter(|r| {
                 all.boundary
@@ -943,10 +1084,10 @@ fn streamed_effects_equal_one_read() {
                     .is_some_and(|b| b.dependency_app.contains_key(*r))
             })
             .count();
-        let one = digest_effects_each(&all, model, &[&roots], false, true, false, BoundaryMode::On)
+        let one = digest_effects_each(all, model, &[&roots], false, true, false, BoundaryMode::On)
             .pop()
             .unwrap();
-        passed_seen += one
+        seen.streamed_passed += one
             .entries
             .iter()
             .filter(|e| {
@@ -959,7 +1100,7 @@ fn streamed_effects_equal_one_read() {
         for chunk in [1, 3] {
             let (mut entries, mut unresolved, mut batches) =
                 (Vec::new(), BTreeMap::new(), Vec::new());
-            digest_effects_chunks(&all, model, &roots, chunk, false, true, false, |b, e| {
+            digest_effects_chunks(all, model, &roots, chunk, false, true, false, |b, e| {
                 assert!(b.len() <= chunk);
                 batches.extend(b.iter().cloned());
                 entries.extend(e.entries);
@@ -973,20 +1114,8 @@ fn streamed_effects_equal_one_read() {
             };
             assert_eq!(shown(&streamed), whole, "{name}, batches of {chunk}");
         }
-        roots_seen += roots.len();
+        seen.streamed_roots += roots.len();
     }
-    assert!(
-        roots_seen > 100,
-        "precondition: roots compared ({roots_seen})"
-    );
-    assert!(
-        dependency_roots > 0,
-        "precondition: a dependency root (rule B off) is read"
-    );
-    assert!(
-        passed_seen > 0,
-        "precondition: the literal pass marks an entry"
-    );
 }
 
 /// #160 step 9 T25 (trigger and event arms, spec §5, S9-2): the fingerprint
@@ -1178,107 +1307,44 @@ fn fingerprint_witness_boundary_trigger_and_event() {
 /// `WitnessRequest::scope`, the view's own mapping. DISCRIMINATION:
 /// a roots request's scope dropping its subjects (`.take(0)` in `scope`) loses the
 /// root's transitive effects and fails it.
-#[test]
-fn prove_scoped_equals_unscoped() {
-    use crate::engine::session::WitnessRequest;
-    let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
-    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
-    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
-        .into_iter()
-        .map(|e| e.unwrap().into_path())
-        .filter(|p| p.join("app.json").is_file())
-        .collect();
-    r0_dirs.sort();
-    for d in r0_dirs {
-        dirs.push((d.display().to_string(), d));
-    }
-    let tmps: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
-    write_fixture_rule_b(tmps[0].path());
-    write_fixture_dep_ambiguous(tmps[1].path());
-    write_fixture_dep_uncertainty(tmps[2].path());
-    write_fixture_symbol_only_dep(tmps[3].path());
-    for (i, t) in tmps.iter().enumerate() {
-        dirs.push((format!("dependency fixture {i}"), t.path().to_path_buf()));
-    }
-    let (mut roots_seen, mut inherited_seen, mut gaps_seen) = (0usize, 0usize, 0usize);
-    let mut failures: Vec<String> = Vec::new();
-    for (name, dir) in &dirs {
-        for single in [true, false] {
-            let Ok(target) = AnalysisTarget::build(&inputs(dir), single, "prove") else {
-                continue;
-            };
-            let model = target.resolved();
-            let sl = source_less_of(&target);
-            let (rel, calls) = match &target {
-                AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-                AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
-            };
-            let roots = crate::engine::l5::digest::reportable_roots(model);
-            let all = tree_of(
-                model,
-                &rel,
-                calls,
-                &sl,
-                ConeScope {
-                    derived: false,
-                    raw: WitnessRequest::primary().scope(model),
-                },
-            );
-            let unscoped = digest_effects(&all, model, &roots, false, true, false);
-            for root in &roots {
-                let scoped_tree = tree_of(
-                    model,
-                    &rel,
-                    calls,
-                    &sl,
-                    ConeScope {
-                        derived: false,
-                        raw: WitnessRequest::roots([root.clone()].into()).scope(model),
-                    },
-                );
-                let scoped = digest_effects(
-                    &scoped_tree,
-                    model,
-                    std::slice::from_ref(root),
-                    false,
-                    true,
-                    false,
-                );
-                let mut one = |e: &DigestEffects| {
-                    let entry = e.entries.iter().find(|x| &x.routine_id == root);
-                    inherited_seen += entry.map_or(0, |x| {
-                        x.effects
-                            .iter()
-                            .filter(|f| f.provenance == "transitive")
-                            .count()
-                    });
-                    let cone = &e.unresolved[root];
-                    gaps_seen += cone.gaps_in_cone.expect("prove's plan counts the gaps");
-                    format!(
-                        "{:?}\n{:?}\n{:?}\n{:?}",
-                        entry.map(|x| &x.effects),
-                        cone.items,
-                        cone.traversal,
-                        cone.gaps_in_cone
-                    )
-                };
-                if one(&scoped) != one(&unscoped) {
-                    failures.push(format!("{name} (single-app {single}): {root}"));
-                }
-                roots_seen += 1;
-            }
+fn prove_scoped_equals_unscoped(case: &Case, seen: &mut Seen) {
+    let (model, name, single) = (case.model, case.name, case.single);
+    let roots = crate::engine::l5::digest::reportable_roots(model);
+    let unscoped = digest_effects(case.primary(), model, &roots, false, true, false);
+    for root in &roots {
+        let scoped_tree = case.scoped_to(root);
+        let scoped = digest_effects(
+            &scoped_tree,
+            model,
+            std::slice::from_ref(root),
+            false,
+            true,
+            false,
+        );
+        let mut one = |e: &DigestEffects| {
+            let entry = e.entries.iter().find(|x| &x.routine_id == root);
+            seen.prove_inherited += entry.map_or(0, |x| {
+                x.effects
+                    .iter()
+                    .filter(|f| f.provenance == "transitive")
+                    .count()
+            });
+            let cone = &e.unresolved[root];
+            seen.prove_gaps += cone.gaps_in_cone.expect("prove's plan counts the gaps");
+            format!(
+                "{:?}\n{:?}\n{:?}\n{:?}",
+                entry.map(|x| &x.effects),
+                cone.items,
+                cone.traversal,
+                cone.gaps_in_cone
+            )
+        };
+        if one(&scoped) != one(&unscoped) {
+            seen.prove_failures
+                .push(format!("{name} (single-app {single}): {root}"));
         }
+        seen.prove_roots += 1;
     }
-    assert!(
-        roots_seen > 200,
-        "precondition: roots compared ({roots_seen})"
-    );
-    assert!(
-        inherited_seen > 0,
-        "precondition: transitive effects compared"
-    );
-    assert!(gaps_seen > 0, "precondition: gap counts compared");
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// #160 step 9 T17 (query arm, 6A-9): `fingerprint --routine R` reads a tree
@@ -1292,133 +1358,72 @@ fn prove_scoped_equals_unscoped() {
 /// (`selector_failure_result`, the count a failing selector prints with no
 /// tree) equals the tree's. DISCRIMINATION: dropping its primary filter
 /// fails it.
-#[test]
-fn fingerprint_query_scoped_equals_unscoped() {
+fn fingerprint_query_scoped_equals_unscoped(case: &Case, seen: &mut Seen) {
     use crate::engine::l5::fingerprint_query::{
         FingerprintFilters, WitnessLimit, fingerprint_query, primary_stable_ids,
     };
-    use crate::engine::session::WitnessRequest;
-    let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
-    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
-    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
-        .into_iter()
-        .map(|e| e.unwrap().into_path())
-        .filter(|p| p.join("app.json").is_file())
-        .collect();
-    r0_dirs.sort();
-    for d in r0_dirs {
-        dirs.push((d.display().to_string(), d));
+    let (model, name, single) = (case.model, case.name, case.single);
+    let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
+    let primary = primary_stable_ids(model);
+    let query = |tree: &crate::engine::l5::snapshot::CapabilitySnapshot, r: &str| {
+        let res = fingerprint_query(
+            tree,
+            &FingerprintFilters {
+                roots: None,
+                routine_selectors: vec![r.to_string()],
+                include_inherited: true,
+                witness_limit: WitnessLimit::Capped(3),
+            },
+            Some(&BTreeSet::from([r.to_string()])),
+            false,
+            &owners,
+            &|id| primary.contains(id),
+        );
+        (format!("{:?}\n{:?}", res.blocks, res.diagnostics), res)
+    };
+    let all = case.primary();
+    // Final panel O4: a failing selector's count, read off the model
+    // with no tree, is the count the tree gives.
+    let tree_total = query(all, "").1.total_classifications;
+    let model_total =
+        crate::engine::l5::fingerprint_query::selector_failure_result(model, vec![], false)
+            .total_classifications;
+    seen.query_totals += tree_total;
+    if tree_total != model_total {
+        seen.query_failures.push(format!(
+            "{name} (single-app {single}): totalClassifications {model_total} off the \
+             model, {tree_total} off the tree"
+        ));
     }
-    let tmps: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
-    write_fixture_rule_b(tmps[0].path());
-    write_fixture_dep_ambiguous(tmps[1].path());
-    write_fixture_dep_uncertainty(tmps[2].path());
-    write_fixture_symbol_only_dep(tmps[3].path());
-    for (i, t) in tmps.iter().enumerate() {
-        dirs.push((format!("dependency fixture {i}"), t.path().to_path_buf()));
-    }
-    let (mut roots_seen, mut inherited_seen, mut totals_seen) = (0usize, 0usize, 0usize);
-    let mut failures: Vec<String> = Vec::new();
-    for (name, dir) in &dirs {
-        for single in [true, false] {
-            let Ok(target) = AnalysisTarget::build(&inputs(dir), single, "fingerprint") else {
-                continue;
-            };
-            let model = target.resolved();
-            let sl = source_less_of(&target);
-            let (rel, calls) = match &target {
-                AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-                AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
-            };
-            let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
-            let primary = primary_stable_ids(model);
-            let query = |tree: &crate::engine::l5::snapshot::CapabilitySnapshot, r: &str| {
-                let res = fingerprint_query(
-                    tree,
-                    &FingerprintFilters {
-                        roots: None,
-                        routine_selectors: vec![r.to_string()],
-                        include_inherited: true,
-                        witness_limit: WitnessLimit::Capped(3),
-                    },
-                    Some(&BTreeSet::from([r.to_string()])),
-                    false,
-                    &owners,
-                    &|id| primary.contains(id),
-                );
-                (format!("{:?}\n{:?}", res.blocks, res.diagnostics), res)
-            };
-            let all = tree_of(
-                model,
-                &rel,
-                calls,
-                &sl,
-                ConeScope {
-                    derived: false,
-                    raw: WitnessRequest::primary().scope(model),
-                },
-            );
-            // Final panel O4: a failing selector's count, read off the model
-            // with no tree, is the count the tree gives.
-            let tree_total = query(&all, "").1.total_classifications;
-            let model_total =
-                crate::engine::l5::fingerprint_query::selector_failure_result(model, vec![], false)
-                    .total_classifications;
-            totals_seen += tree_total;
-            if tree_total != model_total {
-                failures.push(format!(
-                    "{name} (single-app {single}): totalClassifications {model_total} off the \
-                     model, {tree_total} off the tree"
-                ));
-            }
-            let roots: BTreeSet<String> = model
-                .root_classifications
-                .iter()
-                .filter_map(|rc| {
-                    model.workspace.routines.iter().find(|r| {
-                        r.id == rc.routine_id && primary.contains(r.stable_routine_id.as_str())
-                    })
+    let roots: BTreeSet<String> =
+        model
+            .root_classifications
+            .iter()
+            .filter_map(|rc| {
+                model.workspace.routines.iter().find(|r| {
+                    r.id == rc.routine_id && primary.contains(r.stable_routine_id.as_str())
                 })
-                .map(|r| r.stable_routine_id.clone())
-                .collect();
-            for root in &roots {
-                let scoped_tree = tree_of(
-                    model,
-                    &rel,
-                    calls,
-                    &sl,
-                    ConeScope {
-                        derived: false,
-                        raw: WitnessRequest::roots([root.clone()].into()).scope(model),
-                    },
-                );
-                let (got, _) = query(&scoped_tree, root);
-                // Counted on the unscoped side, so a scope that drops the
-                // subject reaches the comparison.
-                let (want, res) = query(&all, root);
-                inherited_seen += res
-                    .blocks
-                    .iter()
-                    .flat_map(|b| &b.rendered_facts)
-                    .filter(|f| f.provenance() == "inherited")
-                    .count();
-                if got != want {
-                    failures.push(format!("{name} (single-app {single}): {root}"));
-                }
-                roots_seen += 1;
-            }
+            })
+            .map(|r| r.stable_routine_id.clone())
+            .collect();
+    for root in &roots {
+        let scoped_tree = case.scoped_to(root);
+        let (got, _) = query(&scoped_tree, root);
+        // Counted on the unscoped side, so a scope that drops the
+        // subject reaches the comparison.
+        let (want, res) = query(all, root);
+        seen.query_inherited += res
+            .blocks
+            .iter()
+            .flat_map(|b| &b.rendered_facts)
+            .filter(|f| f.provenance() == "inherited")
+            .count();
+        if got != want {
+            seen.query_failures
+                .push(format!("{name} (single-app {single}): {root}"));
         }
+        seen.query_roots += 1;
     }
-    assert!(
-        roots_seen > 200,
-        "precondition: roots compared ({roots_seen})"
-    );
-    assert!(inherited_seen > 0, "precondition: inherited facts compared");
-    assert!(
-        totals_seen > 0,
-        "precondition: classification counts compared"
-    );
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// #160 step 9 T11 (spec §5): `fingerprint --inventory-only` (cross-app, on the
