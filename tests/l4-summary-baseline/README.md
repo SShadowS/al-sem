@@ -245,6 +245,21 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   byte; with the app scope they give the new ones. CDO is one app, so every id keeps one
   common prefix and `canonical()`'s sort by `routine_id` is unchanged; only the id text
   moved. The reverse index's oracle comparison passed in the re-freezing run.
+- **2026-11-11, ENG-07** (`alsem/eng-07-request-page-triggers`, engine limits L20).
+  Whole-program `a0ce2366…` -> `f9c5d1e1…`; reverse index unchanged. 5479 routines
+  throughout, none added or removed. Single-variable attribution on the pinned baseline
+  (`cdo` profile): the branch head `a4ed771e` gives `f9c5d1e1`; the same tree with only the
+  report and XmlPort request-page names removed from `resolver::run_triggers` (the
+  `is_trigger` filter kept) gives `a0ce2366` byte for byte. So the request-page triggers
+  alone move it, and the trigger filter moves nothing on CDO. Dumps (`L4_CANONICAL_DUMP`,
+  branch against switched-off): 2 routines moved, each gaining exactly two `opaque-callee`
+  uncertainties already present in about 1,093 other summaries. They are the `OnAction`s of
+  CDO Customer Setup List and CDO Customer List that `Report.RunModal(Report::"CDO Update
+  Customer Setup")`; that report's request-page `OnOpenPage` calls
+  `IsFeatureEnabled`/`IsESealFeatureEnabled`, whose cones carry them. No `db_effects`
+  change, no uncertainty removed, no new shape or value domain. The four warehouse pages
+  that run Base App report 7323 gain a run pair (the compiler audit's 409 -> 415) but no
+  summary change.
 - **2026-11-11, ENG-06** (`alsem/eng-06-b9-fieldref-validate`, engine limits B9/B10).
   Whole-program `46ef73cc…` -> `a0ce2366…`; reverse index unchanged. 5479 routines
   throughout, none added or removed. Exact single-variable attribution on the pinned
