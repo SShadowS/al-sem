@@ -246,6 +246,17 @@ Terms used in the wave-2 sections below:
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
 
+### Changed (TLS-14: the prove parity test builds each model once)
+
+- **`no_dependency_parity_prove` runs each dir's cases as one in-process batch**, TLS-12's reviewed
+  design (one model per universe instead of one per case), and every root of every 5th dir also
+  runs each job alone through `standalone_output`, the path `alsem prove` runs. It now also compares
+  the stderr. Limit: a fault only a one-job view shows is compared on the sampled dirs only.
+  Discrimination: B1 fails both halves; B2, a cross-app-only change made only in a one-demand view,
+  fails the standalone half alone (362 cases, 0 batch). Measured (3 alternating pairs): CPU per run
+  -26 s (-1.6%), wall -1.3 s, the test 46 -> 41 s; prove's per-root work, not its model build, is
+  most of the test's cost. See `docs/superpowers/notes/2026-11-10-task-gate-test-time.md`.
+
 ### Fixed (TLS-15: a status test that failed under host load)
 
 - **`mcp_server::faults::status_answers_during_a_heavy_call` no longer has a fixed 200 ms bound.**
