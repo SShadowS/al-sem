@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use al_sem::engine::gate::filter::Scope;
-use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze_with_exit};
+use al_sem::engine::gate::run::{AnalyzeArgs, AnalyzeJob, OutputFormat, run_analyze_with_exit};
 use al_sem::engine::l5::digest_cli::run_digest_pipeline;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -236,11 +236,26 @@ fn al_files(ws: &Path) -> Vec<String> {
 /// Today's record for one fixture. `with_baseline_bytes` also runs
 /// `--update-baseline` (minting only).
 fn record_fixture(ws: &Path, with_baseline_bytes: bool) -> FixtureRecord {
-    let sarif = analyze(&analyze_args(ws, OutputFormat::Sarif, None)).0;
+    // TLS-12: the SARIF and JSON reports as one in-process batch, so the
+    // model is built once for both (`analyze` built it per format).
+    let (sarif_args, json_args) = (
+        analyze_args(ws, OutputFormat::Sarif, None),
+        analyze_args(ws, OutputFormat::Json, None),
+    );
+    let inputs = sarif_args.read_inputs();
+    let (sarif_request, json_request) = (sarif_args.read_request(), json_args.read_request());
+    let failed = |e: String| -> AnalyzeJob { panic!("{}: analyze failed: {e}", ws.display()) };
+    let sarif_job =
+        AnalyzeJob::new(&inputs, &sarif_request, &sarif_args, VERSION).unwrap_or_else(failed);
+    let json_job =
+        AnalyzeJob::new(&inputs, &json_request, &json_args, VERSION).unwrap_or_else(failed);
+    let out = crate::batch_in_process(&[&sarif_job, &json_job]);
+    let text = |i: usize| String::from_utf8(out[i].1.clone()).expect("UTF-8 report");
+    let sarif = text(0);
     let findings = sarif_findings(&sarif);
 
     let mut stable = Vec::new();
-    let json = analyze(&analyze_args(ws, OutputFormat::Json, None)).0;
+    let json = text(1);
     collect_stable_strings(
         &serde_json::from_str(&json).expect("analyze json"),
         &mut stable,
