@@ -199,7 +199,7 @@ Proof obligation for the table: before code, a grep for `Cell`, `RefCell`, `Rc<`
 `thread_local`, `static mut` and atomics over every file the loop reaches (`literal_reach.rs`,
 `literal_flow.rs`, `literal_values.rs`, `literal_routes.rs`, `recref_flow.rs`, `commit_scope.rs`,
 `group_path.rs`, `traps.rs`, `terminal_facts.rs`, `l4/param_guard.rs`, `digest.rs`), recorded in the
-plan. Both reviewers ran it in round 1 and found nothing else. `Sync` proves thread safety, not
+plan. In round 1 Opus ran it and sol read the files; neither found anything else. `Sync` proves thread safety, not
 purity (sol): purity is the table's claim, and the thread-count tests (8.6) are its net. The
 compiler is the second check: `par_iter_mut` over the loop does not compile while any of them, or
 any value type in a search state, is not `Send`/`Sync`. Also check before the plan that
@@ -237,20 +237,29 @@ entries and witnesses. Shared, as today: the held suffix trees (budget 1.6 M sta
 `results`, `flow_cache` and `CbGraph`'s caches, which grow with what is asked, not with the worker
 count, plus evicted trees still held by a reader until it drops them. So:
 
-`peak ≈ today's serial peak + (workers − 1) × per-root working set`
+`peak ≈ today's serial peak + (workers − 1) × the largest per-root working set`
 
-and the per-root working set is MEASURED (8.7: the pass's peak at workers 1 and 2 on CDO gives
-it), not derived from state counts. The bounds the worker count must keep, all of them:
+Roots differ, so a peak difference between two worker counts is not an upper bound (round 2,
+sol). The working set is therefore measured per root: a temporary trace field records each root's
+own allocation peak in the pass (the largest 10 named), and the pass's peak is measured directly at
+every candidate worker count (8.7), never extrapolated. The bounds the worker count must keep, all
+of them:
 
 - the CLI: the gate's `impact --diff`/`--base` peaks against the 4 GiB host headroom rule
   (TLS-19);
 - `cdo-speed`'s peak-memory limit (1.10 × the merge base). Its impact round asks one new routine,
-  so its pass has one root and the pool adds nothing there; the measurement checks that;
-- the resident engine: its admission (`resident/budget.rs`) estimates the witness case from
-  observed peaks and counts an overrun when a finished piece of work passed the budget; a larger
-  peak raises that estimate on its own, so admission follows. The measurement records the
-  witness case's peak at the default worker count against the 8 GiB budget, and the change is
-  rejected if one 699-root ask overruns it where serial does not.
+  so its pass has few roots (impact can widen one changed routine to more: the measurement
+  records how many the round passes) and the pool adds little there; `cdo-speed` must pass;
+- the resident engine: admission (`resident/budget.rs`) reserves an estimate before work and only
+  LEARNS from an overrun afterwards (`:27-30`), so learning is not prevention (round 2, sol). The
+  pass runs under two admission cases: `Fill("witness")` (`fill_witness`, a request of at most
+  `WITNESS_MEMO_MAX_ROOTS` roots, `resident/revision.rs:886-930`; starting estimate 60 MiB,
+  `budget.rs:174`, "until the fill's peak is measured apart") and `Trees` (a streamed read,
+  `EffectsStream::for_each`, `session.rs:1076-1088`; 900 MiB). Both are measured at the default
+  worker count, one request and two concurrent requests, and each case's starting estimate
+  (`Case::table_mib`) is set to its measured peak when the pool raises it. The change is rejected
+  if a 699-root ask, or two concurrent ones, overrun the 8 GiB budget where serial does not.
+  `EffectsStream` gets the worker setting as a field (it has none today, `session.rs:1039-1046`).
 
 ### 8.5 Scheduling and threads
 
@@ -270,12 +279,19 @@ it), not derived from state counts. The bounds the worker count must keep, all o
   - tests: pass it explicitly. No process-global setting, so tests running in one process cannot
     race on it (round 1, Opus). The binary alone reads `AL_SEM_REACH_WORKERS=N` (measurement) and
     turns it into the parameter.
-- **The pool: one per process**, built lazily (`OnceLock<rayon::ThreadPool>`) with
-  `REACH_WORKERS` threads and `big_stack::BIG_STACK_SIZE` stacks (the search and `eval_routine`
-  recurse; not `big_stack_pool()`, which takes rayon's default thread count). A pass with
-  `ReachWorkers = n > 1` runs in it. The engine host runs several requests at once on its own std
-  threads (`host/child.rs:268-272`); their passes share the one pool, so the extra memory is
-  bounded by the pool's size for the whole process, not per request.
+- **The pools: one per worker count, per process.** `reach_pool(n)` returns a pool of exactly `n`
+  threads with `big_stack::BIG_STACK_SIZE` stacks (the search and `eval_routine` recurse; not
+  `big_stack_pool()`, which takes rayon's default thread count), built on first use and kept in a
+  process-wide `Mutex<HashMap<usize, &'static rayon::ThreadPool>>`. So `ReachWorkers = n` really
+  runs at most `n` roots at once (round 2, sol: one shared pool would ignore `n`). Production uses
+  one count (`REACH_WORKERS`), so one pool; tests and measurement make a few more, which live until
+  the process ends.
+- **Concurrent requests.** The engine host runs several requests at once on its own std threads
+  (`host/child.rs:268-272`). Their passes share the production pool, and a root runs only on a
+  pool thread (the calling thread waits in `install`), so at most `REACH_WORKERS` roots are in
+  flight in the whole process, however many requests run. What is per request, as today, is each
+  pass's `LiteralPass` (reach, caches, `held` suffix trees, `digest_cli.rs:2235-2272`): two
+  concurrent requests already hold two of those today, and parallelism does not add a third.
 - **Never from inside a rayon worker.** No production caller does today (`engine/impact` has no
   threads; the pass runs on the CLI's main thread or a host std thread). If one did, rayon lets the
   blocked worker run other jobs while it waits for `install`, which deadlocks when such a job takes
@@ -293,8 +309,10 @@ The real oracle is the goldens and the CDO output tests: workers 1 runs the NEW 
 (round 1, Opus). The thread-count tests below catch what depends on timing; the goldens catch the
 rest.
 
-Races are forced, not hoped for: a `#[cfg(test)]` hook in `SuffixCache::get` and in
-`RecRefFlow::evaluate` runs between the miss and the build (a closure the test sets per cache,
+Races are forced, not hoped for: a `#[cfg(test)]` hook in `SuffixCache::get` (after the lookup
+misses and the lock is released, before `tree_from`) and in `RecRefFlow::evaluate` (after the
+`results` lookup misses and its lock is released, before the fresh `EvalState`) runs between the
+miss and the build (a closure the test sets per cache,
 not a global), so a test can hold the first worker there until the second has also missed. A
 barrier before the call cannot force a double miss (round 1, both).
 
@@ -321,9 +339,14 @@ barrier before the call cannot force a double miss (round 1, both).
   type is the guard). ENG-18's order tests (`literal_flow_tests.rs:250-386`) stay as they are; they
   pin the depth cut. A budget-exhaustion case is not added: the budget is a local of each
   evaluation by construction now.
-- **The setting reaches the pass:** a resident session with `low_mem` runs the pass with 1 worker
-  and the default session with `REACH_WORKERS` (a test-only counter of passes by worker count,
-  per session); the CLI's route likewise.
+- **The setting reaches the pass, and is obeyed:** a resident session with `low_mem` runs the pass
+  serially and the default session with `REACH_WORKERS`, through both routes (`fill_witness` and a
+  streamed `EffectsStream`); the CLI's route likewise. Asserted on OBSERVED concurrency, not the
+  parameter (round 2, sol): a test-only per-pass counter of roots in flight records its maximum,
+  kept on the pass (and read through the session's `Revision` for the resident routes), never a
+  process-wide counter, so tests in one process do not share it;
+  with `n` workers and a test hook that holds each root until `n` are in flight (a barrier of `n`
+  inside the loop body, more roots than `n`), the maximum is exactly `n`, and 1 with `low_mem`.
 - **Discrimination, one per guard:**
   - The cache key (shared-tree test): key the suffix cache by target alone, dropping the
     bindings: the shared-tree test fails; reverted, passes.
@@ -334,6 +357,8 @@ barrier before the call cannot force a double miss (round 1, both).
     `per_tree / 2` whose capping changes the output): the eviction test fails; reverted, passes.
   - The setting (setting test): the resident route ignores `low_mem`: the test fails; reverted,
     passes.
+  - The pool size (setting test): `reach_pool(n)` builds `REACH_WORKERS` threads whatever `n`:
+    the maximum in flight differs from `n`, the test fails; reverted, passes.
 - **End to end:** `scripts/ci-steps task`; then the branch gate's `output_cdo` (every CDO golden and
   ratchet) with the default workers, and one CDO `impact --diff` JSON compared byte for byte at
   workers 1 and the default.
@@ -347,8 +372,9 @@ Release-fast `alsem` on CDO, alone on the machine, through the orchestrator:
   is missing here: `/proc/<pid>/status` VmHWM via the cdo-speed sampler), suffix builds,
   duplicate builds, evictions, `flow_cache` lock wait (a temporary trace counter, removed before
   the landing).
-- The resident engine: `alsem mcp` warm, one 699-root impact through it, default and `--low-mem`,
-  RSS against the 8 GiB / 6 GiB budgets.
+- The resident engine: `alsem mcp` warm, default and `--low-mem`, RSS against the 8 GiB / 6 GiB
+  budgets: one 699-root impact (the `Trees` case), one ask of at most `WITNESS_MEMO_MAX_ROOTS`
+  roots (the `Fill("witness")` case), and two of each at once.
 - The per-root working set (8.4a): the pass's peak at workers 2 less workers 1, on the same read.
 - `REACH_WORKERS` = the smallest count past which the span stops falling by 10 %, within every
   bound of 8.4a. A smaller gain than the span's share suggests is reported as a finding (the batch tail,
