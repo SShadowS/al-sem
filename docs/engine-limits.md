@@ -489,7 +489,9 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   `Report.Run`, `RunModal`, `Execute` and a report variable's run (re-probed on master `a8a6c70a`).
   A run of a report (or of the report a report extension extends) now follows its request page's
   triggers (`run_triggers`, which also feeds the sited graph and explain's `reachedFrom`). Which
-  trigger runs was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  trigger runs was **measured on the BC 28.4 Linux sidecar; the report paths below are confirmed on
+  Windows BC 28.0.54946.56477** (Cronus28, the same probe unchanged, owner 2026-11-11,
+  q-20261111T144908-3d4d3d0b); the report-extension and XmlPort bullets are sidecar only:
   - Page shown (`Run`/`RunModal`): `OnInitReport`, request page `OnInit`, `OnOpenPage`, the page,
     `OnQueryClosePage`, `OnClosePage`, `OnPreReport`, the data items, `OnPostReport`.
   - `UseRequestPage` false: `OnInitReport`, `OnInit`, `OnPreReport`, … (no `OnOpenPage`/`OnClosePage`).
@@ -498,9 +500,9 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
     `OnPreReport`, … Learn's "the OnOpen and OnClose triggers on the request page will run even
     though the request page is not shown" holds for `Execute`, not for `Run(…, false)`.
   - `SaveAs*` and `Print` were not measured; they are runs like `Execute`.
-  - A report extension's request page: its `OnOpenPage` runs after the base's, its `OnClosePage`
+  - (Sidecar only.) A report extension's request page: its `OnOpenPage` runs after the base's, its `OnClosePage`
     after the page; neither with `UseRequestPage` false. It cannot declare `OnInit` (alc AL0162).
-  - An XmlPort's request page: `OnInit` ran before `OnInitXmlPort` on `Export` to a stream and on
+  - (Sidecar only.) An XmlPort's request page: `OnInit` ran before `OnInitXmlPort` on `Export` to a stream and on
     `Run(X, false)` and `Run(X, true)`; no `OnOpenPage` ran (in a test session the page did not
     show, so its shown order was not seen).
 

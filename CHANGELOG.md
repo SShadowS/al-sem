@@ -135,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`conditional`). The list also feeds the sited graph (`alsem graph`, `impact`) and explain's
   `reachedFrom`: `impact` on a request-page trigger now counts the runs as its code callers, where
   it said "direct code callers: none found" and reached it by UI navigation only. Which trigger
-  runs in which run was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  runs in which run was **measured on the BC 28.4 Linux sidecar, and for reports confirmed on
+  Windows BC 28.0.54946.56477** (the XmlPort request page: sidecar only):
   `OnInit` ran in every run; `OnOpenPage`/`OnClosePage` not with `UseRequestPage` false;
   `OnQueryClosePage` not under `Execute` (the order is in `docs/engine-limits.md`, "L20 in
   detail").
