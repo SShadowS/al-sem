@@ -155,10 +155,13 @@ them:
 
 ## 8. TLS-22: the parallel literal pass (draft for review, 2026-11-11, master `c498fd98`)
 
-Status: round 2 draft. Round 1 (sol: do not approve yet; Opus: approve with changes; no Critical
-from either) found three Important gaps, both reviewers the same ones: the memory bound, how the
-worker count and `--low-mem` reach the pass, and race tests that cannot force their race. Reviews:
-`scratchpad/{pi-sol,opus}-tls22-r1.md`, to be copied to `.agent/tls22/` in the main checkout.
+Status: approved with changes in round 3 (sol, Opus); the round-3 changes are folded in. Round 1
+(sol: do not approve yet; Opus: approve with changes; no Critical from either) found three
+Important gaps, both reviewers the same ones: the memory bound, how the worker count and
+`--low-mem` reach the pass, and race tests that cannot force their race. Round 2: one shared pool
+cannot honour a worker count (both), and concurrent requests and both admission cases (sol).
+Round 3: the concurrency test's barrier could hang (both). Reviews: `.agent/tls22/{pi-sol,opus}-r{1,2,3}.md`
+in the main checkout.
 It answers each finding of section 7 against the code after ENG-18.
 
 ### 8.1 What ENG-18 settled, and what it did not
@@ -240,9 +243,10 @@ count, plus evicted trees still held by a reader until it drops them. So:
 `peak ≈ today's serial peak + (workers − 1) × the largest per-root working set`
 
 Roots differ, so a peak difference between two worker counts is not an upper bound (round 2,
-sol). The working set is therefore measured per root: a temporary trace field records each root's
-own allocation peak in the pass (the largest 10 named), and the pass's peak is measured directly at
-every candidate worker count (8.7), never extrapolated. The bounds the worker count must keep, all
+sol). The working set is therefore measured per root, in a workers = 1 run (under threads, shared
+caches and `Arc` frees blur a per-root count; round 3, Opus): a temporary trace field records each
+root's own allocation peak in the pass (the largest 10 named). The parallel runs give only the
+pass's whole peak, measured directly at every candidate worker count (8.7), never extrapolated. The bounds the worker count must keep, all
 of them:
 
 - the CLI: the gate's `impact --diff`/`--base` peaks against the 4 GiB host headroom rule
@@ -255,7 +259,9 @@ of them:
   pass runs under two admission cases: `Fill("witness")` (`fill_witness`, a request of at most
   `WITNESS_MEMO_MAX_ROOTS` roots, `resident/revision.rs:886-930`; starting estimate 60 MiB,
   `budget.rs:174`, "until the fill's peak is measured apart") and `Trees` (a streamed read,
-  `EffectsStream::for_each`, `session.rs:1076-1088`; 900 MiB). Both are measured at the default
+  `EffectsStream::for_each`, `session.rs:1076-1088`; `Case::Trees`, 900 MiB, `budget.rs:186`,
+reserved for kind `"trees"` at `bin/alsem.rs:4654-4658`; not `Case::Fill("tree")`, the tree store).
+The plan raises exactly these two keys, `Case::Fill("witness")` and `Case::Trees`, if measured. Both are measured at the default
   worker count, one request and two concurrent requests, and each case's starting estimate
   (`Case::table_mib`) is set to its measured peak when the pool raises it. The change is rejected
   if a 699-root ask, or two concurrent ones, overrun the 8 GiB budget where serial does not.
@@ -345,8 +351,11 @@ barrier before the call cannot force a double miss (round 1, both).
   parameter (round 2, sol): a test-only per-pass counter of roots in flight records its maximum,
   kept on the pass (and read through the session's `Revision` for the resident routes), never a
   process-wide counter, so tests in one process do not share it;
-  with `n` workers and a test hook that holds each root until `n` are in flight (a barrier of `n`
-  inside the loop body, more roots than `n`), the maximum is exactly `n`, and 1 with `low_mem`.
+  with `n` workers and a test hook that holds only the FIRST wave (the first `n` roots to start
+  wait, with a timeout, until `n` are in flight or the timeout passes, then all are released; later
+  roots never wait, so nothing hangs on a short last group or a smaller pool), the maximum is
+  exactly `n`, and 1 with `low_mem`. The test also asserts the selected pool's
+  `current_num_threads()` is `n` (round 3, sol: a larger pool need not show a maximum above `n`).
 - **Discrimination, one per guard:**
   - The cache key (shared-tree test): key the suffix cache by target alone, dropping the
     bindings: the shared-tree test fails; reverted, passes.
@@ -375,7 +384,8 @@ Release-fast `alsem` on CDO, alone on the machine, through the orchestrator:
 - The resident engine: `alsem mcp` warm, default and `--low-mem`, RSS against the 8 GiB / 6 GiB
   budgets: one 699-root impact (the `Trees` case), one ask of at most `WITNESS_MEMO_MAX_ROOTS`
   roots (the `Fill("witness")` case), and two of each at once.
-- The per-root working set (8.4a): the pass's peak at workers 2 less workers 1, on the same read.
+- The per-root working set (8.4a): each root's own allocation peak in the pass (the temporary trace
+  field) from the workers = 1 run, and the pass's peak measured directly at every candidate count.
 - `REACH_WORKERS` = the smallest count past which the span stops falling by 10 %, within every
   bound of 8.4a. A smaller gain than the span's share suggests is reported as a finding (the batch tail,
   lock contention, duplicate builds).
@@ -386,8 +396,8 @@ Release-fast `alsem` on CDO, alone on the machine, through the orchestrator:
 
 - A cache that is not pure after all: the table in 8.3 is the claim, the grep is the check, the
   thread-count equality on fixtures and CDO is the net.
-- Memory: `(workers − 1) ×` the measured per-root working set over serial (8.4a), one pool per
-  process; `--low-mem` serial.
+- Memory: `(workers − 1) ×` the largest measured per-root working set over serial (8.4a); at most
+  `REACH_WORKERS` roots in flight per process (production uses one pool); `--low-mem` serial.
 - Stack overflow on a pool thread: the big-stack pool.
 - A future caller inside a rayon worker: the `debug_assert!` (8.5) and the deadlock it guards
   against are recorded there.
