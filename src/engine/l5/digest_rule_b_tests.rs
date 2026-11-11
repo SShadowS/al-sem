@@ -1520,3 +1520,153 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     );
     assert_eq!(got, want);
 }
+
+/// TLS-17: the unresolved cones read the snapshot's indexes built once per
+/// read (`ConeIndexes`, in `FinishCx`), and give what the verbatim pre-TLS-17
+/// search (`unresolved_cone_legacy`) gives. Every r0 dir (single-app) and the
+/// dependency fixtures (cross-app), every root:
+/// - the raw search: one `ConeIndexes` per tree reused across its roots in
+///   root order, against the oracle, every field (`visited_ids` as a set);
+/// - through the real caller: `FinishCx::finish`'s cones (after placement,
+///   the literal filtering and the counts) against the same `finish` taking
+///   each raw cone from the oracle (`LEGACY_CONES`);
+/// - built once: one read, and one streamed read of several batches, each
+///   build the indexes once (`INDEX_BUILDS`).
+///
+/// Preconditions: more than 100 roots; a cone with items; a tree with two
+/// roots whose cones differ.
+/// DISCRIMINATION: `FinishCx::raw_cone` calling `unresolved_cone` per root
+/// (the pre-TLS-17 path) fails "built once"; answering every root with the
+/// first root's raw cone fails both comparisons.
+#[test]
+fn cones_off_shared_indexes_equal_the_legacy_search() {
+    use crate::engine::l5::digest_cli::LEGACY_CONES;
+    use crate::engine::l5::unresolved_cone::{
+        ConeIndexes, DEFAULT_MAX_DEPTH, DEFAULT_MAX_VISITED, INDEX_BUILDS, unresolved_cone_in,
+        unresolved_cone_legacy,
+    };
+    let mut dirs: Vec<(String, std::path::PathBuf, bool)> = Vec::new();
+    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    r0_dirs.sort();
+    for d in r0_dirs {
+        dirs.push((d.display().to_string(), d, true));
+    }
+    let tmps: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    write_fixture_rule_b(tmps[0].path());
+    write_fixture_dep_ambiguous(tmps[1].path());
+    write_fixture_dep_uncertainty(tmps[2].path());
+    for (i, t) in tmps.iter().enumerate() {
+        dirs.push((
+            format!("dependency fixture {i}"),
+            t.path().to_path_buf(),
+            false,
+        ));
+    }
+    let shown = |c: &UnresolvedCone| {
+        format!(
+            "{:?}\n{}\n{}\n{:?}\n{:?}\n{:?}",
+            c.items,
+            c.literal_dead,
+            c.literal_narrowed,
+            c.traversal,
+            c.gaps_in_cone,
+            c.fires_table_events
+        )
+    };
+    let builds = || INDEX_BUILDS.with(std::cell::Cell::get);
+    let (mut roots_seen, mut with_items, mut differing_pair, mut streamed) =
+        (0usize, 0usize, false, false);
+    let mut failures: Vec<String> = Vec::new();
+    for (name, dir, single) in &dirs {
+        let Ok(target) = AnalysisTarget::build(&inputs(dir), *single, "digest") else {
+            continue;
+        };
+        let model = target.resolved();
+        let sl = source_less_of(&target);
+        let (rel, calls) = match &target {
+            AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+            AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
+        };
+        let tree = tree_of(
+            model,
+            &rel,
+            calls,
+            &sl,
+            ConeScope {
+                derived: false,
+                raw: WitnessScope::All,
+            },
+        );
+        let mut roots: Vec<String> = crate::engine::l5::digest::root_set(model)
+            .into_iter()
+            .collect();
+        roots.sort();
+        if roots.is_empty() {
+            continue;
+        }
+        // The raw search, one index set reused across the tree's roots.
+        let idx = ConeIndexes::new(&tree);
+        let mut raw_items: Vec<String> = Vec::new();
+        for r in &roots {
+            let got = unresolved_cone_in(&tree, &idx, r, DEFAULT_MAX_DEPTH, DEFAULT_MAX_VISITED);
+            let want = unresolved_cone_legacy(&tree, r, DEFAULT_MAX_DEPTH, DEFAULT_MAX_VISITED);
+            if got.visited_ids != want.visited_ids
+                || format!("{:?}\n{:?}", got.items, got.traversal)
+                    != format!("{:?}\n{:?}", want.items, want.traversal)
+            {
+                failures.push(format!("{name}: raw cone of {r}"));
+            }
+            with_items += usize::from(!want.items.is_empty());
+            raw_items.push(format!("{:?}", want.items));
+        }
+        differing_pair |= raw_items.iter().any(|x| *x != raw_items[0]);
+        // Through the real caller: one read builds the indexes once.
+        INDEX_BUILDS.with(|n| n.set(0));
+        let prod = digest_effects(&tree, model, &roots, false, true, false);
+        if builds() != 1 {
+            failures.push(format!("{name}: {} index builds in one read", builds()));
+        }
+        LEGACY_CONES.with(|c| c.set(true));
+        let legacy = digest_effects(&tree, model, &roots, false, true, false);
+        LEGACY_CONES.with(|c| c.set(false));
+        let all = |e: &DigestEffects| -> Vec<String> {
+            e.unresolved
+                .iter()
+                .map(|(r, c)| format!("{r}\n{}", shown(c)))
+                .collect()
+        };
+        if all(&prod) != all(&legacy) {
+            failures.push(format!("{name}: finished cones differ"));
+        }
+        // A streamed read of several batches builds them once too.
+        if roots.len() >= 3 {
+            INDEX_BUILDS.with(|n| n.set(0));
+            digest_effects_chunks(&tree, model, &roots, 1, false, true, false, |_, _| {});
+            if builds() != 1 {
+                failures.push(format!(
+                    "{name}: {} index builds in one streamed read of {} batches",
+                    builds(),
+                    roots.len()
+                ));
+            }
+            streamed = true;
+        }
+        roots_seen += roots.len();
+    }
+    assert!(
+        roots_seen > 100,
+        "precondition: roots compared ({roots_seen})"
+    );
+    assert!(with_items > 0, "precondition: a cone with items");
+    assert!(
+        differing_pair,
+        "precondition: a tree with two roots whose cones differ"
+    );
+    assert!(streamed, "precondition: a streamed read of several batches");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

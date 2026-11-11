@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-19 and TLS-20: the CDO gate's impact lane and speed skip)
+
+- **`scripts/cdo-gate` runs the two impact ratchets as their own lane, also in serial mode**
+  (TLS-19, owner approval 2026-11-11). `output_cdo::cdo_impact_ratchets` and
+  `cdo_impact_base_ratchets` (one-shot `alsem impact` processes, 4-7 min each on about 3 cores) held
+  `output_cdo` open 470-700 s after its other tests. They now run as the phase `output_cdo_impact`,
+  started in the background before the test lanes; `output_cdo` runs the rest. Together the two
+  phases run every `output_cdo::` test, and each is summarized and counted. The gate now samples the
+  container's `memory.current` while its lanes run and prints the peak against `memory.max` with
+  the headroom (the owner's rule: keep at least 4 GiB, or go back to serial and say why). To be
+  measured: two gates with the change.
+- **`scripts/cdo-gate` skips its speed phase when the diff touches no product code** (TLS-20, owner
+  approval 2026-11-11). Against the base the speed check itself would use (the merge base with
+  master, or on a clean master HEAD's first parent), every changed path, untracked ones included,
+  must be on an allow-list of paths never compiled into `alsem`: `tests/`, `docs/`, `scripts/` (not
+  `scripts/cdo-speed`), `.config/nextest.toml`, `CHANGELOG.md`. Any other path, an empty diff or an
+  unreadable one keeps the phase. A skipped run says so: `speed: skipped, diff touches no product
+  code`, and `PASS (behaviour only: speed skipped, ...)`, never a plain PASS (and `--summary` of that
+  run too). `cdo-gate --product-paths` prints the rule's verdict for paths on stdin. Saves the
+  7.5-19 min of `speed_build` and `speed` on test-, script- and docs-only branches.
+
+### Changed (TLS-18: the speed check's base is built after a landing, not in the next gate)
+
+- **`scripts/merge-and-push` builds the new master's speed-check binary in the background right
+  after it pushes**, so the next branch's `cdo-gate` finds its base (the merge base: this master)
+  in `~/.cache/al-sem/cdo-speed/bin/<sha>/` instead of building it inside the gate (304-595 s in
+  TLS-16's gates). It runs `scripts/cdo-speed --warm <sha>`, a new mode that only calls the gate's
+  own builder (`cached_binary`: the same cache key, lock, `release-fast` profile, `git archive` and
+  grammar lookup) and exits, so no comparison changes; a gate that starts while it builds waits on
+  the cache lock and then finds the binary. Linux only, at `nice 10`, detached; its log path is
+  printed. A failed warm build only means the next gate builds the base itself, as before. Test:
+  `gate_scripts::speed_warm_reads_the_gates_own_cache_entry` (a warm on a cached entry builds
+  nothing; a warm keyed by any other commit tries to build and fails, its discrimination proof).
+  To be measured: `speed_build` in the next two gates after a landing.
+
+### Changed (TLS-17: the unresolved cones build their indexes once per read)
+
+- **A multi-root digest, prove or impact no longer rebuilds the snapshot's indexes for every
+  root's unresolved cone.** `unresolved_cone` built four indexes over the whole snapshot (identities,
+  the call-site index, the typed edges with sorted buckets, the ledger) before each root's search:
+  699 times for a 699-root impact. They are now built once per read (`ConeIndexes`, in a `OnceLock`
+  on `FinishCx`) and looked up by every root's search. Output is unchanged byte for byte (every
+  golden; the CDO runs below). Measured on CDO (release-fast, TLS-16's note): the
+  `digest.unresolved_cones` span 30.4 -> 3.6 s on `impact --diff` and 41.8 -> 4.0 s on
+  `impact --base`; peak RSS unchanged within noise. Tests: the old function kept verbatim as a
+  test-only oracle, compared through `FinishCx::finish` on every r0 dir and the dependency
+  fixtures, a hand-built visit-cap case for the bucket order, and a one-build-per-read counter, each
+  with a discrimination proof. Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`,
+  which also records why a parallel literal reach is not built yet (ENG-18, TLS-22).
+
 ### Fixed (ENG-06: `FieldRef.Validate` and record operations on a table not known, engine limits B9, B10)
 
 - **B9: `FieldRef.Validate` validates its field.** `FR := RR.Field(2); FR.Validate(1);` now

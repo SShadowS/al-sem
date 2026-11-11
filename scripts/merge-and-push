@@ -69,3 +69,16 @@ fi
 
 git push origin master || die "git push origin master failed; master is merged locally at $(git rev-parse --short HEAD)"
 echo "merge-and-push: pushed master at $(git rev-parse --short HEAD)"
+
+# ⟨TLS-18⟩ The next branch's gate times its tree against this master (the merge
+# base): build master's speed-check binary now, in the background, so that gate
+# finds it cached instead of building it inside the gate (304-595 s measured).
+# The same builder the gate uses (`cdo-speed --warm`: same cache key, lock,
+# profile and grammar). Linux only, like the speed check; a failure here only
+# means the next gate builds it itself, as before.
+if [ "$(uname -s)" = Linux ] && command -v python3 >/dev/null; then
+    head=$(git rev-parse HEAD)
+    warm_log=$(mktemp -t cdo-speed-warm.XXXXXX.log)
+    setsid nohup nice -n 10 python3 scripts/cdo-speed --warm "$head" >"$warm_log" 2>&1 </dev/null &
+    echo "merge-and-push: building the speed check's base for ${head:0:8} in the background (log: $warm_log)"
+fi

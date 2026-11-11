@@ -4,6 +4,9 @@
 Usage:
   scripts/cdo-speed <cdo-workspace> [--base REV] [--head REV] [--rounds N]
                     [--build-only] [--no-build] [--out DIR]
+  scripts/cdo-speed --warm REV    (only build REV's binary into the cache; TLS-18:
+                                   `scripts/merge-and-push` runs it after a landing, so
+                                   the next gate finds its base cached)
 
 It compares two `alsem` binaries, both built with the `release-fast` profile, on
 a fixed set of CDO calls:
@@ -456,7 +459,10 @@ def judge(records):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("workspace")
+    ap.add_argument("workspace", nargs="?")
+    ap.add_argument("--warm", metavar="REV",
+                    help="only build REV's binary into the cache (as a gate would build its base) "
+                         "and exit; no workspace, no timing (TLS-18: run after a landing)")
     ap.add_argument("--base", help="the base commit (default: merge-base HEAD master)")
     ap.add_argument("--head", help="a commit to time instead of the working tree")
     ap.add_argument("--base-exe", help="a built base binary (noise measurements; no build)")
@@ -474,6 +480,17 @@ def main():
         log("this gate reads /proc: Linux only")
         return 2
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if args.warm:
+        # The gate's own builder and cache key, so the next gate finds exactly the binary it
+        # would have built (and waits on the cache lock if this build is still running).
+        os.makedirs(cache_root(), exist_ok=True)
+        with open(os.path.join(cache_root(), "warm.log"), "a") as logf:
+            exe, sha = cached_binary(repo, args.warm, logf)
+        log(f"warm: {args.warm} = {sha[:10]} cached at {exe}")
+        return 0
+    if not args.workspace:
+        log("a workspace is required (or --warm REV)")
+        return 2
     ws = os.path.abspath(args.workspace)
     if not os.path.isdir(ws):
         log(f"no workspace at {ws}")
