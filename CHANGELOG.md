@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer left); which request-page triggers one call runs is not read from the call (`RunModal(X,
   false)` still reaches `OnOpenPage`, safe).
 - No Rust-owned golden moved: no fixture runs a report that has a request page.
+- CDO (`/work/src/cdo-baseline/Cloud`, master `faddbbd4` against the branch, `cdo` profile):
+  `aldump --program-call-graph-stats` is byte-identical, and so are `alsem graph`'s 58,609 edges
+  and 26,098 nodes. Only the graph header's `dependencyBodies` histogram moves: 3 call sites in
+  the loaded Base App code go from `honestEmpty` to `resolvedSource` (report runs that read
+  "runs no AL code" now reach their request-page triggers). CDO's own reports with request pages
+  are started from page actions, not from code calls, so the workspace counts do not move.
 - Tests: `tests/cli/cli_eng07_request_page.rs` (6 tests; discrimination proofs: dropping the
   report's or the XmlPort's request-page names brings the old `no` back, dropping their
   conditionality or making `OnInit` conditional fails the conditionality pins, dropping the trigger
