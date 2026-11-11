@@ -239,6 +239,10 @@ pub struct QueryColumnNode {
 pub struct FieldNode {
     pub name_lc: SharedStr,
     pub type_text: SharedStr,
+    /// The field's number (`field(<no>; …)` in source, the symbols'
+    /// `Id`); `None` when it is not known. Read by `FieldRef` resolution
+    /// (`RecRef.Field(<no>)`, ENG-06).
+    pub number: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1080,6 +1084,7 @@ pub fn extract_nodes(
                 .map(|f| FieldNode {
                     name_lc: f.name.fold_identifier().into(),
                     type_text: f.data_type.as_str().into(),
+                    number: Some(f.number),
                 })
                 .collect()
         } else {
@@ -1336,6 +1341,7 @@ pub(crate) mod test_fixtures {
             fields: vec![FieldNode {
                 name_lc: "no.".into(),
                 type_text: "Code[20]".into(),
+                number: Some(1),
             }],
             dataitems: vec![DataitemNode {
                 name_lc: "customer".into(),

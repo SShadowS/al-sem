@@ -30,7 +30,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#0918411750a46be1a1e5d08e4bf65a80c49f67db546e155cca34ade73a0afee0",
@@ -79,7 +79,12 @@
     {
       "routineId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#2387ac7eebaec0fdb8b460c5fe1d7ca1ac1ea8da4bb7ce5642902828951cd1ff",
       "dbEffects": [],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#2387ac7eebaec0fdb8b460c5fe1d7ca1ac1ea8da4bb7ce5642902828951cd1ff/op0"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -106,7 +111,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#23c33fa0989f81e7701abd7c3f35b00789299d8c24cae6593b1143a593bcf26e",
@@ -138,7 +143,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#3bbd30bac6c05bf33d984f641c4c869e6600a8d0eed0af6cac698192c133e411",

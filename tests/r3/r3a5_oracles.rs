@@ -168,15 +168,24 @@ fn o3_coverage_reflects_cross_app_opaque_apps() {
         use_symbol.coverage.unknown_targets
     );
 
+    // UseChain's dep is source-bearing, so nothing in its cone is opaque. Its
+    // one gap is not an opaque app: the dep's `DoWrite` runs
+    // `r.Insert(true)` on `Record "Dep Chain Customer"`, a table the dep's
+    // symbols name but its source does not declare, so the program holds no
+    // table and its `OnInsert` is code the engine cannot see (ENG-06,
+    // `record-table-unresolved`). Before ENG-06 that op was silently complete.
     let use_chain = by_id(&p, PRIMARY_USECHAIN);
     assert_eq!(
-        use_chain.coverage.inherited_status, "complete",
-        "UseChain (source-bearing dep) has complete coverage"
+        use_chain.coverage.reasons,
+        ["record-table-unresolved"],
+        "UseChain (source-bearing dep) carries no opaque reason; its only gap is the \
+         dep's insert into a table its source does not declare"
     );
-    assert!(
-        use_chain.coverage.reasons.is_empty(),
-        "UseChain coverage carries no opaque reasons, got {:?}",
-        use_chain.coverage.reasons
+    assert_eq!(
+        use_chain.coverage.unknown_targets,
+        [DEP_DOWRITE],
+        "UseChain's only unknown target is the dep routine holding that insert, never \
+         the symbol-only routine"
     );
 }
 

@@ -4105,6 +4105,7 @@ mod tests {
             fields: vec![FieldNode {
                 name_lc: field_name_lc.into(),
                 type_text: field_type_text.into(),
+                number: None,
             }],
             dataitems: vec![],
             query_columns: Vec::new(),

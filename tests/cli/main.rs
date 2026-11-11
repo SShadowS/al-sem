@@ -183,6 +183,7 @@ mod cli_b2_alternative_declarations;
 mod cli_b2_arm_readers;
 mod cli_b2_preproc_arms;
 mod cli_b8_output;
+mod cli_b9_fieldref_validate;
 mod cli_b_diff_differential;
 mod cli_b_digest_differential;
 mod cli_b_digest_exit_oracles;
