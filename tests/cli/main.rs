@@ -122,14 +122,13 @@ pub(crate) fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
     h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
 }
 
-/// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
-/// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
-/// pipelines read their `WorkspaceInputs` with it.
 /// `jobs` as one in-process batch (`al_sem::engine::batch::run_batch`, the
 /// driver `alsem batch` and every standalone run use): each view is built
-/// once for every job that reads it. Per job, in order: (exit, stdout,
-/// stderr). TLS-12: a test comparing many cases of one workspace builds its
-/// model once instead of per case.
+/// once for every job that reads it, and the jobs' plans are merged into one
+/// prepare. Per job, in order: (exit, stdout, stderr). TLS-12: a test
+/// comparing many cases of one workspace builds its model once instead of per
+/// case. Panics when a job's stream file cannot be read (the batch creates
+/// both before any write): an empty read would make two failed runs equal.
 pub(crate) fn batch_in_process(
     jobs: &[&dyn al_sem::engine::batch::job::Job],
 ) -> Vec<(Option<u8>, Vec<u8>, Vec<u8>)> {
@@ -142,15 +141,22 @@ pub(crate) fn batch_in_process(
         })
         .collect();
     let with: Vec<_> = jobs.iter().copied().zip(streams).collect();
-    run_batch(0, &with)
+    let lines = run_batch(0, &with);
+    assert_eq!(lines.len(), jobs.len(), "one line per job");
+    lines
         .into_iter()
         .map(|line| {
-            let read = |p: &std::path::Path| std::fs::read(p).unwrap_or_default();
+            let read = |p: &std::path::Path| {
+                std::fs::read(p).unwrap_or_else(|e| panic!("job stream {}: {e}", p.display()))
+            };
             (line.exit, read(&line.stdout), read(&line.stderr))
         })
         .collect()
 }
 
+/// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
+/// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
+/// pipelines read their `WorkspaceInputs` with it.
 pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::WorkspaceNeeds {
     al_sem::program::inputs::WorkspaceNeeds {
         fingerprint_rows: true,

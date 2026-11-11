@@ -469,29 +469,32 @@ fn fingerprint_witness_zero_keeps_operation_evidence() {
 /// dependency, for every root, `fingerprint --routine <root>` (json and
 /// human) is byte-equal cross-app and `--single-app`: exit, stdout and stderr.
 /// TLS-12: each dir's cases run as one in-process batch (`batch_in_process`,
-/// the driver standalone runs use; one model per universe instead of one per
-/// case, 87 s -> 15 s), and every 20th dir's first root also through
-/// `run_fingerprint_pipeline`, the CLI's one call. DISCRIMINATION: B1, a
-/// cross-app-only diagnostic in the envelope, fails it (on both paths:
-/// 768 batch cases and 11 standalone ones).
+/// the driver every run uses; one model per universe instead of one per
+/// case), and every root of every 5th dir also runs each job alone through
+/// `standalone_output`, the path `alsem fingerprint` runs (a one-job view,
+/// output serialized), so a fault only a one-job view shows is still compared.
+/// DISCRIMINATION: B1, a cross-app-only diagnostic in the envelope, fails it
+/// on both paths.
 #[test]
 fn no_dependency_parity_fingerprint_routine() {
     use al_sem::engine::batch::job::Job;
+    use al_sem::engine::batch::standalone_output;
     use al_sem::engine::l5::fingerprint_cli::{
-        FingerprintFormat, FingerprintJob, FingerprintOptions, FingerprintOutput,
-        run_fingerprint_pipeline,
+        FingerprintFormat, FingerprintJob, FingerprintOptions,
     };
     let dirs = crate::cli_prove_cross_app::no_dependency_dirs();
     assert!(dirs.len() >= 180, "precondition: dirs ({})", dirs.len());
     let failures = std::sync::Mutex::new(Vec::<String>::new());
     let compared = std::sync::atomic::AtomicUsize::new(0);
     let sampled = std::sync::atomic::AtomicUsize::new(0);
+    let multi_root = std::sync::atomic::AtomicBool::new(false);
     let dirs = &dirs;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
     let chunks: Vec<&[PathBuf]> = dirs.chunks(dirs.len().div_ceil(threads)).collect();
     std::thread::scope(|s| {
         for chunk in chunks {
-            let (failures, compared, sampled) = (&failures, &compared, &sampled);
+            let (failures, compared, sampled, multi_root) =
+                (&failures, &compared, &sampled, &multi_root);
             s.spawn(move || {
                 for dir in chunk {
                     let inputs = al_sem::program::inputs::WorkspaceInputs::read(
@@ -522,9 +525,8 @@ fn no_dependency_parity_fingerprint_routine() {
                     let formats = [FingerprintFormat::Json, FingerprintFormat::Human];
                     // TLS-12: every case of this dir as one batch, so each
                     // universe's model is built once (a standalone run builds
-                    // it per case). `alsem batch` equals standalone
-                    // (`cli_batch_contract`); the sample below keeps the
-                    // standalone call itself compared.
+                    // it per case). Both universes get the same jobs in the
+                    // same order, so what the batch shares, it shares alike.
                     let mut cases = Vec::new();
                     let mut jobs = Vec::new();
                     for root in &roots {
@@ -541,6 +543,12 @@ fn no_dependency_parity_fingerprint_routine() {
                     let out = crate::batch_in_process(
                         &jobs.iter().map(|j| j as &dyn Job).collect::<Vec<_>>(),
                     );
+                    assert_eq!(
+                        out.len(),
+                        2 * cases.len(),
+                        "{}: one result per job",
+                        dir.display()
+                    );
                     for (case, pair) in cases.iter().zip(out.chunks(2)) {
                         if pair[0] != pair[1] {
                             failures
@@ -550,18 +558,18 @@ fn no_dependency_parity_fingerprint_routine() {
                         }
                         compared.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                    // The standalone call (the CLI's), on every 20th dir's first root.
-                    let sample = dirs.iter().position(|d| d == dir).unwrap() % 20 == 0;
-                    for root in roots.iter().take(usize::from(sample)) {
+                    // The CLI's own path, each job alone (`standalone_output`:
+                    // a one-job view, as `alsem fingerprint` runs it), on every
+                    // root of every 5th dir. A batch merges its jobs' plans, so a
+                    // cross-app-only fault of a one-job view could pass above.
+                    let sample = dirs.iter().position(|d| d == dir).unwrap() % 5 == 0;
+                    for root in roots.iter().filter(|_| sample) {
                         for format in &formats {
                             let run = |single_app: bool| {
-                                run_fingerprint_pipeline(&opts(root, format, single_app)).map(|r| {
-                                    let text = match r.output {
-                                        FingerprintOutput::Text(t) => t,
-                                        _ => String::from("<binary>"),
-                                    };
-                                    (text, r.exit_code, r.stderr_diagnostics)
-                                })
+                                let job = FingerprintJob::new(opts(root, format, single_app))
+                                    .expect("no --shard");
+                                let out = standalone_output(&job);
+                                (out.exit, out.actions)
                             };
                             if run(false) != run(true) {
                                 failures.lock().unwrap().push(format!(
@@ -570,6 +578,9 @@ fn no_dependency_parity_fingerprint_routine() {
                                 ));
                             }
                             sampled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if roots.len() > 1 {
+                                multi_root.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -579,7 +590,11 @@ fn no_dependency_parity_fingerprint_routine() {
     let compared = compared.into_inner();
     assert!(compared > 1000, "precondition: cases compared ({compared})");
     let sampled = sampled.into_inner();
-    assert!(sampled >= 10, "precondition: standalone cases ({sampled})");
+    assert!(sampled >= 60, "precondition: standalone cases ({sampled})");
+    assert!(
+        multi_root.into_inner(),
+        "precondition: a sampled dir has several roots (a batch shares across them)"
+    );
     let failures = failures.into_inner().unwrap();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
