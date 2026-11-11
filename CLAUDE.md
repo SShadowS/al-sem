@@ -171,7 +171,9 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
     which resolves only in the main checkout.
   - **A new worktree builds everything cold.** `scripts/seed-target <worktree>` first
     makes its `target/` a copy-on-write copy of the main checkout's (seconds on btrfs;
-    cold, as before, where reflinks fail). agentflow seeds its issue worktrees itself.
+    cold, as before, where reflinks fail). The first test build then took 94 s against
+    146 s cold (2026-11-11, `docs/superpowers/notes/2026-11-11-warm-deps.md`). agentflow
+    seeds its issue worktrees itself.
   - Removing a worktree: worktrees created while the grammar was a submodule make
     `git worktree remove` FAIL ("working trees containing submodules cannot be moved or
     removed") — verify the tree is clean/merged, then
