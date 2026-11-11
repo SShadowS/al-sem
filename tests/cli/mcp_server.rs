@@ -1278,15 +1278,23 @@ mod faults {
     use super::*;
 
     /// F-3 (agent-tasks design §2.5): `alsem_status` answers with a complete
-    /// disk check within 200 ms while a heavy `alsem_explain` runs on the
-    /// same engine (its child sleeps 3 s on every ask), and names the
-    /// running call; the explain is answered after it.
+    /// disk check while a heavy `alsem_explain` runs on the same engine (its
+    /// child sleeps 3 s on every ask), and names the running call; the
+    /// explain is answered after it.
+    ///
+    /// "While it runs" is checked in the same run, against the heavy call
+    /// itself (TLS-15): from the status request, the status must answer in
+    /// under a quarter of the time the explain still takes (about 2.5 s of
+    /// its sleep remain; an idle status answers in tens of ms). A fixed
+    /// 200 ms bound failed at 223-227 ms on a saturated host (2026-11-11),
+    /// where host load lengthens both times alike.
     ///
     /// DISCRIMINATION (2026-11-05): making the status wait for the engine's
     /// running call before it reads the worker's snapshot (as a check
     /// through the busy front end would: `engine_rows` waiting while
     /// `running_tool` is set) fails at "answered first"; restored, it
-    /// passes.
+    /// passes. A status slowed past the ratio but still answered first
+    /// fails at "during the heavy call" (TLS-15).
     #[test]
     fn status_answers_during_a_heavy_call() {
         let ws = ws_explain();
@@ -1305,20 +1313,21 @@ mod faults {
             json!({"name": "alsem_status", "arguments": {}}),
         );
         let r = s.response();
-        let elapsed = start.elapsed();
+        let status = start.elapsed();
         assert_eq!(r["id"], 8, "answered first: {r}");
-        assert!(
-            elapsed < std::time::Duration::from_millis(200),
-            "within 200 ms: {elapsed:?}"
-        );
         let st = &r["result"]["structuredContent"];
         let e = &st["engines"][0];
         assert_eq!(e["details"]["running"], "alsem_explain", "{st}");
         assert_eq!(e["check"]["complete"], true, "{st}");
         assert_eq!(e["check"]["fresh"], true, "{st}");
         let r = s.response();
+        let explain = start.elapsed();
         assert_eq!(r["id"], 7, "{r}");
         assert_eq!(envelope(&r["result"])["kind"], "cli", "{r}");
+        assert!(
+            status * 4 < explain,
+            "during the heavy call: status {status:?}, the explain {explain:?} from the same start"
+        );
         assert!(s.finish().success());
     }
 

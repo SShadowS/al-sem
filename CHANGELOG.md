@@ -298,6 +298,35 @@ Terms used in the wave-2 sections below:
   value a routine may be entered under, so a "may" deep in the graph combines exactly with a
   declaration above it.
 
+### Changed (TLS-14: the prove parity test builds each model once)
+
+- **`no_dependency_parity_prove` runs each dir's cases as one in-process batch**, TLS-12's reviewed
+  design (one model per universe instead of one per case), and every root of every 5th dir also
+  runs each job alone through `standalone_output`, the path `alsem prove` runs. It now also compares
+  the stderr. Limit: a fault only a one-job view shows is compared on the sampled dirs only.
+  Discrimination: B1 fails both halves; B2, a cross-app-only change made only in a one-demand view,
+  fails the standalone half alone (362 cases, 0 batch). Measured (3 alternating pairs): CPU per run
+  -26 s (-1.6%), wall -1.3 s, the test 46 -> 41 s; prove's per-root work, not its model build, is
+  most of the test's cost. See `docs/superpowers/notes/2026-11-10-task-gate-test-time.md`.
+
+### Fixed (TLS-15: a status test that failed under host load)
+
+- **`mcp_server::faults::status_answers_during_a_heavy_call` no longer has a fixed 200 ms bound.**
+  It took 223-227 ms on a saturated host (2026-11-11, TLS-13's timing) and stopped the run. What it
+  guards is that `alsem_status` answers WHILE a heavy call runs: it still requires the status first
+  (before the explain) and naming the running call, and now times the status against the heavy call
+  itself in the same run: from the status request, the status must answer in under a quarter of the
+  time the explain still takes (about 2.5 s of a 3 s sleep). Host load stretches both alike.
+  Discrimination: a status that waits for the running call fails at "answered first"; a status
+  slowed by 1.5 s but still answered first fails the new ratio (1.50 s against 2.51 s).
+- Other fixed wall-clock bounds in `tests/cli/mcp_server.rs` and `engine_host.rs`: the 10-30 s
+  upper bounds are hang guards and the lower bounds cannot fail under load. The one tight upper
+  bound, `engine_host::faults::repeated_deaths_back_off_then_fail_until_reset`'s `< 100 ms` for a
+  failure "at once", is now `< 800 ms`: `spawns == 3` pins that nothing was spawned, and the bound
+  pins that no backoff was waited, the next of which is at least 800 ms (the waits double: 200,
+  400). Discrimination: the failed state sleeping its next backoff before failing (1.6 s) fails it;
+  a 500 ms sleep would not (a half-of-the-third-wait ratio was tried first and let it through).
+
 ### Changed (TLS-12: the slowest tests build each model once)
 
 - **Four `tests_rule_b` corpus tests are one test**, `scoped_reads_equal_unscoped_on_the_corpus`:
