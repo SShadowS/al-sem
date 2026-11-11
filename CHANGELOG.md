@@ -70,10 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer depends on its key alone. Found by TLS-17's spec review.
 - Measured on CDO before the fix (2 of 15 chunks of the workspace's files, one digest read
   each, 362k top-level evaluations): no depth cutoff, no budget cutoff, no unsettled
-  evaluation, under 1,000 of the budget used per read; the fixed and the old binary give
-  byte-identical digests. Time on the same chunks, alternating which runs first: +1.8% and +2%
-  (one earlier pair, fixed second, read +37%; it did not reproduce). Peak RSS equal (7.0 and
-  8.4 GB).
+  evaluation, under 1,000 of the budget used per read; on those two chunks the fixed and the
+  old binary give byte-identical digests. Time on the same chunks, alternating which runs
+  first: +1.8% and +2% (one earlier pair, fixed second, read +37%; it did not reproduce). Peak
+  RSS equal (7.0 and 8.4 GB). Landing gate speed phase: prove x0.99, model build x1.12.
+- **The history dependence does fire on CDO, without any cutoff.** In one `prove` of
+  `CDO E-Mail Handler::RunReportID` (`writes-table:CDO E-Mail Log`), a probe build of the old
+  code that also computed every top-level evaluation's key from fresh state found 1,410 of
+  ~4,400 evaluations (11 routines) whose answer differed: every one of the 2,002 differing
+  variables was "anything" in the shared state and a precise table set fresh (none the other
+  way). The old answer is reproduced asked alone, so it is the read's own earlier evaluations,
+  not a batch of questions. With the fix that `prove`'s answer is unchanged and one witness row
+  takes another route (`RunReportID.prove-writes-table.human.txt`: 25 → 30 guards, through
+  Base App's `Workflow Management::ExecuteResponses`).
 - Limits (panel review: gpt-6-astra, Fable): the budget is per top-level key, so the worst
   case per read is no longer bounded by one 200,000 (a shape where many keys share a deep
   sensitive subtree recomputes it per key; CDO shows no such shape); inside one evaluation a key
