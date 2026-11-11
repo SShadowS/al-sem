@@ -146,7 +146,7 @@ fn job<'a>(kind: &str, inputs: &'a Arc<WorkspaceInputs>) -> Box<dyn Job + 'a> {
                 single_app: false,
                 tests: false,
                 include_reads: false,
-                diff_root: DiffRoot::Workspace,
+                diff_root: DiffRoot::Workspace.into(),
             },
             false,
             None,

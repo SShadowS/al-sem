@@ -51,12 +51,15 @@ L14 entry gives the measured noise behind each limit. When the rounds disagree
 about a call (some ratios over its limit, some not), more rounds run, up to
 --max-rounds; then the median decides.
 
-Output equality (the answer's hash and the tool's exit code) is reported (a
-branch may change answers on purpose), never judged here: the CDO goldens do
-that. A call that exits non-zero is still timed.
+Output equality (the answer's hash) is reported (a branch may change answers on
+purpose), never judged here: the CDO goldens do that. A call that exits non-zero
+or fails in the engine, on either side, fails the run at once, naming the call,
+its exit code and the first lines of its stderr: every call exits 0 on CDO, and
+a ratio of failed calls (a wrong workspace answers in 0.01 s) measures nothing
+(TLS-10: a run on a wrong workspace once printed PASS).
 
-Exit: 0 pass, 1 fail (slower or larger), 2 cannot run (usage, build, an MCP
-request that failed or timed out). Linux only (/proc).
+Exit: 0 pass, 1 fail (slower or larger, or a call failed), 2 cannot run (usage,
+build, an MCP request that failed or timed out). Linux only (/proc).
 """
 import argparse
 import fcntl
@@ -335,7 +338,8 @@ class Server:
         return sum(proc_cpu_seconds(p) for p in [self.p.pid, *descendants(self.p.pid)])
 
     def call(self, tool, args):
-        """(wall s, CPU s, stdout sha256, exit code) of one tool call."""
+        """(wall s, CPU s, stdout sha256, exit code, first stderr lines) of one
+        tool call; exit code -1 when the engine failed (no CLI exit)."""
         c0 = self.cpu()
         t0 = time.monotonic()
         r = self.request("tools/call", {"name": tool, "arguments": args})
@@ -352,7 +356,10 @@ class Server:
             if not isinstance(text, str):
                 text = json.dumps(text, sort_keys=True)
             sha = hashlib.sha256(text.encode()).hexdigest()[:16]
-        return wall, cpu, sha, env.get("exitCode", -1)
+        err = env.get("stderr") or [env.get("message", "")]
+        if isinstance(err, str):
+            err = err.splitlines()
+        return wall, cpu, sha, env.get("exitCode", -1), [str(x) for x in err if x][:5]
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
@@ -382,6 +389,10 @@ class Server:
 # The run
 # ---------------------------------------------------------------------------
 
+class CallFailed(Exception):
+    """A timed call that did not exit 0: (what, its first stderr lines)."""
+
+
 def run_round(rnd, servers, records):
     order = ["base", "head"] if rnd % 2 == 0 else ["head", "base"]
     if rnd == 0:
@@ -395,13 +406,12 @@ def run_round(rnd, servers, records):
         # does not always fall on the same side.
         side_order = order if rnd != 0 or i % 2 == 0 else order[::-1]
         for side in side_order:
-            wall, cpu, sha, code = servers[side].call(tool, args)
-            # A non-zero exit is an answer like any other (a branch may change
-            # a verdict on purpose): recorded with the output, still timed.
-            records.append(dict(call=cid, side=side, round=rnd, wall=wall, cpu=cpu,
-                                sha=f"{sha}/exit{code}"))
+            wall, cpu, sha, code, err = servers[side].call(tool, args)
             exit_note = f"  exit {code}" if code != 0 else ""
             log(f"  r{rnd} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s{exit_note}")
+            if code != 0:
+                raise CallFailed(f"r{rnd} {cid} ({tool}) on {side} exited {code}", err)
+            records.append(dict(call=cid, side=side, round=rnd, wall=wall, cpu=cpu, sha=sha))
 
 
 def judge(records):
@@ -523,6 +533,12 @@ def main():
                 continue
             break
         peaks = {side: servers[side].peak_mib() for side in servers}
+    except CallFailed as e:
+        what, err = e.args
+        log(f"FAIL: {what}; nothing is judged on a failed call")
+        for line in err or ["(no stderr)"]:
+            log(f"  | {line}")
+        return 1
     finally:
         for s in servers.values():
             s.close()

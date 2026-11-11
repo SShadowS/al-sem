@@ -534,8 +534,8 @@ fn refused_combinations() {
 }
 
 /// B1's CDO acceptance (`scripts/cdo-gate`), on the pinned baseline:
-/// - the 94-file range `bc3ccb18~5..bc3ccb18` (the diff made with `git diff`,
-///   read only): 699 routines, 12,395 changed lines in buckets that sum, every
+/// - the 94-file range `bc3ccb18~5..bc3ccb18` (the diff made with `git diff
+///   --diff-algorithm=histogram`, read only): 699 routines, 12,395 changed lines in buckets that sum, every
 ///   one of digest's 93 `hunk-outside-routines` named among the hunks that
 ///   touch no routine, no diff/working-tree mismatch (the range ends at the
 ///   checked-out commit; 54 of its files add a byte-order mark), and the
@@ -556,6 +556,10 @@ pub(crate) fn cdo_impact_ratchets() {
             "--no-ext-diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
+            // The numbers below were minted with histogram. The machine's own
+            // `diff.algorithm` would otherwise pick the hunks: with git's
+            // default (myers) the same range gives 700 roots and 12,351 lines.
+            "--diff-algorithm=histogram",
             "bc3ccb18~5",
             "bc3ccb18",
             "--",

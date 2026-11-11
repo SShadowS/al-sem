@@ -120,7 +120,7 @@ fn run() -> Accounting {
     ];
     account(
         &parse_unified_diff(DIFF),
-        &DiffRoot::Workspace,
+        &PathRoot::default(),
         &files,
         &spans,
     )
@@ -233,7 +233,7 @@ fn a_rejected_hunk_header_unmaps_the_file() {
     let files = vec![ws("src/Order.Table.al", ORDER)];
     let a = account(
         &parsed,
-        &DiffRoot::Workspace,
+        &PathRoot::default(),
         &files,
         &RoutineSpanIndex::default(),
     );
@@ -255,7 +255,7 @@ fn a_byte_order_mark_is_not_a_mismatch() {
     let text = "codeunit 50101 Calc\n{\n}\n";
     let a = account(
         &parse_unified_diff(d),
-        &DiffRoot::Workspace,
+        &PathRoot::default(),
         &[ws("src/Calc.Codeunit.al", text)],
         &RoutineSpanIndex::default(),
     );

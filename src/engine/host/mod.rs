@@ -268,6 +268,10 @@ pub struct OpenParams {
 pub struct Decisions {
     pub changed_is_file: Option<bool>,
     pub diff_root: Option<Result<crate::engine::l5::digest_cli::DiffRoot, String>>,
+    /// The diff root's anchors (#363 spec §4), beside it so `diffRoot` keeps
+    /// its shape; an older front end sends none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_anchors: Vec<String>,
 }
 
 /// `session/ask`: one CLI command line (without the program name) and

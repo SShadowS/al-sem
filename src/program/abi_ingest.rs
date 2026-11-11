@@ -1750,6 +1750,90 @@ codeunit 50900 "Subscriber CU"
         );
     }
 
+    /// FW2: an ABI ingest failure is not only recorded on the graph, it reaches
+    /// the user. The dependency ledger marks the declared dependency it hit, which
+    /// makes `alsem analyze` report a `dependencies` diagnostic and degrades the
+    /// preflight; a healthy dependency in the same snapshot does neither.
+    #[test]
+    fn abi_ingest_error_reaches_the_dependency_diagnostics_and_the_preflight() {
+        use crate::program::resolve::full::{FreshCoverage, dependency_ledger};
+
+        let broken = dep_id("BrokenParse");
+        let healthy = dep_id("HealthyDep");
+        let ws = ws_id();
+        let cache = AbiCache::new();
+        cache.seed(
+            &broken.guid,
+            &broken.name,
+            &broken.publisher,
+            &broken.version,
+            Arc::new(SymbolReferenceAbi {
+                error: Some("SymbolReference.json parse failed: trailing characters".into()),
+                ..Default::default()
+            }),
+        );
+        cache.seed(
+            &healthy.guid,
+            &healthy.name,
+            &healthy.publisher,
+            &healthy.version,
+            Arc::new(make_dep_pub_abi()),
+        );
+        let mut ws_unit = make_ws_unit(&ws);
+        ws_unit.declared_deps = [&broken, &healthy]
+            .into_iter()
+            .map(|d| crate::dependencies::AppDependency {
+                app_id: d.guid.clone(),
+                name: d.name.clone(),
+                publisher: d.publisher.clone(),
+                version: d.version.clone(),
+            })
+            .collect();
+        let snap = AppSetSnapshot {
+            apps: vec![
+                ws_unit,
+                make_symbolonly_dep_unit(&broken),
+                make_symbolonly_dep_unit(&healthy),
+            ],
+            workspace_app: ws,
+            world: World::Closed,
+        };
+        let g = build_program_graph(&snap, &cache);
+
+        let fc = FreshCoverage {
+            unknown: 0,
+            coverage_holds: true,
+            recovered_files: 0,
+            opaque_apps: vec![],
+            ledger: dependency_ledger(&snap, &g, &[]),
+            unidentified_packages: vec![],
+            encrypted_packages: vec![],
+            unbound_subscriptions: 0,
+            files_without_object: vec![],
+        };
+        let messages: Vec<String> = fc
+            .dependency_diagnostics()
+            .into_iter()
+            .map(|d| d.message)
+            .collect();
+        assert_eq!(messages.len(), 1, "only the broken dep: {messages:?}");
+        assert!(
+            messages[0].contains("\"BrokenParse\"")
+                && messages[0].contains("could not be read")
+                && messages[0].contains("trailing characters"),
+            "{messages:?}"
+        );
+
+        let pf = crate::engine::gate::preflight::evaluate_preflight(&Ok(fc), true);
+        assert!(pf.degraded && pf.failed, "{}", pf.message);
+        assert!(
+            pf.message
+                .ends_with("1 unreadable dependency app(s): BrokenParse"),
+            "{}",
+            pf.message
+        );
+    }
+
     /// Task 1 (round-2 tri-state arity hardening): an ABI routine whose
     /// `Parameters` field was absent/unparseable (`parameters_known: false`)
     /// must be ingested with the `UNKNOWN_ARITY` sentinel, never a false `0` —

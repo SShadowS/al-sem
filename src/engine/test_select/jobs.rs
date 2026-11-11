@@ -23,7 +23,7 @@ use crate::engine::batch::job::{
 use crate::engine::batch::output::JobOutput;
 use crate::engine::l4::effect_query_cli::OwnerIndex;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, DiffRoot, changed_roots_diagnostic_human, primary_guid_of, resolve_changed_roots,
+    ChangedInput, PathRoot, changed_roots_diagnostic_human, primary_guid_of, resolve_changed_roots,
 };
 
 use super::scope::{Scope, ScopeRequest};
@@ -36,7 +36,11 @@ pub const ROOTS_SCHEMA: &str = "al-sem.tests-roots";
 pub enum RootsAsk {
     Routines(Vec<String>),
     Files(Vec<String>),
-    Diff { text: String, root: DiffRoot },
+    /// The diff's text and what its paths are read against (#363: with anchors).
+    Diff {
+        text: String,
+        root: PathRoot,
+    },
 }
 
 /// The roots part (see the module doc).
@@ -64,8 +68,8 @@ impl Job for RootsJob<'_> {
         let inputs = cx.inputs();
         let owners = OwnerIndex::build(model);
         let (files, routines, diff_text, diff_root) = match &self.ask {
-            RootsAsk::Routines(r) => (None, Some(r.clone()), None, DiffRoot::default()),
-            RootsAsk::Files(f) => (Some(f.clone()), None, None, DiffRoot::default()),
+            RootsAsk::Routines(r) => (None, Some(r.clone()), None, PathRoot::default()),
+            RootsAsk::Files(f) => (Some(f.clone()), None, None, PathRoot::default()),
             RootsAsk::Diff { text, root } => (None, None, Some(text.clone()), root.clone()),
         };
         let changed = resolve_changed_roots(

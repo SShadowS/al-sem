@@ -124,8 +124,9 @@ fn normalize_input(p: &str) -> String {
 /// The workspace-file keys a changed path may name under `root` (#77), as
 /// written then below the git top level: [`normalize_input`]'s spelling, the
 /// key of a workspace `.al` file's `rel_posix` ([`file_key`]). `alsem
-/// impact`'s accounting reads paths exactly as the changed roots are read.
-pub(crate) fn path_keys(root: &DiffRoot, path: &str) -> Vec<String> {
+/// impact`'s accounting reads paths exactly as the changed roots are read,
+/// anchors included (#363).
+pub(crate) fn path_keys(root: &PathRoot, path: &str) -> Vec<String> {
     path_readings(root, path).collect()
 }
 
@@ -157,21 +158,21 @@ fn clean_segments(path: &str) -> String {
 /// The category a `--changed <value>` resolves to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangedAutoDetect {
-    /// Existing file path → treat as --diff.
+    /// An existing path with no `.al` entry → treat as --diff.
     Diff(String),
-    /// Comma-list with any `.al` entry → treat as --changed-files.
+    /// Comma-list with any `.al` entry → treat as --changed-files, whether or
+    /// not the path exists (#362).
     Files(Vec<String>),
     /// Else → treat as --changed-routines.
     Routines(Vec<String>),
 }
 
-/// `autoDetectChanged` (cli/digest.ts). A non-existent path that is not a `.al`
-/// comma-list falls through to a routine selector (graceful miscategorization,
-/// NOT an OS error). `exists` is injected so this stays a pure, testable function.
+/// `autoDetectChanged` (cli/digest.ts). A `.al` entry makes the value file inputs
+/// before existence is asked: a `.al` path is AL source wherever the command
+/// runs, never diff text (#362). Else an existing path is a diff file, and else a
+/// routine selector (graceful miscategorization, NOT an OS error). `exists` is
+/// injected so this stays a pure, testable function.
 pub fn auto_detect_changed_with(value: &str, exists: impl Fn(&str) -> bool) -> ChangedAutoDetect {
-    if exists(value) {
-        return ChangedAutoDetect::Diff(value.to_string());
-    }
     let parts: Vec<String> = value
         .split(',')
         .map(|s| s.trim().to_string())
@@ -179,6 +180,8 @@ pub fn auto_detect_changed_with(value: &str, exists: impl Fn(&str) -> bool) -> C
         .collect();
     if parts.iter().any(|p| p.to_lowercase().ends_with(".al")) {
         ChangedAutoDetect::Files(parts)
+    } else if exists(value) {
+        ChangedAutoDetect::Diff(value.to_string())
     } else {
         ChangedAutoDetect::Routines(parts)
     }
@@ -317,7 +320,9 @@ pub struct ChangedInput<'a> {
     pub files: Option<Vec<String>>,
     pub routines: Option<Vec<String>>,
     pub diff_text: Option<String>,
-    pub diff_root: DiffRoot,
+    /// What changed paths are read against: the diff root and the workspace's
+    /// anchors (#363).
+    pub diff_root: PathRoot,
     /// The workspace's `.al` files (`WorkspaceInputs::al_files`): which
     /// readings of a changed path (a diff's or a file input's) name a FILE,
     /// routines or not (#77, #339).
@@ -355,6 +360,220 @@ impl DiffRoot {
             (false, true) => DiffRoot::Explicit(prefix),
         }
     }
+}
+
+/// The root of an absolute path (#363): `/`, `//` (a `//server/share` path) or
+/// a disk `X:/` (the letter as written).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AbsRoot {
+    Slash,
+    Unc,
+    Disk(char),
+}
+
+impl AbsRoot {
+    /// One root, a disk letter in any case (a disk letter is not a folder name).
+    fn same(&self, other: &AbsRoot) -> bool {
+        match (self, other) {
+            (AbsRoot::Disk(a), AbsRoot::Disk(b)) => a.eq_ignore_ascii_case(b),
+            (a, b) => a == b,
+        }
+    }
+
+    fn spelling(&self) -> String {
+        match self {
+            AbsRoot::Slash => "/".into(),
+            AbsRoot::Unc => "//".into(),
+            AbsRoot::Disk(c) => format!("{c}:/"),
+        }
+    }
+}
+
+/// `path`'s root and its folders (`\` read as `/`, `.` and empty segments
+/// dropped), or `None` for a relative path. A drive-relative `C:x.al` or a bare
+/// `C:` has no root (#363 spec §2).
+fn split_rooted(path: &str) -> Option<(AbsRoot, Vec<&str>)> {
+    let (root, rest) = if let Some(rest) = path.strip_prefix("//") {
+        (AbsRoot::Unc, rest)
+    } else if let Some(rest) = path.strip_prefix('/') {
+        (AbsRoot::Slash, rest)
+    } else {
+        let b = path.as_bytes();
+        if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'/' {
+            (AbsRoot::Disk(b[0] as char), &path[3..])
+        } else {
+            return None;
+        }
+    };
+    let folders = rest
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    Some((root, folders))
+}
+
+/// The workspace's absolute location (#363): a root and its folders, case kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    root: AbsRoot,
+    folders: Vec<String>,
+}
+
+impl Anchor {
+    /// The anchor `spelling` names (`/home/x/ws`, `//srv/s/ws`, `C:/Git/ws`, a
+    /// root-only `/`, `//` or `C:/`; `\` read as `/`). `None` for a relative
+    /// spelling or one with a `..` folder: `..` is never cancelled (#76), so such
+    /// an anchor would match nothing.
+    pub fn parse(spelling: &str) -> Option<Anchor> {
+        let s = spelling.replace('\\', "/");
+        let (root, folders) = split_rooted(&s)?;
+        if folders.contains(&"..") {
+            return None;
+        }
+        Some(Anchor {
+            root,
+            folders: folders.into_iter().map(str::to_string).collect(),
+        })
+    }
+
+    /// A workspace path's anchor: a Windows `\\?\` disk prefix is removed
+    /// (`\\?\U:\Git\x` → `U:/Git/x`); a `\\?\UNC\` path gives none.
+    pub fn of_path(path: &std::path::Path) -> Option<Anchor> {
+        let s = path.to_string_lossy();
+        if s.starts_with(r"\\?\UNC\") {
+            return None;
+        }
+        Anchor::parse(s.strip_prefix(r"\\?\").unwrap_or(&s))
+    }
+
+    /// The anchor as [`Anchor::parse`] reads it back.
+    pub fn spelling(&self) -> String {
+        format!("{}{}", self.root.spelling(), self.folders.join("/"))
+    }
+
+    /// The workspace key `path` names below this anchor: the rest, lowercased.
+    /// `None` when `path` is relative, has another root, does not start with the
+    /// anchor's folders ([`same_folder`]), or IS the anchor (no rest).
+    fn strip(&self, path: &str) -> Option<String> {
+        let path = path.replace('\\', "/");
+        let (root, parts) = split_rooted(&path)?;
+        if !self.root.same(&root) || parts.len() <= self.folders.len() {
+            return None;
+        }
+        // `..` is never cancelled (#76): such a path names no anchored file.
+        let below = !parts.contains(&"..")
+            && self
+                .folders
+                .iter()
+                .zip(&parts)
+                .all(|(want, got)| same_folder(got, want));
+        below.then(|| parts[self.folders.len()..].join("/").to_lowercase())
+    }
+
+    /// Whether `path` is this anchor or a folder above it.
+    fn path_at_or_above(&self, path: &str) -> bool {
+        let path = path.replace('\\', "/");
+        let Some((root, parts)) = split_rooted(&path) else {
+            return false;
+        };
+        self.root.same(&root)
+            && parts.len() <= self.folders.len()
+            && parts
+                .iter()
+                .zip(&self.folders)
+                .all(|(got, want)| same_folder(got, want))
+    }
+}
+
+/// Whether `path` is absolute in the anchor grammar (`/`, `//`, `X:/`, `\` read
+/// as `/`).
+pub(crate) fn is_rooted_path(path: &str) -> bool {
+    split_rooted(&path.replace('\\', "/")).is_some()
+}
+
+/// The workspace's anchors, in order (#363 spec §2): the lexical location, then
+/// the canonical one when it differs. The ONE builder: `decide_diff_root` and
+/// nothing else makes anchors from the file system.
+#[must_use]
+pub fn anchors_of(
+    lexical: Option<&std::path::Path>,
+    canonical: Option<&std::path::Path>,
+) -> Vec<Anchor> {
+    let mut out: Vec<Anchor> = Vec::new();
+    for a in [lexical, canonical]
+        .into_iter()
+        .flatten()
+        .filter_map(Anchor::of_path)
+    {
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// What changed paths are read against (#363): the [`DiffRoot`] and the
+/// workspace's absolute anchors. A path below an anchor has exactly one
+/// reading, the rest; every other path reads under `root` as before.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathRoot {
+    pub root: DiffRoot,
+    pub anchors: Vec<Anchor>,
+}
+
+impl From<DiffRoot> for PathRoot {
+    fn from(root: DiffRoot) -> Self {
+        PathRoot {
+            root,
+            anchors: Vec::new(),
+        }
+    }
+}
+
+impl PathRoot {
+    /// The anchors' spellings (the wire's `pathAnchors`).
+    #[must_use]
+    pub fn anchor_spellings(&self) -> Vec<String> {
+        self.anchors.iter().map(Anchor::spelling).collect()
+    }
+
+    /// `root` with the anchors `spellings` name, in order; a spelling that names
+    /// none is dropped.
+    #[must_use]
+    pub fn with_spellings(root: DiffRoot, spellings: &[String]) -> PathRoot {
+        PathRoot {
+            root,
+            anchors: spellings.iter().filter_map(|s| Anchor::parse(s)).collect(),
+        }
+    }
+
+    /// The one reading below an anchor (the first that matches), if any.
+    fn anchored(&self, path: &str) -> Option<String> {
+        self.anchors.iter().find_map(|a| a.strip(path))
+    }
+}
+
+/// A diff-root decision as the wire carries it (#363 spec §4): the root in its
+/// old shape, its anchors beside it (`pathAnchors`).
+#[must_use]
+pub fn decision_to_wire(
+    decided: &Option<Result<PathRoot, String>>,
+) -> (Option<Result<DiffRoot, String>>, Vec<String>) {
+    match decided {
+        None => (None, Vec::new()),
+        Some(Err(e)) => (Some(Err(e.clone())), Vec::new()),
+        Some(Ok(p)) => (Some(Ok(p.root.clone())), p.anchor_spellings()),
+    }
+}
+
+/// [`decision_to_wire`]'s inverse; a message with no anchors (an older peer's)
+/// gives none.
+#[must_use]
+pub fn decision_from_wire(
+    root: Option<Result<DiffRoot, String>>,
+    anchors: &[String],
+) -> Option<Result<PathRoot, String>> {
+    root.map(|r| r.map(|root| PathRoot::with_spellings(root, anchors)))
 }
 
 /// Whether two folder names name one folder: exactly equal, case included, on
@@ -401,20 +620,22 @@ fn workspace_file_keys(files: &[crate::program::inputs::WsFile]) -> FileKeys<'_>
 /// The keys of the workspace FILES `path` names under `root` (#77), in order:
 /// as written, then below the git top level. A file counts whether or not it
 /// holds a routine, so a table-only reading still makes a path ambiguous.
-fn diff_readings(files: &FileKeys<'_>, root: &DiffRoot, path: &str) -> Vec<String> {
+fn diff_readings(files: &FileKeys<'_>, root: &PathRoot, path: &str) -> Vec<String> {
     path_readings(root, path)
         .filter(|k| files.contains_key(k))
         .collect()
 }
 
-/// Every key `path` may name under `root`, file or not: as written, then below
-/// the git top level.
-fn path_readings(root: &DiffRoot, path: &str) -> impl Iterator<Item = String> {
+/// Every key `path` may name under `root`, file or not. Below an anchor: that
+/// one reading, the rest (#363), so an absolute path is never ambiguous.
+/// Otherwise as written, then below the git top level.
+fn path_readings(root: &PathRoot, path: &str) -> impl Iterator<Item = String> {
     let as_written = || Some(normalize_input(path));
-    let readings = match root {
-        DiffRoot::Workspace => [as_written(), None],
-        DiffRoot::Explicit(p) => [strip_diff_prefix(p, path), None],
-        DiffRoot::GitTop(p) => [as_written(), strip_diff_prefix(p, path)],
+    let readings = match (root.anchored(path), &root.root) {
+        (Some(rest), _) => [Some(rest), None],
+        (None, DiffRoot::Workspace) => [as_written(), None],
+        (None, DiffRoot::Explicit(p)) => [strip_diff_prefix(p, path), None],
+        (None, DiffRoot::GitTop(p)) => [as_written(), strip_diff_prefix(p, path)],
     };
     readings.into_iter().flatten()
 }
@@ -438,15 +659,18 @@ fn workspace_folders(files: &FileKeys<'_>) -> std::collections::HashSet<String> 
 /// Whether a workspace file lies below `path`, an `Only in` path that may be a
 /// folder (#353): a reading is a workspace folder, or `path` is the diff
 /// root's prefix or a folder above it (no reading exists there) and the
-/// workspace has a file.
+/// workspace has a file. An absolute `path` that is the workspace or a folder
+/// above it counts too (#363, the anchors).
 fn holds_workspace_files(
     folders: &std::collections::HashSet<String>,
     any_file: bool,
-    root: &DiffRoot,
+    root: &PathRoot,
     path: &str,
 ) -> bool {
     path_readings(root, path).any(|r| folders.contains(&r))
-        || (any_file && at_or_above_prefix(root, path))
+        || (any_file
+            && (at_or_above_prefix(&root.root, path)
+                || root.anchors.iter().any(|a| a.path_at_or_above(path))))
 }
 
 /// Whether `path`'s folders are the first folders of the diff root's prefix
@@ -484,7 +708,7 @@ enum PathMatch {
 fn match_path(
     spans: &RoutineSpanIndex,
     files: &FileKeys<'_>,
-    root: &DiffRoot,
+    root: &PathRoot,
     path: &str,
 ) -> PathMatch {
     let readings = diff_readings(files, root, path);
@@ -507,7 +731,7 @@ fn match_path(
 fn diff_key(
     spans: &RoutineSpanIndex,
     files: &FileKeys<'_>,
-    root: &DiffRoot,
+    root: &PathRoot,
     path: &str,
 ) -> Result<String, ChangedRootsDiagnostic> {
     let file = path.to_string();
@@ -530,7 +754,7 @@ fn diff_key(
 fn file_hits(
     spans: &RoutineSpanIndex,
     files: &FileKeys<'_>,
-    root: &DiffRoot,
+    root: &PathRoot,
     path: &str,
 ) -> Result<Vec<usize>, ChangedRootsDiagnostic> {
     let file = path.to_string();
@@ -4499,7 +4723,8 @@ pub fn run_digest_pipeline(
             single_app,
             tests,
             include_reads: false,
-            diff_root: DiffRoot::Workspace,
+            // shortcut: in-process callers (tests only) get no anchors (#363 spec §9).
+            diff_root: PathRoot::default(),
         },
     )
 }
@@ -4529,7 +4754,7 @@ pub fn run_digest_pipeline_render(
             single_app,
             tests: false,
             include_reads: false,
-            diff_root: DiffRoot::Workspace,
+            diff_root: PathRoot::default(),
         },
         render,
     )
@@ -4550,8 +4775,9 @@ pub struct DigestRequest<'a> {
     pub tests: bool,
     /// `--include-reads`: add `DB_READ` effects and `payload.includeReads` (#246).
     pub include_reads: bool,
-    /// What `diff_text`'s and `changed_files`' paths are relative to (#77, #339).
-    pub diff_root: DiffRoot,
+    /// What `diff_text`'s and `changed_files`' paths are relative to (#77, #339),
+    /// with the workspace's anchors (#363).
+    pub diff_root: PathRoot,
 }
 
 /// [`run_digest_pipeline`] over a given detector set (#160 §4.4.4): the plan
@@ -5471,7 +5697,7 @@ mod tests {
                         single_app: false,
                         tests: false,
                         include_reads: false,
-                        diff_root: DiffRoot::Workspace,
+                        diff_root: PathRoot::default(),
                     },
                 );
             },
@@ -5551,6 +5777,194 @@ mod tests {
                 "{prefix} {path}"
             );
         }
+        // #363 S4: the relative compare never folds a disk letter.
+        assert_eq!(strip_diff_prefix("C:", "c:/x.al"), None);
+    }
+
+    // --- #363 anchors ------------------------------------------------------
+
+    fn anchor(s: &str) -> Anchor {
+        Anchor::parse(s).unwrap_or_else(|| panic!("{s} is an anchor"))
+    }
+
+    /// #363 spec §3: the one reading below an anchor, and every non-match.
+    #[test]
+    fn anchor_strip_cases() {
+        for (a, path, expected) in [
+            ("/t/repo/Cloud", "/t/repo/Cloud/src/X.al", Some("src/x.al")),
+            (
+                "/t/repo/Cloud",
+                "/t/repo/Cloud/./src//x.al",
+                Some("src/x.al"),
+            ),
+            ("/t/repo/Cloud", "/t/repo/Cloud", None), // empty rest
+            ("/t/repo/Cloud", "/t/repo/cloud/src/x.al", None), // folder case
+            ("/t/repo/Cloud", "/t/repo/Cloudy/x.al", None),
+            ("/t/repo/Cloud", "t/repo/Cloud/src/x.al", None), // relative
+            ("/t/repo/Cloud", "/t/repo/Cloud/../Cloud/x.al", None), // `..` kept
+            ("/", "/src/x.al", Some("src/x.al")),             // root-only
+            ("//srv/share/ws", "//srv/share/ws/x.al", Some("x.al")),
+            ("//srv/share/ws", "/srv/share/ws/x.al", None), // another root
+            ("C:/Git/ws", "c:/Git/ws/x.al", Some("x.al")),  // only the disk folds
+            ("C:/Git/ws", r"C:\Git\ws\src\x.al", Some("src/x.al")),
+            ("C:/Git/ws", "C:/GIT/ws/x.al", None),
+            ("C:/Git/ws", "C:x.al", None), // drive-relative: no root
+            ("C:/", "C:/x.al", Some("x.al")),
+            ("C:/", "C:", None),
+        ] {
+            assert_eq!(anchor(a).strip(path).as_deref(), expected, "{a} {path}");
+        }
+    }
+
+    /// #363: what is no anchor, and the spellings that round-trip.
+    #[test]
+    fn anchor_parse_and_spelling() {
+        for s in ["/", "//", "C:/", "/home/x/ws", "//srv/s/ws", "C:/Git/ws"] {
+            assert_eq!(anchor(s).spelling(), s, "{s}");
+        }
+        assert_eq!(anchor(r"U:\Git\x").spelling(), "U:/Git/x");
+        for s in ["ws", "C:", "C:x", "/t/../ws", ""] {
+            assert_eq!(Anchor::parse(s), None, "{s}");
+        }
+        let p = |s: &str| Anchor::of_path(std::path::Path::new(s));
+        assert_eq!(
+            p(r"\\?\U:\Git\x").map(|a| a.spelling()),
+            Some("U:/Git/x".into())
+        );
+        assert_eq!(p(r"\\?\UNC\srv\s\x"), None);
+        // Equal anchors give one; the order is lexical, then canonical.
+        let (l, c) = (std::path::Path::new("/a/ws"), std::path::Path::new("/b/ws"));
+        assert_eq!(anchors_of(Some(l), Some(l)).len(), 1);
+        assert_eq!(
+            anchors_of(Some(l), Some(c))
+                .iter()
+                .map(Anchor::spelling)
+                .collect::<Vec<_>>(),
+            ["/a/ws", "/b/ws"]
+        );
+    }
+
+    /// #363 spec §3 (sol r1 #5): below an anchor a path has ONE reading, the
+    /// first matching anchor's, whatever the root; else today's readings.
+    #[test]
+    fn anchored_path_has_one_reading_the_first_anchors() {
+        let root = PathRoot::with_spellings(
+            DiffRoot::GitTop("Cloud".into()),
+            &["/t/repo".into(), "/t/repo/Cloud".into()],
+        );
+        assert_eq!(
+            path_keys(&root, "/t/repo/Cloud/src/x.al"),
+            ["cloud/src/x.al"]
+        );
+        let swapped = PathRoot::with_spellings(
+            DiffRoot::GitTop("Cloud".into()),
+            &["/t/repo/Cloud".into(), "/t/repo".into()],
+        );
+        assert_eq!(path_keys(&swapped, "/t/repo/Cloud/src/x.al"), ["src/x.al"]);
+        // A relative path keeps both GitTop readings.
+        assert_eq!(
+            path_keys(&root, "Cloud/src/x.al"),
+            ["cloud/src/x.al", "src/x.al"]
+        );
+    }
+
+    /// #363 S3: an absolute `Only in` folder that is the workspace or above it
+    /// holds its files; one beside it does not.
+    #[test]
+    fn absolute_only_in_folder_at_or_above_the_workspace() {
+        let root = PathRoot::with_spellings(DiffRoot::Workspace, &["/t/repo/Cloud".into()]);
+        let folders: std::collections::HashSet<String> = ["src".to_string()].into();
+        for (path, holds) in [
+            ("/t/repo/Cloud", true),
+            ("/t/repo", true),
+            ("/", true),
+            ("/t/repo/Cloud/src", true),
+            ("/t/elsewhere", false),
+            ("/t/repo/Cloud/test", false),
+        ] {
+            assert_eq!(
+                holds_workspace_files(&folders, true, &root, path),
+                holds,
+                "{path}"
+            );
+        }
+        assert!(!holds_workspace_files(&folders, false, &root, "/t/repo"));
+    }
+
+    /// #363 spec §4: the wire keeps the root's shape and carries the anchors
+    /// beside it; no anchors (an older peer's message) is no anchors.
+    #[test]
+    fn decision_wire_round_trip() {
+        let decided = Some(Ok(PathRoot::with_spellings(
+            DiffRoot::GitTop("Cloud".into()),
+            &["/t/repo/Cloud".into()],
+        )));
+        let (root, anchors) = decision_to_wire(&decided);
+        assert_eq!(root, Some(Ok(DiffRoot::GitTop("Cloud".into()))));
+        assert_eq!(anchors, ["/t/repo/Cloud"]);
+        assert_eq!(decision_from_wire(root.clone(), &anchors), decided);
+        assert_eq!(
+            decision_from_wire(root, &[]),
+            Some(Ok(DiffRoot::GitTop("Cloud".into()).into()))
+        );
+        assert_eq!(
+            decision_to_wire(&Some(Err("e".into()))),
+            (Some(Err("e".into())), vec![])
+        );
+    }
+
+    /// #363 spec §4: both wire structs carry `pathAnchors` beside the root,
+    /// leave it out when empty, and decode a message without it (an older
+    /// peer's) to no anchors.
+    #[test]
+    fn wire_structs_carry_path_anchors() {
+        use crate::engine::batch::JobStreams;
+        use crate::engine::batch::worker::WorkerJob;
+        use crate::engine::host::Decisions;
+        let root = Some(Ok(DiffRoot::GitTop("Cloud".into())));
+        let anchors = vec!["/t/repo/Cloud".to_string()];
+
+        let d = Decisions {
+            changed_is_file: None,
+            diff_root: root.clone(),
+            path_anchors: anchors.clone(),
+        };
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!(v["pathAnchors"], serde_json::json!(anchors));
+        assert_eq!(serde_json::from_value::<Decisions>(v.clone()).unwrap(), d);
+        let mut legacy = v;
+        legacy.as_object_mut().unwrap().remove("pathAnchors");
+        let old: Decisions = serde_json::from_value(legacy).unwrap();
+        assert!(old.path_anchors.is_empty());
+        assert_eq!(old.diff_root, root);
+        let empty = Decisions {
+            path_anchors: vec![],
+            ..d
+        };
+        assert!(
+            serde_json::to_value(&empty)
+                .unwrap()
+                .get("pathAnchors")
+                .is_none()
+        );
+
+        let job = WorkerJob {
+            argv: vec!["digest".into()],
+            streams: JobStreams {
+                stdout: "o".into(),
+                stderr: "e".into(),
+            },
+            changed_is_file: None,
+            diff_root: root.clone(),
+            path_anchors: anchors.clone(),
+        };
+        let v = serde_json::to_value(&job).unwrap();
+        assert_eq!(v["pathAnchors"], serde_json::json!(anchors));
+        let mut legacy = v;
+        legacy.as_object_mut().unwrap().remove("pathAnchors");
+        let old: WorkerJob = serde_json::from_value(legacy).unwrap();
+        assert!(old.path_anchors.is_empty());
+        assert_eq!(old.diff_root, root);
     }
 
     // --- #12 autoDetectChanged --------------------------------------------
@@ -5576,6 +5990,26 @@ mod tests {
         // selector ["bad.patch"] (graceful miscategorization, not an OS error) (#12).
         let r = auto_detect_changed_with("bad.patch", |_| false);
         assert_eq!(r, ChangedAutoDetect::Routines(vec!["bad.patch".into()]));
+    }
+
+    /// #362: a `.al` entry makes file inputs before existence is asked, so an
+    /// existing `.al` path is never read as diff text. Any part counts, in any
+    /// case; the closure panics to prove existence is not consulted.
+    #[test]
+    fn auto_detect_al_entry_is_files_before_existence() {
+        let never = |p: &str| -> bool { panic!("existence asked for {p}") };
+        assert_eq!(
+            auto_detect_changed_with("Cloud/src/posting.al", never),
+            ChangedAutoDetect::Files(vec!["Cloud/src/posting.al".into()])
+        );
+        assert_eq!(
+            auto_detect_changed_with("SRC/X.AL", never),
+            ChangedAutoDetect::Files(vec!["SRC/X.AL".into()])
+        );
+        assert_eq!(
+            auto_detect_changed_with("fix.patch, src/a.al", never),
+            ChangedAutoDetect::Files(vec!["fix.patch".into(), "src/a.al".into()])
+        );
     }
 
     #[test]

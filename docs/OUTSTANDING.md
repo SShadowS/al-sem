@@ -235,6 +235,10 @@ sizings marked pre-arc).
     failures are collected and then never surfaced: not by the preflight, not by analyze,
     not by `aldump`. Decide who reports them (likely the preflight's degraded state)
     and pin it with a test that breaks a dependency's `SymbolReference.json`.
+    **DONE (2026-11-10, `57c32b71`):** the reader already existed (S5.2a/#91): the
+    dependency ledger feeds the `dependencies` diagnostics and the preflight's degraded
+    state. Only a test was missing; `abi_ingest_error_reaches_the_dependency_diagnostics_and_the_preflight`
+    now pins it, with a discrimination proof. `aldump` still does not print it.
   - **`calls_for(..).into_owned()` clones the whole `ResolvedCalls`**
     (`detector_context.rs` and `capability_cone.rs` ordering base; final review
     Minor 12). Fine at CDO's ~603 MB peak; fold into the ProgramContext byte-census

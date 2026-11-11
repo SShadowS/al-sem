@@ -2,13 +2,28 @@
 
 | | |
 |---|---|
-| **Status** | Phase 0 measured (2026-11-10, ENG-04; note `docs/superpowers/notes/2026-11-10-crate-split-phase0.md`). Its recommendation: stop the split, keep C's reduced form (section 3.1). Waiting for the owner's stop/go 0. Nothing is built or split. |
+| **Status** | **Stopped by the owner at stop/go 0, 2026-11-10** (coord `q-20261110T205638-6d9ceb87`): "Stop/go 0: stop the crate split after Phase 0. Go with C-lite (seed the dependencies; a fixed build path per lane only if measured to help). Then target the task gate's test run time and the fat-LTO release build. The release build is what ships: any change to its LTO or codegen settings must be measured for runtime speed and memory as well as build time, and must not make the shipped binary slower." Phase 0 measured (ENG-04; note `docs/superpowers/notes/2026-11-10-crate-split-phase0.md`). The owner confirmed it the same day: Phase 1 (ENG-05) does not run; its one kept change, `task-affected` building only the test binaries it runs, moved to lane tools as TLS-13. Why: see "Stopped" below. |
 | **Written** | 2026-11-10, against master `4bb454f7` and the wave-2 tree `integrate/w2` at `37c734e5`. |
 | **Start when** | Engine-limits wave 2 and the tree-sitter-al 5.0.0 upgrade have landed, in the kraken-alsem container. |
 | **Reviewed by** | Fable (verdict on v1: sound with changes) and gpt-6-astra via pi (verdict on v1: rework). This document folds in both. |
 | **Third review** | Fable, 2026-11-10, against master `b8858256` (after wave 2 and grammar 5.0.0). Verdict: sound; gains re-weighted by where edits land (section 2), the rehearsal moved ahead of the cuts (Phase 1b), two-sided stop/go limits. It could not confirm the chain is the right shape: section 3.1 now lists three candidates and Phase 0 chooses. Folded in below. gpt-6-astra has not reviewed this version. |
 | **Must also be reviewed** | By Fable and gpt-6-astra again before Phase 2, and on each phase's diff (owner's instruction). |
 | **Who runs it** | A supervised session. The autonomous issue flow cannot: `scripts/agentflow/protect.py` blocks edits under `scripts/`. |
+
+**Stopped.**
+- **What Phase 0 measured** (single crate, warm): an edit followed by one lib test takes 15–19 s.
+  The task gate takes 160 s, of which 113 s is running the 5,754 tests.
+- **Why a split gains little:** recompiling an unchanged crate above an edit costs 75–85% of
+  editing it, so a crate above an edit saves only 15–25%.
+- **Who would gain:** candidate A's chain helps only the 41% of commits that skip al-program, and
+  then only part of a 15 s loop. The 59% that touch al-program or al-syntax gain nothing.
+- **Candidate C as designed fails:** a copied warm folder rebuilds our crates at a new worktree
+  path and saves only the 51 s of dependencies.
+- **Where the time is instead:** the larger costs are the task gate's test running and the
+  fat-LTO release build (62% of gate build time). Those went to lane tools as TLS-07 and TLS-08.
+- **Decision:** the owner stopped the split at stop/go 0 (status line). The cuts in section 6 stay
+  valid as ordinary refactoring: each removes a real upward import, and can land on its own
+  merit without any crate split. The Phase 2 review and the section 10 questions are dropped.
 
 **Terms.**
 - **Crate**: rustc's unit of compilation.
