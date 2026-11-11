@@ -73,6 +73,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a discrimination proof. Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`,
   which also records why a parallel literal reach is not built yet (ENG-18, TLS-22).
 
+### Fixed (ENG-07: a report run follows its request page's triggers, engine limits L20)
+
+- **A write in a report's request-page trigger no longer answers `no` through a run.**
+  `run_triggers` listed only a report's `OnInitReport`/`OnPreReport`/`OnPostReport` and its data
+  items' triggers, so `prove writes-table` answered a definite `no` for a write in the request
+  page's `OnOpenPage` through `Report.Run`, `RunModal`, `Execute` and a report variable's run
+  (re-probed on master `a8a6c70a`). A run of a report, or of the report a report extension
+  extends, and of an XmlPort, now follows its request page's `OnInit` (`unconditional on
+  success`) and its `OnOpenPage`, `OnQueryClosePage`, `OnClosePage` and record triggers
+  (`conditional`). The list also feeds the sited graph (`alsem graph`, `impact`) and explain's
+  `reachedFrom`: `impact` on a request-page trigger now counts the runs as its code callers, where
+  it said "direct code callers: none found" and reached it by UI navigation only. Which trigger
+  runs in which run was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  `OnInit` ran in every run; `OnOpenPage`/`OnClosePage` not with `UseRequestPage` false;
+  `OnQueryClosePage` not under `Execute` (the order is in `docs/engine-limits.md`, "L20 in
+  detail").
+- **A run's triggers are triggers.** The resolver matched a run's triggers by name alone, so a
+  procedure named like one (a report procedure `OnOpenPage`) was followed as if the run ran it.
+  It now takes routines declared as triggers only, for a page, report, XmlPort and query run.
+- Left (engine limits, "L20 in detail"): `Report.RunRequestPage` is still not a run (a wrong
+  answer left); which request-page triggers one call runs is not read from the call (`RunModal(X,
+  false)` still reaches `OnOpenPage`, safe).
+- No fixture golden moved: no fixture runs a report that has a request page.
+- CDO (`/work/src/cdo-baseline/Cloud`, master `faddbbd4` against the branch, `cdo` profile):
+  `aldump --program-call-graph-stats` is byte-identical, and so are `alsem graph`'s 58,609 edges
+  and 26,098 nodes: those count call sites and objects, and every run site already resolved. The
+  graph header's `dependencyBodies` histogram moves: 3 call sites in the loaded Base App code go
+  from `honestEmpty` to `resolvedSource` (report runs that read "runs no AL code" now reach
+  their request-page triggers). Two CDO pins moved (the landing gate found them; each was
+  attributed by switching off only the request-page names, which reproduces the old value):
+  - The compiler audit's program-only `ObjectRun` pairs, 409 -> 415: six `Report.RunModal`s now
+    reach a request page's `OnOpenPage` (two `OnAction`s running "CDO Update Customer Setup",
+    four warehouse action pages running Base App report 7323). altool has no run edges at all
+    (`docs/al-compiler-callgraph-holes.md`, A1).
+  - The L4 whole-program digest, `a0ce2366…` -> `f9c5d1e1…`: the two `OnAction`s each gain the
+    two `opaque-callee` uncertainties of that request page's `OnOpenPage` cone; no `db_effects`
+    change (`tests/l4-summary-baseline/README.md`, re-freeze log).
+- Tests: `tests/cli/cli_eng07_request_page.rs` (6 tests; discrimination proofs: dropping the
+  report's or the XmlPort's request-page names brings the old `no` back, dropping their
+  conditionality or making `OnInit` conditional fails the conditionality pins, dropping the trigger
+  filter follows the procedure, and dropping `OnOpenPage` from the sited graph's rule fails the
+  `impact` pin).
+- Left: a report procedure with a request-page trigger's name and parameters still hides the
+  trigger (one routine id; alc accepts the pair), a wrong `no`.
+
 ### Fixed (ENG-18: a literal-reach answer no longer depends on what else the read asked)
 
 - **The RecordRef flow evaluates each question from fresh state.** `RecRefFlow` (the
