@@ -45,12 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fact, no `conditional` floor, the digest's or the slice's `[CommitBehavior]` split applied to the
   run's commit, no variable-form mark, one cone key for both kinds of commit, the run's commit in
   d35's "may commit" flag, one crossing group for both kinds, the run group's witness looked up as
-  a `Commit()`'s, and no impact twin each fail them;
-  leaving the ordering exclusion out moves the d49 run-boundary goldens). `cli_prove_traps`: a
-  checked run's digest now has a live commit row beside its caught error.
+  a `Commit()`'s, and no impact twin each fail them; leaving the ordering exclusion out moves the
+  d49 run-boundary goldens. `cli_prove_traps`: a checked run's digest now has a live commit row
+  beside its caught error.
 - Goldens: `l2_features.snapshot` (the new internal field only, proven by stripping it against the
   old snapshot); `r3a3` `ws-d50-pos` and `ws-txn-d49-neg-run-boundary` gain the run's commit (and
-  `ws-d50-pos` its inherited copy), with the manifest matrix (commit 90 -> 93).
+  `ws-d50-pos` its inherited copy), with the manifest matrix (commit 90 -> 93). The policy facts
+  oracle is re-recorded: 9 of 454 cases moved, each by its checked runs' commits, no count down.
 - `alsem impact`'s summary schema goes 10 -> 11.
 - L28 is now measured too: a write followed by a checked run fails at the run.
 - Left: a run that always fails still answers `may-commit yes` (an over-statement); `Ok := …; if not
