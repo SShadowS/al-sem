@@ -125,6 +125,32 @@ pub(crate) fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
 /// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
 /// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
 /// pipelines read their `WorkspaceInputs` with it.
+/// `jobs` as one in-process batch (`al_sem::engine::batch::run_batch`, the
+/// driver `alsem batch` and every standalone run use): each view is built
+/// once for every job that reads it. Per job, in order: (exit, stdout,
+/// stderr). TLS-12: a test comparing many cases of one workspace builds its
+/// model once instead of per case.
+pub(crate) fn batch_in_process(
+    jobs: &[&dyn al_sem::engine::batch::job::Job],
+) -> Vec<(Option<u8>, Vec<u8>, Vec<u8>)> {
+    use al_sem::engine::batch::{JobStreams, run_batch};
+    let dir = tempfile::tempdir().unwrap();
+    let streams: Vec<JobStreams> = (0..jobs.len())
+        .map(|i| JobStreams {
+            stdout: dir.path().join(format!("{i}.out")),
+            stderr: dir.path().join(format!("{i}.err")),
+        })
+        .collect();
+    let with: Vec<_> = jobs.iter().copied().zip(streams).collect();
+    run_batch(0, &with)
+        .into_iter()
+        .map(|line| {
+            let read = |p: &std::path::Path| std::fs::read(p).unwrap_or_default();
+            (line.exit, read(&line.stdout), read(&line.stderr))
+        })
+        .collect()
+}
+
 pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::WorkspaceNeeds {
     al_sem::program::inputs::WorkspaceNeeds {
         fingerprint_rows: true,

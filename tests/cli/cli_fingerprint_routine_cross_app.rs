@@ -467,51 +467,95 @@ fn fingerprint_witness_zero_keeps_operation_evidence() {
 
 /// T7 (query arm, E9), spec §5: over every r0 dir with an `app.json` and no
 /// dependency, for every root, `fingerprint --routine <root>` (json and
-/// human) is byte-equal cross-app and `--single-app`. In-process through
+/// human) is byte-equal cross-app and `--single-app`: exit, stdout and stderr.
+/// TLS-12: each dir's cases run as one in-process batch (`batch_in_process`,
+/// the driver standalone runs use; one model per universe instead of one per
+/// case, 87 s -> 15 s), and every 20th dir's first root also through
 /// `run_fingerprint_pipeline`, the CLI's one call. DISCRIMINATION: B1, a
-/// cross-app-only diagnostic in the envelope, fails it.
+/// cross-app-only diagnostic in the envelope, fails it (on both paths:
+/// 768 batch cases and 11 standalone ones).
 #[test]
 fn no_dependency_parity_fingerprint_routine() {
+    use al_sem::engine::batch::job::Job;
     use al_sem::engine::l5::fingerprint_cli::{
-        FingerprintFormat, FingerprintOptions, FingerprintOutput, run_fingerprint_pipeline,
+        FingerprintFormat, FingerprintJob, FingerprintOptions, FingerprintOutput,
+        run_fingerprint_pipeline,
     };
     let dirs = crate::cli_prove_cross_app::no_dependency_dirs();
     assert!(dirs.len() >= 180, "precondition: dirs ({})", dirs.len());
     let failures = std::sync::Mutex::new(Vec::<String>::new());
     let compared = std::sync::atomic::AtomicUsize::new(0);
+    let sampled = std::sync::atomic::AtomicUsize::new(0);
+    let dirs = &dirs;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
     let chunks: Vec<&[PathBuf]> = dirs.chunks(dirs.len().div_ceil(threads)).collect();
     std::thread::scope(|s| {
         for chunk in chunks {
-            let (failures, compared) = (&failures, &compared);
+            let (failures, compared, sampled) = (&failures, &compared, &sampled);
             s.spawn(move || {
                 for dir in chunk {
                     let inputs = al_sem::program::inputs::WorkspaceInputs::read(
                         dir,
                         &crate::fingerprint_needs(),
                     );
-                    for root in crate::cli_prove_cross_app::root_ids(dir) {
-                        for format in [FingerprintFormat::Json, FingerprintFormat::Human] {
+                    let opts = |root: &str, format: &FingerprintFormat, single_app: bool| {
+                        FingerprintOptions {
+                            inputs: &inputs,
+                            driver_version: "t",
+                            format: format.clone(),
+                            out: None,
+                            shard: None,
+                            witness_limit: None,
+                            roots: None,
+                            routine_selectors: vec![root.to_string()],
+                            include_inherited: true,
+                            is_query_requested: true,
+                            deterministic: true,
+                            strict: false,
+                            verbosity: "compact",
+                            inventory_only: false,
+                            no_roots_config: false,
+                            single_app,
+                        }
+                    };
+                    let roots = crate::cli_prove_cross_app::root_ids(dir);
+                    let formats = [FingerprintFormat::Json, FingerprintFormat::Human];
+                    // TLS-12: every case of this dir as one batch, so each
+                    // universe's model is built once (a standalone run builds
+                    // it per case). `alsem batch` equals standalone
+                    // (`cli_batch_contract`); the sample below keeps the
+                    // standalone call itself compared.
+                    let mut cases = Vec::new();
+                    let mut jobs = Vec::new();
+                    for root in &roots {
+                        for format in &formats {
+                            cases.push(format!("{root} {format:?}"));
+                            for single_app in [false, true] {
+                                jobs.push(
+                                    FingerprintJob::new(opts(root, format, single_app))
+                                        .expect("no --shard"),
+                                );
+                            }
+                        }
+                    }
+                    let out = crate::batch_in_process(
+                        &jobs.iter().map(|j| j as &dyn Job).collect::<Vec<_>>(),
+                    );
+                    for (case, pair) in cases.iter().zip(out.chunks(2)) {
+                        if pair[0] != pair[1] {
+                            failures
+                                .lock()
+                                .unwrap()
+                                .push(format!("{}: {case}", dir.display()));
+                        }
+                        compared.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // The standalone call (the CLI's), on every 20th dir's first root.
+                    let sample = dirs.iter().position(|d| d == dir).unwrap() % 20 == 0;
+                    for root in roots.iter().take(usize::from(sample)) {
+                        for format in &formats {
                             let run = |single_app: bool| {
-                                let opts = FingerprintOptions {
-                                    inputs: &inputs,
-                                    driver_version: "t",
-                                    format: format.clone(),
-                                    out: None,
-                                    shard: None,
-                                    witness_limit: None,
-                                    roots: None,
-                                    routine_selectors: vec![root.clone()],
-                                    include_inherited: true,
-                                    is_query_requested: true,
-                                    deterministic: true,
-                                    strict: false,
-                                    verbosity: "compact",
-                                    inventory_only: false,
-                                    no_roots_config: false,
-                                    single_app,
-                                };
-                                run_fingerprint_pipeline(&opts).map(|r| {
+                                run_fingerprint_pipeline(&opts(root, format, single_app)).map(|r| {
                                     let text = match r.output {
                                         FingerprintOutput::Text(t) => t,
                                         _ => String::from("<binary>"),
@@ -520,12 +564,12 @@ fn no_dependency_parity_fingerprint_routine() {
                                 })
                             };
                             if run(false) != run(true) {
-                                failures
-                                    .lock()
-                                    .unwrap()
-                                    .push(format!("{}: {root} {format:?}", dir.display()));
+                                failures.lock().unwrap().push(format!(
+                                    "{}: {root} {format:?} (standalone)",
+                                    dir.display()
+                                ));
                             }
-                            compared.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            sampled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                 }
@@ -534,6 +578,8 @@ fn no_dependency_parity_fingerprint_routine() {
     });
     let compared = compared.into_inner();
     assert!(compared > 1000, "precondition: cases compared ({compared})");
+    let sampled = sampled.into_inner();
+    assert!(sampled >= 10, "precondition: standalone cases ({sampled})");
     let failures = failures.into_inner().unwrap();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
