@@ -54,6 +54,15 @@ Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-appr
 
 ### Changed
 
+- **Grammar: tree-sitter-al v5.1.0, `abc77b25`** (was v5.0.0, `18c988e8`). Seven new `RawKind`s,
+  all `Structural`; `NAMED_KIND_COUNT` is 513. `CACHE_VERSION_GRAMMAR` is now
+  `tree-sitter-al-v5.1.0-abc77b25-native` (same length, so `dry-run.txt` did not move).
+  - The grammar's tree changes on valid input (a caption's trailing `,` before an `#if` group;
+    nine or more empty groups after an ML or `Namespaces` value) touch nothing the lowerer reads.
+  - Measured on 12,343 files (the CDO baseline's 741, al-sem's 721 test fixtures and the 10,881
+    sources inside the CDO baseline's 11 dependency packages): every raw tree is identical, the
+    lowered routines are identical, and no file has an `ERROR` or `MISSING` node on either side.
+    The whole suite gives the same outcome for every test on both grammars.
 - **Grammar: tree-sitter-al v5.0.0, `main` at `18c988e8`** (was v4.5.0, `91a5db62`). Five new
   `RawKind`s, all `Structural`; `NAMED_KIND_COUNT` is 506. `CACHE_VERSION_GRAMMAR` is now
   `tree-sitter-al-v5.0.0-18c988e8-native` (same length, so `dry-run.txt` did not move).
@@ -67,6 +76,16 @@ Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-appr
 
 ### Added
 
+- **More `#if` shapes the 5.1.0 grammar parses (they were `ERROR` before).**
+  - A nested group of header and `var` section in a split procedure or trigger
+    (`preproc_conditional_procedure_preamble`, `preproc_conditional_trigger_preamble`) yields
+    one routine per arm, with that arm's own locals and build context, as a nested header
+    group does.
+  - An attribute in an outer arm before a nested header group belongs to every routine of that
+    group, and to no routine of another outer arm.
+  - A label whose `Locked` attribute sits in an `#if` group is not a constant
+    (`FixedLocal::constant`): it is locked in some builds only. The lowerer reads no other
+    grouped label, caption, ML or `Namespaces` content.
 - **`#if` shapes the new grammar parses (they were `ERROR` before).** A split trigger header
   (`preproc_split_trigger_preamble`) and a nested header group in a split procedure
   (`preproc_conditional_procedure_header`) yield one routine per arm, with that arm's build
