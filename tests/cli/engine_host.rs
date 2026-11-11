@@ -1169,7 +1169,18 @@ mod faults {
         let (outcome, message) = failure(&answer.outcome);
         assert_eq!(outcome, FailedOutcome::EngineError);
         assert!(message.contains("engine failed: 3 deaths"), "{message}");
-        assert!(started.elapsed() < Duration::from_millis(100), "no spawn");
+        // "At once": no backoff before the failure. `spawns == 3` below pins
+        // that nothing was spawned; this pins that no backoff was waited.
+        // The backoff doubles (the waits above: at least 200 ms, then 400 ms),
+        // so a next wait would be at least 800 ms. TLS-15: the bound was a
+        // fixed 100 ms, which load alone can pass (a status bound of the same
+        // kind took 223 ms on a saturated host); the property is "less than
+        // a backoff", so the bound is the backoff the doubling gives.
+        let at_once = started.elapsed();
+        assert!(
+            at_once < Duration::from_millis(800),
+            "no backoff (the next would be at least 800 ms): {at_once:?}"
+        );
         assert_eq!(front.stats().spawns, 3);
         front.reset();
         let _ = front.ask(explain());

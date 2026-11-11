@@ -257,9 +257,12 @@ Terms used in the wave-2 sections below:
   Discrimination: a status that waits for the running call fails at "answered first"; a status
   slowed by 1.5 s but still answered first fails the new ratio (1.50 s against 2.51 s).
 - Other fixed wall-clock bounds in `tests/cli/mcp_server.rs` and `engine_host.rs`: the 10-30 s
-  upper bounds are hang guards and the lower bounds cannot fail under load; one tight upper bound
-  remains, `engine_host::repeated_deaths_back_off_then_fail_until_reset`'s `< 100 ms` ("no
-  spawn", which the `spawns == 3` check beside it already pins), left for a follow-up.
+  upper bounds are hang guards and the lower bounds cannot fail under load. The one tight upper
+  bound, `engine_host::faults::repeated_deaths_back_off_then_fail_until_reset`'s `< 100 ms` for a
+  failure "at once", is now `< 800 ms`: `spawns == 3` pins that nothing was spawned, and the bound
+  pins that no backoff was waited, the next of which is at least 800 ms (the waits double: 200,
+  400). Discrimination: the failed state sleeping its next backoff before failing (1.6 s) fails it;
+  a 500 ms sleep would not (a half-of-the-third-wait ratio was tried first and let it through).
 
 ### Changed (TLS-12: the slowest tests build each model once)
 
