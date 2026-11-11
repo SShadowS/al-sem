@@ -226,3 +226,6 @@ Two more gates on 2026-11-11, with the timeline sampler (`memory.timeline`, `pha
 - Verdict (orchestrator, 2026-11-11): serial. The impact tests stay their own phase,
   `output_cdo_impact`, run after every other phase with both tests at once (~14 GB, nothing else of
   the gate beside them). The sampler, timeline and phase times stay.
+- First serial gate (ENG-07 + TLS-23, 2026-11-11; it failed on two ENG-07 pins, nothing of the
+  layout): headroom 13,715 MiB, the gate's own processes 27,837 MiB at the peak, oom 0;
+  `output_cdo` 173 s, then `output_cdo_impact` 541 s alone.
