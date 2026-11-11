@@ -257,7 +257,8 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocConditionalReturn
         | RawKind::PreprocConditionalReturnType
         | RawKind::PreprocSplitTriggerPreamble
-        // Grammar 5.1.0 (abc77b25). Structure; the lowerer owns descent.
+        // Grammar 5.1.0 (abc77b25). Structure; the lowerer owns descent. (5.2.0,
+        // f8c6d8b6, added no kind: `preproc_pragma_only` gained parents only.)
         // `preproc_conditional_procedure_preamble` / `_trigger_preamble` are nested
         // groups of header + `var` section in a split preamble's arm (one routine per
         // arm, `header_arms`). The label/caption/ML/namespace groups are `#if` groups in

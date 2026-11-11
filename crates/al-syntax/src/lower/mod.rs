@@ -8961,6 +8961,33 @@ codeunit 50102 D2
         );
     }
 
+    /// GRM-02 (tree-sitter-al 5.2.0, item 102): an empty `#if` group right after
+    /// a routine header is a `preproc_pragma_only` child of the preamble or the
+    /// var block, and the lowerer descends through it: the var section after it
+    /// still gives the routine its locals. On 5.1.0 the first shape ERRORed and
+    /// lost `V`; the second kept only `V`. 0 production sites in CDO, its
+    /// dependencies and this repo's fixtures (all trees identical across the
+    /// bump); these are the grammar's own fixture cases.
+    #[test]
+    fn an_empty_group_after_a_routine_header_keeps_the_var_section() {
+        let preamble = "codeunit 50100 D\n{\n#if A\n    procedure P()\n#if B\n#endif\n    var\n        V: Integer;\n#else\n    procedure P(I: Integer)\n#endif\n    begin\n    end;\n}\n";
+        let af = parse(preamble);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let locals: Vec<Vec<String>> = af.objects[0]
+            .routines
+            .iter()
+            .map(|r| r.locals.iter().map(|l| l.name.clone()).collect())
+            .collect();
+        assert_eq!(locals, vec![vec!["V".to_string()], vec![]]);
+
+        let var_block = "codeunit 50100 C\n{\n    procedure P()\n#if A\n    var\n        V: Integer;\n#else\n#if B\n#endif\n    var\n        W: Integer;\n#endif\n    begin\n    end;\n}\n";
+        let af = parse(var_block);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let r = &af.objects[0].routines[0];
+        let names: Vec<&str> = r.locals.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["V", "W"]);
+    }
+
     /// A18 (#80): a nested argument group is read under the arm chosen for its
     /// parent group: inside `#if Y`, the `#if not Y` arm is dead, so the reading
     /// is 'OnA' (never 'Never', which no build has).
