@@ -325,7 +325,9 @@ fn cdo_whole_program_v2_matches_frozen_digest() {
     // For a re-freeze's attribution (README "Re-freeze log"): the canonical
     // rendering the digest hashes, to compare two runs record by record.
     if let Ok(dump) = std::env::var("L4_CANONICAL_DUMP") {
-        std::fs::write(&dump, &rendering).unwrap_or_else(|e| panic!("write {dump}: {e}"));
+        // Through the one atomic writer (`regen_atomic_writes`' guard).
+        crate::regen_helper::write_golden(std::path::Path::new(&dump), rendering.as_bytes())
+            .unwrap_or_else(|e| panic!("write {dump}: {e}"));
         eprintln!(
             "L4_CANONICAL_DUMP: {} routines, {digest} -> {dump}",
             new.len()
