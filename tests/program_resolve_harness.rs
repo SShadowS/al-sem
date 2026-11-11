@@ -4017,9 +4017,16 @@ fn cdo_compiler_audit_explains_every_disagreement() {
         // `resolver::run_triggers` (may-execute; OnNewRecord runs only when the
         // page starts a new record, e.g. a card opened on an empty set).
         // Measured steps: 321 at 354f4618, 330 at e18f5053, 409 at c252ddc8.
+        // 409 -> 415 (2026-11-11, ENG-07: a run reaches its report's request-page
+        // triggers; pair lists diffed with the request-page names switched off, 6
+        // new, 0 gone, all to a request page's OnOpenPage): CDO Customer Setup
+        // List and CDO Customer List `OnAction` -> report "CDO Update Customer
+        // Setup" (6175277), and the four warehouse action pages' (6175357,
+        // 6175358, 6175362, 6175363) `CreateInventoryPick`/`CreateInventoryPutAway`
+        // -> Base App report 7323 "Create Invt Put-away/Pick/Mvmt".
         (
             (Side::ProgramOnly, EdgeClass::Run, Some(Verdict::ObjectRun)),
-            409,
+            415,
         ),
         // 40 -> 41 and 8 -> 10 (3cb3d4ea, G41: a report dataitem trigger's bare
         // record calls work on the dataitem's record). CDO Update Customer
