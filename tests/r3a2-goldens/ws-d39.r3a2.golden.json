@@ -29,7 +29,7 @@
       "uncertainties": [],
       "parameterRoles": [],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#338223a36f4f71f00d1687727b90f514c8bb77519ed5e9043f80c366ea58baf1",
@@ -49,7 +49,7 @@
       "uncertainties": [],
       "parameterRoles": [],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#7dcf2891ccbcbb8facca6bc943652fc28aa688762327407a4ffc2b08bcffbcdc",
@@ -66,7 +66,12 @@
           "via": "direct"
         }
       ],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#7dcf2891ccbcbb8facca6bc943652fc28aa688762327407a4ffc2b08bcffbcdc/op0"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -93,12 +98,17 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777",
       "dbEffects": [],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "record-table-unresolved",
+          "operationId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#eb2fce1263fff124a7e96797ea868bb24cad6138eb3e3a980d86fe5cd4bb1777/op0"
+        }
+      ],
       "parameterRoles": [
         {
           "parameterIndex": 0,
@@ -125,7 +135,7 @@
         }
       ],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc390:Codeunit:50390#f39f4972f1fc7bc9550469d22a987c26c3766c8e9e7037ca940e7def8f006503",
@@ -156,7 +166,7 @@
       "uncertainties": [],
       "parameterRoles": [],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     }
   ]
 }

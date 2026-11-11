@@ -867,6 +867,7 @@ pub(crate) fn is_callsite_local_kind(kind: &str) -> bool {
             | "ambiguous-overload"
             | "interface-open-world"
             | super::combined_graph::UNREADABLE_SUBSCRIBER
+            | super::combined_graph::RECORD_TABLE_UNRESOLVED
     )
 }
 

@@ -5132,6 +5132,7 @@ mod tests {
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "session".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -8212,6 +8213,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "blobfield".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![var_decl("Rec", "Record Customer")]);
@@ -8267,6 +8269,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "doc status".into(),
             type_text: "Enum \"DS\"".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![
@@ -8343,6 +8346,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "linked to table".into(),
             type_text: "Enum \"Linked To Table Type\"".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![
@@ -8412,6 +8416,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "legacy status".into(),
             type_text: "Option Open,Closed".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![
@@ -8969,6 +8974,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "file blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let customer_id = graph.objects[customer_idx].id.clone();
         let index = ResolveIndex::build(&graph);
@@ -9015,6 +9021,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "file blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9061,6 +9068,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "req page (xml)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9101,6 +9109,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "base blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let mut ext_obj = make_object_node(
             app,
@@ -9112,6 +9121,7 @@ codeunit 50100 "C"
         ext_obj.fields.push(FieldNode {
             name_lc: "ext note".into(),
             type_text: "Text[100]".into(),
+            number: None,
         });
         graph.objects.push(ext_obj);
         graph.objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -9176,6 +9186,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "view (blob)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9221,6 +9232,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "view (blob)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9290,6 +9302,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "view (blob)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9341,6 +9354,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "view (blob)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let customer_id = graph.objects[customer_idx].id.clone();
         graph
@@ -9398,6 +9412,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "view (blob)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let mut page = make_object_node(
             w,
@@ -9505,6 +9520,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "file blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9544,6 +9560,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "file blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -9584,6 +9601,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "file blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let customer_id = graph.objects[customer_idx].id.clone();
         // `make_routine_node`'s name arg mirrors `RoutineDecl.name` (already
@@ -9649,6 +9667,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "getthing".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let customer_id = graph.objects[customer_idx].id.clone();
         graph
@@ -10059,6 +10078,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "attachment".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -10091,6 +10111,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "baseblob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let mut ext_obj = make_object_node(
             app,
@@ -10102,6 +10123,7 @@ codeunit 50100 "C"
         ext_obj.fields.push(FieldNode {
             name_lc: "extnote".into(),
             type_text: "Text[100]".into(),
+            number: None,
         });
         graph.objects.push(ext_obj);
         graph.objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -10155,6 +10177,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "attachment".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let customer_id = graph.objects[customer_idx].id.clone();
         graph
@@ -10220,6 +10243,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "attachment".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);
@@ -10260,6 +10284,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "rec".into(),
             type_text: "Text[50]".into(),
+            number: None,
         });
         let customer_id = graph.objects[customer_idx].id.clone();
         let index = ResolveIndex::build(&graph);
@@ -10300,6 +10325,7 @@ codeunit 50100 "C"
         graph.objects[customer_idx].fields.push(FieldNode {
             name_lc: "view (blob)".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let index = ResolveIndex::build(&graph);
         let routine = routine_with_locals(vec![]);

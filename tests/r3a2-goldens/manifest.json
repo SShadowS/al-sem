@@ -31,7 +31,7 @@
       "inherited": 55
     },
     "recursiveCycleRoutines": 15,
-    "unresolvedCallRoutines": 30,
+    "unresolvedCallRoutines": 43,
     "opaqueCalleeUncertainties": 2,
     "uncertaintyKinds": {
       "ambiguous-overload": 3,
@@ -41,6 +41,7 @@
       "member-not-found": 2,
       "opaque-callee": 2,
       "parse-incomplete": 1,
+      "record-table-unresolved": 8,
       "unresolved-call": 13
     },
     "parameterRolesWithCrossCallExitEffect": 52,

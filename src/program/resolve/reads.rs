@@ -211,6 +211,14 @@ pub trait IndexReads {
         base: &ObjectNodeId,
         field_lc: &str,
     ) -> Option<(FieldNode, ObjectNodeId)>;
+    /// [`Self::field_with_owner_in_table`] by the field's number.
+    fn field_numbered_in_table(
+        &self,
+        graph: &dyn GraphReads,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        number: i64,
+    ) -> Option<(FieldNode, ObjectNodeId)>;
     fn table_scope_has_routine(
         &self,
         graph: &dyn GraphReads,
@@ -402,6 +410,21 @@ impl IndexReads for ResolveIndex {
             field_lc,
         )
     }
+    fn field_numbered_in_table(
+        &self,
+        graph: &dyn GraphReads,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        number: i64,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
+        ResolveIndex::field_numbered_in_table_from(
+            self,
+            graph.raw(Token(())),
+            from_object.id.app,
+            base,
+            number,
+        )
+    }
     fn table_scope_has_routine(
         &self,
         graph: &dyn GraphReads,
@@ -523,6 +546,7 @@ pub enum Query {
     ImplementersOf(String),
     UnmappedEnumImplementers(String),
     FieldWithOwnerInTable(AppRef, ObjectNodeId, String),
+    FieldNumberedInTable(AppRef, ObjectNodeId, i64),
     TableScopeHasRoutine(AppRef, ObjectNodeId, String),
     TableScopeMayHaveField(AppRef, ObjectNodeId, String),
     UntargetedTableExtensionsIn(AppRef),
@@ -736,6 +760,20 @@ impl IndexReads for Recorder<'_> {
             field_lc.to_string(),
         ));
         IndexReads::field_with_owner_in_table(self.index, self.graph, from_object, base, field_lc)
+    }
+    fn field_numbered_in_table(
+        &self,
+        _graph: &dyn GraphReads,
+        from_object: &ObjectNode,
+        base: &ObjectNodeId,
+        number: i64,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
+        let _g = self.note(Query::FieldNumberedInTable(
+            from_object.id.app,
+            base.clone(),
+            number,
+        ));
+        IndexReads::field_numbered_in_table(self.index, self.graph, from_object, base, number)
     }
     fn table_scope_has_routine(
         &self,

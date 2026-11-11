@@ -329,6 +329,7 @@ fn abi_table_fields(tables: &[AbiTable], object_number: i64, name: &str) -> Vec<
                 .map(|f| FieldNode {
                     name_lc: f.name.fold_identifier().into(),
                     type_text: f.data_type.as_str().into(),
+                    number: Some(f.field_number),
                 })
                 .collect()
         })

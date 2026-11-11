@@ -192,6 +192,7 @@ mod tests {
             diagnostics: all_calls.diagnostics.clone(),
             external_targets: all_calls.external_targets.clone(),
             background_starts: all_calls.background_starts.clone(),
+            loaded_only_tables: all_calls.loaded_only_tables.clone(),
         };
         let mut graph = build_combined_graph(ws, &calls, events);
         let scc = crate::engine::l4::analysis::graph_scc(&graph);
@@ -206,6 +207,7 @@ mod tests {
             diagnostics: Vec::new(),
             external_targets: all_calls.external_targets.clone(),
             background_starts: all_calls.background_starts.clone(),
+            loaded_only_tables: all_calls.loaded_only_tables.clone(),
         };
         let no_events = EventGraph {
             events: Vec::new(),

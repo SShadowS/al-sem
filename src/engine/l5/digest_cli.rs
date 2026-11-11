@@ -1667,6 +1667,11 @@ pub struct UnresolvedCone {
     /// prove's `loaded-subscribers` label. `None` off prove's plan, as
     /// `gaps_in_cone`.
     pub fires_table_events: Option<bool>,
+    /// ENG-06: the cone visits a routine whose record operation may hold any
+    /// table and was kept closed because no loaded table could run anything
+    /// there (`ResolvedCalls::loaded_only_tables`): a `no` holds only within
+    /// the loaded apps. `None` off prove's plan, as `gaps_in_cone`.
+    pub any_table_loaded_only: Option<bool>,
 }
 
 /// Count analysis gaps whose subject intersects the visited cone.
@@ -2058,6 +2063,11 @@ impl<'t> FinishCx<'t> {
                                     c.visited_ids
                                         .iter()
                                         .any(|v| self.fires.contains(v.as_str()))
+                                }),
+                                any_table_loaded_only: gaps_in_cone.then(|| {
+                                    let only = &self.model.calls.loaded_only_tables;
+                                    !only.is_empty()
+                                        && c.visited_ids.iter().any(|v| only.contains(v))
                                 }),
                                 items: c.items,
                                 traversal: c.traversal,

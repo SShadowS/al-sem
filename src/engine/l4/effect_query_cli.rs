@@ -5351,13 +5351,11 @@ fn render_query_effects_body(
             .filter(|u| u.open_world == Some(true))
             .count();
         // An `[EventSubscriber]` the engine cannot read is one more thing the
-        // cone could not follow (engine limits B2).
-        let unreadable = usize::from(
-            b.entry
-                .coverage_reasons
-                .iter()
-                .any(|r| r == crate::engine::l4::combined_graph::UNREADABLE_SUBSCRIBER),
-        );
+        // cone could not follow (engine limits B2), and so is a record
+        // operation on a table not known (ENG-06).
+        let has = |k: &str| usize::from(b.entry.coverage_reasons.iter().any(|r| r == k));
+        let unreadable = has(crate::engine::l4::combined_graph::UNREADABLE_SUBSCRIBER)
+            + has(crate::engine::l4::combined_graph::RECORD_TABLE_UNRESOLVED);
         (b.entry.unresolved.len() - open + unreadable, open)
     });
     // Engine limits B8: the operations are inventoried one dependency

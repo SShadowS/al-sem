@@ -332,9 +332,14 @@ impl Classify for PageControlNode {
 
 impl Classify for FieldNode {
     fn classify(&self, h: &mut ProjectionHasher) {
-        let FieldNode { name_lc, type_text } = self;
+        let FieldNode {
+            name_lc,
+            type_text,
+            number,
+        } = self;
         name_lc.classify(h);
         type_text.classify(h);
+        number.classify(h);
     }
 }
 

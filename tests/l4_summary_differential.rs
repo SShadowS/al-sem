@@ -319,8 +319,20 @@ fn cdo_whole_program_v2_matches_frozen_digest() {
         );
     }
 
-    let digest = sha256_hex(&canonical(&new));
+    let rendering = canonical(&new);
+    let digest = sha256_hex(&rendering);
     let path = baseline_dir().join("cdo-whole-program-digest.txt");
+    // For a re-freeze's attribution (README "Re-freeze log"): the canonical
+    // rendering the digest hashes, to compare two runs record by record.
+    if let Ok(dump) = std::env::var("L4_CANONICAL_DUMP") {
+        // Through the one atomic writer (`regen_atomic_writes`' guard).
+        crate::regen_helper::write_golden(std::path::Path::new(&dump), rendering.as_bytes())
+            .unwrap_or_else(|e| panic!("write {dump}: {e}"));
+        eprintln!(
+            "L4_CANONICAL_DUMP: {} routines, {digest} -> {dump}",
+            new.len()
+        );
+    }
 
     if regen() {
         // The old-solver `v2 == old` cross-assert that guarded this capture was
