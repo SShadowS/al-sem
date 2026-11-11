@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-11
+
+### Highlights
+
+- **Breaking output for programs that read al-sem's JSON (#375).** query 5.0.0 and digest 5.0.0
+  rename `entryPoint(s)` to `dependencyCall(s)`, refer to tables and files by id (`t:<n>`,
+  `f:<n>`) and are compact by default; `--schema 4` (MCP `schema: 4`) still writes the 4.0.0
+  document for one release. See "Schema majors (consumer notice)" and the consumer notices
+  under the round-2 and round-3 sections, and "Outside consumers (wave 2)" for every field wave 2
+  changed (split subscribers' routine and site ids, impact `summarySchema` 9, `PACK_SCHEMA` 17).
+- **The context server** (`alsem mcp`): a resident engine that answers explain, prove, digest and
+  query from a kept model and refreshes it per change; the LSP's `al-call-hierarchy/*` methods use
+  it too.
+- **Agent tasks:** `alsem impact` (on the current revision and against a `--base`), `alsem tests`
+  (test selection), field impact, the debugging slice, callers through dependency code.
+- **Engine precision** (engine limits waves 0-2): error traps and `[CommitBehavior]`, the record
+  operations of report, query and XmlPort datasets, one routine per `#if` arm or subscriber
+  declaration, unreadable event subscribers reported as gaps, literal values through interfaces.
+- **Grammar:** tree-sitter-al v5.2.0 (`f8c6d8b6`).
+- **Speed:** the unresolved cones build their indexes once per read (`digest.unresolved_cones`
+  30-42 s to 4 s on CDO); the CDO gate skips its speed check when a diff touches no product code
+  and builds the speed check's base right after each landing.
+
+### Changed (GRM-02: tree-sitter-al 5.2.0, main `f8c6d8b6`)
+
+- **Grammar 5.1.0 (`abc77b25`) -> 5.2.0 (`f8c6d8b6`).** The parser has 46.8% fewer states and
+  `parser.c` is half the size (70.3 -> 34.7 MB). `gen-syntax`: no new kind (still 513 named
+  kinds, 79 fields), only the node-types hash moves. `node-types.json` gains one child type,
+  `preproc_pragma_only`, under `preproc_conditional_var_block`, the conditional and split
+  procedure and trigger preambles, and itself (an empty `#if` group right after a routine
+  header, grammar item 102). `kind_policy` already classes it structural and the lowerer
+  descends through it, so a var section after such a group still gives the routine its locals
+  (new test `an_empty_group_after_a_routine_header_keeps_the_var_section`; on 5.1.0 the first
+  shape is `Recovered` and the test fails). `CACHE_VERSION_GRAMMAR` is
+  `tree-sitter-al-v5.2.0-f8c6d8b6-native` (and the two fixture-cache stamps, the kept one's
+  content hash recomputed).
+- Measured (old = master `f12bf250` on 5.1.0, new = this branch on 5.2.0):
+  - Trees: all 12,351 `.al` files (CDO's 10,881 dependency sources, the whole CDO baseline and
+    this repo's fixtures) give byte-identical S-expressions, parse status, issue count and
+    lowered routines. The grammar's own 61 item-102 inputs: 14 go `Recovered` -> `Clean`, 4 of
+    them gain a local the error had swallowed, none regress.
+  - Tests: the whole suite passes on 5.2.0 with no golden regenerated (5,812 tests).
+  - CDO (`/work/src/cdo-baseline/Cloud`, `cdo` profile): `aldump --program-call-graph-stats`
+    is byte-identical (46,426 edges, 0 unknown, the same 2 recovered files).
+  - Build: an `al-syntax` rebuild (release, its build script compiles `parser.c`) took
+    9.9-12.4 s on 5.1.0 and 8.6-9.9 s on 5.2.0 (3 runs each, machine shared).
+
 ### Changed (TLS-19 and TLS-20: the CDO gate's impact lane and speed skip)
 
 - **`scripts/cdo-gate` runs the impact ratchets last again, not beside the other phases** (TLS-23,
