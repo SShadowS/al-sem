@@ -1540,6 +1540,14 @@ fn main() -> ExitCode {
     // thread-safe by contract, and this runs before the process starts any
     // thread of its own.
     unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 0) };
+    // TLS-22: the literal pass's worker count, for measurement only; the
+    // library never reads the environment for it.
+    if let Some(n) = std::env::var("AL_SEM_REACH_WORKERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        al_sem::engine::l5::digest_cli::set_default_reach_workers(n);
+    }
     // The process span; its drop emits `peak.process_mb` / `peak.post_attach_mb`
     // (#160 §4.1.4). Declared before `code`, so it drops after the census report.
     let _run = al_sem::engine::perf_trace::run("alsem");

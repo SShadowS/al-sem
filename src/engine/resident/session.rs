@@ -1032,6 +1032,13 @@ impl ResidentSession {
                         _ => None,
                     };
                     let mut rev = Revision::seeded(id, inputs, target, needs.assembly(), seed_from);
+                    // TLS-22: `--low-mem` runs the literal pass serially
+                    // (memory before speed).
+                    if self.low_mem {
+                        rev = rev.with_reach_workers(
+                            crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+                        );
+                    }
                     if let Some(s) = sited.take() {
                         count_sited(&s);
                         rev = rev.with_sited(Arc::new(s.graph));

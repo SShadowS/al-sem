@@ -264,6 +264,32 @@ pub(super) fn pd_and_cold(
     (warm, cold, f.pd_report)
 }
 
+/// TLS-22: a `--low-mem` session builds revisions whose literal pass runs
+/// serially (memory before speed); the default session's run the default
+/// worker count. (That each route obeys its revision's count:
+/// `every_route_runs_the_pass_with_its_revisions_worker_count`.)
+///
+/// DISCRIMINATION (2026-11-11): the session ignoring `low_mem` (no
+/// `with_reach_workers` call) fails; restored, passes.
+#[test]
+fn a_low_mem_session_runs_the_literal_pass_serially() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::engine::l5::test_support::write_fixture_rule_b(dir.path());
+    let open = |low_mem: bool| {
+        Arc::new(
+            ResidentSession::new(dir.path().to_path_buf(), false, "test".into())
+                .with_low_mem(low_mem),
+        )
+    };
+    assert_eq!(pin(&open(true)).reach_workers_count(), 1, "--low-mem");
+    let default = crate::engine::l5::digest_cli::default_reach_workers().count();
+    assert!(
+        default > 1,
+        "precondition: the default runs in parallel here"
+    );
+    assert_eq!(pin(&open(false)).reach_workers_count(), default, "default");
+}
+
 fn rule_b_session() -> (tempfile::TempDir, Arc<ResidentSession>) {
     let dir = tempfile::tempdir().unwrap();
     crate::engine::l5::test_support::write_fixture_rule_b(dir.path());

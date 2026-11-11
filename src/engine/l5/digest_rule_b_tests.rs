@@ -10,6 +10,7 @@ use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l5::detector_context::{compose_capabilities, det_cone_inputs};
 use crate::engine::l5::digest::DigestEffectResult;
+use crate::engine::l5::digest_cli::ReachWorkers;
 use crate::engine::l5::snapshot::{compose_snapshot, compose_tree, source_less_apps};
 use crate::engine::l5::test_support::{
     write_fixture_dep_ambiguous, write_fixture_dep_uncertainty, write_fixture_rule_b,
@@ -165,7 +166,18 @@ fn a_tree_read_is_a_pure_read() {
         "precondition: digest's tree has rule B"
     );
     assert!(!tree.coverage.is_empty() && !tree.identities.stable_ids.is_empty());
-    let read = |mode| digest_effects_each(&tree, model, &[&roots], true, false, false, mode);
+    let read = |mode| {
+        digest_effects_each(
+            &tree,
+            model,
+            &[&roots],
+            true,
+            false,
+            false,
+            mode,
+            ReachWorkers::SERIAL,
+        )
+    };
     let (first, second) = (read(BoundaryMode::On), read(BoundaryMode::On));
     for e in [&first[0], &second[0]] {
         assert!(
@@ -1084,9 +1096,18 @@ fn streamed_effects_equal_one_read(case: &Case, seen: &mut Seen) {
                     .is_some_and(|b| b.dependency_app.contains_key(*r))
             })
             .count();
-        let one = digest_effects_each(all, model, &[&roots], false, true, false, BoundaryMode::On)
-            .pop()
-            .unwrap();
+        let one = digest_effects_each(
+            all,
+            model,
+            &[&roots],
+            false,
+            true,
+            false,
+            BoundaryMode::On,
+            ReachWorkers::SERIAL,
+        )
+        .pop()
+        .unwrap();
         seen.streamed_passed += one
             .entries
             .iter()
@@ -1100,12 +1121,22 @@ fn streamed_effects_equal_one_read(case: &Case, seen: &mut Seen) {
         for chunk in [1, 3] {
             let (mut entries, mut unresolved, mut batches) =
                 (Vec::new(), BTreeMap::new(), Vec::new());
-            digest_effects_chunks(all, model, &roots, chunk, false, true, false, |b, e| {
-                assert!(b.len() <= chunk);
-                batches.extend(b.iter().cloned());
-                entries.extend(e.entries);
-                unresolved.extend(e.unresolved);
-            });
+            digest_effects_chunks(
+                all,
+                model,
+                &roots,
+                chunk,
+                false,
+                true,
+                false,
+                ReachWorkers::SERIAL,
+                |b, e| {
+                    assert!(b.len() <= chunk);
+                    batches.extend(b.iter().cloned());
+                    entries.extend(e.entries);
+                    unresolved.extend(e.unresolved);
+                },
+            );
             assert_eq!(batches, roots, "{name}: every root once, in order");
             let streamed = DigestEffects {
                 entries,
@@ -1646,7 +1677,17 @@ fn cones_off_shared_indexes_equal_the_legacy_search() {
         // A streamed read of several batches builds them once too.
         if roots.len() >= 3 {
             INDEX_BUILDS.with(|n| n.set(0));
-            digest_effects_chunks(&tree, model, &roots, 1, false, true, false, |_, _| {});
+            digest_effects_chunks(
+                &tree,
+                model,
+                &roots,
+                1,
+                false,
+                true,
+                false,
+                ReachWorkers::SERIAL,
+                |_, _| {},
+            );
             if builds() != 1 {
                 failures.push(format!(
                     "{name}: {} index builds in one streamed read of {} batches",
@@ -1669,4 +1710,213 @@ fn cones_off_shared_indexes_equal_the_legacy_search() {
     );
     assert!(streamed, "precondition: a streamed read of several batches");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The corpus's trees (r0 dirs single-app, the dependency fixtures
+/// cross-app), each with its roots, sorted.
+fn corpus_trees() -> Vec<(
+    String,
+    AnalysisTarget,
+    crate::engine::l5::snapshot::CapabilitySnapshot,
+    Vec<String>,
+)> {
+    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut dirs: Vec<(String, std::path::PathBuf, bool)> = walkdir::WalkDir::new(&r0)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.join("app.json").is_file())
+        .map(|p| (p.display().to_string(), p, true))
+        .collect();
+    dirs.sort();
+    let tmps: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    write_fixture_rule_b(tmps[0].path());
+    write_fixture_dep_ambiguous(tmps[1].path());
+    write_fixture_dep_uncertainty(tmps[2].path());
+    for (i, t) in tmps.iter().enumerate() {
+        dirs.push((
+            format!("dependency fixture {i}"),
+            t.path().to_path_buf(),
+            false,
+        ));
+    }
+    let mut out = Vec::new();
+    for (name, dir, single) in dirs {
+        let Ok(target) = AnalysisTarget::build(&inputs(&dir), single, "digest") else {
+            continue;
+        };
+        let model = target.resolved();
+        let sl = source_less_of(&target);
+        let (rel, calls) = match &target {
+            AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+            AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
+        };
+        let tree = tree_of(
+            model,
+            &rel,
+            calls,
+            &sl,
+            ConeScope {
+                derived: false,
+                raw: WitnessScope::All,
+            },
+        );
+        let mut roots: Vec<String> = crate::engine::l5::digest::root_set(model)
+            .into_iter()
+            .collect();
+        roots.sort();
+        if !roots.is_empty() {
+            out.push((name, target, tree, roots));
+        }
+    }
+    out
+}
+
+/// TLS-22: the literal pass answers the same at any worker count, over the
+/// corpus: every passed entry, in its `Debug` form (no hash fields), with 1,
+/// 2 and 8 workers, and a one-root read. Threads hash with different seeds,
+/// so a dependence on a `HashMap`'s order that a serial run hides fails here
+/// too. The serial run is the new code as well: the goldens are the oracle
+/// for what is wrong in every order.
+#[test]
+fn the_literal_pass_answers_the_same_at_any_worker_count() {
+    let (mut boundary, mut wide) = (false, false);
+    let mut failures: Vec<String> = Vec::new();
+    for (name, target, tree, roots) in corpus_trees() {
+        let model = target.resolved();
+        let read = |roots: &[String], n: usize| -> Vec<String> {
+            passed_root_entries(
+                &tree,
+                model,
+                roots,
+                false,
+                BoundaryMode::On,
+                ReachWorkers::new(n),
+            )
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect()
+        };
+        let serial = read(&roots, 1);
+        boundary |= serial.iter().any(|e| e.contains("boundary_group: true"));
+        wide |= roots.len() > 8;
+        for n in [2, 8] {
+            if read(&roots, n) != serial {
+                failures.push(format!("{name}: {n} workers"));
+            }
+        }
+        if read(&roots[..1], 8) != read(&roots[..1], 1) {
+            failures.push(format!("{name}: one root"));
+        }
+    }
+    assert!(boundary, "precondition: an entry with a boundary group");
+    assert!(wide, "precondition: a tree with more roots than workers");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// TLS-22: the pass runs exactly `n` roots at once with `n` workers (the
+/// first wave held until `n` are in flight, at most 10 s), on a pool of `n`
+/// threads, and one at a time serially.
+///
+/// DISCRIMINATION (2026-11-11): `reach_pool(n)` building `REACH_WORKERS`
+/// threads whatever `n` fails (the pool's size, and with 2 workers 8 roots
+/// at once); restored, passes.
+#[test]
+fn the_literal_pass_runs_exactly_its_worker_count_at_once() {
+    let (name, target, tree, roots) = corpus_trees()
+        .into_iter()
+        .max_by_key(|(_, _, _, r)| r.len())
+        .expect("a corpus tree");
+    let model = target.resolved();
+    assert!(
+        roots.len() > 8,
+        "precondition: {name} has more than 8 roots"
+    );
+    for n in [1, 2, 4] {
+        let probe = Arc::new(PassProbe::default());
+        *probe.first_wave.lock().unwrap() = Some((n, std::time::Duration::from_secs(10)));
+        let entries = passed_root_entries(
+            &tree,
+            model,
+            &roots,
+            false,
+            BoundaryMode::On,
+            ReachWorkers::new(n).with_probe(Arc::clone(&probe)),
+        );
+        assert!(
+            entries.iter().flatten().count() > n,
+            "precondition: more entries than workers"
+        );
+        assert_eq!(probe.max(), n, "{n} workers: roots in flight at once");
+        if n > 1 {
+            assert_eq!(reach_pool(n).current_num_threads(), n, "the pool's size");
+        }
+    }
+}
+
+/// TLS-22: two requests running their passes at once (as the engine host's
+/// workers do) share the one pool of their worker count: both finish, and
+/// each answers as serially.
+#[test]
+fn two_passes_at_once_share_the_pool() {
+    let trees: Vec<_> = corpus_trees()
+        .into_iter()
+        .filter(|(_, _, _, r)| r.len() > 4)
+        .take(2)
+        .collect();
+    assert_eq!(trees.len(), 2, "precondition: two trees with several roots");
+    let read = |(_, target, tree, roots): &(
+        String,
+        AnalysisTarget,
+        crate::engine::l5::snapshot::CapabilitySnapshot,
+        Vec<String>,
+    ),
+                n: usize| {
+        format!(
+            "{:?}",
+            passed_root_entries(
+                tree,
+                target.resolved(),
+                roots,
+                false,
+                BoundaryMode::On,
+                ReachWorkers::new(n)
+            )
+        )
+    };
+    let serial: Vec<String> = trees.iter().map(|t| read(t, 1)).collect();
+    let together: Vec<String> = std::thread::scope(|s| {
+        let hs: Vec<_> = trees.iter().map(|t| s.spawn(move || read(t, 4))).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(together, serial);
+}
+
+/// TLS-22: from inside a rayon worker the pass runs serially on that thread
+/// (`install` there would let the blocked worker run other jobs, a deadlock
+/// when one takes a lock the thread holds), and answers the same.
+///
+/// DISCRIMINATION (2026-11-11): without the rayon-worker check the pass
+/// runs 2 roots at once there: fails; restored, passes.
+#[test]
+fn inside_a_rayon_worker_the_pass_runs_serially() {
+    let (_, target, tree, roots) = corpus_trees()
+        .into_iter()
+        .find(|(_, _, _, r)| r.len() > 2)
+        .expect("a tree with three roots");
+    let read = |w: ReachWorkers| {
+        format!(
+            "{:?}",
+            passed_root_entries(&tree, target.resolved(), &roots, false, BoundaryMode::On, w)
+        )
+    };
+    let serial = read(ReachWorkers::SERIAL);
+    let probe = Arc::new(PassProbe::default());
+    *probe.first_wave.lock().unwrap() = Some((2, std::time::Duration::from_secs(2)));
+    let outer = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let inside = outer.install(|| read(ReachWorkers::new(2).with_probe(Arc::clone(&probe))));
+    assert_eq!(inside, serial);
+    assert_eq!(probe.max(), 1, "one root at a time inside a rayon worker");
 }

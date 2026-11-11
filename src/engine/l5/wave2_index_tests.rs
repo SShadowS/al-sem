@@ -1387,7 +1387,12 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
         literal_narrowed_sites: Vec::new(),
         suppressed_commits: Vec::new(),
     }];
-    crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+    crate::engine::l5::digest_cli::literal_reach_pass(
+        &tree,
+        model,
+        &mut entries,
+        crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+    );
     let row = entries[0]
         .effects
         .iter()
@@ -1520,7 +1525,12 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
         literal_narrowed_sites: Vec::new(),
         suppressed_commits: Vec::new(),
     }];
-    crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+    crate::engine::l5::digest_cli::literal_reach_pass(
+        &tree,
+        model,
+        &mut entries,
+        crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+    );
     let row = entries[0]
         .effects
         .iter()
@@ -1652,7 +1662,12 @@ fn cdo_crossing_census() {
             suppressed_commits: Vec::new(),
         }];
         let started = std::time::Instant::now();
-        crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+        crate::engine::l5::digest_cli::literal_reach_pass(
+            &tree,
+            model,
+            &mut entries,
+            crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+        );
         let took = started.elapsed();
         let effects = &entries[0].effects;
         let mut by: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();

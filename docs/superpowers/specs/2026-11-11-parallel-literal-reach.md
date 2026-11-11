@@ -298,12 +298,13 @@ The plan raises exactly these two keys, `Case::Fill("witness")` and `Case::Trees
   flight in the whole process, however many requests run. What is per request, as today, is each
   pass's `LiteralPass` (reach, caches, `held` suffix trees, `digest_cli.rs:2235-2272`): two
   concurrent requests already hold two of those today, and parallelism does not add a third.
-- **Never from inside a rayon worker.** No production caller does today (`engine/impact` has no
-  threads; the pass runs on the CLI's main thread or a host std thread). If one did, rayon lets the
-  blocked worker run other jobs while it waits for `install`, which deadlocks when such a job takes
-  a std `Mutex` the thread holds (`fill_witness` holds `scratch` across the pass,
-  `resident/revision.rs:896`). The pass `debug_assert!`s `rayon::current_thread_index().is_none()`
-  before `install`.
+- **Serial inside a rayon worker.** Rayon lets a worker blocked in `install` run other jobs while
+  it waits, which deadlocks when such a job takes a std `Mutex` the thread holds (`fill_witness`
+  holds `scratch` across the pass, `resident/revision.rs:896`). So a pass called from inside a rayon
+  worker runs serially on that thread; such a caller is parallel already. (As built, 2026-11-11:
+  the draft's `debug_assert!` instead fired in the task gate, because a test,
+  `ids_parent_baseline::record_fixture`, runs the digest pipeline inside its own `par_iter`. No
+  production caller was found doing so; the fallback keeps a future one correct.)
 - Batches: a streamed read passes 32 roots at a time (`impact/jobs.rs` `ROOT_BATCH`), so at most
   32 roots run at once and the batch's slowest root bounds it. Measured, not changed here; if the
   tail dominates, a follow-up overlaps batches (reported, not part of this task).
