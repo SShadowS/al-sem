@@ -58,8 +58,15 @@ Spec `docs/superpowers/specs/2026-11-10-issue-363-absolute-paths.md` (panel-appr
   ENG-05). It used to pass `--workspace` with an `-E` filter: the filter chose which tests ran, but
   every test binary was still built. It now passes the filter's own targets (the `al-sem` lib tests,
   `--test X` for each `binary(X)`, `-p al-syntax` for `package(al-syntax)`) and keeps `-E` inside
-  them. Checked on the l5/l4 + al-syntax filter: both forms list the same 5,344 tests. A filter part
-  with no known target falls back to the whole suite. `task` and `all` are unchanged.
+  them. A filter part with no known target falls back to the whole suite. `task` and `all` are
+  unchanged. TLS-13 re-check (TLS-12's tree): for every filter `affected_filter` can build, each
+  path class alone and all 13 parts together, both forms list the identical tests (3,282 to 5,724).
+  Measured (an edit simulated by touching one file, build and test, alternating, 3 each; every run on
+  a busy host, 0-69% idle): `src/lsp/handlers.rs` wall 66.3 -> 64.9 s, CPU 556 -> 514 s (every pair
+  lower); `src/program/resolve/full.rs` CPU 716 -> 704 s, wall within the noise (73.8 -> 84.7 s,
+  pairs -11, +18, -15 s); `src/engine/l5/digest_cli.rs` inconclusive (2 of 3 old runs stopped at a
+  load-sensitive test, `mcp_server::faults::status_answers_during_a_heavy_call`, 223-227 ms against
+  its 200 ms bound). The saving is the skipped test binaries' linking: real in CPU, small in wall.
 
 - **Grammar: tree-sitter-al v5.1.0, `abc77b25`** (was v5.0.0, `18c988e8`). Seven new `RawKind`s,
   all `Structural`; `NAMED_KIND_COUNT` is 513. `CACHE_VERSION_GRAMMAR` is now
