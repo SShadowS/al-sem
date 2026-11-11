@@ -151,48 +151,72 @@ fn speed_warm_reads_the_gates_own_cache_entry() {
     );
 }
 
-/// TLS-08: `scripts/seed-target` copies a warm build folder into a new
-/// worktree, minus `flycheck0` and `tmp`, or leaves nothing behind. Where the
-/// temp folder has reflinks the copy holds the file and not the skipped
-/// folders; where it has none the script exits 1 and no `target/` exists (a
-/// half copy would make cargo trust stale units). A second run refuses an
-/// existing `target/`.
-///
-/// Mutation: drop the `rm -rf "$dst"` on a failed copy -> on a filesystem
-/// without reflinks an empty `target/` is left and the test fails.
-#[cfg(unix)]
-#[test]
-fn seed_target_copies_all_or_nothing() {
-    let src = tempfile::tempdir().unwrap();
+/// A warm build folder written by hand: one dependency, plus the two folders
+/// `scripts/seed-target` leaves out.
+fn warm_target(src: &tempfile::TempDir) {
     std::fs::create_dir_all(src.path().join("debug/deps")).unwrap();
     std::fs::write(src.path().join("debug/deps/a.rlib"), b"x").unwrap();
     std::fs::create_dir_all(src.path().join("flycheck0")).unwrap();
     std::fs::create_dir_all(src.path().join("tmp")).unwrap();
+}
+
+fn seed_target(wt: &std::path::Path, src: &std::path::Path) -> std::process::Output {
+    std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/seed-target"))
+        .arg(wt)
+        .arg("--from")
+        .arg(src)
+        .output()
+        .expect("spawn bash scripts/seed-target")
+}
+
+/// TLS-08: `scripts/seed-target` copies a warm build folder into a new
+/// worktree, minus `flycheck0` and `tmp`, or leaves nothing behind (a half
+/// copy would make cargo trust stale units). Two cases:
+/// - source and worktree in the same temp folder: where it has reflinks the
+///   copy holds the dependency and not the skipped folders, and a second run
+///   refuses the existing `target/`; where it has none, as below.
+/// - source on `/dev/shm` (its own tmpfs), so a reflink copy always fails:
+///   exit 1 and no `target/`.
+///
+/// Mutation (2026-11-11): drop the `rm -rf "$dst"` on a failed copy -> the
+/// `/dev/shm` case leaves an empty `target/` and fails. (The first version of
+/// this test had only the same-folder case; that break passed it, because
+/// this machine's `/tmp` has reflinks.)
+#[cfg(unix)]
+#[test]
+fn seed_target_copies_all_or_nothing() {
+    let src = tempfile::tempdir().unwrap();
+    warm_target(&src);
     let wt = tempfile::tempdir().unwrap();
-    let seed = || {
-        std::process::Command::new("bash")
-            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/seed-target"))
-            .arg(wt.path())
-            .arg("--from")
-            .arg(src.path())
-            .output()
-            .expect("spawn bash scripts/seed-target")
-    };
-    let out = seed();
     let dst = wt.path().join("target");
+    let out = seed_target(wt.path(), src.path());
     let text = String::from_utf8_lossy(&out.stderr).to_string();
     match out.status.code() {
         Some(0) => {
             assert!(dst.join("debug/deps/a.rlib").is_file(), "{text}");
             assert!(!dst.join("flycheck0").exists(), "{text}");
             assert!(!dst.join("tmp").exists(), "{text}");
-            let again = seed();
+            let again = seed_target(wt.path(), src.path());
             assert_eq!(again.status.code(), Some(1));
             assert!(String::from_utf8_lossy(&again.stderr).contains("exists"));
         }
         Some(1) => assert!(!dst.exists(), "a failed seed left {dst:?}: {text}"),
         other => panic!("exit {other:?}: {text}"),
     }
+
+    let shm = std::path::Path::new("/dev/shm");
+    if !shm.is_dir() {
+        return;
+    }
+    let src = tempfile::tempdir_in(shm).unwrap();
+    warm_target(&src);
+    let wt = tempfile::tempdir().unwrap();
+    let dst = wt.path().join("target");
+    let out = seed_target(wt.path(), src.path());
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(!dst.exists(), "a failed seed left {dst:?}: {text}");
 }
 
 /// `cdo-gate --product-paths` (the rule alone): the changed paths that can
