@@ -65,7 +65,11 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// ids of a split declaration derive from the graph's (they all move once).
 /// 8: an `[EventSubscriber]` the engine cannot read is a coverage gap.
 /// 9: also one whose validate-event field cannot be read.
-pub const SUMMARY_SCHEMA: u32 = 9;
+/// 10 (ENG-08): a statement that starts an XmlPort import is an implicit
+/// error. The bump also covers ENG-06's open record operations and ENG-07's
+/// request-page triggers, which moved summaries at 9 (a base cached by a
+/// binary of the same version would show their facts as added).
+pub const SUMMARY_SCHEMA: u32 = 10;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

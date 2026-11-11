@@ -143,6 +143,7 @@ fn call_site(id: &str, parameter_index: u32, source_temp_state: Option<PTempStat
         result_tested: false,
         receiver_temp_state: None,
         implicit_receiver: None,
+        start_may_fail: false,
     }
 }
 

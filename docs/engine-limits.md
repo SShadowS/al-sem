@@ -489,7 +489,9 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   `Report.Run`, `RunModal`, `Execute` and a report variable's run (re-probed on master `a8a6c70a`).
   A run of a report (or of the report a report extension extends) now follows its request page's
   triggers (`run_triggers`, which also feeds the sited graph and explain's `reachedFrom`). Which
-  trigger runs was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  trigger runs was **measured on the BC 28.4 Linux sidecar; the report paths below are confirmed on
+  Windows BC 28.0.54946.56477** (Cronus28, the same probe unchanged, owner 2026-11-11,
+  q-20261111T144908-3d4d3d0b); the report-extension and XmlPort bullets are sidecar only:
   - Page shown (`Run`/`RunModal`): `OnInitReport`, request page `OnInit`, `OnOpenPage`, the page,
     `OnQueryClosePage`, `OnClosePage`, `OnPreReport`, the data items, `OnPostReport`.
   - `UseRequestPage` false: `OnInitReport`, `OnInit`, `OnPreReport`, … (no `OnOpenPage`/`OnClosePage`).
@@ -498,9 +500,9 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
     `OnPreReport`, … Learn's "the OnOpen and OnClose triggers on the request page will run even
     though the request page is not shown" holds for `Execute`, not for `Run(…, false)`.
   - `SaveAs*` and `Print` were not measured; they are runs like `Execute`.
-  - A report extension's request page: its `OnOpenPage` runs after the base's, its `OnClosePage`
+  - (Sidecar only.) A report extension's request page: its `OnOpenPage` runs after the base's, its `OnClosePage`
     after the page; neither with `UseRequestPage` false. It cannot declare `OnInit` (alc AL0162).
-  - An XmlPort's request page: `OnInit` ran before `OnInitXmlPort` on `Export` to a stream and on
+  - (Sidecar only.) An XmlPort's request page: `OnInit` ran before `OnInitXmlPort` on `Export` to a stream and on
     `Run(X, false)` and `Run(X, true)`; no `OnOpenPage` ran (in a test session the page did not
     show, so its shown order was not seen).
 
@@ -512,6 +514,29 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   query run; explain's `reachedFrom` already checked it). `alsem impact` (the sited graph) now
   counts the runs as code callers of a request-page trigger; before, it said "direct code callers:
   none found" and reached it by UI navigation only. Tests: `tests/cli/cli_eng07_request_page.rs`.
+- ENG-08 (an import's error): `throws-error` answered `no` for a statement `Xmlport.Import(X, IS)`,
+  an `Xmlport.Run` that imports and a variable's `X.Import()` (re-probed on master `f12bf250`). What
+  makes an import fail was **measured on the BC 28.4 Linux sidecar** (XML format, statement form):
+  - A key that exists, or that the file holds twice: "The record in table … already exists", unless
+    `AutoUpdate` or `AutoReplace` is true (then it modifies, no error).
+  - A value that does not evaluate ("The value "abc" can't be evaluated into type Integer.") and
+    malformed XML fail whatever the properties say.
+  - `Ok := Xmlport.Import(…)` returned `false` and raised nothing.
+  - A literal direction the XmlPort's `Direction` refuses fails before any trigger runs:
+    `Xmlport.Run(X, false, false)` on a `Direction = Import` XmlPort gives "The XMLPort 'X' is
+    designed for import only.", and `Run(X, false, true)` on a `Direction = Export` one "…
+    designed for export only." The B6 dataset model let the literal win, so the first answered
+    `throws-error: no` and read the table, and the second claimed the import's writes.
+
+  Since bad input fails any import, the error belongs to the call, not to its insert: a call the
+  resolver decided starts an import (`Import`, or a `Run` whose `Direction` allows one; keyword or
+  variable form) is marked (`PCallSite::start_may_fail`, set in `program_calls`), and in statement
+  position it is an implicit error (`ERROR_IMPLICIT`, the `Evaluate` rule, G50). A used result
+  (`Ok :=`, `if`, `exit(…)`) catches it, and a run that only exports raises none. An import with
+  `AutoSave = false` raises it too. An explicit import or export now runs only when `Direction`
+  allows it (`dataset::import_export`); one it refuses runs nothing (no dataset operation) and is
+  marked too (`dataset::direction_refused`), so in statement position it raises the error.
+  Tests: `tests/cli/cli_eng08_xmlport_import_error.rs`.
 
 **Left.**
 - **`Report.RunRequestPage` is not a run: wrong answer left.** It runs the request page's `OnInit`,
@@ -531,8 +556,15 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   comes first, a run follows neither, so a write in the trigger answers `no` (before ENG-07 the run
   followed the procedure's body, also not the trigger's). The root fix is a member for request-page
   triggers in the lowerer, or `is_trigger` in the routine id; both move ids.
-- **An XmlPort import's error on an existing record is not an error fact: wrong answer left.** With
-  AutoUpdate and AutoReplace both false, or a duplicate key, `throws-error` can say `no`.
+- A checked import (`Ok := Xmlport.Import(X, …)`, `if Xmlport.Import(…)`) is not a trap: an error
+  raised inside `X` (an `Error` in its triggers, or, since ENG-08, a statement import there) still
+  reaches the caller's `throws-error`, though the probe saw `Ok :=` return `false` instead of
+  raising (a false `yes`; it predates ENG-08). The trap rule (`engine::l5::traps::call_trap`)
+  knows `asserterror`, `Codeunit.Run` and try methods only; which errors a checked import traps
+  needs its own probe.
+- An export was not measured failing, so a run that only exports raises no error fact (Learn gives
+  `Export` an optional `Ok` result too, so it can fail somehow). A `Run` whose `Direction` is
+  `Both`, or not known, counts as an import.
 - The LSP call hierarchy still lacks the trigger and table-event edges (only the model and `alsem
   graph` have them).
 - A dynamic run target stays the run's own unknown (no table is named).

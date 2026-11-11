@@ -31,6 +31,7 @@
 //!   - `PCallSite.result_tested`
 //!   - `PCallSite.receiver_temp_state`
 //!   - `PCallSite.implicit_receiver`
+//!   - `PCallSite.start_may_fail`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -292,6 +293,21 @@ pub struct PCallSite {
     /// `in_statement_position`.
     #[serde(skip)]
     pub implicit_receiver: Option<String>,
+    /// True iff the resolver decided this call starts an XmlPort in a way that
+    /// may fail (ENG-08, measured on BC 28): an IMPORT (an `XmlPort.Import`, or
+    /// an `XmlPort.Run` whose `Direction` allows one, `dataset::import_export`),
+    /// which fails on its input whatever `AutoUpdate`/`AutoReplace` say (a
+    /// value that does not evaluate, malformed XML, a key the file holds
+    /// twice); or an explicit import or export its `Direction` refuses
+    /// (`dataset::direction_refused`: "designed for import only"). Keyword or
+    /// variable form. Set by `program_calls` after resolution, never by the
+    /// body walk; in statement position it raises an error
+    /// (`ui_events_error::implicit_error_call`).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`; deserialized rows default it to `false`.
+    #[serde(skip)]
+    pub start_may_fail: bool,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -1199,7 +1215,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 23, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 24, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 
