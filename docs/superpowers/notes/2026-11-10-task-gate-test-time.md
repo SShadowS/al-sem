@@ -138,3 +138,77 @@ checks at the pipeline level, and the CDO gate is already the longest gate).
   above), not measured. The per-call cost of `run_fingerprint_pipeline` and `run_prove_pipeline`
   was not profiled.
 - The task gate's other ~47 s (fmt, clippy, gen-syntax, `cargo test --doc`) was not measured here.
+
+## TLS-11: proposal 1 applied, re-measured (2026-11-11)
+
+Applied in `.config/nextest.toml`: priority 70 for the cli fingerprint parity test, priority 60
+for the 14 lib and `al-syntax` tests of `b_override.toml` (15 tests in all; `cargo nextest list`
+with the two filters selects exactly them). Every run also writes a JUnit report, and
+`scripts/ci-steps test` then runs `scripts/nextest-priority-check`, a warning only.
+
+Measured on master `761581b3` (grammar v5.1.0, `abc77b25`), 6 alternating runs through
+`timeit.py`, "before" = master's config, "after" = this branch's (both with a JUnit path; the
+engine lane held idle by the orchestrator). Every run was still flagged noisy: the host was 62-74%
+idle at each start, from other projects on server1. Records: `task-gate-test-time/tls11-runs.jsonl`.
+
+| Pair | Before wall | After wall | Difference | Before tail | After tail |
+|------|-------------|------------|------------|-------------|------------|
+| 4 | 149.1 | 129.4 | -19.7 | 22.6 | 3.6 |
+| 5 | 150.7 | 122.0 | -28.6 | 27.0 | 3.5 |
+| 6 | 138.3 | 122.6 | -15.7 | 24.8 | 3.1 |
+| median | 149.1 | 122.6 | -19.7 (of the pairs; -26.5 between the medians) | 24.8 | 3.5 |
+
+An earlier set of 6 the same day, beside the engine lane's builds (host 0-69% idle), gave walls
+too noisy to use (one run 243 s) but the same tails: before 26.0, 24.1, 25.7 s; after 8.2, 3.7,
+3.0 s. The tail is the robust number: about 21 s of it is gone in every pair, as TLS-07 measured
+(20 s to 3.5 s). The run now ends at its floor (the summed test time over 22 slots), so the next
+saving is less total work (proposal 2, TLS-12).
+
+Walls on this master are about 30 s longer than TLS-07's on `4abbed93` for both configs (summed
+test time 2,550-2,900 s against 1,980-2,530 s). TLS-07's per-test medians against these show a
+uniform slowdown (median per-test ratio x1.23; no test over x1.48) while children's CPU rose
+only 4% (1,656-1,680 s -> 1,714-1,748 s): host load (TLS-07's runs at least 90% idle, these
+62-74%), plus 35 new tests (17 s).
+
+## TLS-12: proposal 2 applied, re-measured (2026-11-11)
+
+Each change shares a build inside one test (nextest runs every test in its own process, so a
+`OnceLock` is never shared between tests), keeps every assertion and failure message, and has
+its discrimination proofs in its commit message:
+
+- The four `tests_rule_b` corpus tests (TLS-07 named three; `streamed_effects_equal_one_read`
+  walks the same corpus) are arms of one test, `scoped_reads_equal_unscoped_on_the_corpus`:
+  each target built once per universe, the trees two arms build alike composed once, the dirs
+  on 4 threads. 11.5 s alone against about 127 s for the four.
+- `no_dependency_parity_fingerprint_routine`: each dir's cases run as one in-process batch (one
+  model per universe instead of one per case); every root of every 5th dir also runs each job
+  alone through `standalone_output`, the path `alsem fingerprint` runs, because a batch merges
+  its jobs' plans and a cross-app-only fault of a one-job view could pass it. 87 s -> 21 s alone.
+  Limit: the other four dirs in five are compared through the batch only.
+- `ids_parent_baseline`: the SARIF and JSON analyses of each fixture run as one batch; the
+  digest call is unchanged.
+
+Reviewed by both panel reviewers (the fingerprint change: sol DO NOT APPROVE then APPROVE, Opus
+APPROVE twice; `.agent/tls12/`). Measured on 3 alternating pairs from `cargo nextest archive`
+builds of TLS-11's head (before) and TLS-12's first version (after; the standalone sample of
+every 5th dir came after the timing and adds about 6 s to one test), the engine lane held,
+every run flagged noisy (host 0-65% idle). Records: `task-gate-test-time/tls12-runs.jsonl`.
+
+| Pair | Before CPU | After CPU | Before wall | After wall | Difference |
+|------|------------|-----------|-------------|------------|------------|
+| 1 | 1,766 | 1,546 | 154.5 | 123.0 | -31.5 |
+| 2 | 1,750 | 1,547 | 136.5 | 122.5 | -14.0 |
+| 3 | 1,778 | 1,684 | 189.7 | 157.2 | -32.5 |
+
+Children's CPU per run is down about 200 s (12%; pair 3 ran on a saturated host), the summed test
+time x0.91, the median wall 154.5 -> 123.0 s. The tail stays at its floor on both sides
+(3.0-4.3 s): the run is still bound by its total work.
+
+**Proposals 3-5 after TLS-12.** The longest tests are now `attribute_flow_scales_linearly`,
+`single_app_builders_agree` and `no_dependency_parity_prove` (22-49 s on a quiet host). The
+last is the fingerprint test's twin (`run_prove_pipeline` per dir, root and universe) and takes
+the same batch treatment: the best next step (about -35 s of test CPU). Proposal 5 (shrink
+`attribute_flow_scales_linearly`, one debug-build test of 22 s) still saves about 15 s of CPU.
+Proposal 3 (shard the serial corpus tests) saves no CPU; with the tail at its floor it buys
+nothing until a test sets the tail again, which `scripts/nextest-priority-check` reports.
+Proposal 4 (`threads-required`) stays unmeasured and small.
