@@ -576,14 +576,83 @@ fn universe_free_json(text: &str) -> serde_json::Value {
     v
 }
 
+/// One prove run's answer with the universe taken out (output validation
+/// V4: the universe the answer states, `result.scope.universe` and the
+/// header's `[single-app]`, and the scope input its follow-ups carry,
+/// `singleApp: true` and `--single-app`, are the one difference): the exit,
+/// the normalized stdout (JSON, or the human text) and the stderr.
+fn prove_answer(human: bool, exit: Option<u8>, stdout: &[u8], stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stdout);
+    let stdout = if exit != Some(0) && !human && text.trim().is_empty() {
+        String::new()
+    } else if human {
+        without_dependency_count(
+            &text
+                .replace("   [single-app]\n", "   [cross-app]\n")
+                .replace(" --single-app", ""),
+        )
+    } else {
+        universe_free_json(&text).to_string()
+    };
+    format!("{exit:?}\n{stdout}\n{}", String::from_utf8_lossy(stderr))
+}
+
+/// `alsem prove <ws> --routine <root> --question may-commit --deterministic`
+/// (`--format human` when `human`, `--single-app` when `single_app`) as a
+/// job, as the CLI builds it.
+fn prove_job<'a>(
+    inputs: &'a std::sync::Arc<al_sem::program::inputs::WorkspaceInputs>,
+    root: &'a str,
+    human: bool,
+    single_app: bool,
+) -> al_sem::engine::l5::prove::ProveJob<'a> {
+    al_sem::engine::l5::prove::ProveJob {
+        detectors: al_sem::engine::l5::detectors::default_detectors(),
+        inputs,
+        routine_selector: root,
+        question_text: "may-commit",
+        alsem_ver: "t",
+        deterministic: true,
+        single_app,
+        closed_world: false,
+        assume_no_dependents: false,
+        human,
+        detail: false,
+        out: None,
+        slice: None,
+        surface: Default::default(),
+    }
+}
+
+/// A standalone run's (exit, stdout, stderr) from its writes, in order.
+fn streams(out: al_sem::engine::batch::output::JobOutput) -> (Option<u8>, Vec<u8>, Vec<u8>) {
+    use al_sem::engine::batch::output::WriteAction;
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    for a in out.actions {
+        match a {
+            WriteAction::Stdout(b) => stdout.extend(b),
+            WriteAction::Stderr(b) => stderr.extend(b),
+            _ => {}
+        }
+    }
+    (Some(out.exit), stdout, stderr)
+}
+
 /// T7 (prove arm, E9), spec §5: over every r0 dir with an `app.json` and no
 /// dependency, for every root (`may-commit`), prove's cross-app output
-/// equals its `--single-app` output byte for byte (json and human, exit
-/// code). In-process through `run_prove_pipeline`, the CLI's one call.
+/// equals its `--single-app` output byte for byte apart from the universe
+/// (json and human: exit, stdout and stderr).
+/// TLS-14 (TLS-12's reviewed design): each dir's cases run as one in-process
+/// batch (`batch_in_process`, one model per universe instead of one per
+/// case), and every root of every 5th dir also runs each job alone through
+/// `standalone_output`, the path `alsem prove` runs (a one-job view), so a
+/// fault only a one-job view shows is still compared.
 /// DISCRIMINATION: B1, a cross-app-only diagnostic line appended to the
-/// envelope, fails it.
+/// envelope, fails it on both paths.
 #[test]
 fn no_dependency_parity_prove() {
+    use al_sem::engine::batch::job::Job;
+    use al_sem::engine::batch::standalone_output;
     let dirs = no_dependency_dirs();
     assert!(
         dirs.len() >= 180,
@@ -592,58 +661,102 @@ fn no_dependency_parity_prove() {
     );
     let failures = std::sync::Mutex::new(Vec::<String>::new());
     let compared = std::sync::atomic::AtomicUsize::new(0);
+    // Standalone cases per format (json, human).
+    let sampled = [
+        std::sync::atomic::AtomicUsize::new(0),
+        std::sync::atomic::AtomicUsize::new(0),
+    ];
+    let multi_root = std::sync::atomic::AtomicBool::new(false);
+    let dirs = &dirs;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
     let chunks: Vec<&[PathBuf]> = dirs.chunks(dirs.len().div_ceil(threads)).collect();
     std::thread::scope(|s| {
         for chunk in chunks {
-            let (failures, compared) = (&failures, &compared);
+            let (failures, compared, sampled, multi_root) =
+                (&failures, &compared, &sampled, &multi_root);
             s.spawn(move || {
                 for dir in chunk {
                     let inputs = al_sem::program::inputs::WorkspaceInputs::read(
                         dir,
                         &crate::fingerprint_needs(),
                     );
-                    for root in root_ids(dir) {
-                        // Output validation V4: the universe the answer
-                        // states (`result.scope.universe`, the header's
-                        // `[single-app]`) and the scope input its follow-ups
-                        // carry (`singleApp: true`, `--single-app`) are the
-                        // one difference.
-                        let run = |single: bool| {
-                            al_sem::engine::l5::prove::run_prove_pipeline(
-                                &inputs,
-                                &root,
-                                "may-commit",
-                                "t",
-                                true,
-                                single,
-                            )
-                            .map(|r| {
-                                (
-                                    universe_free_json(&r.json_text),
-                                    without_dependency_count(
-                                        &r.human_text
-                                            .replace("   [single-app]\n", "   [cross-app]\n")
-                                            .replace(" --single-app", ""),
-                                    ),
-                                    r.exit_code,
-                                )
-                            })
+                    let job = |root, human, single_app| prove_job(&inputs, root, human, single_app);
+                    let roots = root_ids(dir);
+                    // TLS-14: every case of this dir as one batch, so each
+                    // universe's model is built once. Both universes get the
+                    // same jobs in the same order, so what the batch shares,
+                    // it shares alike.
+                    let mut cases = Vec::new();
+                    let mut jobs = Vec::new();
+                    for root in &roots {
+                        for human in [false, true] {
+                            cases.push((root.clone(), human));
+                            for single_app in [false, true] {
+                                jobs.push(job(root, human, single_app));
+                            }
+                        }
+                    }
+                    let out = crate::batch_in_process(
+                        &jobs.iter().map(|j| j as &dyn Job).collect::<Vec<_>>(),
+                    );
+                    assert_eq!(
+                        out.len(),
+                        2 * cases.len(),
+                        "{}: one result per job",
+                        dir.display()
+                    );
+                    for ((root, human), pair) in cases.iter().zip(out.chunks(2)) {
+                        let answer = |(exit, stdout, stderr): &(Option<u8>, Vec<u8>, Vec<u8>)| {
+                            prove_answer(*human, *exit, stdout, stderr)
                         };
-                        if run(false) != run(true) {
+                        if answer(&pair[0]) != answer(&pair[1]) {
                             failures
                                 .lock()
                                 .unwrap()
-                                .push(format!("{}: {root}", dir.display()));
+                                .push(format!("{}: {root} (human {human})", dir.display()));
                         }
                         compared.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // The CLI's own path, each job alone (`standalone_output`:
+                    // a one-job view, as `alsem prove` runs it), on every root
+                    // of every 5th dir. A batch merges its jobs' plans, so a
+                    // cross-app-only fault of a one-job view could pass above.
+                    let sample = dirs.iter().position(|d| d == dir).unwrap() % 5 == 0;
+                    for root in roots.iter().filter(|_| sample) {
+                        for (f, human) in [false, true].into_iter().enumerate() {
+                            let run = |single_app: bool| {
+                                let (exit, stdout, stderr) =
+                                    streams(standalone_output(&job(root, human, single_app)));
+                                prove_answer(human, exit, &stdout, &stderr)
+                            };
+                            if run(false) != run(true) {
+                                failures.lock().unwrap().push(format!(
+                                    "{}: {root} (human {human}, standalone)",
+                                    dir.display()
+                                ));
+                            }
+                            sampled[f].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if roots.len() > 1 {
+                                multi_root.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
             });
         }
     });
     let compared = compared.into_inner();
-    assert!(compared > 500, "precondition: cases compared ({compared})");
+    assert!(compared > 1000, "precondition: cases compared ({compared})");
+    // At least 180 dirs, every 5th sampled, most with a root: 30 per format.
+    let sampled = sampled.map(std::sync::atomic::AtomicUsize::into_inner);
+    assert!(
+        sampled.iter().all(|&n| n >= 30),
+        "precondition: standalone cases per format (json, human) {sampled:?}"
+    );
+    assert!(
+        multi_root.into_inner(),
+        "precondition: a sampled dir has several roots (a batch shares across them)"
+    );
     let failures = failures.into_inner().unwrap();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
