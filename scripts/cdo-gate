@@ -60,16 +60,54 @@ set -uo pipefail
 speed=1
 ws_arg=""
 summary_dir=""
+speed_skipped=""
+product_paths_only=0
 usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
     echo "       scripts/cdo-gate --summary=<run folder>   (a past run's summary, from its logs)" >&2
 }
 
 loud_no_speed() {
+    if [[ -n "$speed_skipped" ]]; then
+        echo "cdo-gate: speed: skipped, $speed_skipped (nothing in it can change alsem's speed)"
+        return
+    fi
     echo "cdo-gate: ****************************************************************"
     echo "cdo-gate: **  SPEED AND MEMORY WERE NOT CHECKED (--no-speed).            **"
     echo "cdo-gate: **  A slowdown or a memory rise on CDO passes this gate unseen.  **"
     echo "cdo-gate: ****************************************************************"
+}
+
+# ⟨TLS-20, owner 2026-11-11⟩ The changed paths that can reach the `alsem` binary
+# (read on stdin, one per line). An allow-list of paths never compiled into it:
+# tests (goldens included), docs, scripts other than the speed check itself,
+# the nextest config and the CHANGELOG. Everything else, `src/`, `crates/`,
+# `Cargo.*`, `build.rs`, `.cargo/`, a new top-level file, counts: the safe
+# direction. (`include_str!`/`include_bytes!` in product code read only files
+# under `src/` and `crates/`, checked 2026-11-11.)
+product_paths() {
+    local f
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        case "$f" in
+            scripts/cdo-speed) echo "$f" ;;
+            tests/* | docs/* | scripts/* | .config/nextest.toml | CHANGELOG.md) ;;
+            *) echo "$f" ;;
+        esac
+    done
+}
+
+# The paths the working tree changes against the base the speed check times it
+# against (`cdo-speed`'s own choice: the merge base with master, or on a clean
+# master HEAD's first parent), with untracked files.
+changed_paths() {
+    local base head
+    head=$(git -C "$repo" rev-parse HEAD) || return 1
+    base=$(git -C "$repo" merge-base HEAD master) || return 1
+    if [[ "$base" == "$head" && -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]; then
+        base=$(git -C "$repo" rev-parse --verify -q 'HEAD^1') || return 1
+    fi
+    { git -C "$repo" diff --name-only "$base"; git -C "$repo" ls-files --others --exclude-standard; } | sort -u
 }
 
 # The summary: every phase's result from its status file (a missing one is a
@@ -133,6 +171,8 @@ summarize() {
             fi
         done
         echo "cdo-gate: FAIL"
+    elif [[ -n "$speed_skipped" ]]; then
+        echo "cdo-gate: PASS (behaviour only: speed skipped, $speed_skipped)"
     elif [[ "$speed" -eq 0 ]]; then
         echo "cdo-gate: PASS (behaviour only: SPEED AND MEMORY NOT CHECKED)"
     else
@@ -147,6 +187,7 @@ for arg in "$@"; do
     case "$arg" in
         --no-speed) speed=0 ;;
         --summary=*) summary_dir="${arg#--summary=}" ;;
+        --product-paths) product_paths_only=1 ;;
         -*)
             echo "cdo-gate: error: unknown option: $arg" >&2
             usage
@@ -164,10 +205,17 @@ for arg in "$@"; do
 done
 [[ "${CDO_GATE_NO_SPEED:-}" == "1" ]] && speed=0
 
+# ⟨TLS-20⟩ `--product-paths`: the rule alone, for its test (paths on stdin).
+if [[ "$product_paths_only" == 1 ]]; then
+    product_paths
+    exit 0
+fi
+
 # A past run's summary: the run had a speed phase when it left a status for one.
 if [[ -n "$summary_dir" ]]; then
     logs="$summary_dir"
     [[ -f "$logs/speed.status" ]] && speed=1 || speed=0
+    [[ -f "$logs/speed-skipped" ]] && speed_skipped=$(cat "$logs/speed-skipped")
     summarize
     exit $?
 fi
@@ -253,6 +301,17 @@ run_phase() {
 # Build every phase's test target once. The phases' own `cargo test` calls
 # then only check freshness, so two of them can run at once.
 # ---------------------------------------------------------------------------
+# ⟨TLS-20⟩ A diff that touches no product code builds the same `alsem` as its
+# base: the speed phase would time a binary against itself. An empty diff, or a
+# diff that cannot be read, keeps the phase.
+if [[ "$speed" -eq 1 ]]; then
+    changed=$(changed_paths) || changed=""
+    if [[ -n "$changed" && -z "$(product_paths <<<"$changed")" ]]; then
+        speed=0
+        speed_skipped="diff touches no product code"
+        echo "$speed_skipped" > "$logs/speed-skipped"
+    fi
+fi
 if [[ "$speed" -eq 0 ]]; then
     loud_no_speed
 else

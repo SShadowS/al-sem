@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-19 and TLS-20: the CDO gate's impact lane and speed skip)
+
+- **`scripts/cdo-gate` runs the two impact ratchets as their own lane, also in serial mode**
+  (TLS-19, owner approval 2026-11-11). `output_cdo::cdo_impact_ratchets` and
+  `cdo_impact_base_ratchets` (one-shot `alsem impact` processes, 4-7 min each on about 3 cores) held
+  `output_cdo` open 470-700 s after its other tests. They now run as the phase `output_cdo_impact`,
+  started in the background before the test lanes; `output_cdo` runs the rest. Together the two
+  phases run every `output_cdo::` test, and each is summarized and counted. The gate now samples the
+  container's `memory.current` while its lanes run and prints the peak against `memory.max` with
+  the headroom (the owner's rule: keep at least 4 GiB, or go back to serial and say why). To be
+  measured: two gates with the change.
+- **`scripts/cdo-gate` skips its speed phase when the diff touches no product code** (TLS-20, owner
+  approval 2026-11-11). Against the base the speed check itself would use (the merge base with
+  master, or on a clean master HEAD's first parent), every changed path, untracked ones included,
+  must be on an allow-list of paths never compiled into `alsem`: `tests/`, `docs/`, `scripts/` (not
+  `scripts/cdo-speed`), `.config/nextest.toml`, `CHANGELOG.md`. Any other path, an empty diff or an
+  unreadable one keeps the phase. A skipped run says so: `speed: skipped, diff touches no product
+  code`, and `PASS (behaviour only: speed skipped, ...)`, never a plain PASS (and `--summary` of that
+  run too). `cdo-gate --product-paths` prints the rule's verdict for paths on stdin. Saves the
+  7.5-19 min of `speed_build` and `speed` on test-, script- and docs-only branches.
+
 ### Changed (TLS-18: the speed check's base is built after a landing, not in the next gate)
 
 - **`scripts/merge-and-push` builds the new master's speed-check binary in the background right

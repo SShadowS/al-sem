@@ -150,3 +150,113 @@ fn speed_warm_reads_the_gates_own_cache_entry() {
         "{text}"
     );
 }
+
+/// `cdo-gate --product-paths` (the rule alone): the changed paths that can
+/// reach the `alsem` binary.
+fn product_paths(paths: &[&str]) -> Vec<String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg("--product-paths")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn bash scripts/cdo-gate");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{}\n", paths.join("\n")).as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// TLS-20: `cdo-gate` skips its speed phase only when the diff touches no
+/// product code, by an allow-list of paths never compiled into `alsem`.
+/// Both ways: tests, docs, scripts, the nextest config and the CHANGELOG
+/// select none (the phase is skipped); `src/`, `crates/`, `Cargo.*`,
+/// `scripts/cdo-speed` itself and an unknown top-level file each select
+/// themselves (the phase runs). And a run that skipped it says so in its
+/// summary, never as a plain PASS.
+///
+/// Mutation: `src/*` added to the allow-list -> the `src/` path is not
+/// selected and the test fails.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
+    let never = [
+        "tests/cli/x.rs",
+        "tests/r4-goldens/a.json",
+        "docs/superpowers/notes/n.md",
+        "scripts/ci-steps",
+        ".config/nextest.toml",
+        "CHANGELOG.md",
+    ];
+    assert!(
+        product_paths(&never).is_empty(),
+        "{:?}",
+        product_paths(&never)
+    );
+    for p in [
+        "src/engine/l5/digest.rs",
+        "crates/al-syntax/src/lower/mod.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "build.rs",
+        ".cargo/config.toml",
+        "scripts/cdo-speed",
+        "README.md",
+    ] {
+        let mut mixed: Vec<&str> = never.to_vec();
+        mixed.push(p);
+        assert_eq!(product_paths(&mixed), vec![p.to_string()], "{p}");
+    }
+    // A run folder that skipped the phase (written by hand, as the gate does).
+    let run = tempfile::tempdir().unwrap();
+    std::fs::write(run.path().join("split-impact"), "").unwrap();
+    std::fs::write(
+        run.path().join("speed-skipped"),
+        "diff touches no product code\n",
+    )
+    .unwrap();
+    for p in [
+        "program_resolve_harness",
+        "lsp",
+        "l4_summary_differential",
+        "lib_cdo",
+        "output_cdo",
+        "output_cdo_impact",
+    ] {
+        std::fs::write(run.path().join(format!("{p}.status")), "0 1\n").unwrap();
+        std::fs::write(
+            run.path().join(format!("{p}.log")),
+            "    1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+        )
+        .unwrap();
+    }
+    let out = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg(format!("--summary={}", run.path().display()))
+        .output()
+        .expect("spawn bash scripts/cdo-gate");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(
+        text.contains("speed: skipped, diff touches no product code"),
+        "{text}"
+    );
+    assert!(
+        text.contains("PASS (behaviour only: speed skipped, diff touches no product code)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("cdo-gate: PASS\n"),
+        "never a plain PASS: {text}"
+    );
+}
