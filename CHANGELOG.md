@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lowered routines. The grammar's own 61 item-102 inputs: 14 go `Recovered` -> `Clean`, 4 of
     them gain a local the error had swallowed, none regress.
   - Tests: the whole suite passes on 5.2.0 with no golden regenerated (5,812 tests).
+  - CDO (`/work/src/cdo-baseline/Cloud`, `cdo` profile): `aldump --program-call-graph-stats`
+    is byte-identical (46,426 edges, 0 unknown, the same 2 recovered files).
   - Build: an `al-syntax` rebuild (release, its build script compiles `parser.c`) took
     9.9-12.4 s on 5.1.0 and 8.6-9.9 s on 5.2.0 (3 runs each, machine shared).
 
