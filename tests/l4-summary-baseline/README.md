@@ -181,6 +181,20 @@ Regen is a **measurement**, never a blind bless — inspect the diff and
 root-cause any movement before committing (the old solver is at the
 `l4-pre-jacobi-deletion` tag, `f295ef8`, for re-differencing).
 
+**Dumping the CDO rendering for an attribution.** The CDO digest is a hash, so
+a re-freeze compares the canonical `{:#?}` renderings themselves:
+`L4_CANONICAL_DUMP=<file>` makes `cdo_whole_program_v2_matches_frozen_digest`
+write the rendering it hashes (it still checks or regenerates the digest as
+usual). Dump the tree under test and the same tree with the one behaviour
+switched off, then compare record by record; the switched-off run must
+reproduce the frozen digest byte for byte.
+
+```bash
+CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
+  cargo test --profile cdo --test l4_summary_differential \
+  cdo_whole_program_v2_matches_frozen_digest -- --nocapture
+```
+
 ## Re-freeze log
 
 - **2026-10-07, engine-switch S8 gap 1** (`408926b3`, a table method's `Rec` follows its
@@ -231,6 +245,20 @@ root-cause any movement before committing (the old solver is at the
   byte; with the app scope they give the new ones. CDO is one app, so every id keeps one
   common prefix and `canonical()`'s sort by `routine_id` is unchanged; only the id text
   moved. The reverse index's oracle comparison passed in the re-freezing run.
+- **2026-11-11, ENG-06** (`alsem/eng-06-b9-fieldref-validate`, engine limits B9/B10).
+  Whole-program `46ef73cc…` -> `a0ce2366…`; reverse index unchanged. 5479 routines
+  throughout, none added or removed. Exact single-variable attribution on the pinned
+  baseline, by switching off ENG-06's two summary-moving behaviours, (A) the open record
+  edge (`program_calls::open_record_edge` emitted at neither site) and (B) the decided
+  `FieldRef.Validate` operation (`SiteFacts::field_ref_validate` never set):
+  branch `a0ce2366`; A off `46ef73cc`; B off `a0ce2366`; both off `46ef73cc`. Both-off and
+  A-off reproduce the frozen digest byte for byte, so (A) alone moves it and (B) moves
+  nothing on CDO. Dumps (`L4_CANONICAL_DUMP`, branch against both-off): 57 routines moved;
+  12 gain exactly one `record-table-unresolved` uncertainty (CDO's own RecordRef
+  `Modify()`/`Modify(false)`/`Insert(false)` on a table not known, which raise any table's
+  events: loaded code subscribes and symbol-only tables are loaded); 55 flip
+  `has_unresolved_calls` false -> true (those owners and their callers); no `db_effects`
+  change, no uncertainty removed, no new shape or value domain.
 - **2026-11-10, engine limits wave 2** (`integrate/w2`). Whole-program `46c002a2…` -> `46ef73cc…`;
   reverse index `ce2b1abf…` -> `bf331871…`. 5479 routines. Exact attribution on the pinned
   `bc3ccb18` baseline, on the wave-2 head: with three things switched off together, and nothing
