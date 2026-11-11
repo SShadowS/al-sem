@@ -581,7 +581,12 @@ fn universe_free_json(text: &str) -> serde_json::Value {
 /// header's `[single-app]`, and the scope input its follow-ups carry,
 /// `singleApp: true` and `--single-app`, are the one difference): the exit,
 /// the normalized stdout (JSON, or the human text) and the stderr.
-fn prove_answer(human: bool, exit: Option<u8>, stdout: &[u8], stderr: &[u8]) -> String {
+fn prove_answer(
+    human: bool,
+    exit: Option<u8>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> (Option<u8>, String, Vec<u8>) {
     let text = String::from_utf8_lossy(stdout);
     let stdout = if exit != Some(0) && !human && text.trim().is_empty() {
         String::new()
@@ -594,7 +599,7 @@ fn prove_answer(human: bool, exit: Option<u8>, stdout: &[u8], stderr: &[u8]) -> 
     } else {
         universe_free_json(&text).to_string()
     };
-    format!("{exit:?}\n{stdout}\n{}", String::from_utf8_lossy(stderr))
+    (exit, stdout, stderr.to_vec())
 }
 
 /// `alsem prove <ws> --routine <root> --question may-commit --deterministic`
@@ -645,10 +650,13 @@ fn streams(out: al_sem::engine::batch::output::JobOutput) -> (Option<u8>, Vec<u8
 /// TLS-14 (TLS-12's reviewed design): each dir's cases run as one in-process
 /// batch (`batch_in_process`, one model per universe instead of one per
 /// case), and every root of every 5th dir also runs each job alone through
-/// `standalone_output`, the path `alsem prove` runs (a one-job view), so a
-/// fault only a one-job view shows is still compared.
+/// `standalone_output`, the path `alsem prove` runs (a one-job view). LIMIT:
+/// a fault only a one-job view shows is compared on the sampled dirs only
+/// (a batch merges its jobs' plans into one prepare); the other four dirs in
+/// five are compared through the batch.
 /// DISCRIMINATION: B1, a cross-app-only diagnostic line appended to the
-/// envelope, fails it on both paths.
+/// envelope, fails it on both paths. B2, a cross-app-only change made only
+/// in a one-demand view, fails the standalone half alone.
 #[test]
 fn no_dependency_parity_prove() {
     use al_sem::engine::batch::job::Job;
@@ -669,13 +677,14 @@ fn no_dependency_parity_prove() {
     let multi_root = std::sync::atomic::AtomicBool::new(false);
     let dirs = &dirs;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
-    let chunks: Vec<&[PathBuf]> = dirs.chunks(dirs.len().div_ceil(threads)).collect();
+    let indexed: Vec<(usize, &PathBuf)> = dirs.iter().enumerate().collect();
+    let chunks: Vec<&[(usize, &PathBuf)]> = indexed.chunks(dirs.len().div_ceil(threads)).collect();
     std::thread::scope(|s| {
         for chunk in chunks {
             let (failures, compared, sampled, multi_root) =
                 (&failures, &compared, &sampled, &multi_root);
             s.spawn(move || {
-                for dir in chunk {
+                for &(index, dir) in chunk {
                     let inputs = al_sem::program::inputs::WorkspaceInputs::read(
                         dir,
                         &crate::fingerprint_needs(),
@@ -721,7 +730,7 @@ fn no_dependency_parity_prove() {
                     // a one-job view, as `alsem prove` runs it), on every root
                     // of every 5th dir. A batch merges its jobs' plans, so a
                     // cross-app-only fault of a one-job view could pass above.
-                    let sample = dirs.iter().position(|d| d == dir).unwrap() % 5 == 0;
+                    let sample = index % 5 == 0;
                     for root in roots.iter().filter(|_| sample) {
                         for (f, human) in [false, true].into_iter().enumerate() {
                             let run = |single_app: bool| {
