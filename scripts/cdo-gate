@@ -149,15 +149,21 @@ summarize() {
         [[ "$word" == ok ]] || { status=1; bad+=("$name"); }
         printf 'cdo-gate:   %-26s %-20s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
     done
-    # ⟨TLS-19⟩ The container's peak memory during the test lanes (a report, not a verdict).
-    if [[ -f "$logs/memory.peak" ]]; then
+    # ⟨TLS-19⟩ The container's peak unreclaimable memory during the test lanes,
+    # and the OOM counters the run added (a report, not a verdict).
+    if [[ -f "$logs/memory.unreclaimable" ]]; then
         local peak limit
-        read -r peak limit < "$logs/memory.peak"
+        read -r peak limit < "$logs/memory.unreclaimable"
         if [[ "$limit" =~ ^[0-9]+$ ]]; then
-            echo "cdo-gate:   peak memory (container) $((peak >> 20)) MiB of $((limit >> 20)) MiB, headroom $(((limit - peak) >> 20)) MiB"
+            echo "cdo-gate:   peak memory (container, unreclaimable) $((peak >> 20)) MiB of $((limit >> 20)) MiB, headroom $(((limit - peak) >> 20)) MiB"
         else
-            echo "cdo-gate:   peak memory (container) $((peak >> 20)) MiB (no limit)"
+            echo "cdo-gate:   peak memory (container, unreclaimable) $((peak >> 20)) MiB (no limit)"
         fi
+    fi
+    if [[ -f "$logs/memory.events.start" && -f "$logs/memory.events.end" ]]; then
+        echo "cdo-gate:   memory events this run: $(awk 'NR == FNR { s[$1] = $2; next }
+            $1 == "max" || $1 == "oom" || $1 == "oom_kill" { printf "%s%s +%d", sep, $1, $2 - s[$1]; sep = ", " }' \
+            "$logs/memory.events.start" "$logs/memory.events.end")"
     fi
     [[ "$speed" -eq 0 ]] && loud_no_speed
 
@@ -440,15 +446,27 @@ lane2() {
 # calls of 4-7 minutes that use only ~3 cores each. Starved at the start
 # (every other test busy) they ran longest; lane 2 now takes what they leave.
 lane2_nice=(nice -n 10)
-# ⟨TLS-19⟩ The container's memory while the test lanes run: the highest
-# `memory.current` of this cgroup, sampled every 2 s (container-wide: what its
-# `memory.max` limit counts), against that limit, in the summary.
+# ⟨TLS-19⟩ The container's memory while the test lanes run, against its
+# `memory.max`, in the summary. Not `memory.current`: it counts page cache,
+# which the kernel reclaims before any OOM, so it sat at the limit (49151 of
+# 49152 MiB) on a gate that never came near one. What cannot be reclaimed is
+# `memory.stat`'s anon + shmem + kernel minus slab_reclaimable; its highest
+# value, sampled every 2 s, is the headroom the 4 GiB rule is about. The
+# cgroup's own `memory.events` counters (oom, oom_kill, and max: times the
+# limit was hit and the kernel had to reclaim) are kept at the start and the
+# end, so the summary shows what this run added.
+unreclaimable_bytes() {
+    awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" { n += $2 }
+         $1 == "slab_reclaimable" { n -= $2 }
+         END { print n + 0 }' /sys/fs/cgroup/memory.stat
+}
 memory_sampler() {
     local cg=/sys/fs/cgroup peak=0 cur
-    [[ -r "$cg/memory.current" ]] || return 0
+    [[ -r "$cg/memory.stat" ]] || return 0
+    cp "$cg/memory.events" "$logs/memory.events.start" 2>/dev/null
     while :; do
-        read -r cur < "$cg/memory.current" || break
-        ((cur > peak)) && peak=$cur && echo "$peak $(cat "$cg/memory.max" 2>/dev/null)" > "$logs/memory.peak"
+        cur=$(unreclaimable_bytes) || break
+        ((cur > peak)) && peak=$cur && echo "$peak $(cat "$cg/memory.max" 2>/dev/null)" > "$logs/memory.unreclaimable"
         sleep 2
     done
 }
@@ -470,6 +488,7 @@ else
 fi
 wait "$impact_lane"
 kill "$sampler" 2>/dev/null
+cp /sys/fs/cgroup/memory.events "$logs/memory.events.end" 2>/dev/null
 
 summarize
 exit $?

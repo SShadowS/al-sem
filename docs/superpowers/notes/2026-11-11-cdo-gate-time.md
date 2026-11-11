@@ -175,3 +175,31 @@ Records: `cdo-gate-time/tls17-runs.jsonl`.
 - Output: the `--diff` answers are identical; the `--base` answers differ only in the base cache's
   temporary folder and the base build's `ms` timings, which change on every run.
 - What is left of the span (3.6-4.0 s) includes `count_gaps_in_cone`; not worth a task now.
+
+## TLS-19: the impact ratchets as their own lane (measured)
+
+G1 as built: `output_cdo::cdo_impact*` run as the phase `output_cdo_impact`, started in the
+background before the other test phases, also in serial mode (the mode used here). The other phases
+still run one after another. Two gates on 2026-11-11, seconds:
+
+| Run | impact lane | harness | lsp | l4 | lib_cdo | output_cdo (rest) | chain | test phases (wall) |
+|-----|-------------|---------|-----|----|---------|-------------------|-------|--------------------|
+| tb4 (TLS-17..20) | 874 | 99 | 12 | 36 | 362 | 247 | 756 | 874 |
+| joint (TLS-19 fix + ENG-18, busy host) | 1,232 | 104 | 19 | 55 | 503 | 358 | 1,039 | 1,232 |
+
+- Before, the same phases one after another took 1,170-1,174 s on a quiet host (003611, 012547
+  above) and 1,594 s on a busy one (052939). tb4 cut that to 874 s (-25%); the joint run, on a host
+  loaded like 052939 (its lib_cdo 503 s against 452 s), to 1,232 s (-23%).
+- The cost: the phases beside the impact lane slow down (harness 51 -> 99 s, l4 20 -> 36 s in tb4),
+  because the two lanes share the CPU. The impact lane is now the longer one, so the gate's test
+  time is the impact calls' time; P1 (parallel work over roots) is what shortens it further.
+- tb4's whole gate took 34.7 min, but 944 s of it was `speed_build` compiling the merge base cold
+  (TLS-18's warm step was not yet on master); the test phases were 874 s of it.
+- Memory. tb4 sampled `memory.current`, which counts page cache the kernel reclaims, and read
+  49,151 of 49,152 MiB with no OOM: no information. The joint run sampled the unreclaimable part
+  (`memory.stat` anon + shmem + kernel - slab_reclaimable): peak 42,822 of 49,152 MiB, headroom
+  6,329 MiB, against the owner's rule of at least 4 GiB. Its `memory.events` added max +24,119
+  (the limit reached and page cache reclaimed), oom +0, oom_kill +0.
+- Verdict: keep the lane. Both runs are faster than the serial phases they replace, and the one run
+  with a real memory reading keeps 6.2 GiB of headroom. A run with less than 4 GiB means going back
+  to serial (the owner's rule).

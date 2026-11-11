@@ -15,9 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `output_cdo` open 470-700 s after its other tests. They now run as the phase `output_cdo_impact`,
   started in the background before the test lanes; `output_cdo` runs the rest. Together the two
   phases run every `output_cdo::` test, and each is summarized and counted. The gate now samples the
-  container's `memory.current` while its lanes run and prints the peak against `memory.max` with
-  the headroom (the owner's rule: keep at least 4 GiB, or go back to serial and say why). To be
-  measured: two gates with the change.
+  container's unreclaimable memory (`memory.stat`: anon + shmem + kernel − slab_reclaimable) while
+  its lanes run and prints the peak against `memory.max` with the headroom (the owner's rule: keep
+  at least 4 GiB, or go back to serial and say why), plus the `max`/`oom`/`oom_kill` counts of
+  `memory.events` the run added. The first version sampled `memory.current`, which counts page
+  cache the kernel reclaims: on the first gate (2026-11-11) it read 49151 of 49152 MiB with no OOM.
+  Measured on two gates (2026-11-11): the test phases took 874 s and 1,232 s (busy host), against
+  1,170-1,174 s (quiet) and 1,594 s (busy) one after another; peak unreclaimable memory 42,822 of
+  49,152 MiB (6,329 MiB headroom), no OOM. Details:
+  `docs/superpowers/notes/2026-11-11-cdo-gate-time.md`, "TLS-19".
 - **`scripts/cdo-gate` skips its speed phase when the diff touches no product code** (TLS-20, owner
   approval 2026-11-11). Against the base the speed check itself would use (the merge base with
   master, or on a clean master HEAD's first parent), every changed path, untracked ones included,
