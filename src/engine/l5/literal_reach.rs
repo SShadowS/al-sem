@@ -1562,6 +1562,14 @@ impl<'a> LiveTree<'a> {
     }
 }
 
+/// TLS-22: the literal pass shares these between its workers, so they must
+/// stay `Sync` (a `Cell`, `RefCell` or `Rc` added to them fails to compile here).
+#[allow(dead_code)]
+fn shared_by_the_pass_workers(r: &LiteralReach<'_>) {
+    fn sync<T: Sync>(_: &T) {}
+    sync(r);
+}
+
 /// The search context over one snapshot and model, shared by every root.
 pub(crate) struct LiteralReach<'a> {
     out: HashMap<&'a str, Vec<OutEdge<'a>>>,

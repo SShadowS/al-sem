@@ -393,3 +393,77 @@ fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
         "Deep asked after Shallow answers as it does alone"
     );
 }
+
+/// TLS-22: two workers that both miss one evaluation's key (forced: the hook
+/// holds each after its miss until both have missed) get the serial answer,
+/// and the read keeps one answer per key. A third ask after them reads the
+/// kept answer and evaluates nothing.
+///
+/// DISCRIMINATION (2026-11-11): skipping the `results` lookup in
+/// `RecRefFlow::evaluate` makes the third ask run the hook again: fails;
+/// restored, passes.
+#[test]
+fn racing_evaluations_keep_one_answer_per_key() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let tmp = depth_fixture();
+    let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
+        tmp.path(),
+        crate::engine::l4::cone_derived::WitnessScope::All,
+    );
+    let model = &base.resolved;
+    let shallow = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "Shallow")
+        .expect("precondition: Shallow is a model routine")
+        .stable_routine_id
+        .clone();
+    let fx = crate::engine::l5::digest::wave2_index_tests::effects_of(&tree, model, &shallow);
+    let ask = |reach: &LiteralReach| reach.unreachable_effects(&shallow, &fx, &[]).0;
+
+    let serial = LiteralReach::new(&tree, model);
+    let want = ask(&serial);
+    let serial_keys = serial.flow.results_len();
+    assert!(
+        serial_keys > 0,
+        "precondition: the root's search evaluates a sensitive routine"
+    );
+
+    let reach = LiteralReach::new(&tree, model);
+    let misses = Arc::new(AtomicUsize::new(0));
+    {
+        let misses = Arc::clone(&misses);
+        reach.flow.set_evaluate_hook(Arc::new(move || {
+            // Only the first two misses wait (both workers missed the first
+            // key), and at most 10 s: a lost race fails below, never hangs.
+            if misses.fetch_add(1, Ordering::SeqCst) < 2 {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while misses.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }));
+    }
+    let (a, b) = std::thread::scope(|s| {
+        let a = s.spawn(|| ask(&reach));
+        let b = s.spawn(|| ask(&reach));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert_eq!(a, want, "the first worker's answer is the serial one");
+    assert_eq!(b, want, "the second worker's answer is the serial one");
+    assert_eq!(
+        reach.flow.results_len(),
+        serial_keys,
+        "one answer per key, as serially"
+    );
+    let raced = misses.load(Ordering::SeqCst);
+    assert!(raced >= 2, "precondition: both workers missed a key");
+    assert_eq!(ask(&reach), want, "the third ask's answer");
+    assert_eq!(
+        misses.load(Ordering::SeqCst),
+        raced,
+        "the third ask reads every kept answer and evaluates nothing"
+    );
+}

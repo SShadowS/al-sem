@@ -44,9 +44,14 @@ use crate::engine::l5::snapshot::SnapshotGraphEdge;
 use crate::program::body::features::{PCFNNode, PCallSite, PCallee, TableCase};
 use crate::program::model::workspace::ModelParameter;
 use crate::program::model::workspace::{Model, ModelRoutine};
-use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// A lock that a panicked holder does not poison: every map behind one is a
+/// pure memo, whole after each insert.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// One value a RecordRef or Variant may hold, in one routine's terms.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -198,13 +203,16 @@ pub(crate) struct RecRefFlow<'a> {
     converged: bool,
     /// G35: per routine, whether it is evaluated under its inputs.
     sensitive: Vec<bool>,
-    /// The state of the top-level evaluation running now: fresh for each
-    /// ([`RecRefFlow::evaluate`]).
-    eval: RefCell<EvalState>,
     /// ENG-18: each top-level evaluation's answer, by its key. An answer is
     /// computed from a fresh [`EvalState`] (its own budget, depth and memo), so
     /// it is the key's alone: what else the read asked before cannot change it.
-    results: RefCell<HashMap<EvalKey, Option<HashMap<String, Val>>>>,
+    /// TLS-22: shared by the literal pass's workers, never locked while
+    /// evaluating; two workers may evaluate one key, and get the same answer.
+    results: Mutex<HashMap<EvalKey, Option<HashMap<String, Val>>>>,
+    /// Tests: runs after a `results` miss, the lock released, before the
+    /// evaluation (TLS-22 forces two workers to miss one key).
+    #[cfg(test)]
+    evaluate_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// One evaluation's key: the routine, its tracked parameters' input tables,
@@ -386,8 +394,9 @@ impl<'a> RecRefFlow<'a> {
             self_escapes,
             converged: false,
             sensitive: Vec::new(),
-            eval: RefCell::new(EvalState::default()),
-            results: RefCell::new(HashMap::new()),
+            results: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            evaluate_hook: Mutex::new(None),
         };
         flow.solve_alias_reach();
         flow.solve();
@@ -588,32 +597,47 @@ impl<'a> RecRefFlow<'a> {
         globals: Vec<(Arc<str>, Val)>,
     ) -> Option<HashMap<String, Val>> {
         let key: EvalKey = (i, inputs.clone(), globals.clone());
-        if let Some(answer) = self.results.borrow().get(&key) {
+        if let Some(answer) = lock(&self.results).get(&key) {
             return answer.clone();
         }
-        *self.eval.borrow_mut() = EvalState {
+        #[cfg(test)]
+        {
+            // Cloned out first: the hook may block, and must not hold the lock.
+            let hook = lock(&self.evaluate_hook).clone();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        // TLS-22: the state is this evaluation's local, so nothing of it can
+        // outlive it or reach another evaluation (the type is the guard).
+        let mut st = EvalState {
             budget: EVAL_BUDGET,
             ..Default::default()
         };
         let mut answer = None;
         for _ in 0..12 {
-            {
-                let mut st = self.eval.borrow_mut();
-                st.read_partial = false;
-                st.grew = false;
-            }
-            let vals = self.eval_routine(i, &inputs, &globals, 0);
-            let st = self.eval.borrow();
+            st.read_partial = false;
+            st.grew = false;
+            let vals = self.eval_routine(&mut st, i, &inputs, &globals, 0);
             if !(st.read_partial && st.grew) {
                 answer = Some(vals);
                 break;
             }
         }
-        // The next top-level evaluation starts fresh; nothing of this one's
-        // state is read again.
-        *self.eval.borrow_mut() = EvalState::default();
-        self.results.borrow_mut().insert(key, answer.clone());
-        answer
+        // First insert wins; a second evaluation of the key computed the same.
+        lock(&self.results).entry(key).or_insert(answer).clone()
+    }
+
+    /// Tests: set the hook [`Self::evaluate`] runs after a `results` miss.
+    #[cfg(test)]
+    pub(crate) fn set_evaluate_hook(&self, f: Arc<dyn Fn() + Send + Sync>) {
+        *lock(&self.evaluate_hook) = Some(f);
+    }
+
+    /// Tests: how many answers are kept.
+    #[cfg(test)]
+    pub(crate) fn results_len(&self) -> usize {
+        lock(&self.results).len()
     }
 
     /// The starting values of `i`'s tracked own variables: a parameter its
@@ -638,6 +662,7 @@ impl<'a> RecRefFlow<'a> {
 
     fn eval_routine(
         &self,
+        st: &mut EvalState,
         i: usize,
         inputs: &[(u32, Val)],
         globals: &[(Arc<str>, Val)],
@@ -659,24 +684,21 @@ impl<'a> RecRefFlow<'a> {
                 .map(|k| (k.clone(), None))
                 .collect()
         };
-        {
-            let mut st = self.eval.borrow_mut();
-            if st.in_progress.contains(&key) {
-                st.read_partial = true;
-                return st
-                    .memo
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| self.initial_vals(i, inputs));
-            }
-            if depth > EVAL_DEPTH || st.budget == 0 {
-                return all_top();
-            }
-            st.budget -= 1;
-            st.in_progress.insert(key.clone());
+        if st.in_progress.contains(&key) {
+            st.read_partial = true;
+            return st
+                .memo
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| self.initial_vals(i, inputs));
         }
+        if depth > EVAL_DEPTH || st.budget == 0 {
+            return all_top();
+        }
+        st.budget -= 1;
+        st.in_progress.insert(key.clone());
         let mut vals = self.initial_vals(i, inputs);
-        if let Some(prev) = self.eval.borrow().memo.get(&key) {
+        if let Some(prev) = st.memo.get(&key) {
             for (k, v) in prev {
                 let cur = vals.entry(k.clone()).or_insert_with(empty_val);
                 *cur = union_val(cur, v);
@@ -715,7 +737,7 @@ impl<'a> RecRefFlow<'a> {
                     if !self.conds_hold(i, &f.passed_conds[n], &vals, globals) {
                         continue;
                     }
-                    if let Some(add) = self.out_val(i, &vals, globals, *ci, *k as u32, depth) {
+                    if let Some(add) = self.out_val(st, i, &vals, globals, *ci, *k as u32, depth) {
                         merge(&mut vals, v, add);
                     }
                 }
@@ -724,7 +746,6 @@ impl<'a> RecRefFlow<'a> {
                 }
             }
         }
-        let mut st = self.eval.borrow_mut();
         st.in_progress.remove(&key);
         let before = st
             .memo
@@ -785,6 +806,7 @@ impl<'a> RecRefFlow<'a> {
     #[allow(clippy::too_many_arguments)]
     fn out_val(
         &self,
+        st: &mut EvalState,
         i: usize,
         vals: &HashMap<String, Val>,
         globals: &[(Arc<str>, Val)],
@@ -820,7 +842,7 @@ impl<'a> RecRefFlow<'a> {
                         .iter()
                         .find(|p| lc(&p.name) == pname)
                         && let Some(o) =
-                            self.callee_out(i, vals, globals, cs, s, sp, Some(callee), depth)
+                            self.callee_out(st, i, vals, globals, cs, s, sp, Some(callee), depth)
                     {
                         out = union_val(&out, &o);
                     }
@@ -830,7 +852,7 @@ impl<'a> RecRefFlow<'a> {
             let Some(p) = callee.parameters.iter().find(|p| p.index == k) else {
                 return Some(None);
             };
-            if let Some(o) = self.callee_out(i, vals, globals, cs, t, p, None, depth) {
+            if let Some(o) = self.callee_out(st, i, vals, globals, cs, t, p, None, depth) {
                 out = union_val(&out, &o);
             }
         }
@@ -843,6 +865,7 @@ impl<'a> RecRefFlow<'a> {
     #[allow(clippy::too_many_arguments)]
     fn callee_out(
         &self,
+        st: &mut EvalState,
         i: usize,
         vals: &HashMap<String, Val>,
         globals: &[(Arc<str>, Val)],
@@ -887,7 +910,7 @@ impl<'a> RecRefFlow<'a> {
             } else {
                 Vec::new()
             };
-        let res = self.eval_routine(t, &inputs, &g, depth + 1);
+        let res = self.eval_routine(st, t, &inputs, &g, depth + 1);
         Some(res.get(&pname).cloned().unwrap_or(None))
     }
 
