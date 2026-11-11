@@ -486,7 +486,11 @@ fn no_dependency_parity_fingerprint_routine() {
     assert!(dirs.len() >= 180, "precondition: dirs ({})", dirs.len());
     let failures = std::sync::Mutex::new(Vec::<String>::new());
     let compared = std::sync::atomic::AtomicUsize::new(0);
-    let sampled = std::sync::atomic::AtomicUsize::new(0);
+    // Standalone cases per format (json, human).
+    let sampled = [
+        std::sync::atomic::AtomicUsize::new(0),
+        std::sync::atomic::AtomicUsize::new(0),
+    ];
     let multi_root = std::sync::atomic::AtomicBool::new(false);
     let dirs = &dirs;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
@@ -564,7 +568,7 @@ fn no_dependency_parity_fingerprint_routine() {
                     // cross-app-only fault of a one-job view could pass above.
                     let sample = dirs.iter().position(|d| d == dir).unwrap() % 5 == 0;
                     for root in roots.iter().filter(|_| sample) {
-                        for format in &formats {
+                        for (f, format) in formats.iter().enumerate() {
                             let run = |single_app: bool| {
                                 let job = FingerprintJob::new(opts(root, format, single_app))
                                     .expect("no --shard");
@@ -577,7 +581,7 @@ fn no_dependency_parity_fingerprint_routine() {
                                     dir.display()
                                 ));
                             }
-                            sampled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            sampled[f].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             if roots.len() > 1 {
                                 multi_root.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
@@ -589,8 +593,12 @@ fn no_dependency_parity_fingerprint_routine() {
     });
     let compared = compared.into_inner();
     assert!(compared > 1000, "precondition: cases compared ({compared})");
-    let sampled = sampled.into_inner();
-    assert!(sampled >= 60, "precondition: standalone cases ({sampled})");
+    // At least 180 dirs, every 5th sampled, each with a root: 36 per format.
+    let sampled = sampled.map(std::sync::atomic::AtomicUsize::into_inner);
+    assert!(
+        sampled.iter().all(|&n| n >= 36),
+        "precondition: standalone cases per format (json, human) {sampled:?}"
+    );
     assert!(
         multi_root.into_inner(),
         "precondition: a sampled dir has several roots (a batch shares across them)"
