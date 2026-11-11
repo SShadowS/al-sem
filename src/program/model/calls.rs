@@ -318,6 +318,12 @@ pub struct ResolvedCalls {
     /// side table only names the target, for explain's and digest's
     /// `BACKGROUND_TASK` line. Shared, so a clone of the calls is cheap.
     pub background_starts: std::sync::Arc<HashMap<String, BackgroundStart>>,
+    /// ENG-06: the routines (stable ids) holding a trigger-firing record
+    /// operation on a table not known that got NO open edge, because no loaded
+    /// table could run anything there (`OpenFamilies`). A `no` through such a
+    /// routine holds only within the loaded apps: prove states it in its
+    /// assumptions (`prove::EventsRaised::any_table_ops`).
+    pub loaded_only_tables: std::sync::Arc<std::collections::HashSet<String>>,
 }
 
 /// What a background start starts (`StartSession`, `Session.StartSession`,

@@ -332,9 +332,11 @@ pub fn local_recordref_bindings(file: &AlFile, r: &RoutineDecl, var: &str) -> Op
 pub enum FieldArg {
     /// An integer literal: the field's number.
     Number(i64),
-    /// A text literal (`'No.'`) or `Rec.FieldNo(F)`: the field's name
-    /// (unquoted, as written).
+    /// A text literal (`'No.'`): the field's name (unquoted, as written).
     Name(String),
+    /// `Rec.FieldNo(F)`: the number of field `F` of `Rec`'s table, which need
+    /// not be the RecordRef's (`record` and `field` as written, unquoted).
+    FieldNo { record: String, field: String },
     /// `FieldIndex(…)`, a computed number, or anything else.
     Unknown,
 }
@@ -384,19 +386,26 @@ fn field_arg(file: &AlFile, e: ExprId) -> FieldArg {
         ExprKind::Literal(Literal::Text(raw)) => {
             al_syntax::ir::al_string_literal_text(raw).map_or(FieldArg::Unknown, FieldArg::Name)
         }
-        // `Rec.FieldNo(F)` / `Rec.FieldNo("F")`: the field `F`.
+        // `Rec.FieldNo(F)` / `Rec.FieldNo("F")`: field `F` of `Rec`.
         ExprKind::Call { function, args } => {
-            let is_field_no = matches!(
-                &file.ir.expr(*function).kind,
-                ExprKind::Member { member, .. }
-                    if member.trim().trim_matches('"').eq_ignore_ascii_case("fieldno")
-            );
-            match (is_field_no, args.as_slice()) {
-                (true, [a]) => match &file.ir.expr(*a).kind {
-                    ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
-                        FieldArg::Name(n.clone())
-                    }
-                    _ => FieldArg::Unknown,
+            let ExprKind::Member { object, member, .. } = &file.ir.expr(*function).kind else {
+                return FieldArg::Unknown;
+            };
+            if !member
+                .trim()
+                .trim_matches('"')
+                .eq_ignore_ascii_case("fieldno")
+            {
+                return FieldArg::Unknown;
+            }
+            let name = |e: ExprId| match &file.ir.expr(e).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => Some(n.clone()),
+                _ => None,
+            };
+            match (name(*object), args.as_slice()) {
+                (Some(record), [a]) => match name(*a) {
+                    Some(field) => FieldArg::FieldNo { record, field },
+                    None => FieldArg::Unknown,
                 },
                 _ => FieldArg::Unknown,
             }

@@ -14,29 +14,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OnBefore/OnAfterValidateEvent`, as `Rec.Validate(Field, …)` does. Before, it was a plain
   built-in call and `prove … may-commit` answered a definite `no` for a subscriber that commits.
   The FieldRef is followed to `RecRef.Field(<number>)`, `Field('<name>')` or
-  `Field(Rec.FieldNo(F))`, written in place or bound to a local FieldRef only that way, and the
-  RecordRef to its one literal table (`Open(Database::X)`, `GetTable` of a known record). The
-  call site gets a `Validate` record operation of that table and field (`…/fieldref-validate`).
+  `Field(B.FieldNo(F))` (field `F`'s number in `B`'s table, which need not be the RecordRef's),
+  written in place or bound to a local FieldRef only that way, and the RecordRef to its one
+  literal table (`Open(Database::X)`, `GetTable` of a known record). The call site gets a
+  `Validate` record operation of that table and field (`…/fieldref`, the FieldRef operation id
+  B5 introduced, so it takes its call site's context and order). A field number two `#if`
+  builds declare under two names is either field: the lookup by number declines it.
 - **An undecided FieldRef, and B10: a trigger-capable record operation on a table not known,
-  is `unknown`, never `no`.** A FieldRef whose table or field is not provable here (a parameter,
-  a global, passed to a call, `FieldIndex`, a computed number, bindings that name different
-  fields), and `Insert`/`Modify`/`Delete`/`Rename`/`Validate`/… on a record whose table does not
-  resolve, may run code the engine did not follow. They now carry an open edge
+  is `unknown` when code may run there.** A FieldRef whose table or field is not provable here (a
+  parameter, a global, passed to a call, `FieldIndex`, a computed number, bindings that name
+  different fields), and `Insert`/`Modify`/`Delete`/`Rename`/`Validate`/… on a record whose
+  table does not resolve, may run code the engine did not follow. They now carry an open edge
   (`UnknownReason::RecordTableUnresolved`) and the call-site-local uncertainty and coverage
   reason `record-table-unresolved`: `prove` answers `unknown` and its `coverage-incomplete`
-  blocker names the operation, `query effects` counts it in its scope, and finding confidence is
-  capped by `dynamic-dispatch`. Before, all were `no (every candidate decided)`, for the routine
+  blocker says why (it carries no site anchor), `query effects` counts it in its scope, coverage
+  lists it (the operation's id, or a FieldRef's call site), and finding confidence is capped by
+  `dynamic-dispatch`. Before, all were `no (every candidate decided)`, for the routine
   and every caller. When code may run there (`SiteFacts::record_table_unresolved`):
-  - a record of a named table the program does not hold (`Record "G/L Entry"` without its app):
-    whenever the operation fires that table's trigger (`Validate` always, `Insert`/`Modify`/
-    `Delete`/`Rename` with RunTrigger), since its triggers are code the engine cannot see;
+  - a record of a named table the program does not hold (`Record "G/L Entry"` without its app),
+    or a local RecordRef (and a FieldRef on it) whose provable bindings name no one loaded table
+    (`RR.Open(Database::X)` with `X` not loaded): whenever the operation fires that table's
+    trigger (`Validate` always, `Insert`/`Modify`/`Delete`/`Rename` with RunTrigger), since its
+    triggers are code the engine cannot see;
   - a RecordRef that may hold any table (`RR.Modify(true)` with `RR` a parameter) and an
-    undecided FieldRef: only when a loaded table has a trigger of that operation's family, or a
-    readable subscriber to its table events. With none, nothing loaded can run there, and the
-    answer stays `no` within the loaded apps it states (`RR.Insert(true)` with no insert trigger
-    anywhere; `RR.Modify()` with no modify-event subscriber).
+    undecided FieldRef: only when a loaded table has a trigger of that operation's family
+    (`On<Op>`, or a table extension's `OnBefore<Op>`/`OnAfter<Op>`), or a readable subscriber to
+    its table events, or when a loaded table's code is not loaded (a symbol-only dependency's:
+    it may have any trigger or subscriber). With none, nothing loaded can run there, and the
+    answer stays `no` within the loaded apps, and says so: its assumptions read "… the triggers
+    of a record operation on a table not known, of the loaded tables only" (`RR.Insert(true)`
+    with no insert trigger anywhere; `RR.Modify()` with no modify-event subscriber). Owner
+    answer q-20261111T044238-cead8f76.
   On the corpus this adds eight gaps, all `Record Customer`/`"G/L Entry"`/a dependency's
-  undeclared table in fixtures that do not load it.
+  undeclared table in fixtures that do not load it. On CDO (measured 2026-11-11, `aldump`
+  release-fast): the call-graph stats are byte-identical (46,426 edges, 0 unknown); 12
+  operations gain the gap, all RecordRef `Modify()`/`Modify(false)`/`Insert(false)` in CDO's
+  own code (the table events of whatever table they hold; loaded code subscribes and symbol-only
+  tables are loaded), five of them `CDOHandledFieldsManagement`'s `FilterRecord.Modify()`; in
+  the default cross-app mode 1,628 of 5,479 workspace routines carry the reason through their
+  cones, of which 60 (1.1%) go from complete to partial because of it alone. Narrowing such an
+  operation by a `FieldExist` guard (G36) is ENG-17.
 - `FieldNode` (the program graph's table field) carries the field's number (source `field(<no>;
   …)`, the symbols' `Id`), with a new index lookup by number, recorded for the incremental
   session like the lookup by name. `PACK_SCHEMA` is 18: dependency packs built before are

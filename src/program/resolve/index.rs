@@ -1208,7 +1208,13 @@ impl ResolveIndex {
             if !deduped
                 .iter()
                 .any(|(oid, f): &(&ObjectNodeId, &FieldNode)| {
-                    **oid == *m.0 && f.type_text == m.1.type_text
+                    // The name and number too (ENG-06): two `#if` declarations
+                    // of one number with different names, or of one name with
+                    // different numbers, are two fields.
+                    **oid == *m.0
+                        && f.type_text == m.1.type_text
+                        && f.name_lc == m.1.name_lc
+                        && f.number == m.1.number
                 })
             {
                 deduped.push(m);

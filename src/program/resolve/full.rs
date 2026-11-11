@@ -278,16 +278,18 @@ pub enum FieldRefValidate {
         /// ([`crate::program::resolve::resolver::resolve_table_events`]).
         table_events: Vec<Route>,
     },
-    /// The table or the field is not provable here: why. Any table's field
-    /// may be validated, so this is never a "no".
-    Undecided(&'static str),
+    /// The table or the field is not provable here: why, and how the table
+    /// failed (a RecordRef bound only to tables not loaded is
+    /// [`UnresolvedTable::NotLoaded`]; anything else may be any table).
+    Undecided(&'static str, UnresolvedTable),
 }
 
 pub(crate) const FIELDREF_BINDING_UNREADABLE: &str =
     "the FieldRef is not bound here (a parameter, a global, or passed to a call)";
 pub(crate) const FIELDREF_TABLE_UNKNOWN: &str = "the FieldRef's RecordRef has no one known table";
 pub(crate) const FIELDREF_FIELD_UNKNOWN: &str = "the FieldRef's field is not a literal";
-pub(crate) const FIELDREF_FIELD_NOT_FOUND: &str = "the table has no such field";
+pub(crate) const FIELDREF_FIELD_NOT_FOUND: &str =
+    "the table has no one field of that number or name";
 pub(crate) const FIELDREF_BINDINGS_DIFFER: &str = "the FieldRef's bindings name different fields";
 
 /// [`FieldRefValidate`] of a `FieldRef.Validate(…)` call whose receiver is
@@ -309,47 +311,99 @@ fn field_ref_validate(
 ) -> FieldRefValidate {
     use crate::program::recordref_table::{FieldArg, fieldref_sources};
     let Some(sources) = receiver.and_then(|r| fieldref_sources(file, routine, r)) else {
-        return FieldRefValidate::Undecided(FIELDREF_BINDING_UNREADABLE);
+        return FieldRefValidate::Undecided(FIELDREF_BINDING_UNREADABLE, UnresolvedTable::AnyTable);
+    };
+    let table_of = |recordref: &str| {
+        recordref_constant_table(
+            recordref, routine, obj, file, obj_node, caller_app, graph, index,
+        )
+    };
+    // How an undecided FieldRef failed, over EVERY source: one whose RecordRef's
+    // provable bindings name no one loaded table brings that table's unseen
+    // triggers, whatever another source (an any-table parameter) says.
+    let how = if sources.iter().any(|s| {
+        table_of(&s.recordref).is_none()
+            && crate::program::recordref_table::local_recordref_bindings(
+                file,
+                routine,
+                &s.recordref,
+            )
+            .is_some()
+    }) {
+        UnresolvedTable::NotLoaded
+    } else {
+        UnresolvedTable::AnyTable
     };
     let mut decided: Option<(&ObjectNode, String)> = None;
     for src in &sources {
-        let Some(table) = recordref_constant_table(
-            &src.recordref,
-            routine,
-            obj,
-            file,
-            obj_node,
-            caller_app,
-            graph,
-            index,
-        ) else {
-            return FieldRefValidate::Undecided(FIELDREF_TABLE_UNKNOWN);
+        let Some(table) = table_of(&src.recordref) else {
+            return FieldRefValidate::Undecided(FIELDREF_TABLE_UNKNOWN, how);
         };
         let found = match &src.field {
             FieldArg::Number(n) => index.field_numbered_in_table(graph, obj_node, &table.id, *n),
             FieldArg::Name(name) => {
                 index.field_with_owner_in_table(graph, obj_node, &table.id, &name.fold_identifier())
             }
-            FieldArg::Unknown => return FieldRefValidate::Undecided(FIELDREF_FIELD_UNKNOWN),
+            // `B.FieldNo(F)` is a NUMBER, field `F`'s in `B`'s table: on the
+            // RecordRef's own table it names `F`; on another it names whichever
+            // of the RecordRef's fields has that number.
+            FieldArg::FieldNo { record, field } => {
+                let record_table = match infer_receiver_type(
+                    &record.fold_identifier(),
+                    routine,
+                    &obj.globals,
+                    obj_node,
+                    graph,
+                    index,
+                    None,
+                    None,
+                ) {
+                    ReceiverType::Record { table: Some(t) } => t,
+                    _ => {
+                        return FieldRefValidate::Undecided(FIELDREF_FIELD_UNKNOWN, how);
+                    }
+                };
+                let field_lc = field.fold_identifier();
+                if record_table == table.id {
+                    index.field_with_owner_in_table(graph, obj_node, &table.id, &field_lc)
+                } else {
+                    let number = index
+                        .field_with_owner_in_table(graph, obj_node, &record_table, &field_lc)
+                        .and_then(|(f, _)| f.number);
+                    match number {
+                        Some(n) => index.field_numbered_in_table(graph, obj_node, &table.id, n),
+                        None => {
+                            return FieldRefValidate::Undecided(FIELDREF_FIELD_UNKNOWN, how);
+                        }
+                    }
+                }
+            }
+            FieldArg::Unknown => {
+                return FieldRefValidate::Undecided(FIELDREF_FIELD_UNKNOWN, how);
+            }
         };
         let Some((field, _)) = found else {
-            return FieldRefValidate::Undecided(FIELDREF_FIELD_NOT_FOUND);
+            return FieldRefValidate::Undecided(FIELDREF_FIELD_NOT_FOUND, how);
         };
         let field = field.name_lc.to_string();
         match &decided {
             None => decided = Some((table, field)),
             Some((t, f)) if t.id == table.id && *f == field => {}
-            Some(_) => return FieldRefValidate::Undecided(FIELDREF_BINDINGS_DIFFER),
+            Some(_) => {
+                return FieldRefValidate::Undecided(FIELDREF_BINDINGS_DIFFER, how);
+            }
         }
     }
     let Some((table, field)) = decided else {
-        return FieldRefValidate::Undecided(FIELDREF_BINDING_UNREADABLE);
+        return FieldRefValidate::Undecided(FIELDREF_BINDING_UNREADABLE, UnresolvedTable::AnyTable);
     };
     let (_, _, mut triggers) = crate::program::resolve::resolver::resolve_implicit_trigger(
         "validate", table, graph, index, surface,
     );
     // The field's own `OnValidate` only, as `TriggerSiteRule::admits` keeps for
-    // `Rec.Validate(F, …)`; a non-routine route (an honest unknown) stays.
+    // `Rec.Validate(F, …)`. A non-routine route (a collapse-marked trigger's
+    // honest unknown) is kept here but, as for `Rec.Validate`, the model's
+    // `trigger_edges` makes no edge of it.
     triggers.retain(|r| match &r.target {
         RouteTarget::Routine(id) => id.enclosing_member_lc.as_deref() == Some(field.as_str()),
         _ => true,
@@ -1263,16 +1317,29 @@ fn resolve_call_site_obligation(
                     // A local RecordRef bound only to one literal table
                     // (`R.Open(Database::"T")`): that table's operations,
                     // triggers and events, not the open record hub.
-                    _ => recordref_constant_table(
-                        receiver_text,
-                        routine,
-                        obj,
-                        file,
-                        obj_node,
-                        caller_app,
-                        graph,
-                        index,
-                    ),
+                    _ => {
+                        let t = recordref_constant_table(
+                            receiver_text,
+                            routine,
+                            obj,
+                            file,
+                            obj_node,
+                            caller_app,
+                            graph,
+                            index,
+                        );
+                        // ENG-06: provable bindings that name no one loaded
+                        // table (a literal of a table not loaded, or two
+                        // tables) leave triggers the engine cannot see.
+                        named_not_loaded = t.is_none()
+                            && crate::program::recordref_table::local_recordref_bindings(
+                                file,
+                                routine,
+                                receiver_text,
+                            )
+                            .is_some();
+                        t
+                    }
                 }
             } else {
                 None

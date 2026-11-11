@@ -336,17 +336,21 @@ impl SiteCensus {
 /// (B6, `Converter::dataset_operations`).
 const DATASET_OP: &str = "/dataset";
 
-/// The suffix of a `FieldRef.Validate` call site's record operation id
-/// (ENG-06, [`Converter::field_ref_validate_operation`]).
-const FIELD_REF_VALIDATE_OP: &str = "/fieldref-validate";
-
 /// ENG-06: the open edge of record operation `op` whose table is not known
 /// (`SiteFacts::record_table_unresolved`, an undecided `FieldRef.Validate`):
 /// a to-less `ImplicitTrigger` edge, `Unknown(RecordTableUnresolved)`, keyed by
 /// the operation. It names no trigger; the combined graph reads it as the
 /// `record-table-unresolved` uncertainty, so no answer through it is a `no`.
-fn open_record_edge(ix: RoutineIx, r: &ModelRoutine, op: &ModelRecordOperation) -> CallEdge {
-    let mut e = CallEdge::base(ix, &r.id, &op.id, &op.id);
+/// `site` is where coverage lists it: the operation's own id (`…/opN`), or for
+/// a `FieldRef.Validate` its call site (`…/csN`), so the stable-id projection
+/// (`coverage::stable_site`) maps its routine prefix.
+fn open_record_edge(
+    ix: RoutineIx,
+    r: &ModelRoutine,
+    op: &ModelRecordOperation,
+    site: &str,
+) -> CallEdge {
+    let mut e = CallEdge::base(ix, &r.id, site, &op.id);
     e.dispatch_kind = DispatchKind::ImplicitTrigger;
     e.resolution =
         Resolution::Unknown(crate::program::model::calls::UnknownReason::RecordTableUnresolved);
@@ -1702,6 +1706,9 @@ fn convert<'a>(
     let mut background_starts: HashMap<String, BackgroundStart> = HashMap::new();
     let mut dataset_ops: Vec<(usize, Vec<ModelRecordOperation>)> = Vec::new();
     let mut dataset_edges: Vec<CallEdge> = Vec::new();
+    // ENG-06 (`ResolvedCalls::loaded_only_tables`).
+    let mut loaded_only_tables: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order), then the dataset
     // operations' trigger and table-event edges (B6).
@@ -1753,6 +1760,15 @@ fn convert<'a>(
             {
                 let (op, op_edges) =
                     conv.field_ref_validate_operation(ix, r, cs, frv, &event_flow, &mut c);
+                // Undecided with nothing loaded to run: a `no` here holds only
+                // within the loaded apps.
+                if matches!(
+                    frv,
+                    crate::program::resolve::full::FieldRefValidate::Undecided(..)
+                ) && op_edges.is_empty()
+                {
+                    loaded_only_tables.insert(r.stable_routine_id.clone());
+                }
                 dataset_edges.extend(op_edges);
                 dataset_ops.push((ri, vec![op]));
             }
@@ -1763,11 +1779,22 @@ fn convert<'a>(
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
                 // ENG-06: a trigger-capable op on a table that did not resolve.
-                if conv.site_facts.get(&ce.obligation_id).is_some_and(|f| {
-                    f.record_table_unresolved
-                        .is_some_and(|how| conv.unknown_table_may_run(how, &f.open))
-                }) {
-                    edges.push(open_record_edge(RoutineIx::of(ri), r, op));
+                if let Some(f) = conv.site_facts.get(&ce.obligation_id)
+                    && let Some(how) = f.record_table_unresolved
+                {
+                    if conv.unknown_table_may_run(how, &f.open) {
+                        edges.push(open_record_edge(RoutineIx::of(ri), r, op, &op.id));
+                    } else if how == crate::program::resolve::full::UnresolvedTable::AnyTable
+                        && f.open.iter().any(|b| {
+                            matches!(b, crate::program::resolve::edge::OpenBound::Record { .. })
+                        })
+                    {
+                        // A trigger-firing op on any table that no loaded table
+                        // answers: a `no` here holds only within the loaded
+                        // apps' triggers. (An op that fires no trigger rests on
+                        // the table events only, which prove already states.)
+                        loaded_only_tables.insert(r.stable_routine_id.clone());
+                    }
                 }
                 edges.extend(conv.triggers(RoutineIx::of(ri), r, op, ce, &mut c));
                 edges.extend(conv.table_events(
@@ -1797,6 +1824,7 @@ fn convert<'a>(
             diagnostics,
             external_targets: conv.targets.into_inner(),
             background_starts: std::sync::Arc::new(background_starts),
+            loaded_only_tables: std::sync::Arc::new(loaded_only_tables),
         },
         c,
         dataset_ops,
@@ -1880,20 +1908,41 @@ struct Converter<'a> {
 struct OpenFamilies {
     triggers: std::collections::HashSet<&'static str>,
     events: std::collections::HashSet<&'static str>,
+    /// A loaded table (or table extension) whose code is not loaded (from
+    /// symbols only): its triggers are unseen, so an operation that may hold
+    /// any table may run code (owner answer q-20261111T044238-cead8f76:
+    /// missing data is never absence). Subscribers in a symbol-only app are
+    /// read from its symbols like any loaded subscriber (`events` above); an
+    /// unreadable one is B2's own gap.
+    opaque_table: bool,
 }
 
 impl OpenFamilies {
     fn of(graph: &ProgramGraph) -> Self {
         use al_syntax::IdentifierFoldExt;
         let family = |stem: &str| crate::program::resolve::edge::record_trigger_op(stem);
-        let mut out = OpenFamilies::default();
+        let mut out = OpenFamilies {
+            opaque_table: graph.objects.iter().any(|o| {
+                matches!(
+                    o.id.kind,
+                    al_syntax::ir::ObjectKind::Table | al_syntax::ir::ObjectKind::TableExtension
+                ) && o.tier == crate::snapshot::TrustTier::SymbolOnly
+            }),
+            ..OpenFamilies::default()
+        };
         for r in graph.routines.iter() {
             if r.is_trigger
                 && matches!(
                     r.id.object.kind,
                     al_syntax::ir::ObjectKind::Table | al_syntax::ir::ObjectKind::TableExtension
                 )
-                && let Some(f) = r.id.name_lc.strip_prefix("on").and_then(family)
+                // `On<Op>`, and a table extension's `OnBefore<Op>`/`OnAfter<Op>`
+                // (`OnBeforeValidate` on a field, `OnAfterInsert`, …).
+                && let Some(f) = r.id.name_lc.strip_prefix("on").and_then(|s| {
+                    family(s)
+                        .or_else(|| s.strip_prefix("before").and_then(family))
+                        .or_else(|| s.strip_prefix("after").and_then(family))
+                })
             {
                 out.triggers.insert(f);
             }
@@ -1919,7 +1968,9 @@ impl OpenFamilies {
     /// `open` (`OpenBound::Record`: its triggers and table events;
     /// `OpenBound::RecordEvents`: its table events only), may run code. A table
     /// not loaded has triggers the engine cannot see, so a trigger-firing
-    /// operation on it always may; any other trigger or event is loaded code.
+    /// operation on it always may; so may any operation that may hold any table
+    /// while a loaded table's code is not loaded (symbols only); any other
+    /// trigger or event is loaded code.
     fn may_run(
         &self,
         how: crate::program::resolve::full::UnresolvedTable,
@@ -1929,6 +1980,12 @@ impl OpenFamilies {
         use crate::program::resolve::full::UnresolvedTable;
         open.iter().any(|b| match b {
             OpenBound::Record { .. } if how == UnresolvedTable::NotLoaded => true,
+            // Any table, and one whose code is not loaded may run anything.
+            OpenBound::Record { .. } | OpenBound::RecordEvents { .. }
+                if how == UnresolvedTable::AnyTable && self.opaque_table =>
+            {
+                true
+            }
             OpenBound::Record { op } => self.triggers.contains(op) || self.events.contains(op),
             OpenBound::RecordEvents { op } => self.events.contains(op),
             _ => false,
@@ -2922,10 +2979,17 @@ impl<'a> Converter<'a> {
                 },
                 Some(field.clone()),
             ),
-            FieldRefValidate::Undecided(_) => (None, None),
+            FieldRefValidate::Undecided(..) => (None, None),
         };
         let op = ModelRecordOperation {
-            id: format!("{}{FIELD_REF_VALIDATE_OP}", cs.id),
+            // A FieldRef operation's id (`{call site}/fieldref`, as B5's): its
+            // context, order and `asserterror` state are its call site's
+            // (`ModelRoutine::effect_operation_site`).
+            id: format!(
+                "{}{}",
+                cs.id,
+                crate::program::model::workspace::FIELD_REF_OP_SUFFIX
+            ),
             op: "Validate".to_string(),
             record_variable_name: receiver,
             record_variable_id: None,
@@ -2966,14 +3030,11 @@ impl<'a> Converter<'a> {
                 ));
                 edges
             }
-            FieldRefValidate::Undecided(_) => {
+            FieldRefValidate::Undecided(_, how) => {
                 let validate =
                     [crate::program::resolve::edge::OpenBound::Record { op: "validate" }];
-                if self.unknown_table_may_run(
-                    crate::program::resolve::full::UnresolvedTable::AnyTable,
-                    &validate,
-                ) {
-                    vec![open_record_edge(ix, r, &op)]
+                if self.unknown_table_may_run(*how, &validate) {
+                    vec![open_record_edge(ix, r, &op, &cs.id)]
                 } else {
                     Vec::new()
                 }

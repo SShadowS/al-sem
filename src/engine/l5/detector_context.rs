@@ -2453,6 +2453,7 @@ mod tests {
                 diagnostics: Vec::new(),
                 external_targets: Vec::new(),
                 background_starts: Default::default(),
+                loaded_only_tables: Default::default(),
             }),
             events: Default::default(),
             page_ui_blocked: Default::default(),

@@ -5013,6 +5013,7 @@ pub(crate) fn cross_app_base_of(
         diagnostics,
         external_targets,
         background_starts,
+        loaded_only_tables,
     } = std::sync::Arc::try_unwrap(std::mem::take(&mut x.resolved.calls))
         .unwrap_or_else(|shared| (*shared).clone());
     let (dependency_calls, primary_calls): (
@@ -5034,6 +5035,7 @@ pub(crate) fn cross_app_base_of(
         diagnostics,
         external_targets,
         background_starts,
+        loaded_only_tables,
     };
 
     let _s_index = crate::engine::perf_trace::span("crossapp", "crossapp.field_index");

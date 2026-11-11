@@ -230,6 +230,11 @@ pub(crate) struct EventsRaised {
     pub publications: usize,
     /// Live page opens (the platform page events).
     pub pages: usize,
+    /// ENG-06: a record operation that may hold any table, kept closed because
+    /// no loaded table could run anything there
+    /// (`UnresolvedCone::any_table_loaded_only`): its triggers too are the
+    /// loaded tables' only (owner answer q-20261111T044238-cead8f76).
+    pub any_table_ops: bool,
 }
 
 impl EventsRaised {
@@ -240,6 +245,13 @@ impl EventsRaised {
         let mut parts = Vec::new();
         if self.table_events {
             parts.push("the table events of its record operations".to_string());
+        }
+        if self.any_table_ops {
+            parts.push(
+                "the triggers of a record operation on a table not known, of the loaded tables \
+                 only"
+                    .to_string(),
+            );
         }
         if self.publications > 0 {
             parts.push(plural(
@@ -294,7 +306,7 @@ const SUBSCRIBABLE_EFFECTS: &[&str] = &["EVENT_PUBLISH", "UI_WINDOW_OPEN"];
 fn events_raised(
     result: &ProveResult,
     entry: &DigestEntryFull,
-    fires_table_events: bool,
+    cone: ConeEvents,
 ) -> Option<EventsRaised> {
     let live = |ty: &str| {
         entry
@@ -305,19 +317,42 @@ fn events_raised(
     };
     debug_assert_eq!(SUBSCRIBABLE_EFFECTS, ["EVENT_PUBLISH", "UI_WINDOW_OPEN"]);
     let raised = EventsRaised {
-        table_events: fires_table_events,
+        table_events: cone.fires_table_events,
         publications: live("EVENT_PUBLISH"),
         pages: live("UI_WINDOW_OPEN"),
+        any_table_ops: cone.any_table_loaded_only,
     };
     (result.answer == ProveAnswer::No
-        && (raised.table_events || raised.publications + raised.pages > 0))
+        && (raised.table_events || raised.any_table_ops || raised.publications + raised.pages > 0))
         .then_some(raised)
+}
+
+/// What a root's cone raises that code outside the loaded apps could run on
+/// (`UnresolvedCone::fires_table_events`, `UnresolvedCone::any_table_loaded_only`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ConeEvents {
+    pub fires_table_events: bool,
+    pub any_table_loaded_only: bool,
+}
+
+impl ConeEvents {
+    /// The facts of a cone counted on prove's plan.
+    pub(crate) fn of(c: &crate::engine::l5::digest_cli::UnresolvedCone) -> Self {
+        ConeEvents {
+            fires_table_events: c
+                .fires_table_events
+                .expect("prove's plan reads the cone's table events"),
+            any_table_loaded_only: c
+                .any_table_loaded_only
+                .expect("prove's plan reads the cone's any-table operations"),
+        }
+    }
 }
 
 /// Sets `r`'s [`ProveObligations::relies_on_loaded_subscribers`] and what it
 /// rests on.
-fn note_loaded_subscribers(r: &mut ProveResult, entry: &DigestEntryFull, fires_table_events: bool) {
-    let raised = events_raised(r, entry, fires_table_events);
+fn note_loaded_subscribers(r: &mut ProveResult, entry: &DigestEntryFull, cone: ConeEvents) {
+    let raised = events_raised(r, entry, cone);
     r.obligations.relies_on_loaded_subscribers = raised.is_some();
     r.obligations.events_raised = raised;
 }
@@ -1414,7 +1449,7 @@ pub(crate) struct TableQuestions<'a> {
     pub root: &'a str,
     pub entry: &'a DigestEntryFull,
     pub gaps_in_cone_count: usize,
-    pub fires_table_events: bool,
+    pub cone_events: ConeEvents,
     pub world: World,
 }
 
@@ -1459,7 +1494,7 @@ impl TableQuestions<'_> {
             &field_guarded,
             self.world,
         );
-        note_loaded_subscribers(&mut result, self.entry, self.fires_table_events);
+        note_loaded_subscribers(&mut result, self.entry, self.cone_events);
         result.obligations.universe = crate::engine::l5::literal_reach::universe_words(self.model);
         Ok(TableAnswer {
             result,
@@ -1495,7 +1530,7 @@ pub(crate) type TableAnswers = HashMap<String, (Vec<serde_json::Value>, Vec<Stri
 /// joined, which takes the cones).
 pub(crate) fn cone_facts(
     cones: &BTreeMap<String, crate::engine::l5::digest_cli::UnresolvedCone>,
-) -> HashMap<String, (usize, bool)> {
+) -> HashMap<String, (usize, ConeEvents)> {
     cones
         .iter()
         .map(|(r, c)| {
@@ -1504,8 +1539,7 @@ pub(crate) fn cone_facts(
                 (
                     c.gaps_in_cone
                         .expect("a --writes-table plan counts the gaps in the cone"),
-                    c.fires_table_events
-                        .expect("a --writes-table plan reads the cone's table events"),
+                    ConeEvents::of(c),
                 ),
             )
         })
@@ -1518,7 +1552,7 @@ pub(crate) fn table_answers(
     model: &crate::program::model::workspace::Model,
     temp_states: &crate::engine::l5::digest_cli::DbTempStates<'_>,
     entries: &[DigestEntryFull],
-    cones: &HashMap<String, (usize, bool)>,
+    cones: &HashMap<String, (usize, ConeEvents)>,
     tables: &[String],
 ) -> TableAnswers {
     let mut out = TableAnswers::new();
@@ -1526,7 +1560,7 @@ pub(crate) fn table_answers(
         return out;
     }
     for entry in entries {
-        let &(gaps_in_cone_count, fires_table_events) = cones
+        let &(gaps_in_cone_count, cone_events) = cones
             .get(&entry.routine_id)
             .expect("a --writes-table plan counts each root's cone");
         let q = TableQuestions {
@@ -1535,7 +1569,7 @@ pub(crate) fn table_answers(
             root: &entry.routine_id,
             entry,
             gaps_in_cone_count,
-            fires_table_events,
+            cone_events,
             world: World::of_flags(false),
         };
         let (mut values, mut lines) = (Vec::new(), Vec::new());
@@ -4422,9 +4456,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let gaps_in_cone_count = cone
         .gaps_in_cone
         .expect("prove's plan counts the gaps in the cone");
-    let fires_table_events = cone
-        .fires_table_events
-        .expect("prove's plan reads the cone's table events");
+    let cone_events = ConeEvents::of(cone);
     let resolved = cx.view().model();
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
@@ -4477,7 +4509,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
                 root: root_id,
                 entry,
                 gaps_in_cone_count,
-                fires_table_events,
+                cone_events,
                 world: World::of_flags(closed_world),
             }
             .answer(table)
@@ -4524,7 +4556,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
                 &HashMap::new(),
                 World::of_flags(closed_world),
             );
-            note_loaded_subscribers(&mut r, entry, fires_table_events);
+            note_loaded_subscribers(&mut r, entry, cone_events);
             r.obligations.universe = universe;
             (r, other_via_callers)
         }
