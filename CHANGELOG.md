@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (TLS-19 and TLS-20: the CDO gate's impact lane and speed skip)
 
+- **`scripts/cdo-gate`'s impact lane runs its two tests one after the other** (TLS-23). Each test
+  starts its own `alsem impact` calls at once (the diff test three, the base test two), so together
+  they held five CDO models (~3.3-3.7 GB each) beside the other lane; the second gate with the lane
+  kept 2,836 MiB of the owner's 4 GiB headroom (peak 46,315 of 49,152 MiB, no OOM). With
+  `--test-threads=1` the lane holds at most three. The memory sampler now also writes
+  `memory.timeline` (every 2 s: the container's unreclaimable MiB, the RSS sum of the gate's own
+  process tree, its three largest processes) and `phases.times`, and the summary names the gate's
+  own share at the container's peak, since the container counts every agent's processes. To be
+  measured: two gates.
+
 - **`scripts/cdo-gate` runs the two impact ratchets as their own lane, also in serial mode**
   (TLS-19, owner approval 2026-11-11). `output_cdo::cdo_impact_ratchets` and
   `cdo_impact_base_ratchets` (one-shot `alsem impact` processes, 4-7 min each on about 3 cores) held

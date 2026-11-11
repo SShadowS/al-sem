@@ -152,13 +152,14 @@ summarize() {
     # ⟨TLS-19⟩ The container's peak unreclaimable memory during the test lanes,
     # and the OOM counters the run added (a report, not a verdict).
     if [[ -f "$logs/memory.unreclaimable" ]]; then
-        local peak limit
-        read -r peak limit < "$logs/memory.unreclaimable"
+        local peak limit gate
+        read -r peak limit gate < "$logs/memory.unreclaimable"
         if [[ "$limit" =~ ^[0-9]+$ ]]; then
             echo "cdo-gate:   peak memory (container, unreclaimable) $((peak >> 20)) MiB of $((limit >> 20)) MiB, headroom $(((limit - peak) >> 20)) MiB"
         else
             echo "cdo-gate:   peak memory (container, unreclaimable) $((peak >> 20)) MiB (no limit)"
         fi
+        [[ -n "$gate" ]] && echo "cdo-gate:   the gate's own processes then: $gate MiB (RSS sum; the rest is other agents)"
     fi
     if [[ -f "$logs/memory.events.start" && -f "$logs/memory.events.end" ]]; then
         echo "cdo-gate:   memory events this run: $(awk 'NR == FNR { s[$1] = $2; next }
@@ -292,8 +293,10 @@ run_phase() {
     shift
     local start=$SECONDS
     echo "cdo-gate: [$name] started"
+    echo "$(date +%s) start $name" >> "$logs/phases.times"
     "$@" 2>&1 | stamp > "$logs/$name.log"
     local rc=${PIPESTATUS[0]}
+    echo "$(date +%s) end $name" >> "$logs/phases.times"
     echo "$rc $((SECONDS - start))" > "$logs/$name.status"
     if [[ "$rc" -eq 0 ]]; then
         echo "cdo-gate: [$name] ok ($((SECONDS - start)) s)"
@@ -384,8 +387,12 @@ phase_output_cdo() {
 # run one-shot `alsem impact` processes (each builds the CDO model; 4-7 min, on
 # about 3 cores) and held `output_cdo` open 470-700 s after its other tests
 # (TLS-16's note). They run beside everything else, also in serial mode.
+# ⟨TLS-23⟩ One after the other: each test runs its own calls at once (the diff
+# three, the base two), so together they held five CDO models (~3.3-3.7 GB
+# each) beside the other lane, and the second gate kept only 2.8 GiB of the
+# owner's 4 GiB headroom. One at a time, at most three.
 phase_output_cdo_impact() {
-    run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
+    run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact -- --test-threads=1
 }
 
 # ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs
@@ -460,16 +467,37 @@ unreclaimable_bytes() {
          $1 == "slab_reclaimable" { n -= $2 }
          END { print n + 0 }' /sys/fs/cgroup/memory.stat
 }
+# ⟨TLS-23⟩ The container counts every agent's processes, not only the gate's.
+# Each sample also sums the RSS of the gate's own process tree (descendants of
+# this script; shared pages count once per process, so it over-counts a little)
+# and names its three largest processes, in `memory.timeline` (epoch seconds,
+# unreclaimable MiB, gate MiB, top three), beside `phases.times` (phase starts
+# and ends). The summary gives the gate's share at the container's peak.
+gate_tree_rss() {
+    ps -e -o pid=,ppid=,rss=,comm= | awk -v root="$1" '
+        { parent[$1] = $2; rss[$1] = $3; name[$1] = $4 }
+        END {
+            for (p in parent) {
+                q = p
+                while (q != root && (q in parent) && q != parent[q]) q = parent[q]
+                if (q == root) print rss[p], name[p] "/" p
+            }
+        }' | sort -rn | awk '{ kib += $1 } NR <= 3 { top = top " " $2 ":" int($1 / 1024) }
+                             END { print int(kib / 1024) top }'
+}
 memory_sampler() {
-    local cg=/sys/fs/cgroup peak=0 cur
+    local cg=/sys/fs/cgroup peak=0 cur gate
     [[ -r "$cg/memory.stat" ]] || return 0
     cp "$cg/memory.events" "$logs/memory.events.start" 2>/dev/null
     while :; do
         cur=$(unreclaimable_bytes) || break
-        ((cur > peak)) && peak=$cur && echo "$peak $(cat "$cg/memory.max" 2>/dev/null)" > "$logs/memory.unreclaimable"
+        gate=$(gate_tree_rss "$gate_pid")
+        echo "$(date +%s) $((cur >> 20)) $gate" >> "$logs/memory.timeline"
+        ((cur > peak)) && peak=$cur && echo "$peak $(cat "$cg/memory.max" 2>/dev/null) ${gate%% *}" > "$logs/memory.unreclaimable"
         sleep 2
     done
 }
+gate_pid=$$
 # A Ctrl-C or kill stops the background lanes too.
 trap 'kill 0' INT TERM
 memory_sampler &
