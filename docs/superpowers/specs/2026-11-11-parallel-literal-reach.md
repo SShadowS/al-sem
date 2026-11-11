@@ -152,3 +152,144 @@ them:
   collect into a `BTreeMap`, so order comes from the key (Opus and sol); keep the
   `prove.reach_effects` span on the calling thread (Opus); a worker count from the core count makes
   peak memory machine-dependent (Opus).
+
+## 8. TLS-22: the parallel literal pass (draft for review, 2026-11-11, master `c498fd98`)
+
+Status: draft, not reviewed. It answers each finding of section 7 against the code after ENG-18.
+
+### 8.1 What ENG-18 settled, and what it did not
+
+ENG-18 (`55beb633`) gives every top-level `RecRefFlow::evaluate` a fresh `EvalState` (its own
+budget, depth cut, memo and final marks, `recref_flow.rs:584-617`) and keeps the answer by its key
+in `results` (`:207`). So an answer is a function of its key alone: the history finding is closed.
+The STRUCTURE is not: `eval` is still a `RefCell` field that each evaluation overwrites, and
+`results` is a `RefCell` map. Both keep `LiteralReach` from being `Sync`.
+
+### 8.2 Goal
+
+Run `literal_reach_entries`' per-root loop (`digest_cli.rs:2396`, `prove.reach_effects`: 108.8 s of
+the gate's `impact --diff`, 196.8 s of `impact --base`, traced before TLS-17) over the roots of a
+batch in parallel, with output **byte-identical in any thread count**, peak memory measured and
+bounded independently of the machine's core count.
+
+### 8.3 Why the loop can be split by root
+
+Each iteration reads `reach`, `group_paths`, `unresolved_sites` (shared, read-only) and the suffix
+cache, and writes only its own `entry` (`digest_cli.rs:2408-2580`; the `entries` inside the
+crossing block is a local `CrossingEntries`, not the slice). So the only cross-root effects are the
+caches. Every cache must be a pure memo: a value is a function of its key, so who computes it
+first, and whether it was evicted and rebuilt, cannot change any answer.
+
+| State | Where | Today | Pure function of key? | Change |
+|-------|-------|-------|-----------------------|--------|
+| `RecRefFlow::eval` | `recref_flow.rs:203` | `RefCell<EvalState>`, reset per evaluation | per evaluation (ENG-18) | **removed as a field**: `evaluate` owns a local `EvalState` and passes `&mut` down `eval_routine` (`:639`, recursive at `:890`). The type then forbids state outliving an evaluation, and no lock is needed. |
+| `RecRefFlow::results` | `:207` | `RefCell<HashMap<EvalKey, ..>>` | yes (ENG-18) | `Mutex`, never held while evaluating (look up, unlock, evaluate, insert-if-absent). Two threads may evaluate one key; both get the same answer. |
+| `LiteralReach::flow_cache` | `literal_reach.rs:1587` | `Mutex`, not held during compute (`:2301-2320`) | yes (`FlowKey` is program, entry values, keeps) | keep; measure contention (8.6); shard only if the trace shows it. |
+| `CbGraph::{toward, toward_explicit}` | `commit_scope.rs:657-660` | `Mutex`, compute outside, `or_insert` (`:940-955`) | yes (by origin node) | none. |
+| `LiveTree::by_routine` | `literal_reach.rs:1522` | `std::cell::OnceCell` | yes (from the tree) | `std::sync::OnceLock`. |
+| `SuffixCache` | `:544-630` | `&mut`, `Rc` trees, FIFO eviction over 1.6 M states | yes: `tree_from(start, per_tree)` reads only `start`, the cap and pure memos; a capped search is the same `Stop::Capped` every time | see 8.4. |
+| `judge_traps`' `asked` | `:2311` | local `RefCell` | local | none. |
+
+Proof obligation for the table: before code, a grep for `Cell`, `RefCell`, `Rc<`, `Mutex`,
+`thread_local`, `static mut` and atomics over every module the loop reaches
+(`literal_reach.rs`, `recref_flow.rs`, `commit_scope.rs`, `group_path.rs`, `lflow`, `values`,
+`routes`, `traps`), recorded in the plan. The compiler is the second check: `par_iter_mut` over the
+loop does not compile while any of them is not `Sync`.
+
+### 8.4 The suffix cache: one shared cache, not one per worker
+
+Section 7 found that per-worker caches multiply memory (each budget at least one tree's 400 K
+states). The suffix trees are pure (8.3), so ONE cache can serve every worker:
+
+- `SuffixCache` becomes `Mutex<Inner>` with `Arc<LiveTree>` and `Arc<HashSet>` (`plain`); `get`
+  takes `&self`. Lookup under the lock; on a miss, unlock, build, lock, insert if still absent
+  (else take the one there and drop ours), evict oldest-first to the budget, unlock.
+- Two workers may build the same tree once each; the trees are equal, one is kept. (An in-flight
+  marker to stop the duplicate build is not built: measure the duplicate count first; it is a
+  counter, 8.6.)
+- Eviction order now depends on timing. That is allowed only because a tree is pure: an evicted
+  tree is rebuilt with the same result. The test in 8.5 forces eviction across threads.
+- Memory bound: held trees at most the budget (1.6 M states, as today) plus the trees in flight,
+  at most one per worker (`workers × STATE_CAP`), plus each worker's root tree and crossing
+  entries. So the worker count is part of the memory bound, and it is FIXED (8.5), not the core
+  count.
+- `built`, `evicted`, `peak_held` become atomics or move inside the lock. They are diagnostics
+  (tests read them for the serial cases); under threads they vary and nothing prints them.
+
+### 8.5 Scheduling and threads
+
+- In `literal_reach_entries`, `entries.par_iter_mut().with_max_len(1)` (one root per task, so
+  work stealing balances uneven roots) inside `pool.install`. The `prove.reach_effects` span stays
+  on the calling thread around it.
+- The pool: a dedicated rayon pool of `REACH_WORKERS` threads with `big_stack::BIG_STACK_SIZE`
+  stacks (the search and `eval_routine` recurse; today they run on the caller's thread, which may
+  be a big-stack thread). `REACH_WORKERS` is a constant chosen from the measurement (8.6), capped
+  by the core count, never derived from it alone, so peak memory is the same on any machine with
+  at least that many cores. `AL_SEM_REACH_WORKERS=N` for tests and measurement; 1 runs the loop
+  serially on the calling thread (today's path, no pool).
+- Batches: a streamed read passes 32 roots at a time (`impact/jobs.rs` `ROOT_BATCH`), so at most
+  32 roots run at once and the batch's slowest root bounds it. Measured, not changed here; if the
+  tail dominates, a follow-up overlaps batches (reported, not part of this task).
+- Nested parallelism: `QueryCx::run` before the pass and the resident engine's other work keep
+  their own pools; the pass runs inside its pool only.
+- The resident engine (`resident/revision.rs:927`, `passed_root_entries`) runs the same pass. Under
+  `--low-mem` it runs serially (`REACH_WORKERS` = 1): memory before speed there (mantra 21). The
+  default resident mode uses the pool, measured against its 8 GiB budget.
+
+### 8.6 Tests and proofs
+
+The oracle is the serial path (`AL_SEM_REACH_WORKERS=1`, or a direct call with workers 1).
+
+- **Thread-count equality, real output:** over every r0 dir and the dependency fixtures, the
+  passed entries (serialized, every field) with workers 1, 2 and 8 are byte-equal. Preconditions
+  asserted: at least one entry with a boundary group, at least one suffix-cache hit across two
+  roots, more roots than workers.
+- **Shared suffix tree across workers (hand-stated):** a hand-built tree where two roots cross into
+  the same dependency entry state; with 2 workers and a barrier so both ask for the same key at
+  once, both get equal trees and the outputs equal the serial ones. Precondition: `built` counts 2
+  builds for 1 key (the race happened).
+- **Forced eviction under threads:** `SuffixCache::with_limits(small, small)` so every request
+  evicts; workers 4; output equals serial with no eviction. Preconditions: `evicted > 0`, some key
+  built twice.
+- **No evaluator state across evaluations (type guard):** `eval` is no longer a field; a test is
+  not needed for what does not compile. ENG-18's order tests (`literal_flow_tests.rs:366-386`)
+  keep pinning history independence, and run under workers 4 as well.
+- **Results race:** two threads evaluate one `EvalKey` at once (barrier); both answers equal the
+  serial answer; the map holds one entry.
+- **Discrimination, one per guard:**
+  - Shared cache keyed wrongly (insert under the requesting worker's FIRST key): the
+    shared-tree and equality tests fail; reverted, pass.
+  - A cache that keeps a cancelled or capped-by-budget tree from a different cap (insert the
+    tree built with `per_tree / 2` on a race): the eviction test fails; reverted, pass.
+  - Output order: collecting rows in completion order instead of entry order (a
+    `par_iter().map().collect()` into a `Vec` pushed by completion): the equality test fails;
+    reverted, pass.
+- **End to end:** `scripts/ci-steps task`; then the branch gate's `output_cdo` (every CDO golden and
+  ratchet) with the default workers, and one CDO `impact --diff` JSON compared byte for byte at
+  workers 1 and the default.
+
+### 8.7 Measurement
+
+Release-fast `alsem` on CDO, alone on the machine, through the orchestrator:
+
+- `ALSEM_TRACE=1` `impact --diff` (the gate's) and `impact --base bc3ccb18~5 --no-tests --format
+  json`, at workers 1, 2, 4, 8, 16: `prove.reach_effects` span, wall, peak RSS (`/usr/bin/time`
+  is missing here: `/proc/<pid>/status` VmHWM via the cdo-speed sampler), suffix builds,
+  duplicate builds, evictions, `flow_cache` lock wait (a temporary trace counter, removed before
+  the landing).
+- The resident engine: `alsem mcp` warm, one 699-root impact through it, default and `--low-mem`,
+  RSS against the 8 GiB / 6 GiB budgets.
+- `REACH_WORKERS` = the smallest count past which the span stops falling by 10 %, within the
+  budgets. A smaller gain than the span's share suggests is reported as a finding (the batch tail,
+  lock contention, duplicate builds).
+- `cdo-speed` must pass (its model build and test universe ratios are untouched; its impact round
+  should improve).
+
+### 8.8 Risks
+
+- A cache that is not pure after all: the table in 8.3 is the claim, the grep is the check, the
+  thread-count equality on fixtures and CDO is the net.
+- Memory: bounded by workers × (one in-flight tree + root tree), measured; `--low-mem` serial.
+- Stack overflow on a pool thread: the big-stack pool.
+- Rayon nested inside another pool's `install` (impact's own jobs): `install` from inside a pool
+  blocks that worker; measured in the impact run.
