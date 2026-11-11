@@ -74,6 +74,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-identical digests. Time on the same chunks, alternating which runs first: +1.8% and +2%
   (one earlier pair, fixed second, read +37%; it did not reproduce). Peak RSS equal (7.0 and
   8.4 GB).
+- Limits (panel review: gpt-6-astra, Fable): the budget is per top-level key, so the worst
+  case per read is no longer bounded by one 200,000 (a shape where many keys share a deep
+  sensitive subtree recomputes it per key; CDO shows no such shape); inside one evaluation a key
+  reached first past the cutoff and later shallower still answers by call-edge order (stable,
+  and sound: it over-approximates); the test pins depth contamination in both orders, not budget
+  exhaustion. The old shared `done` marks and the `touched` sets are gone (dead with fresh
+  state).
 
 ### Fixed (ENG-06: `FieldRef.Validate` and record operations on a table not known, engine limits B9, B10)
 

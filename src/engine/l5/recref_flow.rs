@@ -216,9 +216,6 @@ type EvalKey = (usize, Vec<(u32, Val)>, Vec<(Arc<str>, Val)>);
 #[derive(Default)]
 struct EvalState {
     memo: HashMap<EvalKey, HashMap<String, Val>>,
-    /// Keys whose value is final (computed in an iteration that changed
-    /// nothing).
-    done: HashSet<EvalKey>,
     in_progress: HashSet<EvalKey>,
     /// An in-progress value was read, or a memo value grew, this iteration.
     read_partial: bool,
@@ -600,16 +597,14 @@ impl<'a> RecRefFlow<'a> {
         };
         let mut answer = None;
         for _ in 0..12 {
-            let mut touched = HashSet::new();
             {
                 let mut st = self.eval.borrow_mut();
                 st.read_partial = false;
                 st.grew = false;
             }
-            let vals = self.eval_routine(i, &inputs, &globals, 0, &mut touched);
-            let mut st = self.eval.borrow_mut();
+            let vals = self.eval_routine(i, &inputs, &globals, 0);
+            let st = self.eval.borrow();
             if !(st.read_partial && st.grew) {
-                st.done.extend(touched);
                 answer = Some(vals);
                 break;
             }
@@ -647,7 +642,6 @@ impl<'a> RecRefFlow<'a> {
         inputs: &[(u32, Val)],
         globals: &[(Arc<str>, Val)],
         depth: usize,
-        touched: &mut HashSet<EvalKey>,
     ) -> HashMap<String, Val> {
         // A routine that is not sensitive reads its summary: no memo, no budget.
         if !self.sensitive[i] {
@@ -667,9 +661,6 @@ impl<'a> RecRefFlow<'a> {
         };
         {
             let mut st = self.eval.borrow_mut();
-            if st.done.contains(&key) {
-                return st.memo[&key].clone();
-            }
             if st.in_progress.contains(&key) {
                 st.read_partial = true;
                 return st
@@ -684,7 +675,6 @@ impl<'a> RecRefFlow<'a> {
             st.budget -= 1;
             st.in_progress.insert(key.clone());
         }
-        touched.insert(key.clone());
         let mut vals = self.initial_vals(i, inputs);
         if let Some(prev) = self.eval.borrow().memo.get(&key) {
             for (k, v) in prev {
@@ -725,9 +715,7 @@ impl<'a> RecRefFlow<'a> {
                     if !self.conds_hold(i, &f.passed_conds[n], &vals, globals) {
                         continue;
                     }
-                    if let Some(add) =
-                        self.out_val(i, &vals, globals, *ci, *k as u32, depth, touched)
-                    {
+                    if let Some(add) = self.out_val(i, &vals, globals, *ci, *k as u32, depth) {
                         merge(&mut vals, v, add);
                     }
                 }
@@ -803,7 +791,6 @@ impl<'a> RecRefFlow<'a> {
         ci: usize,
         k: u32,
         depth: usize,
-        touched: &mut HashSet<EvalKey>,
     ) -> Option<Val> {
         let r = &self.routines[i];
         let cs = &r.call_sites[ci];
@@ -832,17 +819,8 @@ impl<'a> RecRefFlow<'a> {
                         .parameters
                         .iter()
                         .find(|p| lc(&p.name) == pname)
-                        && let Some(o) = self.callee_out(
-                            i,
-                            vals,
-                            globals,
-                            cs,
-                            s,
-                            sp,
-                            Some(callee),
-                            depth,
-                            touched,
-                        )
+                        && let Some(o) =
+                            self.callee_out(i, vals, globals, cs, s, sp, Some(callee), depth)
                     {
                         out = union_val(&out, &o);
                     }
@@ -852,7 +830,7 @@ impl<'a> RecRefFlow<'a> {
             let Some(p) = callee.parameters.iter().find(|p| p.index == k) else {
                 return Some(None);
             };
-            if let Some(o) = self.callee_out(i, vals, globals, cs, t, p, None, depth, touched) {
+            if let Some(o) = self.callee_out(i, vals, globals, cs, t, p, None, depth) {
                 out = union_val(&out, &o);
             }
         }
@@ -873,7 +851,6 @@ impl<'a> RecRefFlow<'a> {
         p: &ModelParameter,
         publisher: Option<&ModelRoutine>,
         depth: usize,
-        touched: &mut HashSet<EvalKey>,
     ) -> Option<Val> {
         let callee = &self.routines[t];
         if !callee.body_available || callee.parse_incomplete {
@@ -910,7 +887,7 @@ impl<'a> RecRefFlow<'a> {
             } else {
                 Vec::new()
             };
-        let res = self.eval_routine(t, &inputs, &g, depth + 1, touched);
+        let res = self.eval_routine(t, &inputs, &g, depth + 1);
         Some(res.get(&pname).cloned().unwrap_or(None))
     }
 

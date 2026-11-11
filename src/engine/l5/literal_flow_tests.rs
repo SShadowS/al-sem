@@ -380,4 +380,16 @@ fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
         dead(&batch, &shallow, &shallow_fx),
         "Shallow asked after Deep answers as it does alone"
     );
+
+    // The other order (review): Shallow's exact values must not reach Deep,
+    // whose own evaluation crosses the cutoff.
+    let reverse = LiteralReach::new(&tree, model);
+    assert!(
+        dead(&reverse, &shallow, &shallow_fx),
+        "Shallow's own answer"
+    );
+    assert!(
+        !dead(&reverse, &deep, &deep_fx),
+        "Deep asked after Shallow answers as it does alone"
+    );
 }
