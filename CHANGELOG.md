@@ -73,6 +73,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a discrimination proof. Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`,
   which also records why a parallel literal reach is not built yet (ENG-18, TLS-22).
 
+### Fixed (ENG-07: a report run follows its request page's triggers, engine limits L20)
+
+- **A write in a report's request-page trigger no longer answers `no` through a run.**
+  `run_triggers` listed only a report's `OnInitReport`/`OnPreReport`/`OnPostReport` and its data
+  items' triggers, so `prove writes-table` answered a definite `no` for a write in the request
+  page's `OnOpenPage` through `Report.Run`, `RunModal`, `Execute` and a report variable's run
+  (re-probed on master `a8a6c70a`). A run of a report, or of the report a report extension
+  extends, now follows its request page's `OnInit` (`unconditional on success`) and its
+  `OnOpenPage`, `OnQueryClosePage`, `OnClosePage` and record triggers (`conditional`). The list
+  also feeds the sited graph (`alsem graph`, `impact`) and explain's `reachedFrom`. Which trigger
+  runs in which run was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  `OnInit` ran in every run; `OnOpenPage`/`OnClosePage` not with `UseRequestPage` false;
+  `OnQueryClosePage` not under `Execute` (the order is in `docs/engine-limits.md`, "L20 in
+  detail").
+- **A run's triggers are triggers.** The resolver matched a run's triggers by name alone, so a
+  procedure named like one (a report procedure `OnOpenPage`) was followed as if the run ran it.
+  It now takes routines declared as triggers only, for every object kind.
+- No Rust-owned golden moved: no fixture runs a report that has a request page.
+- Tests: `tests/cli/cli_eng07_request_page.rs` (4 tests; discrimination proofs: dropping the
+  request page's names brings the old `no` back, dropping their conditionality or making `OnInit`
+  conditional fails the conditionality pins, and dropping the trigger filter follows the
+  procedure).
+
 ### Fixed (ENG-18: a literal-reach answer no longer depends on what else the read asked)
 
 - **The RecordRef flow evaluates each question from fresh state.** `RecRefFlow` (the

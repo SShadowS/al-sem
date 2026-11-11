@@ -485,20 +485,38 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
     lists the properties not read this way yet).
   - `alsem graph` has `implicitTrigger`/`tableEvent` edges from an XmlPort import to its tables'
     `OnInsert`/`OnModify` and table events.
+- ENG-07 (the request page): a write in a report's request-page `OnOpenPage` answered `no` through
+  `Report.Run`, `RunModal`, `Execute` and a report variable's run (re-probed on master `a8a6c70a`).
+  A run of a report (or of the report a report extension extends) now follows its request page's
+  triggers (`run_triggers`, which also feeds the sited graph and explain's `reachedFrom`). Which
+  trigger runs was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  - Page shown (`Run`/`RunModal`): `OnInitReport`, request page `OnInit`, `OnOpenPage`, the page,
+    `OnQueryClosePage`, `OnClosePage`, `OnPreReport`, the data items, `OnPostReport`.
+  - `UseRequestPage` false: `OnInitReport`, `OnInit`, `OnPreReport`, … (no `OnOpenPage`/`OnClosePage`).
+  - Cancelled, or `RunRequestPage`: as shown, then stops after `OnClosePage` (no `OnPreReport`).
+  - `Execute` with parameters: `OnInit`, `OnOpenPage`, `OnClosePage` (no `OnQueryClosePage`),
+    `OnPreReport`, … Learn's "the OnOpen and OnClose triggers on the request page will run even
+    though the request page is not shown" holds for `Execute`, not for `Run(…, false)`.
+  - `SaveAs*` and `Print` were not measured; they are runs like `Execute`.
+
+  So the request page's `OnInit` is `unconditional on success`; its `OnOpenPage`, `OnQueryClosePage`,
+  `OnClosePage` and record triggers (`OnAfterGetRecord`, …, for a request page with a
+  `SourceTable`) are `conditional`. A control's `OnValidate` stays unfollowed (a user's action). The
+  resolver's run follows triggers only, so a report procedure named `OnOpenPage` is not taken for
+  the trigger (this holds for every object kind's run; explain's `reachedFrom` already checked it).
+  Tests: `tests/cli/cli_eng07_request_page.rs`.
 
 **Left.**
-- **A request page's triggers are not followed by `prove`: wrong answer left.** A write in a report's
-  request-page `OnOpenPage` answers `no` through `Report.Run`. Learn says `Execute` (and the head-less
-  flow of the saves and `Print`) also runs the request page's `OnOpenPage`/`OnClosePage` ("The OnOpen
-  and OnClose triggers on the request page will run even though the request page is not shown"). The
-  fix is to add them to `run_triggers`, which also feeds the sited graph and explain's `reachedFrom`.
+- A request page's `SourceTable` does not type its `Rec`: a write through `Rec` in a request-page
+  trigger is a table not known, so `unknown` (safe, imprecise).
 - **An XmlPort import's error on an existing record is not an error fact: wrong answer left.** With
   AutoUpdate and AutoReplace both false, or a duplicate key, `throws-error` can say `no`.
 - The LSP call hierarchy still lacks the trigger and table-event edges (only the model and `alsem
   graph` have them).
 - A dynamic run target stays the run's own unknown (no table is named).
-- A request page the user cancels ends `Report.Run` before `OnPreReport`, so the report-level triggers
-  are `unconditional on success` only when no request page can show.
+- A request page the user cancels ends `Report.Run` before `OnPreReport` without an error (measured,
+  above), yet `OnPreReport` and `OnPostReport` still read `unconditional on success` when a request
+  page can show. Which runs can show one (`UseRequestPage`, the run's own argument) is not modelled.
 - Which data items are indented is not in the model, so a top-level data item's
   `OnPreDataItem`/`OnPostDataItem` reads `conditional` (safe, imprecise).
 - A call whose argument types do not decide between the built-in and a same-arity procedure is

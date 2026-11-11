@@ -2222,6 +2222,13 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
 /// platform entry points are not modelled (the call graph's
 /// `platformEntryPointsNotModelled` assumption). A page part's triggers are
 /// not followed either.
+///
+/// A report's object-level list holds its request page's triggers too (the
+/// lowerer gives them no enclosing member): a run loads the request page, so
+/// its `OnInit` runs, and `OnOpenPage`/`OnClosePage` run whenever the page
+/// shows or a head-less run (`Execute`) runs it (ENG-07, engine limits L20).
+/// Measured on the BC 28.4 Linux sidecar; Windows confirmation pending. Its
+/// record triggers mirror a page's, for a request page with a `SourceTable`.
 pub(crate) fn run_triggers(
     kind: ObjectKind,
 ) -> Option<(&'static [&'static str], &'static [&'static str])> {
@@ -2243,7 +2250,23 @@ pub(crate) fn run_triggers(
             &[],
         )),
         ObjectKind::Report => Some((
-            &["oninitreport", "onprereport", "onpostreport"],
+            &[
+                "oninitreport",
+                "onprereport",
+                "onpostreport",
+                // The request page's (see the doc above).
+                "oninit",
+                "onopenpage",
+                "onfindrecord",
+                "onnextrecord",
+                "onaftergetrecord",
+                "onaftergetcurrrecord",
+                "onnewrecord",
+                "onqueryclosepage",
+                "onclosepage",
+                "onpagebackgroundtaskcompleted",
+                "onpagebackgroundtaskerror",
+            ],
             &["onpredataitem", "onaftergetrecord", "onpostdataitem"],
         )),
         ObjectKind::XmlPort => Some((
@@ -2287,7 +2310,14 @@ pub(crate) fn run_triggers(
 ///   `OnNewRecord` (a record must be there, or be made) and the background
 ///   task triggers (a task must have been started).
 ///
-/// The object-level triggers of a report, XmlPort and query, and a page's
+/// - A report's request-page triggers except `OnInit` (ENG-07, measured on
+///   the BC 28.4 Linux sidecar, Windows confirmation pending): with
+///   `UseRequestPage` false no `OnOpenPage`/`OnClosePage` runs, `Execute`
+///   runs no `OnQueryClosePage`, and the record triggers need a record.
+///   `OnInit` ran in every run measured.
+///
+/// The report's own `OnInitReport`/`OnPreReport`/`OnPostReport`, an XmlPort's
+/// and a query's object-level triggers, and a page's
 /// `OnInit`/`OnOpenPage`/`OnFindRecord`/`OnQueryClosePage`/`OnClosePage`, are
 /// not decided here (a request page the user cancels is a separate limit).
 #[must_use]
@@ -2297,7 +2327,14 @@ pub(crate) fn run_trigger_may_not_run(
     member_level: bool,
 ) -> bool {
     match kind {
-        ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort => member_level,
+        ObjectKind::Report | ObjectKind::ReportExtension => {
+            member_level
+                || !matches!(
+                    trigger_lc,
+                    "oninitreport" | "onprereport" | "onpostreport" | "oninit"
+                )
+        }
+        ObjectKind::XmlPort => member_level,
         ObjectKind::Page | ObjectKind::PageExtension => {
             !member_level
                 && matches!(
@@ -2366,19 +2403,24 @@ fn dispatch_entry_trigger(
                 .into_iter()
                 .collect();
         };
+        // A trigger, never a procedure of the same name: a report procedure
+        // `OnInit` is not its request page's `OnInit` (ENG-07).
+        let trigger = |r: &&RoutineNodeId| graph.routine(r).is_none_or(|n| n.is_trigger);
         let mut out: Vec<&RoutineNodeId> = Vec::new();
         for name in object_level {
             out.extend(
                 index
                     .routines_in_object(graph, object, name)
-                    .filter(|r| r.enclosing_member_lc.is_none()),
+                    .filter(|r| r.enclosing_member_lc.is_none())
+                    .filter(trigger),
             );
         }
         for name in member_level {
             out.extend(
                 index
                     .routines_in_object(graph, object, name)
-                    .filter(|r| r.enclosing_member_lc.is_some()),
+                    .filter(|r| r.enclosing_member_lc.is_some())
+                    .filter(trigger),
             );
         }
         out
