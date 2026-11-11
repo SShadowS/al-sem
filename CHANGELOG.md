@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-18: the speed check's base is built after a landing, not in the next gate)
+
+- **`scripts/merge-and-push` builds the new master's speed-check binary in the background right
+  after it pushes**, so the next branch's `cdo-gate` finds its base (the merge base: this master)
+  in `~/.cache/al-sem/cdo-speed/bin/<sha>/` instead of building it inside the gate (304-595 s in
+  TLS-16's gates). It runs `scripts/cdo-speed --warm <sha>`, a new mode that only calls the gate's
+  own builder (`cached_binary`: the same cache key, lock, `release-fast` profile, `git archive` and
+  grammar lookup) and exits, so no comparison changes; a gate that starts while it builds waits on
+  the cache lock and then finds the binary. Linux only, at `nice 10`, detached; its log path is
+  printed. A failed warm build only means the next gate builds the base itself, as before. Test:
+  `gate_scripts::speed_warm_reads_the_gates_own_cache_entry` (a warm on a cached entry builds
+  nothing; a warm keyed by any other commit tries to build and fails, its discrimination proof).
+  To be measured: `speed_build` in the next two gates after a landing.
+
 ### Changed (TLS-17: the unresolved cones build their indexes once per read)
 
 - **A multi-root digest, prove or impact no longer rebuilds the snapshot's indexes for every

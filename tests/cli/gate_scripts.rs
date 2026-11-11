@@ -90,3 +90,60 @@ fn cdo_gate_fails_a_phase_that_ran_no_test() {
     );
     assert!(text.contains("cdo-gate: FAIL"), "{text}");
 }
+
+/// TLS-18: `cdo-speed --warm REV` (what `merge-and-push` runs after a landing)
+/// fills exactly the cache entry a gate reads for its base: with that entry
+/// present (a speed cache in a temporary folder, `ALSEM_SPEED_CACHE`, holding
+/// a placeholder binary at `bin/<HEAD's sha>/alsem`), it finds it and builds
+/// nothing. A `cargo` that always fails is first on `PATH`, so a warm that
+/// looked anywhere else would try to build and fail.
+///
+/// Mutation: `--warm` keyed by anything but the commit's sha (as
+/// `cached_binary` keys it) -> it builds, the stub `cargo` fails, exit 2.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_warm_reads_the_gates_own_cache_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = env!("CARGO_MANIFEST_DIR");
+    let head = String::from_utf8(
+        crate::git::reader(std::path::Path::new(repo))
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse")
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let cache = tempfile::tempdir().unwrap();
+    let bin = cache.path().join("bin").join(&head);
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("alsem"), b"placeholder").unwrap();
+    let stub = tempfile::tempdir().unwrap();
+    let cargo = stub.path().join("cargo");
+    std::fs::write(&cargo, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = std::process::Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .args(["--warm", &head])
+        .env("ALSEM_SPEED_CACHE", cache.path())
+        .env("PATH", path)
+        .output()
+        .expect("spawn python3 scripts/cdo-speed");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.status.code(), Some(0), "{text}");
+    assert!(text.contains("cached binary"), "{text}");
+    assert!(
+        text.contains(&format!("warm: {head} = {}", &head[..10])),
+        "{text}"
+    );
+}
