@@ -57,6 +57,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a discrimination proof. Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`,
   which also records why a parallel literal reach is not built yet (ENG-18, TLS-22).
 
+### Fixed (ENG-18: a literal-reach answer no longer depends on what else the read asked)
+
+- **The RecordRef flow evaluates each question from fresh state.** `RecRefFlow` (the
+  table-under-inputs evaluation behind literal reach, G35) kept ONE memo, one set of final
+  values and one budget of 200,000 evaluations for a whole read, and a value its depth cutoff
+  (48 calls) turned into "anything" was folded into its callers' memo and marked final. So a
+  root's answer could depend on which roots the same read asked first: `prove` on one root and
+  `impact` or a digest over many could answer the same root differently. Each top-level
+  evaluation now starts from a fresh state (its own budget, depth, memo and final marks) that is
+  dropped afterwards, and its answer is kept by its key (routine, input tables, globals), so an
+  answer depends on its key alone. Found by TLS-17's spec review.
+- Measured on CDO before the fix (2 of 15 chunks of the workspace's files, one digest read
+  each, 362k top-level evaluations): no depth cutoff, no budget cutoff, no unsettled
+  evaluation, under 1,000 of the budget used per read; the fixed and the old binary give
+  byte-identical digests. Time on the same chunks, alternating which runs first: +1.8% and +2%
+  (one earlier pair, fixed second, read +37%; it did not reproduce). Peak RSS equal (7.0 and
+  8.4 GB).
+
 ### Fixed (ENG-06: `FieldRef.Validate` and record operations on a table not known, engine limits B9, B10)
 
 - **B9: `FieldRef.Validate` validates its field.** `FR := RR.Field(2); FR.Validate(1);` now

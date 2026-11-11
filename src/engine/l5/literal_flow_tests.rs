@@ -226,3 +226,158 @@ fn a_replayed_search_rules_out_what_the_search_does() {
     );
     assert!(revived, "precondition: a choice makes a ruled-out row live");
 }
+
+/// ENG-18: a RecordRef flow fixture whose call chain crosses the evaluation's
+/// depth cutoff (`recref_flow::EVAL_DEPTH`, 48) from one root and not from
+/// another. `Shallow` reaches `Release` 47 calls deep; `Deep` reaches it 57
+/// deep (10 more calls before the shared chain `W1..W45`). `Post`'s insert
+/// into `CF Log` runs only for a `CF Doc`, which a `CF Batch` never becomes.
+fn depth_fixture() -> tempfile::TempDir {
+    let mut src = String::from(
+        r#"table 50420 "CF Batch" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50421 "CF Approval" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50422 "CF Doc" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50423 "CF Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+codeunit 50424 "CF Deep"
+{
+    procedure Shallow(var Batch: Record "CF Batch")
+    var
+        V: Variant;
+    begin
+        V := Batch;
+        W1(V);
+    end;
+
+    procedure Deep(var Batch: Record "CF Batch")
+    var
+        V: Variant;
+    begin
+        V := Batch;
+        D1(V);
+    end;
+
+    local procedure Execute(var V: Variant)
+    begin
+        Release(V);
+        Post(V);
+    end;
+
+    local procedure Release(var V: Variant)
+    var
+        RecRef: RecordRef;
+        TargetRecRef: RecordRef;
+    begin
+        RecRef.GetTable(V);
+        case RecRef.Number of
+            Database::"CF Approval":
+                begin
+                    TargetRecRef.Open(Database::"CF Doc");
+                    V := TargetRecRef;
+                end;
+        end;
+    end;
+
+    local procedure Post(V: Variant)
+    var
+        Log: Record "CF Log";
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(V);
+        case RecRef.Number of
+            Database::"CF Doc":
+                begin
+                    Log.Code := 'X';
+                    Log.Insert();
+                end;
+        end;
+    end;
+"#,
+    );
+    let chain = |name: &str, n: usize, last: &str| -> String {
+        (1..=n)
+            .map(|k| {
+                let next = if k == n {
+                    last.to_string()
+                } else {
+                    format!("{name}{}", k + 1)
+                };
+                format!(
+                    "\n    local procedure {name}{k}(var V: Variant)\n    begin\n        {next}(V);\n    end;\n"
+                )
+            })
+            .collect()
+    };
+    src.push_str(&chain("D", 10, "W1"));
+    src.push_str(&chain("W", 45, "Execute"));
+    src.push_str("}\n");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"e18e18e1-0000-4000-8000-0000000000e1","name":"ENG18","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("src/Deep.al"), src).unwrap();
+    dir
+}
+
+/// ENG-18: a root's literal-reach answer does not depend on what else the same
+/// read asked first. Asked alone, `Shallow`'s `CF Log` insert is ruled out (the
+/// whole chain is within the depth cutoff). Asked after `Deep` (whose chain
+/// crosses the cutoff, so a value of the shared chain is "anything" there), the
+/// answer must be the same. Before the fix the flow kept one memo and budget
+/// for the whole read and marked the cut-off values final, so `Shallow` read
+/// `Deep`'s truncated `W` values and kept the insert.
+#[test]
+fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
+    let tmp = depth_fixture();
+    let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
+        tmp.path(),
+        crate::engine::l4::cone_derived::WitnessScope::All,
+    );
+    let model = &base.resolved;
+    let id = |name: &str| -> String {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is a model routine"))
+            .stable_routine_id
+            .clone()
+    };
+    let (shallow, deep) = (id("Shallow"), id("Deep"));
+    let effects =
+        |root: &str| crate::engine::l5::digest::wave2_index_tests::effects_of(&tree, model, root);
+    let log_insert = |effects: &[crate::engine::l5::digest::DigestEffectResult]| -> usize {
+        effects
+            .iter()
+            .position(|e| e.effect_type == "DB_INSERT")
+            .expect("precondition: the CF Log insert is in the root's effects")
+    };
+    let (shallow_fx, deep_fx) = (effects(&shallow), effects(&deep));
+    let dead = |reach: &LiteralReach, root: &str, fx: &[_]| -> bool {
+        reach
+            .unreachable_effects(root, fx, &[])
+            .0
+            .contains(&log_insert(fx))
+    };
+
+    let alone = LiteralReach::new(&tree, model);
+    assert!(
+        dead(&alone, &shallow, &shallow_fx),
+        "precondition: asked alone, Shallow's chain is within the cutoff and the insert is ruled out"
+    );
+    let deep_alone = LiteralReach::new(&tree, model);
+    assert!(
+        !dead(&deep_alone, &deep, &deep_fx),
+        "precondition: Deep's chain crosses the cutoff, so the insert is kept there"
+    );
+
+    let batch = LiteralReach::new(&tree, model);
+    assert!(!dead(&batch, &deep, &deep_fx), "Deep's own answer");
+    assert!(
+        dead(&batch, &shallow, &shallow_fx),
+        "Shallow asked after Deep answers as it does alone"
+    );
+}

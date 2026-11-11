@@ -278,7 +278,11 @@ fn stable(model: &Model, object: &str, name: &str) -> String {
     ids.into_iter().next().unwrap().to_string()
 }
 
-fn effects_of(tree: &CapabilitySnapshot, model: &Model, root: &str) -> Vec<DigestEffectResult> {
+pub(crate) fn effects_of(
+    tree: &CapabilitySnapshot,
+    model: &Model,
+    root: &str,
+) -> Vec<DigestEffectResult> {
     let mut entries = compute_digest_effects_cli(tree, model, Some(&[root.to_string()]), false);
     assert_eq!(entries.len(), 1, "one entry for {root}");
     entries.remove(0).effects

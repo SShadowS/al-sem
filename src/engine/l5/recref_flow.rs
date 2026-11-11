@@ -198,7 +198,13 @@ pub(crate) struct RecRefFlow<'a> {
     converged: bool,
     /// G35: per routine, whether it is evaluated under its inputs.
     sensitive: Vec<bool>,
+    /// The state of the top-level evaluation running now: fresh for each
+    /// ([`RecRefFlow::evaluate`]).
     eval: RefCell<EvalState>,
+    /// ENG-18: each top-level evaluation's answer, by its key. An answer is
+    /// computed from a fresh [`EvalState`] (its own budget, depth and memo), so
+    /// it is the key's alone: what else the read asked before cannot change it.
+    results: RefCell<HashMap<EvalKey, Option<HashMap<String, Val>>>>,
 }
 
 /// One evaluation's key: the routine, its tracked parameters' input tables,
@@ -221,7 +227,7 @@ struct EvalState {
     budget: usize,
 }
 
-/// Evaluations one `RecRefFlow` may run in all.
+/// Evaluations one top-level evaluation ([`RecRefFlow::evaluate`]) may run.
 const EVAL_BUDGET: usize = 200_000;
 /// The deepest chain of calls one evaluation follows.
 const EVAL_DEPTH: usize = 48;
@@ -383,10 +389,8 @@ impl<'a> RecRefFlow<'a> {
             self_escapes,
             converged: false,
             sensitive: Vec::new(),
-            eval: RefCell::new(EvalState {
-                budget: EVAL_BUDGET,
-                ..Default::default()
-            }),
+            eval: RefCell::new(EvalState::default()),
+            results: RefCell::new(HashMap::new()),
         };
         flow.solve_alias_reach();
         flow.solve();
@@ -572,12 +576,29 @@ impl<'a> RecRefFlow<'a> {
     /// Evaluates `i` under its inputs to a fixpoint over recursive calls:
     /// repeats while an iteration read a value still being computed and some
     /// value grew. `None` when it does not settle.
+    ///
+    /// ENG-18: every top-level evaluation starts from a fresh [`EvalState`]:
+    /// its own budget ([`EVAL_BUDGET`]), depth cutoff ([`EVAL_DEPTH`]), memo
+    /// and fixpoint rounds. A cut-off ("anything") never outlives the
+    /// evaluation that made it, and a value one evaluation memoized never
+    /// starts another, so the answer depends on the key alone, never on what
+    /// else the same read asked first (`prove` on one root and `impact` on
+    /// many answer it the same). Its answer is kept by key ([`Self::results`]).
     fn evaluate(
         &self,
         i: usize,
         inputs: Vec<(u32, Val)>,
         globals: Vec<(Arc<str>, Val)>,
     ) -> Option<HashMap<String, Val>> {
+        let key: EvalKey = (i, inputs.clone(), globals.clone());
+        if let Some(answer) = self.results.borrow().get(&key) {
+            return answer.clone();
+        }
+        *self.eval.borrow_mut() = EvalState {
+            budget: EVAL_BUDGET,
+            ..Default::default()
+        };
+        let mut answer = None;
         for _ in 0..12 {
             let mut touched = HashSet::new();
             {
@@ -589,10 +610,15 @@ impl<'a> RecRefFlow<'a> {
             let mut st = self.eval.borrow_mut();
             if !(st.read_partial && st.grew) {
                 st.done.extend(touched);
-                return Some(vals);
+                answer = Some(vals);
+                break;
             }
         }
-        None
+        // The next top-level evaluation starts fresh; nothing of this one's
+        // state is read again.
+        *self.eval.borrow_mut() = EvalState::default();
+        self.results.borrow_mut().insert(key, answer.clone());
+        answer
     }
 
     /// The starting values of `i`'s tracked own variables: a parameter its
