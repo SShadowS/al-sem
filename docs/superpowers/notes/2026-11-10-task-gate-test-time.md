@@ -212,3 +212,29 @@ the same batch treatment: the best next step (about -35 s of test CPU). Proposal
 Proposal 3 (shard the serial corpus tests) saves no CPU; with the tail at its floor it buys
 nothing until a test sets the tail again, which `scripts/nextest-priority-check` reports.
 Proposal 4 (`threads-required`) stays unmeasured and small.
+
+## TLS-14: the prove twin (2026-11-11)
+
+`no_dependency_parity_prove` took TLS-12's reviewed design: each dir's cases (json and human per
+root, cross-app and single-app) as one in-process batch, and every root of every 5th dir also each
+job alone through `standalone_output`, the path `alsem prove` runs. LIMIT: a fault only a one-job
+view shows (a batch merges its jobs' plans into one prepare) is compared on the sampled dirs only.
+Proofs: B1 (a cross-app-only change in `ProveJob::serialize`) fails both halves; B2 (a cross-app-only
+change made only when a view holds one demand) fails the standalone half alone (362 standalone
+cases, 0 batch), which is what the sample is for. Reviewed by both panel reviewers (sol DO NOT
+APPROVE then APPROVE, Opus APPROVE twice; `.agent/tls14/`).
+
+Measured on 3 alternating pairs from `cargo nextest archive` builds of TLS-15's head (before) and
+TLS-14's (after), the host 71-73% idle at every start (steadier than earlier sets, still flagged
+noisy). Records: `task-gate-test-time/tls14-runs.jsonl`.
+
+| Pair | Before CPU | After CPU | Before wall | After wall | The test, before -> after |
+|------|------------|-----------|-------------|------------|---------------------------|
+| 1 | 1,554.9 | 1,531.1 | 110.5 | 109.3 | 46.2 -> 41.7 s |
+| 2 | 1,557.2 | 1,531.1 | 109.8 | 108.6 | 45.3 -> 41.5 s |
+| 3 | 1,557.0 | 1,530.2 | 110.4 | 109.1 | 46.4 -> 41.2 s |
+
+About 26 s less CPU per run (-1.6%), 1.3 s less wall, every pair; the test itself -11%. That is far
+less than the fingerprint twin (87 -> 21 s) and than the -35 s of CPU TLS-12's note expected: for
+prove, the per-root work, not the model build, is most of the test's cost (prove's first call per
+routine is 13-16 s on CDO; see the TLS-16 note's product candidate P4).
