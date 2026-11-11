@@ -52,9 +52,12 @@ fn cdo_gate_fails_a_phase_that_ran_no_test() {
         "l4_summary_differential",
         "lib_cdo",
         "output_cdo",
+        "output_cdo_impact",
     ];
     let summary = |zero: Option<&str>| {
         let run = tempfile::tempdir().unwrap();
+        // A run that ran the impact ratchets as their own phase (TLS-19).
+        std::fs::write(run.path().join("split-impact"), "").unwrap();
         for p in phases {
             let n = if zero == Some(p) { 0 } else { 3 };
             std::fs::write(run.path().join(format!("{p}.status")), "0 1\n").unwrap();
