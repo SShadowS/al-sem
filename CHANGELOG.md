@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-08: an XmlPort import can raise an error, engine limits L20)
+
+- **A statement that starts an XmlPort import no longer answers `throws-error: no`.** A
+  statement `Xmlport.Import(X, IS)`, an `Xmlport.Run` that imports and a variable's `X.Import()`
+  answered `no` (re-probed on master `f12bf250`). Measured on the BC 28.4 Linux sidecar: an
+  import fails on a key that exists or that the file holds twice (unless `AutoUpdate` or
+  `AutoReplace` is true), and on a value that does not evaluate or malformed XML whatever the
+  properties; `Ok := Xmlport.Import(…)` returns `false` instead. So a call the resolver decided
+  starts an import (`dataset::import_export`; an `Import`, or a `Run` whose `Direction` allows
+  one) is marked `PCallSite::start_may_fail` in `program_calls`, and in statement position it is
+  an implicit error (`ERROR_IMPLICIT`, as a statement `Evaluate`). A used result catches it, a
+  run that only exports raises none, and an import with `AutoSave = false` raises it too.
+- **A literal direction no longer overrides `Direction`.** Measured: `Xmlport.Run(X, false,
+  false)` on a `Direction = Import` XmlPort fails ("The XMLPort 'X' is designed for import
+  only."), and the export case alike, before any trigger runs. The dataset model let the literal
+  win, so that run answered `throws-error: no` and claimed a read, and the mirror case claimed
+  the import's writes. Now an explicit import or export runs only when `Direction` allows it
+  (`dataset::import_export`), and one it refuses runs nothing and is a start that may fail
+  (`dataset::direction_refused`).
+- Tests: `tests/cli/cli_eng08_xmlport_import_error.rs` (5 tests, keyword and variable forms, a
+  run-time id, the default cross-app mode; discrimination proofs: dropping the rule brings the
+  old `no` back, dropping its statement-position condition makes `Ok :=` and `if` raise,
+  dropping the import check makes an export-only run raise, dropping `direction_refused` makes a
+  refused run answer `no`, and letting an explicit import ignore `Direction` makes a refused run
+  write).
+- `alsem impact`'s summary schema goes 9 -> 10, so a base cached before this change is rebuilt
+  (it also covers ENG-06's and ENG-07's summary changes, which did not bump it).
+- Left: an export was not measured failing, so a run that only exports raises no error fact; a
+  checked import (`Ok := Xmlport.Import(…)`) is not a trap yet, so an error inside the XmlPort
+  still reaches the caller (a false `yes`, older than this change).
+- The request-page trigger order (ENG-07) is now confirmed on Windows BC 28.0.54946.56477 for
+  reports (the owner, q-20261111T144908-3d4d3d0b); the XmlPort request page stays sidecar only.
+
 ## [3.0.0] - 2026-11-11
 
 ### Highlights
@@ -135,7 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`conditional`). The list also feeds the sited graph (`alsem graph`, `impact`) and explain's
   `reachedFrom`: `impact` on a request-page trigger now counts the runs as its code callers, where
   it said "direct code callers: none found" and reached it by UI navigation only. Which trigger
-  runs in which run was **measured on the BC 28.4 Linux sidecar, Windows confirmation pending**:
+  runs in which run was **measured on the BC 28.4 Linux sidecar, and for reports confirmed on
+  Windows BC 28.0.54946.56477** (the XmlPort request page: sidecar only):
   `OnInit` ran in every run; `OnOpenPage`/`OnClosePage` not with `UseRequestPage` false;
   `OnQueryClosePage` not under `Execute` (the order is in `docs/engine-limits.md`, "L20 in
   detail").

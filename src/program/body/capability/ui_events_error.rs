@@ -231,7 +231,10 @@ pub fn extract_events(
 /// not exist, or another session changed it). `TestField` always. Record
 /// operations are their own list (`PRecordOperation`), not call sites. With
 /// [`implicit_error_call`], the ONE rule: the body extractor and the L4 cone
-/// both call them.
+/// both call them. One input is set only after resolution
+/// ([`PCallSite::start_may_fail`], ENG-08), so the body extractor's L2 facts
+/// (`capabilityFactsDirect`, aldump) never show an import's error; the cone,
+/// which reads the attached model, does.
 ///
 /// Not here, though AL declares them the same way: `CalcFields` / `CalcSums`
 /// fail only when a named field is no FlowField / summable field, a coding
@@ -264,8 +267,11 @@ pub(crate) fn implicit_error_record_op(
 /// in table or page code. G50: a call whose optional Boolean "ok" result is
 /// discarded raises an error when it fails, as `Get` does: `Evaluate(X, Text)`
 /// as a statement (Continia DO's `CDO Functions.GetCDOVerAsInteger`), and
-/// `ReadFrom` on a JSON or XML value. Anything else, an `HttpClient.Get`
-/// included: `None`.
+/// `ReadFrom` on a JSON or XML value; ENG-08: a call the resolver decided
+/// starts an XmlPort in a way that may fail ([`PCallSite::start_may_fail`]:
+/// an import, whose input can make it fail whatever its properties, or a
+/// direction the XmlPort refuses; measured on BC 28). Anything else,
+/// an `HttpClient.Get` included: `None`.
 ///
 /// G52: a statement `Evaluate` that provably cannot fail is no error. See
 /// [`evaluate_cannot_fail`]; `var_facts` gives, for a variable name, its
@@ -300,6 +306,10 @@ pub(crate) fn implicit_error_call(
             is_record.then_some("FieldError")
         }
         PCallee::Bare { name } if name.eq_ignore_ascii_case("fielderror") => Some("FieldError"),
+        // ENG-08: an XmlPort start that may fail (an import, or a direction
+        // the XmlPort refuses) whose result does not catch it (`Import`'s and
+        // `Export`'s optional Boolean discarded; `Run` has none).
+        _ if in_statement_position && cs.start_may_fail => Some("XmlPort start"),
         _ => None,
     }
 }

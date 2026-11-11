@@ -6,7 +6,8 @@
 //! definite `no` for a write in one of them through `Report.Run`.
 //!
 //! Which trigger runs in which run was measured on the BC 28.4 Linux sidecar
-//! (Windows confirmation pending): `OnInit` in every run; `OnOpenPage` and
+//! and, for reports, confirmed on Windows BC 28.0.54946.56477: `OnInit` in
+//! every run; `OnOpenPage` and
 //! `OnClosePage` not with `UseRequestPage` false; `OnQueryClosePage` not under
 //! `Execute`. So `OnInit`'s write is `unconditional-on-success`, the others'
 //! `conditional`.

@@ -2227,10 +2227,10 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
 /// lowerer gives them no enclosing member): a run loads the request page, so
 /// its `OnInit` runs, and `OnOpenPage`/`OnClosePage` run whenever the page
 /// shows or a head-less run (`Execute`) runs it (ENG-07, engine limits L20).
-/// Measured on the BC 28.4 Linux sidecar; Windows confirmation pending. Its
-/// record triggers mirror a page's, for a request page with a `SourceTable`.
-/// An XmlPort's request page the same: its `OnInit` ran on every `Run` and
-/// `Export` measured (before `OnInitXmlPort`).
+/// Measured on the BC 28.4 Linux sidecar and confirmed on Windows BC
+/// 28.0.54946.56477. Its record triggers mirror a page's, for a request page
+/// with a `SourceTable`. An XmlPort's request page the same: its `OnInit` ran
+/// on every `Run` and `Export` measured (before `OnInitXmlPort`; sidecar only).
 pub(crate) fn run_triggers(
     kind: ObjectKind,
 ) -> Option<(&'static [&'static str], &'static [&'static str])> {
@@ -2329,7 +2329,7 @@ pub(crate) fn run_triggers(
 ///   task triggers (a task must have been started).
 ///
 /// - A report's request-page triggers except `OnInit` (ENG-07, measured on
-///   the BC 28.4 Linux sidecar, Windows confirmation pending): with
+///   the BC 28.4 Linux sidecar, confirmed on Windows BC 28.0.54946.56477): with
 ///   `UseRequestPage` false no `OnOpenPage`/`OnClosePage` runs, `Execute`
 ///   runs no `OnQueryClosePage`, and the record triggers need a record.
 ///   `OnInit` ran in every run measured. An XmlPort's request-page triggers
