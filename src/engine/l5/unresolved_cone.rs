@@ -68,7 +68,7 @@ pub struct UnresolvedConeResult {
 }
 
 pub(crate) const DEFAULT_MAX_DEPTH: u32 = 64;
-const DEFAULT_MAX_VISITED: usize = 25_000;
+pub(crate) const DEFAULT_MAX_VISITED: usize = 25_000;
 
 // ---------------------------------------------------------------------------
 // unresolvedCone
@@ -95,63 +95,130 @@ pub(crate) fn is_listed(row: &crate::engine::l5::snapshot::SnapshotCallsiteResol
         && row.unresolved_candidates.as_ref().is_none_or(Vec::is_empty))
 }
 
+#[cfg(test)]
+#[path = "unresolved_cone_legacy.rs"]
+mod legacy;
+#[cfg(test)]
+pub(crate) use legacy::unresolved_cone_legacy;
+
+#[cfg(test)]
+thread_local! {
+    /// [`ConeIndexes::new`] calls on this thread (TLS-17's "built once per
+    /// read" test; thread-local, so tests running in parallel do not share it).
+    pub(crate) static INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The four indexes [`unresolved_cone_in`] reads, over the whole snapshot
+/// (TLS-17). They depend only on `snap`, so one read builds them once and
+/// looks them up for every root (`digest_cli`'s `FinishCx`); the search
+/// only looks them up by key, and `&ConeIndexes` lets nothing change them.
+pub(crate) struct ConeIndexes<'s> {
+    display_by_id: HashMap<&'s str, &'s str>,
+    callsite_by_id: HashMap<&'s str, &'s crate::engine::l5::snapshot::SnapshotCallsiteEvidence>,
+    outgoing: HashMap<&'s str, Vec<&'s str>>,
+    ledger_by_routine:
+        HashMap<&'s str, Vec<&'s crate::engine::l5::snapshot::SnapshotCallsiteResolution>>,
+}
+
+/// The cone of `root` with the default limits, building the indexes for this
+/// one root ([`unresolved_cone_in`] reads them built once).
 pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeResult {
-    let max_depth = DEFAULT_MAX_DEPTH;
-    let max_visited = DEFAULT_MAX_VISITED;
+    unresolved_cone_in(
+        snap,
+        &ConeIndexes::new(snap),
+        root,
+        DEFAULT_MAX_DEPTH,
+        DEFAULT_MAX_VISITED,
+    )
+}
 
-    // --- displayById (identities table) ---
-    let mut display_by_id: HashMap<&str, &str> = HashMap::new();
-    for i in 0..snap.identities.stable_ids.len() {
-        let id = snap
-            .identities
-            .stable_ids
-            .get(i)
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let name = snap
-            .identities
-            .display_names
-            .get(i)
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        if !id.is_empty() {
-            display_by_id.insert(id, name);
+impl<'s> ConeIndexes<'s> {
+    pub(crate) fn new(snap: &'s CapabilitySnapshot) -> ConeIndexes<'s> {
+        #[cfg(test)]
+        INDEX_BUILDS.with(|n| n.set(n.get() + 1));
+
+        // --- displayById (identities table) ---
+        let mut display_by_id: HashMap<&str, &str> = HashMap::new();
+        for i in 0..snap.identities.stable_ids.len() {
+            let id = snap
+                .identities
+                .stable_ids
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let name = snap
+                .identities
+                .display_names
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            if !id.is_empty() {
+                display_by_id.insert(id, name);
+            }
+        }
+
+        // --- callsiteById (callsiteIndex) ---
+        let mut callsite_by_id: HashMap<
+            &str,
+            &crate::engine::l5::snapshot::SnapshotCallsiteEvidence,
+        > = HashMap::new();
+        for cs in &snap.callsite_index {
+            callsite_by_id.insert(cs.callsite_id.as_str(), cs);
+        }
+
+        // --- outgoing edges (typed-edge → to) for BFS expansion ---
+        // Only edges that have a `to` (i.e. all except object-run-unresolved).
+        let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in snap.typed_edges.iter() {
+            let from = edge_from(edge);
+            let to = edge_to(edge);
+            if let Some(to) = to {
+                outgoing.entry(from).or_default().push(to);
+            }
+        }
+        // Sort each bucket for determinism.
+        for bucket in outgoing.values_mut() {
+            bucket.sort_unstable();
+        }
+
+        // --- ledger by routine ---
+        let mut ledger_by_routine: HashMap<
+            &str,
+            Vec<&crate::engine::l5::snapshot::SnapshotCallsiteResolution>,
+        > = HashMap::new();
+        for row in snap.callsite_resolutions.iter() {
+            ledger_by_routine
+                .entry(row.from.as_str())
+                .or_default()
+                .push(row);
+        }
+
+        ConeIndexes {
+            display_by_id,
+            callsite_by_id,
+            outgoing,
+            ledger_by_routine,
         }
     }
+}
 
-    // --- callsiteById (callsiteIndex) ---
-    let mut callsite_by_id: HashMap<&str, &crate::engine::l5::snapshot::SnapshotCallsiteEvidence> =
-        HashMap::new();
-    for cs in &snap.callsite_index {
-        callsite_by_id.insert(cs.callsite_id.as_str(), cs);
-    }
-
-    // --- outgoing edges (typed-edge → to) for BFS expansion ---
-    // Only edges that have a `to` (i.e. all except object-run-unresolved).
-    let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
-    for edge in snap.typed_edges.iter() {
-        let from = edge_from(edge);
-        let to = edge_to(edge);
-        if let Some(to) = to {
-            outgoing.entry(from).or_default().push(to);
-        }
-    }
-    // Sort each bucket for determinism.
-    for bucket in outgoing.values_mut() {
-        bucket.sort_unstable();
-    }
-
-    // --- ledger by routine ---
-    let mut ledger_by_routine: HashMap<
-        &str,
-        Vec<&crate::engine::l5::snapshot::SnapshotCallsiteResolution>,
-    > = HashMap::new();
-    for row in snap.callsite_resolutions.iter() {
-        ledger_by_routine
-            .entry(row.from.as_str())
-            .or_default()
-            .push(row);
-    }
+/// The unresolved cone of `root` over `snap`, reading `idx` (built from the
+/// same `snap`), within `max_depth` hops and `max_visited` routines (the
+/// production limits are [`DEFAULT_MAX_DEPTH`] and `DEFAULT_MAX_VISITED`; a
+/// test passes smaller ones).
+pub(crate) fn unresolved_cone_in(
+    snap: &CapabilitySnapshot,
+    idx: &ConeIndexes<'_>,
+    root: &str,
+    max_depth: u32,
+    max_visited: usize,
+) -> UnresolvedConeResult {
+    let ConeIndexes {
+        display_by_id,
+        callsite_by_id,
+        outgoing,
+        ledger_by_routine,
+    } = idx;
 
     // --- BFS ---
     let mut collected: HashSet<String> = HashSet::new(); // routine ids whose ledger was harvested
@@ -673,6 +740,83 @@ mod tests {
             unresolved_cone(&snap, "d#2").traversal.dependency_routines,
             1,
             "a dependency root does not count itself"
+        );
+    }
+
+    /// TLS-17: the shared indexes' bucket order. `r#0` calls `r#3`, `r#1`
+    /// and `r#2`, listed in that (unsorted) order, under a visit cap of 2
+    /// (the root and one callee): which callee is visited is decided by the
+    /// order of `r#0`'s outgoing bucket. The production search over
+    /// `ConeIndexes` equals the verbatim pre-TLS-17 search.
+    /// Preconditions: the first listed callee is not the smallest (so an
+    /// unsorted bucket would visit another one), and the cap was hit.
+    /// DISCRIMINATION: dropping the bucket sort in `ConeIndexes::new` visits
+    /// `r#3` instead of `r#1` and fails it.
+    #[test]
+    fn shared_indexes_keep_the_bucket_order_under_the_visit_cap() {
+        let mut snap = empty_snap();
+        for i in 0..4 {
+            let ids = std::sync::Arc::make_mut(&mut snap.identities);
+            ids.stable_ids.push(format!("r#{i}"));
+            ids.display_names.push(format!("R::{i}"));
+        }
+        for (n, to) in [3, 1, 2].into_iter().enumerate() {
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(SnapshotGraphEdge::DirectCall {
+                kind: "direct-call",
+                callsite_id: format!("cs{n}"),
+                from: "r#0".into(),
+                to: format!("r#{to}"),
+                source_anchor: SnapshotSourceAnchor {
+                    source_unit_id: "ws:src/Fan.al".into(),
+                    range: SnapshotRange {
+                        start_line: n as u32,
+                        start_column: 0,
+                        end_line: n as u32,
+                        end_column: 1,
+                    },
+                    enclosing_routine_id: "r#0".into(),
+                    syntax_kind: "call_expression".into(),
+                },
+                edge_id: format!("e{n}"),
+            });
+            // Each callee owns one unresolved site, so the visited callee
+            // shows in the items too.
+            std::sync::Arc::make_mut(&mut snap.callsite_resolutions).push(resolution(
+                &format!("u{to}"),
+                &format!("r#{to}"),
+                &format!("IFoo{to}.Bar"),
+                "unresolved",
+                None,
+                None,
+            ));
+        }
+        let first = snap.typed_edges[0].edge_to().unwrap().to_string();
+        assert_ne!(
+            first, "r#1",
+            "precondition: the first listed callee is not the smallest"
+        );
+        let cap = 2;
+        let got = unresolved_cone_in(
+            &snap,
+            &ConeIndexes::new(&snap),
+            "r#0",
+            DEFAULT_MAX_DEPTH,
+            cap,
+        );
+        let want = unresolved_cone_legacy(&snap, "r#0", DEFAULT_MAX_DEPTH, cap);
+        assert!(
+            want.traversal.truncated,
+            "precondition: the visit cap was hit"
+        );
+        assert_eq!(got.visited_ids, want.visited_ids);
+        assert_eq!(format!("{:?}", got.items), format!("{:?}", want.items));
+        assert_eq!(
+            format!("{:?}", got.traversal),
+            format!("{:?}", want.traversal)
+        );
+        assert!(
+            want.visited_ids.contains("r#1"),
+            "the sorted bucket visits r#1"
         );
     }
 }

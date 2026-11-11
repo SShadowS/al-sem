@@ -42,7 +42,8 @@ use crate::engine::l5::snapshot::{
 };
 use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
-    DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
+    ConeIndexes, DEFAULT_MAX_DEPTH, DEFAULT_MAX_VISITED, UnresolvedConeItem, UnresolvedTraversal,
+    unresolved_cone_in,
 };
 use crate::engine::line_base::shown_opt;
 use crate::engine::session::{Cell, RunKey};
@@ -1896,6 +1897,10 @@ pub(crate) struct FinishCx<'t> {
     /// The model's routine rows by stable id, built on the first item that
     /// needs one.
     rows_by_stable: std::sync::OnceLock<HashMap<&'t str, Vec<&'t ModelRoutine>>>,
+    /// TLS-17: the unresolved cones' snapshot indexes, built on the first
+    /// root that needs a cone and read for every root of the read (a
+    /// `FinishCx` lives for one read, every batch of a streamed one).
+    cone_indexes: std::sync::OnceLock<ConeIndexes<'t>>,
 }
 
 impl<'t> FinishCx<'t> {
@@ -1952,12 +1957,32 @@ impl<'t> FinishCx<'t> {
             fires,
             model,
             rows_by_stable: std::sync::OnceLock::new(),
+            cone_indexes: std::sync::OnceLock::new(),
         }
     }
 
     /// The anchor (`file`, line, column) of call site `callsite_id` in the
     /// model rows of the stable routine `owning` (engine limits B8,
     /// [`crate::engine::l5::unresolved_cone::place_items`]).
+    /// `root`'s raw unresolved cone, off the read's indexes (built once,
+    /// TLS-17). A test can switch it to the verbatim pre-TLS-17 search
+    /// ([`LEGACY_CONES`]), so the finished output of both can be compared.
+    fn raw_cone(&self, root: &str) -> crate::engine::l5::unresolved_cone::UnresolvedConeResult {
+        #[cfg(test)]
+        if LEGACY_CONES.with(std::cell::Cell::get) {
+            return crate::engine::l5::unresolved_cone::unresolved_cone_legacy(
+                self.tree,
+                root,
+                DEFAULT_MAX_DEPTH,
+                DEFAULT_MAX_VISITED,
+            );
+        }
+        let idx = self
+            .cone_indexes
+            .get_or_init(|| ConeIndexes::new(self.tree));
+        unresolved_cone_in(self.tree, idx, root, DEFAULT_MAX_DEPTH, DEFAULT_MAX_VISITED)
+    }
+
     fn site_of(&self, owning: &str, callsite_id: &str) -> Option<(String, u32, u32)> {
         let rows = self.rows_by_stable.get_or_init(|| {
             let mut m: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
@@ -2024,7 +2049,7 @@ impl<'t> FinishCx<'t> {
                 let unresolved = roots
                     .iter()
                     .map(|r| {
-                        let mut c = unresolved_cone(tree, r);
+                        let mut c = self.raw_cone(r);
                         // Engine limits B8: an item the tree holds no
                         // evidence for takes its model call site's anchor.
                         crate::engine::l5::unresolved_cone::place_items(&mut c.items, |o, cs| {
@@ -2097,6 +2122,9 @@ impl<'t> FinishCx<'t> {
 thread_local! {
     /// Tests: the batches [`digest_effects_chunks`] read on this thread.
     pub(crate) static STREAM_BATCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Tests: [`FinishCx`]'s raw cones from the verbatim pre-TLS-17 search
+    /// (`unresolved_cone_legacy`) instead of the read's shared indexes.
+    pub(crate) static LEGACY_CONES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// One reader's [`DigestEffects`] over `roots` (sorted, distinct), STREAMED:
