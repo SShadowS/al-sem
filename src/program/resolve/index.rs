@@ -1137,6 +1137,37 @@ impl ResolveIndex {
         base: &ObjectNodeId,
         field_lc: &str,
     ) -> Option<(FieldNode, ObjectNodeId)> {
+        self.field_matching_in_table_from(graph, from_app, base, field_lc, |f| {
+            f.name_lc == field_lc
+        })
+    }
+
+    /// [`Self::field_with_owner_in_table_from`] by the field's NUMBER
+    /// (`RecRef.Field(<no>)`, ENG-06): the same scope, dedup and
+    /// duplicate-decline rules.
+    pub fn field_numbered_in_table_from(
+        &self,
+        graph: &ProgramGraph,
+        from_app: AppRef,
+        base: &ObjectNodeId,
+        number: i64,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
+        self.field_matching_in_table_from(graph, from_app, base, &number.to_string(), |f| {
+            f.number == Some(number)
+        })
+    }
+
+    /// The one field of `base`'s visible table surface (the table and its
+    /// closure-visible extensions) that `is_it` accepts; `what` names it in
+    /// the duplicate-decline log.
+    fn field_matching_in_table_from(
+        &self,
+        graph: &ProgramGraph,
+        from_app: AppRef,
+        base: &ObjectNodeId,
+        what: &str,
+        is_it: impl Fn(&FieldNode) -> bool,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
         let closure = graph.topology.closure(from_app);
         if !closure.contains(&base.app) {
             return None;
@@ -1146,7 +1177,7 @@ impl ResolveIndex {
         let mut matches: Vec<(&ObjectNodeId, &FieldNode)> = base_obj
             .fields
             .iter()
-            .filter(|f| f.name_lc == field_lc)
+            .filter(|f| is_it(f))
             .map(|f| (base, f))
             .collect();
 
@@ -1164,7 +1195,7 @@ impl ResolveIndex {
                 ext_obj
                     .fields
                     .iter()
-                    .filter(|f| f.name_lc == field_lc)
+                    .filter(|f| is_it(f))
                     .map(|f| (ext_id, f)),
             );
         }
@@ -1189,7 +1220,7 @@ impl ResolveIndex {
             [] => None,
             _ => {
                 log::debug!(
-                    "field_in_table: duplicate field {field_lc:?} on table {base:?} declines \
+                    "field_in_table: duplicate field {what:?} on table {base:?} declines \
                      (candidates: {:?})",
                     deduped
                         .iter()
@@ -2521,6 +2552,7 @@ mod tests {
             .push(FieldNode {
                 name_lc: "no.".into(),
                 type_text: "Code[20]".into(),
+                number: None,
             });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2536,6 +2568,7 @@ mod tests {
             Some(FieldNode {
                 name_lc: "no.".into(),
                 type_text: "Code[20]".into(),
+                number: None,
             })
         );
     }
@@ -2549,6 +2582,7 @@ mod tests {
             .push(FieldNode {
                 name_lc: "no.".into(),
                 type_text: "Code[20]".into(),
+                number: None,
             });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2575,6 +2609,7 @@ mod tests {
         find_obj_mut(&mut graph, &ext_id).fields.push(FieldNode {
             name_lc: "ext blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let idx = ResolveIndex::build(&graph);
         // Referencing object lives in App A — sees both Customer (its dep,
@@ -2593,6 +2628,7 @@ mod tests {
             Some(FieldNode {
                 name_lc: "ext blob".into(),
                 type_text: "Blob".into(),
+                number: None,
             }),
             "an extension field visible in from_object's closure must fold into the base scope"
         );
@@ -2609,6 +2645,7 @@ mod tests {
         find_obj_mut(&mut graph, &ext_id).fields.push(FieldNode {
             name_lc: "ext blob".into(),
             type_text: "Blob".into(),
+            number: None,
         });
         let idx = ResolveIndex::build(&graph);
         // Referencing object lives in App B — App B does NOT depend on App A
@@ -2644,10 +2681,12 @@ mod tests {
             .push(FieldNode {
                 name_lc: "dup field".into(),
                 type_text: "Blob".into(),
+                number: None,
             });
         find_obj_mut(&mut graph, &ext_id).fields.push(FieldNode {
             name_lc: "dup field".into(),
             type_text: "Text[50]".into(),
+            number: None,
         });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2678,10 +2717,12 @@ mod tests {
         obj.fields.push(FieldNode {
             name_lc: "no.".into(),
             type_text: "Code[20]".into(),
+            number: None,
         });
         obj.fields.push(FieldNode {
             name_lc: "no.".into(),
             type_text: "Code[20]".into(),
+            number: None,
         });
         let idx = ResolveIndex::build(&graph);
         let from_obj = graph
@@ -2697,6 +2738,7 @@ mod tests {
             Some(FieldNode {
                 name_lc: "no.".into(),
                 type_text: "Code[20]".into(),
+                number: None,
             }),
             "an identical (object, name, type) duplicate must dedupe to one candidate, not decline"
         );

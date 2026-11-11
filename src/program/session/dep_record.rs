@@ -191,6 +191,10 @@ pub(crate) fn eval(q: &Query, s: &EvalState) -> Digest {
             .index
             .field_with_owner_in_table_from(s.graph, *app, base, field)
             .classify(&mut h),
+        Query::FieldNumberedInTable(app, base, number) => s
+            .index
+            .field_numbered_in_table_from(s.graph, *app, base, *number)
+            .classify(&mut h),
         Query::TableScopeHasRoutine(app, base, name) => s
             .index
             .table_scope_has_routine_from(s.graph, *app, base, name)
