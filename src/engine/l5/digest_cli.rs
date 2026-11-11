@@ -2410,7 +2410,7 @@ fn judge_traps<'t>(
 fn literal_reach_entries<'t>(
     reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: &crate::engine::l5::group_path::GroupPaths<'t>,
-    suffixes: &mut crate::engine::l5::literal_reach::SuffixCache<'t>,
+    suffixes: &crate::engine::l5::literal_reach::SuffixCache<'t>,
     unresolved_sites: &[&str],
     entries: &mut [DigestEntryResult],
 ) {
