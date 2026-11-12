@@ -5,8 +5,11 @@
 //! `--part up` output (`up.master.golden.json`, see `tests/cli/cli_up_parallel.rs`).
 //!
 //! Each worker count is its own pool (`reach_pool` keeps one per count for the
-//! process), so a held task never waits on another test's tasks: 6, 5 and 2 here,
-//! 3 in `revision_tests`, 7 and 9 in TLS-22's tests.
+//! process): 6, 5 and 2 here, 3 in `revision_tests`, 7 and 9 in TLS-22's tests.
+//! A held task then waits on no other test's tasks, except on a host with fewer
+//! than 8 cores, where in-process code using `default_reach_workers()` (8 capped
+//! by the cores) can share one of these pools. Every hold has a timeout and the
+//! tests check it did not pass, so that host fails a precondition, never hangs.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -152,6 +155,10 @@ fn parallel_rows_keep_root_order_when_root_0_finishes_last() {
         &captions(&f),
     );
     assert!(probe.max() > 1, "precondition: walks ran at once");
+    assert!(
+        !probe.first_root_timed_out.load(SeqCst),
+        "precondition: the first root was released after the other four, not by its timeout"
+    );
     assert_eq!(probe.up_tasks.load(SeqCst), 5, "one task per walked root");
     let ids: Vec<&str> = got["roots"]
         .as_array()
@@ -172,9 +179,13 @@ fn parallel_rows_keep_root_order_when_root_0_finishes_last() {
 /// (Master gives no caption to the page Delta is reached from, the page an
 /// action opens with `RunObject`, so only Gamma's row needs the file.)
 ///
-/// DISCRIMINATION (2026-11-12): marking the file "being parsed" with an
-/// empty entry before parsing (so the second task reads the empty entry)
-/// fails (a row without its caption); restored, passes.
+/// DISCRIMINATION (2026-11-12, after review): marking the file "being
+/// parsed" with an empty entry before parsing, which the parse then
+/// overwrites, fails here (the task that read the empty entry has no
+/// caption), while the other `up_par_tests` and `cli_up_parallel` (no forced
+/// race) pass with it: only the race shows it. Restored, passes. The test
+/// also checks the race happened (the second read came while the first task
+/// was held, not after a timeout).
 #[test]
 fn racing_tasks_both_get_the_caption() {
     let f = fx();
@@ -197,6 +208,11 @@ fn racing_tasks_both_get_the_caption() {
         &c,
     );
     assert_eq!(probe.max(), 2, "precondition: the two walked at once");
+    let race = c.race().unwrap();
+    assert!(
+        race.lookups.load(SeqCst) >= 2 && !race.timed_out.load(SeqCst),
+        "precondition: the second task read the cache while the first was between its miss and its insert"
+    );
     let rows = got["roots"].as_array().unwrap();
     // The entry lists, where the caption sits (the program share depends on
     // which roots were asked, so the whole row is not master's here).

@@ -1548,6 +1548,11 @@ fn main() -> ExitCode {
     {
         al_sem::engine::l5::digest_cli::set_default_reach_workers(n);
     }
+    // TLS-21, measurement only: a traced one-shot up walk measures its own
+    // memory window (it resets the process's peak mark).
+    if std::env::var("AL_SEM_UP_WALK_WINDOW").as_deref() == Ok("1") {
+        al_sem::engine::l5::digest_cli::set_up_walk_window();
+    }
     // The process span; its drop emits `peak.process_mb` / `peak.post_attach_mb`
     // (#160 §4.1.4). Declared before `code`, so it drops after the census report.
     let _run = al_sem::engine::perf_trace::run("alsem");

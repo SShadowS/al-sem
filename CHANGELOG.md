@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparison test now blanks it too. `cost.walksUs` is still the sum of each walk's own time, so
   with several workers it is larger than the wall time. Spec:
   `docs/superpowers/specs/2026-11-12-parallel-up-walk.md`.
+- **Measurement only: `AL_SEM_UP_WALK_WINDOW=1` with `ALSEM_TRACE=1`** makes a one-shot run's up
+  walk report its own memory window. The trace counters are `impact.up.rss_start_mb` and
+  `impact.up.peak_mb` (Linux). It resets the process's peak-memory mark, so that run's process
+  peak is not the command's. The resident engine never does this, because its memory budget reads
+  the same mark.
 
 ### Changed (TLS-09: the gate's optimized build is `release-fast`)
 

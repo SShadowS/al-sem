@@ -1309,12 +1309,14 @@ fn every_route_runs_the_pass_with_its_revisions_worker_count() {
 /// TLS-21: a revision answers `impact-up` with ITS worker count. At 3, with
 /// the first three walks held until three are in flight, the probe sees
 /// exactly 3 at once in a pool of exactly 3 threads, one task per walked
-/// root, and master's answer. A production revision (serial) walks one root
-/// at a time over the same hold.
+/// root, and the cold standalone run's answer (itself checked against
+/// master's by `cli_up_parallel`). A production revision (serial) walks one
+/// root at a time over the same hold.
 ///
 /// DISCRIMINATION (2026-11-12): a revision whose `reach_workers` starts as
-/// `default_reach_workers()` instead of `SERIAL` (`Revision::new`) fails the
-/// production case (5 in flight); restored, passes.
+/// `default_reach_workers()` instead of `SERIAL` (`Revision::seeded`, which
+/// `Revision::new` calls) fails the production case (5 in flight); restored,
+/// passes.
 #[test]
 fn the_resident_up_walk_runs_on_the_revisions_count() {
     use crate::engine::impact::jobs::{UpAsk, UpJob};

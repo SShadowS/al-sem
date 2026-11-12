@@ -165,9 +165,12 @@ Each extra task in flight holds:
 The pool's threads (32 MiB stacks) already exist in a one-shot `impact`, because the literal pass
 uses them. So no bound is computed from the cost block; the extra memory is measured directly,
 as the **walk window's own peak**:
-- When tracing is on and on Linux, `up` resets the process's peak mark at its start (it writes
-  `5` to `/proc/self/clear_refs`, which resets `VmHWM`). It reads `VmRSS` there, and reads
-  `VmHWM` from `/proc/self/status` after the union summary.
+- When tracing is on, on Linux, and the route asked for it, `up` resets the process's peak mark
+  after building the entry inventory (it writes `5` to `/proc/self/clear_refs`, which resets
+  `VmHWM`). It reads `VmRSS` there, and reads `VmHWM` from `/proc/self/status` after the union
+  summary. Only a one-shot run asks, and only when the binary was started with
+  `AL_SEM_UP_WALK_WINDOW=1` (code review, 2026-11-12): the reset would corrupt the resident
+  memory budget's and the batch census's readings of the same mark.
 - It emits trace counters `impact.up.rss_start_mb` and `impact.up.peak_mb`. Their difference is
   what the walk added on top of what was already alive. If the reset fails, it emits
   nothing, and the run reports "not measured".

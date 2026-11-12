@@ -1,8 +1,9 @@
 //! **Who reaches each changed routine** (agent-tasks design §8.4 step 2): R0's
 //! reverse walks over the production universe's sited graph.
 //!
-//! - Per root, [`walk_one`] with one scratch reused across roots and a
-//!   visitor that keeps COUNTS and the first few witnesses only
+//! - Per root, [`walk_one`] (TLS-21: several roots at once on the one-shot
+//!   CLI, each walk on a scratch from a stash of one per walk in flight) and
+//!   a visitor that keeps COUNTS and the first few witnesses only
 //!   ([`RootUp`]): its direct callers (explain's `callers:` definition,
 //!   [`direct_callers`], with each caller's first call site), ancestors by
 //!   tier, entries by kind (page actions by caption), event publishers that
@@ -604,12 +605,14 @@ pub struct Captions {
 }
 
 /// Tests: hold the first task that misses `unit` between its parse and its
-/// insert until a second task has looked `unit` up (or the timeout passes).
+/// insert until a second task has read the cache for `unit` (or the timeout
+/// passes: `timed_out`, so a test can tell the race did not happen).
 #[cfg(test)]
 pub(crate) struct CaptionRace {
     pub(crate) unit: String,
     pub(crate) timeout: std::time::Duration,
     pub(crate) lookups: std::sync::atomic::AtomicUsize,
+    pub(crate) timed_out: std::sync::atomic::AtomicBool,
 }
 
 /// One action: `(name lc, caption, first line, last line)` (0-based).
@@ -635,8 +638,15 @@ impl Captions {
             unit: unit.to_string(),
             timeout,
             lookups: std::sync::atomic::AtomicUsize::new(0),
+            timed_out: std::sync::atomic::AtomicBool::new(false),
         });
         self
+    }
+
+    /// Tests: the race this cache was given.
+    #[cfg(test)]
+    pub(crate) fn race(&self) -> Option<&CaptionRace> {
+        self.race.as_ref()
     }
 
     /// Tests: how many files the cache holds.
@@ -648,14 +658,17 @@ impl Captions {
     fn actions(&self, unit: &str) -> Arc<Vec<ObjectActions>> {
         // Units and local names spell a workspace file `ws:<rel>` or `<rel>`.
         let unit = unit.strip_prefix("ws:").unwrap_or(unit);
-        #[cfg(test)]
-        let racing = self.race.as_ref().filter(|r| r.unit == unit).map(|r| {
-            let k = r.lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            (r, k == 0)
-        });
         let lock = || self.parsed.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(v) = lock().get(unit) {
-            return Arc::clone(v);
+        let hit = lock().get(unit).map(Arc::clone);
+        // Tests: a lookup counts once the cache was read; the first one that
+        // missed is held below.
+        #[cfg(test)]
+        let first_miss = self.race.as_ref().filter(|r| r.unit == unit).and_then(|r| {
+            let k = r.lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (hit.is_none() && k == 0).then_some(r)
+        });
+        if let Some(v) = hit {
+            return v;
         }
         // Parsed outside the lock: tasks needing other files do not wait.
         let v = Arc::new(
@@ -663,7 +676,8 @@ impl Captions {
                 .get(unit)
                 .map(|t| {
                     let _s = crate::engine::perf_trace::span("impact", "impact.up.caption_parse");
-                    crate::engine::perf_trace::counter_delta("impact.up.caption_files", 1);
+                    // Parses, not files: two tasks may parse the same file.
+                    crate::engine::perf_trace::counter_delta("impact.up.caption_parses", 1);
                     let f = al_syntax::parse(t);
                     f.objects
                         .iter()
@@ -688,11 +702,14 @@ impl Captions {
                 .unwrap_or_default(),
         );
         #[cfg(test)]
-        if let Some((r, true)) = racing {
+        if let Some(r) = first_miss {
+            use std::sync::atomic::Ordering::SeqCst;
             let until = std::time::Instant::now() + r.timeout;
-            while r.lookups.load(std::sync::atomic::Ordering::SeqCst) < 2
-                && std::time::Instant::now() < until
-            {
+            while r.lookups.load(SeqCst) < 2 {
+                if std::time::Instant::now() >= until {
+                    r.timed_out.store(true, SeqCst);
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
@@ -1221,12 +1238,6 @@ impl Scratches {
     fn put(&self, s: WalkScratch) {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).push(s);
     }
-
-    /// Every scratch's capacity: the scratch memory the pass held.
-    fn bytes(&self) -> usize {
-        let v = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        v.iter().map(WalkScratch::bytes).sum()
-    }
 }
 
 /// A walk's options from the up part's arguments. Each task builds its own:
@@ -1297,13 +1308,20 @@ fn status_kib(key: &str) -> Option<u64> {
         .ok()
 }
 
-/// TLS-21, trace only: the up walk's own memory window. Resets the process's
-/// peak mark (`5` into `/proc/self/clear_refs`, Linux) and returns the
-/// resident size at the start, in KiB; `None` (nothing reported) when tracing
-/// is off or the reset fails. The reset also resets what `ru_maxrss` reports,
-/// so a traced run's process peak is not the command's.
-fn walk_window_start() -> Option<u64> {
-    if !crate::engine::perf_trace::enabled(crate::engine::perf_trace::Detail::Stages) {
+/// TLS-21, measurement only: the up walk's own memory window. Resets the
+/// process's peak mark (`5` into `/proc/self/clear_refs`, Linux) and returns
+/// the resident size at the start, in KiB. `None` (nothing reported) unless
+/// tracing is on AND the route asked for it ([`ReachWorkers::up_window`]: a
+/// one-shot run of a binary started with `AL_SEM_UP_WALK_WINDOW=1`, never a
+/// resident revision, whose memory budget reads the same mark), or when the
+/// reset fails. The reset also resets what `ru_maxrss` and the batch census
+/// report, so such a run's process peak is not the command's.
+///
+/// [`ReachWorkers::up_window`]: crate::engine::l5::digest_cli::ReachWorkers::up_window
+fn walk_window_start(workers: &crate::engine::l5::digest_cli::ReachWorkers) -> Option<u64> {
+    if !workers.up_window()
+        || !crate::engine::perf_trace::enabled(crate::engine::perf_trace::Detail::Stages)
+    {
         return None;
     }
     std::fs::write("/proc/self/clear_refs", "5").ok()?;
@@ -1311,10 +1329,10 @@ fn walk_window_start() -> Option<u64> {
 }
 
 /// The up part's JSON over `g`. The walked roots run `args.workers` at a time
-/// (TLS-21: the one-shot CLI 8, a resident revision 1); rows keep root order.
+/// (TLS-21: the one-shot CLI 8 capped by the cores, a resident revision 1);
+/// rows keep root order.
 #[must_use]
 pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
-    let window = walk_window_start();
     let started = std::time::Instant::now();
     // Every changed routine's nodes (each `#if` arm, symbol-only copies
     // too): their entries are left out of both sides of every walk's share.
@@ -1326,6 +1344,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
             .flat_map(|id| g.nodes_with_stable_id(id))
             .collect(),
     );
+    // After the entry inventory's first build: the window holds the walks.
+    let window = walk_window_start(&args.workers);
     // Each root's nodes, in root order; empty: not in the graph.
     let roots: Vec<(&String, Vec<NodeIx>)> = args
         .roots
@@ -1369,7 +1389,11 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
                 && Some(_i) == first_walked
             {
                 let until = std::time::Instant::now() + timeout;
-                while p.up_done.load(SeqCst) + 1 < walked && std::time::Instant::now() < until {
+                while p.up_done.load(SeqCst) + 1 < walked {
+                    if std::time::Instant::now() >= until {
+                        p.first_root_timed_out.store(true, SeqCst);
+                        break;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             }
@@ -1422,20 +1446,26 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
     all_nodes.sort_unstable();
     all_nodes.dedup();
     let mut u = Up::new(g, args.keep, &all_nodes, &shared);
-    let mut scratch = scratches.take(&args.workers);
+    // One scratch for the union walk; the idle ones go first (their bytes
+    // still count: the per-root pass held them).
+    let mut idle = scratches.0.into_inner().unwrap_or_else(|p| p.into_inner());
+    let mut scratch = idle.pop().unwrap_or_default();
+    let idle_bytes: usize = idle.iter().map(WalkScratch::bytes).sum();
+    drop(idle);
     let t = std::time::Instant::now();
     let ustats = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.union_walk");
         walk_multi(g, &all_nodes, &walk_options(args), &mut scratch, &mut u)
     };
     walks_us += t.elapsed().as_micros() as u64;
-    scratches.put(scratch);
+    // Every scratch's capacity: the scratch memory the pass held.
+    let scratch_bytes = idle_bytes + scratch.bytes();
+    drop(scratch);
     visitor_bytes = visitor_bytes.max(u.bytes());
     let union = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.union_summary");
         summary(&u, g, captions)
     };
-    let scratch_bytes = scratches.bytes();
     crate::engine::perf_trace::counter("impact.up.scratch_bytes", scratch_bytes as u64);
     if let Some(start) = window
         && let Some(peak) = status_kib("VmHWM")
