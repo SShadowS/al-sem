@@ -264,11 +264,13 @@ fn the_base_side_keeps_nothing() {
 /// Sol review r1: two `.al` names that are not UTF-8 and read alike
 /// (`b"\xff.al"`, `b"\xfe.al"` are both `\u{fffd}.al`) share one manifest
 /// key, so the stamp would miss an edit to the first: such a read takes no
-/// part, and every part builds.
+/// part, and every part builds. The rule is any manifest key with U+FFFD, so
+/// it covers `src:` and `pkg:` names the same way (sol review r2: package
+/// paths); this test states it with `.al` names.
 ///
-/// Discrimination (2026-11-12): `stamp_for` without its `lossy_twins` check
-/// fails at "lossy twins: every part builds" (1 build seen, 2 expected);
-/// restored, passes.
+/// Discrimination (2026-11-12): `stamp_for` without its `lossy` check fails
+/// at "lossy twins: every part builds" (1 build seen, 2 expected); restored,
+/// passes.
 #[cfg(unix)]
 #[test]
 fn lossy_twin_names_take_no_part() {

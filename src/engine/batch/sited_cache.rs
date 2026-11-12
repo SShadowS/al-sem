@@ -106,26 +106,18 @@ pub(super) fn stamp_for(on_view: &[(usize, &ViewDemand)]) -> Option<String> {
     // build (`build_view_model`): it lends no cross-app program, keeps nothing.
     let model =
         on_view.iter().any(|(_, d)| d.needs.model) && first.inputs.model_instance_id.is_some();
-    (!lossy_twins(&first.inputs) && (sited_only(on_view) || (cross_app && model))).then(|| {
-        let _s = crate::engine::perf_trace::span("batch", "batch.sited_cache.stamp");
-        Manifest::consumed(&first.inputs, !cross_app).stamp()
-    })
-}
-
-/// The manifest keys each `.al` file by its lossy path (`al:<rel_posix>`, a
-/// source dependency's `src:<spelled>\0<rel>`): two names that are not UTF-8
-/// can share one, and the stamp then holds only the last file's hash. Such a
-/// read takes no part (review r1, sol and Opus).
-fn lossy_twins(inputs: &crate::program::inputs::WorkspaceInputs) -> bool {
-    fn twins<'a>(mut names: impl Iterator<Item = &'a str>) -> bool {
-        let mut seen = std::collections::HashSet::new();
-        names.any(|n| !seen.insert(n))
+    if !(sited_only(on_view) || (cross_app && model)) {
+        return None;
     }
-    twins(inputs.al_files.iter().map(|f| f.rel_posix.as_str()))
-        || inputs.source_dependencies.as_ref().is_ok_and(|deps| {
-            deps.iter()
-                .any(|d| twins(d.files.iter().map(|f| f.virtual_path.as_str())))
-        })
+    let _s = crate::engine::perf_trace::span("batch", "batch.sited_cache.stamp");
+    let manifest = Manifest::consumed(&first.inputs, !cross_app);
+    // The manifest keys every file by its LOSSY path (`al:`, `src:`, `pkg:`):
+    // two names that are not UTF-8 can share a key, and the stamp then holds
+    // only the last one's identity. A read with any such name takes no part
+    // (review r1-r2, sol and Opus); a real U+FFFD in a name only costs the
+    // reuse.
+    let lossy = manifest.entries().keys().any(|k| k.contains('\u{fffd}'));
+    (!lossy).then(|| manifest.stamp())
 }
 
 /// `f` on the kept graph when it was built for `key` from inputs with
