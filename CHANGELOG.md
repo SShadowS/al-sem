@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[TryFunction]` procedures may write (the PDF service's token cache is CDO bug #80680, guarded
   by a token warm-up the engine cannot see).
 
+### Changed (TLS-27: the findings sort builds each sort key once)
+
+- **`alsem analyze` sorts its findings about 11 times faster, in the same order.** The sort
+  compared detector names with the natural comparator and formatted each location string on
+  every comparison. Now each distinct detector name gets a rank once, and each finding's key
+  (rank, location text, root cause) is built once (`sort_by_detector_location_cause` in
+  `src/engine/l5/registry.rs`). The same helper serves `role_scope_and_sort` and the r4
+  projections in `src/engine/l5/finding.rs`. Measured on CDO (2026-11-12, release-fast,
+  `analyze --scope all --format json --deterministic`):
+  - the sort's span (`crossapp.role_scope`) median of 3: 250.9 → 22.5 ms;
+  - one untraced run each: wall 24.13 → 22.88 s, CPU 129.8 → 124.5 s, peak 3,209 → 3,224 MiB
+    (single runs, within noise);
+  - all 8 outputs byte-identical.
+
+  Note: `docs/superpowers/notes/2026-11-12-findings-sort.md`.
+
 ### Changed (TLS-21: impact's up walk runs roots in parallel)
 
 - **One-shot `alsem impact` (and `--part up`) walks the up part over 8 roots at once instead of
