@@ -611,8 +611,7 @@ impl<'a> SuffixCache<'a> {
         }
     }
 
-    /// The counters now. Tests only.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The counters now (tests; the literal pass's trace counters).
     pub(crate) fn stats(&self) -> SuffixStats {
         let c = lock(&self.inner);
         SuffixStats {

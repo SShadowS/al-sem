@@ -2462,6 +2462,17 @@ impl<'t> LiteralPass<'t> {
     }
 }
 
+/// TLS-22: the read's suffix-cache work, for `ALSEM_TRACE` (a duplicate is a
+/// tree two workers built at once).
+impl Drop for LiteralPass<'_> {
+    fn drop(&mut self) {
+        let s = self.suffixes.stats();
+        crate::engine::perf_trace::counter_delta("digest.suffix_built", s.built as u64);
+        crate::engine::perf_trace::counter_delta("digest.suffix_duplicate", s.duplicate as u64);
+        crate::engine::perf_trace::counter_delta("digest.suffix_evicted", s.evicted as u64);
+    }
+}
+
 /// B7/L23: the effect types a trap acts on: an error (`Error`, an implicit
 /// error) and the error dialog it shows (`UI_ERROR`, the same site): a
 /// caught error shows no dialog.
