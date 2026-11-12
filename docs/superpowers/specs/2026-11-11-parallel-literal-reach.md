@@ -400,5 +400,33 @@ Release-fast `alsem` on CDO, alone on the machine, through the orchestrator:
 - Memory: `(workers − 1) ×` the largest measured per-root working set over serial (8.4a); at most
   `REACH_WORKERS` roots in flight per process (production uses one pool); `--low-mem` serial.
 - Stack overflow on a pool thread: the big-stack pool.
-- A future caller inside a rayon worker: the `debug_assert!` (8.5) and the deadlock it guards
-  against are recorded there.
+- A future caller inside a rayon worker: runs serially there (8.5, as built), and counts
+  `digest.reach_serial_in_rayon` in the trace so a lost speed-up shows.
+
+### 8.9 As built after the code review and the owner's decision (2026-11-12)
+
+Code review (sol: do not approve, no Critical; Opus: approve with changes; reviews
+`.agent/tls22/{pi-sol,opus}-code-r1.md` in the main checkout). Owner decision (kraken, from the
+design mantra, q-20261112T022816-833a1bd9): two concurrent asks had about 1 % memory headroom at 8
+workers, so keep 8 for a lone ask, and lower the count while two or more run so a concurrent pair
+keeps the old ~3 % (principle 21: no crash, then low memory, then speed).
+
+- **Concurrent asks.** `ReachWorkers` carries a counter of the passes running; the process's
+  default setting shares one counter. The pass pulls roots from a shared index instead of
+  `par_iter_mut`; before each pull every worker but the first stops while another pass runs. So a
+  pass started beside another is serial, and a running one falls back to one root at a time once
+  its current roots end. A pass whose extra workers stopped does not regain them when the other
+  ends (kept simple; measured). Test: `beside_another_pass_the_pass_runs_one_root_at_a_time`.
+- **Admission and execution agree.** `Estimates::new` takes the default worker count (the
+  revision's); the binary sets 1 under `--low-mem`, where a serial session over-estimated stays
+  safe.
+- **A one-core host** runs every pass serially (the count is capped by the cores; no pool).
+- **The acceptance criterion of 8.4a/8.7, revised.** The per-root allocation trace was not built.
+  The worker term in the admission estimate (`REACH_WORKER_MIB`, 25 MiB per extra worker) comes
+  from whole-pass peak differences on CDO (+153 MiB for 7 extra workers), not from the largest
+  root's working set, so a workspace with much larger roots than CDO's gets an estimate at CDO's
+  rate until its first observation, and may overrun once there (the budget's existing rule). The
+  pass's peak was measured directly at every worker count instead, which bounds what CDO does.
+- **Not observed by a test:** the one-shot CLI route's worker count (`session.rs` `read_tree` and
+  the streamed one-shot `EffectsStream`). It guards speed only; the goldens and the CDO tests
+  guard what it answers.

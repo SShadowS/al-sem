@@ -91,8 +91,9 @@ worker count. The resident engine under `--low-mem` keeps the pass serial (memor
 - Left: a workspace whose per-root working set is far above CDO's still gets an estimate made at
   CDO's per-worker rate (scaled only by routine count) until its first observation.
 - The witness case (digests of 10-20 roots) does not change: its pass is a small part of it.
-- The admission estimates (`Case::Trees`, `Case::Fill("witness")` in `resident/budget.rs`) are not
-  raised: the measured peaks did not rise beyond noise for either case.
+- The table constants of the admission estimates (`Case::table_mib` for `Trees` and
+  `Fill("witness")` in `resident/budget.rs`) are not raised: the measured peaks did not rise beyond
+  noise for either case. The worker term is added beside them (below).
 - **`--low-mem`: two 699-root impacts at once, the second is refused** ("memory budget: the trees
   needs about 1204 MiB; budget 6144 MiB, resident 5153 MiB ... retained floor 5153 MiB", rerun with
   `lowmem_x2.py`). That is the budget rule as it was: `--low-mem` runs the pass serially, so the
