@@ -246,6 +246,10 @@ pub struct SiteFacts {
     /// `{call site}/callresult`), with these triggers and table events, as a
     /// `FieldRef.Validate(…)`'s. `None` for any other call.
     pub call_result_record: Option<CallResultRecord>,
+    /// ENG-25: the record operation's table declares a FIELD of the method's
+    /// name (`Count`, `Next`, …), so a parens-less `R.Count` there reads the
+    /// field and is no call. `false` when the table is not known.
+    pub record_op_field_named: bool,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -1445,6 +1449,13 @@ fn resolve_call_site_obligation(
             };
 
             let (shape, completeness, routes) = if let Some(table_node) = table_node_opt {
+                // ENG-25: a field of the method's name makes a parens-less
+                // read of it a field read, not this call.
+                facts_out.record_op_field_named = obj_node_opt.is_some_and(|from| {
+                    index
+                        .field_in_table(graph, from, &table_node.id, &op_lc)
+                        .is_some()
+                });
                 let (shape, completeness, mut routes) =
                     resolve_implicit_trigger(&op_lc, table_node, graph, index, surface);
                 // S3.4: emit only the triggers this site can fire (a literal
@@ -1706,10 +1717,15 @@ pub(crate) fn resolve_file_obligations(
                     );
                 }
                 // A parens-less value read is a call only when it reaches a
-                // routine; otherwise it is a variable, field or built-in read.
-                // ponytail: a parens-less built-in (`Rec.Count`) is dropped too,
-                // as the compiler's graph does; keep it if built-in reads matter.
+                // routine, or (ENG-25) is a record operation the extractor
+                // classified (`if R.FindFirst then`, `exit(R.IsEmpty)`) whose
+                // table declares no field of that name; otherwise it is a
+                // variable, field or built-in read.
+                let parenless_record_op = matches!(site.shape, CalleeShape::RecordOp { .. })
+                    && kind == EdgeKind::ImplicitTrigger
+                    && !facts.record_op_field_named;
                 if site.parenless
+                    && !parenless_record_op
                     && (kind != EdgeKind::Call
                         || routes.is_empty()
                         || !routes.iter().all(|r| {
