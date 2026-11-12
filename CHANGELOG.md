@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-09: the gate's optimized build is `release-fast`)
+
+- **`scripts/ci-steps build` and `perf-bounds` build with `--profile release-fast` instead of
+  `--release`** (local `ci-steps all` and GitHub CI's `release` job). Measured on server1
+  (master `d887bb47`, after an edit): the `--release` build took 636 s, 62 % of it the library's
+  single codegen unit and 38 % the `alsem` fat-LTO link, almost all on one thread; `release-fast`
+  took 200 s, and the `perf_bounds` build 24 s against 78 s. In ENG-22's landing gate the
+  release build (9 min 41 s) was the critical path by about 6.5 minutes. Every `perf_bounds` row
+  keeps at least 2x headroom on `release-fast` (tightest: the `compute_all` scaling ratio, 2.2x
+  -> 2.1x). No profile changed; the shipped `release-ship` is still built on every code push to
+  master by `build-and-deploy.yml` (Windows, Linux, macOS), so a fat-LTO-only failure shows there,
+  after the merge and before any tag. That workflow now also runs on a `rust-toolchain.toml`
+  change. Note: `docs/superpowers/notes/2026-11-12-gate-release-build.md`.
+
 ### Changed (TLS-22: the literal pass runs roots in parallel)
 
 - **One-shot `impact`, `digest` and `prove` run the literal pass (`prove.reach_effects`) over 8

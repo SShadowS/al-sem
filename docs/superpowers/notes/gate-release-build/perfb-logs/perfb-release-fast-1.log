@@ -1,0 +1,15 @@
+ 10:47:56 up 8 days, 12:01,  0 users,  load average: 4.50, 6.82, 10.88
+[perf_bounds] build_full_1000_files: min=74.129436ms bound=6s samples=[91.695903ms, 79.475985ms, 74.129436ms]
+[perf_bounds] batch_write_check(2000 jobs): 15.993832ms
+[perf_bounds] build_full_100_files: min=11.970079ms bound=1.5s samples=[12.821446ms, 12.316245ms, 11.970079ms]
+[perf_bounds] compute_all(1000): min=9.601313ms architectural_bound=150ms samples=[11.209444ms, 10.209448ms, 9.677266ms, 9.617187ms, 9.82665ms, 9.861791ms, 10.092768ms, 9.783373ms, 9.601313ms]
+[perf_bounds] compute_all scaling: t(500)=4.600928ms t(2000)=21.595398ms ratio=4.694 samples500=[4.674671ms, 4.605379ms, 4.600928ms, 4.822105ms, 4.681298ms, 4.706775ms, 4.787512ms, 4.818071ms, 4.85865ms] samples2000=[21.66497ms, 21.748885ms, 21.595398ms, 21.973747ms, 21.801459ms, 22.781592ms, 22.158079ms, 23.331441ms, 22.847862ms]
+[perf_bounds] compute_summaries_v2_bundle(1000): min=75.272997ms bound=230ms samples=[89.602954ms, 83.502894ms, 75.272997ms, 78.334601ms, 75.492938ms]
+[perf_bounds] incoming: min=4.015565ms bound=75ms samples=[4.338025ms, 4.192461ms, 4.153208ms, 4.015565ms, 4.026826ms]
+[perf_bounds] outgoing: min=13.049µs bound=3ms samples=[15.229µs, 13.731µs, 13.049µs, 13.636µs, 13.601µs]
+[perf_bounds] prepare: min=3.235µs bound=3ms samples=[5.917µs, 4.595µs, 3.974µs, 3.443µs, 3.235µs]
+[perf_bounds] recursive_scc_db_effects(400 files, 4 x 800-member recursive SCCs): min=166.152538ms bound=650ms samples=[166.152538ms, 197.868909ms, 202.689424ms, 267.496243ms, 202.557021ms]
+[perf_bounds] rung1_body_edit: min=13.974809ms absolute_bound=300ms synthetic_bound=100ms samples=[14.873558ms, 14.055ms, 13.974809ms]
+[perf_bounds] rung1_body_edit_scoped: min=1.705293ms absolute_bound=300ms synthetic_bound=65ms samples=[2.36878ms, 1.74545ms, 1.705293ms]
+[perf_bounds] rung2_signature_edit: min=39.51231ms absolute_bound=4.5s synthetic_bound=750ms samples=[39.51231ms, 54.249849ms, 51.180142ms]
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.23s
