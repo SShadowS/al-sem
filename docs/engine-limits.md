@@ -579,7 +579,8 @@ literal reach, so measure speed when changing it.
      is carried as a caught ruling of its own kind
      (`try-write-refused`), as ENG-22's clean runs are, inside the engine; every output counts
      it apart from the caught errors (prove's "not raised" line and count, the slice's and
-     explain/digest's `notRaised`, not in `caughtErrors`). A write whose execution depends
+     explain/digest's `notRaised`, not in `caughtErrors`; ENG-22's clean checked runs are still
+     counted among the caught errors). A write whose execution depends
      on data (CDO's cached access token, bug #80680) is a "may". Whether the wider value uses
      (`exit(..)`, an argument, `a and ..`) also CATCH an `Error()` was not measured: the trap rule
      still reads only `Ok :=` and whole conditions (the safe side for catching).
