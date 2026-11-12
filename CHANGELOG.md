@@ -42,8 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`AL_SEM_REACH_WORKERS` for measurement). The output is byte-identical at any worker count, and
   equal to master's on a fixture (`tests/fixtures/up-parallel`). The resident engine (`alsem mcp`,
   `engine-host`) still walks one root at a time. A traced CDO `impact --diff` spent 93 % of its
-  46 s up part in the per-root walks and 0.2 % in the union walk. Measured times and memory:
-  TBD (measurement pending).
+  46 s up part in the per-root walks and 0.2 % in the union walk. Measured on CDO (2026-11-12,
+  release-fast, 22 cores, 699 roots):
+  - the up part at 8 workers against 1: `impact --diff` 40.0 → 8.4 s, `--base` 44.2 → 7.4 s,
+    `--part up` 36.3 → 7.6 s;
+  - peak memory against master at 8: +1.4 % (`impact --diff`) and +1.5 % (`--part up`); the walk
+    itself adds 39-132 MB;
+  - the outputs equal master's, the whole `impact --diff` and `--part up` at every count;
+  - the resident engine's `cdo-speed` against master passes: round total ×0.990, memory ×0.988.
+
+  At 16 workers the command is slower, so the count stays 8. Note:
+  `docs/superpowers/notes/2026-11-12-parallel-up-walk.md`.
 - **`impact-up`'s `cost.scratchBytes` now sums every walk scratch** (one per walk in flight). It
   grows with the worker count and can differ between runs, like `walkMs`. The resident-vs-CLI
   comparison test now blanks it too. `cost.walksUs` is still the sum of each walk's own time, so
