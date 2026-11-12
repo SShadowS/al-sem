@@ -282,7 +282,7 @@ CHANGELOG "B2 per-arm ids").
 | L15 (P1) | `ReadIsolation` UpdLock/RepeatableRead and `FindSet(true)` are plain reads, never locks. On CDO, `RunMigration :307-308` takes an update lock and the answer says `locks: none`. Approach: record isolation per read in the body walk, then emit a lock fact. | confirmed | M | — |
 | L16 (P2) | **Fixed in wave 2 (B4).** `[CommitBehavior]` now decides every forward commit and error answer (prove, its `--site/--match` slice, digest, explain). ENG-09: a checked `Codeunit.Run` commits (item 2). What is left, numbered: [L16 in detail](#l16-in-detail). | fixed (remainder stated) | M | — |
 | L27 | `callers-have-pending-writes` says `no` when a caller holds a `LockTable` but wrote nothing, so an agent about to add a lock gets no hint. | new | S | L3 |
-| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. CDO avoids it by committing first (`CDOQueueManagement:46`). Measured on the BC 28.4 Linux sidecar (ENG-09 probe): an `Insert` followed by a checked run fails at the run ("An error occurred and the transaction is stopped.", inside a `[TryFunction]`). Confirmed on Windows (BC 28.0.54946.56477, owner, q-20261112T021007-384a506a): the run raises that error itself and it is not caught by the checked form (the run does not return `false`), whether the callee succeeds or fails, and the caller's write is not committed. Probe code and results: `docs/superpowers/notes/2026-11-11-eng09-checked-run-probe.md`. **Wave 2 (B7 review):** the forward error answers read a pending write at the run. **ENG-22:** the run's own error is an error site, raised where a write may be pending at the run and not raised (with the callers' entry assumption) where none may; d50 reports it. Details and what is left: [L28 in detail](#l28-in-detail). | partial | M | L23 |
+| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. CDO avoids it by committing first (`CDOQueueManagement:46`). Measured on the BC 28.4 Linux sidecar (ENG-09 probe): an `Insert` followed by a checked run fails at the run ("An error occurred and the transaction is stopped.", inside a `[TryFunction]`). Confirmed on Windows (BC 28.0.54946.56477, owner, q-20261112T021007-384a506a): the run raises that error itself and it is not caught by the checked form (the run does not return `false`), whether the callee succeeds or fails, and the caller's write is not committed. Probe code and results: `docs/superpowers/notes/2026-11-11-eng09-checked-run-probe.md`. **Wave 2 (B7 review):** the forward error answers read a pending write at the run. **ENG-22:** the run's own error is an error site, raised where a write may be pending at the run and not raised (with the callers' entry assumption) where none may; d50 reports it. **ENG-11** re-probed this wrong answer on master `5ebb5e01`: fixed by ENG-22 (L28 in detail). d50's coarser pending walk is ENG-24. Details and what is left: [L28 in detail](#l28-in-detail). | partial | M | L23 |
 
 #### L16 in detail
 
@@ -423,6 +423,15 @@ callers' question reads (`commit_scope::declared`).
   `PCallSite::write_txn_query`, so a procedure of that name does not count), not negated, no
   `else`, and the `then` branch is one `Commit()`. CDO's `CDOLegacyeDocDispatcher:254-255` has it;
   d50's one CDO finding there was a false positive from the branch commit.
+- **ENG-11 re-probe (2026-11-12, master `5ebb5e01`): the wrong answer no longer reproduces; fixed
+  by ENG-22.** `prove <routine> throws-error` on four routines, each running a checked
+  `Codeunit.Run` of a codeunit whose `OnRun` is empty: `R.ModifyAll(V, 1)` before
+  `if Codeunit.Run(…) then;` answers `yes` (`ERROR (checked Codeunit.Run with a write pending)`
+  at the run, conditional); `R.Insert()` before the variable form `Ok := C.Run()` answers `yes`
+  (the Insert's error and the run's own); `R.LockTable(); if R.FindFirst() then;` before the run
+  answers `yes`; `R.ModifyAll(V, 1); Commit();` before the run answers `no`, the run's own error
+  "not raised (no write may be pending at the run)", with the callers' entry assumption. d50's
+  pending walk, coarser than prove's (the d50 item below), is task ENG-24.
 
 **Left.**
 - An error row of the callee under a run a write may be pending at keeps its old ruling
