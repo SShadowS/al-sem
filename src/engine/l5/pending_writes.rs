@@ -118,13 +118,17 @@ pub(crate) struct PendingCtx<'a> {
 /// other routine reached counts its whole cone, so a run inside dependency
 /// code still counts its writes (an over-count, never a missed write).
 ///
-/// Sound by construction, not by a census: a walked routine adds, besides its
-/// own writes, its group's residue ([`Self::residue`]): the writes its cone
-/// holds that neither its group's own writes nor the cone of a routine called
-/// from outside the group (a checked run's target included) explain. A write
-/// the cone reaches over an edge the forward sites lack is in that residue, so
-/// it is counted (an over-count at worst), never dropped. On CDO the residue was
-/// empty for every routine (4,694 checked).
+/// Not walked either: a routine with no summary, a collided id, and a routine
+/// whose cone follows an edge (a typed edge with a target) that its forward
+/// sites lack. So a walked routine's cone is its own writes plus its forward
+/// successors' cones, and leaving a run's target out drops only what is
+/// behind the run. Besides, a walked routine adds its group's residue
+/// ([`Self::residue`]): the writes its cone holds that neither its group's own
+/// writes nor the cone of a routine called from outside the group (a checked
+/// run's target included) explain. That catches a cone fact with no edge
+/// behind it; it subtracts by table, so such a fact on a table a run also
+/// writes is still dropped (no such fact is known; on CDO the residue was empty
+/// for every routine, 4,694 checked).
 pub(crate) struct RunCleanCones<'a> {
     /// The routines walked: they reach a checked run over `fwd`, have a
     /// summary and one row (a collided id's edges are read through one row
@@ -199,6 +203,7 @@ impl<'a> RunCleanCones<'a> {
         routines: &HashMap<&'a str, &'a ModelRoutine>,
         summaries: &HashMap<String, FullRoutineSummary>,
         collided: &HashSet<&'a str>,
+        typed: &[crate::engine::l4::combined_graph::TypedEdge],
     ) -> Self {
         let mut callers: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
         let mut reaches_run = HashSet::new();
@@ -218,9 +223,28 @@ impl<'a> RunCleanCones<'a> {
                 }
             }
         }
+        // Review round 4: a routine whose cone follows an edge the forward
+        // sites lack is not walked. Its residue cannot tell that edge's write
+        // apart from the same table behind a checked run (the residue
+        // subtracts by table), so its whole cone counts.
+        let mut unseen_edge: HashSet<&str> = HashSet::new();
+        for e in typed {
+            let Some(to) = e.to.as_deref() else {
+                continue;
+            };
+            if reaches_run.contains(e.from.as_str())
+                && !fwd
+                    .get(e.from.as_str())
+                    .is_some_and(|outs| outs.iter().any(|&(_, t)| t == to))
+            {
+                unseen_edge.insert(e.from.as_str());
+            }
+        }
         let walk: HashSet<&'a str> = reaches_run
             .into_iter()
-            .filter(|x| summaries.contains_key(*x) && !collided.contains(x))
+            .filter(|x| {
+                summaries.contains_key(*x) && !collided.contains(x) && !unseen_edge.contains(x)
+            })
             .collect();
         // Groups over every forward site between walked routines (a checked
         // run's edge included: what loops back through it is one group).

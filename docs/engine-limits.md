@@ -452,10 +452,12 @@ callers' question reads (`commit_scope::declared`).
   inside its own checked run no longer count (the CDO landing measurement: both d50 findings on
   CDO's send-on-posting were this shape, and with the fix d50 has none there); this reaches
   workspace routines only, so a checked run inside dependency code still counts its writes (an
-  over-count). The same walk serves the explicit-commit spans. It is sound by construction, not
-  by the CDO census: what a walked routine's cone holds that its group's own writes and the cones
-  it calls outside its group do not explain (an edge the forward sites lack) still counts. A
-  collided id (two rows) is not walked: its whole cone counts.
+  over-count). The same walk serves the explicit-commit spans. A routine is walked only when its
+  cone follows no edge its forward sites lack, it has a summary and one row (otherwise its whole
+  cone counts), and what a walked group's cone holds that its own writes and the cones it calls
+  outside the group do not explain still counts. Left: that last check subtracts by table, so a
+  cone fact with no edge behind it, on a table a skipped run also writes, would still be dropped
+  (no such fact is known; on CDO nothing was unexplained, 4,694 routines checked).
 - A locking read without `LockTable` (`FindSet(true)`, `Find` for update,
   `ReadIsolation := IsolationLevel::UpdLock`) was not measured and does not count as a write.
 - A group row beyond a dependency crossing (a run's error in dependency code) gets its terminal

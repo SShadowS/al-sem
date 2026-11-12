@@ -679,6 +679,7 @@ pub fn compute_transaction_spans(
     reverse: &ReverseCallGraph,
     summaries: &HashMap<String, FullRoutineSummary>,
     cone_derived: &ConeDerivedStore,
+    typed: &[crate::engine::l4::combined_graph::TypedEdge],
 ) -> Vec<TransactionSpan> {
     let mut spans: Vec<TransactionSpan> = Vec::new();
 
@@ -752,7 +753,7 @@ pub fn compute_transaction_spans(
     drop(rows);
     let arms = ArmRows::build(routines);
     let fwd = forward_sites(reverse);
-    let clean = RunCleanCones::build(&fwd, &routine_by_id, summaries, &collided);
+    let clean = RunCleanCones::build(&fwd, &routine_by_id, summaries, &collided, typed);
     let pending = PendingCtx {
         fwd: &fwd,
         routines: &routine_by_id,
@@ -972,6 +973,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1004,6 +1006,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
 
         let inner_span = spans
@@ -1057,6 +1060,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
 
         let inner_span = spans
@@ -1083,6 +1087,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         assert!(!spans[0].coverage_complete);
@@ -1108,6 +1113,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert!(!spans[0].coverage_complete);
     }
@@ -1191,8 +1197,64 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(pending_at_seed(&spans, "root/cs1"), vec!["t/M", "t/X"]);
+    }
+
+    /// ENG-22 review round 4: a helper whose cone follows an edge its forward
+    /// sites lack (`h3 → u3`, a typed edge only) is not walked: `u3` writes
+    /// `t/T`, which the run's target `w3` writes too, so the residue (by table)
+    /// could not keep it.
+    #[test]
+    fn a_helper_with_an_unseen_edge_keeps_its_whole_cone() {
+        let mut root = routine("root3", "procedure");
+        root.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "root3/cs0",
+                "H3",
+                vec![],
+            ));
+        root.call_sites
+            .push(object_run_call_site("root3/cs1", "Codeunit", Some(true)));
+        let mut h = routine("h3", "procedure");
+        h.call_sites
+            .push(object_run_call_site("h3/cs0", "Codeunit", Some(true)));
+        let routines = vec![
+            root,
+            h,
+            routine("w3", "trigger"),
+            routine("u3", "procedure"),
+        ];
+        let graph = graph_from_edges(
+            &["root3", "h3", "w3", "u3"],
+            &[edge("root3", "h3", "root3/cs0"), edge("h3", "w3", "h3/cs0")],
+        );
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        for (id, direct, inherited) in [
+            ("root3", vec![], vec![]),
+            ("h3", vec![], vec![fact("insert", "table", Some("t/T"))]),
+            ("w3", vec![fact("insert", "table", Some("t/T"))], vec![]),
+            ("u3", vec![fact("insert", "table", Some("t/T"))], vec![]),
+        ] {
+            summaries.insert(
+                id.to_string(),
+                summary(id, direct, inherited, Some(coverage("complete"))),
+            );
+        }
+        let typed = vec![crate::engine::l4::cone_derived::test_facts::call_edge(
+            "h3", "u3", "h3/cs9",
+        )];
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &typed,
+        );
+        assert_eq!(pending_at_seed(&spans, "root3/cs1"), vec!["t/T"]);
     }
 
     /// ENG-22 review round 4: a collided id's sites are read through one row
@@ -1242,6 +1304,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(pending_at_seed(&spans, "root2/cs1"), vec!["t/W"]);
     }
@@ -1264,6 +1327,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1293,6 +1357,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert!(spans.is_empty());
     }
@@ -1310,6 +1375,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert!(spans.is_empty());
     }
@@ -1333,6 +1399,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].routines_in_span, spans[1].routines_in_span);
@@ -1398,6 +1465,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         assert_eq!(

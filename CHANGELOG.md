@@ -81,7 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with those runs left out, and the result is kept inside its cone (it can only remove a write);
   a run inside dependency code still counts its writes. Whatever a walked routine's cone holds
   that the walk cannot explain (an edge the forward sites lack, a callee with no summary) still
-  counts (review round 4), and a routine id with two rows is not walked.
+  counts (review round 4), and a routine id with two rows, or one whose cone follows an edge its
+  forward sites lack, is not walked (its whole cone counts).
 
 ### Changed (ENG-22: d50 reports the error, not an implicit commit)
 
