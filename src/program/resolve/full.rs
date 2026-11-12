@@ -1057,7 +1057,8 @@ fn resolve_call_site_obligation(
                 // `GetRef().Modify(true)`, `GetRef().FindFirst()`; an array
                 // element and `this.X` are record operations,
                 // `record_ops::receiver_variable`). On CDO 3 such sites, all in
-                // dependency code (`CreationFactory.GeteDocumentHeader().Modify`).
+                // dependency code and all RecordRef results
+                // (`CreationFactory.GeteDocumentHeader().Modify`).
                 // A known table: a record operation of its own
                 // (`CallResultRecord`, built by the model as ENG-06's
                 // `FieldRef.Validate` is); a RecordRef: an honest open dispatch;

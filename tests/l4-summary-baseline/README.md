@@ -260,6 +260,15 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   change, no uncertainty removed, no new shape or value domain. The four warehouse pages
   that run Base App report 7323 gain a run pair (the compiler audit's 409 -> 415) but no
   summary change.
+- **2026-11-12, ENG-12** (`alsem/eng-12-record-ops`, engine limits L35/L36/B10). Whole-program
+  `f9c5d1e1…` -> `8e952ad5…`; reverse index `bf331871…` -> `b7a20797…`. Measured by dumping the
+  canonical serialization (`L4_CANONICAL_DUMP`) at master `26526e7c` (matches the old digest)
+  and at the branch head. 12 of 5479 routines moved, none added or removed; every change is the
+  new `GetBySystemId` record read (L35): 18 `GetBySystemId` read effects added, and the same 6
+  `Modify` effects under renumbered operation ids (op0 -> op3: the reads come first in their
+  routines). 3 routines own the 5 CDO sites (`CDOeDocsSendCodeMigration`, 4 in two routines;
+  `CDOEMailLog`'s `RecRef.GetBySystemId`), 9 callers inherit their effects. The table is
+  `unknown` because this model is single-app. The reverse index moves with the same reads.
 - **2026-11-11, ENG-06** (`alsem/eng-06-b9-fieldref-validate`, engine limits B9/B10).
   Whole-program `46ef73cc…` -> `a0ce2366…`; reverse index unchanged. 5479 routines
   throughout, none added or removed. Exact single-variable attribution on the pinned

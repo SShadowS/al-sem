@@ -33,9 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolver reads the table from the function's return type; the model builds the operation at the
   call site, `{call site}/callresult`, with its triggers and table-event subscribers, as ENG-06
   does for `FieldRef.Validate`); a RecordRef result is an honest open dispatch; an object global
-  through `this` (`this.X.FindSet()`) is a record operation on the global. On CDO: 3 call-result
-  sites and 13 `this.X` sites, all in dependency code; Base Application has 36 array-element
-  writes.
+  through `this` (`this.X.FindSet()`) is a record operation on the global. On CDO, all in
+  dependency code: 13 `this.X` sites, and 3 RecordRef call results
+  (`CreationFactory.GeteDocumentHeader().Modify()`, `GeteDocumentHeader(): RecordRef`), honest
+  dynamic dispatches; no known-table call result. Base Application has 36 array-element writes.
   Probe: `docs/superpowers/notes/2026-11-12-eng12-record-ops-probe.md`.
 - Review round 1: a non-record parameter, local or return value shadows a record global of its
   name in both engines (a local `X: array[2] of Codeunit W` under a global `X: Record T` had made

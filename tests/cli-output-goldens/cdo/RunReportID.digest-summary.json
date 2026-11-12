@@ -11,7 +11,7 @@
   "routines": [
     {
       "analysis": "partial",
-      "answer": "may write 412 tables (12 owned by this app, 400 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 21; file 3; background tasks 6; isolated storage 18; telemetry 23; errors 290; analysis partial (interface-open-world; object-run-unresolved; record-table-unresolved; 260 interface calls open world, 25 dynamic calls not resolved)",
+      "answer": "may write 412 tables (12 owned by this app, 400 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 21; file 3; background tasks 6; isolated storage 18; telemetry 23; errors 290; analysis partial (interface-open-world; object-run-unresolved; record-table-unresolved; 260 interface calls open world, 28 dynamic calls not resolved)",
       "index": 1,
       "selector": "Codeunit \"CDO E-Mail Handler\"::RunReportID"
     }
