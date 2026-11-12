@@ -974,15 +974,14 @@ fn g1_a_capped_suffix_falls_back_to_a_checked_root_path() {
         let row = g.group_row(&g.true_site, op);
         let c = row.crossing.clone().unwrap();
         let entries = reach.crossing_entries(&tree, &c);
-        let mut cache =
-            crate::engine::l5::literal_reach::SuffixCache::with_limits(per_tree, per_tree);
+        let cache = crate::engine::l5::literal_reach::SuffixCache::with_limits(per_tree, per_tree);
         paths.paths(
             &reach,
             &tree,
             &entries,
             &row,
             &row.group_resource_ops,
-            &mut cache,
+            &cache,
             cancel,
         )
     };
@@ -1056,7 +1055,7 @@ fn g1_the_suffix_cache_evicts_oldest_first_and_is_order_free() {
     let size = |site: &str| {
         let mut c = crate::engine::l5::literal_reach::SuffixCache::default();
         ask(site, &mut c);
-        c.held()
+        c.stats().held
     };
     let (nt, nf) = (size(&g.true_site), size(&g.false_site));
     assert!(
@@ -1069,20 +1068,196 @@ fn g1_the_suffix_cache_evicts_oldest_first_and_is_order_free() {
     let a1 = ask(&g.true_site, &mut small);
     let b1 = ask(&g.false_site, &mut small);
     assert!(
-        small.held() <= room,
+        small.stats().held <= room,
         "the budget holds: {} > {room}",
-        small.held()
+        small.stats().held
     );
-    assert_eq!(small.evicted, 1, "the older tree went");
-    assert_eq!(small.held(), nf, "the newer (false) tree is the one kept");
+    assert_eq!(small.stats().evicted, 1, "the older tree went");
+    assert_eq!(
+        small.stats().held,
+        nf,
+        "the newer (false) tree is the one kept"
+    );
     let a2 = ask(&g.true_site, &mut small);
-    assert_eq!(small.built, 3, "the evicted tree was rebuilt");
+    assert_eq!(small.stats().built, 3, "the evicted tree was rebuilt");
     assert_eq!(a1, a2, "a rebuilt tree answers the same");
     // Order-free.
     let mut fresh = crate::engine::l5::literal_reach::SuffixCache::default();
     let b2 = ask(&g.false_site, &mut fresh);
     let a3 = ask(&g.true_site, &mut fresh);
     assert_eq!((a1, b1), (a3, b2), "the asking order changes nothing");
+}
+
+/// TLS-22: the suffix cache shared by the literal pass's workers. On the G1
+/// fixture the `true` and `false` crossings enter one dependency routine under
+/// opposing bindings whose trees answer differently (asserted), so a cache
+/// keyed without the bindings is caught. Two workers ask both crossings at
+/// once, the first two misses held until both have missed (so both build the
+/// first tree): each gets the serial answers, one copy of each tree is held,
+/// and the second copy counts as a duplicate. A cancelled search is not kept.
+///
+/// DISCRIMINATION (2026-11-11): keying the cache by the target alone fails
+/// the `false` answers; inserting the second copy too (adding to `held`
+/// twice) fails `held`; restored, passes.
+#[test]
+fn g1_shared_suffix_cache_keeps_one_tree_per_entry_state() {
+    use crate::engine::l5::literal_reach::SuffixCache;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let g = g1();
+    let model = &g.base.resolved;
+    let reach = g.reach();
+    let tree = reach.live_tree(&g.root).expect("the root's search");
+    let paths = crate::engine::l5::group_path::GroupPaths::new(&g.tree.typed_edges, model);
+    let ask = |site: &str, cache: &_, cancel: &(dyn Fn() -> bool + Sync)| {
+        let row = g.group_row(site, &g.ws_op);
+        let c = row.crossing.clone().unwrap();
+        let entries = reach.crossing_entries(&tree, &c);
+        paths.paths(
+            &reach,
+            &tree,
+            &entries,
+            &row,
+            &row.group_resource_ops,
+            cache,
+            cancel,
+        )
+    };
+    let never = || false;
+    // Serial, each alone in a fresh cache.
+    let alone = |site: &str| {
+        let c = SuffixCache::default();
+        (ask(site, &c, &never), c.stats().held)
+    };
+    let ((want_t, nt), (want_f, nf)) = (alone(&g.true_site), alone(&g.false_site));
+    assert_ne!(
+        want_t, want_f,
+        "precondition: the opposing bindings' trees answer differently"
+    );
+
+    let shared = SuffixCache::default();
+    let misses = Arc::new(AtomicUsize::new(0));
+    {
+        let misses = Arc::clone(&misses);
+        shared.set_miss_hook(Arc::new(move || {
+            // The first two misses wait (at most 10 s) until both happened.
+            if misses.fetch_add(1, Ordering::SeqCst) < 2 {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while misses.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }));
+    }
+    let worker = || {
+        (
+            ask(&g.true_site, &shared, &never),
+            ask(&g.false_site, &shared, &never),
+        )
+    };
+    let (a, b) = std::thread::scope(|s| {
+        let a = s.spawn(worker);
+        let b = s.spawn(worker);
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    for (who, (t, f)) in [("first", a), ("second", b)] {
+        assert_eq!(
+            t, want_t,
+            "the {who} worker's `true` answer is the serial one"
+        );
+        assert_eq!(
+            f, want_f,
+            "the {who} worker's `false` answer is the serial one"
+        );
+    }
+    let st = shared.stats();
+    assert!(
+        st.built >= 3,
+        "precondition: both workers built the first tree ({st:?})"
+    );
+    assert_eq!(st.held, nt + nf, "one copy of each tree is held ({st:?})");
+    assert_eq!(
+        st.duplicate,
+        st.built - 2,
+        "every extra copy is a dropped duplicate ({st:?})"
+    );
+
+    // A cancelled search is not kept: the next ask builds and answers.
+    let c = SuffixCache::default();
+    let _ = ask(&g.true_site, &c, &|| true);
+    assert_eq!(c.stats().held, 0, "a cancelled tree is not held");
+    assert!(
+        c.stats().built >= 1,
+        "precondition: the search ran and was cancelled"
+    );
+    assert_eq!(ask(&g.true_site, &c, &never), want_t);
+}
+
+/// TLS-22: eviction under threads. A budget of one tree, the same per-tree
+/// cap as the oracle, four workers asking both crossings twice: every answer
+/// equals the serial run with the default budget, though trees were evicted
+/// and rebuilt in an order only timing decides.
+///
+/// DISCRIMINATION (2026-11-11): a rebuilt tree searched under cap 0 (a
+/// capped tree answers differently: asserted) fails; restored, passes.
+#[test]
+fn g1_eviction_under_threads_answers_as_serial() {
+    use crate::engine::l5::literal_reach::SuffixCache;
+    let g = g1();
+    let model = &g.base.resolved;
+    let reach = g.reach();
+    let tree = reach.live_tree(&g.root).expect("the root's search");
+    let paths = crate::engine::l5::group_path::GroupPaths::new(&g.tree.typed_edges, model);
+    let ask = |site: &str, cache: &_| {
+        let row = g.group_row(site, &g.ws_op);
+        let c = row.crossing.clone().unwrap();
+        let entries = reach.crossing_entries(&tree, &c);
+        paths.paths(
+            &reach,
+            &tree,
+            &entries,
+            &row,
+            &row.group_resource_ops,
+            cache,
+            &|| false,
+        )
+    };
+    let size = |site: &str| {
+        let c = SuffixCache::default();
+        let _ = ask(site, &c);
+        c.stats().held
+    };
+    let room = size(&g.true_site).max(size(&g.false_site));
+    let serial = SuffixCache::default();
+    let want = (ask(&g.true_site, &serial), ask(&g.false_site, &serial));
+    // The break must be visible: a tree searched under another cap (0: G1's
+    // trees are small, and a tree may hold `cap + 1` states) answers
+    // differently.
+    assert_ne!(
+        ask(&g.true_site, &SuffixCache::with_limits(0, room)),
+        want.0,
+        "precondition: a capped tree answers differently"
+    );
+
+    let tight = SuffixCache::with_limits(room, room);
+    let got: Vec<_> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..4)
+            .map(|_| {
+                s.spawn(|| {
+                    (0..2)
+                        .map(|_| (ask(&g.true_site, &tight), ask(&g.false_site, &tight)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    for (t, f) in &got {
+        assert_eq!((t, f), (&want.0, &want.1), "an answer under eviction");
+    }
+    let st = tight.stats();
+    assert!(st.evicted > 0, "precondition: trees were evicted ({st:?})");
+    assert!(st.built > 2, "precondition: a tree was rebuilt ({st:?})");
 }
 
 /// W2-0c (design §3.3.1): a resource's status beyond ONE crossing, from its
@@ -1113,8 +1288,8 @@ fn w2_0c_a_resource_is_judged_from_its_own_crossing() {
     let status = |site: &str, ops: &[String], per_tree: usize| {
         let row = g.group_row(site, &g.ws_op);
         let entries = reach.crossing_entries(&tree, row.crossing.as_ref().unwrap());
-        let mut cache = SuffixCache::with_limits(per_tree, per_tree);
-        reach.resource_status(&entries, ops, &mut cache, &|| false)
+        let cache = SuffixCache::with_limits(per_tree, per_tree);
+        reach.resource_status(&entries, ops, &cache, &|| false)
     };
     let cap = crate::engine::l5::literal_reach::STATE_CAP;
     assert_eq!(status(&g.true_site, &ops, cap), S::Reachable);
@@ -1145,9 +1320,9 @@ fn w2_0c_a_resource_is_judged_from_its_own_crossing() {
         "an owner not reached even with guards ignored concludes nothing"
     );
     let none = crate::engine::l5::literal_reach::CrossingEntries::empty();
-    let mut cache = SuffixCache::default();
+    let cache = SuffixCache::default();
     assert_eq!(
-        reach.resource_status(&none, &ops, &mut cache, &|| false),
+        reach.resource_status(&none, &ops, &cache, &|| false),
         S::NotEstablished(U::NoEntry)
     );
     // The temporary class: only the known-temporary insert and the producers.
@@ -1212,7 +1387,12 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
         literal_narrowed_sites: Vec::new(),
         suppressed_commits: Vec::new(),
     }];
-    crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+    crate::engine::l5::digest_cli::literal_reach_pass(
+        &tree,
+        model,
+        &mut entries,
+        crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+    );
     let row = entries[0]
         .effects
         .iter()
@@ -1345,7 +1525,12 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
         literal_narrowed_sites: Vec::new(),
         suppressed_commits: Vec::new(),
     }];
-    crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+    crate::engine::l5::digest_cli::literal_reach_pass(
+        &tree,
+        model,
+        &mut entries,
+        crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+    );
     let row = entries[0]
         .effects
         .iter()
@@ -1428,7 +1613,7 @@ fn cdo_crossing_census() {
     // outcomes and cost.
     let reach = LiteralReach::new(&tree, model);
     let paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
-    let mut cache = crate::engine::l5::literal_reach::SuffixCache::default();
+    let cache = crate::engine::l5::literal_reach::SuffixCache::default();
     let started = std::time::Instant::now();
     let (mut through, mut outside) = (0usize, 0usize);
     let mut none: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1441,8 +1626,7 @@ fn cdo_crossing_census() {
             let entries = reach.crossing_entries(&root_tree, c);
             resources += e.group_resource_ops.len();
             let reps = &e.group_resource_ops;
-            for (_, p) in paths.paths(&reach, &root_tree, &entries, e, reps, &mut cache, &|| false)
-            {
+            for (_, p) in paths.paths(&reach, &root_tree, &entries, e, reps, &cache, &|| false) {
                 match p {
                     Ok(p) if p.through_entry_point => through += 1,
                     Ok(_) => outside += 1,
@@ -1453,9 +1637,9 @@ fn cdo_crossing_census() {
     }
     eprintln!(
         "cdo_crossing_census: suffix cache over IR+RR: {resources} group resources: {through} through, {outside} outside, none {none:?}; {} trees built, {} evicted, peak {} states, {:?}",
-        cache.built,
-        cache.evicted,
-        cache.peak_held,
+        cache.stats().built,
+        cache.stats().evicted,
+        cache.stats().peak_held,
         started.elapsed()
     );
     eprintln!(
@@ -1478,7 +1662,12 @@ fn cdo_crossing_census() {
             suppressed_commits: Vec::new(),
         }];
         let started = std::time::Instant::now();
-        crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+        crate::engine::l5::digest_cli::literal_reach_pass(
+            &tree,
+            model,
+            &mut entries,
+            crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+        );
         let took = started.elapsed();
         let effects = &entries[0].effects;
         let mut by: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();

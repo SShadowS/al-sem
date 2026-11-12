@@ -1746,8 +1746,164 @@ pub(crate) fn digest_effects(
         gaps_in_cone,
         include_reads,
         BoundaryMode::On,
+        ReachWorkers::SERIAL,
     );
     out.pop().expect("one reader, one result")
+}
+
+/// TLS-22: how many roots the literal pass runs at once (1: serial on the
+/// calling thread, no pool). A parameter on every route into the pass, never
+/// read from the environment inside the library. In tests it also carries a
+/// [`PassProbe`] down the route, so a test observes the pass it set up.
+#[derive(Clone, Debug)]
+pub struct ReachWorkers {
+    n: usize,
+    #[cfg(test)]
+    probe: Option<std::sync::Arc<PassProbe>>,
+}
+
+impl ReachWorkers {
+    /// One root at a time, on the calling thread.
+    pub const SERIAL: ReachWorkers = ReachWorkers {
+        n: 1,
+        #[cfg(test)]
+        probe: None,
+    };
+
+    /// `n` roots at once (at least 1).
+    #[must_use]
+    pub fn new(n: usize) -> ReachWorkers {
+        ReachWorkers {
+            n: n.max(1),
+            #[cfg(test)]
+            probe: None,
+        }
+    }
+
+    /// How many roots run at once.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.n
+    }
+
+    /// Tests: the same setting, observed by `probe`.
+    #[cfg(test)]
+    pub(crate) fn with_probe(&self, probe: std::sync::Arc<PassProbe>) -> ReachWorkers {
+        ReachWorkers {
+            n: self.n,
+            probe: Some(probe),
+        }
+    }
+}
+
+/// The literal pass's worker count (spec 2026-11-11 section 8.5): fixed, not
+/// the machine's core count, so peak memory is the same on any machine with
+/// at least this many cores. Measured on CDO (2026-11-12, release-fast, 22
+/// cores): `prove.reach_effects` of the 699-root `impact --diff` 87.1 s at
+/// 1, 51.3 s at 2, 35.5 s at 4, 29.4 s at 8, 35.6 s at 16 (peak RSS +5% at
+/// 8, +15% at 16); `docs/superpowers/notes/2026-11-12-parallel-literal-pass.md`.
+pub(crate) const REACH_WORKERS: usize = 8;
+
+static DEFAULT_REACH_WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// Set once by the binary at start (`AL_SEM_REACH_WORKERS`, for
+/// measurement); tests never set it.
+pub fn set_default_reach_workers(n: usize) {
+    let _ = DEFAULT_REACH_WORKERS.set(n.max(1));
+}
+
+/// [`REACH_WORKERS`] on a machine of `cores`: never more workers than cores,
+/// so a one-core host runs every pass serially (no pool).
+fn capped_by_cores(cores: usize) -> usize {
+    REACH_WORKERS.min(cores).max(1)
+}
+
+/// The setting of a one-shot CLI read (`alsem impact`, `digest`, `prove`):
+/// the binary's count, or [`REACH_WORKERS`] capped by the cores. The
+/// resident engine runs serially instead ([`crate::engine::resident`]'s
+/// revisions; owner decision 2026-11-12, q-20261112T032637-1269d8fc).
+pub fn default_reach_workers() -> ReachWorkers {
+    ReachWorkers::new(*DEFAULT_REACH_WORKERS.get_or_init(|| {
+        capped_by_cores(std::thread::available_parallelism().map_or(1, usize::from))
+    }))
+}
+
+/// TLS-22: the pool of exactly `n` threads the literal pass runs `n` roots
+/// in, one per distinct `n` for the process (production uses one count),
+/// with the big stacks the searches' recursion needs.
+fn reach_pool(n: usize) -> &'static rayon::ThreadPool {
+    static POOLS: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<usize, &'static rayon::ThreadPool>>,
+    > = std::sync::OnceLock::new();
+    let mut pools = POOLS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    pools.entry(n).or_insert_with(|| {
+        Box::leak(Box::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .stack_size(crate::big_stack::BIG_STACK_SIZE)
+                .thread_name(|i| format!("al-sem-reach-{i}"))
+                .build()
+                .expect("the literal pass's thread pool"),
+        ))
+    })
+}
+
+/// Tests (TLS-22): what one route's literal passes did: the most roots in
+/// flight at once, and the passes run. `first_wave`: hold each of the first
+/// `n` roots to start until `n` are in flight or the timeout passes (later
+/// roots never wait), so a pass with `n` workers shows `n` at once, and a
+/// smaller pool shows fewer instead of hanging.
+/// `suffix_hits`: the passes' suffix-cache hits (a tree served again).
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct PassProbe {
+    in_flight: std::sync::atomic::AtomicUsize,
+    started: std::sync::atomic::AtomicUsize,
+    pub(crate) max_in_flight: std::sync::atomic::AtomicUsize,
+    pub(crate) passes: std::sync::atomic::AtomicUsize,
+    pub(crate) suffix_hits: std::sync::atomic::AtomicUsize,
+    pub(crate) first_wave: std::sync::Mutex<Option<(usize, std::time::Duration)>>,
+}
+
+/// A root in flight ([`PassProbe::enter`]); leaves on drop.
+#[cfg(test)]
+pub(crate) struct InFlight<'p>(&'p PassProbe);
+
+#[cfg(test)]
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0
+            .in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+impl PassProbe {
+    fn enter(&self) -> InFlight<'_> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let k = self.started.fetch_add(1, SeqCst);
+        let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+        self.max_in_flight.fetch_max(now, SeqCst);
+        let wave = *self.first_wave.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((n, timeout)) = wave
+            && k < n
+        {
+            let until = std::time::Instant::now() + timeout;
+            while self.in_flight.load(SeqCst) < n && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        InFlight(self)
+    }
+
+    /// The most roots in flight at once.
+    pub(crate) fn max(&self) -> usize {
+        self.max_in_flight.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// [`DigestEffects`] for several readers of ONE tree, in order (G16): each
@@ -1764,6 +1920,8 @@ pub(crate) fn digest_effects(
 /// (`On`; a root inside a dependency is still read with it off, G31) or off
 /// for every root. `gaps_in_cone`: prove's plan, which counts each cone's
 /// analysis gaps. `include_reads`: digest's `--include-reads` (#246).
+/// `workers`: the literal pass's (TLS-22).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn digest_effects_each(
     tree: &CapabilitySnapshot,
     model: &Model,
@@ -1772,6 +1930,7 @@ pub(crate) fn digest_effects_each(
     gaps_in_cone: bool,
     include_reads: bool,
     boundary: BoundaryMode,
+    workers: ReachWorkers,
 ) -> Vec<DigestEffects> {
     // One query over every reader's roots: the per-root work is independent
     // (one worker per root), and the per-call work (the tree's indexes, the
@@ -1784,7 +1943,7 @@ pub(crate) fn digest_effects_each(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
-    let entries = passed_root_entries(tree, model, &all, include_reads, boundary)
+    let entries = passed_root_entries(tree, model, &all, include_reads, boundary, workers)
         .into_iter()
         .flatten()
         .collect();
@@ -1803,13 +1962,14 @@ pub(crate) fn passed_root_entries(
     roots: &[String],
     include_reads: bool,
     boundary: BoundaryMode,
+    workers: ReachWorkers,
 ) -> Vec<Option<DigestEntryResult>> {
     let mut entries = root_entries(tree, model, roots, include_reads, boundary);
     let present: Vec<usize> = (0..entries.len())
         .filter(|&i| entries[i].is_some())
         .collect();
     let mut passed: Vec<DigestEntryResult> = entries.iter_mut().filter_map(Option::take).collect();
-    literal_reach_pass(tree, model, &mut passed);
+    literal_reach_pass(tree, model, &mut passed, workers);
     for (i, e) in present.into_iter().zip(passed) {
         entries[i] = Some(e);
     }
@@ -2163,6 +2323,7 @@ pub(crate) fn digest_effects_chunks(
     tests: bool,
     gaps_in_cone: bool,
     include_reads: bool,
+    workers: ReachWorkers,
     mut f: impl FnMut(&[String], DigestEffects),
 ) {
     use crate::engine::l5::digest::{QueryCx, root_set, with_query_cx};
@@ -2184,7 +2345,7 @@ pub(crate) fn digest_effects_chunks(
     };
     let any_dependency = roots.iter().any(is_dependency_root);
     let finish = FinishCx::new(tree, model, tests, gaps_in_cone);
-    let mut pass = LiteralPass::new(tree, model);
+    let mut pass = LiteralPass::new(tree, model, workers);
     let mut batches = |on: &QueryCx<'_, '_>, off: Option<&QueryCx<'_, '_>>| {
         for batch in roots.chunks(chunk) {
             let _s = crate::engine::perf_trace::span("digest", "digest.stream_batch");
@@ -2238,8 +2399,9 @@ pub(crate) fn literal_reach_pass(
     tree: &CapabilitySnapshot,
     model: &Model,
     entries: &mut [DigestEntryResult],
+    workers: ReachWorkers,
 ) {
-    LiteralPass::new(tree, model).pass(entries);
+    LiteralPass::new(tree, model, workers).pass(entries);
 }
 
 /// [`literal_reach_pass`]'s per-tree half: the literal reach, the group
@@ -2253,10 +2415,16 @@ pub(crate) struct LiteralPass<'t> {
     /// Round-4 literal routes: the tree's unresolved call sites (the ledger
     /// rows an unresolved cone lists), sorted and distinct.
     unresolved_sites: Vec<&'t str>,
+    /// TLS-22: how many roots run at once.
+    workers: ReachWorkers,
 }
 
 impl<'t> LiteralPass<'t> {
-    pub(crate) fn new(tree: &'t CapabilitySnapshot, model: &'t Model) -> LiteralPass<'t> {
+    pub(crate) fn new(
+        tree: &'t CapabilitySnapshot,
+        model: &'t Model,
+        workers: ReachWorkers,
+    ) -> LiteralPass<'t> {
         let reach = {
             let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
             crate::engine::l5::literal_reach::LiteralReach::new(tree, model)
@@ -2281,6 +2449,7 @@ impl<'t> LiteralPass<'t> {
             // crossing and resource of this read.
             suffixes: crate::engine::l5::literal_reach::SuffixCache::default(),
             unresolved_sites,
+            workers,
         }
     }
 
@@ -2291,8 +2460,32 @@ impl<'t> LiteralPass<'t> {
             group_paths,
             suffixes,
             unresolved_sites,
+            workers,
         } = self;
-        literal_reach_entries(reach, group_paths, suffixes, unresolved_sites, entries);
+        literal_reach_entries(
+            reach,
+            group_paths,
+            suffixes,
+            unresolved_sites,
+            entries,
+            workers,
+        );
+    }
+}
+
+/// TLS-22: the read's suffix-cache work, for `ALSEM_TRACE` (a duplicate is a
+/// tree two workers built at once).
+impl Drop for LiteralPass<'_> {
+    fn drop(&mut self) {
+        let s = self.suffixes.stats();
+        crate::engine::perf_trace::counter_delta("digest.suffix_built", s.built as u64);
+        crate::engine::perf_trace::counter_delta("digest.suffix_duplicate", s.duplicate as u64);
+        crate::engine::perf_trace::counter_delta("digest.suffix_evicted", s.evicted as u64);
+        #[cfg(test)]
+        if let Some(p) = &self.workers.probe {
+            p.suffix_hits
+                .fetch_add(s.hits, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -2410,16 +2603,23 @@ fn judge_traps<'t>(
 fn literal_reach_entries<'t>(
     reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
     group_paths: &crate::engine::l5::group_path::GroupPaths<'t>,
-    suffixes: &mut crate::engine::l5::literal_reach::SuffixCache<'t>,
+    suffixes: &crate::engine::l5::literal_reach::SuffixCache<'t>,
     unresolved_sites: &[&str],
     entries: &mut [DigestEntryResult],
+    workers: &ReachWorkers,
 ) {
+    // On the calling thread around the whole pass, whatever runs the roots.
     let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
     // A shared fill is never cancelled by a request (context-server design
     // §4.6), so nothing here asks to stop; the check is wired for a reader
     // that owns its search.
     let never = || false;
-    for entry in entries {
+    // TLS-22: one root's pass. It writes only its own entry; what it shares
+    // with other roots (`reach`, `group_paths`, `suffixes`) is read-only or a
+    // pure memo (spec 2026-11-11 section 8.3).
+    let one = |entry: &mut DigestEntryResult| {
+        #[cfg(test)]
+        let _in_flight = workers.probe.as_deref().map(PassProbe::enter);
         // The root's guarded search, built once per root on first need
         // (`None` inside: it hit its cap).
         let mut root_tree = None;
@@ -2701,7 +2901,28 @@ fn literal_reach_entries<'t>(
                 Some(t) => group_paths.own_path(reach, t, &ops),
             });
         }
+    };
+    #[cfg(test)]
+    if let Some(p) = &workers.probe {
+        p.passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
+    // Serial when asked, and from inside a rayon worker: there `install`
+    // would let the blocked worker run other jobs while it waits, which
+    // deadlocks when one takes a lock this thread holds (`fill_witness` holds
+    // `scratch` across the pass); such a caller is parallel already (a test
+    // reading many fixtures on rayon).
+    if workers.n <= 1 {
+        entries.iter_mut().for_each(one);
+        return;
+    }
+    if rayon::current_thread_index().is_some() {
+        crate::engine::perf_trace::counter_delta("digest.reach_serial_in_rayon", 1);
+        entries.iter_mut().for_each(one);
+        return;
+    }
+    use rayon::prelude::*;
+    // One root per task: per-root cost is uneven, work stealing balances it.
+    reach_pool(workers.n).install(|| entries.par_iter_mut().with_max_len(1).for_each(one));
 }
 
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),

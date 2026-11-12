@@ -1236,6 +1236,76 @@ fn a_read_over_more_roots_than_the_cap_memoizes_no_witness() {
     assert_eq!(rev.fill_counts().get("witness"), Some(&2));
 }
 
+/// TLS-22: every route a revision runs the literal pass on obeys the
+/// revision's worker count, observed (each pass's first wave held until
+/// `n` roots are in flight, at most 10 s): a witness fill, a read over more
+/// roots than the memo's cap (the tree read computes its own entries), and a
+/// streamed impact. Each answer is its cold run's.
+///
+/// DISCRIMINATION (2026-11-11): a route passing the default setting instead
+/// of the revision's (`fill_witness` calling `passed_root_entries` with
+/// `default_reach_workers()`) fails the witness case; restored, passes.
+#[test]
+fn every_route_runs_the_pass_with_its_revisions_worker_count() {
+    use crate::engine::l5::digest_cli::ReachWorkers;
+    let roots = ["DocBoth", "QueueTwice", "ReadThenQueue"];
+    let f = witness_ws("ReadThenQueue");
+    let held = |rev: &Revision, n: usize| {
+        *rev.reach_probe().first_wave.lock().unwrap() =
+            Some((n, std::time::Duration::from_secs(10)));
+    };
+    let passes = |rev: &Revision| {
+        rev.reach_probe()
+            .passes
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    // A witness fill: the request's three roots in one pass.
+    // Pool size 7, no other test's (a held first wave must not share a pool
+    // with another test's passes under a plain `cargo test`); the request's
+    // three roots run three at once.
+    let rev = revision(&f).with_reach_workers(ReachWorkers::new(7));
+    held(&rev, 3);
+    let explain = explain_many(&f, &roots);
+    let warm = rev.answer(&*explain, &Control::unreserved()).unwrap();
+    assert_eq!(warm, crate::engine::batch::standalone_output(&*explain));
+    assert_eq!(rev.fill_counts().get("witness"), Some(&3), "precondition");
+    assert!(passes(&rev) >= 1, "precondition: a pass ran");
+    assert_eq!(rev.reach_probe().max(), 3, "a witness fill");
+    // Over the memo's cap: the tree read's own entries.
+    let rev = revision(&f).with_reach_workers(ReachWorkers::new(7));
+    rev.set_witness_memo_max(2);
+    held(&rev, 3);
+    let warm = rev.answer(&*explain, &Control::unreserved()).unwrap();
+    assert_eq!(warm, crate::engine::batch::standalone_output(&*explain));
+    assert_eq!(rev.fill_counts().get("witness"), None, "precondition");
+    assert!(passes(&rev) >= 1, "precondition: a pass ran");
+    assert_eq!(rev.reach_probe().max(), 3, "a read over the cap");
+    // A streamed impact, two roots per batch.
+    use crate::engine::impact::jobs::{MainAsk, MainJob};
+    let main = |hand, root_batch| MainJob {
+        inputs: hand,
+        single_app: true,
+        ask: MainAsk::Routines(roots.iter().map(|r| r.to_string()).collect()),
+        scope: Default::default(),
+        summaries: false,
+        extra_roots: Vec::new(),
+        root_batch,
+    };
+    let rev = revision(&f).with_reach_workers(ReachWorkers::new(7));
+    held(&rev, 2);
+    let hand = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    let warm = rev
+        .answer(&main(&hand, Some(2)), &Control::unreserved())
+        .unwrap();
+    let whole = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    assert_eq!(
+        warm,
+        crate::engine::batch::standalone_output(&main(&whole, None))
+    );
+    assert!(passes(&rev) >= 2, "precondition: two batches, two passes");
+    assert_eq!(rev.reach_probe().max(), 2, "a streamed impact");
+}
+
 /// Without its tree a witness fill fails loudly, never answers wrong: a
 /// plan's witnesses are filled off the request's own `Tree(scope)`.
 ///
