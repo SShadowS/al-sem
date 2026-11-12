@@ -1358,6 +1358,8 @@ pub struct DigestEntryFull {
     /// B4/L16: the commits no route runs as a commit, with why
     /// ([`crate::engine::l5::digest::DigestEntryResult::suppressed_commits`]).
     pub suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
+    /// ENG-10 ([`crate::engine::l5::digest::DigestEntryResult::try_root_refusal`]).
+    pub try_root_refusal: bool,
 }
 
 /// ENG-09: how a human output names a checked run's own commit, whose anchor
@@ -1376,6 +1378,17 @@ pub(crate) fn is_run_error_row(effect_type: &str, detail: &[(String, String)]) -
         && detail
             .iter()
             .any(|(k, v)| k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT)
+}
+
+/// ENG-10: the error a try call raises when the server refuses a database
+/// write inside it (resource `write-in-try` on an implicit error).
+pub(crate) const TRY_REFUSAL_LABEL: &str = "ERROR (database write refused inside a try call)";
+
+pub(crate) fn is_try_refusal_row(effect_type: &str, detail: &[(String, String)]) -> bool {
+    effect_type == "ERROR_IMPLICIT"
+        && detail.iter().any(|(k, v)| {
+            k == "resourceId" && v == crate::engine::l4::capability_cone::WRITE_IN_TRY
+        })
 }
 
 pub(crate) fn is_run_commit_row(e: &DigestEffectFull) -> bool {
@@ -2560,9 +2573,26 @@ fn judge_traps<'t>(
     };
     let scope = reach.trap_scope(&entry.routine_id, full, runs.as_ref());
     let collectors = reach.collectors_reached(full);
-    if scope.is_none() && !collectors && !has_run_error {
+    // ENG-10: a try call's refusal error is ruled by its own reach (no try
+    // call catches it), and a group caught only by a try call may hold one.
+    let refusal_open = if reach.has_try_calls() {
+        reach.refusal_reach(&entry.routine_id)
+    } else {
+        None
+    };
+    let has_refusal = reach.has_try_calls()
+        && rows.iter().any(|&i| {
+            let e = &entry.effects[i];
+            e.boundary_group || is_try_refusal_row(&e.effect_type, &e.detail)
+        });
+    if scope.is_none() && !collectors && !has_run_error && !has_refusal {
         return;
     }
+    let in_try = if has_refusal {
+        reach.in_try_reach(&entry.routine_id)
+    } else {
+        None
+    };
     for i in rows {
         let e = &mut entry.effects[i];
         let ops: Vec<String> = if e.boundary_group {
@@ -2621,6 +2651,46 @@ fn judge_traps<'t>(
                 assumes_clean_entry = true;
                 assumes_normal_commit = by_commit;
             }
+        }
+        // ENG-10: the try call's own refusal error: whatever the ordinary
+        // traps said (an outer try call does not catch it).
+        if !e.boundary_group
+            && is_try_refusal_row(&e.effect_type, &e.detail)
+            && let Some(site) = e.evidence_callsite_id.as_deref()
+            && let Some(v) =
+                reach.try_refusal_verdict(&entry.routine_id, refusal_open.as_ref(), site)
+        {
+            trap = Some(v);
+            assumes_clean_entry = false;
+            assumes_normal_commit = false;
+        }
+        // ENG-10: a group a try call catches may hold the refusal error of a
+        // try call inside the dependency code (T14: no try call around it
+        // catches it): when a crossing edge runs inside a try call on a route
+        // with no checked run or `asserterror`, and its target may make such
+        // a try call (`crossing_in_try`).
+        // Whatever trap the witness route named (another route may enter a
+        // try call).
+        // Only an implicit-error group can hold a refusal (`write-in-try`).
+        if e.boundary_group
+            && e.effect_type == "ERROR_IMPLICIT"
+            && matches!(
+                &trap,
+                Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
+            )
+            && let (Some(c), Some(it)) = (e.crossing.as_ref(), in_try.as_ref())
+            && let Some((o, s)) = c
+                .edges
+                .iter()
+                .find_map(|x| reach.crossing_in_try(it, &x.from, x.site.guarded_id(), &x.to))
+        {
+            trap = Some(
+                crate::engine::l5::literal_reach::TrapVerdict::UnlessWritePending(
+                    reach.try_call_at(o, s),
+                ),
+            );
+            assumes_clean_entry = false;
+            assumes_normal_commit = false;
         }
         let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
             reach
@@ -2805,6 +2875,8 @@ fn literal_reach_entries<'t>(
         }
         // B7/L23 + L30: error rows behind traps, and under error collection.
         judge_traps(reach, &mut root_tree, entry);
+        // ENG-10: a root that is itself a try function may be refused.
+        entry.try_root_refusal = reach.try_root_may_refuse(&entry.routine_id);
         // G33: a group's resources reached only through code that cannot run.
         for (i, resources) in dead_resources {
             entry.effects[i].dead_group_resources = resources;
@@ -3071,6 +3143,7 @@ pub fn run_digest_query_full_from_entries(
                 entry_diagnostics: Vec::new(),
                 declaration_only: true,
                 suppressed_commits: Vec::new(),
+                try_root_refusal: false,
             });
             continue;
         }
@@ -3104,9 +3177,11 @@ pub fn run_digest_query_full_from_entries(
         let mut full_effects: Vec<DigestEffectFull> = Vec::new();
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
         let mut suppressed_commits = Vec::new();
+        let mut try_root_refusal = false;
 
         if let Some(entry) = base_entry {
             suppressed_commits = std::mem::take(&mut entry.suppressed_commits);
+            try_root_refusal = entry.try_root_refusal;
             // A site list the search could not finish (the depth bound): its
             // count is a lower bound, and the renderers say "at least".
             for ty in &entry.partial_site_types {
@@ -3331,6 +3406,7 @@ pub fn run_digest_query_full_from_entries(
             entry_diagnostics,
             declaration_only: false,
             suppressed_commits,
+            try_root_refusal,
         });
     }
 
@@ -6437,6 +6513,7 @@ mod tests {
             entry_diagnostics: diagnostics,
             declaration_only: false,
             suppressed_commits: Vec::new(),
+            try_root_refusal: false,
         }
     }
 

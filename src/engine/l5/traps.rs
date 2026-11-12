@@ -109,6 +109,11 @@ pub(crate) enum TrapKind {
     /// pending at it. Only a ruling of that error names it (never an entry
     /// of the trap table).
     RunCheck,
+    /// ENG-10: not a trap of the call edges: the server's refusal of a
+    /// database write inside a try call (on premises,
+    /// `DisableWriteInsideTryFunctions`), which raises the try call's own
+    /// error. Only a ruling of that error names it.
+    TryRefusal,
 }
 
 impl TrapKind {
@@ -128,6 +133,7 @@ impl TrapKind {
             TrapKind::Asserterror => "asserterror",
             TrapKind::IsolatedEvent => "isolated event",
             TrapKind::RunCheck => "clean-transaction check of the checked Codeunit.Run",
+            TrapKind::TryRefusal => "database-write refusal of the try call",
         }
     }
 
@@ -140,6 +146,7 @@ impl TrapKind {
             TrapKind::Asserterror => "asserterror",
             TrapKind::IsolatedEvent => "isolated-event",
             TrapKind::RunCheck => "checked-run-pending-write",
+            TrapKind::TryRefusal => "try-write-refused",
         }
     }
 }
@@ -229,6 +236,19 @@ pub(crate) fn entry_assumption(clean_entry: bool, normal_commit: bool) -> Option
         "assumes the routine's callers have no write pending when they call it: an error left \
          out as caught may rest on a checked Codeunit.Run, and a checked run inside a write \
          transaction is itself a run-time error"
+            .to_string()
+    })
+}
+
+/// ENG-10: the assumption every forward error answer of a root that is
+/// itself a `[TryFunction]` and may run a refused write rests on (prove's
+/// assumptions, explain's and digest's header). `None` otherwise.
+#[must_use]
+pub(crate) fn try_root_assumption(try_root_refusal: bool) -> Option<String> {
+    try_root_refusal.then(|| {
+        "assumes the routine's callers call it as a statement: it is a [TryFunction], and a \
+         caller that uses its return value gets an error no try call catches when the server \
+         refuses a database write, LockTable or Commit it runs (on premises by default)"
             .to_string()
     })
 }

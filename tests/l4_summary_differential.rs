@@ -1446,6 +1446,7 @@ mod fixtures {
             start_may_fail: false,
             checked_run: false,
             write_txn_query: false,
+            try_call: false,
         }
     }
 

@@ -466,8 +466,14 @@ fn an_error_behind_a_definite_trap_does_not_escape() {
         });
         // ENG-22: a clean checked run's own error is left out too, named by
         // its own kind; the callee's error is the other one.
-        let (own, caught): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = caught
+        // ENG-10: so is a try call's write-refusal error nothing inside it
+        // raises (TryIt does not write).
+        let caught: Vec<&serde_json::Value> = caught
             .iter()
+            .filter(|c| c["trap"]["kind"] != "try-write-refused")
+            .collect();
+        let (own, caught): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = caught
+            .into_iter()
             .partition(|c| c["trap"]["kind"] == "checked-run-pending-write");
         assert_eq!(
             own.len(),

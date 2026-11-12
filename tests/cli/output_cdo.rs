@@ -753,7 +753,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // (`(14 guards on the route, 0 evaluated; 3 earlier exits, 1
         // evaluated)`), so the tools agree with `prove --site`'s count:
         // RunReportID 152 lines / 39,763 B.
-        ("IssueReminder", "explain human") => (145, 34_500),
+        // ENG-10 (2026-11-12): one `not raised: 12 try calls' write-refusal
+        // errors` line, the 12 refusal rows no try call may raise counted
+        // apart from the caught errors: IssueReminder 34,585 B (was 34,480).
+        ("IssueReminder", "explain human") => (145, 34_800),
         ("RunReportID", "explain human") => (160, 40_200),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
@@ -812,7 +815,8 @@ fn ratchet(label: &str, call: &str) -> Budget {
         ("IssueReminder", "prove writes-table data-exch human") => (30, 4_800),
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
-        ("RunReportID", "digest human") => (135, 46_300),
+        // ENG-10 (2026-11-12): the same `not raised:` line: 136 lines.
+        ("RunReportID", "digest human") => (136, 46_300),
         (_, "digest human") => (30, 2_500),
         _ => (150, 40 * 1024),
     };

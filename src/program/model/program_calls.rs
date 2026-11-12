@@ -613,6 +613,9 @@ fn attach_program_calls_with(
     for (ri, ci) in dataset_ops.checked_run_sites {
         rows.workspace.routines[ri].call_sites[ci].checked_run = true;
     }
+    for (ri, ci) in dataset_ops.try_call_sites {
+        rows.workspace.routines[ri].call_sites[ci].try_call = true;
+    }
     // The pages that block a user's record operation, from the graph (the
     // sited graph's page lifecycle reads the same function).
     let page_ui_blocked = {
@@ -1714,6 +1717,14 @@ fn convert<'a>(
         };
     let mut background_starts: HashMap<String, BackgroundStart> = HashMap::new();
     let mut dataset_ops = DatasetOps::default();
+    // ENG-10: the routines some `#if` arm declares `[TryFunction]` (a possible
+    // try call refuses the write; catching needs every arm, `traps`).
+    let try_functions: std::collections::HashSet<&str> = ws
+        .routines
+        .iter()
+        .filter(|r| crate::program::attributes::has_attribute(&r.attributes_parsed, "TryFunction"))
+        .map(|r| r.id.as_str())
+        .collect();
     let mut dataset_edges: Vec<CallEdge> = Vec::new();
     // ENG-06 (`ResolvedCalls::loaded_only_tables`).
     let mut loaded_only_tables: std::collections::HashSet<String> =
@@ -1787,6 +1798,20 @@ fn convert<'a>(
                 })
             }) {
                 dataset_ops.write_txn_query_sites.push((ri, ci));
+            }
+            // ENG-10 (measured on BC 28 on premises): any use of a try
+            // function's value makes the call a try call for the write
+            // refusal; only a call statement is ordinary.
+            if !cs.in_statement_position
+                && site_edges.iter().any(|e| {
+                    e.to.as_deref().is_some_and(|t| try_functions.contains(t))
+                        || e.candidates
+                            .iter()
+                            .flatten()
+                            .any(|t| try_functions.contains(t.as_str()))
+                })
+            {
+                dataset_ops.try_call_sites.push((ri, ci));
             }
             edges.extend(site_edges);
             bindings_per_site.push((cs.id.clone(), bindings));
@@ -1901,6 +1926,9 @@ struct DatasetOps {
     /// ENG-22: the sites that call the platform's `IsInWriteTransaction()`
     /// (`PCallSite::write_txn_query`).
     write_txn_query_sites: Vec<(usize, usize)>,
+    /// ENG-10: the sites that may start a `[TryFunction]` with the value used
+    /// (`PCallSite::try_call`).
+    try_call_sites: Vec<(usize, usize)>,
 }
 
 /// Where a route's target lives relative to the model (engine-switch S7.3).
