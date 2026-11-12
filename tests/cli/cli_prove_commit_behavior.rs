@@ -1167,15 +1167,28 @@ fn the_filtered_slice_traps_a_commit_turned_into_an_error() {
         args.extend_from_slice(extra);
         json(&ws.root, &args)["payload"]["result"].clone()
     };
+    // ENG-10 (measured on BC 28 on premises): the `Commit()` inside the used
+    // try call is refused, an error the try call does not catch, raised if
+    // the server refuses it: the commit's own error is caught, the refusal
+    // is not, unfiltered and filtered alike.
     let unfiltered = ask("ErrorTry", &[]);
-    assert_eq!(unfiltered["answer"], "no", "precondition: {unfiltered}");
+    assert_eq!(unfiltered["answer"], "yes", "precondition: {unfiltered}");
+    let escaping: Vec<&serde_json::Value> =
+        unfiltered["evidence"].as_array().unwrap().iter().collect();
+    assert!(
+        escaping
+            .iter()
+            .all(|e| e["detail"]["resourceId"] == "write-in-try"
+                && e["trap"]["verdict"] == "escapes-if-write-refused"),
+        "only the try call's refusal escapes: {unfiltered}"
+    );
     for filter in [
         &["--site", "ws:src/Probe.al:12"][..],
         &["--match", "commit"][..],
         &["--op", "Commit"][..],
     ] {
         let r = ask("ErrorTry", filter);
-        assert_eq!(r["answer"], "no", "{filter:?}: {r}");
+        assert_eq!(r["answer"], "yes", "{filter:?}: {r}");
     }
     // Control: a plain error in a used TryFunction, asked with --site.
     let control = ask("PlainTry", &["--site", "ws:src/Probe.al:23"]);

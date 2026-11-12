@@ -1245,6 +1245,14 @@ pub fn is_group(e: &DigestEffectFull) -> bool {
     e.crossing.is_some() || detail(e, "boundary").is_some()
 }
 
+/// ENG-10: a try call's write-refusal row ruled "not raised" (nothing
+/// inside the call may be refused): no error at all.
+fn not_raised(e: &DigestEffectFull) -> bool {
+    crate::engine::l5::digest_cli::is_try_refusal_row(&e.effect_type, &e.detail)
+        && crate::engine::l5::prove::caught_at(e)
+            .is_some_and(|a| a.kind == crate::engine::l5::traps::TrapKind::TryRefusal)
+}
+
 /// The kind family of a non-DB effect type (design §4.1 rule 2e).
 #[must_use]
 pub fn family_of(ty: &str) -> Option<&'static str> {
@@ -1435,6 +1443,9 @@ pub struct RollupTotals {
     /// B7/L23: error places a definite trap catches on every route (not in
     /// `kinds`).
     pub caught_errors: usize,
+    /// ENG-10: try calls' write-refusal errors not raised (nothing inside
+    /// may be refused): no error, so not among `caught_errors`.
+    pub not_raised: usize,
     /// B7 review round 2: what leaving the caught rows out assumes
     /// ([`RoutineRollup::caught_assumes`]).
     pub caught_assumes: (bool, bool),
@@ -1604,6 +1615,10 @@ impl RollupTotals {
         // B7/L23 (additive): errors caught on every route by a trap.
         if self.caught_errors > 0 {
             v["caughtErrors"] = json!(self.caught_errors);
+        }
+        // ENG-10 (additive): try calls' write-refusal errors not raised.
+        if self.not_raised > 0 {
+            v["notRaised"] = json!(self.not_raised);
         }
         // B7 review round 2 (additive, as prove's `obligations`): present
         // only when leaving a caught row out rests on the root's callers.
@@ -2077,6 +2092,9 @@ pub struct RoutineRollup {
     /// B7/L23: own error rows a definite trap catches on every route from
     /// the root (not in `kind_sites`, not counted as errors).
     pub caught_errors: Vec<usize>,
+    /// ENG-10: own try-call refusal rows ruled "not raised" (not errors, not
+    /// caught).
+    pub not_raised: Vec<usize>,
     /// B7 review round 2: some caught error row rests on the assumption
     /// that the root's callers have no write pending (and, second, that
     /// they set no `[CommitBehavior]` that stops a `Commit()` the ruling
@@ -2393,7 +2411,9 @@ impl RoutineRollup {
                 // never leaves the root: counted apart, not an error place.
                 // (Its dialog, `UI_ERROR`, is no error place either way.)
                 other if crate::engine::l5::prove::caught_at(e).is_some() => {
-                    if family_of(other) == Some("errors") {
+                    if not_raised(e) {
+                        r.not_raised.push(i);
+                    } else if family_of(other) == Some("errors") {
                         r.caught_errors.push(i);
                     }
                     // A caught dialog is left out on the same assumption.
@@ -2589,6 +2609,7 @@ impl RoutineRollup {
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
             caught_errors: self.caught_errors.len(),
+            not_raised: self.not_raised.len(),
             caught_assumes: self.caught_assumes,
             entry_points_partial: false,
             events: self.events_ws.len() + self.events_beyond.len(),
@@ -2760,6 +2781,8 @@ impl Place {
         // ENG-22: the error a checked run raises itself has a name of its own.
         let lead = if crate::engine::l5::digest_cli::is_run_error_row(&e.effect_type, &e.detail) {
             crate::engine::l5::digest_cli::RUN_ERROR_LABEL.to_string()
+        } else if crate::engine::l5::digest_cli::is_try_refusal_row(&e.effect_type, &e.detail) {
+            crate::engine::l5::digest_cli::TRY_REFUSAL_LABEL.to_string()
         } else {
             e.effect_type.clone()
         };
@@ -3187,7 +3210,12 @@ pub fn header_facts(
         summary: lines[0].clone(),
         analysis,
         limits,
-        assumptions: caught_assumptions(r).into_iter().collect(),
+        assumptions: caught_assumptions(r)
+            .into_iter()
+            .chain(crate::engine::l5::traps::try_root_assumption(
+                entry.try_root_refusal,
+            ))
+            .collect(),
         depth,
     }
 }
@@ -3241,6 +3269,9 @@ fn header_lines(
     out.push(cov);
     let mut assumptions = vec![crate::engine::result_header::LOADED_PROGRAM.to_string()];
     assumptions.extend(caught_assumptions(r));
+    assumptions.extend(crate::engine::l5::traps::try_root_assumption(
+        entry.try_root_refusal,
+    ));
     out.push(format!("assumptions: {}", assumptions.join("; ")));
     let mut limits: Vec<String> = Vec::new();
     if !r.no_path.is_empty() {
@@ -4474,6 +4505,17 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> 
             } else {
                 String::new()
             }
+        ));
+    }
+    // ENG-10: try calls whose write-refusal error is not raised: a count.
+    if !r.not_raised.is_empty() {
+        out.push(format!(
+            "not raised: {} (nothing inside the try call may write, lock or commit)",
+            plural(
+                r.not_raised.len(),
+                "try call's write-refusal error",
+                "try calls' write-refusal errors"
+            )
         ));
     }
     // B7/L23: errors a definite trap catches on every route, apart.

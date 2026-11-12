@@ -507,6 +507,9 @@ pub struct SliceOut {
     /// `Commit()` before it ends the write: it holds only if the callers do
     /// not call the root under `[CommitBehavior(Ignore)]` or `(Error)`.
     pub caught_assumes_normal_commit: bool,
+    /// ENG-10: try calls' write-refusal errors not raised (nothing inside
+    /// the call may be refused): no error at all, so not among `caught`.
+    pub not_raised: usize,
 }
 
 impl SliceOut {
@@ -888,6 +891,7 @@ pub(crate) fn compute_slice(
         caught: Vec::new(),
         caught_assumes_clean_entry: false,
         caught_assumes_normal_commit: false,
+        not_raised: 0,
     };
     // E2: above one route, the state-transition graph, whose tree is the
     // search tree E1 reads (the same search, every transition kept).
@@ -959,6 +963,21 @@ pub(crate) fn compute_slice(
     // ENG-22: the root's checked runs, for a run's own error (built only for
     // the errors question; cheap when none is in reach).
     let runs = if errors { reach.run_points(root) } else { None };
+    // ENG-10: the reach a try call's refusal error is ruled by.
+    let refusal_open = if errors && reach.has_try_calls() {
+        reach.refusal_reach(root)
+    } else {
+        None
+    };
+    // ENG-10: where refused operations run inside a try call from the root.
+    let in_try = if errors && reach.has_try_calls() {
+        reach.in_try_reach(root)
+    } else {
+        None
+    };
+    // The operation ids listed as error sites (a refused one with no error
+    // of its own is added after them).
+    let mut error_ops: HashSet<String> = HashSet::new();
     let scope = if trapped_question {
         reach.trap_scope(root, live, runs.as_ref())
     } else {
@@ -996,6 +1015,9 @@ pub(crate) fn compute_slice(
         };
         if !seen.insert((rec.effect_type, rec.owner, rec.terminal.id())) {
             continue;
+        }
+        if errors {
+            error_ops.insert(rec.terminal.id().to_string());
         }
         // Engine limits B2: the owner's row (`#if` arm) that holds the site.
         let r = reach.row_at(rec.owner, rec.terminal.id());
@@ -1050,6 +1072,38 @@ pub(crate) fn compute_slice(
             trap = Some(v);
             run_clean = clean;
         }
+        // ENG-10: a try call's refusal error, whatever the ordinary traps
+        // said (no try call catches it).
+        let try_refusal = rec.effect_type == "ERROR_IMPLICIT"
+            && tree.capability_facts[rec.fact].resource_id()
+                == Some(crate::engine::l4::capability_cone::WRITE_IN_TRY);
+        if try_refusal
+            && let Some(v) =
+                reach.try_refusal_verdict(root, refusal_open.as_ref(), rec.terminal.id())
+        {
+            trap = Some(v);
+        }
+        // ENG-10: a site that is itself a refused operation, caught by a try
+        // call around it, raises the refusal there when it runs inside a try
+        // call on some route with no checked run or `asserterror` (the try
+        // call does not catch it), as the unfiltered answer's row at the try
+        // call says. One below the try call keeps it caught (T10).
+        // Whatever trap the witness route named: another route may enter a
+        // try call (a checked run on one route, a try call on another).
+        if matches!(&trap, Some(TrapVerdict::Caught(_)))
+            && let Some((o, s)) = in_try
+                .as_ref()
+                .and_then(|it| reach.refused_in_try(it, rec.terminal.id()))
+        {
+            trap = Some(TrapVerdict::UnlessWritePending(reach.try_call_at(o, s)));
+        }
+        if try_refusal
+            && matches!(&trap, Some(TrapVerdict::Caught(at))
+                if at.kind == crate::engine::l5::traps::TrapKind::TryRefusal)
+        {
+            out.not_raised += 1;
+            continue;
+        }
         if let Some(TrapVerdict::Caught(at)) = &trap {
             let anchor = r.and_then(|r| anchor_in(r, rec.terminal.id()));
             // B7 review: the ruling may rest on a checked run, which holds
@@ -1059,6 +1113,7 @@ pub(crate) fn compute_slice(
                     out.caught_assumes_clean_entry = true;
                     out.caught_assumes_normal_commit |= by_commit;
                 }
+                None if try_refusal => {}
                 None => {
                     out.caught_assumes_clean_entry |=
                         scope.as_ref().is_some_and(|s| s.clean_checked);
@@ -1086,6 +1141,8 @@ pub(crate) fn compute_slice(
             {
                 Some("checked Codeunit.Run with a write pending".to_string())
             }
+            // ENG-10: the error a try call raises when a write inside it is refused.
+            _ if try_refusal => Some("database write refused inside a try call".to_string()),
             _ => facts.as_ref().and_then(|f| f.op_name.clone()),
         };
         let table = match (&req.question, rec.resource) {
@@ -1121,6 +1178,47 @@ pub(crate) fn compute_slice(
         };
         site.outcome = outcome(req, &site, caller_dependent);
         sites.push((site, Some(ops)));
+    }
+    // ENG-10: a refused operation with no error of its own (a `Commit()`, a
+    // tested `if not R.Insert()`) raises the refusal where it runs inside a
+    // try call: an error site at the operation.
+    if let Some(it) = &in_try {
+        let mut extra: Vec<(&str, (&str, &str))> = reach
+            .refused_ops()
+            .filter(|op| !error_ops.contains(*op))
+            .filter_map(|op| Some((op, reach.refused_in_try(it, op)?)))
+            // Only where a route the literal arguments allow reaches it.
+            .filter(|(op, _)| reach.tree_witness(live, &[op.to_string()]).is_some())
+            .collect();
+        extra.sort_unstable();
+        for (op, (try_owner, try_site)) in extra {
+            let Some(owner) = reach.op_owner(op) else {
+                continue;
+            };
+            let r = reach.row_at(owner, op);
+            let facts = r.map(|r| site_facts(r, op, &table_names));
+            let anchor = facts.as_ref().and_then(|f| f.anchor);
+            // Raised by the try call around it (the trap words name it).
+            let at = reach.try_call_at(try_owner, try_site);
+            let mut site = SliceSite {
+                effect_type: "ERROR_IMPLICIT",
+                op_id: op.to_string(),
+                owner: owner.to_string(),
+                file: anchor.map(|a| a.source_unit_id.clone()),
+                line: anchor.map(|a| a.start_line),
+                column: anchor.map(|a| a.start_column),
+                op_name: facts.as_ref().and_then(|f| f.op_name.clone()),
+                table: facts.as_ref().and_then(|f| f.table.clone()),
+                message: Some(MessageText::Unknown { reason: "platform" }),
+                outcome: Outcome::NoMatch,
+                route: None,
+                routes: None,
+                trap: Some(TrapVerdict::UnlessWritePending(at)),
+                route_trap_free: false,
+            };
+            site.outcome = outcome(req, &site, false);
+            sites.push((site, Some(vec![op.to_string()])));
+        }
     }
     // Routes for the first matching sites, shortest first.
     let group_paths = GroupPaths::new(&tree.typed_edges, model);
@@ -1615,6 +1713,16 @@ pub fn human_lines(
             first.at.words()
         ));
     }
+    if slice.not_raised > 0 {
+        lines.push(format!(
+            "  not raised: {}: nothing inside the try call may write, lock or commit",
+            plural(
+                slice.not_raised,
+                "try call's write-refusal error",
+                "try calls' write-refusal errors"
+            )
+        ));
+    }
     if let Some(first) = matching.first()
         && let Some(Ok(r)) = &first.route
     {
@@ -1819,6 +1927,10 @@ pub fn slice_value(slice: &SliceOut) -> serde_json::Value {
     if !caught.is_empty() {
         v["caught"] = caught.into();
     }
+    // ENG-10 (additive): try calls' write-refusal errors not raised.
+    if slice.not_raised > 0 {
+        v["notRaised"] = slice.not_raised.into();
+    }
     v
 }
 
@@ -1836,6 +1948,12 @@ fn trap_at_value(at: &TrapAt) -> serde_json::Value {
 fn trap_verdict_value(t: &TrapVerdict) -> serde_json::Value {
     let (verdict, at) = match t {
         TrapVerdict::Caught(at) => ("caught", at),
+        // ENG-10: as `prove::trap_value`.
+        TrapVerdict::UnlessWritePending(at)
+            if at.kind == crate::engine::l5::traps::TrapKind::TryRefusal =>
+        {
+            ("escapes-if-write-refused", at)
+        }
         TrapVerdict::UnlessWritePending(at) => ("escapes-if-write-pending", at),
         TrapVerdict::SomeRoutes(at) => ("trapped-on-some-routes", at),
     };

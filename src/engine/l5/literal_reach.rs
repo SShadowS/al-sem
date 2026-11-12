@@ -1709,6 +1709,9 @@ pub(crate) struct LiteralReach<'a> {
     /// declares a behavior (every commit runs normally) or no checked run
     /// exists.
     commit_graph: Option<CbGraph<'a>>,
+    /// ENG-10: what a try call may run that the server refuses
+    /// ([`TryRefusal`]); `None` when no call site is a try call.
+    refusal: Option<TryRefusal<'a>>,
 }
 
 /// B7 review (a checked run inside an open write transaction): the write
@@ -1726,6 +1729,55 @@ struct PendingWrites<'a> {
     may_write: HashSet<&'a str>,
     /// Per routine, its in-edges as (caller, position in the caller's `out`).
     rev: HashMap<&'a str, Vec<(&'a str, u32)>>,
+}
+
+/// ENG-10 (measured on BC 28 on premises, Windows and the Linux sidecar):
+/// with `DisableWriteInsideTryFunctions` on, a database write (`Insert`,
+/// `Modify`, `ModifyAll`, `Delete`), a `LockTable` or a `Commit()` that runs
+/// inside a try call raises an error no try call catches; a checked
+/// `Codeunit.Run` or `asserterror` between them catches it, and a temporary
+/// record's write is allowed. Kept apart from [`PendingWrites`], whose
+/// meaning (a write left pending) ENG-22 settled.
+struct TryRefusal<'a> {
+    /// The operation ids the server refuses inside a try call: non-temporary
+    /// writes, `LockTable`s and `Commit()`s.
+    ops: HashSet<&'a str>,
+    /// The routines from which such an operation, or code that is not known
+    /// (a callee with no row, a call no edge resolves), may run without
+    /// crossing a checked run or an `asserterror` call.
+    closure: HashSet<&'a str>,
+    /// The routines from which a try call that may be refused runs, with
+    /// no checked run or `asserterror` between: its refusal error, raised
+    /// there, is caught by no try call around them.
+    nested: HashSet<&'a str>,
+    /// The call sites that start code inside a try call: each try call, and
+    /// each call in a try call's argument list (Learn: arguments are
+    /// evaluated inside the try function), each with its try call's site.
+    try_sites: HashMap<&'a str, &'a str>,
+    /// The refused operations in a try call's argument list
+    /// (`TryTakes(R.Insert())`), inside it though their owner is not, each
+    /// with its try call's site.
+    arg_ops: HashMap<&'a str, &'a str>,
+}
+
+/// ENG-10: one root's routines reached without crossing a checked run or an
+/// `asserterror` call ([`LiteralReach::in_try_reach`]): `open` all of them,
+/// `inside` those reached through a try call (code that runs inside one),
+/// each with the first try call (owner, site) found on its route.
+#[derive(Debug, Default)]
+pub(crate) struct InTry<'a> {
+    open: HashSet<&'a str>,
+    inside: HashMap<&'a str, (&'a str, &'a str)>,
+}
+
+/// Whether anchor `b` lies within anchor `a` (same unit).
+fn anchor_within(
+    b: &crate::program::body::features::PAnchor,
+    a: &crate::program::body::features::PAnchor,
+) -> bool {
+    b.source_unit_id == a.source_unit_id
+        && (b.start_line, b.start_column) >= (a.start_line, a.start_column)
+        && (b.end_line, b.end_column) <= (a.end_line, a.end_column)
 }
 
 /// [`LiteralReach::soft_checked_runs`]: the soft runs (caller, out-edge
@@ -1880,6 +1932,17 @@ impl TrapAt {
             TrapKind::RunCheck => format!(
                 "raised by the checked Codeunit.Run itself{} if a write is pending there: a \
                  checked run needs a clean transaction (measured on BC 28)",
+                match (&self.file, self.line) {
+                    (Some(f), Some(l)) => format!(" at {f}:{}", crate::engine::line_base::shown(l)),
+                    _ => String::new(),
+                }
+            ),
+            // ENG-10: the try call's own error.
+            TrapKind::TryRefusal => format!(
+                "raised by the try call{} if a database write runs inside it on a server that \
+                 refuses one there (on premises with DisableWriteInsideTryFunctions on, measured \
+                 on BC 28; Learn: on by default on premises, no such restriction online); no \
+                 try call catches it",
                 match (&self.file, self.line) {
                     (Some(f), Some(l)) => format!(" at {f}:{}", crate::engine::line_base::shown(l)),
                     _ => String::new(),
@@ -2285,7 +2348,24 @@ impl<'a> LiteralReach<'a> {
             builtin_sites,
             pending: None,
             commit_graph: None,
+            refusal: None,
         };
+        if reach
+            .by_stable
+            .values()
+            .chain(reach.arm_rows.values().flatten())
+            // Also with no try call: a try function root states its callers'
+            // assumption (`try_root_may_refuse`), its callers in other apps.
+            .any(|r| {
+                r.call_sites.iter().any(|c| c.try_call)
+                    || crate::program::attributes::has_attribute(
+                        &r.attributes_parsed,
+                        "TryFunction",
+                    )
+            })
+        {
+            reach.refusal = Some(reach.build_try_refusal());
+        }
         // B7 review: the write facts, only when some checked run needs them.
         // ENG-22: also for a checked run with no edge (its own error).
         if reach
@@ -3140,6 +3220,434 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// B7 review: the snapshot's write facts ([`PendingWrites`]).
+    /// ENG-10: [`TryRefusal`] over the whole snapshot.
+    fn build_try_refusal(&self) -> TryRefusal<'a> {
+        use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
+        let mut ops: HashSet<&'a str> = HashSet::new();
+        let mut seeds: HashSet<&'a str> = HashSet::new();
+        // shortcut: `asserterror R.Insert()` (no call between) still counts as
+        // refused: the body walk marks `under_asserterror` on `Error()` sites
+        // only (an over-report; engine limits L23 item 6).
+        for rec in self.terminals.records() {
+            if !matches!(rec.effect_type, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE")
+                || matches!(rec.temp, TerminalTemp::Known(true))
+            {
+                continue;
+            }
+            seeds.insert(rec.owner);
+            if !matches!(rec.terminal, TerminalSite::None) {
+                ops.insert(rec.terminal.id());
+            }
+        }
+        for (&id, &r) in &self.by_stable {
+            let one = [r];
+            let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
+            for row in rows {
+                // No body (a symbol-only dependency routine, a `[TryFunction]`
+                // among them): unknown code. Interface methods dispatch to
+                // their implementations, which carry their own facts.
+                if !row.body_available && !row.object_type.eq_ignore_ascii_case("Interface") {
+                    seeds.insert(id);
+                }
+                for op in row
+                    .operation_sites
+                    .iter()
+                    .filter(|o| o.kind == "lock" || o.kind == "commit")
+                {
+                    ops.insert(op.id.as_str());
+                    seeds.insert(id);
+                }
+                // A call no edge resolves (not a platform method): unknown code.
+                let sited: HashSet<&str> = self
+                    .out
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|&(_, s, _, _)| s.and_then(EdgeSite::guarded))
+                    .collect();
+                if row.call_sites.iter().any(|c| {
+                    !sited.contains(c.id.as_str())
+                        && !self.builtin_sites.contains(c.id.as_str())
+                        && c.under_asserterror != Some(true)
+                }) {
+                    seeds.insert(id);
+                }
+            }
+        }
+        let mut rev: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        for (&f, list) in &self.out {
+            let traps = self.traps.get(f).map_or(&[][..], Vec::as_slice);
+            for (j, &(to, _, _, _)) in list.iter().enumerate() {
+                // A checked run or asserterror catches the refusal.
+                if traps.iter().any(|&(t, k)| {
+                    t as usize == j && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+                }) {
+                    continue;
+                }
+                rev.entry(to).or_default().push(f);
+                if !self.by_stable.contains_key(to) {
+                    seeds.insert(to);
+                }
+            }
+        }
+        let mut closure = seeds.clone();
+        let mut q: VecDeque<&'a str> = seeds.into_iter().collect();
+        while let Some(x) = q.pop_front() {
+            for &p in rev.get(x).map_or(&[][..], Vec::as_slice) {
+                if closure.insert(p) {
+                    q.push_back(p);
+                }
+            }
+        }
+        let mut try_sites: HashMap<&'a str, &'a str> = HashMap::new();
+        let mut arg_ops: HashMap<&'a str, &'a str> = HashMap::new();
+        for row in self
+            .by_stable
+            .values()
+            .copied()
+            .chain(self.arm_rows.values().flatten().copied())
+        {
+            for t in row.call_sites.iter().filter(|c| c.try_call) {
+                let (a, tid) = (&t.source_anchor, t.id.as_str());
+                for c in &row.call_sites {
+                    if anchor_within(&c.source_anchor, a) {
+                        try_sites.entry(c.id.as_str()).or_insert(tid);
+                    }
+                }
+                try_sites.insert(tid, tid);
+                for o in &row.operation_sites {
+                    if anchor_within(&o.source_anchor, a) {
+                        // `TryNoop(T.Insert(true))`: the operation's trigger
+                        // and event edges run inside the try call too.
+                        try_sites.entry(o.id.as_str()).or_insert(tid);
+                        if ops.contains(o.id.as_str()) {
+                            arg_ops.entry(o.id.as_str()).or_insert(tid);
+                        }
+                    }
+                }
+            }
+        }
+        // The routines that make a try call which may be refused (what it
+        // or its arguments run is in `closure`, has no row, or is no edge),
+        // then every routine that reaches one with no checked run or
+        // asserterror: a refusal raised in there leaves any try call around.
+        let mut nested: HashSet<&'a str> = HashSet::new();
+        for (&f, list) in &self.out {
+            if list.iter().any(|&(to, es, _, _)| {
+                es.and_then(EdgeSite::guarded)
+                    .is_some_and(|s| try_sites.contains_key(s))
+                    && (closure.contains(to) || !self.by_stable.contains_key(to))
+            }) {
+                nested.insert(f);
+            }
+        }
+        for (&id, &r) in &self.by_stable {
+            let one = [r];
+            let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
+            if rows.iter().any(|row| {
+                row.operation_sites
+                    .iter()
+                    .any(|o| arg_ops.contains_key(o.id.as_str()))
+            }) {
+                nested.insert(id);
+            }
+        }
+        let mut q: VecDeque<&'a str> = nested.iter().copied().collect();
+        while let Some(x) = q.pop_front() {
+            for &p in rev.get(x).map_or(&[][..], Vec::as_slice) {
+                if nested.insert(p) {
+                    q.push_back(p);
+                }
+            }
+        }
+        TryRefusal {
+            ops,
+            closure,
+            nested,
+            try_sites,
+            arg_ops,
+        }
+    }
+
+    /// ENG-10: the routines `root` reaches without crossing a checked run or
+    /// an `asserterror` call, and those among them reached through a try call
+    /// ([`InTry`]). A checked run or `asserterror` above the try call catches
+    /// its refusal (T16, T15); one below it runs the code outside it (T10).
+    /// `None` without refusal facts or for an unknown root.
+    pub(crate) fn in_try_reach(&self, root: &str) -> Option<InTry<'a>> {
+        let w = self.refusal.as_ref()?;
+        let (&root, _) = self.by_stable.get_key_value(root)?;
+        let mut it = InTry::default();
+        it.open.insert(root);
+        let mut q: VecDeque<(&'a str, Option<(&'a str, &'a str)>)> = VecDeque::from([(root, None)]);
+        while let Some((f, via)) = q.pop_front() {
+            let traps = self.traps.get(f).map_or(&[][..], Vec::as_slice);
+            for (j, &(to, site, _, _)) in self.out.get(f).into_iter().flatten().enumerate() {
+                if traps.iter().any(|&(t, k)| {
+                    t as usize == j && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+                }) {
+                    continue;
+                }
+                let next = via.or_else(|| {
+                    site.and_then(EdgeSite::guarded)
+                        .and_then(|s| w.try_sites.get(s))
+                        .map(|&t| (f, t))
+                });
+                let fresh = match next {
+                    Some(v) => match it.inside.entry(to) {
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(v);
+                            true
+                        }
+                        std::collections::hash_map::Entry::Occupied(_) => false,
+                    },
+                    None => it.open.insert(to),
+                };
+                if fresh {
+                    q.push_back((to, next));
+                }
+            }
+        }
+        it.open.extend(it.inside.keys().copied());
+        Some(it)
+    }
+
+    /// ENG-10: the try call (owner, call site) inside which the refused
+    /// operation `op` runs on some route [`Self::in_try_reach`] holds: the
+    /// first one on its owner's route, or the try call whose argument list
+    /// holds `op`. `None`: `op` is no refused operation run inside one.
+    pub(crate) fn refused_in_try(&self, it: &InTry<'a>, op: &str) -> Option<(&'a str, &'a str)> {
+        let w = self.refusal.as_ref()?;
+        if !w.ops.contains(op) {
+            return None;
+        }
+        let owner = self.op_owner(op)?;
+        if let Some(&v) = it.inside.get(owner) {
+            return Some(v);
+        }
+        w.arg_ops
+            .get(op)
+            .filter(|_| it.open.contains(owner))
+            .map(|&t| (owner, t))
+    }
+
+    /// ENG-10: whether code beyond the crossing edge `from → to` at `site`
+    /// may be refused inside a try call on a route [`Self::in_try_reach`]
+    /// holds: the edge runs inside one, and `to` may run a try call of its own
+    /// that may be refused (`nested`). A write `to` runs directly needs no
+    /// group: the outer try call's own row carries its refusal, and the
+    /// group's own errors stay caught by that try call.
+    /// The try call (owner, site) it runs inside, or `None`.
+    pub(crate) fn crossing_in_try(
+        &self,
+        it: &InTry<'a>,
+        from: &str,
+        site: Option<&str>,
+        to: &str,
+    ) -> Option<(&'a str, &'a str)> {
+        let w = self.refusal.as_ref()?;
+        // The crossing edge itself must not be a checked run or asserterror.
+        let traps = self.traps.get(from).map_or(&[][..], Vec::as_slice);
+        let open_edge =
+            self.out
+                .get(from)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .any(|(j, &(t, es, _, _))| {
+                    t == to
+                        && es.and_then(EdgeSite::guarded) == site
+                        && !traps.iter().any(|&(i, k)| {
+                            i as usize == j
+                                && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+                        })
+                });
+        if !open_edge || !it.open.contains(from) || !w.nested.contains(to) {
+            return None;
+        }
+        if let Some(&v) = it.inside.get(from) {
+            return Some(v);
+        }
+        let (&from, _) = self.by_stable.get_key_value(from)?;
+        site.and_then(|s| w.try_sites.get(s)).map(|&t| (from, t))
+    }
+
+    /// ENG-10: the trap the try call `(owner, site)` raises a refusal at (the
+    /// trap words name the try call).
+    pub(crate) fn try_call_at(&self, owner: &str, site: &str) -> TrapAt {
+        let a = self
+            .row_at(owner, site)
+            .and_then(|r| r.call_sites.iter().find(|c| c.id == site))
+            .map(|c| &c.source_anchor);
+        TrapAt {
+            kind: TrapKind::TryRefusal,
+            routine: owner.to_string(),
+            file: a.map(|a| a.source_unit_id.clone()),
+            line: a.map(|a| a.start_line),
+        }
+    }
+
+    /// ENG-10: the routines `root` reaches without crossing a checked run or
+    /// an `asserterror` call: a try call's refusal error raised in one of them
+    /// leaves the root (no try call catches it, the probe's T14).
+    pub(crate) fn refusal_reach(&self, root: &str) -> Option<OpenReach<'a>> {
+        self.open_reach(root, &|_, _, k| {
+            matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+        })
+    }
+
+    /// ENG-10: the error the try call at `site` raises when the server
+    /// refuses a write inside it, from the root `open` was built for
+    /// ([`Self::refusal_reach`]). `Caught` by [`TrapKind::TryRefusal`] when
+    /// nothing inside the call may be refused ("not raised"); `Caught` by the
+    /// trap that stops it when every route from the root crosses a checked
+    /// run or an `asserterror` call; otherwise `UnlessWritePending` with
+    /// [`TrapKind::TryRefusal`] (raised on such a server, never
+    /// unconditional). `None` when the site has no known owner.
+    pub(crate) fn try_refusal_verdict(
+        &self,
+        root: &str,
+        open: Option<&OpenReach<'a>>,
+        site: &str,
+    ) -> Option<TrapVerdict> {
+        let w = self.refusal.as_ref()?;
+        let owner = self.op_owner(site)?;
+        let row = self.row_at(owner, site)?;
+        let cs = row.call_sites.iter().find(|c| c.id == site)?;
+        let a = &cs.source_anchor;
+        let at = TrapAt {
+            kind: TrapKind::TryRefusal,
+            routine: owner.to_string(),
+            file: Some(a.source_unit_id.clone()),
+            line: Some(a.start_line),
+        };
+        let outs = self.out.get(owner).map_or(&[][..], Vec::as_slice);
+        // What a call site of `owner` runs may be refused: a target in the
+        // closure, a target with no row, or no edge at all (not a platform
+        // method): unknown code.
+        let runs_refused = |s: &str| {
+            let mut edge = false;
+            for &(to, es, _, _) in outs {
+                if es.and_then(EdgeSite::guarded) == Some(s) {
+                    edge = true;
+                    if w.closure.contains(to) || !self.by_stable.contains_key(to) {
+                        return true;
+                    }
+                }
+            }
+            !edge && !self.builtin_sites.contains(s)
+        };
+        // Learn: "Arguments for a try function are evaluated inside the try
+        // function" (the probe's T13): what the argument list runs counts.
+        let within = |b: &crate::program::body::features::PAnchor| {
+            b.source_unit_id == a.source_unit_id
+                && (b.start_line, b.start_column) >= (a.start_line, a.start_column)
+                && (b.end_line, b.end_column) <= (a.end_line, a.end_column)
+        };
+        let inside = runs_refused(site)
+            || row
+                .call_sites
+                .iter()
+                .filter(|c| c.id != site && within(&c.source_anchor))
+                .any(|c| runs_refused(&c.id))
+            || row
+                .operation_sites
+                .iter()
+                .filter(|o| within(&o.source_anchor))
+                // Record operations are operation sites too (`record-op`):
+                // `TryTakes(R.Insert())` is found here, and an argument
+                // operation's trigger or event that may be refused
+                // (`TryNoop(T.Insert(true))`, `OnInsert` commits).
+                .any(|o| {
+                    w.ops.contains(o.id.as_str())
+                        || outs.iter().any(|&(to, es, _, _)| {
+                            es.and_then(EdgeSite::guarded) == Some(o.id.as_str())
+                                && (w.closure.contains(to) || !self.by_stable.contains_key(to))
+                        })
+                });
+        if !inside {
+            return Some(TrapVerdict::Caught(at));
+        }
+        match open {
+            Some(o) if !o.parent.contains_key(owner) => {
+                // Every route crosses a checked run or `asserterror`: name the
+                // first on one route (a route that crosses none would have put
+                // `owner` in `o`).
+                let all = self.open_reach(root, &|_, _, _| false)?;
+                let caught_by = self
+                    .open_steps(&all, owner)
+                    .into_iter()
+                    .find_map(|s| self.catching_trap(&s));
+                Some(match caught_by {
+                    Some(t) => TrapVerdict::Caught(t),
+                    None => TrapVerdict::UnlessWritePending(at),
+                })
+            }
+            _ => Some(TrapVerdict::UnlessWritePending(at)),
+        }
+    }
+
+    /// ENG-10: whether a refused operation (or unknown code) may run from
+    /// `routine` (stable id) without crossing a checked run or `asserterror`.
+    pub(crate) fn may_refuse(&self, routine: &str) -> bool {
+        self.refusal
+            .as_ref()
+            .is_some_and(|w| w.closure.contains(routine))
+    }
+
+    /// ENG-10: whether `root` is a `[TryFunction]` (on some `#if` arm) that
+    /// may run a refused operation: a caller that uses its value gets the
+    /// refusal error, which the root's own answer cannot see.
+    pub(crate) fn try_root_may_refuse(&self, root: &str) -> bool {
+        let Some(&r) = self.by_stable.get(root) else {
+            return false;
+        };
+        let one = [r];
+        let rows = self.arm_rows.get(root).map_or(&one[..], Vec::as_slice);
+        rows.iter().any(|row| {
+            crate::program::attributes::has_attribute(&row.attributes_parsed, "TryFunction")
+        }) && self.may_refuse(root)
+    }
+
+    /// ENG-10: the operations the server refuses inside a try call (a
+    /// non-temporary write, a `LockTable`, a `Commit()`).
+    pub(crate) fn refused_ops(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.refusal.iter().flat_map(|w| w.ops.iter().copied())
+    }
+
+    /// ENG-10: whether any call site is a try call (the refusal facts exist).
+    pub(crate) fn has_try_calls(&self) -> bool {
+        self.refusal.is_some()
+    }
+
+    /// ENG-10: the checked run or `asserterror` trap step `s` crosses, as a
+    /// [`TrapAt`] at the step's call site.
+    fn catching_trap(&self, s: &Step<'a>) -> Option<TrapAt> {
+        let traps = self.traps.get(s.from)?;
+        let outs = self.out.get(s.from)?;
+        let kind = traps.iter().find_map(|&(j, k)| {
+            let (to, site, _, _) = outs[j as usize];
+            (to == s.to
+                && site == s.site
+                && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror))
+            .then_some(k)
+        })?;
+        let anchor = s
+            .site
+            .and_then(EdgeSite::guarded)
+            .and_then(|id| {
+                self.row_at(s.from, id)
+                    .and_then(|r| r.call_sites.iter().find(|c| c.id == id))
+            })
+            .map(|c| &c.source_anchor);
+        Some(TrapAt {
+            kind,
+            routine: s.from.to_string(),
+            file: anchor.map(|a| a.source_unit_id.clone()),
+            line: anchor.map(|a| a.start_line),
+        })
+    }
+
     fn build_pending_writes(&self) -> PendingWrites<'a> {
         use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
         {

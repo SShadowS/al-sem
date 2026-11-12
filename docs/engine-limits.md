@@ -533,10 +533,57 @@ literal reach, so measure speed when changing it.
 6. Not modeled:
    - errors in a try call's arguments. Learn says they are evaluated inside the try function, so
      they are caught; the answers report them as escaping, which is safe;
-   - a write inside a try method on premises with `DisableWriteInsideTryFunctions`: wrong answer
-     left, on premises only. It is a run-time error the answers do not add. Learn does not say
-     whether the try call catches it, so it is NOT known to be safe: `throws-error` may under-report
-     it.
+   - **Fixed (ENG-10):** a write inside a try call on premises with
+     `DisableWriteInsideTryFunctions` on (measured on BC 28 on premises, Linux sidecar and Windows
+     28.0.54946.56477, q-20261112T104134-338e9d4a and q-20261112T110129-63d6683c; probe
+     `docs/superpowers/notes/2026-11-12-eng10-write-in-try-probe.md`). A database write
+     (`Insert`, `Modify`, `ModifyAll`, `Delete`), `LockTable` or `Commit()` that runs inside a try
+     call raises an error that no try call catches (neither the try call itself nor an outer one);
+     a checked `Codeunit.Run` or `asserterror` between catches it; a temporary record's write is
+     allowed. Every use of the try function's value makes it a try call (`Ok :=`, a condition,
+     `exit(..)`, an argument, `a and ..`); only a call statement is ordinary; what the call's
+     arguments run is inside it. Each such call (`PCallSite::try_call`: any resolved callee, any
+     `#if` arm declaring `[TryFunction]`) carries the error at its call site, ruled per site:
+     raised (conditional, never unconditional: "if a database write runs inside it on a server
+     that refuses one") when a write, `LockTable`, `Commit()` or unknown code may run inside it
+     without crossing a checked run or `asserterror`, and not caught by any try call above;
+     "not raised" otherwise. A filtered slice (`--site`, `--match`, `--op`) on a refused
+     operation inside a try call rules it the same way: a refused operation raises the refusal
+     where some route from the root runs it inside a try call (through the call, or in its
+     argument list, an argument operation's trigger or event included) with no checked run or
+     `asserterror` anywhere on the route, whatever trap another route names; one that has no
+     error of its own (a `Commit()`, a tested `if not R.Insert()`) is an error site there too, and
+     a try call where nothing may be refused is "not raised" in the slice as well. An implicit-
+     error boundary group a try call catches is kept escaping when a crossing edge runs inside
+     a try call on such a route and the dependency code beyond it makes a try call of its own
+     that may be refused (that refusal leaves the outer try call, T14); a write it runs
+     directly is the outer try call's own refusal row, and the group's other errors stay
+     caught. A routine with
+     no body (a symbol-only dependency routine, a `[TryFunction]` among them) is unknown code
+     inside a try call. A root that is itself a `[TryFunction]` and may run a refused operation
+     states the assumption its answer rests on: its callers call it as a statement (prove's
+     assumptions and `obligations.assumesStatementCallsOnly`, explain's and digest's header).
+   - **Left (ENG-10):** Learn says Business Central online has no such restriction; online was
+     not measured, and the rows name the setting rather than claim either way. Platform writes
+     (`IsolatedStorage.Set`, Media import and similar) are not counted as refused (not measured).
+     A root that is itself a try function is answered as called as a statement (a tested write
+     such as `if not R.Insert()` and a body that only commits or locks answer `no`); the
+     assumption is stated, not answered both ways, and digest's JSON `coverage.assumptions` labels
+     do not carry it. The refusal row names the try call, not the refused write inside it (BC's
+     message names the operation). An impact key for the refusal does not carry its verdict: a
+     write added inside an existing try call shows as the new write's own key, not as a new
+     refusal error (a new try call does show one). A refused operation written directly under
+     `asserterror` inside the try function (`asserterror R.Insert();`, no call between) still
+     counts as refused, an over-report: the body walk marks `asserterror` only on `Error()`
+     sites (an `asserterror` around a call is followed). "Not raised"
+     is carried as a caught ruling of its own kind
+     (`try-write-refused`), as ENG-22's clean runs are, inside the engine; every output counts
+     it apart from the caught errors (prove's "not raised" line and count, the slice's and
+     explain/digest's `notRaised`, not in `caughtErrors`; ENG-22's clean checked runs are still
+     counted among the caught errors). A write whose execution depends
+     on data (CDO's cached access token, bug #80680) is a "may". Whether the wider value uses
+     (`exit(..)`, an argument, `a and ..`) also CATCH an `Error()` was not measured: the trap rule
+     still reads only `Ok :=` and whole conditions (the safe side for catching).
 
 ### Declarations and objects
 

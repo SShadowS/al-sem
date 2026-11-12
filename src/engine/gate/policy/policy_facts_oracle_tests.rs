@@ -60,6 +60,13 @@
 //! the same 9 cases moved by the same amounts, each checked run's
 //! `error-implicit` fact (resource `checked-run`) beside its commit: `direct`
 //! +1 per run, `inherited` plus the copies; no count down.
+//!
+//! Re-recorded (2026-11-12, ENG-10: a database write inside a used try call is
+//! refused, an error no try call catches) with `REMINT_POLICY_FACTS_ORACLE=1`:
+//! only `r0/ws-d53` (single and cross) moved, `direct` 4 -> 6 and `any`
+//! 12 -> 14: the `error-implicit` fact (resource `write-in-try`) of its two
+//! `if not TryStep()` calls; its statement calls (`TryStep();`,
+//! `asserterror TryStep();`) have none. No count down.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

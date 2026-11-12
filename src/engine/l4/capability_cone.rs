@@ -174,6 +174,12 @@ pub struct CoverageRecord {
 /// none. A marker of the commit's kind, not a table or event id.
 pub(crate) const RUN_COMMIT: &str = "checked-run";
 
+/// ENG-10: the resource of the error a try call raises when the server
+/// refuses a database write inside it (`PCallSite::try_call`), on an
+/// `error-implicit` fact witnessed by the try call site. A marker, not a table
+/// or event id.
+pub(crate) const WRITE_IN_TRY: &str = "write-in-try";
+
 /// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
 fn object_type_to_resource_kind(object_type: &str) -> &'static str {
     match object_type {
@@ -1265,6 +1271,19 @@ pub(crate) fn direct_facts_for_routine(
                 });
             }
         }
+        // ENG-10: a try call raises its own error when the server refuses a
+        // database write inside it (on premises, DisableWriteInsideTryFunctions;
+        // measured on BC 28), which no try call catches. Whether a write may
+        // run inside it is ruled per site by the trap pass
+        // (`literal_reach::LiteralReach::try_refusal_verdict`).
+        for cs in &call_sites {
+            if cs.try_call {
+                facts.push(CapabilityFact {
+                    resource_id: Some(WRITE_IN_TRY.to_string()),
+                    ..implicit(None, Some(cs.id.clone()))
+                });
+            }
+        }
     }
 
     // ── publisher-fact injection (summary-runner.ts:615-632) ───────────────
@@ -1490,7 +1509,7 @@ fn build_typed_edge_graph(
 /// source` yields `static` / `userDynamic` / `configDynamic` / `unresolved`, and
 /// the r3a3 manifest records both `unresolved` and `configDynamic`. It is safe
 /// because **no one of those four values is a prefix of another, and
-/// `resource_id` is only ever a table id, an event id or [`RUN_COMMIT`], none of
+/// `resource_id` is only ever a table id, an event id, [`RUN_COMMIT`] or [`WRITE_IN_TRY`], none of
 /// which can contain `|`.** Add a `dynamic` confidence alongside `dynamicX`, or a rid that
 /// can carry a `|`, and this breaks.
 ///

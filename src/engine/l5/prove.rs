@@ -218,6 +218,9 @@ pub struct ProveObligations {
     /// also holds only if the callers do not call the root under
     /// `[CommitBehavior(Ignore)]` or `(Error)`.
     pub(crate) trap_assumes_normal_commit: bool,
+    /// ENG-10: the root is a `[TryFunction]` that may run a refused write
+    /// (`traps::try_root_assumption`). From the entry.
+    pub(crate) try_root_refusal: bool,
 }
 
 /// r3 §7 R1: the events a cone raises that an unloaded subscriber could
@@ -508,6 +511,7 @@ fn compute_obligations(
         suppressed_commits: entry.suppressed_commits.clone(),
         trap_assumes_clean_entry: false,
         trap_assumes_normal_commit: false,
+        try_root_refusal: entry.try_root_refusal,
     }
 }
 
@@ -1833,6 +1837,13 @@ pub(crate) fn trap_value(eff: &DigestEffectFull) -> Option<serde_json::Value> {
     use crate::engine::l5::literal_reach::TrapVerdict;
     let (verdict, at) = match eff.flow_notes.as_deref()?.trap.as_ref()? {
         TrapVerdict::Caught(at) => ("caught", at),
+        // ENG-10: a try call's refusal error is raised by the server's
+        // refusal, not by a pending write.
+        TrapVerdict::UnlessWritePending(at)
+            if at.kind == crate::engine::l5::traps::TrapKind::TryRefusal =>
+        {
+            ("escapes-if-write-refused", at)
+        }
         TrapVerdict::UnlessWritePending(at) => ("escapes-if-write-pending", at),
         TrapVerdict::SomeRoutes(at) => ("trapped-on-some-routes", at),
     };
@@ -1885,6 +1896,11 @@ pub(crate) fn caught_line(effects: &[DigestEffectFull], types: &[&str]) -> Optio
     let (unraised, caught): (Vec<&DigestEffectFull>, Vec<&DigestEffectFull>) =
         caught_rows(effects, types)
             .partition(|e| caught_at(e).is_some_and(|a| a.kind == TrapKind::RunCheck));
+    // ENG-10: so is a try call's refusal error when nothing inside it may be
+    // refused.
+    let (unrefused, caught): (Vec<&DigestEffectFull>, Vec<&DigestEffectFull>) = caught
+        .into_iter()
+        .partition(|e| caught_at(e).is_some_and(|a| a.kind == TrapKind::TryRefusal));
     let site = |e: &DigestEffectFull| {
         e.site_text()
             .unwrap_or_else(|| "no position kept".to_string())
@@ -1908,6 +1924,18 @@ pub(crate) fn caught_line(effects: &[DigestEffectFull], types: &[&str]) -> Optio
                 unraised.len(),
                 "checked Codeunit.Run's own error",
                 "checked Codeunit.Runs' own errors"
+            ),
+            site(first)
+        ));
+    }
+    if let Some(first) = unrefused.first() {
+        lines.push(format!(
+            "  not raised: {} (first: at {}): nothing inside the try call may write, lock or \
+             commit; not counted",
+            crate::engine::l5::routine_rollup::plural(
+                unrefused.len(),
+                "try call's write-refusal error",
+                "try calls' write-refusal errors"
             ),
             site(first)
         ));
@@ -2135,6 +2163,11 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
     // also rest on a `Commit()` before the run ending the write.
     if o.trap_assumes_normal_commit {
         m.insert("assumesNoCommitBehaviorAtEntry".into(), true.into());
+    }
+    // ENG-10 (additive): present only when the root is a try function that
+    // may run a refused write.
+    if o.try_root_refusal {
+        m.insert("assumesStatementCallsOnly".into(), true.into());
     }
     serde_json::Value::Object(m)
 }
@@ -3029,7 +3062,14 @@ pub fn format_prove_human(
                         .is_some_and(|a| a.kind == crate::engine::l5::traps::TrapKind::RunCheck)
                 })
                 .count();
-            let caught = caught_count(effects, caught_types(question)) - unraised;
+            // ENG-10: so is a try call's refusal error nothing inside it raises.
+            let unrefused = caught_rows(effects, caught_types(question))
+                .filter(|e| {
+                    caught_at(e)
+                        .is_some_and(|a| a.kind == crate::engine::l5::traps::TrapKind::TryRefusal)
+                })
+                .count();
+            let caught = caught_count(effects, caught_types(question)) - unraised - unrefused;
             let mut left_out: Vec<String> = Vec::new();
             if caught > 0 {
                 left_out.push(format!(
@@ -3044,6 +3084,16 @@ pub fn format_prove_human(
                         unraised,
                         "checked Codeunit.Run's own error",
                         "checked Codeunit.Runs' own errors"
+                    )
+                ));
+            }
+            if unrefused > 0 {
+                left_out.push(format!(
+                    "{} not raised (nothing inside the try call may write)",
+                    crate::engine::l5::routine_rollup::plural(
+                        unrefused,
+                        "try call's write-refusal error",
+                        "try calls' write-refusal errors"
                     )
                 ));
             }
@@ -3214,6 +3264,10 @@ pub fn format_prove_human(
             // ENG-22: the error a checked run raises itself.
             if crate::engine::l5::digest_cli::is_run_error_row(&eff.effect_type, &eff.detail) {
                 return crate::engine::l5::digest_cli::RUN_ERROR_LABEL.to_string();
+            }
+            // ENG-10: the error a try call raises when a write inside it is refused.
+            if crate::engine::l5::digest_cli::is_try_refusal_row(&eff.effect_type, &eff.detail) {
+                return crate::engine::l5::digest_cli::TRY_REFUSAL_LABEL.to_string();
             }
             match (eff.effect_type.as_str(), paths) {
                 ("ERROR_IMPLICIT", Some(p)) => {
@@ -3869,6 +3923,9 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
         o.trap_assumes_clean_entry,
         o.trap_assumes_normal_commit,
     ));
+    out.extend(crate::engine::l5::traps::try_root_assumption(
+        o.try_root_refusal,
+    ));
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
@@ -4336,6 +4393,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             suppressed_commits: Vec::new(),
             trap_assumes_clean_entry: false,
             trap_assumes_normal_commit: false,
+            try_root_refusal: false,
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -5462,6 +5520,7 @@ mod tests {
             entry_diagnostics,
             declaration_only: false,
             suppressed_commits: Vec::new(),
+            try_root_refusal: false,
         }
     }
 

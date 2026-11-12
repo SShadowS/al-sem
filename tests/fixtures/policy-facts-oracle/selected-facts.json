@@ -1065,18 +1065,18 @@
       "sha256": "6b5fd417f9f3174ce4047f3fbfd5f6f7f72b993e0ac5480405388779f49efbea"
     },
     "r0/ws-d53 cross": {
-      "any": 12,
-      "direct": 4,
+      "any": 14,
+      "direct": 6,
       "inherited": 8,
       "routines": 7,
-      "sha256": "1734ac1c14375f9361aefab489418c54d26f1c61fb35d3abab0f9fc25859fbb1"
+      "sha256": "8490997d5d43cd05d4720b861738151f5bb899ca4d1840db91aa5e2438211bbf"
     },
     "r0/ws-d53 single": {
-      "any": 12,
-      "direct": 4,
+      "any": 14,
+      "direct": 6,
       "inherited": 8,
       "routines": 7,
-      "sha256": "1734ac1c14375f9361aefab489418c54d26f1c61fb35d3abab0f9fc25859fbb1"
+      "sha256": "8490997d5d43cd05d4720b861738151f5bb899ca4d1840db91aa5e2438211bbf"
     },
     "r0/ws-d54 cross": {
       "any": 5,
