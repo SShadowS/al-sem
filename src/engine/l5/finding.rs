@@ -985,11 +985,12 @@ pub fn project_r4_findings(
 
     // RE-SORT in stable space: (detector compareNatural, stable primaryLocationKey
     // compareStrings, stable rootCauseKey compareStrings).
-    stable.sort_by(|a, b| {
-        crate::engine::l5::registry::compare_natural(&a.detector, &b.detector)
-            .then_with(|| stable_primary_location_key(a).cmp(&stable_primary_location_key(b)))
-            .then_with(|| a.root_cause_key.cmp(&b.root_cause_key))
-    });
+    crate::engine::l5::registry::sort_by_detector_location_cause(
+        &mut stable,
+        |f| &f.detector,
+        stable_primary_location_key,
+        |f| &f.root_cause_key,
+    );
 
     let has_d1 = stable.iter().any(|f| f.cohort_contexts.is_some());
     let (loop_catalog, loop_set_registry) =
@@ -1102,11 +1103,12 @@ pub fn project_r4_findings_cross_app(
         .map(|f| project_finding(f, &map, &stable_finding_id))
         .collect();
 
-    stable.sort_by(|a, b| {
-        crate::engine::l5::registry::compare_natural(&a.detector, &b.detector)
-            .then_with(|| stable_primary_location_key(a).cmp(&stable_primary_location_key(b)))
-            .then_with(|| a.root_cause_key.cmp(&b.root_cause_key))
-    });
+    crate::engine::l5::registry::sort_by_detector_location_cause(
+        &mut stable,
+        |f| &f.detector,
+        stable_primary_location_key,
+        |f| &f.root_cause_key,
+    );
 
     let has_d1 = stable.iter().any(|f| f.cohort_contexts.is_some());
     let (loop_catalog, loop_set_registry) =
