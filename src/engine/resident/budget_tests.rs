@@ -6,7 +6,11 @@ use super::*;
 fn budget(bytes: u64, rss: u64) -> (Budget, Arc<FakeMeter>) {
     let meter = Arc::new(FakeMeter::default());
     meter.rss.store(rss, Ordering::SeqCst);
-    let b = Budget::new(bytes, meter.clone(), Estimates::new(false));
+    // One worker: these tests pin the table and the size classes; the
+    // parallel pass's worker term has its own test.
+    let mut e = Estimates::new(false);
+    e.reach_workers = 1;
+    let b = Budget::new(bytes, meter.clone(), e);
     (b, meter)
 }
 
@@ -91,6 +95,16 @@ fn the_pre_model_estimate_follows_the_input_sizes() {
 /// 8-worker estimate (900 MiB against 1,075); restored, passes.
 #[test]
 fn a_pass_running_cases_table_estimate_counts_the_extra_workers() {
+    // Admission's default count is the one a revision runs with, for any
+    // session, not only those the binary sets up (review, sol 1).
+    // DISCRIMINATION (2026-11-12): `reach_workers: 1` in `Estimates::new`
+    // fails here (1 against the default count on this host); restored,
+    // passes. (A one-core host has a default of 1 and cannot tell them apart.)
+    assert_eq!(
+        Estimates::new(false).reach_workers,
+        crate::engine::l5::digest_cli::default_reach_workers().count() as u64,
+        "admission and the work agree on the default"
+    );
     let none = InputSizes::default();
     let mut e = Estimates::new(false);
     e.routines = Some(TABLE_ROUTINES);
@@ -237,6 +251,7 @@ fn a_large_requests_peak_is_not_a_small_requests_estimate() {
     // An unobserved middle class: the table or a smaller class's peak.
     assert_eq!(b.estimate_sized(Case::Trees, none, 10), 900 * MIB);
     let mut e = Estimates::new(false);
+    e.reach_workers = 1;
     e.observe_sized(Case::Trees, 3, 1_000 * MIB);
     assert_eq!(e.of_sized(Case::Trees, none, 10), 1_000 * MIB);
     assert_eq!(e.of_sized(Case::Trees, none, 1), 900 * MIB);

@@ -578,6 +578,8 @@ pub(crate) struct SuffixStats {
     /// Trees a worker built while another worker's equal tree was inserted
     /// first (dropped; TLS-22).
     pub(crate) duplicate: usize,
+    /// Requests a held tree answered (no search).
+    pub(crate) hits: usize,
 }
 
 impl Default for SuffixCache<'_> {
@@ -633,8 +635,13 @@ impl<'a> SuffixCache<'a> {
         start: State<'a>,
         cancel: &dyn Fn() -> bool,
     ) -> Result<Arc<LiveTree<'a>>, Stop> {
-        if let Some(t) = lock(&self.inner).trees.get(&start) {
-            return t.clone();
+        {
+            let mut c = lock(&self.inner);
+            if let Some(t) = c.trees.get(&start) {
+                let t = t.clone();
+                c.stats.hits += 1;
+                return t;
+            }
         }
         #[cfg(test)]
         {
@@ -658,12 +665,16 @@ impl<'a> SuffixCache<'a> {
             return t;
         }
         let n = built.as_ref().map_or(0, |t| t.len());
+        // Evicted trees are freed after the lock is released: a large tree's
+        // free would block every worker's lookup.
+        let mut evicted = Vec::new();
         while c.held + n > self.budget {
             let Some(old) = c.order.pop_front() else {
                 break;
             };
             if let Some(Ok(t)) = c.trees.remove(&old) {
                 c.held -= t.len();
+                evicted.push(t);
             }
             c.stats.evicted += 1;
         }
@@ -672,6 +683,8 @@ impl<'a> SuffixCache<'a> {
         c.order.push_back(start);
         c.held += n;
         c.stats.peak_held = c.stats.peak_held.max(c.held);
+        drop(c);
+        drop(evicted);
         built
     }
 
@@ -2365,7 +2378,12 @@ impl<'a> LiteralReach<'a> {
             .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
             .collect();
         let key: FlowKey = (p as *const lflow::FlowProgram as usize, entry, keep.clone());
-        if let Some(ev) = self.flow_cache.lock().expect("flow cache").get(&key) {
+        if let Some(ev) = self
+            .flow_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+        {
             return Some(Arc::clone(ev));
         }
         let r = self.by_stable.get(routine)?;
@@ -2390,7 +2408,7 @@ impl<'a> LiteralReach<'a> {
         asked.dedup();
         ev.consulted = asked;
         let ev = Arc::new(ev);
-        let mut cache = self.flow_cache.lock().expect("flow cache");
+        let mut cache = self.flow_cache.lock().unwrap_or_else(|p| p.into_inner());
         if cache.len() >= FLOW_CACHE_MAX {
             cache.clear();
         }

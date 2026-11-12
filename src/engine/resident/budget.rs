@@ -259,7 +259,10 @@ impl Estimates {
             per_al_byte: PER_AL_BYTE,
             per_package_byte: PER_PACKAGE_BYTE,
             routines: None,
-            reach_workers: 1,
+            // The count a revision runs by default, so admission and the
+            // work agree for any session; the binary sets 1 under --low-mem
+            // (a serial session over-estimated stays on the safe side).
+            reach_workers: crate::engine::l5::digest_cli::default_reach_workers().count() as u64,
             observed: BTreeMap::new(),
         }
     }

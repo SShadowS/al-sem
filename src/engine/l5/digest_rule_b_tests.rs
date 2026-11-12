@@ -1777,9 +1777,15 @@ fn corpus_trees() -> Vec<(
 /// so a dependence on a `HashMap`'s order that a serial run hides fails here
 /// too. The serial run is the new code as well: the goldens are the oracle
 /// for what is wrong in every order.
+///
+/// Each probe-holding test in this file uses pool sizes no other test uses
+/// (5, 6; 3; 9; the resident route test 7): a pool is shared by every pass
+/// of its size in the process, so two tests holding a first wave in one pool
+/// under a plain `cargo test` could starve each other (review, Opus I1).
 #[test]
 fn the_literal_pass_answers_the_same_at_any_worker_count() {
     let (mut boundary, mut wide) = (false, false);
+    let probe = Arc::new(PassProbe::default());
     let mut failures: Vec<String> = Vec::new();
     for (name, target, tree, roots) in corpus_trees() {
         let model = target.resolved();
@@ -1790,7 +1796,7 @@ fn the_literal_pass_answers_the_same_at_any_worker_count() {
                 roots,
                 false,
                 BoundaryMode::On,
-                ReachWorkers::new(n),
+                ReachWorkers::new(n).with_probe(Arc::clone(&probe)),
             )
             .iter()
             .map(|e| format!("{e:?}"))
@@ -1810,7 +1816,79 @@ fn the_literal_pass_answers_the_same_at_any_worker_count() {
     }
     assert!(boundary, "precondition: an entry with a boundary group");
     assert!(wide, "precondition: a tree with more roots than workers");
+    assert!(
+        probe.suffix_hits.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "precondition: a suffix tree served again (shared, not rebuilt)"
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// TLS-22: the default worker count is capped by the cores: a one-core host
+/// runs every pass serially (no pool), a large one runs `REACH_WORKERS`.
+///
+/// DISCRIMINATION (2026-11-12): `capped_by_cores` without `.min(cores)`
+/// fails the one-core case (8 against 1); restored, passes.
+#[test]
+fn the_default_worker_count_is_capped_by_the_cores() {
+    assert_eq!(capped_by_cores(1), 1, "one core: serial");
+    assert_eq!(capped_by_cores(4), 4);
+    assert_eq!(capped_by_cores(22), REACH_WORKERS);
+    assert_eq!(capped_by_cores(0), 1, "an unknown count: serial");
+}
+
+/// TLS-22, owner decision 2026-11-12 (q-20261112T022816-833a1bd9): while
+/// another pass sharing the counter runs (another ask), a pass runs one root
+/// at a time. Started beside another, it is serial; when another starts
+/// while it runs (the probe adds one to the counter as its third root
+/// starts, the first wave of 3 in flight), every root it starts after that
+/// runs alone.
+///
+/// DISCRIMINATION (2026-11-12): without the workers' stop (`w > 0 &&
+/// others()`) it fails (3 roots at once after the other pass started,
+/// against 1); restored, passes.
+#[test]
+fn beside_another_pass_the_pass_runs_one_root_at_a_time() {
+    let (name, target, tree, roots) = corpus_trees()
+        .into_iter()
+        .max_by_key(|(_, _, _, r)| r.len())
+        .expect("a corpus tree");
+    assert!(
+        roots.len() > 8,
+        "precondition: {name} has more than 8 roots"
+    );
+    let run = |w: ReachWorkers| {
+        passed_root_entries(&tree, target.resolved(), &roots, false, BoundaryMode::On, w);
+    };
+    let held = |n| Some((n, std::time::Duration::from_secs(10)));
+    // Another pass starts while this one runs.
+    let w = ReachWorkers::new(3);
+    let counter = Arc::clone(w.passes.as_ref().unwrap());
+    let probe = Arc::new(PassProbe::default());
+    *probe.first_wave.lock().unwrap() = held(3);
+    *probe.another_at.lock().unwrap() = Some((2, Arc::clone(&counter)));
+    run(w.with_probe(Arc::clone(&probe)));
+    assert_eq!(probe.max(), 3, "precondition: alone, 3 roots at once");
+    assert!(
+        probe.started.load(std::sync::atomic::Ordering::SeqCst) > 4,
+        "precondition: roots started after the other pass"
+    );
+    assert_eq!(
+        probe.max_after.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "after the other pass started: one root at a time"
+    );
+    // Started while another runs (the counter still counts it).
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let probe = Arc::new(PassProbe::default());
+    *probe.first_wave.lock().unwrap() = Some((3, std::time::Duration::from_millis(200)));
+    run(w.with_probe(Arc::clone(&probe)));
+    assert_eq!(probe.max(), 1, "started beside another: serial");
+    // The default setting shares one counter for the process.
+    let (a, b) = (default_reach_workers(), default_reach_workers());
+    assert!(Arc::ptr_eq(
+        a.passes.as_ref().unwrap(),
+        b.passes.as_ref().unwrap()
+    ));
 }
 
 /// TLS-22: the pass runs exactly `n` roots at once with `n` workers (the
@@ -1831,7 +1909,7 @@ fn the_literal_pass_runs_exactly_its_worker_count_at_once() {
         roots.len() > 8,
         "precondition: {name} has more than 8 roots"
     );
-    for n in [1, 2, 4] {
+    for n in [1, 5, 6] {
         let probe = Arc::new(PassProbe::default());
         *probe.first_wave.lock().unwrap() = Some((n, std::time::Duration::from_secs(10)));
         let entries = passed_root_entries(
@@ -1853,42 +1931,63 @@ fn the_literal_pass_runs_exactly_its_worker_count_at_once() {
     }
 }
 
-/// TLS-22: two requests running their passes at once (as the engine host's
-/// workers do) share the one pool of their worker count: both finish, and
-/// each answers as serially.
+/// TLS-22: two passes running at once on separate counters (so neither
+/// throttles the other) share the ONE pool of their worker count: their
+/// roots in flight together never pass the pool's 9 threads (two pools
+/// would reach 18 while both first waves are held), both overlap, and each
+/// answers as serially.
+///
+/// DISCRIMINATION (2026-11-12): `reach_pool` building a fresh pool on every
+/// call fails (18 at once); restored, passes.
 #[test]
 fn two_passes_at_once_share_the_pool() {
     let trees: Vec<_> = corpus_trees()
         .into_iter()
-        .filter(|(_, _, _, r)| r.len() > 4)
+        .filter(|(_, _, _, r)| r.len() > 9)
         .take(2)
         .collect();
-    assert_eq!(trees.len(), 2, "precondition: two trees with several roots");
+    assert_eq!(
+        trees.len(),
+        2,
+        "precondition: two trees with more than 9 roots"
+    );
     let read = |(_, target, tree, roots): &(
         String,
         AnalysisTarget,
         crate::engine::l5::snapshot::CapabilitySnapshot,
         Vec<String>,
     ),
-                n: usize| {
+                w: ReachWorkers| {
         format!(
             "{:?}",
-            passed_root_entries(
-                tree,
-                target.resolved(),
-                roots,
-                false,
-                BoundaryMode::On,
-                ReachWorkers::new(n)
-            )
+            passed_root_entries(tree, target.resolved(), roots, false, BoundaryMode::On, w)
         )
     };
-    let serial: Vec<String> = trees.iter().map(|t| read(t, 1)).collect();
+    let serial: Vec<String> = trees
+        .iter()
+        .map(|t| read(t, ReachWorkers::SERIAL))
+        .collect();
+    // One probe for both passes: it counts their roots together; each holds
+    // its first roots until 18 are in flight, at most 300 ms.
+    let probe = Arc::new(PassProbe::default());
+    *probe.first_wave.lock().unwrap() = Some((18, std::time::Duration::from_millis(300)));
     let together: Vec<String> = std::thread::scope(|s| {
-        let hs: Vec<_> = trees.iter().map(|t| s.spawn(move || read(t, 4))).collect();
+        let hs: Vec<_> = trees
+            .iter()
+            .map(|t| {
+                let w = ReachWorkers::new(9).with_probe(Arc::clone(&probe));
+                s.spawn(move || read(t, w))
+            })
+            .collect();
         hs.into_iter().map(|h| h.join().unwrap()).collect()
     });
     assert_eq!(together, serial);
+    assert!(
+        probe.max() <= 9,
+        "both passes in one pool of 9 threads: {} at once",
+        probe.max()
+    );
+    assert!(probe.max() >= 2, "precondition: roots ran at once");
 }
 
 /// TLS-22: from inside a rayon worker the pass runs serially on that thread
@@ -1911,7 +2010,7 @@ fn inside_a_rayon_worker_the_pass_runs_serially() {
     };
     let serial = read(ReachWorkers::SERIAL);
     let probe = Arc::new(PassProbe::default());
-    *probe.first_wave.lock().unwrap() = Some((2, std::time::Duration::from_secs(2)));
+    *probe.first_wave.lock().unwrap() = Some((2, std::time::Duration::from_millis(200)));
     let outer = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
         .build()

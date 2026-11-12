@@ -1260,7 +1260,10 @@ fn every_route_runs_the_pass_with_its_revisions_worker_count() {
             .load(std::sync::atomic::Ordering::SeqCst)
     };
     // A witness fill: the request's three roots in one pass.
-    let rev = revision(&f).with_reach_workers(ReachWorkers::new(3));
+    // Pool size 7, no other test's (a held first wave must not share a pool
+    // with another test's passes under a plain `cargo test`); the request's
+    // three roots run three at once.
+    let rev = revision(&f).with_reach_workers(ReachWorkers::new(7));
     held(&rev, 3);
     let explain = explain_many(&f, &roots);
     let warm = rev.answer(&*explain, &Control::unreserved()).unwrap();
@@ -1269,7 +1272,7 @@ fn every_route_runs_the_pass_with_its_revisions_worker_count() {
     assert!(passes(&rev) >= 1, "precondition: a pass ran");
     assert_eq!(rev.reach_probe().max(), 3, "a witness fill");
     // Over the memo's cap: the tree read's own entries.
-    let rev = revision(&f).with_reach_workers(ReachWorkers::new(3));
+    let rev = revision(&f).with_reach_workers(ReachWorkers::new(7));
     rev.set_witness_memo_max(2);
     held(&rev, 3);
     let warm = rev.answer(&*explain, &Control::unreserved()).unwrap();
@@ -1288,7 +1291,7 @@ fn every_route_runs_the_pass_with_its_revisions_worker_count() {
         extra_roots: Vec::new(),
         root_batch,
     };
-    let rev = revision(&f).with_reach_workers(ReachWorkers::new(2));
+    let rev = revision(&f).with_reach_workers(ReachWorkers::new(7));
     held(&rev, 2);
     let hand = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
     let warm = rev

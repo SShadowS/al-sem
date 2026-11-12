@@ -433,14 +433,26 @@ fn racing_evaluations_keep_one_answer_per_key() {
 
     let reach = LiteralReach::new(&tree, model);
     let misses = Arc::new(AtomicUsize::new(0));
+    // The first two misses' keys (hashed), and whether a wait timed out.
+    let first_two = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
-        let misses = Arc::clone(&misses);
-        reach.flow.set_evaluate_hook(Arc::new(move || {
-            // Only the first two misses wait (both workers missed the first
-            // key), and at most 10 s: a lost race fails below, never hangs.
+        let (misses, first_two, timed_out) = (
+            Arc::clone(&misses),
+            Arc::clone(&first_two),
+            Arc::clone(&timed_out),
+        );
+        reach.flow.set_evaluate_hook(Arc::new(move |key| {
+            // Only the first two misses wait, until both happened, at most
+            // 10 s: a lost race fails below, never hangs.
             if misses.fetch_add(1, Ordering::SeqCst) < 2 {
+                first_two.lock().unwrap().push(key);
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                while misses.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < until {
+                while misses.load(Ordering::SeqCst) < 2 {
+                    if std::time::Instant::now() >= until {
+                        timed_out.store(true, Ordering::SeqCst);
+                        break;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             }
@@ -460,6 +472,15 @@ fn racing_evaluations_keep_one_answer_per_key() {
     );
     let raced = misses.load(Ordering::SeqCst);
     assert!(raced >= 2, "precondition: both workers missed a key");
+    assert!(
+        !timed_out.load(Ordering::SeqCst),
+        "precondition: the two misses met (no wait timed out)"
+    );
+    let keys = first_two.lock().unwrap().clone();
+    assert!(
+        keys.len() == 2 && keys[0] == keys[1],
+        "precondition: both workers missed the SAME key ({keys:?})"
+    );
     assert_eq!(ask(&reach), want, "the third ask's answer");
     assert_eq!(
         misses.load(Ordering::SeqCst),

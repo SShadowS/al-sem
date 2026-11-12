@@ -1758,6 +1758,12 @@ pub(crate) fn digest_effects(
 #[derive(Clone, Debug)]
 pub struct ReachWorkers {
     n: usize,
+    /// The passes running now among those that share this counter (owner
+    /// decision 2026-11-12, q-20261112T022816-833a1bd9: a lone ask runs `n`
+    /// roots at once; while two or more run, each runs one at a time, so two
+    /// concurrent asks keep their memory headroom). The process's default
+    /// setting shares one counter; [`ReachWorkers::new`] makes a private one.
+    passes: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     #[cfg(test)]
     probe: Option<std::sync::Arc<PassProbe>>,
 }
@@ -1766,33 +1772,45 @@ impl ReachWorkers {
     /// One root at a time, on the calling thread.
     pub const SERIAL: ReachWorkers = ReachWorkers {
         n: 1,
+        passes: None,
         #[cfg(test)]
         probe: None,
     };
 
-    /// `n` roots at once (at least 1).
+    /// `n` roots at once (at least 1), its passes counted apart from any
+    /// other setting's.
     #[must_use]
     pub fn new(n: usize) -> ReachWorkers {
         ReachWorkers {
             n: n.max(1),
+            passes: Some(std::sync::Arc::default()),
             #[cfg(test)]
             probe: None,
         }
     }
 
-    /// How many roots run at once.
+    /// How many roots run at once in a lone pass.
     #[must_use]
     pub fn count(&self) -> usize {
         self.n
     }
 
-    /// Tests: the same setting, observed by `probe`.
+    /// Tests: the same setting (and passes counter), observed by `probe`.
     #[cfg(test)]
     pub(crate) fn with_probe(&self, probe: std::sync::Arc<PassProbe>) -> ReachWorkers {
         ReachWorkers {
-            n: self.n,
             probe: Some(probe),
+            ..self.clone()
         }
+    }
+}
+
+/// A pass counted as running in its setting's counter while held.
+struct Running<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1812,13 +1830,24 @@ pub fn set_default_reach_workers(n: usize) {
     let _ = DEFAULT_REACH_WORKERS.set(n.max(1));
 }
 
-/// The worker count a caller with no setting of its own uses: the binary's,
-/// or [`REACH_WORKERS`] capped by the cores.
+/// [`REACH_WORKERS`] on a machine of `cores`: never more workers than cores,
+/// so a one-core host runs every pass serially (no pool).
+fn capped_by_cores(cores: usize) -> usize {
+    REACH_WORKERS.min(cores).max(1)
+}
+
+/// The setting a caller with no setting of its own uses: the binary's count,
+/// or [`REACH_WORKERS`] capped by the cores; its passes share ONE counter for
+/// the process, so concurrent asks see each other ([`ReachWorkers::passes`]).
 pub fn default_reach_workers() -> ReachWorkers {
-    ReachWorkers::new(*DEFAULT_REACH_WORKERS.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map_or(1, usize::from);
-        REACH_WORKERS.min(cores)
-    }))
+    static PASSES: std::sync::OnceLock<std::sync::Arc<std::sync::atomic::AtomicUsize>> =
+        std::sync::OnceLock::new();
+    ReachWorkers {
+        passes: Some(std::sync::Arc::clone(PASSES.get_or_init(Default::default))),
+        ..ReachWorkers::new(*DEFAULT_REACH_WORKERS.get_or_init(|| {
+            capped_by_cores(std::thread::available_parallelism().map_or(1, usize::from))
+        }))
+    }
 }
 
 /// TLS-22: the pool of exactly `n` threads the literal pass runs `n` roots
@@ -1849,26 +1878,38 @@ fn reach_pool(n: usize) -> &'static rayon::ThreadPool {
 /// `n` roots to start until `n` are in flight or the timeout passes (later
 /// roots never wait), so a pass with `n` workers shows `n` at once, and a
 /// smaller pool shows fewer instead of hanging.
+/// `another_at`: when the k-th root starts, add one to that counter (another
+/// pass starting beside this one); `max_after` is then the most roots
+/// STARTED after that point in flight at once. `suffix_hits`: the passes'
+/// suffix-cache hits (a tree served again).
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct PassProbe {
     in_flight: std::sync::atomic::AtomicUsize,
     started: std::sync::atomic::AtomicUsize,
+    in_flight_after: std::sync::atomic::AtomicUsize,
     pub(crate) max_in_flight: std::sync::atomic::AtomicUsize,
+    pub(crate) max_after: std::sync::atomic::AtomicUsize,
     pub(crate) passes: std::sync::atomic::AtomicUsize,
+    pub(crate) suffix_hits: std::sync::atomic::AtomicUsize,
     pub(crate) first_wave: std::sync::Mutex<Option<(usize, std::time::Duration)>>,
+    #[allow(clippy::type_complexity)]
+    pub(crate) another_at:
+        std::sync::Mutex<Option<(usize, std::sync::Arc<std::sync::atomic::AtomicUsize>)>>,
 }
 
 /// A root in flight ([`PassProbe::enter`]); leaves on drop.
 #[cfg(test)]
-pub(crate) struct InFlight<'p>(&'p PassProbe);
+pub(crate) struct InFlight<'p>(&'p PassProbe, bool);
 
 #[cfg(test)]
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
-        self.0
-            .in_flight
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        use std::sync::atomic::Ordering::SeqCst;
+        self.0.in_flight.fetch_sub(1, SeqCst);
+        if self.1 {
+            self.0.in_flight_after.fetch_sub(1, SeqCst);
+        }
     }
 }
 
@@ -1879,6 +1920,23 @@ impl PassProbe {
         let k = self.started.fetch_add(1, SeqCst);
         let now = self.in_flight.fetch_add(1, SeqCst) + 1;
         self.max_in_flight.fetch_max(now, SeqCst);
+        let another = self
+            .another_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let after = match another {
+            Some((at, _)) if k > at => true,
+            Some((at, counter)) if k == at => {
+                counter.fetch_add(1, SeqCst);
+                false
+            }
+            _ => false,
+        };
+        if after {
+            let now = self.in_flight_after.fetch_add(1, SeqCst) + 1;
+            self.max_after.fetch_max(now, SeqCst);
+        }
         let wave = *self.first_wave.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((n, timeout)) = wave
             && k < n
@@ -1888,7 +1946,7 @@ impl PassProbe {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
-        InFlight(self)
+        InFlight(self, after)
     }
 
     /// The most roots in flight at once.
@@ -2472,6 +2530,11 @@ impl Drop for LiteralPass<'_> {
         crate::engine::perf_trace::counter_delta("digest.suffix_built", s.built as u64);
         crate::engine::perf_trace::counter_delta("digest.suffix_duplicate", s.duplicate as u64);
         crate::engine::perf_trace::counter_delta("digest.suffix_evicted", s.evicted as u64);
+        #[cfg(test)]
+        if let Some(p) = &self.workers.probe {
+            p.suffix_hits
+                .fetch_add(s.hits, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -2892,18 +2955,57 @@ fn literal_reach_entries<'t>(
     if let Some(p) = &workers.probe {
         p.passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
+    use std::sync::atomic::Ordering::SeqCst;
+    let _running = workers.passes.as_deref().map(|p| {
+        p.fetch_add(1, SeqCst);
+        Running(p)
+    });
     // Serial when asked, and from inside a rayon worker: there `install`
     // would let the blocked worker run other jobs while it waits, which
     // deadlocks when one takes a lock this thread holds (`fill_witness` holds
     // `scratch` across the pass); such a caller is parallel already (a test
     // reading many fixtures on rayon).
-    if workers.n <= 1 || rayon::current_thread_index().is_some() {
+    if workers.n <= 1 {
         entries.iter_mut().for_each(one);
         return;
     }
-    use rayon::prelude::*;
-    // One root per task: per-root cost is uneven, work stealing balances it.
-    reach_pool(workers.n).install(|| entries.par_iter_mut().with_max_len(1).for_each(one));
+    if rayon::current_thread_index().is_some() {
+        crate::engine::perf_trace::counter_delta("digest.reach_serial_in_rayon", 1);
+        entries.iter_mut().for_each(one);
+        return;
+    }
+    // Another pass sharing the counter is running (another ask).
+    let others = || {
+        workers
+            .passes
+            .as_deref()
+            .is_some_and(|p| p.load(SeqCst) > 1)
+    };
+    // Each worker pulls the next root (per-root cost is uneven: pulling
+    // balances it). Before each pull, every worker but the first stops while
+    // another pass runs, so a pass started beside another is serial and a
+    // running one falls back to one root at a time once its current roots end
+    // (owner decision 2026-11-12: memory before speed under concurrent asks).
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let slots: Vec<std::sync::Mutex<&mut DigestEntryResult>> =
+        entries.iter_mut().map(std::sync::Mutex::new).collect();
+    let (one, others, next, slots) = (&one, &others, &next, &slots);
+    reach_pool(workers.n).install(|| {
+        rayon::scope(|s| {
+            for w in 0..workers.n {
+                s.spawn(move |_| {
+                    loop {
+                        if w > 0 && others() {
+                            break;
+                        }
+                        let i = next.fetch_add(1, SeqCst);
+                        let Some(slot) = slots.get(i) else { break };
+                        one(&mut slot.lock().unwrap_or_else(|p| p.into_inner()));
+                    }
+                });
+            }
+        });
+    });
 }
 
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),

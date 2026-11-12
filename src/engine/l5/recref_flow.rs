@@ -212,8 +212,13 @@ pub(crate) struct RecRefFlow<'a> {
     /// Tests: runs after a `results` miss, the lock released, before the
     /// evaluation (TLS-22 forces two workers to miss one key).
     #[cfg(test)]
-    evaluate_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    evaluate_hook: Mutex<Option<EvaluateHook>>,
 }
+
+/// Tests: a hook [`RecRefFlow::evaluate`] runs after a `results` miss, given
+/// the missed key's hash.
+#[cfg(test)]
+pub(crate) type EvaluateHook = Arc<dyn Fn(u64) + Send + Sync>;
 
 /// One evaluation's key: the routine, its tracked parameters' input tables,
 /// its instance's globals.
@@ -605,7 +610,10 @@ impl<'a> RecRefFlow<'a> {
             // Cloned out first: the hook may block, and must not hold the lock.
             let hook = lock(&self.evaluate_hook).clone();
             if let Some(hook) = hook {
-                hook();
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                key.hash(&mut h);
+                hook(h.finish());
             }
         }
         // TLS-22: the state is this evaluation's local, so nothing of it can
@@ -630,7 +638,7 @@ impl<'a> RecRefFlow<'a> {
 
     /// Tests: set the hook [`Self::evaluate`] runs after a `results` miss.
     #[cfg(test)]
-    pub(crate) fn set_evaluate_hook(&self, f: Arc<dyn Fn() + Send + Sync>) {
+    pub(crate) fn set_evaluate_hook(&self, f: EvaluateHook) {
         *lock(&self.evaluate_hook) = Some(f);
     }
 
