@@ -15,6 +15,7 @@ pub mod job;
 pub mod manifest;
 pub mod output;
 pub mod plan_cx;
+pub mod sited_cache;
 pub mod worker;
 
 use std::collections::HashSet;
@@ -356,9 +357,44 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             .all(|(_, d)| Arc::ptr_eq(&d.inputs, &first.inputs)),
         "a view's demands share one WorkspaceInputs"
     );
-    let needs = on_view
+    // TLS-28: inside a one-shot impact's scope, a sited-only view runs on the
+    // graph an earlier part kept for the same key and input bytes.
+    let cache_stamp = sited_cache::stamp_for(on_view);
+    if let Some(stamp) = cache_stamp
+        .as_deref()
+        .filter(|_| sited_cache::sited_only(on_view))
+    {
+        let hit = sited_cache::with_hit(&first.key, stamp, |g| {
+            on_view
+                .iter()
+                .map(|(j, d)| {
+                    let _s = job_span(*j, jobs[*j], "compute");
+                    capture(|| {
+                        jobs[*j].sited(
+                            d.side,
+                            Ok(g),
+                            &crate::engine::l5::digest_cli::default_reach_workers(),
+                        )
+                    })
+                })
+                .collect()
+        });
+        if let Some(sides) = hit {
+            return sides;
+        }
+    }
+    // Every build in a scope drops the kept graph, also one that keeps none
+    // itself (a single-app base model after a cross-app up part): a kept
+    // graph never lives through another build (sol review r1).
+    sited_cache::clear();
+    #[cfg(test)]
+    sited_cache::BUILDS.with(|b| b.set(b.get() + 1));
+    let mut needs = on_view
         .iter()
         .fold(first.needs, |n, (_, d)| n.union(d.needs));
+    // A view that keeps its graph has its program lent (`build_view_model`
+    // lends it only for a graph need); no demand's own needs change.
+    needs.graph |= cache_stamp.is_some();
     let finish = |results: Vec<Option<Side>>| {
         results
             .into_iter()
@@ -370,11 +406,14 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
     // past the lent program for its compute (`ViewCx::sited`; `None` there
     // when its build did not finish).
     let mut kept_sited: Option<crate::program::impact_graph::SitedGraph> = None;
+    // TLS-28: the graph this view keeps for the scope's next part.
+    let mut to_store: Option<crate::program::impact_graph::SitedGraph> = None;
     // (1) The one builder; graph demands are done off its program.
     let built = build_view_model(&first.inputs, &first.key, needs, |program| {
         // The sited graph, built once off the lent program for every sited
-        // demand on the view.
-        let sited = on_view.iter().any(|(_, d)| d.needs.sited).then(|| {
+        // demand on the view, and for the scope when it keeps one (TLS-28).
+        let wanted = cache_stamp.is_some() || on_view.iter().any(|(_, d)| d.needs.sited);
+        let sited = wanted.then(|| {
             program.and_then(|p| {
                 crate::program::impact_graph::sited_from_program(p, &|| false)
                     .map_err(|_| "the sited graph's build was cancelled")
@@ -401,11 +440,21 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
         }
         if on_view.iter().any(|(_, d)| d.needs.model && d.needs.sited) {
             kept_sited = sited.and_then(Result::ok);
+        } else if cache_stamp.is_some() {
+            to_store = sited.and_then(Result::ok);
         }
     });
+    let store = |g: Option<crate::program::impact_graph::SitedGraph>| {
+        if let (Some(stamp), Some(g)) = (cache_stamp.clone(), g) {
+            sited_cache::store(&first.key, stamp, g);
+        }
+    };
     let (target, fresh) = match built {
         Ok(Some(ViewModel { target, fresh, .. })) => (target, fresh),
-        Ok(None) => return finish(results),
+        Ok(None) => {
+            store(to_store);
+            return finish(results);
+        }
         Err(failure) => {
             for (i, (j, d)) in on_view.iter().enumerate() {
                 results[i].get_or_insert_with(|| {
@@ -514,6 +563,7 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
         drop(view);
         drop(fresh);
     }
+    store(kept_sited.or(to_store));
     // The view's model is gone: its post-attach phase ends (#160 §4.1.4), so
     // the next view's build is in no phase.
     pt::end_phase("post_attach");

@@ -2691,9 +2691,20 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
         scratch,
         diff_text: diff_text.clone().unwrap_or_default(),
         anchors,
-        run: Box::new(|argv: Vec<String>, stdin: String| run_part_with_stdin(&argv, Some(stdin))),
+        // TLS-28: the base side's part shares no graph with a later part.
+        run: Box::new(|argv: Vec<String>, stdin: String| {
+            al_sem::engine::batch::sited_cache::without_sited_cache(|| {
+                run_part_with_stdin(&argv, Some(stdin))
+            })
+        }),
     });
-    match al_sem::engine::impact::run::orchestrate(&req, cmp, opts, &mut run, bcx.as_mut()) {
+    // TLS-28: the parts run one after another in this process; a part that
+    // reads only the sited graph runs on the one an earlier part built from
+    // the same inputs (spec 2026-11-12-impact-shared-sited).
+    let answer = al_sem::engine::batch::sited_cache::with_sited_cache(|| {
+        al_sem::engine::impact::run::orchestrate(&req, cmp, opts, &mut run, bcx.as_mut())
+    });
+    match answer {
         Ok(r) => {
             let out = JobOutput::text(t.out.as_deref(), Ok((r.text, r.exit)));
             ExitCode::from(al_sem::engine::batch::output::replay(&out, 1))
