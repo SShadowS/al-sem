@@ -1036,7 +1036,10 @@ fn resolve_call_site_obligation(
                 // record no variable names (a call's result,
                 // `GetRef().Modify(true)`, `GetRef().FindFirst()`; an array
                 // element is a record operation, `extract::classify_call`).
-                // Measured 2026-11-12: 0 such sites in CDO or Base Application.
+                // Measured 2026-11-12 (CDO explain): 3 such sites reached from
+                // CDO's roots, all in dependency code
+                // (`CreationFactory.GeteDocumentHeader().Modify`); none in CDO's
+                // or Base Application's own source.
                 // A trigger-firing one runs its table's triggers when the table
                 // is known (as a record operation's, by the same RunTrigger
                 // rule); each carries one honest unknown for what is not

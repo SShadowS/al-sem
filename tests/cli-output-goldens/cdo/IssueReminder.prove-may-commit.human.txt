@@ -1,6 +1,6 @@
 prove Codeunit "CDO Issue Document"::IssueReminder may-commit   [cross-app]
 answer: yes — COMMIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229 (18 guards, 10 earlier exits on the route; 2 guards and 4 exits evaluated), and 16 more
-analysis partial (25 calls not resolved (9 in this workspace), 258 interface calls open world (7 in this workspace)) · assumptions: assumes Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value (Continia Document Output with its loaded dependencies; no additional subscribers assumed); rules out ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123 · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+analysis partial (28 calls not resolved (9 in this workspace), 258 interface calls open world (7 in this workspace)) · assumptions: assumes Codeunit "CDO Events"::OnBeforeCreateAndSendMailV2 has no loaded subscriber, so UseSMTP keeps its value (Continia Document Output with its loaded dependencies; no additional subscribers assumed); rules out ws:src/Features/Email/Sending/CDOMailManagement.Codeunit.al:123 · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 17 effects
     [COMMIT] at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229

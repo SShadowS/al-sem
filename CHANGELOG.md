@@ -30,8 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A trigger-firing operation on a record no variable names** (`GetRef().Modify(true)`, a call's
   result) answered a definite `may-commit: no`; it now runs its table's triggers when the table
   is known, and carries one unresolved route for what is not followed there (the table events;
-  with no table, any table's triggers), so the answer is `yes` or `unknown`. 0 such sites in CDO
-  and Base Application (measured 2026-11-12); Base Application has 36 array-element writes.
+  with no table, any table's triggers), so the answer is `yes` or `unknown`. On CDO (measured
+  2026-11-12): 3 such sites reached from the golden roots, all in dependency code
+  (`CreationFactory.GeteDocumentHeader().Modify`), which IssueReminder and RunReportID now list
+  as unresolved calls (25 -> 28); Base Application has 36 array-element writes.
   Probe: `docs/superpowers/notes/2026-11-12-eng12-record-ops-probe.md`.
 - Review round 1: a non-record parameter, local or return value shadows a record global of its
   name in both engines (a local `X: array[2] of Codeunit W` under a global `X: Record T` had made
