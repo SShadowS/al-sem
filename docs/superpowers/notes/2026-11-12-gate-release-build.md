@@ -131,9 +131,59 @@ their paths point at the session's scratchpad).
 - `CLAUDE.md` (Build Commands, Test tiers row 3, Performance Targets) and the
   `tests/perf_bounds.rs` module doc say which profile the gate builds.
 
-## 5. Step (b): more codegen units for `release`
+## 5. Step (b): more codegen units for `release` (measured; not changed)
 
-Not in this change. After it lands, `codegen-units` 16 and 4 under fat LTO are measured against
-today's `release-ship` (build time with `measure.sh`; runtime with `scripts/cdo-speed --base-exe
---head-exe` after an A/A control for the noise band; `perf_bounds`; peak memory) and kept only if
-the shipped binary is not slower. The result, including the A/A band, goes in this note.
+**Result: `release` keeps `codegen-units = 1`.** More units make the shipped build about 42 %
+faster, but the runtime noise on this host is about ±10 %. That is too wide to show that the
+shipped binary is not slower, which the owner's rule requires. The orchestrator decided
+(2026-11-12) to keep cu=1 and record the numbers. The gain would now come only in CI's shipped
+build, since the gate builds `release-fast` (section 4).
+
+**Builds.** Master `3bcfaae7`. One target folder per value. The value is set with
+`CARGO_PROFILE_RELEASE_CODEGEN_UNITS` and `CARGO_PROFILE_RELEASE_SHIP_CODEGEN_UNITS`;
+`Cargo.toml` is not edited. For each: an untimed `cargo build --profile release-ship`, then
+`touch src/lib.rs` and a timed build with `--timings`. 2026-11-12 12:13-13:14 UTC, quiet host:
+the heavy window, no other build in the container. Script and raw rows: `gate-release-build/b/`
+(`b-measure.sh`, `runs.jsonl`).
+
+| `codegen-units` | Wall | CPU | Peak child RSS | `alsem` size | Load at start |
+|---|---:|---:|---:|---:|---:|
+| 1 (today) | 511 s | 768 s | 4,410 MiB | 39.9 MB | 3.9 |
+| 16 | 297 s | 790 s | 5,315 MiB | 42.4 MB | 3.6 |
+| 4 | 299 s | 692 s | 5,048 MiB | 42.2 MB | 8.3 |
+
+Each value also built the `perf_bounds` test binary (`cargo test --release --no-run`): 600 / 345 /
+363 s. Those times are not a cu comparison. `release` unwinds and `release-ship` aborts, so these
+builds shared no artifacts with the ones above: each rebuilt all 255 dependency units. The
+`perf_bounds` runs were not made, because the decision was already taken.
+
+**Runtime noise (A/A control).** `scripts/cdo-speed /work/src/cdo-baseline/Cloud --base-exe
+<cu1 alsem> --head-exe <a byte copy of it> --rounds 5`: the same binary on both sides, so any
+ratio away from 1.00 is noise. 2026-11-12 13:20-13:25 UTC, load 5.9 at the start and 7.3 at the
+end, 55 GB free. Raw: `gate-release-build/b/speed-aa.json` and `speed-aa.log`.
+
+| Call | Median CPU ratio | Per-round CPU ratios |
+|---|---:|---|
+| prove | 1.050 | 0.905, 1.128, 1.050, 1.132, 0.966 |
+| explain | 0.905 | 0.823, 1.180, 1.048, 0.905, 0.750 |
+| digest | 0.938 | 0.573, 1.024, 0.938, 1.097, 0.831 |
+| query | 1.038 | 1.183, 1.000, 1.062, 1.038, 0.770 |
+| tests | 1.059 | 1.059, 1.083, 0.938, 1.059, 0.854 |
+| impact | 0.951 | 0.951, 1.289, 0.890, 1.068, 0.874 |
+| **round total** | **1.037** | 0.904, 1.132, 1.037, 1.109, 0.932 |
+
+- Warm-up, one sample each: the model build CPU x1.18 and wall x1.28; the test universe CPU x0.973
+  and wall x0.969.
+- Peak memory (VmHWM summed over the servers) x0.991. The output was the same on every call.
+  `cdo-speed` said PASS.
+- The acceptance bar agreed for (b) needed a variant's round-total median ratio within 1.02 and
+  inside the A/A band. With round-total ratios from 0.90 to 1.13 for one binary against itself, no
+  variant could be told apart from cu=1. Three interleaved runs would not narrow ±10 % to 2 %.
+
+**`cdo-speed` has at most 5 rounds.** It has 5 round routines. `--rounds 6` ran the warm-up and 5
+rounds, then stopped with `IndexError` and wrote no `speed.json`. Filed as TLS-25, so the script
+rejects the value up front.
+
+**If anyone revisits this.** Measure instruction counts (`perf stat -e instructions` per call, or
+over the whole round) instead of wall or CPU time. Instruction counts barely move with host load,
+so a few-percent difference between cu values could be resolved on a shared host.

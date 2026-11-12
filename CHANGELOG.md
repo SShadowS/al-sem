@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   master by `build-and-deploy.yml` (Windows, Linux, macOS), so a fat-LTO-only failure shows there,
   after the merge and before any tag. That workflow now also runs on a `rust-toolchain.toml`
   change. Note: `docs/superpowers/notes/2026-11-12-gate-release-build.md`.
+- **The shipped profile keeps `codegen-units = 1` (measured, not changed).** With 16 or 4 units
+  the `release-ship` build took 297 / 299 s against 511 s, but an A/A control (the same binary
+  against itself in `scripts/cdo-speed`) varied about ±10 % per round on this host. That is too
+  wide to show the binary is not slower, which the owner's rule for the shipped profile requires.
+  The numbers and a better method for next time (instruction counts) are in the note's section 5.
 
 ### Changed (TLS-22: the literal pass runs roots in parallel)
 
