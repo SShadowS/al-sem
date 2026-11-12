@@ -5905,6 +5905,16 @@ fn digest_one_root<'i>(
             if commit_error {
                 key_effect_type = format!("{key_effect_type}|commit");
             }
+            // ENG-09: a checked run's commit and a `Commit()` behind one
+            // crossing are two group rows with one boundary terminal; the
+            // run's keeps an id of its own.
+            if acc.effect_type == "COMMIT"
+                && detail.iter().any(|(k, v)| {
+                    k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT
+                })
+            {
+                key_effect_type = format!("{key_effect_type}|run");
+            }
             let (canonical_key, link_signature) = build_canonical_key(
                 rid,
                 &via_paths,

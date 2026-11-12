@@ -394,8 +394,8 @@ fn dep_workspace() -> tempfile::TempDir {
 }
 
 /// Beyond a dependency crossing, a `Commit()` and a checked run's commit are
-/// two rows, never one: the run's row is marked `checked-run` and is
-/// `conditional`, and under `Ignore` only the run's row is left.
+/// two rows with two ids, never one: the run's row is marked `checked-run`
+/// and ends on its own site, and under `Ignore` only the run's row is left.
 #[test]
 fn beyond_a_crossing_the_two_kinds_of_commit_stay_apart() {
     let t = dep_workspace();
@@ -441,6 +441,15 @@ fn beyond_a_crossing_the_two_kinds_of_commit_stay_apart() {
         vec![(false, "op0".to_string()), (true, "cs0".to_string())],
         "the Commit() and the run, apart, each ending on its own site: {r}"
     );
+    // Two rows, two ids (the ordering engine finds a row by its id).
+    let ids: std::collections::BTreeSet<&str> = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "COMMIT")
+        .filter_map(|e| e["factId"].as_str())
+        .collect();
+    assert_eq!(ids.len(), 2, "one id per row: {r}");
     let r = prove("UnderIgnore");
     assert_eq!(r["answer"], "yes", "{r}");
     assert_eq!(
