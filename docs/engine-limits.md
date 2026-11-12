@@ -408,7 +408,8 @@ callers' question reads (`commit_scope::declared`).
   trigger of a table event shares the sibling rule (subscribers of one record operation), and one
   fired by a write operation is entered with that write pending (conservative for `OnBefore…`
   events and `OnInsert`-style triggers, which run before the write); `LockTable` counts as a write
-  (measured on the BC 28.4 sidecar only, Windows pending, owner q-20261112T043721-7da83bae:
+  (measured on the BC 28.4 sidecar, confirmed on Windows BC 28.0.54946.56477 by the owner,
+  q-20261112T043721-7da83bae:
   `LockTable` then a read makes `IsInWriteTransaction()` true and a checked run after it fails). d50 also seeds the variable form (`Ok := C.Run()`). Round 2: a
   call in a `while`/`repeat` condition counts what an earlier pass of the whole condition ran
   (`while Step() do;`, `Step` running a checked run and then writing).
@@ -416,8 +417,8 @@ callers' question reads (`commit_scope::declared`).
   and the transaction spans (d50). Measured on the BC 28.4 sidecar (probe note, second probe):
   `IsInWriteTransaction()` was true exactly when a checked run failed, in all seven states tried
   (nothing, a pending insert, after a `Commit()`, a plain `Get`, `LockTable` + `FindSet`, a
-  `ModifyAll` that matched no row, the guarded commit itself); sidecar only, Windows pending (owner
-  q-20261112T043721-7da83bae). Only
+  `ModifyAll` that matched no row, the guarded commit itself); confirmed on Windows BC 28.0.54946.56477 (owner,
+  q-20261112T043721-7da83bae: all seven states the same). Only
   that shape: the whole condition is the platform's call (resolver-decided,
   `PCallSite::write_txn_query`, so a procedure of that name does not count), not negated, no
   `else`, and the `then` branch is one `Commit()`. CDO's `CDOLegacyeDocDispatcher:254-255` has it;

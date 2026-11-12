@@ -67,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`if IsInWriteTransaction() then Commit();` ends the write** (that shape only: the platform's
   call as the whole condition, not negated, no `else`, one `Commit()`), in prove's trap search and
   in the transaction spans. Measured on the BC 28.4 sidecar: `IsInWriteTransaction()` was true
-  exactly when a checked run failed, in seven transaction states (Windows confirmation pending).
+  exactly when a checked run failed, in seven transaction states; confirmed on Windows BC
+  28.0.54946.56477 by the owner.
   Before, a branch `Commit()` ended nothing, and d50's one CDO finding (CDOLegacyeDocDispatcher,
   which commits that way before its run) was a false positive.
 

@@ -167,8 +167,11 @@ codeunit 50985 "CR Probe Test"
 
 ## Second probe (ENG-22): does `IsInWriteTransaction()` match the run's failure?
 
-Measured 2026-11-12 on the BC 28.4 Linux sidecar. **Windows confirmation pending** (owner
-q-20261112T043721-7da83bae). App
+Measured 2026-11-12 on the BC 28.4 Linux sidecar. **Confirmed on Windows** by the owner
+(q-20261112T043721-7da83bae): BC 28.0.54946.56477, Cronus28, test runner 130451,
+TestPermissions=Disabled with a permission set; all seven states gave the same result as the
+sidecar (the table below), the error text "An error occurred and the transaction is stopped",
+and `IsInWriteTransaction()` true exactly when the run failed. App
 `e22e22e0-0000-4000-8000-0000000000e9` ("ENG22 IsInWriteTransaction Probe", ids 50960-50979,
 removed after the run). Each state starts after a `Commit()` (nothing pending); the probe records
 `IsInWriteTransaction()` and whether a checked run of an empty codeunit (inside a `[TryFunction]`)
