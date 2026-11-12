@@ -578,12 +578,21 @@ fn a_symbol_only_try_function_may_be_refused() {
 
 const SRC_DEP_GUID: &str = "e10e10e0-0000-4000-8000-0000000000de";
 
-/// A try function that calls into dependency code that writes: the errors
-/// beyond the crossing form one boundary group, which the try function
-/// would catch, but a refused write's error leaves it (the group rule in
-/// `digest_cli::judge_traps`).
-/// Break (2026-11-12): turn the group rule off -> the group is caught and
-/// not listed; restored, it passes.
+/// Boundary groups (errors beyond a call into dependency code) under a used
+/// try call (the group rule in `digest_cli::judge_traps`):
+/// - the dependency code writes directly (`UseTry`): the refusal is the try
+///   call's own row; the group's own errors stay caught by the try call;
+/// - it makes a try call of its own that may be refused (`UseTryNested`,
+///   T14): that refusal leaves the outer try call, so the group escapes;
+/// - its own try call writes only a temporary record (`UseTryNestedTemp`):
+///   nothing is refused, the group stays caught.
+///
+/// Breaks (2026-11-12): turn the group rule off -> `UseTryNested`'s group is
+/// caught (not listed); rule every group type, not only `ERROR_IMPLICIT` ->
+/// `UseOwnTry`'s `Error()` group is listed; judge by `closure` instead of
+/// `nested` (any target that may write) -> `UseTry`'s group is listed; seed
+/// `nested` with every try call (refused or not) -> `UseTryNestedTemp`'s
+/// group is listed. Each fails; restored, it passes.
 #[test]
 fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
     let t = tempfile::tempdir().unwrap();
@@ -599,7 +608,7 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
     .unwrap();
     std::fs::write(
         ws.join("src/c.al"),
-        "codeunit 52440 \"WG Caller\"\n{\n    procedure UseTry()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryDep();\n    end;\n\n    [TryFunction]\n    local procedure TryDep()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n\n    procedure UseTryRun()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRun();\n    end;\n\n    [TryFunction]\n    local procedure TryRun()\n    begin\n        if Codeunit.Run(Codeunit::\"WG Runner\") then;\n    end;\n\n    procedure UseTryRunDep()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRunDep();\n    end;\n\n    [TryFunction]\n    local procedure TryRunDep()\n    begin\n        if Codeunit.Run(Codeunit::\"YDep Runner\") then;\n    end;\n}\ncodeunit 52441 \"WG Runner\"\n{\n    trigger OnRun()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n}\n",
+        "codeunit 52440 \"WG Caller\"\n{\n    procedure UseTry()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryDep();\n    end;\n\n    [TryFunction]\n    local procedure TryDep()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n\n    procedure UseTryRun()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRun();\n    end;\n\n    [TryFunction]\n    local procedure TryRun()\n    begin\n        if Codeunit.Run(Codeunit::\"WG Runner\") then;\n    end;\n\n    procedure UseTryRunDep()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRunDep();\n    end;\n\n    [TryFunction]\n    local procedure TryRunDep()\n    begin\n        if Codeunit.Run(Codeunit::\"YDep Runner\") then;\n    end;\n\n    procedure UseTryNested()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryNested();\n    end;\n\n    [TryFunction]\n    local procedure TryNested()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.UseOwnTry();\n    end;\n\n    procedure UseTryNestedTemp()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryNestedTemp();\n    end;\n\n    [TryFunction]\n    local procedure TryNestedTemp()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.UseOwnTempTry();\n    end;\n}\ncodeunit 52441 \"WG Runner\"\n{\n    trigger OnRun()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n}\n",
     )
     .unwrap();
     crate::symbol_app::write_source_app(
@@ -608,7 +617,7 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
         "YDep",
         "1.0.0.0",
         &format!(
-            r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":52450,"Name":"YDep Row","Fields":[{{"Id":1,"Name":"K","TypeDefinition":{{"Name":"Integer"}}}}]}}],"Codeunits":[{{"Id":52451,"Name":"YDep Lib","Methods":[{{"Name":"InsertRow","Parameters":[]}}]}},{{"Id":52452,"Name":"YDep Runner","Methods":[]}}],"AppId":"{SRC_DEP_GUID}","Name":"YDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+            r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":52450,"Name":"YDep Row","Fields":[{{"Id":1,"Name":"K","TypeDefinition":{{"Name":"Integer"}}}}]}}],"Codeunits":[{{"Id":52451,"Name":"YDep Lib","Methods":[{{"Name":"InsertRow","Parameters":[]}},{{"Name":"UseOwnTry","Parameters":[]}},{{"Name":"UseOwnTempTry","Parameters":[]}}]}},{{"Id":52452,"Name":"YDep Runner","Methods":[]}}],"AppId":"{SRC_DEP_GUID}","Name":"YDep","Publisher":"probe","Version":"1.0.0.0"}}"#
         ),
         &[
             (
@@ -617,7 +626,7 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
             ),
             (
                 "src/Lib.al",
-                "codeunit 52451 \"YDep Lib\"\n{\n    procedure InsertRow()\n    var\n        R: Record \"YDep Row\";\n    begin\n        R.Insert();\n    end;\n}\n",
+                "codeunit 52451 \"YDep Lib\"\n{\n    procedure InsertRow()\n    var\n        R: Record \"YDep Row\";\n    begin\n        R.Insert();\n    end;\n\n    procedure UseOwnTry()\n    begin\n        if TryInsertRow() then;\n        Error('dep');\n    end;\n\n    [TryFunction]\n    local procedure TryInsertRow()\n    var\n        R: Record \"YDep Row\";\n    begin\n        R.Insert();\n    end;\n\n    procedure UseOwnTempTry()\n    begin\n        if TryTempRow() then;\n    end;\n\n    [TryFunction]\n    local procedure TryTempRow()\n    var\n        T: Record \"YDep Row\" temporary;\n    begin\n        T.Insert();\n    end;\n}\n",
             ),
             (
                 "src/Runner.al",
@@ -626,22 +635,39 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
         ],
         "",
     );
+    // A caught group is not listed among the evidence.
+    let typed = |r: &Value, name: &str, ty: &str| -> Option<Value> {
+        r["evidence"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|e| {
+                e["detail"]["boundary"] == format!("Codeunit YDep Lib::{name}") && e["type"] == ty
+            })
+            .cloned()
+    };
+    let group = |r: &Value, name: &str| typed(r, name, "ERROR_IMPLICIT");
     let r = ask(ws.to_str().unwrap(), "WG Caller::UseTry", &[]);
     assert_eq!(r["answer"], "yes", "{r}");
-    let group = r["evidence"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["detail"]["boundary"] == "Codeunit YDep Lib::InsertRow")
-        // A caught group is not listed: missing means the try function was
-        // taken to catch it.
-        .unwrap_or_else(|| panic!("the group beyond InsertRow is not escaping: {r}"))
-        .clone();
-    assert_eq!(
-        group["trap"]["verdict"], "escapes-if-write-refused",
-        "{group}"
+    assert!(
+        refusals(&r)
+            .iter()
+            .any(|(l, v, _)| *l == 7 && v == "escapes-if-write-refused"),
+        "the try call's own refusal row: {r}"
     );
-    assert_eq!(group["trap"]["kind"], "try-write-refused", "{group}");
+    assert!(group(&r, "InsertRow").is_none(), "stays caught: {r}");
+    let r = ask(ws.to_str().unwrap(), "WG Caller::UseTryNested", &[]);
+    let g = group(&r, "UseOwnTry").unwrap_or_else(|| panic!("escapes: {r}"));
+    assert_eq!(g["trap"]["verdict"], "escapes-if-write-refused", "{g}");
+    assert_eq!(g["trap"]["kind"], "try-write-refused", "{g}");
+    // Its `Error('dep')` is caught by the outer try call as before.
+    assert!(
+        typed(&r, "UseOwnTry", "ERROR_THROW").is_none(),
+        "the Error() group stays caught: {r}"
+    );
+    let r = ask(ws.to_str().unwrap(), "WG Caller::UseTryNestedTemp", &[]);
+    assert!(group(&r, "UseOwnTempTry").is_none(), "stays caught: {r}");
+    assert_eq!(r["answer"], "no", "{r}");
     // T10: the same write behind a checked run inside the try call runs
     // outside it: the group stays caught (not listed), nothing is refused.
     // Break (2026-11-12): rule the group by its first trap only (any

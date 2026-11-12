@@ -1746,6 +1746,10 @@ struct TryRefusal<'a> {
     /// (a callee with no row, a call no edge resolves), may run without
     /// crossing a checked run or an `asserterror` call.
     closure: HashSet<&'a str>,
+    /// The routines from which a try call that may be refused runs, with
+    /// no checked run or `asserterror` between: its refusal error, raised
+    /// there, is caught by no try call around them.
+    nested: HashSet<&'a str>,
     /// The call sites that start code inside a try call: each try call, and
     /// each call in a try call's argument list (Learn: arguments are
     /// evaluated inside the try function), each with its try call's site.
@@ -3323,9 +3327,43 @@ impl<'a> LiteralReach<'a> {
                 }
             }
         }
+        // The routines that make a try call which may be refused (what it
+        // or its arguments run is in `closure`, has no row, or is no edge),
+        // then every routine that reaches one with no checked run or
+        // asserterror: a refusal raised in there leaves any try call around.
+        let mut nested: HashSet<&'a str> = HashSet::new();
+        for (&f, list) in &self.out {
+            if list.iter().any(|&(to, es, _, _)| {
+                es.and_then(EdgeSite::guarded)
+                    .is_some_and(|s| try_sites.contains_key(s))
+                    && (closure.contains(to) || !self.by_stable.contains_key(to))
+            }) {
+                nested.insert(f);
+            }
+        }
+        for (&id, &r) in &self.by_stable {
+            let one = [r];
+            let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
+            if rows.iter().any(|row| {
+                row.operation_sites
+                    .iter()
+                    .any(|o| arg_ops.contains_key(o.id.as_str()))
+            }) {
+                nested.insert(id);
+            }
+        }
+        let mut q: VecDeque<&'a str> = nested.iter().copied().collect();
+        while let Some(x) = q.pop_front() {
+            for &p in rev.get(x).map_or(&[][..], Vec::as_slice) {
+                if nested.insert(p) {
+                    q.push_back(p);
+                }
+            }
+        }
         TryRefusal {
             ops,
             closure,
+            nested,
             try_sites,
             arg_ops,
         }
@@ -3395,7 +3433,10 @@ impl<'a> LiteralReach<'a> {
 
     /// ENG-10: whether code beyond the crossing edge `from → to` at `site`
     /// may be refused inside a try call on a route [`Self::in_try_reach`]
-    /// holds: the edge runs inside one, and `to` may run a refused operation.
+    /// holds: the edge runs inside one, and `to` may run a try call of its own
+    /// that may be refused (`nested`). A write `to` runs directly needs no
+    /// group: the outer try call's own row carries its refusal, and the
+    /// group's own errors stay caught by that try call.
     /// The try call (owner, site) it runs inside, or `None`.
     pub(crate) fn crossing_in_try(
         &self,
@@ -3421,7 +3462,7 @@ impl<'a> LiteralReach<'a> {
                                 && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
                         })
                 });
-        if !open_edge || !it.open.contains(from) || !w.closure.contains(to) {
+        if !open_edge || !it.open.contains(from) || !w.nested.contains(to) {
             return None;
         }
         if let Some(&v) = it.inside.get(from) {

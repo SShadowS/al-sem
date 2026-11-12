@@ -553,9 +553,12 @@ literal reach, so measure speed when changing it.
      argument list, an argument operation's trigger or event included) with no checked run or
      `asserterror` anywhere on the route, whatever trap another route names; one that has no
      error of its own (a `Commit()`, a tested `if not R.Insert()`) is an error site there too, and
-     a try call where nothing may be refused is "not raised" in the slice as well. A boundary
-     group a try call catches is kept escaping when a crossing edge runs inside a try call on
-     such a route and the code beyond it may run a refused operation. A routine with
+     a try call where nothing may be refused is "not raised" in the slice as well. An implicit-
+     error boundary group a try call catches is kept escaping when a crossing edge runs inside
+     a try call on such a route and the dependency code beyond it makes a try call of its own
+     that may be refused (that refusal leaves the outer try call, T14); a write it runs
+     directly is the outer try call's own refusal row, and the group's other errors stay
+     caught. A routine with
      no body (a symbol-only dependency routine, a `[TryFunction]` among them) is unknown code
      inside a try call. A root that is itself a `[TryFunction]` and may run a refused operation
      states the assumption its answer rests on: its callers call it as a statement (prove's

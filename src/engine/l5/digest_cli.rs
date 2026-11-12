@@ -2664,13 +2664,16 @@ fn judge_traps<'t>(
             assumes_clean_entry = false;
             assumes_normal_commit = false;
         }
-        // ENG-10: a group a try call catches may hold the refusal of a write
-        // beyond the crossing, which the try call does not catch: when a
-        // crossing edge runs inside a try call on a route with no checked
-        // run or `asserterror`, and its target may run a refused operation.
+        // ENG-10: a group a try call catches may hold the refusal error of a
+        // try call inside the dependency code (T14: no try call around it
+        // catches it): when a crossing edge runs inside a try call on a route
+        // with no checked run or `asserterror`, and its target may make such
+        // a try call (`crossing_in_try`).
         // Whatever trap the witness route named (another route may enter a
         // try call).
+        // Only an implicit-error group can hold a refusal (`write-in-try`).
         if e.boundary_group
+            && e.effect_type == "ERROR_IMPLICIT"
             && matches!(
                 &trap,
                 Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
