@@ -2322,7 +2322,15 @@ impl<'a> LiteralReach<'a> {
             .by_stable
             .values()
             .chain(reach.arm_rows.values().flatten())
-            .any(|r| r.call_sites.iter().any(|c| c.try_call))
+            // Also with no try call: a try function root states its callers'
+            // assumption (`try_root_may_refuse`), its callers in other apps.
+            .any(|r| {
+                r.call_sites.iter().any(|c| c.try_call)
+                    || crate::program::attributes::has_attribute(
+                        &r.attributes_parsed,
+                        "TryFunction",
+                    )
+            })
         {
             reach.refusal = Some(reach.build_try_refusal());
         }

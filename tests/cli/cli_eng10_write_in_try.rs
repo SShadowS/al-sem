@@ -559,3 +559,26 @@ fn a_try_function_root_states_its_callers_assumption() {
         "{r}"
     );
 }
+
+/// A library whose try function no loaded routine calls: its callers are
+/// all elsewhere, so its answer still states the assumption.
+/// Break (2026-11-12): build the refusal facts only when a try call exists
+/// -> no assumption; restored, it passes.
+#[test]
+fn a_try_function_with_no_loaded_caller_states_the_assumption() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e10e10e0-0000-4000-8000-0000000000ad","name":"ENG10L","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/l.al"),
+        "table 52460 \"WL Row\" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }\ncodeunit 52461 \"WL Lib\"\n{\n    [TryFunction]\n    procedure TryPost()\n    var\n        R: Record \"WL Row\";\n    begin\n        if not R.Insert() then;\n    end;\n}\n",
+    )
+    .unwrap();
+    let ws = t.path().to_str().unwrap();
+    let r = ask(ws, "WL Lib::TryPost", &[]);
+    assert_eq!(r["obligations"]["assumesStatementCallsOnly"], true, "{r}");
+}
