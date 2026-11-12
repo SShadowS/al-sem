@@ -156,7 +156,7 @@ impl<'a> GroupPaths<'a> {
         entries: &CrossingEntries<'a>,
         eff: &DigestEffectResult,
         candidates: &[(String, Option<Vec<String>>)],
-        cache: &mut SuffixCache<'a>,
+        cache: &SuffixCache<'a>,
         cancel: &dyn Fn() -> bool,
     ) -> Vec<(String, GroupPathOutcome)> {
         let Some(crossing) = eff.crossing.as_deref().filter(|_| eff.boundary_group) else {

@@ -950,7 +950,12 @@ impl<'a> CbGraph<'a> {
     }
 
     fn toward(&self, o: u32) -> Arc<Vec<Transfer>> {
-        if let Some(t) = self.toward.lock().expect("toward cache").get(&o) {
+        if let Some(t) = self
+            .toward
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&o)
+        {
             return Arc::clone(t);
         }
         let origins = self
@@ -959,7 +964,7 @@ impl<'a> CbGraph<'a> {
         let t = Arc::new(self.backward_states(&origins, true));
         self.toward
             .lock()
-            .expect("toward cache")
+            .unwrap_or_else(|p| p.into_inner())
             .entry(o)
             .or_insert(t)
             .clone()
@@ -991,14 +996,19 @@ impl<'a> CbGraph<'a> {
         // The root is entered normally, so it runs under its own
         // declaration alone (`lift(N, decl) == decl`).
         let at_root = |t: &[Transfer]| apply(&t[r as usize], self.decl[r as usize]) == N;
-        if let Some(t) = self.toward_explicit.lock().expect("toward cache").get(&o) {
+        if let Some(t) = self
+            .toward_explicit
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&o)
+        {
             return at_root(t);
         }
         let t: Arc<Vec<Transfer>> = Arc::new(self.backward_states(&origins, false));
         let ok = at_root(&t);
         self.toward_explicit
             .lock()
-            .expect("toward cache")
+            .unwrap_or_else(|p| p.into_inner())
             .entry(o)
             .or_insert(t);
         ok

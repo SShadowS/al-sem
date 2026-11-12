@@ -1,0 +1,5 @@
+{"config": "w8", "step": "warm", "wall_s": 43.6, "peak_mib": 5470.9, "exits": [0]}
+{"config": "w8", "step": "witness", "wall_s": 5.1, "peak_mib": 5777.8, "exits": [0]}
+{"config": "w8", "step": "witness x2", "wall_s": 5.7, "peak_mib": 5877.1, "exits": [0, 0]}
+{"config": "w8", "step": "trees", "wall_s": 169.7, "peak_mib": 6984.8, "exits": [0]}
+{"config": "w8", "step": "trees x2", "wall_s": 260.1, "peak_mib": 8030.5, "exits": [0, 0]}

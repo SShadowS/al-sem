@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-22: the literal pass runs roots in parallel)
+
+- **One-shot `impact`, `digest` and `prove` run the literal pass (`prove.reach_effects`) over 8
+  roots at once instead of one.** Measured on CDO (release-fast, 22 cores, 2026-11-12): the
+  699-root `impact --diff` pass falls 87.1 -> 29.4 s and its wall 218 -> 162 s; `impact --base`
+  147.4 -> 53.0 s and 321 -> 253 s. Peak memory +5 %. Output is byte-identical at any worker count.
+  16 workers was slower than 8 and used 15 % more memory, so the count is fixed at 8 (capped by the
+  cores; a one-core host runs serially), not taken from the machine. A pass called from inside a
+  rayon worker runs serially there.
+- **The context server keeps the pass serial** (owner decision 2026-11-12,
+  q-20261112T032637-1269d8fc). With 8 workers a resident 699-root impact fell 206 -> 140 s, but two
+  in a row (the engine runs heavy asks one at a time) peaked at 8,030-8,089 MiB, 2 % under its 8 GiB
+  budget, against 7,929 MiB (3 %) serially. A first design that lowered the count only while two
+  passes ran was built, tested and measured, then removed: two passes never run at once in one
+  engine child, so it could not fire.
+- How: the RecordRef flow's per-evaluation state is a local of each evaluation; its answers, the
+  suffix trees (one shared cache, `Arc` trees, searches outside the lock, evicted trees freed
+  outside it) and the other memos sit behind short locks that recover from a panicked holder; one
+  pool of exactly `n` big-stack threads per worker count. The setting is a parameter on every route
+  (`ReachWorkers`); only the binary reads `AL_SEM_REACH_WORKERS` (measurement). `ALSEM_TRACE` counts
+  the suffix cache's searches, duplicates and evictions, and passes run serially inside rayon.
+- Tests: equality at 1/2/8 workers over the r0 corpus and the dependency fixtures (a suffix tree
+  served again asserted); the worker count observed (exactly `n` roots in flight), on every
+  resident route; the resident engine serial in both modes; two passes sharing one pool; serial
+  inside a rayon worker; the core cap; races forced through test hooks on the evaluator's answers
+  (the same key, no timeout) and the suffix cache (a key missing its bindings, a double insert,
+  eviction under four workers). Each with a discrimination proof. Spec `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md`
+  section 8; note `docs/superpowers/notes/2026-11-12-parallel-literal-pass.md`.
+
 ### Added
 
 - **`scripts/seed-target <worktree>`** (TLS-08): makes a new worktree's `target/` a

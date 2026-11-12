@@ -64,7 +64,6 @@ use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, is_try_function}
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
 use std::sync::Arc;
 
 #[path = "literal_routes.rs"]
@@ -541,19 +540,46 @@ impl<'a> GroupWitness<'a> {
 /// so what is evicted depends only on the order of requests, never on
 /// timing. An evicted tree is rebuilt on its next request, with the same
 /// result.
+///
+/// TLS-22: one cache serves every worker of the literal pass. A tree is a
+/// pure function of its entry state and `per_tree` (the search is first in,
+/// first out over snapshot-ordered edges), so which worker builds it, and
+/// whether it was evicted and rebuilt, cannot change an answer; only the
+/// counters vary with timing. Searches run outside the lock.
 pub(crate) struct SuffixCache<'a> {
-    trees: HashMap<State<'a>, Result<Rc<LiveTree<'a>>, Stop>>,
-    order: VecDeque<State<'a>>,
-    held: usize,
+    inner: std::sync::Mutex<SuffixInner<'a>>,
     per_tree: usize,
     budget: usize,
+    /// Tests: runs after a tree lookup misses, the lock released, before the
+    /// search (TLS-22 forces two workers to miss one entry state).
+    #[cfg(test)]
+    miss_hook: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+struct SuffixInner<'a> {
+    trees: HashMap<State<'a>, Result<Arc<LiveTree<'a>>, Stop>>,
+    order: VecDeque<State<'a>>,
+    held: usize,
     /// W2-0c: per entry target, the routines reached with guards ignored (a
     /// set per distinct target routine, so few and small next to the trees).
-    plain: HashMap<&'a str, Rc<HashSet<&'a str>>>,
-    /// Trees built and evicted (the cost the commit message measures).
+    plain: HashMap<&'a str, Arc<HashSet<&'a str>>>,
+    stats: SuffixStats,
+}
+
+/// A [`SuffixCache`]'s counters (diagnostics: no output reads them).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SuffixStats {
+    /// Searches run (a duplicate counts; a cancelled one too).
     pub(crate) built: usize,
     pub(crate) evicted: usize,
     pub(crate) peak_held: usize,
+    /// The states the held trees hold together.
+    pub(crate) held: usize,
+    /// Trees a worker built while another worker's equal tree was inserted
+    /// first (dropped; TLS-22).
+    pub(crate) duplicate: usize,
+    /// Requests a held tree answered (no search).
+    pub(crate) hits: usize,
 }
 
 impl Default for SuffixCache<'_> {
@@ -562,70 +588,114 @@ impl Default for SuffixCache<'_> {
     }
 }
 
+/// A lock that a panicked holder does not poison: what it guards is whole
+/// after each insert.
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 impl<'a> SuffixCache<'a> {
     /// A cache whose trees hold at most `per_tree` states each and
     /// `budget` together.
     pub(crate) fn with_limits(per_tree: usize, budget: usize) -> Self {
         SuffixCache {
-            trees: HashMap::new(),
-            order: VecDeque::new(),
-            held: 0,
+            inner: std::sync::Mutex::new(SuffixInner {
+                trees: HashMap::new(),
+                order: VecDeque::new(),
+                held: 0,
+                plain: HashMap::new(),
+                stats: SuffixStats::default(),
+            }),
             per_tree,
             budget: budget.max(per_tree),
-            plain: HashMap::new(),
-            built: 0,
-            evicted: 0,
-            peak_held: 0,
+            #[cfg(test)]
+            miss_hook: std::sync::Mutex::new(None),
         }
     }
 
-    /// The states the held trees hold together. Tests only.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn held(&self) -> usize {
-        self.held
+    /// The counters now (tests; the literal pass's trace counters).
+    pub(crate) fn stats(&self) -> SuffixStats {
+        let c = lock(&self.inner);
+        SuffixStats {
+            held: c.held,
+            ..c.stats
+        }
+    }
+
+    /// Tests: set the hook [`Self::get`] runs after a miss.
+    #[cfg(test)]
+    pub(crate) fn set_miss_hook(&self, f: Arc<dyn Fn() + Send + Sync>) {
+        *lock(&self.miss_hook) = Some(f);
     }
 
     /// The suffix tree from `start`, built on first use.
     fn get(
-        &mut self,
+        &self,
         reach: &LiteralReach<'a>,
         start: State<'a>,
         cancel: &dyn Fn() -> bool,
-    ) -> Result<Rc<LiveTree<'a>>, Stop> {
-        if let Some(t) = self.trees.get(&start) {
-            return t.clone();
+    ) -> Result<Arc<LiveTree<'a>>, Stop> {
+        {
+            let mut c = lock(&self.inner);
+            if let Some(t) = c.trees.get(&start) {
+                let t = t.clone();
+                c.stats.hits += 1;
+                return t;
+            }
+        }
+        #[cfg(test)]
+        {
+            // Cloned out first: the hook may block, and must not hold the lock.
+            let hook = lock(&self.miss_hook).clone();
+            if let Some(hook) = hook {
+                hook();
+            }
         }
         let built = reach.tree_from(start.clone(), self.per_tree, cancel);
-        self.built += 1;
+        let mut c = lock(&self.inner);
+        c.stats.built += 1;
         // A cancelled search is no property of the entry: not cached.
         if matches!(built, Err(Stop::Cancelled)) {
             return Err(Stop::Cancelled);
         }
+        // Another worker inserted it meanwhile: the same tree; keep theirs.
+        if let Some(t) = c.trees.get(&start) {
+            let t = t.clone();
+            c.stats.duplicate += 1;
+            return t;
+        }
         let n = built.as_ref().map_or(0, |t| t.len());
-        while self.held + n > self.budget {
-            let Some(old) = self.order.pop_front() else {
+        // Evicted trees are freed after the lock is released: a large tree's
+        // free would block every worker's lookup.
+        let mut evicted = Vec::new();
+        while c.held + n > self.budget {
+            let Some(old) = c.order.pop_front() else {
                 break;
             };
-            if let Some(Ok(t)) = self.trees.remove(&old) {
-                self.held -= t.len();
+            if let Some(Ok(t)) = c.trees.remove(&old) {
+                c.held -= t.len();
+                evicted.push(t);
             }
-            self.evicted += 1;
+            c.stats.evicted += 1;
         }
-        let built = built.map(Rc::new);
-        self.trees.insert(start.clone(), built.clone());
-        self.order.push_back(start);
-        self.held += n;
-        self.peak_held = self.peak_held.max(self.held);
+        let built = built.map(Arc::new);
+        c.trees.insert(start.clone(), built.clone());
+        c.order.push_back(start);
+        c.held += n;
+        c.stats.peak_held = c.stats.peak_held.max(c.held);
+        drop(c);
+        drop(evicted);
         built
     }
 
-    /// The routines `from` reaches with guards ignored, built on first use.
-    fn plain(&mut self, reach: &LiteralReach<'a>, from: &'a str) -> Rc<HashSet<&'a str>> {
-        Rc::clone(
-            self.plain
-                .entry(from)
-                .or_insert_with(|| Rc::new(reach.plain_reach(from))),
-        )
+    /// The routines `from` reaches with guards ignored, built on first use
+    /// (outside the lock: a whole-graph search).
+    fn plain(&self, reach: &LiteralReach<'a>, from: &'a str) -> Arc<HashSet<&'a str>> {
+        if let Some(p) = lock(&self.inner).plain.get(from) {
+            return Arc::clone(p);
+        }
+        let p = Arc::new(reach.plain_reach(from));
+        Arc::clone(lock(&self.inner).plain.entry(from).or_insert(p))
     }
 }
 
@@ -1519,7 +1589,7 @@ pub(crate) struct LiveTree<'a> {
     /// W2-0b: routine → its states' positions in `order`, ascending; built
     /// on first use, so a witness for one resource is a lookup, not a scan
     /// of the whole tree.
-    by_routine: std::cell::OnceCell<HashMap<&'a str, Vec<u32>>>,
+    by_routine: std::sync::OnceLock<HashMap<&'a str, Vec<u32>>>,
 }
 
 impl<'a> LiveTree<'a> {
@@ -1560,6 +1630,16 @@ impl<'a> LiveTree<'a> {
         steps.reverse();
         steps
     }
+}
+
+/// TLS-22: the literal pass shares these between its workers, so they must
+/// stay `Sync` (a `Cell`, `RefCell` or `Rc` added to them fails to compile here).
+#[allow(dead_code)]
+fn shared_by_the_pass_workers(r: &LiteralReach<'_>, c: &SuffixCache<'_>, t: &LiveTree<'_>) {
+    fn sync<T: Sync + Send>(_: &T) {}
+    sync(r);
+    sync(c);
+    sync(t);
 }
 
 /// The search context over one snapshot and model, shared by every root.
@@ -2298,7 +2378,12 @@ impl<'a> LiteralReach<'a> {
             .filter_map(|&i| b.entry_value(i).map(|v| (i, v)))
             .collect();
         let key: FlowKey = (p as *const lflow::FlowProgram as usize, entry, keep.clone());
-        if let Some(ev) = self.flow_cache.lock().expect("flow cache").get(&key) {
+        if let Some(ev) = self
+            .flow_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+        {
             return Some(Arc::clone(ev));
         }
         let r = self.by_stable.get(routine)?;
@@ -2323,7 +2408,7 @@ impl<'a> LiteralReach<'a> {
         asked.dedup();
         ev.consulted = asked;
         let ev = Arc::new(ev);
-        let mut cache = self.flow_cache.lock().expect("flow cache");
+        let mut cache = self.flow_cache.lock().unwrap_or_else(|p| p.into_inner());
         if cache.len() >= FLOW_CACHE_MAX {
             cache.clear();
         }
@@ -2871,7 +2956,7 @@ impl<'a> LiteralReach<'a> {
         Ok(LiveTree {
             parent,
             order,
-            by_routine: std::cell::OnceCell::new(),
+            by_routine: std::sync::OnceLock::new(),
         })
     }
 
@@ -3519,7 +3604,7 @@ impl<'a> LiteralReach<'a> {
         crossing: &Crossing,
         entries: &CrossingEntries<'a>,
         ops: &[String],
-        cache: &mut SuffixCache<'a>,
+        cache: &SuffixCache<'a>,
         cancel: &dyn Fn() -> bool,
     ) -> GroupWitness<'a> {
         // Suffix phase.
@@ -3709,7 +3794,7 @@ impl<'a> LiteralReach<'a> {
         &self,
         entries: &CrossingEntries<'a>,
         ops: &[String],
-        cache: &mut SuffixCache<'a>,
+        cache: &SuffixCache<'a>,
         cancel: &dyn Fn() -> bool,
     ) -> ResourceStatus {
         if entries.0.is_empty() {

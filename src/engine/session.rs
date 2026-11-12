@@ -1043,11 +1043,17 @@ pub struct EffectsStream {
     tests: bool,
     gaps_in_cone: bool,
     include_reads: bool,
+    /// TLS-22: the literal pass's worker count (1 under `--low-mem`).
+    reach_workers: crate::engine::l5::digest_cli::ReachWorkers,
 }
 
 impl EffectsStream {
     /// The stream of `demand` (a streamed `Effects` read) off `tree`.
-    pub(crate) fn of(tree: Arc<CapabilitySnapshot>, demand: &TreeDemand) -> EffectsStream {
+    pub(crate) fn of(
+        tree: Arc<CapabilitySnapshot>,
+        demand: &TreeDemand,
+        reach_workers: crate::engine::l5::digest_cli::ReachWorkers,
+    ) -> EffectsStream {
         EffectsStream {
             tree,
             roots: demand.subjects.ids.iter().cloned().collect(),
@@ -1055,6 +1061,7 @@ impl EffectsStream {
             tests: demand.tests,
             gaps_in_cone: demand.gaps_in_cone,
             include_reads: demand.include_reads,
+            reach_workers,
         }
     }
 
@@ -1081,6 +1088,7 @@ impl EffectsStream {
             self.tests,
             self.gaps_in_cone,
             self.include_reads,
+            self.reach_workers.clone(),
             f,
         );
     }
@@ -1114,6 +1122,7 @@ pub(crate) fn read_tree(
         None,
         // A one-shot run is never cancelled mid-read.
         &|| false,
+        crate::engine::l5::digest_cli::default_reach_workers(),
     );
 }
 
@@ -1135,6 +1144,7 @@ pub(crate) fn read_tree_shared(
     tree_reads: &mut BTreeMap<JobId, TreeReadOut>,
     entries: Option<Vec<crate::engine::l5::digest::DigestEntryResult>>,
     stop: &dyn Fn() -> bool,
+    reach_workers: crate::engine::l5::digest_cli::ReachWorkers,
 ) {
     let model = target.resolved();
     // No tree read asks `primary`: digest, prove and the query ask their
@@ -1172,6 +1182,7 @@ pub(crate) fn read_tree_shared(
                     demand.gaps_in_cone,
                     demand.include_reads,
                     BoundaryMode::On,
+                    reach_workers,
                 ),
             };
             for ((&m, mut out), own) in group.iter().zip(outs).zip(&roots) {
@@ -1518,7 +1529,14 @@ impl View {
                     // A streamed read: the job reads the tree in batches
                     // (`ViewCx::take_effects_stream`); it lives until then.
                     let t = tree.take().expect("tree filled above");
-                    streams.insert(*job, EffectsStream::of(Arc::new(t), demand));
+                    streams.insert(
+                        *job,
+                        EffectsStream::of(
+                            Arc::new(t),
+                            demand,
+                            crate::engine::l5::digest_cli::default_reach_workers(),
+                        ),
+                    );
                 } else {
                     read_tree(tree, &plan.trees, group, target, effects, tree_reads);
                 }

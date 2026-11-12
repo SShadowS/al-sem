@@ -338,6 +338,10 @@ pub struct Revision {
     raw_seed: Vec<Arc<Artifact>>,
     /// The `Raw` fills' subjects ([`Revision::raw_counts`]).
     raw_counts: RawCounts,
+    /// TLS-22: the literal pass's worker count: serial (tests may set it).
+    reach_workers: crate::engine::l5::digest_cli::ReachWorkers,
+    #[cfg(test)]
+    reach_probe: Arc<crate::engine::l5::digest_cli::PassProbe>,
     /// The witness memo's counters ([`Revision::witness_counts`]).
     witness: WitnessCounts,
 }
@@ -440,7 +444,46 @@ impl Revision {
             raw_seed,
             raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
+            // Serial in the resident engine (owner decision 2026-11-12,
+            // q-20261112T032637-1269d8fc): the parallel pass left about 2 %
+            // of the 8 GiB budget for two impacts in a row, serial about 3 %;
+            // one-shot CLI reads keep the workers.
+            reach_workers: crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+            #[cfg(test)]
+            reach_probe: Arc::default(),
         }
+    }
+
+    /// Tests: the revision with the literal pass's worker count `n` (the
+    /// resident engine runs it serially).
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_reach_workers(self, n: crate::engine::l5::digest_cli::ReachWorkers) -> Revision {
+        Revision {
+            reach_workers: n,
+            ..self
+        }
+    }
+
+    /// The literal pass's setting on this revision's routes (in tests,
+    /// observed by [`Self::reach_probe`]).
+    fn pass_workers(&self) -> crate::engine::l5::digest_cli::ReachWorkers {
+        #[cfg(test)]
+        return self.reach_workers.with_probe(Arc::clone(&self.reach_probe));
+        #[cfg(not(test))]
+        self.reach_workers.clone()
+    }
+
+    /// Tests: the literal pass's worker count on this revision.
+    #[cfg(test)]
+    pub(crate) fn reach_workers_count(&self) -> usize {
+        self.reach_workers.count()
+    }
+
+    /// Tests: what this revision's literal passes did.
+    #[cfg(test)]
+    pub(crate) fn reach_probe(&self) -> &crate::engine::l5::digest_cli::PassProbe {
+        &self.reach_probe
     }
 
     /// The assembly needs this revision's model rows were built with.
@@ -923,8 +966,14 @@ impl Revision {
             // W2-1b: memoized AFTER the literal pass, which every reader
             // runs (design §3.1), so a warm ask on this root pays nothing
             // for it; one `LiteralReach` per batch.
-            let entries =
-                passed_root_entries(tree, model, &absent, include_reads, BoundaryMode::On);
+            let entries = passed_root_entries(
+                tree,
+                model,
+                &absent,
+                include_reads,
+                BoundaryMode::On,
+                self.pass_workers(),
+            );
             for (root, entry) in absent.into_iter().zip(entries) {
                 held.insert(
                     ArtifactKey::Witness {
@@ -1358,7 +1407,11 @@ impl Revision {
                 // job reads the published tree in batches at compute.
                 streams.insert(
                     *job,
-                    crate::engine::session::EffectsStream::of(Arc::clone(tree), demand),
+                    crate::engine::session::EffectsStream::of(
+                        Arc::clone(tree),
+                        demand,
+                        self.pass_workers(),
+                    ),
                 );
                 continue;
             }
@@ -1373,6 +1426,7 @@ impl Revision {
                     &mut tree_reads,
                     entries,
                     &stopped,
+                    self.pass_workers(),
                 );
             });
             // Agent-tasks E2: a prove slice's route enumeration stops early
