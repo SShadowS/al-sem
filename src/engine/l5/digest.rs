@@ -5496,23 +5496,41 @@ fn digest_one_root<'i>(
                 // routes into the paths that still commit and those that raise
                 // an error (an `ERROR_IMPLICIT` row of its own); a commit no
                 // route runs is listed as suppressed instead of as a row.
+                // ENG-09: a checked run's own commit is no `Commit()`: no
+                // `[CommitBehavior]` changes it, and it happens only when the
+                // run ends without an error, which the caller survives (the
+                // run returns `false`), so it is never `unconditional`.
+                let run_commit =
+                    effect_type == "COMMIT" && crate::engine::l5::commit_scope::is_run_commit(fact);
                 let mut offers: Vec<PartOffer> = Vec::with_capacity(parts.len());
                 for (bnd, ix) in parts {
                     let split = match cb {
-                        Some(cb) if effect_type == "COMMIT" => {
+                        Some(cb) if effect_type == "COMMIT" && !run_commit => {
                             split_commit_part(cb, &cb_root, rid, &outcome, bnd.as_deref(), &ix, idx)
                         }
                         _ => None,
                     };
                     let Some(split) = split else {
+                        let (twins, uncertain) = if run_commit {
+                            (
+                                Some((0..outcome.twins.len()).collect()),
+                                Uncertain {
+                                    ix: ix.clone(),
+                                    extra: false,
+                                    twins: (0..outcome.twins.len()).collect(),
+                                },
+                            )
+                        } else {
+                            (None, Uncertain::default())
+                        };
                         offers.push(PartOffer {
                             effect_type,
                             bnd,
                             ix,
                             extra: None,
-                            twins: None,
+                            twins,
                             error_reason: None,
-                            uncertain: Uncertain::default(),
+                            uncertain,
                         });
                         continue;
                     };
@@ -5635,9 +5653,11 @@ fn digest_one_root<'i>(
                             }
                         };
                     let key = match &bnd {
-                        // (effect type with its temp class, boundary identity).
+                        // (effect type with its temp class, boundary identity);
+                        // ENG-09: a checked run's commit is its own group.
                         Some(b) => format!(
-                            "B|{effect_type}|{}|{}",
+                            "B|{effect_type}{}|{}|{}",
+                            if run_commit { "|run" } else { "" },
                             if is_known_temp_snap(fact) { "kt" } else { "nt" },
                             b.id
                         ),
@@ -5669,8 +5689,10 @@ fn digest_one_root<'i>(
                         {
                             acc.group_unresolved += 1;
                         }
+                        // ENG-09: `checked-run` marks the commit's kind; it
+                        // is no resource the group touches.
                         if let (Some((_, resources)), Some(r)) =
-                            (&mut acc.group, fact.resource_id())
+                            (&mut acc.group, fact.resource_id().filter(|_| !run_commit))
                         {
                             resources.entry(r.to_string()).or_insert_with(|| {
                                 resource_display_of(fact, &idx.stable_id_to_display)
@@ -5840,10 +5862,16 @@ fn digest_one_root<'i>(
                         ));
                     }
                     // B4/L16: a group of commits that raise an error says why.
+                    // ENG-09: a group of checked runs' commits says so (its
+                    // readers: the ordering flag, its terminal witness).
                     d.extend(
                         acc.detail
                             .iter()
-                            .filter(|(k, _)| k == "commitBehavior")
+                            .filter(|(k, v)| {
+                                k == "commitBehavior"
+                                    || (k == "resourceId"
+                                        && v == crate::engine::l4::capability_cone::RUN_COMMIT)
+                            })
                             .cloned(),
                     );
                     d
@@ -5876,6 +5904,16 @@ fn digest_one_root<'i>(
             }
             if commit_error {
                 key_effect_type = format!("{key_effect_type}|commit");
+            }
+            // ENG-09: a checked run's commit and a `Commit()` behind one
+            // crossing are two group rows with one boundary terminal; the
+            // run's keeps an id of its own.
+            if acc.effect_type == "COMMIT"
+                && detail.iter().any(|(k, v)| {
+                    k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT
+                })
+            {
+                key_effect_type = format!("{key_effect_type}|run");
             }
             let (canonical_key, link_signature) = build_canonical_key(
                 rid,
@@ -6034,6 +6072,12 @@ fn digest_one_root<'i>(
                             occurrence_id: e.fact_id.clone(),
                             conditionality: e.conditionality,
                             boundary: e.boundary_group,
+                            // `commit_scope::is_run_commit`, read off the row.
+                            run_commit: e.effect_type == "COMMIT"
+                                && e.detail.iter().any(|(k, v)| {
+                                    k == "resourceId"
+                                        && v == crate::engine::l4::capability_cone::RUN_COMMIT
+                                }),
                         }
                     })
                     .collect();

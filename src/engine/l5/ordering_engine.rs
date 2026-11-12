@@ -68,6 +68,13 @@ pub struct OrderingEffectInput {
     /// effect. It stays in every MAY relation, is left out of the commit set
     /// the MUST labels read, and never carries a MUST label.
     pub boundary: bool,
+    /// ENG-09: the commit of a checked `Codeunit.Run` (`commit_scope::is_run_commit`).
+    /// It commits the run's own transaction only: a write the caller has
+    /// pending at the run is a run-time error there (engine limits L28,
+    /// measured on BC 28), and a later write is not in it. So it is
+    /// `COMMIT_REACHABLE` and nothing more: it clears, commits or follows no
+    /// write and carries no other commit label.
+    pub run_commit: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -508,12 +515,17 @@ pub fn compute_ordering(
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
 
-            // commit/write/io occurrences in the SAME group.
+            // commit/write/io occurrences in the SAME group. A checked run's
+            // commit is no commit of this transaction (`run_commit`).
             let commit_idxs: Vec<usize> = group_idxs
                 .iter()
                 .copied()
-                .filter(|&i| occurrences[i].effect_type == "COMMIT")
+                .filter(|&i| occurrences[i].effect_type == "COMMIT" && !effects[i].run_commit)
                 .collect();
+            let reaches_commit = group_idxs
+                .iter()
+                .any(|&i| occurrences[i].effect_type == "COMMIT");
+            let txn_commit = occ.effect_type == "COMMIT" && !effects[idx].run_commit;
             let write_idxs: Vec<usize> = group_idxs
                 .iter()
                 .copied()
@@ -521,8 +533,7 @@ pub fn compute_ordering(
                 .collect();
 
             // COMMIT_REACHABLE: any commit occurrence exists in this routine group.
-            let has_any_commit = !commit_idxs.is_empty();
-            if has_any_commit {
+            if reaches_commit {
                 labels.push("COMMIT_REACHABLE");
             }
 
@@ -536,7 +547,7 @@ pub fn compute_ordering(
             // COMMIT_ON_SUCCESS_PATH (on COMMIT effects):
             // any commit in the group has conditionality = "unconditional-on-success".
             // Mirrors TS: `commitOccs.some(o => o.conditionality === "unconditional-on-success")`.
-            if occ.effect_type == "COMMIT" && !is_boundary {
+            if txn_commit && !is_boundary {
                 let has_commit_on_success = must_commit_idxs
                     .iter()
                     .any(|&ci| effects[ci].conditionality == "unconditional-on-success");
@@ -546,14 +557,14 @@ pub fn compute_ordering(
             }
 
             // COMMIT_DOMINATES_RETURN (on COMMIT effects): this commit dominates return.
-            if occ.effect_type == "COMMIT" && !is_boundary && dominates_return(op) {
+            if txn_commit && !is_boundary && dominates_return(op) {
                 labels.push("COMMIT_DOMINATES_RETURN");
             }
 
             // WRITE_COMMITTED_BEFORE_RETURN (on COMMIT effects):
             // dominatesReturn(op) AND there is a write w with dom(w, op) AND
             // the nearest commit after w (by orderId) is this commit.
-            if occ.effect_type == "COMMIT" && !is_boundary && dominates_return(op) {
+            if txn_commit && !is_boundary && dominates_return(op) {
                 // nearest_commit_after(write_occ): find commit with smallest orderId > write's orderId.
                 let nearest_commit_after = |write_op_id: u32| -> Option<String> {
                     let mut nearest_id: Option<u32> = None;
@@ -604,7 +615,7 @@ pub fn compute_ordering(
                 }
             }
             // EXTERNAL_IO_BEFORE_COMMIT (on COMMIT effects).
-            if occ.effect_type == "COMMIT" {
+            if txn_commit {
                 let any_io_before_commit = group_idxs
                     .iter()
                     .copied()
@@ -926,7 +937,11 @@ pub fn compute_ordering(
 
     // Index sets (with chains).
     let commit_with_chains: Vec<usize> = (0..occurrences.len())
-        .filter(|&i| occurrences[i].effect_type == "COMMIT" && occurrence_chains[i].is_some())
+        .filter(|&i| {
+            occurrences[i].effect_type == "COMMIT"
+                && !effects[i].run_commit
+                && occurrence_chains[i].is_some()
+        })
         .collect();
     let write_with_chains: Vec<usize> = (0..occurrences.len())
         .filter(|&i| is_db_write(&occurrences[i].effect_type) && occurrence_chains[i].is_some())
@@ -1044,8 +1059,8 @@ pub fn compute_ordering(
         let first_commit_edge = edges_from(&io_occ.occurrence_id).iter().find(|e| {
             occurrences
                 .iter()
-                .find(|o| o.occurrence_id == e.to)
-                .map(|o| o.effect_type == "COMMIT")
+                .position(|o| o.occurrence_id == e.to)
+                .map(|i| occurrences[i].effect_type == "COMMIT" && !effects[i].run_commit)
                 .unwrap_or(false)
         });
         if let Some(edge) = first_commit_edge {

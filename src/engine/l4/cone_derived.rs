@@ -115,7 +115,8 @@ use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
 /// Any reachable fact with `resource_kind == "table"` (regardless of op) — backs
 /// `touches_db_of`.
 pub const TOUCHES_TABLE: u8 = 1 << 0;
-/// `op == "commit" && resource_kind == "transaction"` — backs `may_commit`.
+/// `op == "commit" && resource_kind == "transaction"`, a checked run's own
+/// commit (`RUN_COMMIT`) left out — backs `may_commit` (d34, d35).
 pub const MAY_COMMIT: u8 = 1 << 1;
 /// `resource_kind == "http"` — half of d48's `routine_touches_external_io`.
 pub const TOUCHES_HTTP: u8 = 1 << 2;
@@ -828,7 +829,12 @@ impl Scratch {
                 }
             }
             "transaction" => {
-                if f.op == "commit" {
+                // ENG-09: a checked run's own commit is left out. Its readers
+                // (d34, d35) ask about a `Commit()` that commits the caller's
+                // work, which the run's commit never does (engine limits L28).
+                if f.op == "commit"
+                    && f.resource_id.as_deref() != Some(super::capability_cone::RUN_COMMIT)
+                {
                     self.flags |= MAY_COMMIT;
                 }
             }

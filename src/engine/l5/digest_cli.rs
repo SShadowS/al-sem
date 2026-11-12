@@ -1360,6 +1360,20 @@ pub struct DigestEntryFull {
     pub suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
 }
 
+/// ENG-09: how a human output names a checked run's own commit, whose anchor
+/// is the `Codeunit.Run` (where BC commits, at the run's end), never a
+/// `Commit()`.
+pub(crate) const RUN_COMMIT_LABEL: &str = "COMMIT (checked Codeunit.Run)";
+
+/// ENG-09: whether a row is a checked run's own commit (its
+/// `detail.resourceId` is `capability_cone::RUN_COMMIT`).
+pub(crate) fn is_run_commit_row(e: &DigestEffectFull) -> bool {
+    e.effect_type == "COMMIT"
+        && e.detail
+            .iter()
+            .any(|(k, v)| k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT)
+}
+
 pub struct DigestEffectFull {
     pub effect_type: String,
     pub detail: Vec<(String, String)>,
@@ -2476,7 +2490,12 @@ fn literal_reach_entries<'t>(
                     } else {
                         e.effect_type.as_str()
                     };
-                    let ops = vec![(String::new(), reach.terminal_ops(ty))];
+                    // ENG-09: a group of checked runs' commits ends on one.
+                    let run = crate::engine::l4::capability_cone::RUN_COMMIT;
+                    let marker = (ty == "COMMIT"
+                        && e.detail.iter().any(|(k, v)| k == "resourceId" && v == run))
+                    .then_some(run);
+                    let ops = vec![(String::new(), reach.terminal_ops((ty, marker)))];
                     e.group_terminal_path = group_paths
                         .paths(reach, tree, entries, e, &ops, suffixes, &never)
                         .pop()

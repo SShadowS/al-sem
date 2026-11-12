@@ -229,6 +229,8 @@ fn cone_twin(own: &str) -> Option<String> {
             format!("{ty}|{t}")
         }
         ["commit"] => "COMMIT|".into(),
+        // ENG-09: a checked run's commit (`keys`: `commit|checked-run`).
+        ["commit", r] => format!("COMMIT|{r}"),
         ["error", "error-throw", _] => "ERROR_THROW|".into(),
         ["error", _, _] => "ERROR_IMPLICIT|".into(),
         ["ui", op] => format!("{}|", op.to_ascii_uppercase().replace('-', "_")),

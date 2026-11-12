@@ -607,6 +607,9 @@ fn attach_program_calls_with(
     for (ri, ci) in dataset_ops.may_fail_sites {
         rows.workspace.routines[ri].call_sites[ci].start_may_fail = true;
     }
+    for (ri, ci) in dataset_ops.checked_run_sites {
+        rows.workspace.routines[ri].call_sites[ci].checked_run = true;
+    }
     // The pages that block a user's record operation, from the graph (the
     // sited graph's page lifecycle reads the same function).
     let page_ui_blocked = {
@@ -1743,6 +1746,34 @@ fn convert<'a>(
                     no_program_edge(ix, r, cs)
                 }
             };
+            // ENG-09: a checked `Codeunit.Run` commits at its end. The keyword
+            // form by its shape (a run-time id included); the variable form
+            // when the resolver decided the call starts the codeunit (not a
+            // procedure named `Run`), whether or not its `OnRun` is a row here
+            // (none declared, or a symbol-only dependency).
+            let starts_codeunit = program_edge
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .is_some_and(|f| {
+                    f.starts_object == crate::program::resolve::dataset::ObjectStart::Yes
+                        && f.receiver.as_ref().is_some_and(|r| {
+                            matches!(
+                                r.ty,
+                                crate::program::resolve::full::ReceiverFactType::Object {
+                                    kind: ObjectKind::Codeunit,
+                                    ..
+                                }
+                            )
+                        })
+                });
+            if crate::engine::l5::traps::is_checked_run(cs, None)
+                || (starts_codeunit
+                    && crate::engine::l5::traps::checked_run(
+                        cs,
+                        crate::engine::l5::traps::TrapCallee::Object { codeunit: true },
+                    ))
+            {
+                dataset_ops.checked_run_sites.push((ri, ci));
+            }
             edges.extend(site_edges);
             bindings_per_site.push((cs.id.clone(), bindings));
             // B6: the platform's own operations on the run object's dataset.
@@ -1850,6 +1881,9 @@ struct DatasetOps {
     /// ENG-08: the (row, call site) indexes whose XmlPort start may fail
     /// (`PCallSite::start_may_fail`).
     may_fail_sites: Vec<(usize, usize)>,
+    /// ENG-09: the (row, call site) indexes of checked `Codeunit.Run`s
+    /// (`PCallSite::checked_run`).
+    checked_run_sites: Vec<(usize, usize)>,
 }
 
 /// Where a route's target lives relative to the model (engine-switch S7.3).

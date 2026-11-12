@@ -248,6 +248,13 @@ fn line_tokens(t: &str) -> Vec<String> {
         }
         return v;
     }
+    // ENG-09: a checked run's own commit, `COMMIT (checked Codeunit.Run) at
+    // <anchor>`, is anchored at the run (BC commits at its end), so the line
+    // holds the `Run`; a plain `COMMIT at` still needs a `Commit()`.
+    if t.contains("COMMIT (checked Codeunit.Run) at ") {
+        v.push("run".to_string());
+        return v;
+    }
     // query: `[Op] on T via ...` / `+1 Caller [Op] via ...`; touches (W2-3):
     // `[Op] <family> at <anchor> in <owner>`.
     if let Some(op) = between(t, "[", "]")
