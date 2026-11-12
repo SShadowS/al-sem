@@ -25,8 +25,52 @@ codeunit 52210 "PW Clean"
     begin
     end;
 }
+codeunit 52211 "PW Writer"
+{
+    trigger OnRun()
+    var
+        R: Record "PW Row";
+    begin
+        R.ModifyAll(V, 4);
+    end;
+}
 codeunit 52220 "PW Caller"
 {
+    procedure IsolatedHelperThenRun()
+    begin
+        if RunWriterIsolated() then;
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    local procedure RunWriterIsolated(): Boolean
+    begin
+        exit(Codeunit.Run(Codeunit::"PW Writer"));
+    end;
+    procedure HelperWritesBeforeItsRunThenRun()
+    begin
+        if WriteThenRunIsolated() then;
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    local procedure WriteThenRunIsolated(): Boolean
+    var
+        R: Record "PW Row";
+    begin
+        R.ModifyAll(V, 6);
+        exit(Codeunit.Run(Codeunit::"PW Writer"));
+    end;
+    procedure HelperWritesAfterItsRunThenRun()
+    begin
+        if RunThenWriteIsolated() then;
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    local procedure RunThenWriteIsolated(): Boolean
+    var
+        R: Record "PW Row";
+        Ok: Boolean;
+    begin
+        Ok := Codeunit.Run(Codeunit::"PW Writer");
+        R.ModifyAll(V, 5);
+        exit(Ok);
+    end;
     procedure PendingThenRun()
     var
         R: Record "PW Row";
@@ -526,4 +570,29 @@ fn d50_sees_the_variable_form_and_the_guarded_commit() {
     let guarded = line_of("Codeunit.Run(", "procedure GuardedCommitThenRun(");
     assert!(lines.contains(&var_run), "{lines:?} want {var_run}: {out}");
     assert!(!lines.contains(&guarded), "{lines:?} not {guarded}");
+    // ENG-22 (CDO's send-on-posting): a helper whose only write is inside its
+    // own checked run leaves nothing pending; one that writes after its run
+    // does.
+    let isolated = line_of(
+        "Codeunit.Run(Codeunit::\"PW Clean\")",
+        "procedure IsolatedHelperThenRun(",
+    );
+    let after = line_of(
+        "Codeunit.Run(Codeunit::\"PW Clean\")",
+        "procedure HelperWritesAfterItsRunThenRun(",
+    );
+    assert!(!lines.contains(&isolated), "{lines:?} not {isolated}");
+    assert!(lines.contains(&after), "{lines:?} want {after}");
+    // A write before the helper's own run is pending at that run, and stays
+    // pending at the caller's next run (the helper's run raised or left it).
+    let helper_run = line_of(
+        "Codeunit.Run(Codeunit::\"PW Writer\")",
+        "local procedure WriteThenRunIsolated(",
+    );
+    let before = line_of(
+        "Codeunit.Run(Codeunit::\"PW Clean\")",
+        "procedure HelperWritesBeforeItsRunThenRun(",
+    );
+    assert!(lines.contains(&helper_run), "{lines:?} want {helper_run}");
+    assert!(lines.contains(&before), "{lines:?} want {before}");
 }

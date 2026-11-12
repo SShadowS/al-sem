@@ -448,9 +448,11 @@ callers' question reads (`commit_scope::declared`).
   "raised if a write is pending at it").
 - d50 reads `transaction_spans`, whose pending walk is coarser than the trap search: it counts
   only writes to a known table (a `RecordRef` write, a `LockTable`, the record operation that
-  fires a subscriber, and sibling subscribers are left out: wrong negatives), and a helper's
-  whole write cone counts even when the helper's writes are inside its own checked run (wrong
-  positives).
+  fires a subscriber, and sibling subscribers are left out: wrong negatives). A helper's writes
+  inside its own checked run no longer count (the CDO landing measurement: both d50 findings on
+  CDO's send-on-posting were this shape, and with the fix d50 has none there); this reaches
+  workspace routines only, so a checked run inside dependency code still counts its writes (an
+  over-count). The same walk serves the explicit-commit spans.
 - A locking read without `LockTable` (`FindSet(true)`, `Find` for update,
   `ReadIsolation := IsolationLevel::UpdLock`) was not measured and does not count as a write.
 - A group row beyond a dependency crossing (a run's error in dependency code) gets its terminal

@@ -16,7 +16,10 @@
 //! it (an earlier iteration). A site's effects are its own physical table
 //! writes and published events, plus, for a call, the callee's whole cone. The
 //! call toward the Commit itself never counts, even inside a loop: what it
-//! reaches is that span member's to count.
+//! reaches is that span member's to count. A checked `Codeunit.Run` in the
+//! callee's cone leaves nothing pending (it commits its own writes or rolls
+//! them back, ENG-22): a workspace callee that reaches one is walked
+//! ([`RunCleanCones`]), and only the writes outside those runs count.
 //!
 //! A `Commit()` statement on the way to the target (an earlier statement of a
 //! block that holds it) ends the earlier transaction: what ran before it is
@@ -100,6 +103,139 @@ pub(crate) struct PendingCtx<'a> {
     pub cone_derived: &'a ConeDerivedStore,
     /// The ids with two or more rows (#160 step 11b §4.6).
     pub collided: &'a HashSet<&'a str>,
+    /// The callees' cones without their checked runs; `None` counts each
+    /// callee's whole cone (a caller that holds one routine's sites only).
+    pub clean: Option<&'a RunCleanCones<'a>>,
+}
+
+/// ENG-22: the writes and events a called routine leaves pending, with every
+/// checked `Codeunit.Run` in its cone left out (BC commits the run's own writes
+/// when it succeeds and rolls them back when it fails: none stay pending,
+/// measured on BC 28 and confirmed on Windows, engine limits L28).
+///
+/// Only the routines whose forward sites are known (workspace callers: the
+/// primary graph) and that reach a checked run over them are walked; every
+/// other routine reached counts its whole cone, so a run inside dependency
+/// code still counts its writes (an over-count, never a missed write).
+pub(crate) struct RunCleanCones<'a> {
+    reaches_run: HashSet<&'a str>,
+    memo: std::sync::Mutex<HashMap<&'a str, std::sync::Arc<Pending>>>,
+}
+
+/// The site `from → to` is a checked run.
+fn is_run_edge(
+    from: &str,
+    site: Option<&str>,
+    to: &str,
+    routines: &HashMap<&str, &ModelRoutine>,
+) -> bool {
+    let Some(site) = site else { return false };
+    routines
+        .get(from)
+        .and_then(|r| r.call_sites.iter().find(|c| c.id == site))
+        .is_some_and(|cs| is_checked_run(cs, routines.get(to).copied()))
+}
+
+impl<'a> RunCleanCones<'a> {
+    /// The routines that reach a checked run over `fwd` (its caller included).
+    pub(crate) fn build(
+        fwd: &'a ForwardSites<'a>,
+        routines: &HashMap<&'a str, &'a ModelRoutine>,
+    ) -> Self {
+        let mut callers: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        let mut reaches_run = HashSet::new();
+        let mut queue = Vec::new();
+        for (&from, outs) in fwd {
+            for &(site, to) in outs {
+                callers.entry(to).or_default().push(from);
+                if is_run_edge(from, site, to, routines) && reaches_run.insert(from) {
+                    queue.push(from);
+                }
+            }
+        }
+        while let Some(x) = queue.pop() {
+            for &c in callers.get(x).map_or(&[][..], Vec::as_slice) {
+                if reaches_run.insert(c) {
+                    queue.push(c);
+                }
+            }
+        }
+        RunCleanCones {
+            reaches_run,
+            memo: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// `callee`'s pending effects, or `None` when it reaches no checked run
+    /// (its whole cone counts).
+    fn of(&self, callee: &'a str, cx: &PendingCtx<'a>) -> Option<std::sync::Arc<Pending>> {
+        if !self.reaches_run.contains(callee) {
+            return None;
+        }
+        let lock = || self.memo.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(p) = lock().get(callee) {
+            return Some(p.clone());
+        }
+        let mut out = Pending::default();
+        let mut seen: HashSet<&'a str> = HashSet::from([callee]);
+        let mut stack = vec![callee];
+        while let Some(x) = stack.pop() {
+            let Some(s) = cx.summaries.get(x) else {
+                continue;
+            };
+            if !self.reaches_run.contains(x) {
+                for id in cx.cone_derived.physical_write_ids_of(&s.routine_id) {
+                    out.tables
+                        .insert(cx.cone_derived.resolve_res(id).to_string());
+                }
+                for id in cx.cone_derived.event_ids_of(&s.routine_id) {
+                    out.events
+                        .insert(cx.cone_derived.resolve_res(*id).to_string());
+                }
+                continue;
+            }
+            for f in &s.capability_facts_direct {
+                let Some(rid) = f.resource_id.as_deref() else {
+                    continue;
+                };
+                match f.resource_kind {
+                    "table" if write_op_bit(f.op).is_some() && !fact_is_known_temp(f) => {
+                        out.tables.insert(rid.to_string());
+                    }
+                    "event" if f.op == "publish" => {
+                        out.events.insert(rid.to_string());
+                    }
+                    _ => {}
+                }
+            }
+            for &(site, to) in cx.fwd.get(x).map_or(&[][..], Vec::as_slice) {
+                if !is_run_edge(x, site, to, cx.routines) && seen.insert(to) {
+                    stack.push(to);
+                }
+            }
+        }
+        // The walk follows forward sites the cone does not (on CDO 140 routines'
+        // sites reach writes their cone leaves out): keep only the cone's, so
+        // leaving the runs out can remove a write, never add one.
+        if let Some(s) = cx.summaries.get(callee) {
+            let tables: HashSet<&str> = cx
+                .cone_derived
+                .physical_write_ids_of(&s.routine_id)
+                .map(|id| cx.cone_derived.resolve_res(id))
+                .collect();
+            let events: HashSet<&str> = cx
+                .cone_derived
+                .event_ids_of(&s.routine_id)
+                .iter()
+                .map(|id| cx.cone_derived.resolve_res(*id))
+                .collect();
+            out.tables.retain(|t| tables.contains(t.as_str()));
+            out.events.retain(|e| events.contains(e.as_str()));
+        }
+        let out = std::sync::Arc::new(out);
+        lock().insert(callee, out.clone());
+        Some(out)
+    }
 }
 
 /// What `r` has pending when control reaches any of `targets`, and how it got
@@ -314,6 +450,7 @@ fn effects(
         summaries,
         cone_derived,
         collided,
+        clean,
     } = *cx;
     let mut out = Pending::default();
     if let Some(s) = summaries.get(&r.id) {
@@ -375,6 +512,11 @@ fn effects(
         let Some(callee) = summaries.get(*to) else {
             continue;
         };
+        if let Some(p) = clean.and_then(|c| c.of(to, cx)) {
+            out.tables.extend(p.tables.iter().cloned());
+            out.events.extend(p.events.iter().cloned());
+            continue;
+        }
         for id in cone_derived.physical_write_ids_of(&callee.routine_id) {
             out.tables.insert(cone_derived.resolve_res(id).to_string());
         }

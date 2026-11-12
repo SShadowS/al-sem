@@ -62,8 +62,8 @@ use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, fra
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    Before, ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_of,
-    rows_before, sites_before, toward_sites,
+    Before, ForwardSites, Pending, PendingCtx, RunCleanCones, forward_sites, is_checked_run,
+    pending_of, rows_before, sites_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::{PCallSite, PCallee};
@@ -752,12 +752,14 @@ pub fn compute_transaction_spans(
     drop(rows);
     let arms = ArmRows::build(routines);
     let fwd = forward_sites(reverse);
+    let clean = RunCleanCones::build(&fwd, &routine_by_id);
     let pending = PendingCtx {
         fwd: &fwd,
         routines: &routine_by_id,
         summaries,
         cone_derived,
         collided: &collided,
+        clean: Some(&clean),
     };
     let inputs = SpanInputs {
         commits_by_routine: &commits_by_routine,

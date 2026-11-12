@@ -71,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   28.0.54946.56477 by the owner.
   Before, a branch `Commit()` ended nothing, and d50's one CDO finding (CDOLegacyeDocDispatcher,
   which commits that way before its run) was a false positive.
+- **A helper's writes inside its own checked run are not pending after it** (the transaction
+  spans' pending walk, which d50 and the explicit-commit spans read). The walk counted a called
+  routine's whole write cone, also the writes behind a checked run inside it, which BC commits or
+  rolls back with the run. On CDO that made both of d50's findings on the send-on-posting path
+  (`CDOSubscribers`: `LogAutoSendFailure`, `RunDocHandleIsolated`) false positives: d50 on CDO
+  went from 3 old-meaning findings on master to none (6 checked runs considered, all with no
+  write pending), at both scopes. A workspace callee that reaches a checked run is now walked
+  with those runs left out, and the result is kept inside its cone (it can only remove a write);
+  a run inside dependency code still counts its writes.
 
 ### Changed (ENG-22: d50 reports the error, not an implicit commit)
 

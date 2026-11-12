@@ -1251,6 +1251,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
             summaries: self.cx.summaries,
             cone_derived: self.cx.cone_derived,
             collided: &self.ix.collided,
+            clean: None,
         };
         let target = body.id().to_string();
         let rep: PendingReport = pending_before_report(r, &[target.as_str()], false, &pcx);
