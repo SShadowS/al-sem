@@ -13,6 +13,24 @@ use serde_json::Value;
 use std::process::Command;
 
 const SOURCE: &str = r#"table 52400 "WT Row" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 52401 "WT Trig"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+    trigger OnInsert()
+    begin
+        Commit();
+    end;
+}
+codeunit 52412 "WT Helper Runner"
+{
+    trigger OnRun()
+    var
+        C: Codeunit "WT Caller";
+    begin
+        C.Helper();
+    end;
+}
 codeunit 52410 "WT Writer"
 {
     trigger OnRun()
@@ -119,6 +137,35 @@ codeunit 52420 "WT Caller"
         Ok: Boolean;
     begin
         Ok := TryDynamic(Id); // unknown code inside
+    end;
+    procedure TwoRoutes()
+    begin
+        if Codeunit.Run(Codeunit::"WT Helper Runner") then;
+        if TryHelper() then;
+    end;
+    procedure Helper()
+    var
+        R: Record "WT Row";
+    begin
+        R.K := 8;
+        R.Insert();
+    end;
+    [TryFunction]
+    local procedure TryHelper()
+    begin
+        HelperVia(); // one hop longer: the shortest witness takes the run
+    end;
+    local procedure HelperVia()
+    begin
+        Helper();
+    end;
+    procedure ArgTrigTry()
+    var
+        T: Record "WT Trig" temporary;
+        Ok: Boolean;
+    begin
+        T.K := 1;
+        Ok := TryTakes(T.Insert(true)); // OnInsert commits inside the try call
     end;
     procedure ArgRecTry()
     var
@@ -424,8 +471,12 @@ fn the_site_slice_rules_the_refusal() {
 /// Breaks (2026-11-12): drop the added sites for refused operations with no
 /// error of their own -> `--op Commit` and `ArgRecTry --op Insert` answer
 /// `no`; restore the first-trap override (any `Caught(TryFunction)` on a
-/// refused operation escapes) -> `CheckedRunTry --op Insert` answers `yes`.
-/// Each fails; restored, it passes.
+/// refused operation escapes) -> `CheckedRunTry --op Insert` answers `yes`;
+/// require the witness's trap to be the TryFunction -> `TwoRoutes --op
+/// Insert` answers `no`; leave argument operation sites out of `try_sites`
+/// -> `ArgTrigTry --op Commit` answers `no`; leave their edges out of
+/// `try_refusal_verdict`'s argument scan -> the unfiltered `ArgTrigTry`
+/// answers `no`. Each fails; restored, it passes.
 #[test]
 fn the_op_slice_rules_refused_operations_by_their_route() {
     let t = workspace();
@@ -436,6 +487,23 @@ fn the_op_slice_rules_refused_operations_by_their_route() {
     assert_eq!(r["answer"], "yes", "{r}");
     let r = ask(ws, "WT Caller::CheckedRunTry", &["--op", "Insert"]);
     assert_eq!(r["answer"], "no", "{r}");
+    // One route through a checked run, another through a try call: the
+    // insert is refused on the second whatever trap the first route names.
+    let r = ask(ws, "WT Caller::TwoRoutes", &["--op", "Insert"]);
+    assert_eq!(r["answer"], "yes", "{r}");
+    // A temporary insert in the argument list: allowed, but its OnInsert
+    // trigger commits inside the try call.
+    let r = ask(ws, "WT Caller::ArgTrigTry", &["--op", "Commit"]);
+    assert_eq!(r["answer"], "yes", "{r}");
+    let r = ask(ws, "WT Caller::ArgTrigTry", &[]);
+    let want = line_of("Ok := TryTakes(T.Insert(true));");
+    assert!(
+        refusals(&r)
+            .iter()
+            .any(|(l, v, _)| *l == want && v == "escapes-if-write-refused"),
+        "{:?} {r}",
+        refusals(&r)
+    );
     let site = format!("src/wt.al:{}", line_of("Ok := TryRead();"));
     let h = run(&[
         "prove",
@@ -522,7 +590,7 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
     .unwrap();
     std::fs::write(
         ws.join("src/c.al"),
-        "codeunit 52440 \"WG Caller\"\n{\n    procedure UseTry()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryDep();\n    end;\n\n    [TryFunction]\n    local procedure TryDep()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n\n    procedure UseTryRun()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRun();\n    end;\n\n    [TryFunction]\n    local procedure TryRun()\n    begin\n        if Codeunit.Run(Codeunit::\"WG Runner\") then;\n    end;\n}\ncodeunit 52441 \"WG Runner\"\n{\n    trigger OnRun()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n}\n",
+        "codeunit 52440 \"WG Caller\"\n{\n    procedure UseTry()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryDep();\n    end;\n\n    [TryFunction]\n    local procedure TryDep()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n\n    procedure UseTryRun()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRun();\n    end;\n\n    [TryFunction]\n    local procedure TryRun()\n    begin\n        if Codeunit.Run(Codeunit::\"WG Runner\") then;\n    end;\n\n    procedure UseTryRunDep()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRunDep();\n    end;\n\n    [TryFunction]\n    local procedure TryRunDep()\n    begin\n        if Codeunit.Run(Codeunit::\"YDep Runner\") then;\n    end;\n}\ncodeunit 52441 \"WG Runner\"\n{\n    trigger OnRun()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n}\n",
     )
     .unwrap();
     crate::symbol_app::write_source_app(
@@ -531,7 +599,7 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
         "YDep",
         "1.0.0.0",
         &format!(
-            r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":52450,"Name":"YDep Row","Fields":[{{"Id":1,"Name":"K","TypeDefinition":{{"Name":"Integer"}}}}]}}],"Codeunits":[{{"Id":52451,"Name":"YDep Lib","Methods":[{{"Name":"InsertRow","Parameters":[]}}]}}],"AppId":"{SRC_DEP_GUID}","Name":"YDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+            r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":52450,"Name":"YDep Row","Fields":[{{"Id":1,"Name":"K","TypeDefinition":{{"Name":"Integer"}}}}]}}],"Codeunits":[{{"Id":52451,"Name":"YDep Lib","Methods":[{{"Name":"InsertRow","Parameters":[]}}]}},{{"Id":52452,"Name":"YDep Runner","Methods":[]}}],"AppId":"{SRC_DEP_GUID}","Name":"YDep","Publisher":"probe","Version":"1.0.0.0"}}"#
         ),
         &[
             (
@@ -541,6 +609,10 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
             (
                 "src/Lib.al",
                 "codeunit 52451 \"YDep Lib\"\n{\n    procedure InsertRow()\n    var\n        R: Record \"YDep Row\";\n    begin\n        R.Insert();\n    end;\n}\n",
+            ),
+            (
+                "src/Runner.al",
+                "codeunit 52452 \"YDep Runner\"\n{\n    trigger OnRun()\n    var\n        R: Record \"YDep Row\";\n    begin\n        R.Insert();\n    end;\n}\n",
             ),
         ],
         "",
@@ -566,6 +638,12 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
     // Break (2026-11-12): rule the group by its first trap only (any
     // crossing target that may refuse) -> it is listed as escaping.
     let r = ask(ws.to_str().unwrap(), "WG Caller::UseTryRun", &[]);
+    assert_eq!(r["answer"], "no", "{r}");
+    // The crossing edge is itself the checked run (into dependency code):
+    // its group stays caught.
+    // Break (2026-11-12): skip the crossing edge's own trap check in
+    // `crossing_in_try` -> listed as escaping.
+    let r = ask(ws.to_str().unwrap(), "WG Caller::UseTryRunDep", &[]);
     assert_eq!(r["answer"], "no", "{r}");
 }
 

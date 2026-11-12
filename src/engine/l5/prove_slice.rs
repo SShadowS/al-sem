@@ -1088,18 +1088,14 @@ pub(crate) fn compute_slice(
         // call on some route with no checked run or `asserterror` (the try
         // call does not catch it), as the unfiltered answer's row at the try
         // call says. One below the try call keeps it caught (T10).
-        if let Some(TrapVerdict::Caught(at)) = &trap
-            && at.kind == crate::engine::l5::traps::TrapKind::TryFunction
-            && in_try
+        // Whatever trap the witness route named: another route may enter a
+        // try call (a checked run on one route, a try call on another).
+        if matches!(&trap, Some(TrapVerdict::Caught(_)))
+            && let Some((o, s)) = in_try
                 .as_ref()
-                .is_some_and(|it| reach.refused_in_try(it, rec.terminal.id()).is_some())
+                .and_then(|it| reach.refused_in_try(it, rec.terminal.id()))
         {
-            trap = Some(TrapVerdict::UnlessWritePending(
-                crate::engine::l5::literal_reach::TrapAt {
-                    kind: crate::engine::l5::traps::TrapKind::TryRefusal,
-                    ..at.clone()
-                },
-            ));
+            trap = Some(TrapVerdict::UnlessWritePending(reach.try_call_at(o, s)));
         }
         if try_refusal
             && matches!(&trap, Some(TrapVerdict::Caught(at))
@@ -1191,6 +1187,8 @@ pub(crate) fn compute_slice(
             .refused_ops()
             .filter(|op| !error_ops.contains(*op))
             .filter_map(|op| Some((op, reach.refused_in_try(it, op)?)))
+            // Only where a route the literal arguments allow reaches it.
+            .filter(|(op, _)| reach.tree_witness(live, &[op.to_string()]).is_some())
             .collect();
         extra.sort_unstable();
         for (op, (try_owner, try_site)) in extra {
@@ -1201,16 +1199,7 @@ pub(crate) fn compute_slice(
             let facts = r.map(|r| site_facts(r, op, &table_names));
             let anchor = facts.as_ref().and_then(|f| f.anchor);
             // Raised by the try call around it (the trap words name it).
-            let ta = reach
-                .row_at(try_owner, try_site)
-                .and_then(|r| r.call_sites.iter().find(|c| c.id == try_site))
-                .map(|c| &c.source_anchor);
-            let at = crate::engine::l5::literal_reach::TrapAt {
-                kind: crate::engine::l5::traps::TrapKind::TryRefusal,
-                routine: try_owner.to_string(),
-                file: ta.map(|a| a.source_unit_id.clone()),
-                line: ta.map(|a| a.start_line),
-            };
+            let at = reach.try_call_at(try_owner, try_site);
             let mut site = SliceSite {
                 effect_type: "ERROR_IMPLICIT",
                 op_id: op.to_string(),

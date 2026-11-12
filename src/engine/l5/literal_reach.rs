@@ -3312,8 +3312,13 @@ impl<'a> LiteralReach<'a> {
                 }
                 try_sites.insert(tid, tid);
                 for o in &row.operation_sites {
-                    if anchor_within(&o.source_anchor, a) && ops.contains(o.id.as_str()) {
-                        arg_ops.entry(o.id.as_str()).or_insert(tid);
+                    if anchor_within(&o.source_anchor, a) {
+                        // `TryNoop(T.Insert(true))`: the operation's trigger
+                        // and event edges run inside the try call too.
+                        try_sites.entry(o.id.as_str()).or_insert(tid);
+                        if ops.contains(o.id.as_str()) {
+                            arg_ops.entry(o.id.as_str()).or_insert(tid);
+                        }
                     }
                 }
             }
@@ -3391,19 +3396,54 @@ impl<'a> LiteralReach<'a> {
     /// ENG-10: whether code beyond the crossing edge `from → to` at `site`
     /// may be refused inside a try call on a route [`Self::in_try_reach`]
     /// holds: the edge runs inside one, and `to` may run a refused operation.
+    /// The try call (owner, site) it runs inside, or `None`.
     pub(crate) fn crossing_in_try(
         &self,
         it: &InTry<'a>,
         from: &str,
         site: Option<&str>,
         to: &str,
-    ) -> bool {
-        let Some(w) = self.refusal.as_ref() else {
-            return false;
-        };
-        it.open.contains(from)
-            && (it.inside.contains_key(from) || site.is_some_and(|s| w.try_sites.contains_key(s)))
-            && w.closure.contains(to)
+    ) -> Option<(&'a str, &'a str)> {
+        let w = self.refusal.as_ref()?;
+        // The crossing edge itself must not be a checked run or asserterror.
+        let traps = self.traps.get(from).map_or(&[][..], Vec::as_slice);
+        let open_edge =
+            self.out
+                .get(from)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .any(|(j, &(t, es, _, _))| {
+                    t == to
+                        && es.and_then(EdgeSite::guarded) == site
+                        && !traps.iter().any(|&(i, k)| {
+                            i as usize == j
+                                && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+                        })
+                });
+        if !open_edge || !it.open.contains(from) || !w.closure.contains(to) {
+            return None;
+        }
+        if let Some(&v) = it.inside.get(from) {
+            return Some(v);
+        }
+        let (&from, _) = self.by_stable.get_key_value(from)?;
+        site.and_then(|s| w.try_sites.get(s)).map(|&t| (from, t))
+    }
+
+    /// ENG-10: the trap the try call `(owner, site)` raises a refusal at (the
+    /// trap words name the try call).
+    pub(crate) fn try_call_at(&self, owner: &str, site: &str) -> TrapAt {
+        let a = self
+            .row_at(owner, site)
+            .and_then(|r| r.call_sites.iter().find(|c| c.id == site))
+            .map(|c| &c.source_anchor);
+        TrapAt {
+            kind: TrapKind::TryRefusal,
+            routine: owner.to_string(),
+            file: a.map(|a| a.source_unit_id.clone()),
+            line: a.map(|a| a.start_line),
+        }
     }
 
     /// ENG-10: the routines `root` reaches without crossing a checked run or
@@ -3474,8 +3514,16 @@ impl<'a> LiteralReach<'a> {
                 .iter()
                 .filter(|o| within(&o.source_anchor))
                 // Record operations are operation sites too (`record-op`):
-                // `TryTakes(R.Insert())` is found here.
-                .any(|o| w.ops.contains(o.id.as_str()));
+                // `TryTakes(R.Insert())` is found here, and an argument
+                // operation's trigger or event that may be refused
+                // (`TryNoop(T.Insert(true))`, `OnInsert` commits).
+                .any(|o| {
+                    w.ops.contains(o.id.as_str())
+                        || outs.iter().any(|&(to, es, _, _)| {
+                            es.and_then(EdgeSite::guarded) == Some(o.id.as_str())
+                                && (w.closure.contains(to) || !self.by_stable.contains_key(to))
+                        })
+                });
         if !inside {
             return Some(TrapVerdict::Caught(at));
         }
@@ -3521,8 +3569,7 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// ENG-10: the operations the server refuses inside a try call (a
-    /// non-temporary write, a `LockTable`, a `Commit()`; not one under
-    /// `asserterror`).
+    /// non-temporary write, a `LockTable`, a `Commit()`).
     pub(crate) fn refused_ops(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.refusal.iter().flat_map(|w| w.ops.iter().copied())
     }

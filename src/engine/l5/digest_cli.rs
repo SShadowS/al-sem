@@ -2668,20 +2668,22 @@ fn judge_traps<'t>(
         // beyond the crossing, which the try call does not catch: when a
         // crossing edge runs inside a try call on a route with no checked
         // run or `asserterror`, and its target may run a refused operation.
+        // Whatever trap the witness route named (another route may enter a
+        // try call).
         if e.boundary_group
-            && let Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(at)) = &trap
-            && at.kind == crate::engine::l5::traps::TrapKind::TryFunction
+            && matches!(
+                &trap,
+                Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
+            )
             && let (Some(c), Some(it)) = (e.crossing.as_ref(), in_try.as_ref())
-            && c.edges
+            && let Some((o, s)) = c
+                .edges
                 .iter()
-                .any(|x| reach.crossing_in_try(it, &x.from, x.site.guarded_id(), &x.to))
+                .find_map(|x| reach.crossing_in_try(it, &x.from, x.site.guarded_id(), &x.to))
         {
             trap = Some(
                 crate::engine::l5::literal_reach::TrapVerdict::UnlessWritePending(
-                    crate::engine::l5::literal_reach::TrapAt {
-                        kind: crate::engine::l5::traps::TrapKind::TryRefusal,
-                        ..at.clone()
-                    },
+                    reach.try_call_at(o, s),
                 ),
             );
             assumes_clean_entry = false;

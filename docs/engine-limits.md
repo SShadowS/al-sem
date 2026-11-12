@@ -550,7 +550,8 @@ literal reach, so measure speed when changing it.
      "not raised" otherwise. A filtered slice (`--site`, `--match`, `--op`) on a refused
      operation inside a try call rules it the same way: a refused operation raises the refusal
      where some route from the root runs it inside a try call (through the call, or in its
-     argument list) with no checked run or `asserterror` anywhere on the route; one that has no
+     argument list, an argument operation's trigger or event included) with no checked run or
+     `asserterror` anywhere on the route, whatever trap another route names; one that has no
      error of its own (a `Commit()`, a tested `if not R.Insert()`) is an error site there too, and
      a try call where nothing may be refused is "not raised" in the slice as well. A boundary
      group a try call catches is kept escaping when a crossing edge runs inside a try call on
