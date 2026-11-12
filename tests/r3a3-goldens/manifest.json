@@ -27,18 +27,18 @@
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 36,
 		"provenanceDistribution": {
-			"direct": 853,
-			"inherited": 321
+			"direct": 855,
+			"inherited": 322
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 1092,
+			"static": 1095,
 			"unresolved": 81
 		},
 		"opDistribution": {
 			"commit": 93,
 			"delete": 7,
-			"error-implicit": 324,
+			"error-implicit": 327,
 			"error-throw": 16,
 			"execute": 15,
 			"insert": 78,
@@ -55,10 +55,10 @@
 			"write-blob": 2
 		},
 		"viaDistribution": {
-			"call": 247,
+			"call": 248,
 			"event-dispatch": 70,
 			"implicit-trigger": 4,
-			"self": 853
+			"self": 855
 		},
 		"directStatusDistribution": {
 			"complete": 574,

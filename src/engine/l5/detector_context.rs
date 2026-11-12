@@ -1846,6 +1846,7 @@ pub(crate) fn harvest_detector_artifacts(
                 &reverse_call_graph,
                 &summaries,
                 &cone_derived,
+                &cone,
             )
         } else {
             Vec::new()

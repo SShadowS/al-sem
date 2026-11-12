@@ -2019,12 +2019,13 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             short_description: "DB write pending at a window-opening UI call (BC runtime error)",
             requires: substrate::ORDERING_FACTS,
         },
-        // d50: OPT-IN (checked-run-implicit-commit, advisory info/medium).
+        // d50: OPT-IN. ENG-22: a checked run with a write pending (BC raises
+        // an error at the run); the id keeps its old name, the rule is new.
         Detector {
             name: d50::DETECTOR.to_string(),
             run: d50::detect_d50,
-            rule_name: "CheckedRunImplicitCommit",
-            short_description: "Checked Codeunit.Run implicit commit within a posting span (advisory)",
+            rule_name: "CheckedRunWithPendingWrite",
+            short_description: "Checked Codeunit.Run with a DB write pending (BC runtime error at the run)",
             // summaries + transaction_spans.
             requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },

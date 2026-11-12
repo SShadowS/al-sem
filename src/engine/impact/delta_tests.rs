@@ -176,6 +176,34 @@ fn a_new_checked_runs_commit_is_one_change() {
     );
 }
 
+/// ENG-22: a new checked run's own error is one change: its own key explains
+/// its cone row (`ERROR_IMPLICIT|checked-run`); another implicit error's
+/// cone row (`ERROR_IMPLICIT|`) is another change.
+///
+/// Break: drop `cone_twin`'s `["error", "error-implicit", r]` arm → the
+/// run's cone row is printed beside its own key.
+#[test]
+fn a_new_checked_runs_error_is_one_change() {
+    let b = summary(&[], &[], complete());
+    let n = summary(
+        &[(
+            "error|error-implicit|checked-run",
+            &[site(7, "Codeunit.Run")],
+        )],
+        &["ERROR_IMPLICIT|checked-run", "ERROR_IMPLICIT|"],
+        complete(),
+    );
+    let (own, cone) = root_delta(&b, &n);
+    assert_eq!(
+        own.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+        vec!["error|error-implicit|checked-run"]
+    );
+    assert_eq!(
+        cone.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+        vec!["ERROR_IMPLICIT|"]
+    );
+}
+
 /// A call the analyzed body no longer makes is removed even when the new
 /// side's cone is incomplete (the call is read off the body, not the cone);
 /// an effect key under the same coverage is only "no longer observed".

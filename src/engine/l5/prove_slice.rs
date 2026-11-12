@@ -956,8 +956,11 @@ pub(crate) fn compute_slice(
     // errors question's sites, and the error dialogs, `UI_ERROR`, of the UI
     // question.)
     let trapped_question = matches!(req.question, SliceQuestion::Errors | SliceQuestion::Ui);
+    // ENG-22: the root's checked runs, for a run's own error (built only for
+    // the errors question; cheap when none is in reach).
+    let runs = if errors { reach.run_points(root) } else { None };
     let scope = if trapped_question {
-        reach.trap_scope(root, live)
+        reach.trap_scope(root, live, runs.as_ref())
     } else {
         None
     };
@@ -1031,16 +1034,38 @@ pub(crate) fn compute_slice(
         // turned into an error (`ERROR_IMPLICIT` above) is trapped like any
         // other error, as the unfiltered answer and the digest rule it (B4
         // review, finding C).
-        let trap = scope
+        let mut trap = scope
             .as_ref()
             .filter(|_| crate::engine::l5::digest_cli::is_error_row_type(effect_type))
             .and_then(|s| reach.trap_verdict(live, s, &ops));
+        // ENG-22: a checked run's own error, ruled as the digest rules it
+        // (`digest_cli::judge_traps`).
+        let mut run_clean: Option<bool> = None;
+        if trap.is_none()
+            && rec.effect_type == "ERROR_IMPLICIT"
+            && tree.capability_facts[rec.fact].resource_id()
+                == Some(crate::engine::l4::capability_cone::RUN_COMMIT)
+            && let Some((v, clean)) = reach.run_error_verdict(runs.as_ref(), rec.terminal.id())
+        {
+            trap = Some(v);
+            run_clean = clean;
+        }
         if let Some(TrapVerdict::Caught(at)) = &trap {
             let anchor = r.and_then(|r| anchor_in(r, rec.terminal.id()));
             // B7 review: the ruling may rest on a checked run, which holds
             // only if the root's callers have no write pending.
-            out.caught_assumes_clean_entry |= scope.as_ref().is_some_and(|s| s.clean_checked);
-            out.caught_assumes_normal_commit |= scope.as_ref().is_some_and(|s| s.clean_by_commit);
+            match run_clean {
+                Some(by_commit) => {
+                    out.caught_assumes_clean_entry = true;
+                    out.caught_assumes_normal_commit |= by_commit;
+                }
+                None => {
+                    out.caught_assumes_clean_entry |=
+                        scope.as_ref().is_some_and(|s| s.clean_checked);
+                    out.caught_assumes_normal_commit |=
+                        scope.as_ref().is_some_and(|s| s.clean_by_commit);
+                }
+            }
             out.caught.push(CaughtSite {
                 file: anchor.map(|a| a.source_unit_id.clone()),
                 line: anchor.map(|a| a.start_line),
@@ -1054,6 +1079,13 @@ pub(crate) fn compute_slice(
         let op_name = match (&req.question, rec.op_kind) {
             // A write's ORIGINAL kind (`ModifyAll`, `Rename`, …).
             (SliceQuestion::Writes { .. }, Some(k)) => Some(k.to_string()),
+            // ENG-22: the error a checked run raises itself.
+            _ if run_clean.is_some()
+                || matches!(&trap, Some(TrapVerdict::UnlessWritePending(a))
+                    if a.kind == crate::engine::l5::traps::TrapKind::RunCheck) =>
+            {
+                Some("checked Codeunit.Run with a write pending".to_string())
+            }
             _ => facts.as_ref().and_then(|f| f.op_name.clone()),
         };
         let table = match (&req.question, rec.resource) {

@@ -133,15 +133,20 @@ const WAVE_H_POSITIVE: &[Smoke] = &[
         ported: true,
         corpus_dir: None,
     },
-    // Issue 18 — d50's MEDIUM tier and its medium→info DEMOTION. Three
-    // independent codeunits: a `local procedure` committer (no root
-    // classification → UNCAPPED → medium), its ONE-LINE TWIN whose committer is
-    // a `trigger OnRun()` (`onrun-codeunit` is in `D50_UNTRUSTED_ROOT_KINDS` →
-    // CAPPED → info), and a control carrying BOTH kinds of committer on one span
-    // (the ANY quantifier short-circuits on the uncapped one → medium). Before
-    // this fixture no corpus fixture put an explicit `Commit()` anywhere near a
-    // checked-Run span, so `has_proven_effective_explicit_commit` was false by
-    // vacuity and that list could be edited without moving a single golden.
+];
+
+const WAVE_H_NEGATIVES: &[Smoke] = &[
+    Smoke {
+        fixture: "ws-d50-neg",
+        wave: "R4-H",
+        detectors: &["d50-checked-run-implicit-commit"],
+        ported: true,
+        corpus_dir: None,
+    },
+    // Issue 18 built this fixture for d50's MEDIUM tier, which ENG-22 removed
+    // with the old "implicit commit" claim. It writes no table, so no write is
+    // pending at any of its checked runs: d50 (the error BC raises at a run
+    // with a write pending) finds nothing.
     Smoke {
         fixture: "ws-d50-medium",
         wave: "R4-H",
@@ -150,14 +155,6 @@ const WAVE_H_POSITIVE: &[Smoke] = &[
         corpus_dir: None,
     },
 ];
-
-const WAVE_H_NEGATIVES: &[Smoke] = &[Smoke {
-    fixture: "ws-d50-neg",
-    wave: "R4-H",
-    detectors: &["d50-checked-run-implicit-commit"],
-    ported: true,
-    corpus_dir: None,
-}];
 
 /// R4 CROSS-APP per-detector fixtures (d13/d16/d17). Each fixture resolves a cross-app
 /// call into a COMMITTED dependency `.app` under `tests/r0-corpus/<fixture>/.alpackages/`.

@@ -507,8 +507,8 @@ mod tests {
             ),
             (
                 "d50-checked-run-implicit-commit",
-                "CheckedRunImplicitCommit",
-                "Checked Codeunit.Run implicit commit within a posting span (advisory)",
+                "CheckedRunWithPendingWrite",
+                "Checked Codeunit.Run with a DB write pending (BC runtime error at the run)",
             ),
             (
                 "d51-retry-side-effect-duplication",

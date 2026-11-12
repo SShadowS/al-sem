@@ -1,3 +1,12 @@
+//! **ENG-22 changed what d50 reports**, and A6, A7 and the population with
+//! it. d50 no longer looks for a "transaction-managing" routine (no NAME
+//! branch, no COUNT threshold): it fires where a PHYSICAL write may be
+//! pending at the checked run, because BC then raises an error at the run
+//! (measured on BC 28, Linux and Windows). Temporary records are still no
+//! pending write (A2), so the issue-23 point stands; but two physical writes
+//! (A7) now report, and a posting NAME over temporary writes (A6) no longer
+//! does. The paragraphs below describe the issue-23 defect as it was.
+//!
 //! Issue 23 — d50's transaction-managing COUNT branch USED TO count
 //! TEMP-INCLUSIVE table writes; it now counts PHYSICAL ones, as d8 does. These
 //! tests are what pin that, so they are written against the defect they fixed —
@@ -397,10 +406,11 @@ fn a2_temp_only_writer_produces_no_finding() {
 
 /// `StageMixedRows` is a same-shape clone of `StageRows` differing ONLY in the
 /// third local record declaration carrying `temporary`: temp-inclusive 3,
-/// physical 2. The narrowing is not limited to temp-ONLY routines — two physical
-/// writes plus one temporary also drops below the threshold of 3.
+/// physical 2. ENG-22: two physical writes are pending at its run, so it
+/// reports (issue 23 had it below a threshold d50 no longer has), and the
+/// finding names only the two physical tables.
 #[test]
-fn a7_mixed_writer_below_physical_threshold_produces_no_finding() {
+fn a7_mixed_writer_reports_its_physical_pending_writes() {
     let resolved = resolve_fixture();
     let owned = build_detector_context(&resolved, substrate::ALL);
     let ctx = owned.ctx();
@@ -428,13 +438,18 @@ fn a7_mixed_writer_below_physical_threshold_produces_no_finding() {
 
     let findings = d50_findings(&resolved);
     let at = findings_at(&findings, &id);
-    assert!(
-        at.is_empty(),
-        "StageMixedRows writes only 2 PHYSICAL tables — below \
-         TRANSACTION_THRESHOLD_TABLES ({THRESHOLD}) — so its checked-Run callsite must \
-         produce no finding. Got {} finding(s) there; all d50 subjects: {:?}",
+    assert_eq!(
         at.len(),
+        1,
+        "StageMixedRows leaves 2 PHYSICAL writes pending at its checked run, so it \
+         must report. All d50 subjects: {:?}",
         subjects(&resolved, &findings)
+    );
+    assert_eq!(
+        at[0].affected_tables.len(),
+        2,
+        "only the PHYSICAL tables are pending: {:?}",
+        at[0].affected_tables
     );
 }
 
@@ -471,11 +486,10 @@ fn a3_physical_writer_still_reports() {
 }
 
 /// `PostBuffers` has `BufferRows`' writes — three TEMPORARY records, physical 0
-/// — but a posting-style name. The NAME branch is untouched by this change, so
-/// it must report before AND after. This is what keeps the fix scoped to the
-/// COUNT branch.
+/// — but a posting-style name. ENG-22: a name pends no write, so it no longer
+/// reports (the NAME branch is gone with the old claim).
 #[test]
-fn a6_posting_named_temp_only_writer_still_reports_via_the_name_branch() {
+fn a6_posting_named_temp_only_writer_no_longer_reports() {
     let resolved = resolve_fixture();
     let owned = build_detector_context(&resolved, substrate::ALL);
     let ctx = owned.ctx();
@@ -490,11 +504,10 @@ fn a6_posting_named_temp_only_writer_still_reports_via_the_name_branch() {
 
     let findings = d50_findings(&resolved);
     let at = findings_at(&findings, &id);
-    assert_eq!(
-        at.len(),
-        1,
-        "PostBuffers matches ^Post[A-Z]; the NAME branch is unchanged, so it must still \
-         report even with zero physical writes. All d50 subjects: {:?}",
+    assert!(
+        at.is_empty(),
+        "PostBuffers writes only TEMPORARY records: no write is pending at its run. \
+         All d50 subjects: {:?}",
         subjects(&resolved, &findings)
     );
 }
@@ -503,12 +516,12 @@ fn a6_posting_named_temp_only_writer_still_reports_via_the_name_branch() {
 // The whole-fixture population.
 // ---------------------------------------------------------------------------
 
-/// The population, stated once: after the fix the fixture yields EXACTLY the two
-/// retained subjects. Before it, all four report. Asserted by subject SET, never
-/// by a bare count, so a suppression plus an unrelated new finding cannot cancel
-/// out.
+/// The population, stated once: the fixture yields EXACTLY the two writers
+/// with a PHYSICAL write pending at their run (ENG-22). Asserted by subject
+/// SET, never by a bare count, so a suppression plus an unrelated new finding
+/// cannot cancel out.
 #[test]
-fn fixture_population_is_exactly_stage_rows_and_post_buffers() {
+fn fixture_population_is_exactly_the_physical_writers() {
     let resolved = resolve_fixture();
     let findings = d50_findings(&resolved);
 
@@ -520,10 +533,9 @@ fn fixture_population_is_exactly_stage_rows_and_post_buffers() {
 
     assert_eq!(
         got,
-        vec!["PostBuffers".to_string(), "StageRows".to_string()],
-        "d50 over {FIXTURE} must report at exactly the two checked-Run callsites whose \
-         routine is transaction-managing on PHYSICAL writes (StageRows) or by NAME \
-         (PostBuffers). Full findings: {:#?}",
+        vec!["StageMixedRows".to_string(), "StageRows".to_string()],
+        "d50 over {FIXTURE} must report at exactly the two checked-Run callsites with \
+         a PHYSICAL write pending (StageMixedRows, StageRows). Full findings: {:#?}",
         findings
             .iter()
             .map(|f| (&f.id, &f.severity, &f.root_cause))

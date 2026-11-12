@@ -1879,18 +1879,40 @@ fn caught_count(effects: &[DigestEffectFull], types: &[&str]) -> usize {
 /// catches on every route: their count, and the first one's site and trap.
 /// `None` when there is none.
 pub(crate) fn caught_line(effects: &[DigestEffectFull], types: &[&str]) -> Option<String> {
-    let caught: Vec<&DigestEffectFull> = caught_rows(effects, types).collect();
-    let first = caught.first()?;
-    let at = caught_at(first)?;
-    Some(format!(
-        "  caught on every route by a trap: {} (first: {} at {}, by the {}); not counted",
-        crate::engine::l5::routine_rollup::plural(caught.len(), "error site", "error sites"),
-        first.effect_type,
-        first
-            .site_text()
-            .unwrap_or_else(|| "no position kept".to_string()),
-        at.words()
-    ))
+    use crate::engine::l5::traps::TrapKind;
+    // ENG-22: a checked run's own error with no write pending at the run is
+    // not raised at all, which is no trap catching it: a line of its own.
+    let (unraised, caught): (Vec<&DigestEffectFull>, Vec<&DigestEffectFull>) =
+        caught_rows(effects, types)
+            .partition(|e| caught_at(e).is_some_and(|a| a.kind == TrapKind::RunCheck));
+    let site = |e: &DigestEffectFull| {
+        e.site_text()
+            .unwrap_or_else(|| "no position kept".to_string())
+    };
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(first) = caught.first() {
+        let at = caught_at(first)?;
+        lines.push(format!(
+            "  caught on every route by a trap: {} (first: {} at {}, by the {}); not counted",
+            crate::engine::l5::routine_rollup::plural(caught.len(), "error site", "error sites"),
+            first.effect_type,
+            site(first),
+            at.words()
+        ));
+    }
+    if let Some(first) = unraised.first() {
+        lines.push(format!(
+            "  not raised: {} (first: at {}): no write may be pending at the run on any route \
+             from the routine; not counted",
+            crate::engine::l5::routine_rollup::plural(
+                unraised.len(),
+                "checked Codeunit.Run's own error",
+                "checked Codeunit.Runs' own errors"
+            ),
+            site(first)
+        ));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// B7/L23: where an error row is caught, when a definite trap is on every
@@ -2999,14 +3021,41 @@ pub fn format_prove_human(
         {
             // B7 review: a `no` that left errors out as caught says so in
             // the headline, not only on the caught line below.
-            match caught_count(effects, caught_types(question)) {
-                0 => negative_answer(&site),
-                n => format!(
-                    "  answer:   no — no {site} escapes the routine; {} caught on every route \
-                     by a trap (every candidate decided; {})",
-                    crate::engine::l5::routine_rollup::plural(n, "error site", "error sites"),
+            // ENG-22: a checked run's own error that is not raised (no
+            // write may be pending at the run) is counted apart.
+            let unraised = caught_rows(effects, caught_types(question))
+                .filter(|e| {
+                    caught_at(e)
+                        .is_some_and(|a| a.kind == crate::engine::l5::traps::TrapKind::RunCheck)
+                })
+                .count();
+            let caught = caught_count(effects, caught_types(question)) - unraised;
+            let mut left_out: Vec<String> = Vec::new();
+            if caught > 0 {
+                left_out.push(format!(
+                    "{} caught on every route by a trap",
+                    crate::engine::l5::routine_rollup::plural(caught, "error site", "error sites")
+                ));
+            }
+            if unraised > 0 {
+                left_out.push(format!(
+                    "{} not raised (no write may be pending at the run)",
+                    crate::engine::l5::routine_rollup::plural(
+                        unraised,
+                        "checked Codeunit.Run's own error",
+                        "checked Codeunit.Runs' own errors"
+                    )
+                ));
+            }
+            if left_out.is_empty() {
+                negative_answer(&site)
+            } else {
+                format!(
+                    "  answer:   no — no {site} escapes the routine; {} (every candidate \
+                     decided; {})",
+                    left_out.join("; "),
                     crate::engine::l5::prove_slice::STATIC_LABEL
-                ),
+                )
             }
         }
         a => format!("  answer:   {}", a.as_str()),
@@ -3161,6 +3210,10 @@ pub fn format_prove_human(
             // ENG-09: a checked run's own commit, anchored at the run.
             if crate::engine::l5::digest_cli::is_run_commit_row(eff) {
                 return crate::engine::l5::digest_cli::RUN_COMMIT_LABEL.to_string();
+            }
+            // ENG-22: the error a checked run raises itself.
+            if crate::engine::l5::digest_cli::is_run_error_row(&eff.effect_type, &eff.detail) {
+                return crate::engine::l5::digest_cli::RUN_ERROR_LABEL.to_string();
             }
             match (eff.effect_type.as_str(), paths) {
                 ("ERROR_IMPLICIT", Some(p)) => {

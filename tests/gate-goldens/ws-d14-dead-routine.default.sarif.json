@@ -284,9 +284,9 @@
             },
             {
               "id": "d50-checked-run-implicit-commit",
-              "name": "CheckedRunImplicitCommit",
+              "name": "CheckedRunWithPendingWrite",
               "shortDescription": {
-                "text": "Checked Codeunit.Run implicit commit within a posting span (advisory)"
+                "text": "Checked Codeunit.Run with a DB write pending (BC runtime error at the run)"
               }
             },
             {

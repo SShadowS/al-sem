@@ -2,7 +2,11 @@
 //! `src/engine/transaction-spans.ts`.
 //!
 //! `compute_transaction_spans` produces a `TransactionSpan` per Commit (and per
-//! checked Codeunit.Run implicit commit). For each seed it walks callers BACKWARD
+//! checked Codeunit.Run). A checked run's seed is NOT a commit of the span's
+//! writes (ENG-22, measured on BC 28, Linux and Windows): BC commits only the
+//! run's own transaction, and a write of the caller's pending at the run makes
+//! the run itself raise an error. Its span answers "which writes may be
+//! pending at the run" (d50). For each seed it walks callers BACKWARD
 //! over the reverse call graph to find every routine that participates in the
 //! transaction; the walk stops at `MAX_DEPTH` and past a routine whose call
 //! toward the Commit follows a Commit of its own (below). The span aggregates
@@ -58,8 +62,8 @@ use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, fra
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    Before, ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_of,
-    rows_before, sites_before, toward_sites,
+    Before, ForwardSites, Pending, PendingCtx, RunCleanCones, forward_sites, is_checked_run,
+    pending_of, rows_before, sites_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::{PCallSite, PCallee};
@@ -68,8 +72,10 @@ use crate::program::model::workspace::ModelRoutine;
 
 const MAX_DEPTH: usize = 50;
 
-/// Distinguishes an explicit `Commit()` span from a synthetic checked-Run
-/// implicit commit. Mirrors al-sem `seedKind`.
+/// Distinguishes an explicit `Commit()` span from a checked run's span (the
+/// writes that may be pending at the run, which BC refuses with an error at
+/// the run: it commits none of them; ENG-22). The variant keeps its al-sem
+/// name (`seedKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeedKind {
     ExplicitCommit,
@@ -84,7 +90,7 @@ pub struct TransactionSpan {
     /// checked callsite id — al-sem stores the callsite id here too).
     pub commit_operation_id: String,
     /// For checked-run-implicit seeds only: the callsite id of the checked
-    /// Codeunit.Run forming the implicit-commit boundary. `None` for explicit.
+    /// Codeunit.Run the span ends at. `None` for explicit.
     pub seed_callsite_id: Option<String>,
     /// The routine containing the bounding Commit.
     pub commit_routine_id: String,
@@ -543,12 +549,15 @@ fn frame_key(r: &ModelRoutine) -> (String, usize) {
     (r.id.clone(), std::ptr::from_ref(r) as usize)
 }
 
-/// A CHECKED `Codeunit.Run` (its return value is used): an implicit commit
-/// boundary. Codeunit.Run only; `objectRunReturnUsed === true` only (the
+/// A CHECKED `Codeunit.Run` (its return value is used): a span seed (the
+/// writes pending at it make the run fail; ENG-22). Codeunit.Run only; `objectRunReturnUsed === true` only (the
 /// STRICT affirmative predicate). NOT Page.Run / Report.Run.
 fn is_checked_codeunit_run(cs: &PCallSite) -> bool {
-    matches!(&cs.callee, PCallee::ObjectRun { object_kind, .. } if object_kind == "Codeunit")
-        && cs.object_run_return_used == Some(true)
+    // ENG-22 review: also a codeunit variable's `Ok := C.Run()`, as the
+    // resolver decided it (`PCallSite::checked_run`, the trap rule's).
+    cs.checked_run
+        || (matches!(&cs.callee, PCallee::ObjectRun { object_kind, .. } if object_kind == "Codeunit")
+            && cs.object_run_return_used == Some(true))
 }
 
 /// What the seed routine's parameters must be for `site` (a Commit, or a
@@ -652,7 +661,7 @@ fn span_template<'c>(
 }
 
 /// Compute transaction spans. For each primary-app routine that contains a Commit
-/// (and each checked Codeunit.Run implicit commit), walk callers backward to find
+/// (and each checked Codeunit.Run), walk callers backward to find
 /// every routine that participates in the transaction. Each Commit operation
 /// yields one `TransactionSpan`. Mirrors al-sem `computeTransactionSpans`.
 ///
@@ -670,6 +679,7 @@ pub fn compute_transaction_spans(
     reverse: &ReverseCallGraph,
     summaries: &HashMap<String, FullRoutineSummary>,
     cone_derived: &ConeDerivedStore,
+    typed: &[crate::engine::l4::combined_graph::TypedEdge],
 ) -> Vec<TransactionSpan> {
     let mut spans: Vec<TransactionSpan> = Vec::new();
 
@@ -743,12 +753,14 @@ pub fn compute_transaction_spans(
     drop(rows);
     let arms = ArmRows::build(routines);
     let fwd = forward_sites(reverse);
+    let clean = RunCleanCones::build(&fwd, &routine_by_id, summaries, &collided, typed);
     let pending = PendingCtx {
         fwd: &fwd,
         routines: &routine_by_id,
         summaries,
         cone_derived,
         collided: &collided,
+        clean: Some(&clean),
     };
     let inputs = SpanInputs {
         commits_by_routine: &commits_by_routine,
@@ -844,7 +856,8 @@ pub fn compute_transaction_spans(
         }
     }
 
-    // --- §B: synthetic seeds for CHECKED codeunit-run implicit commits ---
+    // --- §B: synthetic seeds for CHECKED codeunit runs (the writes pending
+    // at the run; ENG-22: BC raises an error there, it commits none) ---
     // Codeunit.Run only; objectRunReturnUsed === true only (the STRICT affirmative
     // predicate). NOT Page.Run / Report.Run.
     for r in routines {
@@ -960,6 +973,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -992,6 +1006,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
 
         let inner_span = spans
@@ -1045,6 +1060,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
 
         let inner_span = spans
@@ -1071,6 +1087,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         assert!(!spans[0].coverage_complete);
@@ -1096,8 +1113,200 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert!(!spans[0].coverage_complete);
+    }
+
+    /// The pending tables of the span seeded at `site`.
+    fn pending_at_seed(spans: &[TransactionSpan], site: &str) -> Vec<String> {
+        spans
+            .iter()
+            .find(|s| s.seed_callsite_id.as_deref() == Some(site))
+            .expect(site)
+            .pending_physical_tables
+            .clone()
+    }
+
+    /// ENG-22 review round 4: a helper's writes behind its own checked run are
+    /// not pending after it, but whatever its cone holds that the forward
+    /// sites do not explain still is: a write over an edge the primary graph
+    /// lacks (`t/X`, stated in the cone only) and one through a callee with no
+    /// summary (`t/M`). `root: H(); if Codeunit.Run(..) then;` with
+    /// `H: if Codeunit.Run(W) then; M();`.
+    #[test]
+    fn a_helpers_run_is_left_out_and_its_unexplained_cone_is_kept() {
+        let mut root = routine("root", "procedure");
+        root.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "root/cs0",
+                "H",
+                vec![],
+            ));
+        root.call_sites
+            .push(object_run_call_site("root/cs1", "Codeunit", Some(true)));
+        let mut h = routine("h", "procedure");
+        h.call_sites
+            .push(object_run_call_site("h/cs0", "Codeunit", Some(true)));
+        h.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "h/cs1",
+                "M",
+                vec![],
+            ));
+        let routines = vec![root, h, routine("w", "trigger"), routine("m", "procedure")];
+        let graph = graph_from_edges(
+            &["root", "h", "w", "m"],
+            &[
+                edge("root", "h", "root/cs0"),
+                edge("h", "w", "h/cs0"),
+                edge("h", "m", "h/cs1"),
+            ],
+        );
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        summaries.insert(
+            "root".to_string(),
+            summary("root", vec![], vec![], Some(coverage("complete"))),
+        );
+        summaries.insert(
+            "h".to_string(),
+            summary(
+                "h",
+                vec![],
+                vec![
+                    fact("insert", "table", Some("t/W")),
+                    fact("insert", "table", Some("t/M")),
+                    fact("insert", "table", Some("t/X")),
+                ],
+                Some(coverage("complete")),
+            ),
+        );
+        summaries.insert(
+            "w".to_string(),
+            summary(
+                "w",
+                vec![fact("insert", "table", Some("t/W"))],
+                vec![],
+                Some(coverage("complete")),
+            ),
+        );
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &[],
+        );
+        assert_eq!(pending_at_seed(&spans, "root/cs1"), vec!["t/M", "t/X"]);
+    }
+
+    /// ENG-22 review round 4: a helper whose cone follows an edge its forward
+    /// sites lack (`h3 → u3`, a typed edge only) is not walked: `u3` writes
+    /// `t/T`, which the run's target `w3` writes too, so the residue (by table)
+    /// could not keep it.
+    #[test]
+    fn a_helper_with_an_unseen_edge_keeps_its_whole_cone() {
+        let mut root = routine("root3", "procedure");
+        root.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "root3/cs0",
+                "H3",
+                vec![],
+            ));
+        root.call_sites
+            .push(object_run_call_site("root3/cs1", "Codeunit", Some(true)));
+        let mut h = routine("h3", "procedure");
+        h.call_sites
+            .push(object_run_call_site("h3/cs0", "Codeunit", Some(true)));
+        let routines = vec![
+            root,
+            h,
+            routine("w3", "trigger"),
+            routine("u3", "procedure"),
+        ];
+        let graph = graph_from_edges(
+            &["root3", "h3", "w3", "u3"],
+            &[edge("root3", "h3", "root3/cs0"), edge("h3", "w3", "h3/cs0")],
+        );
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        for (id, direct, inherited) in [
+            ("root3", vec![], vec![]),
+            ("h3", vec![], vec![fact("insert", "table", Some("t/T"))]),
+            ("w3", vec![fact("insert", "table", Some("t/T"))], vec![]),
+            ("u3", vec![fact("insert", "table", Some("t/T"))], vec![]),
+        ] {
+            summaries.insert(
+                id.to_string(),
+                summary(id, direct, inherited, Some(coverage("complete"))),
+            );
+        }
+        let typed = vec![crate::engine::l4::cone_derived::test_facts::call_edge(
+            "h3", "u3", "h3/cs9",
+        )];
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &typed,
+        );
+        assert_eq!(pending_at_seed(&spans, "root3/cs1"), vec!["t/T"]);
+    }
+
+    /// ENG-22 review round 4: a collided id's sites are read through one row
+    /// only, so its edges are never taken for a checked run: `h2`'s row A calls
+    /// `W()` at `h2/cs0`, its last row has a checked run with the same id.
+    #[test]
+    fn a_collided_helper_keeps_its_whole_cone() {
+        let mut root = routine("root2", "procedure");
+        root.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "root2/cs0",
+                "H2",
+                vec![],
+            ));
+        root.call_sites
+            .push(object_run_call_site("root2/cs1", "Codeunit", Some(true)));
+        let mut a = routine("h2", "procedure");
+        a.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "h2/cs0",
+                "W",
+                vec![],
+            ));
+        let mut b = routine("h2", "procedure");
+        b.call_sites
+            .push(object_run_call_site("h2/cs0", "Codeunit", Some(true)));
+        let routines = vec![root, a, b, routine("w2", "procedure")];
+        let graph = graph_from_edges(
+            &["root2", "h2", "w2"],
+            &[edge("root2", "h2", "root2/cs0"), edge("h2", "w2", "h2/cs0")],
+        );
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        for (id, direct, inherited) in [
+            ("root2", vec![], vec![]),
+            ("h2", vec![], vec![fact("insert", "table", Some("t/W"))]),
+            ("w2", vec![fact("insert", "table", Some("t/W"))], vec![]),
+        ] {
+            summaries.insert(
+                id.to_string(),
+                summary(id, direct, inherited, Some(coverage("complete"))),
+            );
+        }
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &[],
+        );
+        assert_eq!(pending_at_seed(&spans, "root2/cs1"), vec!["t/W"]);
     }
 
     #[test]
@@ -1118,6 +1327,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1147,6 +1357,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert!(spans.is_empty());
     }
@@ -1164,6 +1375,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert!(spans.is_empty());
     }
@@ -1187,6 +1399,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].routines_in_span, spans[1].routines_in_span);
@@ -1252,6 +1465,7 @@ mod tests {
             &reverse,
             &summaries,
             &cone_store_of(&summaries),
+            &[],
         );
         assert_eq!(spans.len(), 1);
         assert_eq!(
