@@ -8,8 +8,10 @@
 //! process): 6, 5 and 2 here, 3 in `revision_tests`, 7 and 9 in TLS-22's tests.
 //! A held task then waits on no other test's tasks, except on a host with fewer
 //! than 8 cores, where in-process code using `default_reach_workers()` (8 capped
-//! by the cores) can share one of these pools. Every hold has a timeout and the
-//! tests check it did not pass, so that host fails a precondition, never hangs.
+//! by the cores) can share one of these pools. Every hold has a timeout, so that
+//! host fails a precondition, never hangs: the first-root hold and the caption
+//! race assert their timeout did not pass, and the `first_wave` holds are
+//! caught by the exact in-flight counts asserted after them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -179,13 +181,15 @@ fn parallel_rows_keep_root_order_when_root_0_finishes_last() {
 /// (Master gives no caption to the page Delta is reached from, the page an
 /// action opens with `RunObject`, so only Gamma's row needs the file.)
 ///
+/// The race is forced in two steps (`CaptionRace`): the second task reads the
+/// cache only after the first has missed, and the first inserts only after
+/// the second has read. The test checks neither step timed out.
+///
 /// DISCRIMINATION (2026-11-12, after review): marking the file "being
-/// parsed" with an empty entry before parsing, which the parse then
-/// overwrites, fails here (the task that read the empty entry has no
+/// parsed" with an empty entry right after the miss, which the parse then
+/// overwrites, fails here 3 runs of 3 (the second task's entries: no
 /// caption), while the other `up_par_tests` and `cli_up_parallel` (no forced
-/// race) pass with it: only the race shows it. Restored, passes. The test
-/// also checks the race happened (the second read came while the first task
-/// was held, not after a timeout).
+/// race) pass with it, so only the race shows it. Restored, passes.
 #[test]
 fn racing_tasks_both_get_the_caption() {
     let f = fx();

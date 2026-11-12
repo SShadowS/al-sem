@@ -604,15 +604,37 @@ pub struct Captions {
     race: Option<CaptionRace>,
 }
 
-/// Tests: hold the first task that misses `unit` between its parse and its
-/// insert until a second task has read the cache for `unit` (or the timeout
-/// passes: `timed_out`, so a test can tell the race did not happen).
+/// Tests: a forced race on `unit`, in two steps. A second task to ask for
+/// `unit` waits, before it reads the cache, until the first task has missed
+/// and is about to parse (`first_parsing`). The first task is then held
+/// between its parse and its insert until the second has read the cache
+/// (`lookups`). So the second read always falls inside the first task's
+/// miss-to-insert window. A timeout in either step sets `timed_out`, so a
+/// test can tell the race did not happen.
 #[cfg(test)]
 pub(crate) struct CaptionRace {
     pub(crate) unit: String,
     pub(crate) timeout: std::time::Duration,
+    pub(crate) arrivals: std::sync::atomic::AtomicUsize,
+    pub(crate) first_parsing: std::sync::atomic::AtomicBool,
     pub(crate) lookups: std::sync::atomic::AtomicUsize,
     pub(crate) timed_out: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+impl CaptionRace {
+    /// Wait until `done` holds or the timeout passes (then `timed_out`).
+    fn wait(&self, done: impl Fn() -> bool) {
+        let until = std::time::Instant::now() + self.timeout;
+        while !done() {
+            if std::time::Instant::now() >= until {
+                self.timed_out
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
 
 /// One action: `(name lc, caption, first line, last line)` (0-based).
@@ -637,6 +659,8 @@ impl Captions {
         self.race = Some(CaptionRace {
             unit: unit.to_string(),
             timeout,
+            arrivals: std::sync::atomic::AtomicUsize::new(0),
+            first_parsing: std::sync::atomic::AtomicBool::new(false),
             lookups: std::sync::atomic::AtomicUsize::new(0),
             timed_out: std::sync::atomic::AtomicBool::new(false),
         });
@@ -659,16 +683,30 @@ impl Captions {
         // Units and local names spell a workspace file `ws:<rel>` or `<rel>`.
         let unit = unit.strip_prefix("ws:").unwrap_or(unit);
         let lock = || self.parsed.lock().unwrap_or_else(|p| p.into_inner());
+        // Tests: a later task waits for the first one's miss before reading.
+        #[cfg(test)]
+        let race = self.race.as_ref().filter(|r| r.unit == unit);
+        #[cfg(test)]
+        if let Some(r) = race
+            && r.arrivals.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        {
+            r.wait(|| r.first_parsing.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let hit = lock().get(unit).map(Arc::clone);
         // Tests: a lookup counts once the cache was read; the first one that
         // missed is held below.
         #[cfg(test)]
-        let first_miss = self.race.as_ref().filter(|r| r.unit == unit).and_then(|r| {
+        let first_miss = race.and_then(|r| {
             let k = r.lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             (hit.is_none() && k == 0).then_some(r)
         });
         if let Some(v) = hit {
             return v;
+        }
+        #[cfg(test)]
+        if let Some(r) = first_miss {
+            r.first_parsing
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         // Parsed outside the lock: tasks needing other files do not wait.
         let v = Arc::new(
@@ -703,15 +741,7 @@ impl Captions {
         );
         #[cfg(test)]
         if let Some(r) = first_miss {
-            use std::sync::atomic::Ordering::SeqCst;
-            let until = std::time::Instant::now() + r.timeout;
-            while r.lookups.load(SeqCst) < 2 {
-                if std::time::Instant::now() >= until {
-                    r.timed_out.store(true, SeqCst);
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            r.wait(|| r.lookups.load(std::sync::atomic::Ordering::SeqCst) >= 2);
         }
         Arc::clone(lock().entry(unit.to_string()).or_insert(v))
     }

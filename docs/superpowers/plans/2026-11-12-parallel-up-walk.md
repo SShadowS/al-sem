@@ -111,7 +111,8 @@ a scratch stash, then walks the union serially.
   fold sums/max in index order; union walk on a stash scratch; `scratchBytes` = sum of stash
   capacities + trace counter `impact.up.scratch_bytes`.
 - [ ] **Step 4:** Spans: keep `impact.up.roots`, `impact.up.union_walk`, `impact.up.union_summary`,
-  `impact.up.caption_parse` and `impact.up.caption_files`; drop the step-0 per-root time counters.
+  `impact.up.caption_parse` and `impact.up.caption_parses` (renamed in review: it counts parses);
+  drop the step-0 per-root time counters.
   Walk-window memory (Linux, tracing on only): at `up`'s start write `5` to `/proc/self/clear_refs`;
   on success read `VmRSS`, after the union summary read `VmHWM`, emit `impact.up.rss_start_mb` and
   `impact.up.peak_mb`; on failure emit nothing.
