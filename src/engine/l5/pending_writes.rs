@@ -117,9 +117,64 @@ pub(crate) struct PendingCtx<'a> {
 /// primary graph) and that reach a checked run over them are walked; every
 /// other routine reached counts its whole cone, so a run inside dependency
 /// code still counts its writes (an over-count, never a missed write).
+///
+/// Sound by construction, not by a census: a walked routine adds, besides its
+/// own writes, its group's residue ([`Self::residue`]): the writes its cone
+/// holds that neither its group's own writes nor the cone of a routine called
+/// from outside the group (a checked run's target included) explain. A write
+/// the cone reaches over an edge the forward sites lack is in that residue, so
+/// it is counted (an over-count at worst), never dropped. On CDO the residue was
+/// empty for every routine (4,694 checked).
 pub(crate) struct RunCleanCones<'a> {
-    reaches_run: HashSet<&'a str>,
+    /// The routines walked: they reach a checked run over `fwd`, have a
+    /// summary and one row (a collided id's edges are read through one row
+    /// only, so its whole cone counts).
+    walk: HashSet<&'a str>,
+    /// A walked routine → its group (strongly connected over `fwd`).
+    group_of: HashMap<&'a str, usize>,
+    groups: Vec<Vec<&'a str>>,
+    residue: std::sync::Mutex<HashMap<usize, std::sync::Arc<Effects<'a>>>>,
     memo: std::sync::Mutex<HashMap<&'a str, std::sync::Arc<Pending>>>,
+}
+
+/// Physical tables written and events published, borrowed.
+#[derive(Default)]
+struct Effects<'a> {
+    tables: HashSet<&'a str>,
+    events: HashSet<&'a str>,
+}
+
+impl<'a> Effects<'a> {
+    /// A routine's whole cone (read by its own id when it has no summary).
+    fn add_cone(&mut self, x: &'a str, cx: &PendingCtx<'a>) {
+        let id = cx.summaries.get(x).map_or(x, |s| s.routine_id.as_str());
+        let cd = cx.cone_derived;
+        self.tables
+            .extend(cd.physical_write_ids_of(id).map(|i| cd.resolve_res(i)));
+        self.events
+            .extend(cd.event_ids_of(id).iter().map(|i| cd.resolve_res(*i)));
+    }
+
+    /// A routine's own physical writes and publishes.
+    fn add_direct(&mut self, x: &'a str, cx: &PendingCtx<'a>) {
+        let Some(s) = cx.summaries.get(x) else {
+            return;
+        };
+        for f in &s.capability_facts_direct {
+            let Some(rid) = f.resource_id.as_deref() else {
+                continue;
+            };
+            match f.resource_kind {
+                "table" if write_op_bit(f.op).is_some() && !fact_is_known_temp(f) => {
+                    self.tables.insert(rid);
+                }
+                "event" if f.op == "publish" => {
+                    self.events.insert(rid);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The site `from → to` is a checked run.
@@ -137,10 +192,13 @@ fn is_run_edge(
 }
 
 impl<'a> RunCleanCones<'a> {
-    /// The routines that reach a checked run over `fwd` (its caller included).
+    /// The routines to walk (those that reach a checked run over `fwd`, with a
+    /// summary and one row) and their groups.
     pub(crate) fn build(
         fwd: &'a ForwardSites<'a>,
         routines: &HashMap<&'a str, &'a ModelRoutine>,
+        summaries: &HashMap<String, FullRoutineSummary>,
+        collided: &HashSet<&'a str>,
     ) -> Self {
         let mut callers: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
         let mut reaches_run = HashSet::new();
@@ -160,53 +218,106 @@ impl<'a> RunCleanCones<'a> {
                 }
             }
         }
+        let walk: HashSet<&'a str> = reaches_run
+            .into_iter()
+            .filter(|x| summaries.contains_key(*x) && !collided.contains(x))
+            .collect();
+        // Groups over every forward site between walked routines (a checked
+        // run's edge included: what loops back through it is one group).
+        let mut nodes: Vec<String> = walk.iter().map(|x| x.to_string()).collect();
+        nodes.sort();
+        let edges_by_from: HashMap<String, Vec<String>> = walk
+            .iter()
+            .map(|&x| {
+                let mut to: Vec<String> = fwd
+                    .get(x)
+                    .map_or(&[][..], Vec::as_slice)
+                    .iter()
+                    .filter(|(_, t)| walk.contains(t))
+                    .map(|(_, t)| t.to_string())
+                    .collect();
+                to.sort();
+                to.dedup();
+                (x.to_string(), to)
+            })
+            .collect();
+        let sccs = crate::engine::l4::scc::tarjan_scc(&crate::engine::l4::scc::SccInputGraph {
+            nodes: &nodes,
+            edges_by_from: &edges_by_from,
+        });
+        let by_name: HashMap<&str, &'a str> = walk.iter().map(|&x| (x, x)).collect();
+        let groups: Vec<Vec<&'a str>> = sccs
+            .sccs
+            .iter()
+            .map(|s| s.members.iter().map(|m| by_name[m.as_str()]).collect())
+            .collect();
+        let group_of = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(i, g)| g.iter().map(move |&x| (x, i)))
+            .collect();
         RunCleanCones {
-            reaches_run,
+            walk,
+            group_of,
+            groups,
+            residue: std::sync::Mutex::new(HashMap::new()),
             memo: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    /// `callee`'s pending effects, or `None` when it reaches no checked run
-    /// (its whole cone counts).
+    /// Group `g`'s residue: what its members' cones hold that neither the
+    /// members' own writes nor the cone of a routine they call outside the
+    /// group (over any forward site, a checked run's included) explain: the
+    /// cone's facts over edges the forward sites lack.
+    fn residue(&self, g: usize, cx: &PendingCtx<'a>) -> std::sync::Arc<Effects<'a>> {
+        let lock = || self.residue.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(r) = lock().get(&g) {
+            return r.clone();
+        }
+        let members = &self.groups[g];
+        let mut cone = Effects::default();
+        let mut known = Effects::default();
+        for &x in members {
+            cone.add_cone(x, cx);
+            known.add_direct(x, cx);
+            for &(_, to) in cx.fwd.get(x).map_or(&[][..], Vec::as_slice) {
+                if self.group_of.get(to) != Some(&g) {
+                    known.add_cone(to, cx);
+                }
+            }
+        }
+        cone.tables.retain(|t| !known.tables.contains(t));
+        cone.events.retain(|e| !known.events.contains(e));
+        let r = std::sync::Arc::new(cone);
+        lock().insert(g, r.clone());
+        r
+    }
+
+    /// `callee`'s pending effects, or `None` when it is not walked (its whole
+    /// cone counts).
     fn of(&self, callee: &'a str, cx: &PendingCtx<'a>) -> Option<std::sync::Arc<Pending>> {
-        if !self.reaches_run.contains(callee) {
+        if !self.walk.contains(callee) {
             return None;
         }
         let lock = || self.memo.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(p) = lock().get(callee) {
             return Some(p.clone());
         }
-        let mut out = Pending::default();
+        let mut out = Effects::default();
+        let mut groups_added: HashSet<usize> = HashSet::new();
         let mut seen: HashSet<&'a str> = HashSet::from([callee]);
         let mut stack = vec![callee];
         while let Some(x) = stack.pop() {
-            let Some(s) = cx.summaries.get(x) else {
-                continue;
-            };
-            if !self.reaches_run.contains(x) {
-                for id in cx.cone_derived.physical_write_ids_of(&s.routine_id) {
-                    out.tables
-                        .insert(cx.cone_derived.resolve_res(id).to_string());
-                }
-                for id in cx.cone_derived.event_ids_of(&s.routine_id) {
-                    out.events
-                        .insert(cx.cone_derived.resolve_res(*id).to_string());
-                }
+            if !self.walk.contains(x) {
+                out.add_cone(x, cx);
                 continue;
             }
-            for f in &s.capability_facts_direct {
-                let Some(rid) = f.resource_id.as_deref() else {
-                    continue;
-                };
-                match f.resource_kind {
-                    "table" if write_op_bit(f.op).is_some() && !fact_is_known_temp(f) => {
-                        out.tables.insert(rid.to_string());
-                    }
-                    "event" if f.op == "publish" => {
-                        out.events.insert(rid.to_string());
-                    }
-                    _ => {}
-                }
+            out.add_direct(x, cx);
+            let g = self.group_of[x];
+            if groups_added.insert(g) {
+                let r = self.residue(g, cx);
+                out.tables.extend(r.tables.iter().copied());
+                out.events.extend(r.events.iter().copied());
             }
             for &(site, to) in cx.fwd.get(x).map_or(&[][..], Vec::as_slice) {
                 if !is_run_edge(x, site, to, cx.routines) && seen.insert(to) {
@@ -214,25 +325,25 @@ impl<'a> RunCleanCones<'a> {
                 }
             }
         }
-        // The walk follows forward sites the cone does not (on CDO 140 routines'
-        // sites reach writes their cone leaves out): keep only the cone's, so
-        // leaving the runs out can remove a write, never add one.
-        if let Some(s) = cx.summaries.get(callee) {
-            let tables: HashSet<&str> = cx
-                .cone_derived
-                .physical_write_ids_of(&s.routine_id)
-                .map(|id| cx.cone_derived.resolve_res(id))
-                .collect();
-            let events: HashSet<&str> = cx
-                .cone_derived
-                .event_ids_of(&s.routine_id)
-                .iter()
-                .map(|id| cx.cone_derived.resolve_res(*id))
-                .collect();
-            out.tables.retain(|t| tables.contains(t.as_str()));
-            out.events.retain(|e| events.contains(e.as_str()));
-        }
-        let out = std::sync::Arc::new(out);
+        // The walk follows forward sites the cone does not (on CDO 140
+        // routines' sites reach writes their cone leaves out): keep only the
+        // cone's, so leaving the runs out can remove a write, never add one.
+        let mut cone = Effects::default();
+        cone.add_cone(callee, cx);
+        let out = std::sync::Arc::new(Pending {
+            tables: out
+                .tables
+                .into_iter()
+                .filter(|t| cone.tables.contains(t))
+                .map(str::to_string)
+                .collect(),
+            events: out
+                .events
+                .into_iter()
+                .filter(|e| cone.events.contains(e))
+                .map(str::to_string)
+                .collect(),
+        });
         lock().insert(callee, out.clone());
         Some(out)
     }

@@ -79,7 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went from 3 old-meaning findings on master to none (6 checked runs considered, all with no
   write pending), at both scopes. A workspace callee that reaches a checked run is now walked
   with those runs left out, and the result is kept inside its cone (it can only remove a write);
-  a run inside dependency code still counts its writes.
+  a run inside dependency code still counts its writes. Whatever a walked routine's cone holds
+  that the walk cannot explain (an edge the forward sites lack, a callee with no summary) still
+  counts (review round 4), and a routine id with two rows is not walked.
 
 ### Changed (ENG-22: d50 reports the error, not an implicit commit)
 
