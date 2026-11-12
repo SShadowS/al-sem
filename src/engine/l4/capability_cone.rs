@@ -7644,7 +7644,8 @@ codeunit 50111 "Cell Calls"
         ("r0-corpus", 221),
         // 64: + `write-order` (output validation r3 §7 R6, 2026-11-08).
         // 65: + `isolated-events/ws` (engine limits B3, 2026-11-09).
-        ("fixtures", 65),
+        // 66: + `up-parallel/ws` (TLS-21, 2026-11-12).
+        ("fixtures", 66),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),

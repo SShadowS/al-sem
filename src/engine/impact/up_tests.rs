@@ -141,7 +141,7 @@ fn a_page_action_reached_only_by_navigation_has_no_code_population() {
         assert_eq!(class_of(&up, n), Population::Navigation, "{what}");
         assert_eq!(up.best[&n].class.tier, Tier::Local, "{what}");
     }
-    let s = summary(&up, &g, &mut Captions::new(HashMap::new()));
+    let s = summary(&up, &g, &Captions::new(HashMap::new()));
     let a = &s["byRelation"]["ancestors"];
     assert_eq!(
         a["code"],
@@ -285,7 +285,7 @@ fn a_mixed_path_over_navigation_and_a_hub_is_a_candidate_that_needs_navigation()
         Population::OverHub,
         "the hub is via-hub"
     );
-    let s = summary(&up, &g, &mut Captions::new(HashMap::new()));
+    let s = summary(&up, &g, &Captions::new(HashMap::new()));
     let a = &s["byRelation"]["ancestors"];
     assert_eq!(
         a["candidates"]["overHub"],
@@ -390,7 +390,7 @@ fn a_configured_path_is_a_candidate_over_configuration() {
         Population::Code,
         "Mixed has a code path"
     );
-    let s = summary(&up, &g, &mut Captions::new(HashMap::new()));
+    let s = summary(&up, &g, &Captions::new(HashMap::new()));
     let a = &s["byRelation"]["ancestors"];
     assert!(
         a["candidates"]["overConfiguration"]["code"].as_u64() >= Some(1),

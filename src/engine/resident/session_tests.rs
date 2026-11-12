@@ -867,6 +867,7 @@ impl crate::engine::batch::job::Job for SitedTextJob<'_> {
         &self,
         _: crate::engine::batch::job::SideIx,
         g: Result<&crate::program::impact_graph::SitedGraph, &str>,
+        _: &crate::engine::l5::digest_cli::ReachWorkers,
     ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
         Ok(crate::engine::batch::job::SideDoc::new(
             g.map(|g| g.text()).map_err(str::to_string),

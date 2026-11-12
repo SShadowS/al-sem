@@ -732,10 +732,15 @@ pub trait Job {
     /// A sited-graph demand ([`ViewNeeds::sited`]): off the program's sited
     /// graph (built from the lent program one-shot, kept by a resident
     /// revision), or the program's build error. Its side is done here.
+    /// `workers`: how many roots a job that walks per root may walk at once,
+    /// stated by the route (TLS-21): the one-shot batch runner passes
+    /// [`crate::engine::l5::digest_cli::default_reach_workers`], a resident
+    /// revision serial.
     fn sited(
         &self,
         _side: SideIx,
         _graph: Result<&crate::program::impact_graph::SitedGraph, &str>,
+        _workers: &crate::engine::l5::digest_cli::ReachWorkers,
     ) -> Result<SideDoc, JobFailure> {
         unreachable!("a job that reads no sited graph")
     }

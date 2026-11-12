@@ -1782,6 +1782,11 @@ pub(crate) fn digest_effects(
 #[derive(Clone, Debug)]
 pub struct ReachWorkers {
     n: usize,
+    /// TLS-21, measurement only: the up walk measures its own memory window
+    /// (it resets the process's peak mark, so other readers of that mark see
+    /// a wrong peak). Set only on the one-shot route, and only when the
+    /// binary was asked ([`set_up_walk_window`]); never on a resident revision.
+    up_window: bool,
     #[cfg(test)]
     probe: Option<std::sync::Arc<PassProbe>>,
 }
@@ -1790,6 +1795,7 @@ impl ReachWorkers {
     /// One root at a time, on the calling thread.
     pub const SERIAL: ReachWorkers = ReachWorkers {
         n: 1,
+        up_window: false,
         #[cfg(test)]
         probe: None,
     };
@@ -1799,6 +1805,7 @@ impl ReachWorkers {
     pub fn new(n: usize) -> ReachWorkers {
         ReachWorkers {
             n: n.max(1),
+            up_window: false,
             #[cfg(test)]
             probe: None,
         }
@@ -1810,13 +1817,26 @@ impl ReachWorkers {
         self.n
     }
 
+    /// Whether the up walk measures its own memory window (TLS-21).
+    #[must_use]
+    pub fn up_window(&self) -> bool {
+        self.up_window
+    }
+
     /// Tests: the same setting, observed by `probe`.
     #[cfg(test)]
     pub(crate) fn with_probe(&self, probe: std::sync::Arc<PassProbe>) -> ReachWorkers {
         ReachWorkers {
             n: self.n,
+            up_window: self.up_window,
             probe: Some(probe),
         }
+    }
+
+    /// Tests: the probe this setting carries.
+    #[cfg(test)]
+    pub(crate) fn probe(&self) -> Option<&std::sync::Arc<PassProbe>> {
+        self.probe.as_ref()
     }
 }
 
@@ -1847,15 +1867,27 @@ fn capped_by_cores(cores: usize) -> usize {
 /// resident engine runs serially instead ([`crate::engine::resident`]'s
 /// revisions; owner decision 2026-11-12, q-20261112T032637-1269d8fc).
 pub fn default_reach_workers() -> ReachWorkers {
-    ReachWorkers::new(*DEFAULT_REACH_WORKERS.get_or_init(|| {
-        capped_by_cores(std::thread::available_parallelism().map_or(1, usize::from))
-    }))
+    ReachWorkers {
+        up_window: UP_WALK_WINDOW.get().copied().unwrap_or(false),
+        ..ReachWorkers::new(*DEFAULT_REACH_WORKERS.get_or_init(|| {
+            capped_by_cores(std::thread::available_parallelism().map_or(1, usize::from))
+        }))
+    }
+}
+
+static UP_WALK_WINDOW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Set once by the binary at start (`AL_SEM_UP_WALK_WINDOW=1`, TLS-21's
+/// measurement): one-shot runs' up walk measures its own memory window
+/// ([`ReachWorkers::up_window`]); tests never set it.
+pub fn set_up_walk_window() {
+    let _ = UP_WALK_WINDOW.set(true);
 }
 
 /// TLS-22: the pool of exactly `n` threads the literal pass runs `n` roots
 /// in, one per distinct `n` for the process (production uses one count),
 /// with the big stacks the searches' recursion needs.
-fn reach_pool(n: usize) -> &'static rayon::ThreadPool {
+pub(crate) fn reach_pool(n: usize) -> &'static rayon::ThreadPool {
     static POOLS: std::sync::OnceLock<
         std::sync::Mutex<HashMap<usize, &'static rayon::ThreadPool>>,
     > = std::sync::OnceLock::new();
@@ -1890,6 +1922,16 @@ pub(crate) struct PassProbe {
     pub(crate) passes: std::sync::atomic::AtomicUsize,
     pub(crate) suffix_hits: std::sync::atomic::AtomicUsize,
     pub(crate) first_wave: std::sync::Mutex<Option<(usize, std::time::Duration)>>,
+    /// TLS-21, the up walk: tasks run, scratches made, the pool size each
+    /// task saw (`rayon::current_num_threads`).
+    pub(crate) up_tasks: std::sync::atomic::AtomicUsize,
+    pub(crate) up_done: std::sync::atomic::AtomicUsize,
+    pub(crate) scratches_made: std::sync::atomic::AtomicUsize,
+    pub(crate) pool_threads: std::sync::Mutex<Vec<usize>>,
+    /// Hold the first root's walk until every other root's walk is done (or
+    /// the timeout passes: `first_root_timed_out`), so it finishes last.
+    pub(crate) hold_first_root: std::sync::Mutex<Option<std::time::Duration>>,
+    pub(crate) first_root_timed_out: std::sync::atomic::AtomicBool,
 }
 
 /// A root in flight ([`PassProbe::enter`]); leaves on drop.
@@ -1907,7 +1949,7 @@ impl Drop for InFlight<'_> {
 
 #[cfg(test)]
 impl PassProbe {
-    fn enter(&self) -> InFlight<'_> {
+    pub(crate) fn enter(&self) -> InFlight<'_> {
         use std::sync::atomic::Ordering::SeqCst;
         let k = self.started.fetch_add(1, SeqCst);
         let now = self.in_flight.fetch_add(1, SeqCst) + 1;
