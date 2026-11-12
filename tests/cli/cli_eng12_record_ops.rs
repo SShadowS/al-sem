@@ -137,6 +137,53 @@ codeunit 52604 "E12 More"
         GRecs: array[2] of Record "E12 Row";
         G: Record "E12 Row";
         TempG: Record "E12 Row" temporary;
+        "My G": Record "E12 Row";
+        "Temp Q": Record "E12 Row" temporary;
+        XC: Codeunit "E12 Worker";
+        GB: Record "E12 Sub";
+        GT: Record "E12 Row";
+    procedure ThisQuoted()
+    begin
+        this."My G".Modify(true);
+    end;
+    procedure ThisQuotedTemp()
+    begin
+        this."Temp Q".Insert();
+    end;
+    procedure ThisShadowCodeunit()
+    var
+        XC: Record "E12 Plain";
+    begin
+        this.XC.Modify();
+    end;
+    procedure ThisShadowRecord()
+    var
+        GB: Record "E12 Plain";
+    begin
+        this.GB.Modify(true);
+    end;
+    procedure ThisShadowInteger()
+    var
+        GT: Integer;
+    begin
+        GT := 1;
+        this.GT.Modify(true);
+    end;
+    procedure ThisAndBareFlow()
+    begin
+        G.SetAutoCalcFields(Cnt);
+        if this.G.FindFirst() then;
+    end;
+    procedure GetRRRead()
+    begin
+        if GetRRX().FindFirst() then;
+    end;
+    local procedure GetRRX(): RecordRef
+    var
+        RR: RecordRef;
+    begin
+        exit(RR);
+    end;
     procedure ThisRead()
     begin
         if this.G.FindFirst() then;
@@ -371,7 +418,13 @@ fn answer(args: &[&str]) -> String {
 /// returning its input -> `SpacedFlow` answers `no` for "E12 Plain";
 /// `record_ops::is_this` false -> `ThisTemp` counts 0 temporary touches (the
 /// call-result path still answers `ThisRead`/`ThisModifyTrue`, with an
-/// unknown temp state). Each fails; restored, it passes.
+/// unknown temp state). Review round 3: keep the quotes of `this."X"` ->
+/// `ThisQuotedTemp` counts 0 temporary touches; let `this_receivers` keep a
+/// global a local shadows -> `ThisShadowRecord` answers `no` (the local's
+/// table); send a shadowed `this.X` past the call-result path (the guard back
+/// to `is_none`) -> `ThisShadowRecord` answers `no`; keep `this.` in
+/// `receiver_key_text` -> `ThisAndBareFlow` answers `no` (the FlowField set
+/// up on `G` is not `this.G`'s). Each fails; restored, it passes.
 #[test]
 fn the_review_shapes() {
     let t = workspace();
@@ -412,6 +465,26 @@ fn the_review_shapes() {
     // ... with the global's own temp state (CDO's are `this.TempX`).
     let a = tc("ThisTemp", "E12 Row");
     assert!(a.contains("1 on temporary records"), "ThisTemp: {a}");
+    // Review round 3: a quoted global; a same-named local of any type (the
+    // global's codeunit call, its own table's subscriber, its own trigger);
+    // `this.G` and `G` are one record (the FlowField set up on `G`).
+    for r in [
+        "ThisQuoted",
+        "ThisShadowCodeunit",
+        "ThisShadowRecord",
+        "ThisShadowInteger",
+    ] {
+        let a = mc(r);
+        assert!(a.starts_with("answer: yes"), "{r}: {a}");
+    }
+    // A quoted global is the variable too, with its own temp state.
+    let a = tc("ThisQuotedTemp", "E12 Row");
+    assert!(a.contains("1 on temporary records"), "ThisQuotedTemp: {a}");
+    let a = tc("ThisAndBareFlow", "E12 Plain");
+    assert!(a.starts_with("answer: down: yes"), "ThisAndBareFlow: {a}");
+    // A read on a RecordRef call result: runtime-typed, never a definite `no`.
+    let a = tc("GetRRRead", "E12 Row");
+    assert!(a.starts_with("answer: down: unknown"), "GetRRRead: {a}");
     for r in ["GlobalArr", "ArrParam"] {
         let a = tc(r, "E12 Row");
         assert!(a.starts_with("answer: down: yes"), "{r}: {a}");
@@ -431,12 +504,13 @@ fn the_review_shapes() {
 }
 
 /// ENG-12 gate (`dependency_body_unknown_ceiling_on_cdo`): no site here is an
-/// `unknown` edge. A RecordRef call result (`GetRR().Modify(true)`, its table
-/// runtime-typed) is the one honest-dynamic edge; a known table's call result
-/// is a record operation of its own; an array element and `this.X` are record
-/// operations.
+/// `unknown` edge. The two RecordRef call results (`GetRR().Modify(true)`,
+/// `GetRRX().FindFirst()`, their tables runtime-typed) are the two
+/// honest-dynamic edges; a known table's call result is a record operation of
+/// its own; an array element and `this.X` are record operations.
 /// Break (2026-11-12): the RecordRef result keeps an unknown route instead of
-/// `DynamicOpen` -> unknown 1, honestDynamic 0; restored, passes.
+/// `DynamicOpen` -> unknown 1, honestDynamic 0 (one RecordRef site then);
+/// restored, passes.
 #[test]
 fn no_site_is_an_unknown_edge() {
     let t = workspace();
@@ -455,7 +529,7 @@ fn no_site_is_an_unknown_edge() {
     let p = &v["primaryScoped"];
     assert_eq!(
         (p["unknown"].as_u64(), p["honestDynamic"].as_u64()),
-        (Some(0), Some(1)),
+        (Some(0), Some(2)),
         "{p}"
     );
 }

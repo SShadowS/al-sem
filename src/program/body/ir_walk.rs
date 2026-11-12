@@ -431,6 +431,7 @@ fn build_scope(
 
     let mut rvars = globals;
     rvars.extend(params_locals.iter().cloned());
+    let explicit_globals_all = explicit_globals.clone();
     let mut frvars = explicit_globals;
     if implicit_rec {
         frvars.insert("rec".to_string());
@@ -443,6 +444,11 @@ fn build_scope(
         rvars.remove(&n);
         frvars.remove(&n);
     }
+    // `this.X`: an unshadowed record global, as the extractor's receivers.
+    let this_keys =
+        crate::program::resolve::extract::this_receivers(&explicit_globals_all, routine);
+    rvars.extend(this_keys.iter().cloned());
+    frvars.extend(this_keys);
     // Every name a bare identifier can resolve to before a field of the
     // implicit record: parameters, locals, the object's globals of any type,
     // its dataitems and procedures, and `Rec` / `xRec` themselves.
@@ -1271,7 +1277,7 @@ impl<'a> SpineCtx<'a> {
                 Member { object, member, .. } => {
                     // `X` or an array element `X[i]` (ENG-12, L36).
                     let recv_name = crate::record_ops::receiver_variable(&self.file.ir, *object)
-                        .map(str::to_ascii_lowercase);
+                        .map(|x| x.to_ascii_lowercase());
                     let is_rec = recv_name
                         .as_ref()
                         .map(|r| self.scope.rvars.contains(r))

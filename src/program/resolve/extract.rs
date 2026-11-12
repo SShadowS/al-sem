@@ -272,6 +272,30 @@ pub(crate) fn routine_non_record_names(routine: &RoutineDecl) -> HashSet<String>
     out
 }
 
+/// The `this.` receiver keys (`record_ops::this_key`, folded) of the record
+/// globals (`globals`, folded names) no parameter, local or return value of
+/// the routine declares under ANY type: `this.X` names the global, so with a
+/// same-named declaration the bare-name sets cannot tell which (ENG-12 review
+/// round 3); such a `this.X` is no record-op receiver and is typed by the
+/// resolver from the globals instead. Shared by both engines.
+pub(crate) fn this_receivers<'g>(
+    globals: impl IntoIterator<Item = &'g String>,
+    routine: &RoutineDecl,
+) -> HashSet<String> {
+    let declared: HashSet<String> = routine
+        .params
+        .iter()
+        .map(|p| p.name.fold_identifier())
+        .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
+        .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+        .collect();
+    globals
+        .into_iter()
+        .filter(|g| !declared.contains(g.as_str()) && !g.starts_with("this."))
+        .map(|g| crate::record_ops::this_key(g).fold_identifier())
+        .collect()
+}
+
 /// [`routine_rvars`] plus the object's record globals, less the names the
 /// routine shadows with a non-record declaration.
 fn routine_receivers(routine: &RoutineDecl, object_globals: &HashSet<String>) -> HashSet<String> {
@@ -280,6 +304,8 @@ fn routine_receivers(routine: &RoutineDecl, object_globals: &HashSet<String>) ->
     for n in routine_non_record_names(routine) {
         rvars.remove(&n);
     }
+    // `this.X`: an unshadowed record global (`this_receivers`).
+    rvars.extend(this_receivers(object_globals, routine));
     rvars
 }
 

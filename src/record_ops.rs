@@ -31,22 +31,42 @@ pub fn receiver_type_of(ty: &str) -> &str {
     array_element_type(ty).unwrap_or(ty)
 }
 
-/// The variable a record-op receiver expression names: `X` for `X`, for an
-/// array element `X[i]` (ENG-12, L36) and for an object global through `this`
-/// (`this.X`, `this.X[i]`; ENG-12 gate: CDO's dependencies use it). `None` for
-/// any other shape (a call result, another member). Shared by both engines so
-/// they classify the same calls.
-pub fn receiver_variable(ir: &al_syntax::ir::Ir, e: al_syntax::ir::ExprId) -> Option<&str> {
+/// The variable a record-op receiver expression names: `X` for `X` and for an
+/// array element `X[i]` (ENG-12, L36); `this.x` (the `this.` key, the member
+/// unquoted) for an object global through `this` (`this.X`, `this."X"`,
+/// `this.X[i]`; ENG-12 gate: CDO's dependencies use it), which the receiver
+/// sets hold only for a record global no parameter, local or return value of
+/// the routine shadows ([`this_key`]). `None` for any other shape (a call
+/// result, another member). Shared by both engines so they classify the same
+/// calls.
+pub fn receiver_variable(
+    ir: &al_syntax::ir::Ir,
+    e: al_syntax::ir::ExprId,
+) -> Option<std::borrow::Cow<'_, str>> {
     use al_syntax::ir::ExprKind;
+    use std::borrow::Cow;
     let named = |e: al_syntax::ir::ExprId| match &ir.expr(e).kind {
-        ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.as_str()),
-        ExprKind::Member { object, member, .. } if is_this(ir, *object) => Some(member.as_str()),
+        ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(Cow::Borrowed(x.as_str())),
+        ExprKind::Member { object, member, .. } if is_this(ir, *object) => {
+            let m = member.trim();
+            let m = m
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(m);
+            Some(Cow::Owned(this_key(m)))
+        }
         _ => None,
     };
     match &ir.expr(e).kind {
         ExprKind::Index { base, .. } => named(*base),
         _ => named(e),
     }
+}
+
+/// The receiver-set key of an object global `name` reached through `this`
+/// (`this.<name>`, the name as written; callers fold it as they fold names).
+pub fn this_key(name: &str) -> String {
+    format!("this.{name}")
 }
 
 /// Whether `e` is the `this` keyword (the object instance).
@@ -80,10 +100,17 @@ pub fn touches_table(method_lc: &str) -> bool {
     )
 }
 
-/// A record-op receiver's text as both engines key it: an indexed receiver
-/// without whitespace outside quotes (`Recs[ 1 ]` and `Recs[1]` are one
-/// element, ENG-12 review); any other text unchanged.
+/// A record-op receiver's text as both engines key it: an object global
+/// through `this` without the `this.` (`this.G` and `G` are one record: a
+/// `this.X` receiver is classified only when no local shadows `X`, ENG-12
+/// review); an indexed receiver without whitespace outside quotes
+/// (`Recs[ 1 ]` and `Recs[1]` are one element); any other text unchanged.
 pub fn receiver_key_text(t: &str) -> String {
+    let t = t.trim_start();
+    let t = match t.get(..5) {
+        Some(p) if p.eq_ignore_ascii_case("this.") => t[5..].trim_start(),
+        _ => t,
+    };
     if !t.contains('[') {
         return t.to_string();
     }

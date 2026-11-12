@@ -1069,8 +1069,12 @@ fn resolve_call_site_obligation(
                     // Not a variable (`X`, `X[i]`): those are record operations,
                     // or a variable the receiver sets do not hold (a base
                     // object's `protected var` in an extension), left as before.
+                    // A `this.X` that reaches here is one a same-named local
+                    // shadows in the receiver sets: the resolver typed it from
+                    // the globals, so it takes this path (ENG-12 review round 3).
                     && receiver.is_some_and(|id| {
-                        crate::record_ops::receiver_variable(&file.ir, id).is_none()
+                        crate::record_ops::receiver_variable(&file.ir, id)
+                            .is_none_or(|v| v.starts_with("this."))
                     })
                 {
                     let table_node = match &recv {
