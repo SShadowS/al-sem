@@ -2588,6 +2588,11 @@ fn judge_traps<'t>(
     if scope.is_none() && !collectors && !has_run_error && !has_refusal {
         return;
     }
+    let in_try = if has_refusal {
+        reach.in_try_reach(&entry.routine_id)
+    } else {
+        None
+    };
     for i in rows {
         let e = &mut entry.effects[i];
         let ops: Vec<String> = if e.boundary_group {
@@ -2660,13 +2665,16 @@ fn judge_traps<'t>(
             assumes_normal_commit = false;
         }
         // ENG-10: a group a try call catches may hold the refusal of a write
-        // beyond the crossing, which the try call does not catch.
+        // beyond the crossing, which the try call does not catch: when a
+        // crossing edge runs inside a try call on a route with no checked
+        // run or `asserterror`, and its target may run a refused operation.
         if e.boundary_group
             && let Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(at)) = &trap
             && at.kind == crate::engine::l5::traps::TrapKind::TryFunction
-            && e.crossing
-                .as_ref()
-                .is_some_and(|c| c.targets.iter().any(|t| reach.may_refuse(t)))
+            && let (Some(c), Some(it)) = (e.crossing.as_ref(), in_try.as_ref())
+            && c.edges
+                .iter()
+                .any(|x| reach.crossing_in_try(it, &x.from, x.site.guarded_id(), &x.to))
         {
             trap = Some(
                 crate::engine::l5::literal_reach::TrapVerdict::UnlessWritePending(

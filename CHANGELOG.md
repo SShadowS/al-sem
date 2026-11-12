@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write-in-try`), raised, never unconditional, where a refused operation or unknown code may run
   inside it, "not raised" otherwise (trap kind `try-write-refused`; JSON verdict
   `escapes-if-write-refused`). prove (and its `--site/--match/--op` slice, which also rules a
-  refused operation inside the try that way), explain and digest. A symbol-only routine (no body)
+  refused operation inside the try that way, by its route: through a try call with no checked run
+  or `asserterror` on it; `--op Commit` and a tested `--op Insert` find the refusal too),
+  explain and digest. A symbol-only routine (no body)
   is unknown code inside a try call. A root that is itself such a try function states that its
   answer assumes statement calls (`obligations.assumesStatementCallsOnly`, the header's
   assumptions). `alsem impact` keys the refusal as `error|error-implicit|write-in-try` (summary

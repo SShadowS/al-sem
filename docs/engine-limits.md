@@ -548,8 +548,13 @@ literal reach, so measure speed when changing it.
      that refuses one") when a write, `LockTable`, `Commit()` or unknown code may run inside it
      without crossing a checked run or `asserterror`, and not caught by any try call above;
      "not raised" otherwise. A filtered slice (`--site`, `--match`, `--op`) on a refused
-     operation inside a try call rules it the same way. A boundary group a try call catches is
-     kept escaping when the code beyond its crossing may run a refused operation. A routine with
+     operation inside a try call rules it the same way: a refused operation raises the refusal
+     where some route from the root runs it inside a try call (through the call, or in its
+     argument list) with no checked run or `asserterror` anywhere on the route; one that has no
+     error of its own (a `Commit()`, a tested `if not R.Insert()`) is an error site there too, and
+     a try call where nothing may be refused is "not raised" in the slice as well. A boundary
+     group a try call catches is kept escaping when a crossing edge runs inside a try call on
+     such a route and the code beyond it may run a refused operation. A routine with
      no body (a symbol-only dependency routine, a `[TryFunction]` among them) is unknown code
      inside a try call. A root that is itself a `[TryFunction]` and may run a refused operation
      states the assumption its answer rests on: its callers call it as a statement (prove's
@@ -561,8 +566,12 @@ literal reach, so measure speed when changing it.
      such as `if not R.Insert()` and a body that only commits or locks answer `no`); the
      assumption is stated, not answered both ways, and digest's JSON `coverage.assumptions` labels
      do not carry it. The refusal row names the try call, not the refused write inside it (BC's
-     message names the operation). An impact key for the refusal does not carry its verdict, so
-     a write added inside an existing try call moves no key (a new try call does). "Not raised"
+     message names the operation). An impact key for the refusal does not carry its verdict: a
+     write added inside an existing try call shows as the new write's own key, not as a new
+     refusal error (a new try call does show one). A refused operation written directly under
+     `asserterror` inside the try function (`asserterror R.Insert();`, no call between) still
+     counts as refused, an over-report: the body walk marks `asserterror` only on `Error()`
+     sites (an `asserterror` around a call is followed). "Not raised"
      is carried as a caught ruling of its own kind
      (`try-write-refused`), as ENG-22's clean runs are, so caught counts (digest
      `caughtErrors`) include it; the human lines name it apart. A write whose execution depends

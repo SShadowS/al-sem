@@ -1746,6 +1746,34 @@ struct TryRefusal<'a> {
     /// (a callee with no row, a call no edge resolves), may run without
     /// crossing a checked run or an `asserterror` call.
     closure: HashSet<&'a str>,
+    /// The call sites that start code inside a try call: each try call, and
+    /// each call in a try call's argument list (Learn: arguments are
+    /// evaluated inside the try function), each with its try call's site.
+    try_sites: HashMap<&'a str, &'a str>,
+    /// The refused operations in a try call's argument list
+    /// (`TryTakes(R.Insert())`), inside it though their owner is not, each
+    /// with its try call's site.
+    arg_ops: HashMap<&'a str, &'a str>,
+}
+
+/// ENG-10: one root's routines reached without crossing a checked run or an
+/// `asserterror` call ([`LiteralReach::in_try_reach`]): `open` all of them,
+/// `inside` those reached through a try call (code that runs inside one),
+/// each with the first try call (owner, site) found on its route.
+#[derive(Debug, Default)]
+pub(crate) struct InTry<'a> {
+    open: HashSet<&'a str>,
+    inside: HashMap<&'a str, (&'a str, &'a str)>,
+}
+
+/// Whether anchor `b` lies within anchor `a` (same unit).
+fn anchor_within(
+    b: &crate::program::body::features::PAnchor,
+    a: &crate::program::body::features::PAnchor,
+) -> bool {
+    b.source_unit_id == a.source_unit_id
+        && (b.start_line, b.start_column) >= (a.start_line, a.start_column)
+        && (b.end_line, b.end_column) <= (a.end_line, a.end_column)
 }
 
 /// [`LiteralReach::soft_checked_runs`]: the soft runs (caller, out-edge
@@ -3193,6 +3221,9 @@ impl<'a> LiteralReach<'a> {
         use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
         let mut ops: HashSet<&'a str> = HashSet::new();
         let mut seeds: HashSet<&'a str> = HashSet::new();
+        // shortcut: `asserterror R.Insert()` (no call between) still counts as
+        // refused: the body walk marks `under_asserterror` on `Error()` sites
+        // only (an over-report; engine limits L23 item 6).
         for rec in self.terminals.records() {
             if !matches!(rec.effect_type, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE")
                 || matches!(rec.temp, TerminalTemp::Known(true))
@@ -3231,7 +3262,9 @@ impl<'a> LiteralReach<'a> {
                     .filter_map(|&(_, s, _, _)| s.and_then(EdgeSite::guarded))
                     .collect();
                 if row.call_sites.iter().any(|c| {
-                    !sited.contains(c.id.as_str()) && !self.builtin_sites.contains(c.id.as_str())
+                    !sited.contains(c.id.as_str())
+                        && !self.builtin_sites.contains(c.id.as_str())
+                        && c.under_asserterror != Some(true)
                 }) {
                     seeds.insert(id);
                 }
@@ -3262,7 +3295,115 @@ impl<'a> LiteralReach<'a> {
                 }
             }
         }
-        TryRefusal { ops, closure }
+        let mut try_sites: HashMap<&'a str, &'a str> = HashMap::new();
+        let mut arg_ops: HashMap<&'a str, &'a str> = HashMap::new();
+        for row in self
+            .by_stable
+            .values()
+            .copied()
+            .chain(self.arm_rows.values().flatten().copied())
+        {
+            for t in row.call_sites.iter().filter(|c| c.try_call) {
+                let (a, tid) = (&t.source_anchor, t.id.as_str());
+                for c in &row.call_sites {
+                    if anchor_within(&c.source_anchor, a) {
+                        try_sites.entry(c.id.as_str()).or_insert(tid);
+                    }
+                }
+                try_sites.insert(tid, tid);
+                for o in &row.operation_sites {
+                    if anchor_within(&o.source_anchor, a) && ops.contains(o.id.as_str()) {
+                        arg_ops.entry(o.id.as_str()).or_insert(tid);
+                    }
+                }
+            }
+        }
+        TryRefusal {
+            ops,
+            closure,
+            try_sites,
+            arg_ops,
+        }
+    }
+
+    /// ENG-10: the routines `root` reaches without crossing a checked run or
+    /// an `asserterror` call, and those among them reached through a try call
+    /// ([`InTry`]). A checked run or `asserterror` above the try call catches
+    /// its refusal (T16, T15); one below it runs the code outside it (T10).
+    /// `None` without refusal facts or for an unknown root.
+    pub(crate) fn in_try_reach(&self, root: &str) -> Option<InTry<'a>> {
+        let w = self.refusal.as_ref()?;
+        let (&root, _) = self.by_stable.get_key_value(root)?;
+        let mut it = InTry::default();
+        it.open.insert(root);
+        let mut q: VecDeque<(&'a str, Option<(&'a str, &'a str)>)> = VecDeque::from([(root, None)]);
+        while let Some((f, via)) = q.pop_front() {
+            let traps = self.traps.get(f).map_or(&[][..], Vec::as_slice);
+            for (j, &(to, site, _, _)) in self.out.get(f).into_iter().flatten().enumerate() {
+                if traps.iter().any(|&(t, k)| {
+                    t as usize == j && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+                }) {
+                    continue;
+                }
+                let next = via.or_else(|| {
+                    site.and_then(EdgeSite::guarded)
+                        .and_then(|s| w.try_sites.get(s))
+                        .map(|&t| (f, t))
+                });
+                let fresh = match next {
+                    Some(v) => match it.inside.entry(to) {
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(v);
+                            true
+                        }
+                        std::collections::hash_map::Entry::Occupied(_) => false,
+                    },
+                    None => it.open.insert(to),
+                };
+                if fresh {
+                    q.push_back((to, next));
+                }
+            }
+        }
+        it.open.extend(it.inside.keys().copied());
+        Some(it)
+    }
+
+    /// ENG-10: the try call (owner, call site) inside which the refused
+    /// operation `op` runs on some route [`Self::in_try_reach`] holds: the
+    /// first one on its owner's route, or the try call whose argument list
+    /// holds `op`. `None`: `op` is no refused operation run inside one.
+    pub(crate) fn refused_in_try(&self, it: &InTry<'a>, op: &str) -> Option<(&'a str, &'a str)> {
+        let w = self.refusal.as_ref()?;
+        if !w.ops.contains(op) {
+            return None;
+        }
+        let owner = self.op_owner(op)?;
+        if let Some(&v) = it.inside.get(owner) {
+            return Some(v);
+        }
+        w.arg_ops
+            .get(op)
+            .filter(|_| it.open.contains(owner))
+            .map(|&t| (owner, t))
+    }
+
+    /// ENG-10: whether code beyond the crossing edge `from → to` at `site`
+    /// may be refused inside a try call on a route [`Self::in_try_reach`]
+    /// holds: the edge runs inside one, and `to` may run a refused operation.
+    pub(crate) fn crossing_in_try(
+        &self,
+        it: &InTry<'a>,
+        from: &str,
+        site: Option<&str>,
+        to: &str,
+    ) -> bool {
+        let Some(w) = self.refusal.as_ref() else {
+            return false;
+        };
+        it.open.contains(from)
+            && (it.inside.contains_key(from) || site.is_some_and(|s| w.try_sites.contains_key(s)))
+            && w.closure.contains(to)
     }
 
     /// ENG-10: the routines `root` reaches without crossing a checked run or
@@ -3379,10 +3520,11 @@ impl<'a> LiteralReach<'a> {
         }) && self.may_refuse(root)
     }
 
-    /// ENG-10: whether `op` is an operation the server refuses inside a try
-    /// call (a non-temporary write, a `LockTable`, a `Commit()`).
-    pub(crate) fn is_refused_op(&self, op: &str) -> bool {
-        self.refusal.as_ref().is_some_and(|w| w.ops.contains(op))
+    /// ENG-10: the operations the server refuses inside a try call (a
+    /// non-temporary write, a `LockTable`, a `Commit()`; not one under
+    /// `asserterror`).
+    pub(crate) fn refused_ops(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.refusal.iter().flat_map(|w| w.ops.iter().copied())
     }
 
     /// ENG-10: whether any call site is a try call (the refusal facts exist).

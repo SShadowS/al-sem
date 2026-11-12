@@ -416,6 +416,44 @@ fn the_site_slice_rules_the_refusal() {
     assert_eq!(r["answer"], "yes", "{r}");
 }
 
+/// A filtered answer on the refused operation itself: a `Commit()` (no
+/// error of its own) and a tested `Insert` in a try call's argument list
+/// raise the refusal (T09, T13); an `Insert` behind a checked run inside
+/// the try call does not (T10); a try call where nothing may be refused is
+/// "not raised", not "caught".
+/// Breaks (2026-11-12): drop the added sites for refused operations with no
+/// error of their own -> `--op Commit` and `ArgRecTry --op Insert` answer
+/// `no`; restore the first-trap override (any `Caught(TryFunction)` on a
+/// refused operation escapes) -> `CheckedRunTry --op Insert` answers `yes`.
+/// Each fails; restored, it passes.
+#[test]
+fn the_op_slice_rules_refused_operations_by_their_route() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let r = ask(ws, "WT Caller::CommitTryCaller", &["--op", "Commit"]);
+    assert_eq!(r["answer"], "yes", "{r}");
+    let r = ask(ws, "WT Caller::ArgRecTry", &["--op", "Insert"]);
+    assert_eq!(r["answer"], "yes", "{r}");
+    let r = ask(ws, "WT Caller::CheckedRunTry", &["--op", "Insert"]);
+    assert_eq!(r["answer"], "no", "{r}");
+    let site = format!("src/wt.al:{}", line_of("Ok := TryRead();"));
+    let h = run(&[
+        "prove",
+        ws,
+        "WT Caller::ReadTry",
+        "throws-error",
+        "--site",
+        &site,
+        "--format",
+        "human",
+    ]);
+    assert!(
+        h.contains("not raised: 1 try call's write-refusal error")
+            && !h.contains("caught on every"),
+        "{h}"
+    );
+}
+
 const DEP_GUID: &str = "e10e10e0-0000-4000-8000-0000000000dd";
 
 /// A try function known only from a dependency's symbols: no body to read,
@@ -484,7 +522,7 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
     .unwrap();
     std::fs::write(
         ws.join("src/c.al"),
-        "codeunit 52440 \"WG Caller\"\n{\n    procedure UseTry()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryDep();\n    end;\n\n    [TryFunction]\n    local procedure TryDep()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n}\n",
+        "codeunit 52440 \"WG Caller\"\n{\n    procedure UseTry()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryDep();\n    end;\n\n    [TryFunction]\n    local procedure TryDep()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n\n    procedure UseTryRun()\n    var\n        Ok: Boolean;\n    begin\n        Ok := TryRun();\n    end;\n\n    [TryFunction]\n    local procedure TryRun()\n    begin\n        if Codeunit.Run(Codeunit::\"WG Runner\") then;\n    end;\n}\ncodeunit 52441 \"WG Runner\"\n{\n    trigger OnRun()\n    var\n        L: Codeunit \"YDep Lib\";\n    begin\n        L.InsertRow();\n    end;\n}\n",
     )
     .unwrap();
     crate::symbol_app::write_source_app(
@@ -523,6 +561,12 @@ fn a_group_beyond_a_try_call_stays_escaping_when_it_may_refuse() {
         "{group}"
     );
     assert_eq!(group["trap"]["kind"], "try-write-refused", "{group}");
+    // T10: the same write behind a checked run inside the try call runs
+    // outside it: the group stays caught (not listed), nothing is refused.
+    // Break (2026-11-12): rule the group by its first trap only (any
+    // crossing target that may refuse) -> it is listed as escaping.
+    let r = ask(ws.to_str().unwrap(), "WG Caller::UseTryRun", &[]);
+    assert_eq!(r["answer"], "no", "{r}");
 }
 
 /// A root that is itself a try function and may run a refused operation:
