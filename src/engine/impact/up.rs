@@ -1362,6 +1362,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(rayon::current_num_threads());
+            // In flight first, so a held first root counts while it waits.
+            let in_flight = p.enter();
             let hold = *p.hold_first_root.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(timeout) = hold
                 && Some(_i) == first_walked
@@ -1371,7 +1373,7 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             }
-            p.enter()
+            in_flight
         });
         let out = walk_root(g, args, &shared, captions, &scratches, id, nodes);
         #[cfg(test)]
@@ -1467,6 +1469,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
                  "inventoryBytes": shared.inv.bytes()},
     })
 }
+
+#[cfg(test)]
+#[path = "up_par_tests.rs"]
+pub(crate) mod up_par_tests;
 
 #[cfg(test)]
 mod tests {

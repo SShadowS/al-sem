@@ -1306,6 +1306,104 @@ fn every_route_runs_the_pass_with_its_revisions_worker_count() {
     assert_eq!(rev.reach_probe().max(), 2, "a streamed impact");
 }
 
+/// TLS-21: a revision answers `impact-up` with ITS worker count. At 3, with
+/// the first three walks held until three are in flight, the probe sees
+/// exactly 3 at once in a pool of exactly 3 threads, one task per walked
+/// root, and master's answer. A production revision (serial) walks one root
+/// at a time over the same hold.
+///
+/// DISCRIMINATION (2026-11-12): a revision whose `reach_workers` starts as
+/// `default_reach_workers()` instead of `SERIAL` (`Revision::new`) fails the
+/// production case (5 in flight); restored, passes.
+#[test]
+fn the_resident_up_walk_runs_on_the_revisions_count() {
+    use crate::engine::impact::jobs::{UpAsk, UpJob};
+    use crate::engine::impact::up::up_par_tests::{fixture_dir, root_ids};
+    use crate::engine::l5::digest_cli::ReachWorkers;
+    let dir = fixture_dir();
+    let f = Fixture {
+        inputs: WorkspaceInputs::read(&dir.path().join("ws"), &READ),
+        single_app: false,
+        routine: "",
+        _dir: Some(dir),
+    };
+    let program = crate::program::resolved::ResolvedProgram::build(
+        &f.inputs,
+        crate::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("the fixture builds");
+    let g = Arc::new(
+        crate::program::impact_graph::sited_from_program(&program, &|| false).expect("built"),
+    );
+    let ask = || UpAsk {
+        roots: root_ids(),
+        assume_no_dependents: false,
+        detail: false,
+        single_app: false,
+    };
+    let held = |rev: &Revision, n: usize, timeout: u64| {
+        *rev.reach_probe().first_wave.lock().unwrap() =
+            Some((n, std::time::Duration::from_secs(timeout)));
+    };
+    let hand = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    let job = UpJob::new(&hand, ask());
+    let cold = crate::engine::batch::standalone_output(&job);
+    // At 3 workers.
+    let rev = revision(&f)
+        .with_sited(Arc::clone(&g))
+        .with_reach_workers(ReachWorkers::new(3));
+    held(&rev, 3, 10);
+    let hand = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    let out = rev
+        .answer(&UpJob::new(&hand, ask()), &Control::unreserved())
+        .unwrap();
+    assert_eq!(out.exit, 0, "{:?}", out.message());
+    let p = rev.reach_probe();
+    assert_eq!(
+        p.up_tasks.load(std::sync::atomic::Ordering::SeqCst),
+        5,
+        "one task per walked root"
+    );
+    if std::thread::available_parallelism().map_or(1, usize::from) < 2 {
+        eprintln!("one core: the parallel claim is not checked");
+    } else {
+        assert_eq!(p.max(), 3, "three walks at once");
+        assert!(
+            p.pool_threads.lock().unwrap().iter().all(|&n| n == 3),
+            "a pool of exactly three: {:?}",
+            p.pool_threads.lock().unwrap()
+        );
+    }
+    let answer = |o: &JobOutput| -> serde_json::Value {
+        let stdout: Vec<u8> = o
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                crate::engine::batch::output::WriteAction::Stdout(b) => Some(b.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let mut v: serde_json::Value = serde_json::from_slice(&stdout).expect("JSON");
+        for k in ["walkMs", "walksUs", "scratchBytes"] {
+            v["cost"][k] = serde_json::Value::Null;
+        }
+        v
+    };
+    assert_eq!(answer(&out), answer(&cold), "the cold run's answer");
+    // A production revision: serial.
+    let rev = revision(&f).with_sited(Arc::clone(&g));
+    held(&rev, 3, 2);
+    let hand = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    let out = rev
+        .answer(&UpJob::new(&hand, ask()), &Control::unreserved())
+        .unwrap();
+    assert_eq!(answer(&out), answer(&cold));
+    let p = rev.reach_probe();
+    assert_eq!(p.up_tasks.load(std::sync::atomic::Ordering::SeqCst), 5);
+    assert_eq!(p.max(), 1, "the resident engine walks one root at a time");
+}
+
 /// Without its tree a witness fill fails loudly, never answers wrong: a
 /// plan's witnesses are filled off the request's own `Tree(scope)`.
 ///
