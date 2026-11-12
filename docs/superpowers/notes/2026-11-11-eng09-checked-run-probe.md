@@ -1,8 +1,15 @@
 # ENG-09 probe: what a checked `Codeunit.Run` commits (L16 item 2, L28)
 
-Measured 2026-11-11 on the BC 28.4 Linux sidecar (`http://bc`, instance `BC`). **Windows
-confirmation pending** (owner question q-20261112T021007-384a506a). The probe app was removed
-after the run.
+Measured 2026-11-11 on the BC 28.4 Linux sidecar (`http://bc`, instance `BC`). The probe app was
+removed after the run.
+
+**Confirmed on Windows** by the owner, 2026-11-12 (BC 28.0.54946.56477, Cronus28, test runner
+130451, isolation off; q-20261112T021007-384a506a). The shape: an `Insert` pending, then
+`Ok := Codeunit.Run(C)`. The run itself raises "An error occurred and the transaction is
+stopped." The error is **not caught by the checked form**: the run does not return `false`. This
+holds whether `C` succeeds or calls `Error()`. The caller's row count afterwards is 0, so the
+insert was not committed. Controls: with no run the count is 0; with `Commit()` before `Error()`
+it is 1. The sidecar run did not show the uncaught part, because F ran inside a `[TryFunction]`.
 
 ## What it tests
 
