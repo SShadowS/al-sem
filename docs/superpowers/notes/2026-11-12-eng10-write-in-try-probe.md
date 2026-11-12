@@ -3,7 +3,15 @@
 Measured 2026-11-12 on the BC 28.4 Linux sidecar (`http://bc`, instance `BC`, on premises; the
 server's `DisableWriteInsideTryFunctions` was not changed, so it has its default). App
 `e10e10e0-0000-4000-8000-0000000000e9` ("ENG10 Write In TryFunction Probe", ids 50940-50959),
-removed after the run. **Windows confirmation: pending** (asked of the owner).
+removed after the run.
+
+**First run (T00-T12) confirmed on Windows** by the owner (q-20261112T104134-338e9d4a): BC
+28.0.54946.56477 on premises, Cronus28, test runner 130451, `DisableWriteInsideTryFunctions=true`,
+TestPermissions=Disabled with a permission set. All 13 outcomes match the sidecar: T00, T02, T08
+ok; T01, T03-T07, T09, T11, T12 raise "Call to the function X is not allowed…", not caught; T10's
+checked run catches it (the try returns true). One difference: the scope in the message reads
+`'RunTests'` on Windows, not `'RootMethodScope'`, so nothing may match on the scope name. **The
+second and third runs (T13-T20) are sidecar-only**: not part of that confirmation.
 
 ## Question
 
@@ -38,7 +46,7 @@ failure with another text is BC's own error, which nothing caught.
 | T10 `if Codeunit.Run(Writer) then;` inside the try (Writer's `OnRun` inserts) | the run returns false and catches the refusal ("…'INSERT' is not allowed…" is the last error); the try returns true |
 | T11 `Codeunit.Run(Writer);` inside the try (unchecked) | **not caught**, the same error, raised in Writer's `OnRun` |
 
-Second run, same day (review: shapes the first run did not cover):
+Second run, same day, **sidecar only** (review: shapes the first run did not cover):
 
 | Scenario | Outcome |
 |---|---|
@@ -48,7 +56,7 @@ Second run, same day (review: shapes the first run did not cover):
 | T16 `Ok := TryRunsInnerTry()`, whose body is `if Codeunit.Run(Inner) then;`, `Inner` does `Ok := TryW()` and `TryW` inserts | caught by the checked run; the outer try returns true |
 | T17 `TryOuter();` (result not used) around `if TryInsert() then;` | **not caught** ("…inside the call to 'T17_UnusedTry_InnerUsedTryWrites'…"): the inner used try is refused as before |
 
-Third run, same day (review: which uses of the value make it a try call for the write):
+Third run, same day, **sidecar only** (review: which uses of the value make it a try call for the write):
 
 | Scenario | Outcome |
 |---|---|
