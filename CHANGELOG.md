@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-25: `cdo-speed --rounds` above 5 is refused up front)
+
+- **`scripts/cdo-speed --rounds N` with N above 5 crashed after minutes of timing.** There are 5
+  round routines, one per round. `--rounds 6` built and started both servers, timed the warm-up
+  and 5 rounds (about 5 minutes on CDO), then stopped with `IndexError` and wrote no
+  `speed.json` (found in TLS-09 (b)). It is now a usage error (exit 2) naming the limit, given
+  before anything is built or started; so is `--rounds 0`. `--max-rounds` was already capped at
+  5. Test: `tests/cli/gate_scripts.rs` `speed_gate_refuses_more_rounds_than_routines`.
+
 ### Fixed (ENG-10: a database write inside a used try call is refused on premises, engine limits L23 item 6)
 
 - **`throws-error` answered `no` for `Ok := TryInsert()`** whose try function inserts: it counted
