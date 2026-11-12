@@ -167,7 +167,8 @@ codeunit 50985 "CR Probe Test"
 
 ## Second probe (ENG-22): does `IsInWriteTransaction()` match the run's failure?
 
-Measured 2026-11-12 on the BC 28.4 Linux sidecar. **Windows confirmation pending.** App
+Measured 2026-11-12 on the BC 28.4 Linux sidecar. **Windows confirmation pending** (owner
+q-20261112T043721-7da83bae). App
 `e22e22e0-0000-4000-8000-0000000000e9` ("ENG22 IsInWriteTransaction Probe", ids 50960-50979,
 removed after the run). Each state starts after a `Commit()` (nothing pending); the probe records
 `IsInWriteTransaction()` and whether a checked run of an empty codeunit (inside a `[TryFunction]`)

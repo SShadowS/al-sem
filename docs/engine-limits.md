@@ -408,13 +408,16 @@ callers' question reads (`commit_scope::declared`).
   trigger of a table event shares the sibling rule (subscribers of one record operation), and one
   fired by a write operation is entered with that write pending (conservative for `OnBefore…`
   events and `OnInsert`-style triggers, which run before the write); `LockTable` counts as a write
-  (measured on the BC 28.4 sidecar: `LockTable` then a read makes `IsInWriteTransaction()` true
-  and a checked run after it fails). d50 also seeds the variable form (`Ok := C.Run()`).
+  (measured on the BC 28.4 sidecar only, Windows pending, owner q-20261112T043721-7da83bae:
+  `LockTable` then a read makes `IsInWriteTransaction()` true and a checked run after it fails). d50 also seeds the variable form (`Ok := C.Run()`). Round 2: a
+  call in a `while`/`repeat` condition counts what an earlier pass of the whole condition ran
+  (`while Step() do;`, `Step` running a checked run and then writing).
 - **`if IsInWriteTransaction() then Commit();` ends the write** on both paths, in the trap search
   and the transaction spans (d50). Measured on the BC 28.4 sidecar (probe note, second probe):
   `IsInWriteTransaction()` was true exactly when a checked run failed, in all seven states tried
   (nothing, a pending insert, after a `Commit()`, a plain `Get`, `LockTable` + `FindSet`, a
-  `ModifyAll` that matched no row, the guarded commit itself); Windows confirmation pending. Only
+  `ModifyAll` that matched no row, the guarded commit itself); sidecar only, Windows pending (owner
+  q-20261112T043721-7da83bae). Only
   that shape: the whole condition is the platform's call (resolver-decided,
   `PCallSite::write_txn_query`, so a procedure of that name does not count), not negated, no
   `else`, and the `then` branch is one `Commit()`. CDO's `CDOLegacyeDocDispatcher:254-255` has it;
@@ -447,8 +450,8 @@ callers' question reads (`commit_scope::declared`).
   fires a subscriber, and sibling subscribers are left out: wrong negatives), and a helper's
   whole write cone counts even when the helper's writes are inside its own checked run (wrong
   positives).
-- `ReadIsolation := IsolationLevel::UpdLock` (a locking read without `LockTable`) was not
-  measured and does not count as a write.
+- A locking read without `LockTable` (`FindSet(true)`, `Find` for update,
+  `ReadIsolation := IsolationLevel::UpdLock`) was not measured and does not count as a write.
 - A group row beyond a dependency crossing (a run's error in dependency code) gets its terminal
   witness from the run's own terminals (review round 1); no test reaches a group row of this kind.
 - Platform-side database writes before a checked run (`IsolatedStorage.Set`, Media import and
