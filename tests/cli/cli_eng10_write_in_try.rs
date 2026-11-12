@@ -430,6 +430,15 @@ fn no_refusal_where_nothing_inside_may_be_refused() {
             "{routine}: {h}"
         );
     }
+    // explain keeps it apart from the caught errors too (a count, no list).
+    // Break (2026-11-12): `routine_rollup::not_raised` always false -> the
+    // row is listed as caught "by the database-write refusal"; restored, ok.
+    let e = run(&["explain", ws, "--routine", "WT Caller::ReadTry"]);
+    assert!(
+        e.contains("not raised: 1 try call's write-refusal error")
+            && !e.contains("by the database-write refusal"),
+        "{e}"
+    );
     let r = ask(ws, "WT Caller::StatementTry", &[]);
     assert!(refusals(&r).is_empty(), "{r}");
 }
