@@ -240,6 +240,12 @@ pub struct SiteFacts {
     /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
     /// validates ([`field_ref_validate`]). `None` for any other call.
     pub field_ref_validate: Option<FieldRefValidate>,
+    /// ENG-12: a record operation on a function's returned record of a known
+    /// table (`GetRef().Modify(true)`, `F().FindFirst()`): the model makes it a
+    /// record operation of its own (`program_calls`, id
+    /// `{call site}/callresult`), with these triggers and table events, as a
+    /// `FieldRef.Validate(…)`'s. `None` for any other call.
+    pub call_result_record: Option<CallResultRecord>,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -265,6 +271,20 @@ pub enum UnresolvedTable {
 /// platform runs the field's `OnValidate` trigger and raises the table's
 /// `OnBeforeValidateEvent`/`OnAfterValidateEvent` for that field, as
 /// `Rec.Validate(Field, …)` does; the FieldRef only hides which table and field.
+/// ENG-12: a record operation on a function's returned record
+/// ([`SiteFacts::call_result_record`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallResultRecord {
+    /// The operation, as `record_ops::record_op_type` spells it (`Modify`).
+    pub op: &'static str,
+    /// The returned record's table (the function's declared return type).
+    pub table: ObjectNodeId,
+    /// Its trigger routes, after the site's RunTrigger rule.
+    pub triggers: Vec<Route>,
+    /// Its platform table-event publishers.
+    pub table_events: Vec<Route>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldRefValidate {
     /// Every binding of the FieldRef names this table's field.
@@ -1035,16 +1055,13 @@ fn resolve_call_site_obligation(
                 // ENG-12 (ENG-06 review gap (b)): a record operation on a
                 // record no variable names (a call's result,
                 // `GetRef().Modify(true)`, `GetRef().FindFirst()`; an array
-                // element is a record operation, `extract::classify_call`).
-                // Measured 2026-11-12 (CDO explain): 3 such sites reached from
-                // CDO's roots, all in dependency code
-                // (`CreationFactory.GeteDocumentHeader().Modify`); none in CDO's
-                // or Base Application's own source.
-                // A trigger-firing one runs its table's triggers when the table
-                // is known (as a record operation's, by the same RunTrigger
-                // rule); each carries one honest unknown for what is not
-                // followed here (the table it touches, its table events; with
-                // no table, any table's triggers): never a definite `no`.
+                // element and `this.X` are record operations,
+                // `record_ops::receiver_variable`). On CDO 3 such sites, all in
+                // dependency code (`CreationFactory.GeteDocumentHeader().Modify`).
+                // A known table: a record operation of its own
+                // (`CallResultRecord`, built by the model as ENG-06's
+                // `FieldRef.Validate` is); a RecordRef: an honest open dispatch;
+                // a table not loaded: one unresolved route. Never a definite `no`.
                 let trigger_op = crate::program::resolve::edge::record_trigger_op(&method_lc);
                 if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
                     && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
@@ -1055,31 +1072,56 @@ fn resolve_call_site_obligation(
                         crate::record_ops::receiver_variable(&file.ir, id).is_none()
                     })
                 {
-                    // What is not followed comes first: the site's first edge
-                    // is what the unresolved ledger reads. The builtin route
-                    // (no target) is replaced by it.
-                    r = vec![unknown_route(UnknownReason::CompoundReceiver)];
-                    s = DispatchShape::Exact;
-                    if trigger_op.is_some()
-                        && let ReceiverType::Record { table: Some(tid) } = &recv
-                        && let Some(table_node) = graph.object_first(tid)
-                    {
-                        let (_, _, mut trig) =
-                            resolve_implicit_trigger(&method_lc, table_node, graph, index, surface);
-                        let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
-                            &method_lc, call_args, file, text,
-                        );
-                        trig.retain(|t| match &t.target {
-                            RouteTarget::Routine(id) => rule.admits(id),
-                            _ => true,
-                        });
-                        if !trig.is_empty() {
-                            // The triggers and what is not followed all run:
-                            // one model edge per route (`program_calls`), not
-                            // an overload set to choose from.
-                            s = DispatchShape::Multicast;
+                    let table_node = match &recv {
+                        ReceiverType::Record { table: Some(tid) } => graph.object_first(tid),
+                        _ => None,
+                    };
+                    match (table_node, &recv) {
+                        // A known table: the call stays the builtin call, and the
+                        // model makes the operation a record operation of its
+                        // own (`CallResultRecord`): its table, triggers (by the
+                        // site's RunTrigger rule) and table events, through the
+                        // ordinary record-operation path. No gap.
+                        (Some(table_node), _)
+                            if let Some(op) = crate::record_ops::record_op_type(&method_lc) =>
+                        {
+                            let mut triggers = Vec::new();
+                            if trigger_op.is_some() {
+                                let (_, _, mut trig) = resolve_implicit_trigger(
+                                    &method_lc, table_node, graph, index, surface,
+                                );
+                                let rule =
+                                    crate::program::resolve::applicability::TriggerSiteRule::of(
+                                        &method_lc, call_args, file, text,
+                                    );
+                                trig.retain(|t| match &t.target {
+                                    RouteTarget::Routine(id) => rule.admits(id),
+                                    _ => true,
+                                });
+                                triggers = trig;
+                            }
+                            facts_out.call_result_record = Some(CallResultRecord {
+                                op,
+                                table: table_node.id.clone(),
+                                triggers,
+                                table_events:
+                                    crate::program::resolve::resolver::resolve_table_events(
+                                        &method_lc, table_node, graph,
+                                    ),
+                            });
                         }
-                        r.extend(trig);
+                        // A RecordRef result: its table is runtime-typed, an
+                        // honest open dispatch (no route, `DynamicOpen`).
+                        (None, ReceiverType::RecordRef) => {
+                            r = Vec::new();
+                            s = DispatchShape::DynamicOpen;
+                        }
+                        // A record of a table not loaded: one unresolved route,
+                        // never a definite `no`.
+                        _ => {
+                            r = vec![unknown_route(UnknownReason::CompoundReceiver)];
+                            s = DispatchShape::Exact;
+                        }
                     }
                 }
                 // B9: a `FieldRef.Validate(…)` validates a field of the table

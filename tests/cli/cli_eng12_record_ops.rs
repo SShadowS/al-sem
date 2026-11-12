@@ -94,6 +94,29 @@ codeunit 52601 "E12 Ops"
     begin
         exit(RR);
     end;
+    procedure GetSubModifyTrue()
+    begin
+        GetSub().Modify(true);
+    end;
+    local procedure GetSub(): Record "E12 Sub"
+    var
+        S: Record "E12 Sub";
+    begin
+        exit(S);
+    end;
+}
+table 52605 "E12 Sub"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 52606 "E12 Sub Listener"
+{
+    [EventSubscriber(ObjectType::Table, Database::"E12 Sub", 'OnAfterModifyEvent', '', false, false)]
+    local procedure OnAfterModifySub(var Rec: Record "E12 Sub"; var xRec: Record "E12 Sub"; RunTrigger: Boolean)
+    begin
+        Commit();
+    end;
 }
 table 52602 "E12 Plain"
 {
@@ -112,6 +135,21 @@ codeunit 52604 "E12 More"
     var
         X: Record "E12 Plain";
         GRecs: array[2] of Record "E12 Row";
+        G: Record "E12 Row";
+        TempG: Record "E12 Row" temporary;
+    procedure ThisRead()
+    begin
+        if this.G.FindFirst() then;
+    end;
+    procedure ThisModifyTrue()
+    begin
+        this.G.Modify(true);
+    end;
+    procedure ThisTemp()
+    begin
+        this.TempG.K := 1;
+        this.TempG.Insert();
+    end;
     procedure Shadow()
     var
         X: array[2] of Codeunit "E12 Worker";
@@ -271,17 +309,20 @@ fn an_array_element_is_a_record() {
 }
 
 /// ENG-06 review gap (b): a trigger-firing operation on a receiver that is
-/// not a plain variable runs the table's triggers (`OnModify` commits):
-/// an array element of a known table -> yes; a RecordRef array element (any
-/// table may be open) -> unknown; a call's result of a known table -> yes;
-/// of a table with no trigger -> unknown (its table events are not followed),
-/// a RecordRef call result -> unknown. Never a definite `no`.
+/// not a plain variable runs the table's triggers (`OnModify` commits) and
+/// its table events: an array element of a known table -> yes; a RecordRef
+/// array element (any table may be open) -> unknown; a call's result of a
+/// known table, a record operation of its own (`CallResultRecord`) -> yes; of
+/// a table with no trigger and no subscriber -> no (a real `no`); of a table
+/// whose `OnAfterModifyEvent` subscriber commits -> yes; a RecordRef call
+/// result (runtime-typed) -> unknown.
 /// Breaks (2026-11-12): drop the receiver id from `CalleeShape::RecordOp` in
 /// `full.rs` (`None` to `infer_receiver_type`) -> `ArrModifyTrue` answers
-/// `unknown` (no table, the open edge), not `yes`; drop the member-path
-/// trigger step in `full.rs` -> `GetRefModifyTrue` answers `no`; keep the
-/// step but not its unknown route -> `GetPlainModifyTrue` answers `no`. Each
-/// fails; restored, it passes.
+/// `unknown` (no table, the open edge), not `yes`; never set
+/// `SiteFacts::call_result_record` -> `GetRefModifyTrue` answers `no` (and the
+/// review test's `GetRefRead`); drop the table-event edges in
+/// `program_calls::call_result_operation` -> `GetSubModifyTrue` answers `no`.
+/// Each fails; restored, it passes.
 #[test]
 fn a_trigger_firing_op_on_an_element_or_a_call_result_is_never_a_definite_no() {
     let t = workspace();
@@ -290,7 +331,10 @@ fn a_trigger_firing_op_on_an_element_or_a_call_result_is_never_a_definite_no() {
         ("ArrModifyTrue", "answer: yes"),
         ("RRArrModifyTrue", "answer: unknown"),
         ("GetRefModifyTrue", "answer: yes"),
-        ("GetPlainModifyTrue", "answer: unknown"),
+        // No trigger and no subscriber on its table: a real `no`.
+        ("GetPlainModifyTrue", "answer: no"),
+        // A table-event subscriber commits: reached through the call result.
+        ("GetSubModifyTrue", "answer: yes"),
         ("GetRRModifyTrue", "answer: unknown"),
     ] {
         let a = may_commit(ws, routine);
@@ -313,17 +357,21 @@ fn answer(args: &[&str]) -> String {
 /// - `with Recs[1] do Modify(true)` runs the trigger;
 /// - a global array and an array parameter are records through elements;
 /// - a temporary array's element is temporary;
-/// - a read on a call's result is never a definite `no`;
+/// - a read on a known table's call result reads it (a record operation);
 /// - `Recs[ 1 ]` is the element `Recs[1]` set its FlowField up on, so its
-///   retrieval reads the FlowField's source table.
+///   retrieval reads the FlowField's source table;
+/// - an object global through `this` is a record operation with the global's
+///   own temp state (ENG-12 gate).
 ///
 /// Breaks (2026-11-12): skip `routine_non_record_names` in both engines ->
 /// `Shadow` answers `no`; `receiver_variable` without its `Index` arm ->
 /// `GlobalArr` and `ArrParam` answer `no`; skip the temporary element in
 /// pass 2b -> `TempArr` counts 0 temporary touches; `touches_table` false in
 /// the member-path step -> `GetRefRead` answers `no`; `receiver_key_text`
-/// returning its input -> `SpacedFlow` answers `no` for "E12 Plain". Each
-/// fails; restored, it passes.
+/// returning its input -> `SpacedFlow` answers `no` for "E12 Plain";
+/// `record_ops::is_this` false -> `ThisTemp` counts 0 temporary touches (the
+/// call-result path still answers `ThisRead`/`ThisModifyTrue`, with an
+/// unknown temp state). Each fails; restored, it passes.
 #[test]
 fn the_review_shapes() {
     let t = workspace();
@@ -355,14 +403,24 @@ fn the_review_shapes() {
     assert!(a.starts_with("answer: yes"), "Shadow: {a}");
     let a = mc("WithModifyTrue");
     assert!(a.starts_with("answer: yes"), "WithModifyTrue: {a}");
+    // ENG-12 gate: an object global through `this` is a record operation (CDO's
+    // dependencies: `this.TempOnboardingCompany.FindSet(false)`).
+    let a = mc("ThisModifyTrue");
+    assert!(a.starts_with("answer: yes"), "ThisModifyTrue: {a}");
+    let a = tc("ThisRead", "E12 Row");
+    assert!(a.starts_with("answer: down: yes"), "ThisRead: {a}");
+    // ... with the global's own temp state (CDO's are `this.TempX`).
+    let a = tc("ThisTemp", "E12 Row");
+    assert!(a.contains("1 on temporary records"), "ThisTemp: {a}");
     for r in ["GlobalArr", "ArrParam"] {
         let a = tc(r, "E12 Row");
         assert!(a.starts_with("answer: down: yes"), "{r}: {a}");
     }
     let a = tc("TempArr", "E12 Row");
     assert!(a.contains("1 on temporary records"), "TempArr: {a}");
+    // A read on a known table's call result is a record operation of its own.
     let a = tc("GetRefRead", "E12 Row");
-    assert!(a.starts_with("answer: down: unknown"), "GetRefRead: {a}");
+    assert!(a.starts_with("answer: down: yes"), "GetRefRead: {a}");
     // Round 2 (astra): either side spaced, or both. The setup side already
     // matches without normalizing `flow_fields::var_key` (a break normalizing
     // it changed nothing, 2026-11-12), so these pin the behaviour only.
@@ -370,4 +428,34 @@ fn the_review_shapes() {
         let a = tc(r, "E12 Plain");
         assert!(a.starts_with("answer: down: yes"), "{r}: {a}");
     }
+}
+
+/// ENG-12 gate (`dependency_body_unknown_ceiling_on_cdo`): no site here is an
+/// `unknown` edge. A RecordRef call result (`GetRR().Modify(true)`, its table
+/// runtime-typed) is the one honest-dynamic edge; a known table's call result
+/// is a record operation of its own; an array element and `this.X` are record
+/// operations.
+/// Break (2026-11-12): the RecordRef result keeps an unknown route instead of
+/// `DynamicOpen` -> unknown 1, honestDynamic 0; restored, passes.
+#[test]
+fn no_site_is_an_unknown_edge() {
+    let t = workspace();
+    let out = Command::new(env!("CARGO_BIN_EXE_aldump"))
+        .arg("--program-call-graph-stats")
+        .arg(t.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn aldump");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
+    let p = &v["primaryScoped"];
+    assert_eq!(
+        (p["unknown"].as_u64(), p["honestDynamic"].as_u64()),
+        (Some(0), Some(1)),
+        "{p}"
+    );
 }

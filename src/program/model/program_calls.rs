@@ -1703,6 +1703,10 @@ fn convert<'a>(
                 Some(crate::program::resolve::full::FieldRefValidate::Decided { table_events, .. })
                     if !table_events.is_empty()
             )
+            // ENG-12: a call-result record operation's.
+            || f.call_result_record
+                .as_ref()
+                .is_some_and(|cr| !cr.table_events.is_empty())
     });
     let event_flow: HashMap<&RoutineNodeId, &ClassifiedEdge> =
         if table_event_edges.is_empty() && !dataset_events {
@@ -1848,6 +1852,15 @@ fn convert<'a>(
                 {
                     loaded_only_tables.insert(r.stable_routine_id.clone());
                 }
+                dataset_edges.extend(op_edges);
+                dataset_ops.ops.push((ri, vec![op]));
+            }
+            // ENG-12: a record operation on a function's returned record.
+            if let Some(cr) = program_edge
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .and_then(|f| f.call_result_record.as_ref())
+            {
+                let (op, op_edges) = conv.call_result_operation(ix, r, cs, cr, &event_flow, &mut c);
                 dataset_edges.extend(op_edges);
                 dataset_ops.ops.push((ri, vec![op]));
             }
@@ -3135,6 +3148,76 @@ impl<'a> Converter<'a> {
                 }
             }
         };
+        (op, edges)
+    }
+
+    /// ENG-12: the record operation a call site `cs` performs on a function's
+    /// returned record of a known table (`GetRef().Modify(true)`), anchored at
+    /// the site (id `{call site}/callresult`), with its trigger and table-event
+    /// edges, as [`Self::field_ref_validate_operation`] builds a FieldRef's.
+    fn call_result_operation(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        cs: &PCallSite,
+        cr: &crate::program::resolve::full::CallResultRecord,
+        event_flow: &HashMap<&RoutineNodeId, &ClassifiedEdge>,
+        c: &mut SiteCensus,
+    ) -> (ModelRecordOperation, Vec<CallEdge>) {
+        use crate::program::body::features::PTempState;
+        let receiver = match &cs.callee {
+            PCallee::Member { receiver, .. } => receiver.clone(),
+            _ => String::new(),
+        };
+        let table_id = match &cr.table.key {
+            crate::program::node::ObjKey::Id(number) => Some(crate::engine::ids::encode_table_id(
+                &self.graph.apps.resolve(cr.table.app).guid,
+                *number,
+            )),
+            crate::program::node::ObjKey::Name(_) => None,
+        };
+        let op = ModelRecordOperation {
+            id: format!(
+                "{}{}",
+                cs.id,
+                crate::program::model::workspace::CALL_RESULT_OP_SUFFIX
+            ),
+            op: cr.op.to_string(),
+            record_variable_name: receiver,
+            record_variable_id: None,
+            table_id,
+            temp_state: Some(PTempState {
+                kind: "unknown".to_string(),
+                value: None,
+                parameter_index: None,
+            }),
+            // `Validate(Field, …)`: its field, as written.
+            field_arguments: (cr.op == "Validate")
+                .then(|| cs.argument_texts.first().cloned())
+                .flatten()
+                .map(|f| vec![f]),
+            source_anchor: cs.source_anchor.clone(),
+            loop_stack: cs.loop_stack.clone(),
+            field_argument_infos: None,
+            in_until_condition: false,
+            in_statement_position: cs.in_statement_position,
+            run_trigger: None,
+            modify_all_field: None,
+            transfer_fields_source: None,
+            receiver_is_record_ref: false,
+            flow_field_reads: Vec::new(),
+            dataset_reason: None,
+        };
+        let mut edges = self.trigger_edges(ix, r, &op, &cr.triggers, c);
+        edges.extend(self.table_event_edges(
+            ix,
+            r,
+            &op,
+            &cr.table_events,
+            crate::program::table_event_guard::RaiseContext::default(),
+            event_flow,
+            c,
+        ));
         (op, edges)
     }
 

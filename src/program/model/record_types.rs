@@ -41,6 +41,12 @@ fn op_variable_lc(raw: &str) -> String {
         Some(_) => raw.find('[').map_or(raw, |i| &raw[..i]),
         None => raw,
     };
+    // An object global through `this` (`this.X`): the global `X` (ENG-12).
+    let raw = raw.trim();
+    let raw = match raw.get(..5) {
+        Some(p) if p.eq_ignore_ascii_case("this.") => &raw[5..],
+        _ => raw,
+    };
     strip_quotes(raw.trim())
         .replace("\"\"", "\"")
         .to_lowercase()

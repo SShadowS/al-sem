@@ -27,18 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FindFirst()` made no record operation and answered `no`; an array of records (or of RecordRef)
   now receives through its elements in both the body walk and the resolver, the table taken from
   the element type, so `Recs[1].Modify(true)` also runs the table's triggers.
-- **A trigger-firing operation on a record no variable names** (`GetRef().Modify(true)`, a call's
-  result) answered a definite `may-commit: no`; it now runs its table's triggers when the table
-  is known, and carries one unresolved route for what is not followed there (the table events;
-  with no table, any table's triggers), so the answer is `yes` or `unknown`. On CDO (measured
-  2026-11-12): 3 such sites reached from the golden roots, all in dependency code
-  (`CreationFactory.GeteDocumentHeader().Modify`), which IssueReminder and RunReportID now list
-  as unresolved calls (25 -> 28); Base Application has 36 array-element writes.
+- **A record operation on a record no variable names** answered a definite `no`:
+  `GetRef().Modify(true)` (a function's returned record) for `may-commit`, `GetRef().FindFirst()`
+  for `query touches`. A known table's call result is now a record operation of its own (the
+  resolver reads the table from the function's return type; the model builds the operation at the
+  call site, `{call site}/callresult`, with its triggers and table-event subscribers, as ENG-06
+  does for `FieldRef.Validate`); a RecordRef result is an honest open dispatch; an object global
+  through `this` (`this.X.FindSet()`) is a record operation on the global. On CDO: 3 call-result
+  sites and 13 `this.X` sites, all in dependency code; Base Application has 36 array-element
+  writes.
   Probe: `docs/superpowers/notes/2026-11-12-eng12-record-ops-probe.md`.
 - Review round 1: a non-record parameter, local or return value shadows a record global of its
   name in both engines (a local `X: array[2] of Codeunit W` under a global `X: Record T` had made
-  `X[1].Modify()` a record operation and hidden the codeunit's commit); a read on a call's result
-  is `unknown`, not `no`; an element of a `temporary` array is temporary; `Recs[ 1 ]` and
+  `X[1].Modify()` a record operation and hidden the codeunit's commit); an element of a
+  `temporary` array is temporary; `Recs[ 1 ]` and
   `Recs[1]` are one receiver; `query effects` lists `GetBySystemId` as a read. A record
   operation written without parentheses in expression position (`if R.FindFirst then`, about 96
   sites in CDO) is still not seen: task ENG-25.

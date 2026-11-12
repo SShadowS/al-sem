@@ -31,19 +31,27 @@ pub fn receiver_type_of(ty: &str) -> &str {
     array_element_type(ty).unwrap_or(ty)
 }
 
-/// The variable a record-op receiver expression names: `X` for `X` and for an
-/// array element `X[i]` (ENG-12, L36). `None` for any other shape (a call
-/// result, a member). Shared by both engines so they classify the same calls.
+/// The variable a record-op receiver expression names: `X` for `X`, for an
+/// array element `X[i]` (ENG-12, L36) and for an object global through `this`
+/// (`this.X`, `this.X[i]`; ENG-12 gate: CDO's dependencies use it). `None` for
+/// any other shape (a call result, another member). Shared by both engines so
+/// they classify the same calls.
 pub fn receiver_variable(ir: &al_syntax::ir::Ir, e: al_syntax::ir::ExprId) -> Option<&str> {
     use al_syntax::ir::ExprKind;
-    match &ir.expr(e).kind {
+    let named = |e: al_syntax::ir::ExprId| match &ir.expr(e).kind {
         ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.as_str()),
-        ExprKind::Index { base, .. } => match &ir.expr(*base).kind {
-            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.as_str()),
-            _ => None,
-        },
+        ExprKind::Member { object, member, .. } if is_this(ir, *object) => Some(member.as_str()),
         _ => None,
+    };
+    match &ir.expr(e).kind {
+        ExprKind::Index { base, .. } => named(*base),
+        _ => named(e),
     }
+}
+
+/// Whether `e` is the `this` keyword (the object instance).
+fn is_this(ir: &al_syntax::ir::Ir, e: al_syntax::ir::ExprId) -> bool {
+    matches!(&ir.expr(e).kind, al_syntax::ir::ExprKind::Identifier(t) if t.eq_ignore_ascii_case("this"))
 }
 
 /// Whether the record method (lowercase) reads, writes or locks its table.
