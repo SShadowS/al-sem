@@ -157,6 +157,20 @@ codeunit 52604 "E12 More"
         Recs[1].SetAutoCalcFields(Cnt);
         if Recs[ 1 ].FindFirst() then;
     end;
+    procedure SpacedSetup()
+    var
+        Recs: array[2] of Record "E12 Row";
+    begin
+        Recs[ 1 ].SetAutoCalcFields(Cnt);
+        if Recs[1].FindFirst() then;
+    end;
+    procedure SpacedBoth()
+    var
+        Recs: array[2] of Record "E12 Row";
+    begin
+        Recs[ 1 ].SetAutoCalcFields(Cnt);
+        if Recs[ 1 ].FindFirst() then;
+    end;
 }
 "#;
 
@@ -349,6 +363,11 @@ fn the_review_shapes() {
     assert!(a.contains("1 on temporary records"), "TempArr: {a}");
     let a = tc("GetRefRead", "E12 Row");
     assert!(a.starts_with("answer: down: unknown"), "GetRefRead: {a}");
-    let a = tc("SpacedFlow", "E12 Plain");
-    assert!(a.starts_with("answer: down: yes"), "SpacedFlow: {a}");
+    // Round 2 (astra): either side spaced, or both. The setup side already
+    // matches without normalizing `flow_fields::var_key` (a break normalizing
+    // it changed nothing, 2026-11-12), so these pin the behaviour only.
+    for r in ["SpacedFlow", "SpacedSetup", "SpacedBoth"] {
+        let a = tc(r, "E12 Plain");
+        assert!(a.starts_with("answer: down: yes"), "{r}: {a}");
+    }
 }
