@@ -4,9 +4,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 # build-essential: the tree-sitter grammar's C build (crates/al-syntax/build.rs); cmake: libz-ng-sys
 # (CI's runner has it preinstalled); python3: the bench and trace scripts; python-is-python3: the
 # commands and hooks call `python` (agentflow, run-timer); python3-psutil: scripts/bench_ab.py (no pip);
-# python3-pytest: scripts/agentflow/tests (no pip); libicu: .NET aborts without it
+# python3-pytest: scripts/agentflow/tests (no pip); libicu: .NET aborts without it;
+# time: GNU `/usr/bin/time -v` for peak-memory measurements (CLAUDE.md's `aldump --snapshot-memory`
+# recipe; the image lacked it, TLS-26)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config python3 python-is-python3 python3-psutil python3-pytest jq libicu-dev \
+      build-essential cmake pkg-config python3 python-is-python3 python3-psutil python3-pytest jq libicu-dev time \
       ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 # Rust as rust-toolchain.toml pins it, outside the cache volume (the base points CARGO_HOME at ~/.cache
