@@ -2,7 +2,11 @@
 //! `src/engine/transaction-spans.ts`.
 //!
 //! `compute_transaction_spans` produces a `TransactionSpan` per Commit (and per
-//! checked Codeunit.Run implicit commit). For each seed it walks callers BACKWARD
+//! checked Codeunit.Run). A checked run's seed is NOT a commit of the span's
+//! writes (ENG-22, measured on BC 28, Linux and Windows): BC commits only the
+//! run's own transaction, and a write of the caller's pending at the run makes
+//! the run itself raise an error. Its span answers "which writes may be
+//! pending at the run" (d50). For each seed it walks callers BACKWARD
 //! over the reverse call graph to find every routine that participates in the
 //! transaction; the walk stops at `MAX_DEPTH` and past a routine whose call
 //! toward the Commit follows a Commit of its own (below). The span aggregates
@@ -68,8 +72,10 @@ use crate::program::model::workspace::ModelRoutine;
 
 const MAX_DEPTH: usize = 50;
 
-/// Distinguishes an explicit `Commit()` span from a synthetic checked-Run
-/// implicit commit. Mirrors al-sem `seedKind`.
+/// Distinguishes an explicit `Commit()` span from a checked run's span (the
+/// writes that may be pending at the run, which BC refuses with an error at
+/// the run: it commits none of them; ENG-22). The variant keeps its al-sem
+/// name (`seedKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeedKind {
     ExplicitCommit,
@@ -84,7 +90,7 @@ pub struct TransactionSpan {
     /// checked callsite id — al-sem stores the callsite id here too).
     pub commit_operation_id: String,
     /// For checked-run-implicit seeds only: the callsite id of the checked
-    /// Codeunit.Run forming the implicit-commit boundary. `None` for explicit.
+    /// Codeunit.Run the span ends at. `None` for explicit.
     pub seed_callsite_id: Option<String>,
     /// The routine containing the bounding Commit.
     pub commit_routine_id: String,
@@ -543,8 +549,8 @@ fn frame_key(r: &ModelRoutine) -> (String, usize) {
     (r.id.clone(), std::ptr::from_ref(r) as usize)
 }
 
-/// A CHECKED `Codeunit.Run` (its return value is used): an implicit commit
-/// boundary. Codeunit.Run only; `objectRunReturnUsed === true` only (the
+/// A CHECKED `Codeunit.Run` (its return value is used): a span seed (the
+/// writes pending at it make the run fail; ENG-22). Codeunit.Run only; `objectRunReturnUsed === true` only (the
 /// STRICT affirmative predicate). NOT Page.Run / Report.Run.
 fn is_checked_codeunit_run(cs: &PCallSite) -> bool {
     matches!(&cs.callee, PCallee::ObjectRun { object_kind, .. } if object_kind == "Codeunit")
@@ -652,7 +658,7 @@ fn span_template<'c>(
 }
 
 /// Compute transaction spans. For each primary-app routine that contains a Commit
-/// (and each checked Codeunit.Run implicit commit), walk callers backward to find
+/// (and each checked Codeunit.Run), walk callers backward to find
 /// every routine that participates in the transaction. Each Commit operation
 /// yields one `TransactionSpan`. Mirrors al-sem `computeTransactionSpans`.
 ///
@@ -844,7 +850,8 @@ pub fn compute_transaction_spans(
         }
     }
 
-    // --- §B: synthetic seeds for CHECKED codeunit-run implicit commits ---
+    // --- §B: synthetic seeds for CHECKED codeunit runs (the writes pending
+    // at the run; ENG-22: BC raises an error there, it commits none) ---
     // Codeunit.Run only; objectRunReturnUsed === true only (the STRICT affirmative
     // predicate). NOT Page.Run / Report.Run.
     for r in routines {

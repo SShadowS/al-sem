@@ -70,7 +70,9 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// request-page triggers, which moved summaries at 9 (a base cached by a
 /// binary of the same version would show their facts as added).
 /// 11 (ENG-09): a checked `Codeunit.Run` commits.
-pub const SUMMARY_SCHEMA: u32 = 11;
+/// 12 (ENG-22): a checked `Codeunit.Run` raises its own error when a write is
+/// pending at it.
+pub const SUMMARY_SCHEMA: u32 = 12;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,10 +508,19 @@ fn own_keys(
                             })
                         })
                         .map_or_else(|| "none".into(), |c| message_key(r, &c.argument_infos))
+                } else if f.resource_id.as_deref()
+                    == Some(crate::engine::l4::capability_cone::RUN_COMMIT)
+                {
+                    // ENG-22: a checked run's own error keys as its cone row
+                    // does (`ERROR_IMPLICIT|checked-run`, `delta::cone_twin`).
+                    crate::engine::l4::capability_cone::RUN_COMMIT.to_string()
                 } else {
                     String::new()
                 };
                 let shown = match msg.split_once(':') {
+                    None if msg == crate::engine::l4::capability_cone::RUN_COMMIT => {
+                        " (checked run with a write pending)".to_string()
+                    }
                     Some(("label", n)) => format!(" (label {n})"),
                     Some(("text", h)) => format!(" (text #{})", &h[..8.min(h.len())]),
                     Some(("expr", h)) => format!(" (expression #{})", &h[..8.min(h.len())]),

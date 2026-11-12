@@ -1,17 +1,29 @@
-//! D50 — Advisory (info), opt-in.
+//! D50 — opt-in. A checked `Codeunit.Run` (its Boolean result used) at which
+//! a database write may be pending.
 //!
-//! A Codeunit.Run whose Boolean return value is USED (if-condition, assignment,
-//! exit argument, etc.) performs an implicit commit on successful return. When a
-//! transaction-managing routine sits in that implicit commit's span, flag it as
-//! a possible mid-posting implicit commit.
+//! **ENG-22 (meaning changed).** d50 used to report "a checked Codeunit.Run
+//! performs an implicit commit on successful return" inside a posting span,
+//! as if the run committed the caller's writes. BC does the opposite:
+//! measured on the BC 28.4 Linux sidecar and confirmed on Windows BC
+//! 28.0.54946.56477 (owner, q-20261112T021007-384a506a), a checked run with
+//! a write pending raises "An error occurred and the transaction is
+//! stopped." at the run itself, which the checked form does not catch (the
+//! run does not return `false`), and nothing of the caller's is committed
+//! (probe: docs/superpowers/notes/2026-11-11-eng09-checked-run-probe.md).
+//! Microsoft Learn ("Codeunit.Run(Integer [, var Record]) Method"): "If
+//! you're already in a transaction you must commit first before calling
+//! Codeunit.Run". The owner kept the id and changed the finding to that
+//! error (q-20261112T025612-62a3ca62); the finding id carries
+//! `pending-write`, so a suppression or baseline of the old claim does not
+//! carry over.
 //!
-//! Port of al-sem `src/detectors/d50-checked-run-implicit-commit.ts`.
-//!
-//! ROUTINE-LEVEL approximation — may include writes not proven to precede the
-//! implicit commit (§B.3). NOT refutation-grade.
-//!
-//! Consumes ONLY `CheckedRunImplicit` seeds from `transaction_spans`.
-//! D8/D9 ignore those seeds; D50 ignores `ExplicitCommit` seeds.
+//! Fires per checked-run seed of `transaction_spans` whose span leaves a
+//! physical table write pending at the run
+//! (`TransactionSpan::pending_physical_tables`, read in statement order by
+//! [`crate::engine::l5::pending_writes`]). A routine-level approximation:
+//! the span's callers are every caller in the transaction, not one route.
+//! `prove … throws-error` rules the same error per route
+//! (`LiteralReach::run_error_verdict`).
 
 use std::collections::HashSet;
 
@@ -23,181 +35,9 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::engine::l5::transaction_spans::SeedKind;
-use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d50-checked-run-implicit-commit";
-const TRANSACTION_THRESHOLD_TABLES: usize = 3;
-
-/// RootKind values that make a commit-chain root UNTRUSTED for D50's medium tier.
-/// Mirrors al-sem's `D50_UNTRUSTED_ROOT_KINDS`.
-///
-/// `page-action` is DELIBERATELY absent, and the omission is load-bearing. The
-/// invariant is stated NARROWLY because the broad version is false: every
-/// routine that gains AST-DERIVED `page-action` also carries `trigger-page`
-/// (`root_classification.rs`'s Page arm inserts both), `trigger-page` IS
-/// listed, and the check below is ANY-quantified -- so this gate already
-/// rejects every such routine.
-///
-/// It does NOT hold for CONFIG-ONLY roots. `overlay_config_roots` builds a
-/// classification from the configured kinds alone when a routine has no AST
-/// root, so a `roots.config.json` asserting `["page-action"]` on some codeunit
-/// procedure yields `page-action` with NO `trigger-page`, and this gate does
-/// not reject it. That predates the derived kind and is not changed by it --
-/// adding `page-action` here would alter existing config-only behaviour and
-/// needs its own decision and tests, not a drive-by edit.
-///
-/// The derived-kind half of the argument breaks if `page-action` ever becomes
-/// AST-emittable WITHOUT `trigger-page` (an exclusive rule, or a new arm on
-/// another object type). That would flip this gate from reject to accept
-/// silently: no golden projects d50 output for an action-bearing fixture.
-///
-/// `onrun-codeunit` IS listed, and the reason is the whole point of the kind.
-/// `Codeunit.Run(id)` can be called from ARBITRARY code, including from inside a
-/// caller that already has an open write transaction -- AL has no nested
-/// transactions, so the callee joins the caller's. An `OnRun` therefore is NOT
-/// provably at the top of its own transaction, and a `Commit()` inside it may be
-/// committing the caller's uncommitted work. That is the same argument that puts
-/// `public-procedure` on this list. The job-queue path DOES enter an `OnRun` at
-/// top-of-transaction, but that case has its own kind (`job-queue-entrypoint`,
-/// overlay-supplied) which is deliberately absent here; when both apply the
-/// ANY-quantified check below takes the untrusted verdict, which is the
-/// fail-closed direction.
-///
-/// Before #12 an `OnRun` reached this gate UNCLASSIFIED, and an absent slot is
-/// treated as trusted, so it passed by accident. Listing the kind makes that an
-/// explicit, tested decision rather than a side effect of a missing arm.
-const D50_UNTRUSTED_ROOT_KINDS: &[&str] = &[
-    "event-subscriber",
-    "install-codeunit",
-    "upgrade-codeunit",
-    "api-page",
-    "public-procedure",
-    "test-procedure",
-    "trigger-table",
-    "trigger-page",
-    "report-trigger",
-    "onrun-codeunit",
-];
-
-/// Hand-rolled `^(Post|Apply|Release)[A-Z]` check — mirrors al-sem's `POSTING_NAME_RE`.
-fn posting_name_matches(name: &str) -> bool {
-    for prefix in &["Post", "Apply", "Release"] {
-        if let Some(rest) = name.strip_prefix(prefix)
-            && let Some(next) = rest.chars().next()
-            && next.is_ascii_uppercase()
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// `isTransactionManaging(routineId)` — routine name matches POSTING_NAME_RE, OR
-/// `writes_physical_tables_count_of(summary) >= TRANSACTION_THRESHOLD_TABLES`.
-fn is_transaction_managing(routine_id: &str, ctx: &DetectorContext) -> bool {
-    let Some(r) = ctx.routine_by_id.get(routine_id) else {
-        return false;
-    };
-    if posting_name_matches(&r.name) {
-        return true;
-    }
-    let Some(summary) = ctx.summaries.get(routine_id) else {
-        return false;
-    };
-    // ⟨C1 Task 2 fix M2⟩ The count alone — avoids resolving and allocating one
-    // `String` per table just to discard it. `is_transaction_managing` runs
-    // per routine, so this matters at scale.
-    //
-    // ⟨issue 23⟩ The PHYSICAL count, not the temp-inclusive one: a write to a
-    // `temporary` record never dirties the transaction, so counting temp writes
-    // toward "this routine manages a transaction" admits routines that manage
-    // none. d8 already gates on the physical count (`d8.rs:40-42`); this aligns
-    // d50 with it. "Physical" means EXCLUDING known-temp facts — unknown,
-    // parameter-dependent and absent temp states still count.
-    ctx.cone_derived
-        .writes_physical_tables_count_of(&summary.routine_id)
-        >= TRANSACTION_THRESHOLD_TABLES
-}
-
-/// Returns true when the routine containing an explicit Commit() is eligible for the
-/// D50 MEDIUM tier (its explicit Commit() is "proven effective"). Mirrors al-sem's
-/// `isExplicitCommitProvenEffective`.
-///
-/// Four caps:
-///   1. primary routine with available body.
-///   2. root classification has NO untrusted RootKind.
-///   3. routine does NOT carry [TryFunction].
-///   4. effective CommitBehavior is "normal" (not "ignore" or "error").
-fn is_explicit_commit_proven_effective(routine_id: &str, ctx: &DetectorContext) -> bool {
-    let Some(r) = ctx.routine_by_id.get(routine_id) else {
-        return false;
-    };
-
-    // Cap 1: primary routine with available body.
-    // Source-only: all routines are primary (no dep set). Check body_available.
-    if !r.body_available {
-        return false;
-    }
-
-    // Cap 2: root classification — no untrusted RootKind.
-    if let Some(rc) = ctx.root_classifications_by_routine.get(routine_id) {
-        for kind in &rc.kinds {
-            if D50_UNTRUSTED_ROOT_KINDS.contains(&kind.as_str()) {
-                return false;
-            }
-        }
-    }
-
-    // Cap 3: routine must NOT carry [TryFunction].
-    let attrs = &r.attributes_parsed;
-    if has_attribute(attrs, "TryFunction") {
-        return false;
-    }
-
-    // Cap 4: effective CommitBehavior must be "normal".
-    // Mirrors TS `attrs.find((a) => a.name === "CommitBehavior")` — CASE-SENSITIVE
-    // exact match (NOT the shared case-insensitive find_attribute). This faithfully
-    // mirrors al-sem's actual code even though a miscased attr name would be a
-    // latent al-sem inconsistency.
-    //
-    // When the routine-level [CommitBehavior] attr IS present:
-    //   - If args[0] is present → evaluate value; Ignore/Error → fail cap-4.
-    //   - If args is empty → treated as "present but normal" (routine attr wins,
-    //     object ICB is NOT consulted). Cap-4 passes.
-    // Only when NO routine [CommitBehavior] attr is present → consult object ICB.
-    // This mirrors TS d50.ts:133-151 exactly.
-    let cb_attr = attrs.iter().find(|a| a.name == "CommitBehavior");
-    if let Some(attr) = cb_attr {
-        // Routine-level attr present — it wins over the object.
-        if let Some(arg) = attr.args.first() {
-            let val = if arg.kind == "qualified_enum_value" {
-                arg.member.as_deref().unwrap_or("").to_lowercase()
-            } else {
-                arg.value
-                    .as_deref()
-                    .or(Some(arg.text.as_str()))
-                    .unwrap_or("")
-                    .to_lowercase()
-            };
-            if val == "ignore" || val == "error" {
-                return false;
-            }
-        }
-        // Argless [CommitBehavior] or non-suppressing value — cap-4 passes.
-    } else {
-        // No routine-level attr → object-level InherentCommitBehavior applies.
-        let obj = ctx.declaring.of(r);
-        if let Some(o) = obj
-            && let Some(icb) = &o.inherent_commit_behavior
-            && (icb == "ignore" || icb == "error")
-        {
-            return false;
-        }
-    }
-
-    true
-}
 
 /// Build a `SourceAnchor` from a routine's `PAnchor`.
 fn routine_anchor(r: &ModelRoutine) -> SourceAnchor {
@@ -209,52 +49,31 @@ pub fn detect_d50(
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
     let fp_index = &ctx.fingerprint_index;
-
-    // Build routinesWithExplicitCommit from ExplicitCommit spans — O(1) membership.
-    let mut routines_with_explicit_commit: HashSet<&str> = HashSet::new();
-    for span in &ctx.transaction_spans {
-        if span.seed_kind == SeedKind::ExplicitCommit {
-            routines_with_explicit_commit.insert(span.commit_routine_id.as_str());
-        }
-    }
-
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
-    let mut skipped_other = 0u64;
+    let mut skipped_clean = 0u64;
 
     for span in &ctx.transaction_spans {
-        // D50 only consumes CheckedRunImplicit seeds — D8/D9 own ExplicitCommit.
         if span.seed_kind != SeedKind::CheckedRunImplicit {
             continue;
         }
         let Some(seed_routine) = ctx.routine_by_id.get(span.commit_routine_id.as_str()) else {
             continue;
         };
-        // Source-only: all routines are primary — no dep-set check needed.
         candidates_considered += 1;
-
-        // managers = routinesInSpan filtered to isTransactionManaging (includes seed).
-        let managers: Vec<&str> = span
-            .routines_in_span
-            .iter()
-            .filter(|id| is_transaction_managing(id.as_str(), ctx))
-            .map(|id| id.as_str())
-            .collect();
-
-        if managers.is_empty() {
-            skipped_other += 1;
+        if span.pending_physical_tables.is_empty() {
+            skipped_clean += 1;
             continue;
         }
 
-        let manager_id = managers[0];
-        let Some(manager) = ctx.routine_by_id.get(manager_id) else {
-            continue;
-        };
-
-        // Anchor: use the actual callsite anchor when available, else routine header.
-        let callsite_anchor: SourceAnchor = if let Some(cs_id) = &span.seed_callsite_id {
-            if let Some(cs) = ctx.call_site_by_id.get(cs_id.as_str()) {
-                SourceAnchor {
+        // Anchor: the run's call site when known, else the routine header.
+        let callsite_anchor: SourceAnchor = span
+            .seed_callsite_id
+            .as_deref()
+            .and_then(|cs_id| ctx.call_site_by_id.get(cs_id))
+            .map_or_else(
+                || routine_anchor(seed_routine),
+                |cs| SourceAnchor {
                     source_unit_id: cs.source_anchor.source_unit_id.clone(),
                     start_line: cs.source_anchor.start_line,
                     start_column: cs.source_anchor.start_column,
@@ -265,123 +84,88 @@ pub fn detect_d50(
                     normalized_text_hash: None,
                     leading_context_hash: None,
                     trailing_context_hash: None,
-                }
-            } else {
-                routine_anchor(seed_routine)
-            }
-        } else {
-            routine_anchor(seed_routine)
-        };
+                },
+            );
 
-        // Build evidence path. Two shapes:
-        //   Direct (managerId === seedRoutine.id):
-        //     step 1 — manager routine header, note: "transaction-managing routine {name} contains the implicit-commit callsite"
-        //     step 2 — seed routine's callsite, note: "Codeunit.Run implicit commit (on success) — return value consumed"
-        //   Indirect (different routines):
-        //     step 1 — manager routine header, note: "transaction-managing routine: {name}"
-        //     step 2 — seed routine's callsite, note: "Codeunit.Run implicit commit (on success) in {name} — return value consumed"
-        let evidence_path: Vec<EvidenceStep> = if manager_id == seed_routine.id.as_str() {
-            vec![
-                EvidenceStep {
-                    routine_id: manager_id.to_string(),
-                    operation_id: None,
-                    callsite_id: None,
-                    loop_id: None,
-                    source_anchor: routine_anchor(manager),
-                    note: format!(
-                        "transaction-managing routine {} contains the implicit-commit callsite",
-                        manager.name
-                    ),
-                },
-                EvidenceStep {
-                    routine_id: seed_routine.id.clone(),
-                    operation_id: None,
-                    callsite_id: None,
-                    loop_id: None,
-                    source_anchor: callsite_anchor.clone(),
-                    note: "Codeunit.Run implicit commit (on success) — return value consumed"
-                        .to_string(),
-                },
-            ]
-        } else {
-            vec![
-                EvidenceStep {
-                    routine_id: manager_id.to_string(),
-                    operation_id: None,
-                    callsite_id: None,
-                    loop_id: None,
-                    source_anchor: routine_anchor(manager),
-                    note: format!("transaction-managing routine: {}", manager.name),
-                },
-                EvidenceStep {
-                    routine_id: seed_routine.id.clone(),
-                    operation_id: None,
-                    callsite_id: None,
-                    loop_id: None,
-                    source_anchor: callsite_anchor.clone(),
-                    note: format!(
-                        "Codeunit.Run implicit commit (on success) in {} — return value consumed",
-                        seed_routine.name
-                    ),
-                },
-            ]
-        };
-
-        // §0.5 MEDIUM tier: escalate when a proven-effective EXPLICIT Commit() is
-        // on the same checked-run-implicit span.
-        let has_proven_effective_explicit_commit = span.routines_in_span.iter().any(|rid| {
-            routines_with_explicit_commit.contains(rid.as_str())
-                && is_explicit_commit_proven_effective(rid.as_str(), ctx)
+        // The writer: a span member that writes before its call toward the
+        // run (the first by id), else the run's own routine.
+        let writer = span
+            .pending_physical_by_routine
+            .iter()
+            .find(|&(_, &n)| n > 0)
+            .and_then(|(id, _)| ctx.routine_by_id.get(id.as_str()))
+            .copied()
+            .unwrap_or(seed_routine);
+        let tables = span
+            .pending_physical_tables
+            .iter()
+            .map(|t| {
+                ctx.table_by_id
+                    .get(t.as_str())
+                    .map_or(t.as_str(), |m| m.name.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut evidence_path = Vec::new();
+        if writer.id != seed_routine.id {
+            evidence_path.push(EvidenceStep {
+                routine_id: writer.id.clone(),
+                operation_id: None,
+                callsite_id: None,
+                loop_id: None,
+                source_anchor: routine_anchor(writer),
+                note: format!(
+                    "{} may write before the run, and no Commit() ends it",
+                    writer.name
+                ),
+            });
+        }
+        evidence_path.push(EvidenceStep {
+            routine_id: seed_routine.id.clone(),
+            operation_id: None,
+            callsite_id: span.seed_callsite_id.clone(),
+            loop_id: None,
+            source_anchor: callsite_anchor.clone(),
+            note: format!(
+                "checked Codeunit.Run in {} with a write that may be pending ({tables}): \
+                 BC raises an error at the run",
+                seed_routine.name
+            ),
         });
-        let severity = if has_proven_effective_explicit_commit {
-            "medium"
-        } else {
-            "info"
-        };
 
-        let base_root_cause = format!(
-            "A Codeunit.Run whose Boolean return value is used in {} performs an implicit commit \
-             on successful return while {} (a transaction-managing routine) is reachable in the \
-             routine-level implicit-commit span. Routine-level approximation — may include writes \
-             not proven to precede the implicit commit. Review whether the implicit commit splits \
-             a posting transaction.",
-            seed_routine.name, manager.name
+        let root_cause = format!(
+            "A Codeunit.Run whose Boolean result is used in {} runs while a database write may be \
+             pending ({tables}). A checked run needs a clean transaction: with a write pending, BC \
+             raises \"An error occurred and the transaction is stopped.\" at the run itself, the \
+             checked form does not catch it (the run does not return false), and nothing of the \
+             caller's is committed (measured on BC 28). Routine-level approximation: the writes \
+             may be pending on some callers' routes only.",
+            seed_routine.name
         );
-        let root_cause = if severity == "medium" {
-            format!(
-                "{} A proven-effective explicit Commit() is also on the span — committed writes \
-                 may persist partial state before the implicit-commit boundary.",
-                base_root_cause
-            )
-        } else {
-            base_root_cause
-        };
 
-        // affectedObjects: [seedRoutine.objectId, manager.objectId].sort()
-        let mut affected_objects = vec![seed_routine.object_id.clone(), manager.object_id.clone()];
+        let mut affected_objects = vec![seed_routine.object_id.clone(), writer.object_id.clone()];
         affected_objects.sort();
+        affected_objects.dedup();
 
-        let id = format!("d50/{}", span.commit_operation_id);
-        let root_cause_key = id.clone();
-
+        // ENG-22: a new id (and so a new fingerprint) for the new meaning.
+        let id = format!("d50/pending-write/{}", span.commit_operation_id);
         let mut finding = Finding {
-            id,
-            root_cause_key,
+            id: id.clone(),
+            root_cause_key: id,
             detector: DETECTOR.to_string(),
-            title: "Codeunit.Run implicit commit within a posting span".into(),
+            title: "Checked Codeunit.Run with a write pending raises an error".into(),
             root_cause,
-            severity: severity.to_string(),
+            severity: "medium".into(),
             confidence: to_confidence(&[], "possible"),
             primary_location: callsite_anchor,
             evidence_path,
             additional_paths: None,
             affected_objects: id_list(affected_objects),
-            affected_tables: id_list(span.writes_tables.clone()),
+            affected_tables: id_list(span.pending_physical_tables.clone()),
             fix_options: vec![FixOption {
-                description:
-                    "If atomicity matters, avoid the checked Run mid-transaction or restructure \
-                     so the posting completes before the implicit commit."
-                        .into(),
+                description: "Commit() before the checked run when the writes before it may be \
+                              committed, or move the writes after the run."
+                    .into(),
                 safety: "low".into(),
             }],
             provenance: vec![Evidence {
@@ -399,19 +183,17 @@ pub fn detect_d50(
         findings.push(finding);
     }
 
-    // Dedupe by id (same checked-Run callsite → one finding).
+    // Dedupe by id (same checked-run call site → one finding).
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let mut seen: HashSet<String> = HashSet::new();
-    let mut emitted: Vec<Finding> = Vec::new();
-    for f in findings {
-        if seen.insert(f.id.clone()) {
-            emitted.push(f);
-        }
-    }
+    let emitted: Vec<Finding> = findings
+        .into_iter()
+        .filter(|f| seen.insert(f.id.clone()))
+        .collect();
 
     let count = emitted.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, count);
-    stats.add_skip("other", skipped_other);
+    stats.add_skip("no-write-pending", skipped_clean);
     Ok(DetectorOutput {
         findings: emitted,
         stats,
@@ -420,286 +202,46 @@ pub fn detect_d50(
     })
 }
 
-// ===========================================================================
-// Native oracles — D50 MEDIUM tier + cap-4 faithfulness.
-//
-// These tests cover the CORPUS-UNEXECUTED medium tier and the FIX-1
-// cap-4 case-sensitivity / argless-fallthrough edge cases. The 2 corpus
-// goldens (ws-d50-pos, ws-d50-neg) are INFO-only and never exercise any of
-// this path; the oracles below are the only execution of that code.
-// ===========================================================================
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
     use crate::engine::l4::combined_graph::PrimaryGraph;
-    use crate::engine::l5::detector_context::{
-        DetectorArtifacts, DetectorContext, detector_context,
-    };
-    use crate::engine::l5::full_summary::FullRoutineSummary;
-    use crate::engine::l5::test_support::{
-        MinimalCtx, cone_store_of, empty_artifacts, fact, routine, summary, ts_known,
-    };
-    use crate::engine::root_classification::RootClassification;
-    use crate::program::attributes::{AttributeArg, AttributeInfo};
-    use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
+    use crate::engine::l5::detector_context::{DetectorArtifacts, detector_context};
+    use crate::engine::l5::test_support::{empty_artifacts, routine};
+    use crate::engine::l5::transaction_spans::TransactionSpan;
+    use crate::program::model::workspace::ModelEntities;
 
-    // -----------------------------------------------------------------------
-    // Attribute / object constructors
-    // -----------------------------------------------------------------------
-
-    /// Build a `[CommitBehavior(CommitBehavior::Xxx)]` attribute (qualified form).
-    fn cb_attr_qualified(member: &str) -> AttributeInfo {
-        AttributeInfo {
-            name: "CommitBehavior".to_string(),
-            args: vec![AttributeArg {
-                kind: "qualified_enum_value".to_string(),
-                text: format!("CommitBehavior::{member}"),
-                value: None,
-                qualifier: Some("CommitBehavior".to_string()),
-                member: Some(member.to_string()),
-            }],
-            raw: format!("[CommitBehavior(CommitBehavior::{member})]"),
-            conditional: false,
-            another_declaration_lacks: false,
+    fn span(seed: &str, pending: &[&str]) -> TransactionSpan {
+        TransactionSpan {
+            seed_kind: SeedKind::CheckedRunImplicit,
+            commit_operation_id: format!("{seed}/cs0"),
+            seed_callsite_id: Some(format!("{seed}/cs0")),
+            commit_routine_id: seed.to_string(),
+            routines_in_span: vec![seed.to_string()],
+            writes_tables: pending.iter().map(|s| s.to_string()).collect(),
+            writes_physical_tables_count: pending.len(),
+            publishes_events: vec![],
+            span_roots: vec![seed.to_string()],
+            coverage_complete: true,
+            pending_physical_tables: pending.iter().map(|s| s.to_string()).collect(),
+            pending_events: vec![],
+            pending_physical_by_routine: Default::default(),
         }
     }
 
-    /// Build a `[CommitBehavior(Ignore)]` attribute (plain identifier / ABI "value" path).
-    fn cb_attr_plain(value: &str) -> AttributeInfo {
-        AttributeInfo {
-            name: "CommitBehavior".to_string(),
-            args: vec![AttributeArg {
-                kind: "identifier".to_string(),
-                text: value.to_string(),
-                value: Some(value.to_string()),
-                qualifier: None,
-                member: None,
-            }],
-            raw: format!("[CommitBehavior({value})]"),
-            conditional: false,
-            another_declaration_lacks: false,
-        }
-    }
-
-    /// Build a `[CommitBehavior]` attribute with NO args (the argless form).
-    fn cb_attr_argless() -> AttributeInfo {
-        AttributeInfo {
-            name: "CommitBehavior".to_string(),
-            args: vec![],
-            raw: "[CommitBehavior]".to_string(),
-            conditional: false,
-            another_declaration_lacks: false,
-        }
-    }
-
-    /// Build a MISCASED `[Commitbehavior(Ignore)]` attribute.
-    fn cb_attr_miscased_ignore() -> AttributeInfo {
-        AttributeInfo {
-            name: "Commitbehavior".to_string(), // wrong case
-            args: vec![AttributeArg {
-                kind: "qualified_enum_value".to_string(),
-                text: "CommitBehavior::Ignore".to_string(),
-                value: None,
-                qualifier: Some("CommitBehavior".to_string()),
-                member: Some("Ignore".to_string()),
-            }],
-            raw: "[Commitbehavior(CommitBehavior::Ignore)]".to_string(),
-            conditional: false,
-            another_declaration_lacks: false,
-        }
-    }
-
-    /// Build a `[TryFunction]` attribute.
-    fn try_fn_attr() -> AttributeInfo {
-        AttributeInfo {
-            name: "TryFunction".to_string(),
-            args: vec![],
-            raw: "[TryFunction]".to_string(),
-            conditional: false,
-            another_declaration_lacks: false,
-        }
-    }
-
-    /// A minimal `ModelObject` with the given id + optional InherentCommitBehavior.
-    fn mk_object(id: &str, icb: Option<&str>) -> ModelObject {
-        ModelObject {
-            id: id.to_string(),
-            app_guid: "app".to_string(),
-            object_type: "Codeunit".to_string(),
-            object_number: 1,
-            object_key: "1".to_string(),
-            name: "TestCU".to_string(),
-            source_table_name: None,
-            extends_target_name: None,
-            implements_interfaces: None,
-            object_subtype: None,
-            page_type: None,
-            inherent_commit_behavior: icb.map(|s| s.to_string()),
-            inherent_commit_behavior_conditional: false,
-            source_table_temporary: None,
-            page_controls: Vec::new(),
-            single_instance: None,
-            editable: None,
-            insert_allowed: None,
-            modify_allowed: None,
-            delete_allowed: None,
-            source_anchor: None,
-            declaration_only_routines: Vec::new(),
-            run_actions: None,
-            enum_impls: None,
-        }
-    }
-
-    /// A minimal `RootClassification` with the given kinds.
-    fn mk_root_class(routine_id: &str, kinds: &[&str]) -> RootClassification {
-        RootClassification {
-            routine_id: routine_id.to_string(),
-            kinds: kinds.iter().map(|k| k.to_string()).collect(),
-            externally_reachable: true,
-            source: "ast".to_string(),
-            confidence: "static".to_string(),
-            config_entry_id: None,
-            resolution_status: None,
-        }
-    }
-
-    /// Build a minimal `DetectorContext` that is sufficient for
-    /// `is_explicit_commit_proven_effective` — only `routine_by_id` and
-    /// `root_classifications_by_routine` are populated; all other fields are
-    /// empty / default.
+    /// ENG-22: d50 fires on a checked run at which a write may be pending,
+    /// with the error's meaning and a `pending-write` id; a run with no
+    /// write pending (the old claim's other case) is no finding.
     ///
-    /// Lifetimes: `routines` and `objects` must outlive the returned ctx.
-    fn minimal_ctx<'a>(
-        routines: &'a [crate::program::model::workspace::ModelRoutine],
-        root_classes: Vec<RootClassification>,
-        objects: &'a [ModelObject],
-    ) -> MinimalCtx<'a> {
-        let mut owned =
-            crate::engine::l5::test_support::minimal_ctx(routines, HashMap::new(), HashMap::new())
-                .with_objects(objects);
-        owned.art_mut().root_classifications_by_routine = root_classes
-            .into_iter()
-            .map(|rc| (rc.routine_id.clone(), rc))
-            .collect();
-        owned
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 1: all caps pass → proven_effective TRUE + detect_d50 → MEDIUM.
-    //
-    // THE PRIORITY: exercises the corpus-unexecuted medium-tier escalation path
-    // end-to-end at the detector level.
-    //
-    // Strategy: hand-build a DetectorContext with pre-populated transaction_spans
-    // so we avoid the full call-resolution pipeline.
-    //
-    //   - r_seed: "RunWorkerChecked" — the CheckedRunImplicit seed routine
-    //   - r_manager: "PostDocument" — the transaction manager (name matches Post[A-Z])
-    //   - r_committer: "CommitWorker" — has an explicit commit
-    //   - CheckedRunImplicit span: seed_kind=CheckedRunImplicit, commit_routine_id=r_seed,
-    //     routines_in_span=[r_seed, r_manager, r_committer] (all three are in span)
-    //   - ExplicitCommit span: commit_routine_id=r_committer (populates routinesWithExplicitCommit)
-    //   - is_explicit_commit_proven_effective(r_committer) = TRUE (all defaults: body_available,
-    //     no untrusted root, no TryFunction, no CommitBehavior attr, no object ICB)
-    //   → severity MEDIUM + rootCause contains the medium-extra suffix.
-    // -----------------------------------------------------------------------
+    /// Break: drop the `pending_physical_tables.is_empty()` skip → "Clean"
+    /// is reported too.
     #[test]
-    fn all_caps_pass_medium_severity_at_detector_level() {
-        use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
-        use crate::program::body::features::PAnchor;
-
-        let dummy_anchor = PAnchor {
-            source_unit_id: "ws:src/T.al".to_string(),
-            start_line: 1,
-            start_column: 0,
-            end_line: 5,
-            end_column: 0,
-            syntax_kind: "procedure".to_string(),
-        };
-
-        // r_seed: the routine containing the checked Codeunit.Run callsite.
-        let mut r_seed = routine("seed", "procedure");
-        r_seed.name = "RunWorkerChecked".to_string();
-        r_seed.source_anchor = dummy_anchor.clone();
-
-        // r_manager: the transaction-managing routine (name matches Post[A-Z]).
-        let mut r_manager = routine("manager", "procedure");
-        r_manager.name = "PostDocument".to_string();
-        r_manager.source_anchor = dummy_anchor.clone();
-
-        // r_committer: the routine with an explicit Commit().
-        // All caps pass by default: body_available=true, no untrusted root,
-        // no TryFunction, no CommitBehavior, no object ICB.
-        let mut r_committer = routine("committer", "procedure");
-        r_committer.name = "CommitWorker".to_string();
-        r_committer.source_anchor = dummy_anchor.clone();
-        r_committer.object_id = "obj-committer".to_string();
-
-        let routines_slice = vec![r_seed.clone(), r_manager.clone(), r_committer.clone()];
-
-        // Build a minimal object for r_committer (no ICB → cap-4 passes).
-        // detect_d50 reads the context's `declaring`, built from
-        // resolved.workspace.objects, so we provide the object there (in
-        // ws_objects below).
-        let obj_committer = mk_object("obj-committer", None);
-        let ws_objects = vec![obj_committer.clone()];
-
-        // Manually build the DetectorArtifacts, pre-populating only the fields
-        // detect_d50 actually reads:
-        //   - transaction_spans (pre-built below)
-        //   - root_classifications_by_routine (empty → all caps pass for r_committer)
-        //   - summaries (empty → is_transaction_managing falls back to name match)
-        // The context's borrowed maps (`routine_by_id`, `call_site_by_id`, …)
-        // come from the model below. Fixture routines (`test_support::routine`)
-        // carry no call sites, so `call_site_by_id` is empty → the finding
-        // anchors on the routine header (the fallback).
-
-        // Pre-build the transaction spans:
-        //   1. CheckedRunImplicit span: seed=r_seed, routines_in_span includes all 3.
-        //   2. ExplicitCommit span: seed=r_committer (puts it in routinesWithExplicitCommit).
-        let spans = vec![
-            TransactionSpan {
-                seed_kind: SeedKind::CheckedRunImplicit,
-                commit_operation_id: "seed/cs0".to_string(),
-                seed_callsite_id: Some("seed/cs0".to_string()),
-                commit_routine_id: "seed".to_string(),
-                routines_in_span: vec![
-                    "committer".to_string(),
-                    "manager".to_string(),
-                    "seed".to_string(),
-                ],
-                writes_tables: vec![],
-                writes_physical_tables_count: 0,
-                publishes_events: vec![],
-                span_roots: vec!["manager".to_string()],
-                coverage_complete: false,
-                pending_physical_tables: vec![],
-                pending_events: vec![],
-                pending_physical_by_routine: Default::default(),
-            },
-            TransactionSpan {
-                seed_kind: SeedKind::ExplicitCommit,
-                commit_operation_id: "committer/op-commit".to_string(),
-                seed_callsite_id: None,
-                commit_routine_id: "committer".to_string(),
-                routines_in_span: vec!["committer".to_string()],
-                writes_tables: vec![],
-                writes_physical_tables_count: 0,
-                publishes_events: vec![],
-                span_roots: vec!["committer".to_string()],
-                coverage_complete: false,
-                pending_physical_tables: vec![],
-                pending_events: vec![],
-                pending_physical_by_routine: Default::default(),
-            },
-        ];
-
+    fn fires_only_where_a_write_may_be_pending() {
+        let routines = vec![routine("dirty", "procedure"), routine("clean", "procedure")];
         let art = DetectorArtifacts {
-            transaction_spans: spans,
+            transaction_spans: vec![span("dirty", &["t/A"]), span("clean", &[])],
             ..empty_artifacts(
                 PrimaryGraph {
                     nodes: vec![],
@@ -711,14 +253,11 @@ mod tests {
                 HashMap::new(),
             )
         };
-
-        // Build a minimal Model for detect_d50 (it uses ws.routines; the
-        // context's `declaring` is built over ws.objects); the context borrows it.
         let resolved = Model {
             workspace: ModelEntities {
-                objects: ws_objects,
+                objects: vec![],
                 tables: vec![],
-                routines: routines_slice,
+                routines,
             },
             root_classifications: vec![],
             primary_app: None,
@@ -730,455 +269,14 @@ mod tests {
             page_ui_blocked: Default::default(),
         };
         let ctx = detector_context(&resolved, &art, None, None);
-
-        let output = detect_d50(&resolved, &ctx).unwrap();
-
-        // Must produce exactly one finding with severity MEDIUM.
-        assert_eq!(
-            output.findings.len(),
-            1,
-            "expected 1 finding; got: {:#?}",
-            output.findings
-        );
-        let f = &output.findings[0];
-        assert_eq!(
-            f.severity, "medium",
-            "severity must be MEDIUM when proven-effective explicit commit is in span; got: {}",
-            f.severity
-        );
-        // rootCause must contain the medium-extra partial-state suffix.
+        let out = detect_d50(&resolved, &ctx).unwrap();
+        assert_eq!(out.findings.len(), 1, "{:#?}", out.findings);
+        let f = &out.findings[0];
+        assert_eq!(f.id, "d50/pending-write/dirty/cs0");
         assert!(
             f.root_cause
-                .contains("A proven-effective explicit Commit() is also on the span"),
-            "rootCause must contain the medium-extra suffix; got: {}",
-            f.root_cause
+                .contains("An error occurred and the transaction is stopped.")
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 2: cap1 body_available=false → proven_effective FALSE (→ info).
-    // -----------------------------------------------------------------------
-    #[test]
-    fn cap1_body_not_available_returns_false() {
-        let mut r = routine("r1", "procedure");
-        r.body_available = false;
-        let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![], &[]);
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r1", &ctx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 3: cap2 root has untrusted kind → FALSE.
-    //   3a: public-procedure
-    //   3b: event-subscriber
-    // -----------------------------------------------------------------------
-    #[test]
-    fn cap2_untrusted_root_public_procedure_returns_false() {
-        let r = routine("r2a", "procedure");
-        let routines = vec![r];
-        let rc = mk_root_class("r2a", &["public-procedure"]);
-        let owned = minimal_ctx(&routines, vec![rc], &[]);
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r2a", &ctx));
-    }
-
-    #[test]
-    fn cap2_untrusted_root_event_subscriber_returns_false() {
-        let r = routine("r2b", "procedure");
-        let routines = vec![r];
-        let rc = mk_root_class("r2b", &["event-subscriber"]);
-        let owned = minimal_ctx(&routines, vec![rc], &[]);
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r2b", &ctx));
-    }
-
-    #[test]
-    fn cap2_untrusted_root_onrun_codeunit_returns_false() {
-        // #12: `Codeunit.Run(id)` is callable from arbitrary code, so an OnRun can
-        // run inside a caller's already-open write transaction (AL has no nested
-        // transactions) -- its Commit() is therefore not provably effective at
-        // top-of-transaction. Before #12 an OnRun reached cap 2 with NO slot and
-        // passed by accident, so this row is the kind's trust verdict made
-        // explicit. Preconditions hand-stated by ASSIGNMENT.
-        let r = routine("r2c", "trigger");
-        let routines = vec![r];
-        let rc = mk_root_class("r2c", &["onrun-codeunit"]);
-        let owned = minimal_ctx(&routines, vec![rc], &[]);
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r2c", &ctx));
-    }
-
-    #[test]
-    fn cap2_onrun_codeunit_beats_a_trusted_job_queue_kind() {
-        // The cap is ANY-quantified: one untrusted kind decides even when a
-        // trusted overlay kind is present. Fail-closed, and asserted rather than
-        // assumed -- a job-queue-ONLY root still passes (next row).
-        let r = routine("r2d", "trigger");
-        let routines = vec![r];
-        let rc = mk_root_class("r2d", &["job-queue-entrypoint", "onrun-codeunit"]);
-        let owned = minimal_ctx(&routines, vec![rc], &[]);
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r2d", &ctx));
-    }
-
-    #[test]
-    fn cap2_job_queue_entrypoint_alone_still_passes() {
-        // Guards against over-correction: adding onrun-codeunit must not make the
-        // overlay-only job-queue kind untrusted.
-        let r = routine("r2e", "trigger");
-        let routines = vec![r];
-        let rc = mk_root_class("r2e", &["job-queue-entrypoint"]);
-        let owned = minimal_ctx(&routines, vec![rc], &[]);
-        let ctx = owned.ctx();
-        assert!(is_explicit_commit_proven_effective("r2e", &ctx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 4: cap3 [TryFunction] → FALSE.
-    // -----------------------------------------------------------------------
-    #[test]
-    fn cap3_try_function_returns_false() {
-        let mut r = routine("r3", "procedure");
-        r.attributes_parsed = vec![try_fn_attr()];
-        let routines = vec![r];
-        let owned = minimal_ctx(&routines, vec![], &[]);
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r3", &ctx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 5: cap4 routine [CommitBehavior(CommitBehavior::Ignore)] qualified → FALSE;
-    //           routine [CommitBehavior(CommitBehavior::Error)] qualified → FALSE.
-    // -----------------------------------------------------------------------
-    #[test]
-    fn cap4_qualified_ignore_returns_false() {
-        let mut r = routine("r4a", "procedure");
-        r.attributes_parsed = vec![cb_attr_qualified("Ignore")];
-        r.object_id = "obj-4a".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-4a", None);
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r4a", &ctx));
-    }
-
-    #[test]
-    fn cap4_qualified_error_returns_false() {
-        let mut r = routine("r4b", "procedure");
-        r.attributes_parsed = vec![cb_attr_qualified("Error")];
-        r.object_id = "obj-4b".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-4b", None);
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r4b", &ctx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 6: cap4 bare-ABI [CommitBehavior(Ignore)] (value/text path) → FALSE.
-    // -----------------------------------------------------------------------
-    #[test]
-    fn cap4_abi_value_ignore_returns_false() {
-        let mut r = routine("r4c", "procedure");
-        r.attributes_parsed = vec![cb_attr_plain("Ignore")];
-        r.object_id = "obj-4c".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-4c", None);
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r4c", &ctx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 7: cap4 NO routine attr + object ICB "ignore" → FALSE;
-    //           + object ICB "error" → FALSE.
-    // -----------------------------------------------------------------------
-    #[test]
-    fn cap4_no_routine_attr_object_icb_ignore_returns_false() {
-        let mut r = routine("r4d", "procedure");
-        r.object_id = "obj-4d".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-4d", Some("ignore"));
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r4d", &ctx));
-    }
-
-    #[test]
-    fn cap4_no_routine_attr_object_icb_error_returns_false() {
-        let mut r = routine("r4e", "procedure");
-        r.object_id = "obj-4e".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-4e", Some("error"));
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        assert!(!is_explicit_commit_proven_effective("r4e", &ctx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 8 (FIX 1 regression): cap4 argless [CommitBehavior] (no args) +
-    // object ICB "ignore" → proven_effective TRUE.
-    //
-    // Encodes TS behavior: routine attr IS present → wins → object ICB NOT consulted
-    // → no suppression → cap-4 PASSES (routine attr with no args is treated as
-    // "normal" override, not a fall-through to object ICB).
-    // -----------------------------------------------------------------------
-    #[test]
-    fn fix1_argless_cb_attr_wins_over_object_icb_ignore_returns_true() {
-        let mut r = routine("r_fix1a", "procedure");
-        r.attributes_parsed = vec![cb_attr_argless()]; // [CommitBehavior] — argless
-        r.object_id = "obj-fix1a".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-fix1a", Some("ignore")); // ICB = ignore, but irrelevant
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        // FIX 1b: routine attr present → object ICB NOT consulted → TRUE.
-        assert!(
-            is_explicit_commit_proven_effective("r_fix1a", &ctx),
-            "argless [CommitBehavior] + object ICB ignore must return TRUE (routine attr wins)"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Oracle 9 (FIX 1 regression): cap4 miscased [Commitbehavior(Ignore)] +
-    // object ICB absent → proven_effective TRUE.
-    //
-    // Encodes TS behavior: case-sensitive match misses the routine attr (name is
-    // "Commitbehavior" not "CommitBehavior") → falls through to object ICB → absent
-    // → cap-4 PASSES → TRUE.
-    // -----------------------------------------------------------------------
-    #[test]
-    fn fix1_miscased_cb_attr_not_matched_no_object_icb_returns_true() {
-        let mut r = routine("r_fix1b", "procedure");
-        r.attributes_parsed = vec![cb_attr_miscased_ignore()]; // [Commitbehavior(...)] — miscased
-        r.object_id = "obj-fix1b".to_string();
-        let routines = vec![r];
-        let obj = mk_object("obj-fix1b", None); // no object ICB
-        let owned = minimal_ctx(&routines, vec![], std::slice::from_ref(&obj));
-        let ctx = owned.ctx();
-        // FIX 1a: case-sensitive match misses → no object ICB → TRUE.
-        assert!(
-            is_explicit_commit_proven_effective("r_fix1b", &ctx),
-            "miscased [Commitbehavior(Ignore)] + no object ICB must return TRUE (case-sensitive miss)"
-        );
-    }
-
-    /// An anchor in `f.al` covering lines `from..=to`.
-    fn span(from: u32, to: u32) -> crate::program::body::features::PAnchor {
-        crate::program::body::features::PAnchor {
-            source_unit_id: "ws:f.al".to_string(),
-            start_line: from,
-            start_column: 0,
-            end_line: to,
-            end_column: 0,
-            syntax_kind: String::new(),
-        }
-    }
-
-    /// R11 (#279): cap 4 reads the ICB of the routine's OWN declaring row. Two
-    /// rows share one id BY ASSIGNMENT (an `#if` split): lines 0-10 with ICB
-    /// "ignore", lines 11-20 with none. The routine in the first arm is
-    /// suppressed; the same routine in the second arm is not. A last-row lookup
-    /// fails the first assert, a first-row lookup the second.
-    #[test]
-    fn cap4_reads_the_declaring_arms_icb() {
-        let mut first = mk_object("obj-split", Some("ignore"));
-        first.source_anchor = Some(span(0, 10));
-        let mut second = mk_object("obj-split", None);
-        second.source_anchor = Some(span(11, 20));
-        let rows = [first, second];
-        for (line, expect) in [(2, false), (12, true)] {
-            let mut r = routine("r_split", "procedure");
-            r.object_id = "obj-split".to_string();
-            r.source_anchor = span(line, line + 2);
-            let routines = vec![r];
-            let owned = minimal_ctx(&routines, vec![], &rows);
-            let ctx = owned.ctx();
-            assert_eq!(
-                is_explicit_commit_proven_effective("r_split", &ctx),
-                expect,
-                "routine at line {line}"
-            );
-        }
-    }
-
-    // =======================================================================
-    // A1 (issue 23) — `is_transaction_managing`'s COUNT branch must count
-    // PHYSICAL table writes, not temp-inclusive ones.
-    //
-    // d8 already gates on `writes_physical_tables_count_of`
-    // (`d8.rs:40-42`); d50 USED TO gate on `writes_tables_count_of`, which the
-    // `cone_derived` module doc (`:23-24`) states is temp-INCLUSIVE -- that is
-    // the defect these tests pin, fixed for the count branch by issue 23. A routine
-    // whose only writes are to `temporary` records dirties nothing an implicit
-    // commit could split.
-    //
-    // THE VACUITY TRAP these tests are built to avoid: `minimal_ctx` has EMPTY
-    // `summaries` and a DEFAULT (row-less) cone store, so
-    // `is_transaction_managing` on one returns false at the missing-summary
-    // early return (`d50.rs:68-70`) BEFORE the count is ever consulted — a test
-    // built on an unmodified `minimal_ctx` would pass identically before and
-    // after the fix, for the wrong reason. Every case below therefore populates
-    // a REAL summary and a REAL derived cone row, and ASSERTS the
-    // inclusive/physical precondition explicitly before asserting the gate.
-    // =======================================================================
-
-    /// One `insert` on `table_id`, tagged `temp_state: known(is_temp)`.
-    /// `cone_derived::fact_is_known_temp` reads exactly this shape, and it is
-    /// what splits `table_writes_all` from `physical_table_writes` in
-    /// `ConeDerivedBuilder::fold_fact`. (Cited by NAME, not by line: both line
-    /// ranges that used to stand here had already rotted.)
-    fn table_insert_fact(table_id: &str, is_temp: bool) -> CapabilityFact {
-        let mut f = fact("insert", "table", Some(table_id));
-        f.extra = Some(CapabilityExtra::Table {
-            record_variable_id: None,
-            temp_state: Some(ts_known(is_temp)),
-            op_subtype: None,
-        });
-        f
-    }
-
-    /// A `DetectorContext` whose `summaries` AND `cone_derived` are REALLY
-    /// populated for `routine_id` — `cone_store_of` folds the store FROM the
-    /// summary, so the two can never silently disagree.
-    fn ctx_with_write_summary<'a>(
-        routines: &'a [ModelRoutine],
-        routine_id: &str,
-        facts: Vec<CapabilityFact>,
-    ) -> MinimalCtx<'a> {
-        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
-        summaries.insert(
-            routine_id.to_string(),
-            summary(routine_id, facts, vec![], None),
-        );
-        let mut owned = minimal_ctx(routines, vec![], &[]);
-        owned.art_mut().cone_derived = std::sync::Arc::new(cone_store_of(&summaries));
-        owned.art_mut().summaries = summaries;
-        owned
-    }
-
-    /// Assert the preconditions that make a COUNT-branch case non-vacuous: the
-    /// summary EXISTS (so the gate reaches the count rather than returning
-    /// false at `d50.rs:68-70`) and the derived row carries exactly
-    /// `inclusive` temp-inclusive / `physical` physical writes.
-    ///
-    /// Asserts only; it returns `()`. Callers keep their own `ctx`.
-    fn assert_counts(
-        ctx: &DetectorContext<'_>,
-        routine_id: &str,
-        inclusive: usize,
-        physical: usize,
-    ) {
-        assert!(
-            ctx.summaries.contains_key(routine_id),
-            "{routine_id} must HAVE a summary, or `is_transaction_managing` returns false \
-             at the missing-summary early return and the case proves nothing"
-        );
-        assert_eq!(
-            ctx.cone_derived.writes_tables_count_of(routine_id),
-            inclusive,
-            "{routine_id}: temp-INCLUSIVE written-table count (what the OLD gate read)"
-        );
-        assert_eq!(
-            ctx.cone_derived.writes_physical_tables_count_of(routine_id),
-            physical,
-            "{routine_id}: PHYSICAL written-table count (what the gate MUST read)"
-        );
-    }
-
-    /// A1 — three writes, ALL to `temporary` records: temp-inclusive 3 (AT the
-    /// threshold, which is why the OLD inclusive gate answered true), physical 0. The
-    /// routine must NOT be transaction-managing.
-    #[test]
-    fn a1_temp_only_writes_are_not_transaction_managing() {
-        const ID: &str = "BufferRowsTemp";
-        let r = routine(ID, "procedure");
-        assert!(
-            !posting_name_matches(&r.name),
-            "the fixture routine must NOT match POSTING_NAME_RE, or the NAME branch \
-             short-circuits and the COUNT branch under test is never consulted"
-        );
-        let routines = vec![r];
-        let owned = ctx_with_write_summary(
-            &routines,
-            ID,
-            vec![
-                table_insert_fact("t1", true),
-                table_insert_fact("t2", true),
-                table_insert_fact("t3", true),
-            ],
-        );
-        let ctx = owned.ctx();
-        assert_counts(&ctx, ID, 3, 0);
-        assert!(
-            ctx.cone_derived.writes_tables_count_of(ID) >= TRANSACTION_THRESHOLD_TABLES,
-            "precondition: the temp-INCLUSIVE count is at/over the threshold, so the \
-             OLD inclusive gate answered true — that is what makes this case discriminating"
-        );
-
-        assert!(
-            !is_transaction_managing(ID, &ctx),
-            "3 writes to TEMPORARY records and 0 physical ones: a temporary record never \
-             dirties the transaction, so the gate must count PHYSICAL writes (as d8 does) \
-             and answer false"
-        );
-    }
-
-    /// A1 — the mixed case: two physical writes plus one temporary is
-    /// temp-inclusive 3 but physical 2, below the threshold. The narrowing is
-    /// not limited to temp-ONLY routines.
-    #[test]
-    fn a1_mixed_writes_below_the_physical_threshold_are_not_transaction_managing() {
-        const ID: &str = "StageMixedRowsTemp";
-        let r = routine(ID, "procedure");
-        assert!(!posting_name_matches(&r.name));
-        let routines = vec![r];
-        let owned = ctx_with_write_summary(
-            &routines,
-            ID,
-            vec![
-                table_insert_fact("t1", false),
-                table_insert_fact("t2", false),
-                table_insert_fact("t3", true),
-            ],
-        );
-        let ctx = owned.ctx();
-        assert_counts(&ctx, ID, 3, 2);
-
-        assert!(
-            !is_transaction_managing(ID, &ctx),
-            "2 PHYSICAL writes is below TRANSACTION_THRESHOLD_TABLES ({TRANSACTION_THRESHOLD_TABLES}) \
-             even though the temp-inclusive count is 3"
-        );
-    }
-
-    /// A1 CONTROL (suppression-direction guard) — three PHYSICAL writes still
-    /// make a transaction manager through the COUNT branch. Without this,
-    /// "always answer false" would pass both cases above, and the two would not
-    /// prove the count path is live at all.
-    #[test]
-    fn a1_control_three_physical_writes_are_transaction_managing() {
-        const ID: &str = "StageRowsPhysical";
-        let r = routine(ID, "procedure");
-        assert!(!posting_name_matches(&r.name));
-        let routines = vec![r];
-        let owned = ctx_with_write_summary(
-            &routines,
-            ID,
-            vec![
-                table_insert_fact("t1", false),
-                table_insert_fact("t2", false),
-                table_insert_fact("t3", false),
-            ],
-        );
-        let ctx = owned.ctx();
-        assert_counts(&ctx, ID, 3, 3);
-
-        assert!(
-            is_transaction_managing(ID, &ctx),
-            "3 PHYSICAL writes must STILL clear the gate — the change narrows the COUNT \
-             branch, it does not disable it"
-        );
+        assert!(!f.root_cause.contains("implicit commit"));
     }
 }

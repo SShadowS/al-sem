@@ -1251,6 +1251,20 @@ pub(crate) fn direct_facts_for_routine(
                 facts.push(implicit(None, Some(cs.id.clone())));
             }
         }
+        // ENG-22: a checked `Codeunit.Run` with a write pending raises an
+        // error at the run itself, which the checked form does not catch
+        // (measured on BC 28, Linux and Windows). Whether a write may be
+        // pending is a route property, ruled per root by the trap pass
+        // (`literal_reach::LiteralReach::run_error_verdict`). Its resource
+        // ([`RUN_COMMIT`]) tells it from the other implicit errors.
+        for cs in &call_sites {
+            if cs.checked_run {
+                facts.push(CapabilityFact {
+                    resource_id: Some(RUN_COMMIT.to_string()),
+                    ..implicit(None, Some(cs.id.clone()))
+                });
+            }
+        }
     }
 
     // ── publisher-fact injection (summary-runner.ts:615-632) ───────────────

@@ -421,13 +421,6 @@ impl<'a> MinimalCtx<'a> {
         DetectorContext::new(self.routines, self.objects, &[], &self.art, None, None)
     }
 
-    /// The object rows the context's `declaring` index is built over (none by
-    /// default).
-    pub fn with_objects(mut self, objects: &'a [ModelObject]) -> Self {
-        self.objects = objects;
-        self
-    }
-
     /// Mutate the artifacts BEFORE borrowing a context.
     pub fn art_mut(&mut self) -> &mut DetectorArtifacts {
         &mut self.art

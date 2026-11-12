@@ -468,7 +468,16 @@ fn walk_node(
 ) {
     let leaves = kids(&n.condition_leaves);
     if walk_list(leaves, t, commits, out, cleared) {
-        return; // `t` is in the condition (or the arguments)
+        // `t` is in the condition (or the arguments). A `while` condition
+        // runs again after each pass of the body, and a `repeat` condition
+        // after the body of the same pass: the body may run before `t`
+        // (ENG-22 review). A `for` range is evaluated once, before the body.
+        if matches!(n.kind.as_str(), "while" | "repeat") {
+            for c in kids(&n.children).iter().chain(kids(&n.else_children)) {
+                collect_reaching(c, out);
+            }
+        }
+        return;
     }
     // A condition (or a call's arguments) runs before the body (or the call).
     for l in leaves {

@@ -1367,6 +1367,17 @@ pub(crate) const RUN_COMMIT_LABEL: &str = "COMMIT (checked Codeunit.Run)";
 
 /// ENG-09: whether a row is a checked run's own commit (its
 /// `detail.resourceId` is `capability_cone::RUN_COMMIT`).
+/// ENG-22: the error a checked run raises itself when a write is pending at
+/// it (resource `checked-run` on an implicit error).
+pub(crate) const RUN_ERROR_LABEL: &str = "ERROR (checked Codeunit.Run with a write pending)";
+
+pub(crate) fn is_run_error_row(effect_type: &str, detail: &[(String, String)]) -> bool {
+    effect_type == "ERROR_IMPLICIT"
+        && detail
+            .iter()
+            .any(|(k, v)| k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT)
+}
+
 pub(crate) fn is_run_commit_row(e: &DigestEffectFull) -> bool {
     e.effect_type == "COMMIT"
         && e.detail
@@ -2536,9 +2547,20 @@ fn judge_traps<'t>(
     else {
         return;
     };
-    let scope = reach.trap_scope(&entry.routine_id, full);
+    // ENG-22: a checked run's own error is ruled by whether a write may be
+    // pending at the run, so its rows need the root's run points.
+    let has_run_error = rows.iter().any(|&i| {
+        !entry.effects[i].boundary_group
+            && is_run_error_row(&entry.effects[i].effect_type, &entry.effects[i].detail)
+    });
+    let runs = if has_run_error {
+        reach.run_points(&entry.routine_id)
+    } else {
+        None
+    };
+    let scope = reach.trap_scope(&entry.routine_id, full, runs.as_ref());
     let collectors = reach.collectors_reached(full);
-    if scope.is_none() && !collectors {
+    if scope.is_none() && !collectors && !has_run_error {
         return;
     }
     for i in rows {
@@ -2570,7 +2592,7 @@ fn judge_traps<'t>(
             }
             ops
         };
-        let trap = scope
+        let mut trap = scope
             .as_ref()
             .and_then(|s| reach.trap_verdict(full, s, &ops)); // B7 review: a caught ruling that may rest on a checked run assumes
         // the root's callers have no write pending.
@@ -2578,10 +2600,28 @@ fn judge_traps<'t>(
             trap,
             Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(_))
         );
-        let assumes_clean_entry = caught && scope.as_ref().is_some_and(|s| s.clean_checked);
+        let mut assumes_clean_entry = caught && scope.as_ref().is_some_and(|s| s.clean_checked);
         // Round 2: ... and, when a `Commit()` before the run ends the write,
         // that the callers set no `[CommitBehavior]` that stops it.
-        let assumes_normal_commit = caught && scope.as_ref().is_some_and(|s| s.clean_by_commit);
+        let mut assumes_normal_commit = caught && scope.as_ref().is_some_and(|s| s.clean_by_commit);
+        // ENG-22: the run's own error, unless a trap outside the run catches
+        // it on every route: not raised where no write may be pending at the
+        // run (resting on the callers' entry), otherwise raised if one is.
+        // A trap on some routes only keeps its own words (the row stays
+        // escaping, never unconditional).
+        if !caught
+            && trap.is_none()
+            && !e.boundary_group
+            && is_run_error_row(&e.effect_type, &e.detail)
+            && let Some(site) = e.evidence_callsite_id.as_deref()
+            && let Some((v, clean)) = reach.run_error_verdict(runs.as_ref(), site)
+        {
+            trap = Some(v);
+            if let Some(by_commit) = clean {
+                assumes_clean_entry = true;
+                assumes_normal_commit = by_commit;
+            }
+        }
         let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
             reach
                 .tree_witness(full, &ops)

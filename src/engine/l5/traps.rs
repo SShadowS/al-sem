@@ -104,6 +104,11 @@ pub(crate) enum TrapKind {
     TryFunction,
     Asserterror,
     IsolatedEvent,
+    /// ENG-22: not a trap of the call edges: the clean-transaction check of
+    /// a checked run, which raises the run's own error when a write is
+    /// pending at it. Only a ruling of that error names it (never an entry
+    /// of the trap table).
+    RunCheck,
 }
 
 impl TrapKind {
@@ -122,6 +127,7 @@ impl TrapKind {
             TrapKind::TryFunction => "TryFunction with its result used",
             TrapKind::Asserterror => "asserterror",
             TrapKind::IsolatedEvent => "isolated event",
+            TrapKind::RunCheck => "clean-transaction check of the checked Codeunit.Run",
         }
     }
 
@@ -133,6 +139,7 @@ impl TrapKind {
             TrapKind::TryFunction => "try-function",
             TrapKind::Asserterror => "asserterror",
             TrapKind::IsolatedEvent => "isolated-event",
+            TrapKind::RunCheck => "checked-run-pending-write",
         }
     }
 }
