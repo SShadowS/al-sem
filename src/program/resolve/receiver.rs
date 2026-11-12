@@ -1369,21 +1369,7 @@ pub(crate) fn extension_base_object<'g>(
     Some(object_by_id(graph, &base_id))
 }
 
-/// The element type of an `array[N, ...] of T` type text: `T`. `None` for any other
-/// type text.
-fn array_element_type(ty: &str) -> Option<&str> {
-    let t = ty.trim();
-    if !t.get(..5)?.eq_ignore_ascii_case("array") {
-        return None;
-    }
-    let close = t.find(']')?;
-    let rest = t[close + 1..].trim_start();
-    if !rest.get(..2)?.eq_ignore_ascii_case("of") {
-        return None;
-    }
-    let element = rest[2..].trim();
-    (!element.is_empty() && rest[2..].starts_with(char::is_whitespace)).then_some(element)
-}
+use crate::record_ops::array_element_type;
 
 /// Step 6's AST-native entry point: type an arbitrary `Expr` node directly
 /// from the IR — never by re-parsing source text — recursing through

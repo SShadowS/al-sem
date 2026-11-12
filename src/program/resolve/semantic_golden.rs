@@ -1032,8 +1032,7 @@ fn build_fan_out_site_context(
                     .iter()
                     .filter(|v| {
                         v.ty.as_deref()
-                            .map(|ty| ty.trim().to_ascii_lowercase().starts_with("record"))
-                            .unwrap_or(false)
+                            .is_some_and(crate::program::resolve::extract::is_record_ty)
                     })
                     .map(|v| v.name.fold_identifier())
                     .collect();
@@ -1086,7 +1085,9 @@ fn build_fan_out_site_context(
                                     );
                                 }
                             }
-                            CalleeShape::RecordOp { receiver_text, op } => {
+                            CalleeShape::RecordOp {
+                                receiver_text, op, ..
+                            } => {
                                 let receiver_lc = receiver_text.fold_identifier();
                                 let op_lc = op.fold_identifier();
                                 let Some(op_kind) = record_op_kind_for_method(&op_lc) else {

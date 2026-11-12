@@ -69,6 +69,31 @@ codeunit 52601 "E12 Ops"
     begin
         exit(R);
     end;
+    procedure GetPlainModifyTrue()
+    begin
+        GetPlain().Modify(true);
+    end;
+    local procedure GetPlain(): Record "E12 Plain"
+    var
+        P: Record "E12 Plain";
+    begin
+        exit(P);
+    end;
+    procedure GetRRModifyTrue()
+    begin
+        GetRR().Modify(true);
+    end;
+    local procedure GetRR(): RecordRef
+    var
+        RR: RecordRef;
+    begin
+        exit(RR);
+    end;
+}
+table 52602 "E12 Plain"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
 }
 "#;
 
@@ -133,5 +158,65 @@ fn get_by_system_id_reads_its_table() {
     ] {
         let a = touches_down(ws, from);
         assert!(a.starts_with("answer: down: yes"), "{from}: {a}");
+    }
+}
+
+/// The `answer:` line of `prove <routine> may-commit`.
+fn may_commit(ws: &str, routine: &str) -> String {
+    let h = run(&[
+        "prove",
+        ws,
+        &format!("\"E12 Ops\"::{routine}"),
+        "may-commit",
+        "--format",
+        "human",
+    ]);
+    h.lines()
+        .find(|l| l.starts_with("answer:"))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// L36: an array element is a record: its reads touch the table, member and
+/// `with` alike.
+/// Break (2026-11-12): `record_ops::receiver_variable` without its `Index`
+/// arm -> `ArrMember` answers `down: no (every candidate decided)`; restored,
+/// passes. (`Recs[1].Modify(true)` still answers `yes` then, through the
+/// member-path trigger step, the second test's fallback.)
+#[test]
+fn an_array_element_is_a_record() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    for from in ["\"E12 Ops\".ArrMember", "\"E12 Ops\".ArrWith"] {
+        let a = touches_down(ws, from);
+        assert!(a.starts_with("answer: down: yes"), "{from}: {a}");
+    }
+}
+
+/// ENG-06 review gap (b): a trigger-firing operation on a receiver that is
+/// not a plain variable runs the table's triggers (`OnModify` commits):
+/// an array element of a known table -> yes; a RecordRef array element (any
+/// table may be open) -> unknown; a call's result of a known table -> yes;
+/// of a table with no trigger -> unknown (its table events are not followed),
+/// a RecordRef call result -> unknown. Never a definite `no`.
+/// Breaks (2026-11-12): drop the receiver id from `CalleeShape::RecordOp` in
+/// `full.rs` (`None` to `infer_receiver_type`) -> `ArrModifyTrue` answers
+/// `unknown` (no table, the open edge), not `yes`; drop the member-path
+/// trigger step in `full.rs` -> `GetRefModifyTrue` answers `no`; keep the
+/// step but not its unknown route -> `GetPlainModifyTrue` answers `no`. Each
+/// fails; restored, it passes.
+#[test]
+fn a_trigger_firing_op_on_an_element_or_a_call_result_is_never_a_definite_no() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    for (routine, want) in [
+        ("ArrModifyTrue", "answer: yes"),
+        ("RRArrModifyTrue", "answer: unknown"),
+        ("GetRefModifyTrue", "answer: yes"),
+        ("GetPlainModifyTrue", "answer: unknown"),
+        ("GetRRModifyTrue", "answer: unknown"),
+    ] {
+        let a = may_commit(ws, routine);
+        assert!(a.starts_with(want), "{routine}: {a}");
     }
 }

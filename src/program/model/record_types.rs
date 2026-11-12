@@ -36,7 +36,14 @@ use crate::program::body::node_util::strip_quotes;
 /// names are stored. A quoted receiver missed its variable, so its table and
 /// temp state stayed unknown.
 fn op_variable_lc(raw: &str) -> String {
-    strip_quotes(raw).replace("\"\"", "\"").to_lowercase()
+    // An array element `Recs[1]` is an op on the array variable (ENG-12, L36).
+    let raw = match raw.trim_end().strip_suffix(']') {
+        Some(_) => raw.find('[').map_or(raw, |i| &raw[..i]),
+        None => raw,
+    };
+    strip_quotes(raw.trim())
+        .replace("\"\"", "\"")
+        .to_lowercase()
 }
 
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
@@ -210,7 +217,9 @@ pub fn resolve_routine_record_types(
         else {
             continue;
         };
-        let Some(table_name) = record_table_name_of(decl) else {
+        // An array of records: its element type (ENG-12, L36).
+        let Some(table_name) = record_table_name_of(crate::record_ops::receiver_type_of(decl))
+        else {
             continue;
         };
         if let Some(table) = symbols.table_by_name(&table_name) {

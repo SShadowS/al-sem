@@ -1028,10 +1028,44 @@ fn resolve_call_site_obligation(
                     graph,
                     index,
                 ));
-                let (s, r) = resolve_member_with_args(
+                let (mut s, mut r) = resolve_member_with_args(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
+                // ENG-12 (ENG-06 review gap (b)): a trigger-firing record
+                // operation on a record no variable names (a call's result,
+                // `GetRef().Modify(true)`; an array element is a record
+                // operation, `extract::classify_call`). Measured 2026-11-12: 0
+                // such sites in CDO or Base Application. Its table's triggers
+                // when the table is known (as a record operation's, by the
+                // same RunTrigger rule), and one honest unknown for what is not
+                // followed here (its table events; with no table, any table's
+                // triggers): never a definite `no`.
+                if let Some(trigger_op) =
+                    crate::program::resolve::edge::record_trigger_op(&method_lc)
+                    && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
+                {
+                    let _ = trigger_op;
+                    if let ReceiverType::Record { table: Some(tid) } = &recv
+                        && let Some(table_node) = graph.object_first(tid)
+                    {
+                        let (_, _, mut trig) =
+                            resolve_implicit_trigger(&method_lc, table_node, graph, index, surface);
+                        let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
+                            &method_lc, call_args, file, text,
+                        );
+                        trig.retain(|t| match &t.target {
+                            RouteTarget::Routine(id) => rule.admits(id),
+                            _ => true,
+                        });
+                        if !trig.is_empty() {
+                            // The builtin and its table's triggers all run.
+                            s = DispatchShape::Multicast;
+                        }
+                        r.extend(trig);
+                    }
+                    r.push(unknown_route(UnknownReason::CompoundReceiver));
+                }
                 // B9: a `FieldRef.Validate(…)` validates a field of the table
                 // the FieldRef holds.
                 if r.iter().any(|rt| {
@@ -1281,7 +1315,11 @@ fn resolve_call_site_obligation(
             }
         }
 
-        CalleeShape::RecordOp { receiver_text, op } => {
+        CalleeShape::RecordOp {
+            receiver_text,
+            op,
+            receiver,
+        } => {
             let receiver_lc = receiver_text.fold_identifier();
             let op_lc = op.fold_identifier();
 
@@ -1292,10 +1330,8 @@ fn resolve_call_site_obligation(
             // that may hold any table ([`UnresolvedTable`]).
             let mut named_not_loaded = false;
             let table_node_opt: Option<&ObjectNode> = if let Some(obj_node) = obj_node_opt {
-                // `RecordOp` carries no `ExprId` (Task 2 scoped the primitive
-                // to `CalleeShape::Member` only) — `None`/`None` here is
-                // unchanged behavior, not a gap (Task 3's Step 5 is also
-                // scoped to `CalleeShape::Member`).
+                // ENG-12 (L36): the receiver expression, so an array element
+                // `Recs[1]` is typed by its element type (step 6).
                 let recv = infer_receiver_type(
                     &receiver_lc,
                     routine,
@@ -1303,8 +1339,8 @@ fn resolve_call_site_obligation(
                     obj_node,
                     graph,
                     index,
-                    None,
-                    None,
+                    receiver.map(|id| (file, id)),
+                    Some((surface, with_state)),
                 );
                 match recv {
                     ReceiverType::Record {
@@ -1519,8 +1555,7 @@ pub(crate) fn resolve_file_obligations(
             .iter()
             .filter(|v| {
                 v.ty.as_deref()
-                    .map(|ty| ty.trim().to_ascii_lowercase().starts_with("record"))
-                    .unwrap_or(false)
+                    .is_some_and(crate::program::resolve::extract::is_record_ty)
             })
             .map(|v| v.name.fold_identifier())
             // Report dataitems and XmlPort table elements are record variables too

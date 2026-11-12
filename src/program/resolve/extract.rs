@@ -74,7 +74,15 @@ pub enum CalleeShape {
         target_is_name: bool,
     },
     /// A record operation on an explicit record-typed receiver: `Rec.SetRange(...)`.
-    RecordOp { receiver_text: String, op: String },
+    RecordOp {
+        receiver_text: String,
+        op: String,
+        /// The receiver expression when there is one (`X`, `Recs[1]`, a `with`
+        /// receiver), so receiver typing can read it (ENG-12: an array element
+        /// is typed by its element type). `None` for the implicit `Rec`. Not part
+        /// of equality, as `Member`'s `receiver` is not.
+        receiver: Option<ExprId>,
+    },
     /// A bare `Commit()` call.
     Commit,
     /// Any other call expression that doesn't match a known pattern.
@@ -114,10 +122,12 @@ impl PartialEq for CalleeShape {
                 CalleeShape::RecordOp {
                     receiver_text: rt1,
                     op: op1,
+                    ..
                 },
                 CalleeShape::RecordOp {
                     receiver_text: rt2,
                     op: op2,
+                    ..
                 },
             ) => rt1 == rt2 && op1 == op2,
             (CalleeShape::Commit, CalleeShape::Commit) => true,
@@ -223,8 +233,12 @@ pub enum WithState {
 /// `"record"` (case-insensitive), INCLUSIVE of `RecordRef`. This ensures that
 /// a `RecordRef`-typed var's record-op calls classify as `RecordOp` (matching L3,
 /// which makes no PCallSite for them).
-fn is_record_ty(ty: &str) -> bool {
-    ty.trim().to_ascii_lowercase().starts_with("record")
+pub(crate) fn is_record_ty(ty: &str) -> bool {
+    // ENG-12 (L36): an array of records receives through its elements.
+    crate::record_ops::receiver_type_of(ty)
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("record")
 }
 
 /// Compute the set of lowercased record-receiver variable names in scope for a
@@ -387,12 +401,9 @@ fn classify_call(
             // Receiver must be a simple Identifier/QuotedIdentifier in rvars AND
             // method must be an L2 record op -- the SAME table, so the two engines
             // cannot drift (a hand copy here once lacked `rename`, #9).
-            let recv_lc = match &obj.kind {
-                ExprKind::Identifier(r) | ExprKind::QuotedIdentifier(r) => {
-                    Some(r.fold_identifier())
-                }
-                _ => None,
-            };
+            // `X` or an array element `X[i]` (ENG-12, L36).
+            let recv_lc = crate::record_ops::receiver_variable(&file.ir, *object)
+                .map(|r| r.fold_identifier());
             if let Some(ref r_lc) = recv_lc
                 && rvars.contains(r_lc)
                 && crate::record_ops::record_op_type(&method_lc).is_some()
@@ -401,6 +412,7 @@ fn classify_call(
                 return CalleeShape::RecordOp {
                     receiver_text,
                     op: method_lc,
+                    receiver: Some(*object),
                 };
             }
 
@@ -461,20 +473,25 @@ fn classify_call(
             let op = name.fold_identifier();
             let receiver_text = match ctx.implicit {
                 ImplicitRecv::NotRecord => None,
-                ImplicitRecv::Rec => Some("Rec".to_string()),
-                ImplicitRecv::With(r) => {
-                    Some(src[file.ir.expr(r).origin.byte.clone()].trim().to_string())
-                }
+                ImplicitRecv::Rec => Some(("Rec".to_string(), None)),
+                ImplicitRecv::With(r) => Some((
+                    src[file.ir.expr(r).origin.byte.clone()].trim().to_string(),
+                    Some(r),
+                )),
             };
             match receiver_text {
-                Some(receiver_text)
+                Some((receiver_text, receiver))
                     if crate::record_ops::record_op_type(&op).is_some()
                         && !file.objects[ctx.object_idx]
                             .routines
                             .iter()
                             .any(|r| r.name.eq_fold_identifier(&op)) =>
                 {
-                    CalleeShape::RecordOp { receiver_text, op }
+                    CalleeShape::RecordOp {
+                        receiver_text,
+                        op,
+                        receiver,
+                    }
                 }
                 _ => CalleeShape::Bare { name: name.clone() },
             }
@@ -539,12 +556,9 @@ impl WithCtx {
     /// Depth incremented on entry to a `StmtKind::With` body, whose implicit
     /// receiver is `receiver` when that is a record variable.
     fn entered_with(self, file: &AlFile, receiver: ExprId, rvars: &HashSet<String>) -> WithCtx {
-        let is_record = match &file.ir.expr(receiver).kind {
-            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
-                rvars.contains(&x.fold_identifier())
-            }
-            _ => false,
-        };
+        // `with X do` or `with Recs[i] do` (ENG-12, L36).
+        let is_record = crate::record_ops::receiver_variable(&file.ir, receiver)
+            .is_some_and(|x| rvars.contains(&x.fold_identifier()));
         WithCtx {
             depth: self.depth + 1,
             implicit: if is_record {
@@ -1146,6 +1160,7 @@ codeunit 50102 "D"
         let op = |r: &str, o: &str| CalleeShape::RecordOp {
             receiver_text: r.to_string(),
             op: o.to_string(),
+            receiver: None,
         };
         let bare = |n: &str| CalleeShape::Bare {
             name: n.to_string(),

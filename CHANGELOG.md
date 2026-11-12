@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before anything is built or started; so is `--rounds 0`. `--max-rounds` was already capped at
   5. Test: `tests/cli/gate_scripts.rs` `speed_gate_refuses_more_rounds_than_routines`.
 
+### Fixed (ENG-12: record operations the engine did not see, engine limits L35, L36 and B10's left item 1)
+
+- **`GetBySystemId` is a record read (L35).** `R.GetBySystemId(Id)`, a bare `GetBySystemId(Id)`
+  in a table and `RR.GetBySystemId(Id)` on a RecordRef answered `query touches --direction down:
+  no (every candidate decided)` for the record's own table; they are now read operations (d11/d21
+  count them as loading the record; an unchecked one in statement position is an implicit error,
+  as `Get`). The performance detectors' retrieval lists (d1, d3, d36, d4) are unchanged.
+- **A record array element is a record (L36).** `Recs[1].FindFirst()` and `with Recs[1] do
+  FindFirst()` made no record operation and answered `no`; an array of records (or of RecordRef)
+  now receives through its elements in both the body walk and the resolver, the table taken from
+  the element type, so `Recs[1].Modify(true)` also runs the table's triggers.
+- **A trigger-firing operation on a record no variable names** (`GetRef().Modify(true)`, a call's
+  result) answered a definite `may-commit: no`; it now runs its table's triggers when the table
+  is known, and carries one unresolved route for what is not followed there (the table events;
+  with no table, any table's triggers), so the answer is `yes` or `unknown`. 0 such sites in CDO
+  and Base Application (measured 2026-11-12); Base Application has 36 array-element writes.
+  Probe: `docs/superpowers/notes/2026-11-12-eng12-record-ops-probe.md`.
+
 ### Fixed (ENG-10: a database write inside a used try call is refused on premises, engine limits L23 item 6)
 
 - **`throws-error` answered `no` for `Ok := TryInsert()`** whose try function inserts: it counted

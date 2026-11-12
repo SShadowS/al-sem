@@ -232,7 +232,11 @@ fn is_commit_callee(file: &AlFile, function: ExprId, database_shadowed: bool) ->
 /// unlike [`is_record_type_str`], which is the stricter record-VARIABLE test (temp
 /// state / table resolution) that excludes `RecordRef`.
 fn is_record_receiver_ty(ty: &str) -> bool {
-    ty.trim().to_ascii_lowercase().starts_with("record")
+    // ENG-12 (L36): an array of records receives through its elements.
+    crate::record_ops::receiver_type_of(ty)
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("record")
 }
 
 fn is_record_ty(v: &VarDecl) -> bool {
@@ -265,7 +269,11 @@ pub(crate) fn named_return_var(routine: &RoutineDecl) -> Option<(&str, &str)> {
 
 /// The AL `RecordRef` type, exactly (Q4): not `Record …`, not `RecordId`.
 fn is_record_ref_ty(ty: Option<&str>) -> bool {
-    ty.is_some_and(|t| t.trim().eq_ignore_ascii_case("recordref"))
+    ty.is_some_and(|t| {
+        crate::record_ops::receiver_type_of(t)
+            .trim()
+            .eq_ignore_ascii_case("recordref")
+    })
 }
 
 /// The lowercased names a routine's lexical scope resolves to a `RecordRef`
@@ -1189,12 +1197,9 @@ impl<'a> SpineCtx<'a> {
             }
             With { receiver, body } => {
                 self.walk_expr(*receiver);
-                let is_record = match &self.file.ir.expr(*receiver).kind {
-                    ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
-                        self.scope.rvars.contains(&x.to_ascii_lowercase())
-                    }
-                    _ => false,
-                };
+                // `with X do` or `with Recs[i] do` (ENG-12, L36).
+                let is_record = crate::record_ops::receiver_variable(&self.file.ir, *receiver)
+                    .is_some_and(|x| self.scope.rvars.contains(&x.to_ascii_lowercase()));
                 let text = self
                     .raw(&self.file.ir.expr(*receiver).origin)
                     .trim()
@@ -1261,10 +1266,9 @@ impl<'a> SpineCtx<'a> {
             let mut receiver_is_record_ref = false;
             let record_op: Option<(&'static str, String)> = match &fe.kind {
                 Member { object, member, .. } => {
-                    let recv_name = match &self.file.ir.expr(*object).kind {
-                        Identifier(x) | QuotedIdentifier(x) => Some(x.to_ascii_lowercase()),
-                        _ => None,
-                    };
+                    // `X` or an array element `X[i]` (ENG-12, L36).
+                    let recv_name = crate::record_ops::receiver_variable(&self.file.ir, *object)
+                        .map(str::to_ascii_lowercase);
                     let is_rec = recv_name
                         .as_ref()
                         .map(|r| self.scope.rvars.contains(r))
