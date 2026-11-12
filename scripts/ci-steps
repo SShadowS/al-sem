@@ -203,9 +203,19 @@ run_task_affected() {
     env -u CDO_WS -u ENFORCE_CDO_WS -u REGEN_TEMP_GOLDENS cargo nextest run "${targets[@]}" -E "$filter"
 }
 
-run_build() { require_grammar || return 1; cargo build --release; }
+# ⟨2026-11-12, TLS-09⟩ The gate's optimized build is `release-fast` (thin LTO, 4 codegen
+# units), not `--release` (fat LTO, one codegen unit): 200 s against 636 s on server1,
+# where `--release` was the landing gate's critical path by ~6.5 min. It still unwinds
+# and has no debug assertions, so `perf_bounds`' checks compile in and the pair shares
+# artifacts. The SHIPPED profile (`release-ship`, fat LTO, abort) is built on every code
+# push to master by `.github/workflows/build-and-deploy.yml` (Windows, Linux, macOS),
+# so a fat-LTO-only failure shows there, after the merge and before any tag.
+# Note: docs/superpowers/notes/2026-11-12-gate-release-build.md.
+GATE_PROFILE=release-fast
 
-run_perf_bounds() { require_grammar || return 1; require_rttime || return 1; cargo test --release --test perf_bounds; }
+run_build() { require_grammar || return 1; cargo build --profile "$GATE_PROFILE"; }
+
+run_perf_bounds() { require_grammar || return 1; require_rttime || return 1; cargo test --profile "$GATE_PROFILE" --test perf_bounds; }
 
 # ⟨2026-11-07⟩ A record that a WHOLE `task` or `all` run passed, so
 # `scripts/merge-and-push` can skip re-running the task gate when the merge it
@@ -272,7 +282,7 @@ case "$step" in
     # Exactly what CI runs. Part of the branch gate (with `scripts/cdo-gate`),
     # run once before a merge, not on every task.
     #
-    # ⟨2026-10-20⟩ `build` (release, LTO, mostly a single-threaded link) runs in the
+    # ⟨2026-10-20⟩ `build` (optimized: `$GATE_PROFILE`, see `run_build`) runs in the
     # background WHILE `test` (dev, all cores) runs; `perf-bounds` then runs alone,
     # after both, so its timings see an idle machine. The release pair uses its own
     # target dir (`<target>/gate-release`): two cargo builds in one target dir would

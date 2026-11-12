@@ -13,8 +13,9 @@
 //! times slower than release, for reasons unrelated to any real regression),
 //! so the actual bounds checks below only exist in a release build. This is
 //! deliberate, NOT a silent-skip: CI explicitly invokes
-//! `cargo test --release --test perf_bounds`, so it always runs in the
-//! profile where the checks are compiled in. The always-present marker test
+//! `cargo test --profile release-fast --test perf_bounds` (`scripts/ci-steps
+//! perf-bounds`; `--release` until TLS-09, 2026-11-12), so it always runs in an
+//! optimized profile where the checks are compiled in. The always-present marker test
 //! below has no `cfg` gate at all, so `cargo test --test perf_bounds` (any
 //! profile) never silently reports zero tests — if this file's `mod` wiring
 //! ever broke, this test failing to even show up would be caught immediately
@@ -158,7 +159,7 @@ fn every_timing_test_holds_the_timing_lock() {
 #[allow(dead_code)]
 /// Compile-time note (not a test): the real bounds checks live in
 /// `release_checks` below and only compile under `#[cfg(not(debug_assertions))]`.
-/// Run `cargo test --release --test perf_bounds` to exercise them.
+/// Run `scripts/ci-steps perf-bounds` (an optimized profile) to exercise them.
 const DEBUG_BUILD_SKIPS_REAL_PERF_BOUNDS: &str = "see module doc comment";
 
 #[cfg(not(debug_assertions))]

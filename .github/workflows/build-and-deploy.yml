@@ -9,6 +9,7 @@ on:
       - '.cargo/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'  # a toolchain bump changes the shipped binaries (TLS-09)
       - 'build.rs'
       - '.github/workflows/build-and-deploy.yml'
   workflow_dispatch:  # Allow manual trigger
