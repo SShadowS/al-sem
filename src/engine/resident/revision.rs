@@ -1801,7 +1801,7 @@ impl Revision {
                     job.name()
                 )));
             };
-            return Ok(answer_sited(job, d.side, &g));
+            return Ok(answer_sited(job, d.side, &g, &self.pass_workers()));
         }
         // A model job that also walks the sited graph (`ViewNeeds::MODEL_SITED`:
         // the callers' context questions, explain --callers-context, query
@@ -1897,13 +1897,16 @@ pub fn answer_failed_build(
 }
 
 /// A sited-graph job's answer off `g`: what the one-shot driver writes for
-/// it (`Job::sited` over the graph built from the same program).
+/// it (`Job::sited` over the graph built from the same program). `workers`:
+/// the revision's count, serial in production (TLS-21; the resident engine
+/// walks one root at a time, as its literal pass does).
 fn answer_sited(
     job: &dyn Job,
     side: crate::engine::batch::job::SideIx,
     g: &crate::program::impact_graph::SitedGraph,
+    workers: &crate::engine::l5::digest_cli::ReachWorkers,
 ) -> JobOutput {
-    let (side, lines) = capture(|| job.sited(side, Ok(g)));
+    let (side, lines) = capture(|| job.sited(side, Ok(g), workers));
     let doc = job.finalize(vec![side]);
     crate::engine::batch::serialize(0, job, doc, lines)
 }
@@ -1952,7 +1955,12 @@ impl GraphRevision {
                 job.name()
             )));
         }
-        Ok(answer_sited(job, d.side, &self.sited))
+        Ok(answer_sited(
+            job,
+            d.side,
+            &self.sited,
+            &crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
+        ))
     }
 }
 

@@ -620,6 +620,8 @@ impl Captions {
                 .texts
                 .get(unit)
                 .map(|t| {
+                    let _s = crate::engine::perf_trace::span("impact", "impact.up.caption_parse");
+                    crate::engine::perf_trace::counter_delta("impact.up.caption_files", 1);
                     let f = al_syntax::parse(t);
                     f.objects
                         .iter()
@@ -1132,7 +1134,10 @@ pub struct UpArgs<'a> {
     pub roots: &'a [String],
     pub assume_no_dependents: bool,
     pub keep: Keep,
-    pub cancel: Option<&'a dyn Fn() -> bool>,
+    /// Shared by the tasks walking at once, so `Sync`.
+    pub cancel: Option<&'a (dyn Fn() -> bool + Sync)>,
+    /// How many roots walk at once (TLS-21), stated by the route.
+    pub workers: crate::engine::l5::digest_cli::ReachWorkers,
 }
 
 /// The up part's JSON over `g`.
@@ -1140,7 +1145,7 @@ pub struct UpArgs<'a> {
 pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
     let opts = WalkOptions {
         assume_no_dependents: args.assume_no_dependents,
-        cancel: args.cancel,
+        cancel: args.cancel.map(|c| c as &dyn Fn() -> bool),
         ..Default::default()
     };
     let mut scratch = WalkScratch::default();
@@ -1161,6 +1166,9 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
     // The largest visitor any one walk held (one is alive at a time).
     let mut visitor_bytes = 0usize;
     let mut walks_us = 0u64;
+    // Step 0 of TLS-21: where the up part's time goes (trace only).
+    let mut root_summary_us = 0u64;
+    let roots_span = crate::engine::perf_trace::span("impact", "impact.up.roots");
     for id in args.roots {
         let nodes: Vec<NodeIx> = g
             .nodes_with_stable_id(id)
@@ -1183,6 +1191,7 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
         walks_us += t.elapsed().as_micros() as u64;
         states += v.states;
         visitor_bytes = visitor_bytes.max(v.bytes());
+        let ts = std::time::Instant::now();
         let mut s = summary(&v, g, captions);
         s["stableId"] = json!(id);
         s["status"] = json!("walked");
@@ -1200,16 +1209,26 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
                 })
                 .collect::<Vec<_>>()
         );
+        root_summary_us += ts.elapsed().as_micros() as u64;
         roots_out.push(s);
     }
+    crate::engine::perf_trace::counter("impact.up.root_walks_us", walks_us);
+    crate::engine::perf_trace::counter("impact.up.root_summaries_us", root_summary_us);
+    drop(roots_span);
     all_nodes.sort_unstable();
     all_nodes.dedup();
     let mut u = Up::new(g, args.keep, &all_nodes, &shared);
     let t = std::time::Instant::now();
-    let ustats = walk_multi(g, &all_nodes, &opts, &mut scratch, &mut u);
+    let ustats = {
+        let _s = crate::engine::perf_trace::span("impact", "impact.up.union_walk");
+        walk_multi(g, &all_nodes, &opts, &mut scratch, &mut u)
+    };
     walks_us += t.elapsed().as_micros() as u64;
     visitor_bytes = visitor_bytes.max(u.bytes());
-    let union = summary(&u, g, captions);
+    let union = {
+        let _s = crate::engine::perf_trace::span("impact", "impact.up.union_summary");
+        summary(&u, g, captions)
+    };
     json!({
         "schema": SCHEMA,
         "version": 1,

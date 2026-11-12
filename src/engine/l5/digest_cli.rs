@@ -1855,7 +1855,7 @@ pub fn default_reach_workers() -> ReachWorkers {
 /// TLS-22: the pool of exactly `n` threads the literal pass runs `n` roots
 /// in, one per distinct `n` for the process (production uses one count),
 /// with the big stacks the searches' recursion needs.
-fn reach_pool(n: usize) -> &'static rayon::ThreadPool {
+pub(crate) fn reach_pool(n: usize) -> &'static rayon::ThreadPool {
     static POOLS: std::sync::OnceLock<
         std::sync::Mutex<HashMap<usize, &'static rayon::ThreadPool>>,
     > = std::sync::OnceLock::new();

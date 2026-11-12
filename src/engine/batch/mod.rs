@@ -386,8 +386,13 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             } else if d.needs.sited {
                 let _s = job_span(*j, jobs[*j], "compute");
                 let g = sited.as_ref().expect("built for a sited demand");
+                // The one-shot route: the CLI's worker count (TLS-21).
                 results[i] = Some(capture(|| {
-                    jobs[*j].sited(d.side, g.as_ref().map_err(|e| *e))
+                    jobs[*j].sited(
+                        d.side,
+                        g.as_ref().map_err(|e| *e),
+                        &crate::engine::l5::digest_cli::default_reach_workers(),
+                    )
                 }));
             } else if d.needs.graph {
                 let _s = job_span(*j, jobs[*j], "compute");
