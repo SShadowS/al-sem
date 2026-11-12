@@ -1818,6 +1818,12 @@ impl ReachWorkers {
             probe: Some(probe),
         }
     }
+
+    /// Tests: the probe this setting carries.
+    #[cfg(test)]
+    pub(crate) fn probe(&self) -> Option<&std::sync::Arc<PassProbe>> {
+        self.probe.as_ref()
+    }
 }
 
 /// The literal pass's worker count (spec 2026-11-11 section 8.5): fixed, not
@@ -1890,6 +1896,15 @@ pub(crate) struct PassProbe {
     pub(crate) passes: std::sync::atomic::AtomicUsize,
     pub(crate) suffix_hits: std::sync::atomic::AtomicUsize,
     pub(crate) first_wave: std::sync::Mutex<Option<(usize, std::time::Duration)>>,
+    /// TLS-21, the up walk: tasks run, scratches made, the pool size each
+    /// task saw (`rayon::current_num_threads`).
+    pub(crate) up_tasks: std::sync::atomic::AtomicUsize,
+    pub(crate) up_done: std::sync::atomic::AtomicUsize,
+    pub(crate) scratches_made: std::sync::atomic::AtomicUsize,
+    pub(crate) pool_threads: std::sync::Mutex<Vec<usize>>,
+    /// Hold the first root's walk until every other root's walk is done (or
+    /// the timeout passes), so it finishes last.
+    pub(crate) hold_first_root: std::sync::Mutex<Option<std::time::Duration>>,
 }
 
 /// A root in flight ([`PassProbe::enter`]); leaves on drop.
@@ -1907,7 +1922,7 @@ impl Drop for InFlight<'_> {
 
 #[cfg(test)]
 impl PassProbe {
-    fn enter(&self) -> InFlight<'_> {
+    pub(crate) fn enter(&self) -> InFlight<'_> {
         use std::sync::atomic::Ordering::SeqCst;
         let k = self.started.fetch_add(1, SeqCst);
         let now = self.in_flight.fetch_add(1, SeqCst) + 1;

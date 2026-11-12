@@ -616,7 +616,7 @@ impl Job for UpJob<'_> {
                 ))));
             }
         };
-        let mut captions = super::up::Captions::new(self.texts.clone());
+        let captions = super::up::Captions::new(self.texts.clone());
         let v = super::up::up(
             g,
             &super::up::UpArgs {
@@ -626,7 +626,7 @@ impl Job for UpJob<'_> {
                 cancel: None,
                 workers: workers.clone(),
             },
-            &mut captions,
+            &captions,
         );
         Ok(SideDoc::new(Ok::<Value, String>(v)))
     }
