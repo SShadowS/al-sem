@@ -169,6 +169,11 @@ pub struct CoverageRecord {
 // publisher injection.
 // ===========================================================================
 
+/// ENG-09: the resource of a checked `Codeunit.Run`'s own commit (the run's
+/// transaction), on a `commit`/`transaction` fact. An explicit `Commit()` has
+/// none. A marker of the commit's kind, not a table or event id.
+pub(crate) const RUN_COMMIT: &str = "checked-run";
+
 /// Map an object-run kind to the dispatch resourceKind (al-sem `dispatch.ts`).
 fn object_type_to_resource_kind(object_type: &str) -> &'static str {
     match object_type {
@@ -724,6 +729,31 @@ pub(crate) fn direct_facts_for_routine(
                 via: "self",
                 witness_operation_id: Some(op.id.clone()),
                 witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+                extra: None,
+            });
+        }
+    }
+    // ENG-09: a checked `Codeunit.Run` commits its own changes when it ends
+    // without an error (Learn; measured on BC 28: also under
+    // `[CommitBehavior(Ignore)]` and `(Error)`), witnessed by its call site.
+    // Its resource ([`RUN_COMMIT`]) keeps it apart from a `Commit()`, which
+    // `[CommitBehavior]` does change: its own cone entry, its own witness
+    // carriers (`is_bfs_carrier`), `commit_scope::is_run_commit`.
+    for cs in &call_sites {
+        if cs.checked_run {
+            facts.push(CapabilityFact {
+                subject: routine.id.clone(),
+                op: "commit",
+                resource_kind: "transaction",
+                resource_id: Some(RUN_COMMIT.to_string()),
+                resource_arg_source: None,
+                confidence: "static",
+                provenance: "direct",
+                via: "self",
+                witness_operation_id: None,
+                witness_callsite_id: Some(cs.id.clone()),
                 witness_first_hop_operation_id: None,
                 witness_first_hop_event_id: None,
                 extra: None,
@@ -1446,8 +1476,8 @@ fn build_typed_edge_graph(
 /// source` yields `static` / `userDynamic` / `configDynamic` / `unresolved`, and
 /// the r3a3 manifest records both `unresolved` and `configDynamic`. It is safe
 /// because **no one of those four values is a prefix of another, and
-/// `resource_id` is only ever a table id or an event id, neither of which can
-/// contain `|`.** Add a `dynamic` confidence alongside `dynamicX`, or a rid that
+/// `resource_id` is only ever a table id, an event id or [`RUN_COMMIT`], none of
+/// which can contain `|`.** Add a `dynamic` confidence alongside `dynamicX`, or a rid that
 /// can carry a `|`, and this breaks.
 ///
 /// What this buys is CONSERVATIVE FOR THE PHYSICAL-WRITE AND PHYSICAL-READ SETS

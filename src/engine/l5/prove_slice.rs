@@ -968,12 +968,17 @@ pub(crate) fn compute_slice(
     // Per site: the site, and whether its write is caller-dependent.
     let mut sites: Vec<(SliceSite, Option<Vec<String>>)> = Vec::new();
     for rec in reach.terminals().records() {
+        // ENG-09: a checked run's own commit, which no `[CommitBehavior]`
+        // changes: always a commit, never an error.
+        let run_commit = rec.effect_type == "COMMIT"
+            && crate::engine::l5::commit_scope::is_run_commit(&tree.capability_facts[rec.fact]);
         // A commit that raises an error under `CommitBehavior::Error`.
         let commit_error = rec.effect_type == "COMMIT"
+            && !run_commit
             && commit_states(rec.owner) & crate::engine::l5::commit_scope::E != 0;
         let fits_here = match (&req.question, rec.effect_type) {
             (SliceQuestion::Commits, "COMMIT") => {
-                commit_states(rec.owner) & crate::engine::l5::commit_scope::N != 0
+                run_commit || commit_states(rec.owner) & crate::engine::l5::commit_scope::N != 0
             }
             (SliceQuestion::Errors, "COMMIT") => commit_error,
             _ => fits(rec.effect_type, rec.resource),

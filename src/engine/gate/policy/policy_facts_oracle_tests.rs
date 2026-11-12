@@ -46,6 +46,14 @@
 //! `REMINT_POLICY_FACTS_ORACLE=1`: only `r0/ws-d21` and `r0/ws-d22` (cross and
 //! single) moved, `direct` and `any` +1 each: the `CalcFields` of
 //! `Customer."Balance (LCY)"` now also reads `Ledger Entry`.
+//!
+//! Re-recorded (2026-11-11, ENG-09: a checked `Codeunit.Run` commits) with
+//! `REMINT_POLICY_FACTS_ORACLE=1`: 9 of 454 cases moved, each by its checked
+//! runs' commit facts (`direct` +1 per run in the case's own code, `inherited`
+//! plus their copies in callers), no count down: `r0/ws-d50-medium` (3 runs),
+//! `r0/ws-d50-temp-gate` (4), `r0/ws-d50-pos` (1),
+//! `r0/ws-txn-d49-neg-run-boundary` (1), cross and single each, and
+//! `dep/dep_ledger` cross (its dependency's `Ok := Codeunit.Run(..)`, inherited).
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

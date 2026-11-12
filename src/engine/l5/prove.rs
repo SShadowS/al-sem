@@ -3158,6 +3158,10 @@ pub fn format_prove_human(
             if let Some((_, why)) = eff.detail.iter().find(|(k, _)| k == "commitBehavior") {
                 return format!("COMMIT (an error: {why})");
             }
+            // ENG-09: a checked run's own commit, anchored at the run.
+            if crate::engine::l5::digest_cli::is_run_commit_row(eff) {
+                return crate::engine::l5::digest_cli::RUN_COMMIT_LABEL.to_string();
+            }
             match (eff.effect_type.as_str(), paths) {
                 ("ERROR_IMPLICIT", Some(p)) => {
                     let terminal = terminal_of(eff)

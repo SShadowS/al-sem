@@ -69,7 +69,8 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// error. The bump also covers ENG-06's open record operations and ENG-07's
 /// request-page triggers, which moved summaries at 9 (a base cached by a
 /// binary of the same version would show their facts as added).
-pub const SUMMARY_SCHEMA: u32 = 10;
+/// 11 (ENG-09): a checked `Codeunit.Run` commits.
+pub const SUMMARY_SCHEMA: u32 = 11;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -481,7 +482,12 @@ fn own_keys(
                 )
             }
             ("table", _) | ("event", "subscribe") => continue,
-            ("transaction", "commit") => ("commit".into(), "commit".into()),
+            // ENG-09: a checked run's commit keys as its cone row does
+            // (`COMMIT|checked-run`, `delta::cone_twin`).
+            ("transaction", "commit") => match f.resource_id.as_deref() {
+                Some(r) => (format!("commit|{r}"), "commit (checked run)".into()),
+                None => ("commit".into(), "commit".into()),
+            },
             ("error", op) => {
                 let msg = if op == "error-throw" {
                     let r = f

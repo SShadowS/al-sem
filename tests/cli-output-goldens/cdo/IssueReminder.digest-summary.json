@@ -20,6 +20,6 @@
   "rowDetail": "compact: each row names its result-index row (`index`), which holds its signature, stable id, full answer and totals",
   "shared": {},
   "testStatus": "not requested",
-  "totalEffects": 814,
+  "totalEffects": 823,
   "totalUnresolved": 285
 }

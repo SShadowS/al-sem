@@ -16,6 +16,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   146.3 s cold, 3 units compiled against 257. Where a reflink copy fails it removes the
   partial copy and the build runs cold. Note: `docs/superpowers/notes/2026-11-11-warm-deps.md`.
 
+### Fixed (ENG-09: a checked `Codeunit.Run` commits, engine limits L16 item 2)
+
+- **`if Codeunit.Run(X) then` no longer answers `may-commit no` when X has no `Commit()`.** It did
+  (and `unknown` for a run-time id), re-probed on master `c498fd98`. Measured on the BC 28.4 Linux
+  sidecar: after such a run a second checked run succeeds, which BC refuses while a write is
+  pending, so the run committed its insert; the same under the caller's `[CommitBehavior(Ignore)]`
+  and `(Error)` (no error), and for `Ok := W.Run()` on a codeunit variable. Each checked run (keyword
+  form, run-time id included, or a codeunit variable's `.Run()` that starts the codeunit, with or
+  without an `OnRun`) now carries a commit at its call site (`PCallSite::checked_run`, set by
+  `program_calls`), with the resource id `checked-run` (shown as `detail.resourceId`), so it never
+  shares a cone entry with a `Commit()`. No `[CommitBehavior]` rule applies to it (Learn: "the
+  implicit commit by `Codeunit.Run` isn't affected by `CommitBehavior`"), it is never
+  `unconditional on success` (a failed run commits nothing and the caller carries on), in the
+  ordering engine it is `COMMIT_REACHABLE` only (it ends no write of the caller), and it does not
+  feed d34/d35's "may commit" flag (their findings do not change).
+- Found on the way: `prove throws-error --match` under `[CommitBehavior(Error)]` would have listed
+  the run's commit as an error site; the slice applies the same rule as the unfiltered answer.
+  Review (astra, Fable): with a witness-shape identity, a root reaching both a `Commit()` and a
+  checked run kept one inherited commit for both, so `[CommitBehavior(Ignore)]` over a `Commit()`
+  and a deeper run answered `may-commit no`; the resource id fixes it. Round 2 (Fable): beyond a
+  dependency crossing the two kinds were still one group row (its key had no resource), and a
+  run's group ended its witness on a `Commit()`; now they are two rows (the run's says
+  `resourceId: checked-run`), each ending on its own site. `alsem impact` keys a new checked run's
+  commit as `commit|checked-run`, the twin of its cone row, so it is listed once.
+- Tests: `tests/cli/cli_eng09_checked_run_commit.rs` (6 tests, one cross-app) and
+  `impact::delta::tests::a_new_checked_runs_commit_is_one_change`; discrimination proofs: no commit
+  fact, no `conditional` floor, the digest's or the slice's `[CommitBehavior]` split applied to the
+  run's commit, no variable-form mark, one cone key for both kinds of commit, the run's commit in
+  d35's "may commit" flag, one crossing group for both kinds, the run group's witness looked up as
+  a `Commit()`'s, and no impact twin each fail them; leaving the ordering exclusion out moves the
+  d49 run-boundary goldens. `cli_prove_traps`: a checked run's digest now has a live commit row
+  beside its caught error.
+- Goldens: `l2_features.snapshot` (the new internal field only, proven by stripping it against the
+  old snapshot); `r3a3` `ws-d50-pos` and `ws-txn-d49-neg-run-boundary` gain the run's commit (and
+  `ws-d50-pos` its inherited copy), with the manifest matrix (commit 90 -> 93). The policy facts
+  oracle is re-recorded: 9 of 454 cases moved, each by its checked runs' commits, no count down.
+- `alsem impact`'s summary schema goes 10 -> 11.
+- L28 is now measured too: a write followed by a checked run fails at the run.
+- Left: a run that always fails still answers `may-commit yes` (an over-statement); `Ok := …; if not
+  Ok then Error(…)` answers `commits-on-success-path unknown` (an under-statement); see engine
+  limits L16 item 2.
+
 ### Fixed (ENG-08: an XmlPort import can raise an error, engine limits L20)
 
 - **A statement that starts an XmlPort import no longer answers `throws-error: no`.** A

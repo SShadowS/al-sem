@@ -151,6 +151,31 @@ fn an_explained_cone_change_is_dropped() {
     );
 }
 
+/// ENG-09: a new checked run's own commit (`commit|checked-run`) explains its
+/// cone row (`COMMIT|checked-run`), so it is printed once; a `Commit()`'s
+/// cone row (`COMMIT|`) is another change.
+///
+/// Break: drop `cone_twin`'s `["commit", r]` arm → the run's cone row is
+/// printed beside its own key.
+#[test]
+fn a_new_checked_runs_commit_is_one_change() {
+    let b = summary(&[], &[], complete());
+    let n = summary(
+        &[("commit|checked-run", &[site(7, "Codeunit.Run")])],
+        &["COMMIT|checked-run", "COMMIT|"],
+        complete(),
+    );
+    let (own, cone) = root_delta(&b, &n);
+    assert_eq!(
+        own.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+        vec!["commit|checked-run"]
+    );
+    assert_eq!(
+        cone.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+        vec!["COMMIT|"]
+    );
+}
+
 /// A call the analyzed body no longer makes is removed even when the new
 /// side's cone is incomplete (the call is read off the body, not the cone);
 /// an effect key under the same coverage is only "no longer observed".

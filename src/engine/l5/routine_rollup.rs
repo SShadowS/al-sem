@@ -3403,7 +3403,12 @@ fn commit_site_lines(
         let e = &entry.effects[i];
         // r3 §7 R5: the route's guards when one was replayed, as prove.
         let row = format!(
-            "COMMIT at {} ({})",
+            "{} at {} ({})",
+            if crate::engine::l5::digest_cli::is_run_commit_row(e) {
+                crate::engine::l5::digest_cli::RUN_COMMIT_LABEL
+            } else {
+                "COMMIT"
+            },
             row_anchor(e),
             crate::engine::l5::prove::condition_words(e)
         );

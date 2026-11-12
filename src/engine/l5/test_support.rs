@@ -209,6 +209,7 @@ pub fn object_run_call_site(id: &str, object_kind: &str, return_used: Option<boo
         receiver_temp_state: None,
         implicit_receiver: None,
         start_may_fail: false,
+        checked_run: false,
     }
 }
 
@@ -301,6 +302,7 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
         receiver_temp_state: None,
         implicit_receiver: None,
         start_may_fail: false,
+        checked_run: false,
     }
 }
 
