@@ -1,0 +1,1598 @@
+{
+  "cost": {
+    "inventoryBytes": 352,
+    "perRootStates": 19,
+    "scratchBytes": null,
+    "unionStates": 15,
+    "visitorBytes": 1544,
+    "walkMs": null,
+    "walksUs": null
+  },
+  "graph": {
+    "nodes": 14,
+    "sites": 12
+  },
+  "localSourceDependencies": false,
+  "roots": [
+    {
+      "ancestors": {
+        "local": 4,
+        "onlyOpen": 0,
+        "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
+        "throughDependency": 0,
+        "total": 4
+      },
+      "byRelation": {
+        "ancestors": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 4,
+            "viaDependency": 0
+          },
+          "total": 4,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        },
+        "entries": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 0,
+            "viaDependency": 0
+          },
+          "total": 0,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        }
+      },
+      "callers": {
+        "count": 3,
+        "first": [
+          {
+            "display": "Codeunit \"UP Callers\"::CallerOne",
+            "file": "src/Up.al",
+            "line": 57,
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#055b81757c17253769849236b96f7c2d5105782f46c75c4635653238524c1871"
+          },
+          {
+            "display": "Codeunit \"UP Callers\"::CallerTwo",
+            "file": "src/Up.al",
+            "line": 64,
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#19ae1a57f9436698e8f3d452c6e494d72619fec12c926708fda03220c6f49166"
+          },
+          {
+            "display": "Codeunit \"UP Core\"::Beta()",
+            "file": "src/Up.al",
+            "line": 34,
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#f6c9f8d45c19c37415ec3eb8d87823274ae3035d8c82c5175b9778646f614b1d~19aca096"
+          }
+        ],
+        "local": 3
+      },
+      "display": "Codeunit \"UP Core\"::Alpha",
+      "entries": [
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Codeunit \"UP Core\"::Beta()",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#f6c9f8d45c19c37415ec3eb8d87823274ae3035d8c82c5175b9778646f614b1d~19aca096",
+              "tier": "local"
+            }
+          ],
+          "kind": "event-subscriber",
+          "onlyOpen": 0,
+          "userOrJob": false
+        }
+      ],
+      "entriesByContext": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entriesByKind": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entryBuckets": 1,
+      "entryNotes": {
+        "backgroundTargetsWithoutOnRun": {
+          "program": 0,
+          "reached": 0
+        },
+        "pagesWithUnnamedActions": {
+          "program": 0,
+          "reached": 0
+        },
+        "unnamedActionRunSites": 0
+      },
+      "eventPublishers": {
+        "count": 1,
+        "direct": {
+          "count": 0,
+          "first": []
+        },
+        "first": [
+          {
+            "display": "Codeunit \"UP Callers\"::OnSecond",
+            "file": "src/Up.al",
+            "hops": 2,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+            "tier": "local"
+          }
+        ],
+        "onlyOpen": 0
+      },
+      "external": [
+        {
+          "count": 4,
+          "first": [
+            {
+              "display": "Codeunit \"UP Core\"::Alpha",
+              "file": "src/Up.al",
+              "hops": 0,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#81c17c9a2aeee9d00bd7820fcaccb88e39c54eb5b6f812184c979dbe654005b3",
+              "tier": "local"
+            },
+            {
+              "display": "Codeunit \"UP Callers\"::CallerOne",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#055b81757c17253769849236b96f7c2d5105782f46c75c4635653238524c1871",
+              "tier": "local"
+            },
+            {
+              "display": "Codeunit \"UP Callers\"::CallerTwo",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#19ae1a57f9436698e8f3d452c6e494d72619fec12c926708fda03220c6f49166",
+              "tier": "local"
+            }
+          ],
+          "onlyOpen": 0,
+          "why": "public"
+        }
+      ],
+      "externalCode": [
+        {
+          "count": 4,
+          "why": "public"
+        }
+      ],
+      "firstByKind": {
+        "code": [],
+        "overConfiguration": [],
+        "overHub": [],
+        "overRule": [],
+        "uiNavigation": []
+      },
+      "hidden": {
+        "byChannel": {},
+        "universalHub": false
+      },
+      "hubs": [],
+      "limited": null,
+      "maxHops": 3,
+      "nearest": {
+        "code": {
+          "display": "Codeunit \"UP Core\"::Beta()",
+          "established": true,
+          "hops": 1,
+          "relation": "code",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#f6c9f8d45c19c37415ec3eb8d87823274ae3035d8c82c5175b9778646f614b1d~19aca096",
+          "tier": "local"
+        },
+        "overConfiguration": null,
+        "overHub": null,
+        "overRule": null,
+        "uiNavigation": null
+      },
+      "nearestAncestors": [
+        {
+          "display": "Codeunit \"UP Core\"::Beta()",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#f6c9f8d45c19c37415ec3eb8d87823274ae3035d8c82c5175b9778646f614b1d~19aca096"
+        },
+        {
+          "display": "Codeunit \"UP Callers\"::CallerOne",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#055b81757c17253769849236b96f7c2d5105782f46c75c4635653238524c1871"
+        },
+        {
+          "display": "Codeunit \"UP Callers\"::CallerTwo",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#19ae1a57f9436698e8f3d452c6e494d72619fec12c926708fda03220c6f49166"
+        },
+        {
+          "display": "Codeunit \"UP Callers\"::OnSecond",
+          "hops": 2,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7"
+        }
+      ],
+      "nodes": 1,
+      "programEntries": 3,
+      "programEntriesByKind": {
+        "page action": 2,
+        "page trigger": 1
+      },
+      "programShare": {
+        "all": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "candidates": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "code": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overConfiguration": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overHub": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overRule": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "uiNavigation": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        }
+      },
+      "relationRecorded": true,
+      "rootEntryKinds": [],
+      "rootUserOrJob": false,
+      "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#81c17c9a2aeee9d00bd7820fcaccb88e39c54eb5b6f812184c979dbe654005b3",
+      "states": 6,
+      "status": "walked",
+      "userOrJobEntries": 0
+    },
+    {
+      "ancestors": {
+        "local": 3,
+        "onlyOpen": 0,
+        "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
+        "throughDependency": 0,
+        "total": 3
+      },
+      "byRelation": {
+        "ancestors": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 3,
+            "viaDependency": 0
+          },
+          "total": 3,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        },
+        "entries": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 0,
+            "viaDependency": 0
+          },
+          "total": 0,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        }
+      },
+      "callers": {
+        "count": 0,
+        "first": [],
+        "local": 0
+      },
+      "display": "Codeunit \"UP Core\"::Beta()",
+      "entries": [],
+      "entriesByContext": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entriesByKind": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entryBuckets": 0,
+      "entryNotes": {
+        "backgroundTargetsWithoutOnRun": {
+          "program": 0,
+          "reached": 0
+        },
+        "pagesWithUnnamedActions": {
+          "program": 0,
+          "reached": 0
+        },
+        "unnamedActionRunSites": 0
+      },
+      "eventPublishers": {
+        "count": 2,
+        "direct": {
+          "count": 2,
+          "first": [
+            {
+              "display": "Codeunit \"UP Callers\"::OnSecond",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+              "tier": "local"
+            },
+            {
+              "display": "Codeunit \"UP Callers\"::OnFirst",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#7e642a0f15fd063631bea4e187f8b92d6530ec90142534df9a1092f27db03c37",
+              "tier": "local"
+            }
+          ]
+        },
+        "first": [
+          {
+            "display": "Codeunit \"UP Callers\"::OnSecond",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+            "tier": "local"
+          },
+          {
+            "display": "Codeunit \"UP Callers\"::OnFirst",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#7e642a0f15fd063631bea4e187f8b92d6530ec90142534df9a1092f27db03c37",
+            "tier": "local"
+          }
+        ],
+        "onlyOpen": 0
+      },
+      "external": [
+        {
+          "count": 3,
+          "first": [
+            {
+              "display": "Codeunit \"UP Callers\"::OnSecond",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+              "tier": "local"
+            },
+            {
+              "display": "Codeunit \"UP Callers\"::OnFirst",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#7e642a0f15fd063631bea4e187f8b92d6530ec90142534df9a1092f27db03c37",
+              "tier": "local"
+            },
+            {
+              "display": "Codeunit \"UP Callers\"::CallerTwo",
+              "file": "src/Up.al",
+              "hops": 2,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#19ae1a57f9436698e8f3d452c6e494d72619fec12c926708fda03220c6f49166",
+              "tier": "local"
+            }
+          ],
+          "onlyOpen": 0,
+          "why": "public"
+        }
+      ],
+      "externalCode": [
+        {
+          "count": 3,
+          "why": "public"
+        }
+      ],
+      "firstByKind": {
+        "code": [],
+        "overConfiguration": [],
+        "overHub": [],
+        "overRule": [],
+        "uiNavigation": []
+      },
+      "hidden": {
+        "byChannel": {},
+        "universalHub": false
+      },
+      "hubs": [],
+      "limited": null,
+      "maxHops": 2,
+      "nearest": {
+        "code": {
+          "display": "Codeunit \"UP Callers\"::OnSecond",
+          "established": true,
+          "hops": 1,
+          "relation": "code",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+          "tier": "local"
+        },
+        "overConfiguration": null,
+        "overHub": null,
+        "overRule": null,
+        "uiNavigation": null
+      },
+      "nearestAncestors": [
+        {
+          "display": "Codeunit \"UP Callers\"::OnSecond",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7"
+        },
+        {
+          "display": "Codeunit \"UP Callers\"::OnFirst",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#7e642a0f15fd063631bea4e187f8b92d6530ec90142534df9a1092f27db03c37"
+        },
+        {
+          "display": "Codeunit \"UP Callers\"::CallerTwo",
+          "hops": 2,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#19ae1a57f9436698e8f3d452c6e494d72619fec12c926708fda03220c6f49166"
+        }
+      ],
+      "nodes": 2,
+      "programEntries": 3,
+      "programEntriesByKind": {
+        "page action": 2,
+        "page trigger": 1
+      },
+      "programShare": {
+        "all": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "candidates": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "code": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overConfiguration": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overHub": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overRule": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "uiNavigation": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        }
+      },
+      "relationRecorded": true,
+      "rootEntryKinds": [
+        "event-subscriber"
+      ],
+      "rootUserOrJob": false,
+      "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#f6c9f8d45c19c37415ec3eb8d87823274ae3035d8c82c5175b9778646f614b1d",
+      "states": 5,
+      "status": "walked",
+      "userOrJobEntries": 0
+    },
+    {
+      "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#0000000000000000000000000000000000000000000000000000000000000000",
+      "status": "not-in-graph"
+    },
+    {
+      "ancestors": {
+        "local": 2,
+        "onlyOpen": 0,
+        "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
+        "throughDependency": 0,
+        "total": 2
+      },
+      "byRelation": {
+        "ancestors": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 1,
+            "viaDependency": 0
+          },
+          "total": 2,
+          "uiNavigation": {
+            "local": 1,
+            "viaDependency": 0
+          }
+        },
+        "entries": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 1,
+            "viaDependency": 0
+          },
+          "total": 1,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        }
+      },
+      "callers": {
+        "count": 0,
+        "first": [],
+        "local": 0
+      },
+      "display": "Codeunit \"UP Core\"::Gamma",
+      "entries": [
+        {
+          "count": 1,
+          "first": [
+            {
+              "action": "rungamma",
+              "caption": "Run Gamma",
+              "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+              "tier": "local"
+            }
+          ],
+          "kind": "page-action",
+          "onlyOpen": 0,
+          "userOrJob": true
+        },
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+              "tier": "local"
+            }
+          ],
+          "kind": "trigger-page",
+          "onlyOpen": 0,
+          "userOrJob": true
+        }
+      ],
+      "entriesByContext": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entriesByKind": {
+        "code": {
+          "page action": 1
+        },
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entryBuckets": 2,
+      "entryNotes": {
+        "backgroundTargetsWithoutOnRun": {
+          "program": 0,
+          "reached": 0
+        },
+        "pagesWithUnnamedActions": {
+          "program": 0,
+          "reached": 0
+        },
+        "unnamedActionRunSites": 0
+      },
+      "eventPublishers": {
+        "count": 0,
+        "direct": {
+          "count": 0,
+          "first": []
+        },
+        "first": [],
+        "onlyOpen": 0
+      },
+      "external": [
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Codeunit \"UP Core\"::Gamma",
+              "file": "src/Up.al",
+              "hops": 0,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#d800ba134870623f51844fbfbb72920fc06f06a84586ecd7ce57881918fe0a9f",
+              "tier": "local"
+            }
+          ],
+          "onlyOpen": 0,
+          "why": "public"
+        }
+      ],
+      "externalCode": [
+        {
+          "count": 1,
+          "why": "public"
+        }
+      ],
+      "firstByKind": {
+        "code": [
+          {
+            "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+            "established": true,
+            "hops": 1,
+            "kind": "page action",
+            "relation": "code",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+            "tier": "local"
+          }
+        ],
+        "overConfiguration": [],
+        "overHub": [],
+        "overRule": [],
+        "uiNavigation": []
+      },
+      "hidden": {
+        "byChannel": {},
+        "universalHub": false
+      },
+      "hubs": [],
+      "limited": null,
+      "maxHops": 2,
+      "nearest": {
+        "code": {
+          "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+          "entry": "page action",
+          "established": true,
+          "hops": 1,
+          "relation": "code",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+          "tier": "local"
+        },
+        "overConfiguration": null,
+        "overHub": null,
+        "overRule": null,
+        "uiNavigation": {
+          "display": "Page \"UP Card\"",
+          "established": true,
+          "hops": 2,
+          "relation": "UI navigation",
+          "tier": "local"
+        }
+      },
+      "nearestAncestors": [
+        {
+          "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26"
+        }
+      ],
+      "nodes": 1,
+      "programEntries": 3,
+      "programEntriesByKind": {
+        "page action": 2,
+        "page trigger": 1
+      },
+      "programShare": {
+        "all": {
+          "percent": 33,
+          "program": 3,
+          "reached": 1
+        },
+        "candidates": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "code": {
+          "percent": 33,
+          "program": 3,
+          "reached": 1
+        },
+        "overConfiguration": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overHub": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overRule": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "uiNavigation": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        }
+      },
+      "relationRecorded": true,
+      "rootEntryKinds": [],
+      "rootUserOrJob": false,
+      "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#d800ba134870623f51844fbfbb72920fc06f06a84586ecd7ce57881918fe0a9f",
+      "states": 3,
+      "status": "walked",
+      "userOrJobEntries": 2
+    },
+    {
+      "ancestors": {
+        "local": 3,
+        "onlyOpen": 0,
+        "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
+        "throughDependency": 0,
+        "total": 3
+      },
+      "byRelation": {
+        "ancestors": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 2,
+            "viaDependency": 0
+          },
+          "total": 3,
+          "uiNavigation": {
+            "local": 1,
+            "viaDependency": 0
+          }
+        },
+        "entries": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 1,
+            "viaDependency": 0
+          },
+          "total": 2,
+          "uiNavigation": {
+            "local": 1,
+            "viaDependency": 0
+          }
+        }
+      },
+      "callers": {
+        "count": 1,
+        "first": [
+          {
+            "display": "Page \"UP List\"::OnOpenPage",
+            "file": "src/Up.al",
+            "line": 118,
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407"
+          }
+        ],
+        "local": 1
+      },
+      "display": "Codeunit \"UP Core\"::Delta",
+      "entries": [
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Page \"UP Card\"",
+              "file": "",
+              "hops": 3,
+              "pathTier": "local",
+              "tier": "local"
+            }
+          ],
+          "kind": "page-action",
+          "onlyOpen": 0,
+          "userOrJob": true
+        },
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Page \"UP List\"::OnOpenPage",
+              "file": "src/Up.al",
+              "hops": 1,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
+              "tier": "local"
+            }
+          ],
+          "kind": "trigger-page",
+          "onlyOpen": 0,
+          "userOrJob": true
+        }
+      ],
+      "entriesByContext": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entriesByKind": {
+        "code": {
+          "page trigger": 1
+        },
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {
+          "page action": 1
+        }
+      },
+      "entryBuckets": 2,
+      "entryNotes": {
+        "backgroundTargetsWithoutOnRun": {
+          "program": 0,
+          "reached": 0
+        },
+        "pagesWithUnnamedActions": {
+          "program": 0,
+          "reached": 0
+        },
+        "unnamedActionRunSites": 0
+      },
+      "eventPublishers": {
+        "count": 0,
+        "direct": {
+          "count": 0,
+          "first": []
+        },
+        "first": [],
+        "onlyOpen": 0
+      },
+      "external": [
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Codeunit \"UP Core\"::Delta",
+              "file": "src/Up.al",
+              "hops": 0,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#fe1aefe8188b436f7e9aa6de6bad5c41346e321d5f78210204a8c3afdffcb0a5",
+              "tier": "local"
+            }
+          ],
+          "onlyOpen": 0,
+          "why": "public"
+        }
+      ],
+      "externalCode": [
+        {
+          "count": 1,
+          "why": "public"
+        }
+      ],
+      "firstByKind": {
+        "code": [
+          {
+            "display": "Page \"UP List\"::OnOpenPage",
+            "established": true,
+            "hops": 1,
+            "kind": "page trigger",
+            "relation": "code",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
+            "tier": "local"
+          }
+        ],
+        "overConfiguration": [],
+        "overHub": [],
+        "overRule": [],
+        "uiNavigation": [
+          {
+            "action": "OpenList",
+            "display": "Page \"UP Card\"",
+            "established": true,
+            "hops": 3,
+            "kind": "page action",
+            "relation": "UI navigation",
+            "tier": "local"
+          }
+        ]
+      },
+      "hidden": {
+        "byChannel": {},
+        "universalHub": false
+      },
+      "hubs": [],
+      "limited": null,
+      "maxHops": 3,
+      "nearest": {
+        "code": {
+          "display": "Page \"UP List\"::OnOpenPage",
+          "entry": "page trigger",
+          "established": true,
+          "hops": 1,
+          "relation": "code",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
+          "tier": "local"
+        },
+        "overConfiguration": null,
+        "overHub": null,
+        "overRule": null,
+        "uiNavigation": {
+          "action": "OpenList",
+          "display": "Page \"UP Card\"",
+          "entry": "page action",
+          "established": true,
+          "hops": 3,
+          "relation": "UI navigation",
+          "tier": "local"
+        }
+      },
+      "nearestAncestors": [
+        {
+          "display": "Page \"UP List\"::OnOpenPage",
+          "hops": 1,
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407"
+        }
+      ],
+      "nodes": 1,
+      "programEntries": 3,
+      "programEntriesByKind": {
+        "page action": 2,
+        "page trigger": 1
+      },
+      "programShare": {
+        "all": {
+          "percent": 66,
+          "program": 3,
+          "reached": 2
+        },
+        "candidates": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "code": {
+          "percent": 33,
+          "program": 3,
+          "reached": 1
+        },
+        "overConfiguration": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overHub": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overRule": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "uiNavigation": {
+          "percent": 33,
+          "program": 3,
+          "reached": 1
+        }
+      },
+      "relationRecorded": true,
+      "rootEntryKinds": [],
+      "rootUserOrJob": false,
+      "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#fe1aefe8188b436f7e9aa6de6bad5c41346e321d5f78210204a8c3afdffcb0a5",
+      "states": 4,
+      "status": "walked",
+      "userOrJobEntries": 2
+    },
+    {
+      "ancestors": {
+        "local": 0,
+        "onlyOpen": 0,
+        "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
+        "throughDependency": 0,
+        "total": 0
+      },
+      "byRelation": {
+        "ancestors": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 0,
+            "viaDependency": 0
+          },
+          "total": 0,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        },
+        "entries": {
+          "candidates": {
+            "overConfiguration": {
+              "code": 0,
+              "uiNavigation": 0
+            },
+            "overHub": 0,
+            "overRule": 0
+          },
+          "code": {
+            "local": 0,
+            "viaDependency": 0
+          },
+          "total": 0,
+          "uiNavigation": {
+            "local": 0,
+            "viaDependency": 0
+          }
+        }
+      },
+      "callers": {
+        "count": 0,
+        "first": [],
+        "local": 0
+      },
+      "display": "Codeunit \"UP Core\"::Lonely",
+      "entries": [],
+      "entriesByContext": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entriesByKind": {
+        "code": {},
+        "overConfiguration": {},
+        "overHub": {},
+        "overRule": {},
+        "uiNavigation": {}
+      },
+      "entryBuckets": 0,
+      "entryNotes": {
+        "backgroundTargetsWithoutOnRun": {
+          "program": 0,
+          "reached": 0
+        },
+        "pagesWithUnnamedActions": {
+          "program": 0,
+          "reached": 0
+        },
+        "unnamedActionRunSites": 0
+      },
+      "eventPublishers": {
+        "count": 0,
+        "direct": {
+          "count": 0,
+          "first": []
+        },
+        "first": [],
+        "onlyOpen": 0
+      },
+      "external": [
+        {
+          "count": 1,
+          "first": [
+            {
+              "display": "Codeunit \"UP Core\"::Lonely",
+              "file": "src/Up.al",
+              "hops": 0,
+              "pathTier": "local",
+              "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#c723a99e303f0e7dcb2865b635356ddc3fa2671ddf23757bce1cc40012216b88",
+              "tier": "local"
+            }
+          ],
+          "onlyOpen": 0,
+          "why": "public"
+        }
+      ],
+      "externalCode": [
+        {
+          "count": 1,
+          "why": "public"
+        }
+      ],
+      "firstByKind": {
+        "code": [],
+        "overConfiguration": [],
+        "overHub": [],
+        "overRule": [],
+        "uiNavigation": []
+      },
+      "hidden": {
+        "byChannel": {},
+        "universalHub": false
+      },
+      "hubs": [],
+      "limited": null,
+      "maxHops": 0,
+      "nearest": {
+        "code": null,
+        "overConfiguration": null,
+        "overHub": null,
+        "overRule": null,
+        "uiNavigation": null
+      },
+      "nearestAncestors": [],
+      "nodes": 1,
+      "programEntries": 3,
+      "programEntriesByKind": {
+        "page action": 2,
+        "page trigger": 1
+      },
+      "programShare": {
+        "all": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "candidates": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "code": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overConfiguration": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overHub": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "overRule": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        },
+        "uiNavigation": {
+          "percent": 0,
+          "program": 3,
+          "reached": 0
+        }
+      },
+      "relationRecorded": true,
+      "rootEntryKinds": [],
+      "rootUserOrJob": false,
+      "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#c723a99e303f0e7dcb2865b635356ddc3fa2671ddf23757bce1cc40012216b88",
+      "states": 1,
+      "status": "walked",
+      "userOrJobEntries": 0
+    }
+  ],
+  "schema": "al-sem.impact-up",
+  "union": {
+    "ancestors": {
+      "local": 8,
+      "onlyOpen": 0,
+      "population": "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation",
+      "throughDependency": 0,
+      "total": 8
+    },
+    "byRelation": {
+      "ancestors": {
+        "candidates": {
+          "overConfiguration": {
+            "code": 0,
+            "uiNavigation": 0
+          },
+          "overHub": 0,
+          "overRule": 0
+        },
+        "code": {
+          "local": 7,
+          "viaDependency": 0
+        },
+        "total": 8,
+        "uiNavigation": {
+          "local": 1,
+          "viaDependency": 0
+        }
+      },
+      "entries": {
+        "candidates": {
+          "overConfiguration": {
+            "code": 0,
+            "uiNavigation": 0
+          },
+          "overHub": 0,
+          "overRule": 0
+        },
+        "code": {
+          "local": 2,
+          "viaDependency": 0
+        },
+        "total": 3,
+        "uiNavigation": {
+          "local": 1,
+          "viaDependency": 0
+        }
+      }
+    },
+    "entries": [
+      {
+        "count": 2,
+        "first": [
+          {
+            "action": "rungamma",
+            "caption": "Run Gamma",
+            "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+            "tier": "local"
+          },
+          {
+            "display": "Page \"UP Card\"",
+            "file": "",
+            "hops": 3,
+            "pathTier": "local",
+            "tier": "local"
+          }
+        ],
+        "kind": "page-action",
+        "onlyOpen": 0,
+        "userOrJob": true
+      },
+      {
+        "count": 2,
+        "first": [
+          {
+            "display": "Page \"UP List\"::OnOpenPage",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
+            "tier": "local"
+          },
+          {
+            "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+            "tier": "local"
+          }
+        ],
+        "kind": "trigger-page",
+        "onlyOpen": 0,
+        "userOrJob": true
+      }
+    ],
+    "entriesByContext": {
+      "code": {},
+      "overConfiguration": {},
+      "overHub": {},
+      "overRule": {},
+      "uiNavigation": {}
+    },
+    "entriesByKind": {
+      "code": {
+        "page action": 1,
+        "page trigger": 1
+      },
+      "overConfiguration": {},
+      "overHub": {},
+      "overRule": {},
+      "uiNavigation": {
+        "page action": 1
+      }
+    },
+    "entryBuckets": 4,
+    "entryNotes": {
+      "backgroundTargetsWithoutOnRun": {
+        "program": 0,
+        "reached": 0
+      },
+      "pagesWithUnnamedActions": {
+        "program": 0,
+        "reached": 0
+      },
+      "unnamedActionRunSites": 0
+    },
+    "eventPublishers": {
+      "count": 2,
+      "direct": {
+        "count": 2,
+        "first": [
+          {
+            "display": "Codeunit \"UP Callers\"::OnSecond",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+            "tier": "local"
+          },
+          {
+            "display": "Codeunit \"UP Callers\"::OnFirst",
+            "file": "src/Up.al",
+            "hops": 1,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#7e642a0f15fd063631bea4e187f8b92d6530ec90142534df9a1092f27db03c37",
+            "tier": "local"
+          }
+        ]
+      },
+      "first": [
+        {
+          "display": "Codeunit \"UP Callers\"::OnSecond",
+          "file": "src/Up.al",
+          "hops": 1,
+          "pathTier": "local",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#56b9d2b75720b8c7bf578fd6c9265a0862947ea928191cb6cd5af80466d0c3c7",
+          "tier": "local"
+        },
+        {
+          "display": "Codeunit \"UP Callers\"::OnFirst",
+          "file": "src/Up.al",
+          "hops": 1,
+          "pathTier": "local",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51401#7e642a0f15fd063631bea4e187f8b92d6530ec90142534df9a1092f27db03c37",
+          "tier": "local"
+        }
+      ],
+      "onlyOpen": 0
+    },
+    "external": [
+      {
+        "count": 8,
+        "first": [
+          {
+            "display": "Codeunit \"UP Core\"::Alpha",
+            "file": "src/Up.al",
+            "hops": 0,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#81c17c9a2aeee9d00bd7820fcaccb88e39c54eb5b6f812184c979dbe654005b3",
+            "tier": "local"
+          },
+          {
+            "display": "Codeunit \"UP Core\"::Delta",
+            "file": "src/Up.al",
+            "hops": 0,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#fe1aefe8188b436f7e9aa6de6bad5c41346e321d5f78210204a8c3afdffcb0a5",
+            "tier": "local"
+          },
+          {
+            "display": "Codeunit \"UP Core\"::Gamma",
+            "file": "src/Up.al",
+            "hops": 0,
+            "pathTier": "local",
+            "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#d800ba134870623f51844fbfbb72920fc06f06a84586ecd7ce57881918fe0a9f",
+            "tier": "local"
+          }
+        ],
+        "onlyOpen": 0,
+        "why": "public"
+      }
+    ],
+    "externalCode": [
+      {
+        "count": 8,
+        "why": "public"
+      }
+    ],
+    "firstByKind": {
+      "code": [
+        {
+          "display": "Page \"UP Card\".action(RunGamma)::OnAction",
+          "established": true,
+          "hops": 1,
+          "kind": "page action",
+          "relation": "code",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51400#1d01d9de5541d07dbab8d2a92137204e4bfce1bc26068017e44d68c895ad4b26",
+          "tier": "local"
+        },
+        {
+          "display": "Page \"UP List\"::OnOpenPage",
+          "established": true,
+          "hops": 1,
+          "kind": "page trigger",
+          "relation": "code",
+          "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
+          "tier": "local"
+        }
+      ],
+      "overConfiguration": [],
+      "overHub": [],
+      "overRule": [],
+      "uiNavigation": [
+        {
+          "action": "OpenList",
+          "display": "Page \"UP Card\"",
+          "established": true,
+          "hops": 3,
+          "kind": "page action",
+          "relation": "UI navigation",
+          "tier": "local"
+        }
+      ]
+    },
+    "hidden": {
+      "byChannel": {},
+      "universalHub": false
+    },
+    "hubs": [],
+    "limited": null,
+    "maxHops": 2,
+    "nearest": {
+      "code": {
+        "display": "Page \"UP List\"::OnOpenPage",
+        "entry": "page trigger",
+        "established": true,
+        "hops": 1,
+        "relation": "code",
+        "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Page:51401#d5b90afe13d05769339bd1cbd6824a564b23c559ef00ed654c8accf74b02e407",
+        "tier": "local"
+      },
+      "overConfiguration": null,
+      "overHub": null,
+      "overRule": null,
+      "uiNavigation": {
+        "action": "OpenList",
+        "display": "Page \"UP Card\"",
+        "entry": "page action",
+        "established": true,
+        "hops": 3,
+        "relation": "UI navigation",
+        "tier": "local"
+      }
+    },
+    "programEntries": 3,
+    "programEntriesByKind": {
+      "page action": 2,
+      "page trigger": 1
+    },
+    "programShare": {
+      "all": {
+        "percent": 100,
+        "program": 3,
+        "reached": 3
+      },
+      "candidates": {
+        "percent": 0,
+        "program": 3,
+        "reached": 0
+      },
+      "code": {
+        "percent": 66,
+        "program": 3,
+        "reached": 2
+      },
+      "overConfiguration": {
+        "percent": 0,
+        "program": 3,
+        "reached": 0
+      },
+      "overHub": {
+        "percent": 0,
+        "program": 3,
+        "reached": 0
+      },
+      "overRule": {
+        "percent": 0,
+        "program": 3,
+        "reached": 0
+      },
+      "uiNavigation": {
+        "percent": 33,
+        "program": 3,
+        "reached": 1
+      }
+    },
+    "relationRecorded": true,
+    "rootEntryKinds": [
+      "event-subscriber"
+    ],
+    "rootUserOrJob": false,
+    "states": 15,
+    "userOrJobEntries": 4
+  },
+  "version": 1
+}

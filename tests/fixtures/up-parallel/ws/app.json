@@ -1,0 +1,13 @@
+{
+  "id": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36",
+  "name": "Up Parallel Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 51400,
+      "to": 51409
+    }
+  ]
+}
