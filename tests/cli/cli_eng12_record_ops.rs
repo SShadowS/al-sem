@@ -142,6 +142,11 @@ codeunit 52604 "E12 More"
         XC: Codeunit "E12 Worker";
         GB: Record "E12 Sub";
         GT: Record "E12 Row";
+        GRR: RecordRef;
+    procedure ThisRRModify()
+    begin
+        this.GRR.Modify(true);
+    end;
     procedure ThisQuoted()
     begin
         this."My G".Modify(true);
@@ -478,6 +483,9 @@ fn the_review_shapes() {
         assert!(a.starts_with("answer: yes"), "{r}: {a}");
     }
     // A quoted global is the variable too, with its own temp state.
+    // The shadowed global's own table (the call-result op), not the local's.
+    let a = tc("ThisShadowRecord", "E12 Sub");
+    assert!(a.starts_with("answer: down: yes"), "ThisShadowRecord: {a}");
     let a = tc("ThisQuotedTemp", "E12 Row");
     assert!(a.contains("1 on temporary records"), "ThisQuotedTemp: {a}");
     let a = tc("ThisAndBareFlow", "E12 Plain");
@@ -532,4 +540,23 @@ fn no_site_is_an_unknown_edge() {
         (Some(0), Some(2)),
         "{p}"
     );
+}
+
+/// Fable round 4: a global RecordRef through `this` keeps its RecordRef flag
+/// (`receiver_is_record_ref`), which the effects label and the RecordRef
+/// origin analysis read; the `this.` key is the unshadowed global's.
+/// Break (2026-11-12): look `this.grr` up unstripped in `record_ref_vars` ->
+/// the label is "table not resolved", not "on a RecordRef"; restored, passes.
+#[test]
+fn a_global_record_ref_through_this_stays_a_record_ref() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let h = run(&[
+        "query",
+        "effects",
+        "--routine",
+        "\"E12 More\".ThisRRModify",
+        ws,
+    ]);
+    assert!(h.contains("on a RecordRef (table not resolved"), "{h}");
 }

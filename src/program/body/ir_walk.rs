@@ -1284,9 +1284,13 @@ impl<'a> SpineCtx<'a> {
                         .unwrap_or(false);
                     match (is_rec, record_op_type(&member.to_ascii_lowercase())) {
                         (true, Some(op)) => {
-                            receiver_is_record_ref = recv_name
-                                .as_ref()
-                                .is_some_and(|r| self.scope.record_ref_vars.contains(r));
+                            // `this.x` names the global `x`, unshadowed by
+                            // construction (`extract::this_receivers`).
+                            receiver_is_record_ref = recv_name.as_ref().is_some_and(|r| {
+                                self.scope
+                                    .record_ref_vars
+                                    .contains(r.strip_prefix("this.").unwrap_or(r))
+                            });
                             Some((
                                 op,
                                 crate::record_ops::receiver_key_text(
