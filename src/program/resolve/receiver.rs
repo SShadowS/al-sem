@@ -665,8 +665,9 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
 /// `receiver_expr` carries the PARSED receiver `Expr` — `Some((file, id))` when
 /// the call site's [`CalleeShape::Member`] populated a `receiver` `ExprId`
 /// (`file.ir.expr(id)` recovers the structured node: `ExprKind::Call{..}` /
-/// `Member{..}` / …), `None` when the caller has no such node in scope (e.g.
-/// the `RecordOp` shape, which does not carry one). Steps 0-4 are UNCHANGED by
+/// `Member{..}` / …); the `RecordOp` shape carries one too since ENG-12 (an
+/// array element `Recs[1]` is typed by its element), the implicit `Rec` none.
+/// `None` when the caller has no such node in scope. Steps 0-4 are UNCHANGED by
 /// this parameter and continue to dispatch purely on `receiver_lc`; Step 5
 /// (Task 3) is the first consumer.
 ///
@@ -675,8 +676,8 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
 /// `Some((surface, with_state))` when the caller can supply the two extra
 /// inputs Step 5 needs to run [`crate::program::resolve::resolver::resolve_bare`]
 /// as a type query (`resolve_full_program`'s real `CalleeShape::Member`
-/// resolution path); `None` for callers with no such context in scope (unit
-/// tests, `semantic_golden.rs`, the `RecordOp` shape) — Step 5 is then a
+/// resolution path, and since ENG-12 its `RecordOp` path); `None` for callers
+/// with no such context in scope (unit tests, `semantic_golden.rs`) — Step 5 is then a
 /// no-op, resolution-neutral exactly like `receiver_expr` for those callers.
 ///
 /// [`CalleeShape::Member`]: crate::program::resolve::extract::CalleeShape::Member
@@ -1199,7 +1200,7 @@ pub fn infer_receiver_type(
     // restricted to Table/Page-kind objects — a `with` block can wrap ANY
     // record-typed receiver in ANY object kind, so the gate is unconditional
     // here rather than paired with an object-kind `matches!`). No `bare_ctx`
-    // supplied (unit tests, `semantic_golden.rs`, the `RecordOp` shape) makes
+    // supplied (unit tests, `semantic_golden.rs`) makes
     // this step a no-op exactly like Step 3a and Step 5 — resolution-neutral
     // for those callers, never a regression.
     // -----------------------------------------------------------------------
@@ -1229,7 +1230,7 @@ pub fn infer_receiver_type(
     // 2) and `bare_ctx` (the `DeclSurface`/`WithState` Step 5 needs to run
     // `resolve_bare` as a type query, Task 3) are populated — a no-op
     // otherwise, so callers that don't supply them (unit tests,
-    // `semantic_golden.rs`, the `RecordOp` shape) are unaffected.
+    // `semantic_golden.rs`) are unaffected.
     // -----------------------------------------------------------------------
 
     if let Some((file, expr_id)) = receiver_expr
@@ -1261,8 +1262,8 @@ pub fn infer_receiver_type(
     // `DeclSurface` (it calls `resolve_member` as a type-query, which needs one
     // to build routes) — threaded here as `Option<&DeclSurface>` extracted
     // from `bare_ctx`, so it is a no-op for callers with no `bare_ctx` in
-    // scope (unit tests that pass `None`, `semantic_golden.rs`, the
-    // `RecordOp` shape), exactly like Step 5, while the framework/`this.`
+    // scope (unit tests that pass `None`, `semantic_golden.rs`), exactly like
+    // Step 5, while the framework/`this.`
     // sub-cases remain resolution-neutral either way.
     // -----------------------------------------------------------------------
 

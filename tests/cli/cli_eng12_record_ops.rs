@@ -7,7 +7,12 @@ use std::process::Command;
 
 const SOURCE: &str = r#"table 52600 "E12 Row"
 {
-    fields { field(1; K; Integer) { } field(2; V; Integer) { } }
+    fields
+    {
+        field(1; K; Integer) { }
+        field(2; V; Integer) { }
+        field(3; Cnt; Integer) { FieldClass = FlowField; CalcFormula = count("E12 Plain"); }
+    }
     keys { key(PK; K) { } }
     trigger OnModify()
     begin
@@ -94,6 +99,64 @@ table 52602 "E12 Plain"
 {
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
+}
+codeunit 52603 "E12 Worker"
+{
+    procedure Modify()
+    begin
+        Commit();
+    end;
+}
+codeunit 52604 "E12 More"
+{
+    var
+        X: Record "E12 Plain";
+        GRecs: array[2] of Record "E12 Row";
+    procedure Shadow()
+    var
+        X: array[2] of Codeunit "E12 Worker";
+    begin
+        X[1].Modify();
+    end;
+    procedure WithModifyTrue()
+    var
+        Recs: array[2] of Record "E12 Row";
+    begin
+        with Recs[1] do
+            Modify(true);
+    end;
+    procedure GlobalArr()
+    begin
+        if GRecs[1].FindFirst() then;
+    end;
+    procedure ArrParam(var Recs: array[2] of Record "E12 Row")
+    begin
+        if Recs[1].FindFirst() then;
+    end;
+    procedure TempArr()
+    var
+        Temps: array[2] of Record "E12 Row" temporary;
+    begin
+        Temps[1].K := 1;
+        Temps[1].Insert();
+    end;
+    procedure GetRefRead()
+    begin
+        if GetRef().FindFirst() then;
+    end;
+    local procedure GetRef(): Record "E12 Row"
+    var
+        R: Record "E12 Row";
+    begin
+        exit(R);
+    end;
+    procedure SpacedFlow()
+    var
+        Recs: array[2] of Record "E12 Row";
+    begin
+        Recs[1].SetAutoCalcFields(Cnt);
+        if Recs[ 1 ].FindFirst() then;
+    end;
 }
 "#;
 
@@ -219,4 +282,73 @@ fn a_trigger_firing_op_on_an_element_or_a_call_result_is_never_a_definite_no() {
         let a = may_commit(ws, routine);
         assert!(a.starts_with(want), "{routine}: {a}");
     }
+}
+
+/// The `answer:` line of a command's human output.
+fn answer(args: &[&str]) -> String {
+    run(args)
+        .lines()
+        .find(|l| l.starts_with("answer:"))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The review's shapes (ENG-12 round 1):
+/// - a local codeunit array shadowing a record global of its name is no
+///   record: `X[1].Modify()` is the codeunit's call, which commits;
+/// - `with Recs[1] do Modify(true)` runs the trigger;
+/// - a global array and an array parameter are records through elements;
+/// - a temporary array's element is temporary;
+/// - a read on a call's result is never a definite `no`;
+/// - `Recs[ 1 ]` is the element `Recs[1]` set its FlowField up on, so its
+///   retrieval reads the FlowField's source table.
+///
+/// Breaks (2026-11-12): skip `routine_non_record_names` in both engines ->
+/// `Shadow` answers `no`; `receiver_variable` without its `Index` arm ->
+/// `GlobalArr` and `ArrParam` answer `no`; skip the temporary element in
+/// pass 2b -> `TempArr` counts 0 temporary touches; `touches_table` false in
+/// the member-path step -> `GetRefRead` answers `no`; `receiver_key_text`
+/// returning its input -> `SpacedFlow` answers `no` for "E12 Plain". Each
+/// fails; restored, it passes.
+#[test]
+fn the_review_shapes() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let mc = |r: &str| {
+        answer(&[
+            "prove",
+            ws,
+            &format!("\"E12 More\"::{r}"),
+            "may-commit",
+            "--format",
+            "human",
+        ])
+    };
+    let tc = |r: &str, table: &str| {
+        answer(&[
+            "query",
+            "touches",
+            "--table",
+            table,
+            "--from",
+            &format!("\"E12 More\".{r}"),
+            "--direction",
+            "down",
+            ws,
+        ])
+    };
+    let a = mc("Shadow");
+    assert!(a.starts_with("answer: yes"), "Shadow: {a}");
+    let a = mc("WithModifyTrue");
+    assert!(a.starts_with("answer: yes"), "WithModifyTrue: {a}");
+    for r in ["GlobalArr", "ArrParam"] {
+        let a = tc(r, "E12 Row");
+        assert!(a.starts_with("answer: down: yes"), "{r}: {a}");
+    }
+    let a = tc("TempArr", "E12 Row");
+    assert!(a.contains("1 on temporary records"), "TempArr: {a}");
+    let a = tc("GetRefRead", "E12 Row");
+    assert!(a.starts_with("answer: down: unknown"), "GetRefRead: {a}");
+    let a = tc("SpacedFlow", "E12 Plain");
+    assert!(a.starts_with("answer: down: yes"), "SpacedFlow: {a}");
 }

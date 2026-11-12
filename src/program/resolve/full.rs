@@ -1032,21 +1032,33 @@ fn resolve_call_site_obligation(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
-                // ENG-12 (ENG-06 review gap (b)): a trigger-firing record
-                // operation on a record no variable names (a call's result,
-                // `GetRef().Modify(true)`; an array element is a record
-                // operation, `extract::classify_call`). Measured 2026-11-12: 0
-                // such sites in CDO or Base Application. Its table's triggers
-                // when the table is known (as a record operation's, by the
-                // same RunTrigger rule), and one honest unknown for what is not
-                // followed here (its table events; with no table, any table's
-                // triggers): never a definite `no`.
-                if let Some(trigger_op) =
-                    crate::program::resolve::edge::record_trigger_op(&method_lc)
+                // ENG-12 (ENG-06 review gap (b)): a record operation on a
+                // record no variable names (a call's result,
+                // `GetRef().Modify(true)`, `GetRef().FindFirst()`; an array
+                // element is a record operation, `extract::classify_call`).
+                // Measured 2026-11-12: 0 such sites in CDO or Base Application.
+                // A trigger-firing one runs its table's triggers when the table
+                // is known (as a record operation's, by the same RunTrigger
+                // rule); each carries one honest unknown for what is not
+                // followed here (the table it touches, its table events; with
+                // no table, any table's triggers): never a definite `no`.
+                let trigger_op = crate::program::resolve::edge::record_trigger_op(&method_lc);
+                if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
                     && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
+                    // Not a variable (`X`, `X[i]`): those are record operations,
+                    // or a variable the receiver sets do not hold (a base
+                    // object's `protected var` in an extension), left as before.
+                    && receiver.is_some_and(|id| {
+                        crate::record_ops::receiver_variable(&file.ir, id).is_none()
+                    })
                 {
-                    let _ = trigger_op;
-                    if let ReceiverType::Record { table: Some(tid) } = &recv
+                    // What is not followed comes first: the site's first edge
+                    // is what the unresolved ledger reads. The builtin route
+                    // (no target) is replaced by it.
+                    r = vec![unknown_route(UnknownReason::CompoundReceiver)];
+                    s = DispatchShape::Exact;
+                    if trigger_op.is_some()
+                        && let ReceiverType::Record { table: Some(tid) } = &recv
                         && let Some(table_node) = graph.object_first(tid)
                     {
                         let (_, _, mut trig) =
@@ -1059,12 +1071,13 @@ fn resolve_call_site_obligation(
                             _ => true,
                         });
                         if !trig.is_empty() {
-                            // The builtin and its table's triggers all run.
+                            // The triggers and what is not followed all run:
+                            // one model edge per route (`program_calls`), not
+                            // an overload set to choose from.
                             s = DispatchShape::Multicast;
                         }
                         r.extend(trig);
                     }
-                    r.push(unknown_route(UnknownReason::CompoundReceiver));
                 }
                 // B9: a `FieldRef.Validate(…)` validates a field of the table
                 // the FieldRef holds.

@@ -250,6 +250,39 @@ pub(crate) fn is_record_ty(ty: &str) -> bool {
 ///
 /// Object-level globals are NOT included here — pass them via `object_globals` in
 /// [`extract_sites`].
+/// The names (folded) a routine declares with a NON-record type: a parameter,
+/// local or named return value. They shadow an object global or `Rec` of the
+/// same name, so a call on them is no record operation (ENG-12 review: a local
+/// `X: array[2] of Codeunit W` under a global `X: Record T` made `X[1].Modify()`
+/// a record operation and hid the codeunit's call). Shared by both engines.
+pub(crate) fn routine_non_record_names(routine: &RoutineDecl) -> HashSet<String> {
+    let mut out: HashSet<String> = routine
+        .params
+        .iter()
+        .map(|p| (&p.name, p.ty.as_deref()))
+        .chain(routine.locals.iter().map(|v| (&v.name, v.ty.as_deref())))
+        .filter(|(_, ty)| !ty.is_some_and(is_record_ty))
+        .map(|(n, _)| n.fold_identifier())
+        .collect();
+    if let Some((name, ty)) = crate::program::body::ir_walk::named_return_var(routine)
+        && !is_record_ty(ty)
+    {
+        out.insert(name.fold_identifier());
+    }
+    out
+}
+
+/// [`routine_rvars`] plus the object's record globals, less the names the
+/// routine shadows with a non-record declaration.
+fn routine_receivers(routine: &RoutineDecl, object_globals: &HashSet<String>) -> HashSet<String> {
+    let mut rvars = routine_rvars(routine);
+    rvars.extend(object_globals.iter().cloned());
+    for n in routine_non_record_names(routine) {
+        rvars.remove(&n);
+    }
+    rvars
+}
+
 pub fn routine_rvars(routine: &RoutineDecl) -> HashSet<String> {
     let mut rvars = HashSet::new();
     rvars.insert("rec".to_string());
@@ -408,7 +441,8 @@ fn classify_call(
                 && rvars.contains(r_lc)
                 && crate::record_ops::record_op_type(&method_lc).is_some()
             {
-                let receiver_text = src[obj.origin.byte.clone()].to_string();
+                let receiver_text =
+                    crate::record_ops::receiver_key_text(&src[obj.origin.byte.clone()]);
                 return CalleeShape::RecordOp {
                     receiver_text,
                     op: method_lc,
@@ -475,7 +509,9 @@ fn classify_call(
                 ImplicitRecv::NotRecord => None,
                 ImplicitRecv::Rec => Some(("Rec".to_string(), None)),
                 ImplicitRecv::With(r) => Some((
-                    src[file.ir.expr(r).origin.byte.clone()].trim().to_string(),
+                    crate::record_ops::receiver_key_text(
+                        src[file.ir.expr(r).origin.byte.clone()].trim(),
+                    ),
                     Some(r),
                 )),
             };
@@ -1002,8 +1038,7 @@ pub fn extract_sites(
         for routine in &obj.routines {
             if let Some(body) = routine.body {
                 let caller = routine.name.fold_identifier();
-                let mut rvars = routine_rvars(routine);
-                rvars.extend(object_globals.iter().cloned());
+                let rvars = routine_receivers(routine, object_globals);
                 let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
                 walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
             }
@@ -1044,8 +1079,7 @@ pub fn extract_sites_for_object(
     for routine in &obj.routines {
         if let Some(body) = routine.body {
             let caller = routine.name.fold_identifier();
-            let mut rvars = routine_rvars(routine);
-            rvars.extend(object_globals.iter().cloned());
+            let rvars = routine_receivers(routine, object_globals);
             let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
             walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
         }
@@ -1090,8 +1124,7 @@ pub fn extract_sites_for_routine(
         return Vec::new();
     };
     let caller = routine.name.fold_identifier();
-    let mut rvars = routine_rvars(routine);
-    rvars.extend(object_globals.iter().cloned());
+    let rvars = routine_receivers(routine, object_globals);
     let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
     let mut out = Vec::new();
     walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);

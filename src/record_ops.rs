@@ -46,6 +46,52 @@ pub fn receiver_variable(ir: &al_syntax::ir::Ir, e: al_syntax::ir::ExprId) -> Op
     }
 }
 
+/// Whether the record method (lowercase) reads, writes or locks its table.
+pub fn touches_table(method_lc: &str) -> bool {
+    matches!(
+        method_lc,
+        "find"
+            | "findfirst"
+            | "findlast"
+            | "findset"
+            | "get"
+            | "getbysystemid"
+            | "next"
+            | "count"
+            | "countapprox"
+            | "isempty"
+            | "calcfields"
+            | "calcsums"
+            | "modify"
+            | "modifyall"
+            | "insert"
+            | "delete"
+            | "deleteall"
+            | "rename"
+            | "locktable"
+    )
+}
+
+/// A record-op receiver's text as both engines key it: an indexed receiver
+/// without whitespace outside quotes (`Recs[ 1 ]` and `Recs[1]` are one
+/// element, ENG-12 review); any other text unchanged.
+pub fn receiver_key_text(t: &str) -> String {
+    if !t.contains('[') {
+        return t.to_string();
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut quoted = false;
+    for c in t.chars() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if c.is_whitespace() && !quoted {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Canonical record-op name (lowercase) → properly-cased RecordOpType.
 pub fn record_op_type(method_lc: &str) -> Option<&'static str> {
     Some(match method_lc {

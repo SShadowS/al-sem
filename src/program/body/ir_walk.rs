@@ -436,6 +436,13 @@ fn build_scope(
         frvars.insert("rec".to_string());
     }
     frvars.extend(params_locals);
+    // A non-record parameter, local or return value shadows a record global of
+    // its name (ENG-12 review), as the extractor's receivers do.
+    for n in crate::program::resolve::extract::routine_non_record_names(routine) {
+        let n = n.to_ascii_lowercase();
+        rvars.remove(&n);
+        frvars.remove(&n);
+    }
     // Every name a bare identifier can resolve to before a field of the
     // implicit record: parameters, locals, the object's globals of any type,
     // its dataitems and procedures, and `Rec` / `xRec` themselves.
@@ -566,12 +573,9 @@ impl<'a> SpineCtx<'a> {
         use ExprKind::*;
         let (method, on_record) = match &self.file.ir.expr(function).kind {
             Member { object, member, .. } => {
-                let on_record = match &self.file.ir.expr(*object).kind {
-                    Identifier(x) | QuotedIdentifier(x) => {
-                        self.scope.rvars.contains(&x.to_ascii_lowercase())
-                    }
-                    _ => false,
-                };
+                // `X` or an array element `X[i]`, as the record-op arm.
+                let on_record = crate::record_ops::receiver_variable(&self.file.ir, *object)
+                    .is_some_and(|x| self.scope.rvars.contains(&x.to_ascii_lowercase()));
                 (member.to_ascii_lowercase(), on_record)
             }
             Identifier(m) | QuotedIdentifier(m) => {
@@ -1200,10 +1204,9 @@ impl<'a> SpineCtx<'a> {
                 // `with X do` or `with Recs[i] do` (ENG-12, L36).
                 let is_record = crate::record_ops::receiver_variable(&self.file.ir, *receiver)
                     .is_some_and(|x| self.scope.rvars.contains(&x.to_ascii_lowercase()));
-                let text = self
-                    .raw(&self.file.ir.expr(*receiver).origin)
-                    .trim()
-                    .to_string();
+                let text = crate::record_ops::receiver_key_text(
+                    self.raw(&self.file.ir.expr(*receiver).origin).trim(),
+                );
                 self.implicit.push(ImplicitFrame { is_record, text });
                 self.walk_block(*body);
                 self.implicit.pop();
@@ -1278,7 +1281,12 @@ impl<'a> SpineCtx<'a> {
                             receiver_is_record_ref = recv_name
                                 .as_ref()
                                 .is_some_and(|r| self.scope.record_ref_vars.contains(r));
-                            Some((op, self.raw(&self.file.ir.expr(*object).origin).to_string()))
+                            Some((
+                                op,
+                                crate::record_ops::receiver_key_text(
+                                    self.raw(&self.file.ir.expr(*object).origin),
+                                ),
+                            ))
                         }
                         _ => None,
                     }

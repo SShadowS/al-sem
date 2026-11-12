@@ -1086,13 +1086,17 @@ fn build_fan_out_site_context(
                                 }
                             }
                             CalleeShape::RecordOp {
-                                receiver_text, op, ..
+                                receiver_text,
+                                op,
+                                receiver,
                             } => {
                                 let receiver_lc = receiver_text.fold_identifier();
                                 let op_lc = op.fold_identifier();
                                 let Some(op_kind) = record_op_kind_for_method(&op_lc) else {
                                     continue;
                                 };
+                                // ENG-12: an array element is typed by its
+                                // element, as production types it.
                                 let recv = infer_receiver_type(
                                     &receiver_lc,
                                     routine,
@@ -1100,7 +1104,7 @@ fn build_fan_out_site_context(
                                     obj_node,
                                     graph,
                                     index,
-                                    None,
+                                    receiver.map(|id| (&*pf.file, id)),
                                     None,
                                 );
                                 if let ReceiverType::Record {

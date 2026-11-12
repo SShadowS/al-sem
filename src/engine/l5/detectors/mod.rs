@@ -792,9 +792,11 @@ pub(crate) const RECORD_LOAD_OPS: &[&str] = &[
     "Copy",
 ];
 
-/// G-10 tier 1: platform BUILT-IN record loaders that are NOT in the L2
-/// record-op map (`record_op.rs`) — they surface as member CALL SITES, not
-/// record operations — but perform a complete row fetch, equivalent to `Get`
+/// G-10 tier 1: platform BUILT-IN record loaders seen as member CALL SITES,
+/// not record operations, that perform a complete row fetch, equivalent to `Get`
+/// (since ENG-12 `GetBySystemId` on a variable or an array element is a record
+/// operation in `RECORD_LOAD_OPS`; this tier still sees it on any other
+/// receiver, a call's result)
 /// for the "record is loaded" precondition. EXACT method names, matched
 /// case-insensitively. Deliberately conservative: only platform built-ins that
 /// load the full current record are listed; custom `FindXxx`/`GetXxx` wrappers

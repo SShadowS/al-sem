@@ -217,7 +217,13 @@ pub fn resolve_routine_record_types(
         else {
             continue;
         };
-        // An array of records: its element type (ENG-12, L36).
+        // An array of records: its element type (ENG-12, L36). An element of a
+        // `temporary` array is temporary; otherwise its state stays unknown.
+        if let Some(element) = crate::record_ops::array_element_type(decl)
+            && strip_trailing_temporary(element).len() != element.trim_end().len()
+        {
+            op.temp_state = Some(crate::program::body::scope::ts_known(true));
+        }
         let Some(table_name) = record_table_name_of(crate::record_ops::receiver_type_of(decl))
         else {
             continue;

@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no table, any table's triggers), so the answer is `yes` or `unknown`. 0 such sites in CDO
   and Base Application (measured 2026-11-12); Base Application has 36 array-element writes.
   Probe: `docs/superpowers/notes/2026-11-12-eng12-record-ops-probe.md`.
+- Review round 1: a non-record parameter, local or return value shadows a record global of its
+  name in both engines (a local `X: array[2] of Codeunit W` under a global `X: Record T` had made
+  `X[1].Modify()` a record operation and hidden the codeunit's commit); a read on a call's result
+  is `unknown`, not `no`; an element of a `temporary` array is temporary; `Recs[ 1 ]` and
+  `Recs[1]` are one receiver; `query effects` lists `GetBySystemId` as a read. A record
+  operation written without parentheses in expression position (`if R.FindFirst then`, about 96
+  sites in CDO) is still not seen: task ENG-25.
 
 ### Fixed (ENG-10: a database write inside a used try call is refused on premises, engine limits L23 item 6)
 
