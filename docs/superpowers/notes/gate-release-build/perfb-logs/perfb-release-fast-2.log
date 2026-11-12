@@ -1,0 +1,15 @@
+ 10:48:07 up 8 days, 12:01,  0 users,  load average: 4.42, 6.73, 10.80
+[perf_bounds] batch_write_check(2000 jobs): 16.60823ms
+[perf_bounds] build_full_1000_files: min=82.864719ms bound=6s samples=[82.864719ms, 105.980323ms, 99.031122ms]
+[perf_bounds] compute_all(1000): min=10.459438ms architectural_bound=150ms samples=[10.59883ms, 10.591616ms, 10.518765ms, 10.465059ms, 10.929697ms, 10.783706ms, 10.579847ms, 10.588288ms, 10.459438ms]
+[perf_bounds] compute_all scaling: t(500)=4.539325ms t(2000)=21.455081ms ratio=4.726 samples500=[5.382691ms, 5.319851ms, 4.737549ms, 4.565673ms, 4.539325ms, 4.55259ms, 4.746886ms, 4.649344ms, 4.592309ms] samples2000=[24.948555ms, 24.794982ms, 22.183639ms, 21.825998ms, 21.529831ms, 21.455081ms, 22.249705ms, 21.754913ms, 32.838329ms]
+[perf_bounds] compute_summaries_v2_bundle(1000): min=73.217267ms bound=230ms samples=[74.785334ms, 73.347734ms, 73.995799ms, 74.750551ms, 73.217267ms]
+[perf_bounds] outgoing: min=11.623µs bound=3ms samples=[13.83µs, 11.875µs, 11.636µs, 11.623µs, 11.658µs]
+[perf_bounds] incoming: min=3.056887ms bound=75ms samples=[3.516796ms, 3.352886ms, 3.176774ms, 3.138678ms, 3.056887ms]
+[perf_bounds] prepare: min=3.544µs bound=3ms samples=[6.291µs, 4.617µs, 3.679µs, 3.989µs, 3.544µs]
+[perf_bounds] build_full_100_files: min=8.279663ms bound=1.5s samples=[10.077023ms, 8.408395ms, 8.279663ms]
+[perf_bounds] recursive_scc_db_effects(400 files, 4 x 800-member recursive SCCs): min=175.169728ms bound=650ms samples=[175.169728ms, 188.465225ms, 223.773955ms, 221.720419ms, 183.503149ms]
+[perf_bounds] rung1_body_edit: min=17.396502ms absolute_bound=300ms synthetic_bound=100ms samples=[19.508526ms, 17.56094ms, 17.396502ms]
+[perf_bounds] rung1_body_edit_scoped: min=1.719734ms absolute_bound=300ms synthetic_bound=65ms samples=[2.331789ms, 1.719734ms, 1.732393ms]
+[perf_bounds] rung2_signature_edit: min=43.557847ms absolute_bound=4.5s synthetic_bound=750ms samples=[44.228449ms, 43.557847ms, 46.115213ms]
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.15s
