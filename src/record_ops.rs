@@ -15,6 +15,8 @@ pub fn record_op_type(method_lc: &str) -> Option<&'static str> {
         "findlast" => "FindLast",
         "find" => "Find",
         "get" => "Get",
+        // ENG-12 (L35): reads the record by its SystemId, as `Get` does.
+        "getbysystemid" => "GetBySystemId",
         "calcfields" => "CalcFields",
         "calcsums" => "CalcSums",
         "testfield" => "TestField",

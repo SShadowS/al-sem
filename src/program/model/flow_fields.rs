@@ -536,7 +536,7 @@ fn push(out: &mut Vec<FlowFieldRead>, field: &str, source: FlowFieldSource) {
 fn is_retrieval(op: &str) -> bool {
     matches!(
         op,
-        "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "Next"
+        "Get" | "GetBySystemId" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "Next"
     )
 }
 

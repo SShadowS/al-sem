@@ -23,8 +23,8 @@ use super::{CapabilityExtra, CapabilityFact, CoverageReason, ExtractionContext, 
 /// the record's own table.
 pub(crate) fn map_op(op: &str) -> Option<&'static str> {
     match op {
-        "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty" | "Count"
-        | "CountApprox" | "Next" | "CalcFields" | "CalcSums" => Some("read"),
+        "Get" | "GetBySystemId" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "IsEmpty"
+        | "Count" | "CountApprox" | "Next" | "CalcFields" | "CalcSums" => Some("read"),
         "Modify" | "ModifyAll" => Some("modify"),
         "Insert" => Some("insert"),
         "Delete" | "DeleteAll" => Some("delete"),

@@ -780,6 +780,8 @@ fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext, symbols: &Symb
 /// uses the SAME set the detectors apply intraprocedurally.
 pub(crate) const RECORD_LOAD_OPS: &[&str] = &[
     "Get",
+    // ENG-12 (L35): a record operation now, no longer only tier 1's call site.
+    "GetBySystemId",
     "FindFirst",
     "FindLast",
     "FindSet",
@@ -1455,7 +1457,9 @@ pub(crate) fn whole_set_break(
         "Reset" | "Copy" => Some(WholeSetBreak::ChangesSet),
         // A second retrieval on the DRIVER repositions the cursor, so the loop
         // stops visiting the rows it was going to visit.
-        "Find" | "FindFirst" | "FindLast" | "FindSet" | "Get" => Some(WholeSetBreak::SkipsRows),
+        "Find" | "FindFirst" | "FindLast" | "FindSet" | "Get" | "GetBySystemId" => {
+            Some(WholeSetBreak::SkipsRows)
+        }
         // SetLoadFields/AddLoadFields change which COLUMNS are fetched, not
         // which rows or in what order.
         //
