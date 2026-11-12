@@ -842,15 +842,17 @@ fn tokenize(s: &str) -> Vec<String> {
 /// order, so `rank[a].cmp(&rank[b]) == compare_natural(a, b)` for every pair. Names that
 /// compare Equal without being the same string (`"d1"` and `"d01"`: their number tokens
 /// are both 1) share a rank, so a later tie-break decides between them, as before.
-pub(crate) fn natural_ranks<'a>(
+fn natural_ranks<'a>(
     names: impl IntoIterator<Item = &'a str>,
-) -> std::collections::HashMap<String, u32> {
-    let mut distinct: Vec<&str> = names.into_iter().collect();
-    distinct.sort_unstable();
-    distinct.dedup();
+) -> std::collections::HashMap<String, usize> {
+    let mut distinct: Vec<&str> = names
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     distinct.sort_by(|a, b| compare_natural(a, b));
     let mut ranks = std::collections::HashMap::with_capacity(distinct.len());
-    let mut rank = 0u32;
+    let mut rank = 0usize;
     for (i, name) in distinct.iter().enumerate() {
         if i > 0 && compare_natural(distinct[i - 1], name) != std::cmp::Ordering::Equal {
             rank += 1;
@@ -864,30 +866,28 @@ pub(crate) fn natural_ranks<'a>(
 /// location key, then the root-cause key. A STABLE sort, so findings tying on all three
 /// keep their order. The same order as comparing
 /// `compare_natural(detector).then(location_key.cmp).then(root_cause_key.cmp)` on every
-/// pair. But each item's keys are built once (decorate, sort, undecorate), not twice per
-/// comparison: the detector as its [`natural_ranks`] rank, the location key as its
-/// string.
+/// pair. But each item's key is built once, not twice per comparison: the detector as its
+/// [`natural_ranks`] rank, the location key as its string, the root-cause key copied.
+/// `sort_by_cached_key` sorts the keys with their indices and then permutes the items in
+/// place, so no second buffer of items is held (code review, 2026-11-12).
 ///
 /// The location key stays the STRING `"{unit}:{line}:{column}"`, compared as text. That
 /// is not the order of `(unit, line, column)` compared field by field: `"a1:…"` sorts
 /// before `"a:…"`, because `'1' < ':'`.
 pub(crate) fn sort_by_detector_location_cause<T>(
-    items: &mut Vec<T>,
+    items: &mut [T],
     detector: impl Fn(&T) -> &str,
     location_key: impl Fn(&T) -> String,
     root_cause_key: impl Fn(&T) -> &str,
 ) {
     let ranks = natural_ranks(items.iter().map(&detector));
-    let mut keyed: Vec<(u32, String, T)> = items
-        .drain(..)
-        .map(|t| (ranks[detector(&t)], location_key(&t), t))
-        .collect();
-    keyed.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| root_cause_key(&a.2).cmp(root_cause_key(&b.2)))
+    items.sort_by_cached_key(|t| {
+        (
+            ranks[detector(t)],
+            location_key(t),
+            root_cause_key(t).to_owned(),
+        )
     });
-    items.extend(keyed.into_iter().map(|(_, _, t)| t));
 }
 
 #[cfg(test)]
@@ -1530,10 +1530,11 @@ mod tests {
     /// every pair, comparing ranks gives what `compare_natural` gives, Equal
     /// included (`d1`/`d01` and `d2`/`d02` share a rank).
     ///
-    /// DISCRIMINATION (2026-11-12): giving each distinct name its own rank
-    /// (the sorted position, no Equal sharing) fails on `"d2"` vs `"d02"`
-    /// (Greater, not Equal), and `decorated_sort_equals_the_old_comparator`
-    /// fails with it; restored, both pass.
+    /// DISCRIMINATION (2026-11-12, redone after review): giving each distinct
+    /// name its own rank (the sorted position, no Equal sharing) fails on
+    /// `"d2"` vs `"d02"` (not Equal), and
+    /// `decorated_sort_equals_the_old_comparator` fails with it; restored,
+    /// both pass.
     #[test]
     fn natural_ranks_are_an_exact_monotone_image_of_compare_natural() {
         let ranks = natural_ranks(RANK_NAMES.iter().copied());
@@ -1563,30 +1564,42 @@ mod tests {
     }
 
     /// TLS-27, the production call site: `role_scope_and_sort` orders by the
-    /// detector's natural order (`d02` ties `d2`; `d10` after both), then the
-    /// location key AS TEXT (`"a1:1:1"` before `"a:1:1"`, because `'1' <
-    /// ':'`; a field-wise `(unit, line, column)` order would put `a` first),
-    /// then the root-cause key, and keeps input order on a full tie (`t1`
-    /// before `t2`). The expected order is stated by hand.
+    /// detector's natural order, then the location key AS TEXT, then the
+    /// root-cause key, and keeps input order on a full tie. The expected
+    /// order is stated by hand:
+    /// - `d02` ties `d2`, so its finding at unit `c` sorts between the `d2`
+    ///   findings at `a`/`b` and the one at `d`. Ranked apart, it would come
+    ///   before or after all of them (which one depends on hash order, so
+    ///   both sides are pinned). `d10` comes after both;
+    /// - `"a1:1:1"` before `"a:1:1"`, because `'1' < ':'` (a field-wise
+    ///   `(unit, line, column)` order would put `a` first);
+    /// - `k1` before `k2` at the same location; `t1` before `t2` on a full
+    ///   tie (input order; with six items this alone does not catch an
+    ///   unstable sort, which `decorated_sort_equals_the_old_comparator`
+    ///   does).
     ///
-    /// DISCRIMINATION (2026-11-12): a field-wise location key
-    /// (`"{unit}\0{line:010}\0{column:010}"`) fails (`a` before `a1`);
-    /// restored, passes.
+    /// DISCRIMINATION (2026-11-12, after review): (a) a field-wise location
+    /// key (`"{unit}\0{line:010}\0{column:010}"`) fails (`a` before `a1`);
+    /// (b) ranking `d02` apart from `d2` (no Equal sharing in
+    /// `natural_ranks`) fails 3 runs of 3 (`c` first, or after `d`, as the
+    /// hash order fell); restored, passes.
     #[test]
     fn findings_sort_by_natural_detector_then_location_text_then_cause() {
         let input = vec![
             located("late", "d10", "a", 1, "k"),
             located("a-k2", "d2", "a", 1, "k2"),
             located("t1", "d2", "b", 1, "k"),
-            located("a1", "d02", "a1", 1, "k"),
+            located("c", "d02", "c", 1, "k"),
+            located("a1", "d2", "a1", 1, "k"),
             located("a-k1", "d2", "a", 1, "k1"),
+            located("d", "d2", "d", 1, "k"),
             located("t2", "d2", "b", 1, "k"),
         ];
         let ids: Vec<String> = role_scope_and_sort(input, &std::collections::HashMap::new())
             .into_iter()
             .map(|f| f.id)
             .collect();
-        assert_eq!(ids, ["a1", "a-k1", "a-k2", "t1", "t2", "late"]);
+        assert_eq!(ids, ["a1", "a-k1", "a-k2", "t1", "t2", "c", "d", "late"]);
     }
 
     /// TLS-27: the decorated sort gives the order the old comparator gave
@@ -1594,7 +1607,8 @@ mod tests {
     /// then the root-cause key, a stable `sort_by` over those three), on
     /// 2,000 items with many full ties, so input order decides among them.
     ///
-    /// DISCRIMINATION (2026-11-12): an unstable sort (`sort_unstable_by`) in
+    /// DISCRIMINATION (2026-11-12, redone after review): an unstable sort
+    /// (`sort_unstable_by_key` in place of `sort_by_cached_key`) in
     /// `sort_by_detector_location_cause` fails (tied items reordered);
     /// restored, passes.
     #[test]
