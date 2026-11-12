@@ -3189,7 +3189,12 @@ pub fn header_facts(
         summary: lines[0].clone(),
         analysis,
         limits,
-        assumptions: caught_assumptions(r).into_iter().collect(),
+        assumptions: caught_assumptions(r)
+            .into_iter()
+            .chain(crate::engine::l5::traps::try_root_assumption(
+                entry.try_root_refusal,
+            ))
+            .collect(),
         depth,
     }
 }
@@ -3243,6 +3248,9 @@ fn header_lines(
     out.push(cov);
     let mut assumptions = vec![crate::engine::result_header::LOADED_PROGRAM.to_string()];
     assumptions.extend(caught_assumptions(r));
+    assumptions.extend(crate::engine::l5::traps::try_root_assumption(
+        entry.try_root_refusal,
+    ));
     out.push(format!("assumptions: {}", assumptions.join("; ")));
     let mut limits: Vec<String> = Vec::new();
     if !r.no_path.is_empty() {

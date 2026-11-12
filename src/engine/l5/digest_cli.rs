@@ -1358,6 +1358,8 @@ pub struct DigestEntryFull {
     /// B4/L16: the commits no route runs as a commit, with why
     /// ([`crate::engine::l5::digest::DigestEntryResult::suppressed_commits`]).
     pub suppressed_commits: Vec<crate::engine::l5::digest::SuppressedCommit>,
+    /// ENG-10 ([`crate::engine::l5::digest::DigestEntryResult::try_root_refusal`]).
+    pub try_root_refusal: bool,
 }
 
 /// ENG-09: how a human output names a checked run's own commit, whose anchor
@@ -2860,6 +2862,8 @@ fn literal_reach_entries<'t>(
         }
         // B7/L23 + L30: error rows behind traps, and under error collection.
         judge_traps(reach, &mut root_tree, entry);
+        // ENG-10: a root that is itself a try function may be refused.
+        entry.try_root_refusal = reach.try_root_may_refuse(&entry.routine_id);
         // G33: a group's resources reached only through code that cannot run.
         for (i, resources) in dead_resources {
             entry.effects[i].dead_group_resources = resources;
@@ -3126,6 +3130,7 @@ pub fn run_digest_query_full_from_entries(
                 entry_diagnostics: Vec::new(),
                 declaration_only: true,
                 suppressed_commits: Vec::new(),
+                try_root_refusal: false,
             });
             continue;
         }
@@ -3159,9 +3164,11 @@ pub fn run_digest_query_full_from_entries(
         let mut full_effects: Vec<DigestEffectFull> = Vec::new();
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
         let mut suppressed_commits = Vec::new();
+        let mut try_root_refusal = false;
 
         if let Some(entry) = base_entry {
             suppressed_commits = std::mem::take(&mut entry.suppressed_commits);
+            try_root_refusal = entry.try_root_refusal;
             // A site list the search could not finish (the depth bound): its
             // count is a lower bound, and the renderers say "at least".
             for ty in &entry.partial_site_types {
@@ -3386,6 +3393,7 @@ pub fn run_digest_query_full_from_entries(
             entry_diagnostics,
             declaration_only: false,
             suppressed_commits,
+            try_root_refusal,
         });
     }
 
@@ -6492,6 +6500,7 @@ mod tests {
             entry_diagnostics: diagnostics,
             declaration_only: false,
             suppressed_commits: Vec::new(),
+            try_root_refusal: false,
         }
     }
 

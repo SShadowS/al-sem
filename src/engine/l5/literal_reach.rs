@@ -3200,6 +3200,12 @@ impl<'a> LiteralReach<'a> {
             let one = [r];
             let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
             for row in rows {
+                // No body (a symbol-only dependency routine, a `[TryFunction]`
+                // among them): unknown code. Interface methods dispatch to
+                // their implementations, which carry their own facts.
+                if !row.body_available && !row.object_type.eq_ignore_ascii_case("Interface") {
+                    seeds.insert(id);
+                }
                 for op in row
                     .operation_sites
                     .iter()
@@ -3318,6 +3324,8 @@ impl<'a> LiteralReach<'a> {
                 .operation_sites
                 .iter()
                 .filter(|o| within(&o.source_anchor))
+                // Record operations are operation sites too (`record-op`):
+                // `TryTakes(R.Insert())` is found here.
                 .any(|o| w.ops.contains(o.id.as_str()));
         if !inside {
             return Some(TrapVerdict::Caught(at));
@@ -3347,6 +3355,20 @@ impl<'a> LiteralReach<'a> {
         self.refusal
             .as_ref()
             .is_some_and(|w| w.closure.contains(routine))
+    }
+
+    /// ENG-10: whether `root` is a `[TryFunction]` (on some `#if` arm) that
+    /// may run a refused operation: a caller that uses its value gets the
+    /// refusal error, which the root's own answer cannot see.
+    pub(crate) fn try_root_may_refuse(&self, root: &str) -> bool {
+        let Some(&r) = self.by_stable.get(root) else {
+            return false;
+        };
+        let one = [r];
+        let rows = self.arm_rows.get(root).map_or(&one[..], Vec::as_slice);
+        rows.iter().any(|row| {
+            crate::program::attributes::has_attribute(&row.attributes_parsed, "TryFunction")
+        }) && self.may_refuse(root)
     }
 
     /// ENG-10: whether `op` is an operation the server refuses inside a try

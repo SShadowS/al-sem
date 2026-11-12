@@ -549,14 +549,21 @@ literal reach, so measure speed when changing it.
      without crossing a checked run or `asserterror`, and not caught by any try call above;
      "not raised" otherwise. A filtered slice (`--site`, `--match`, `--op`) on a refused
      operation inside a try call rules it the same way. A boundary group a try call catches is
-     kept escaping when the code beyond its crossing may run a refused operation.
+     kept escaping when the code beyond its crossing may run a refused operation. A routine with
+     no body (a symbol-only dependency routine, a `[TryFunction]` among them) is unknown code
+     inside a try call. A root that is itself a `[TryFunction]` and may run a refused operation
+     states the assumption its answer rests on: its callers call it as a statement (prove's
+     assumptions and `obligations.assumesStatementCallsOnly`, explain's and digest's header).
    - **Left (ENG-10):** Learn says Business Central online has no such restriction; online was
      not measured, and the rows name the setting rather than claim either way. Platform writes
      (`IsolatedStorage.Set`, Media import and similar) are not counted as refused (not measured).
-     A root that is itself a try function is answered as called: a caller that uses its value
-     makes its writes refused, which the root's own answer does not state (its writes' own
-     implicit errors keep the answer `yes`; a try function whose body only commits or locks
-     answers `no`). "Not raised" is carried as a caught ruling of its own kind
+     A root that is itself a try function is answered as called as a statement (a tested write
+     such as `if not R.Insert()` and a body that only commits or locks answer `no`); the
+     assumption is stated, not answered both ways, and digest's JSON `coverage.assumptions` labels
+     do not carry it. The refusal row names the try call, not the refused write inside it (BC's
+     message names the operation). An impact key for the refusal does not carry its verdict, so
+     a write added inside an existing try call moves no key (a new try call does). "Not raised"
+     is carried as a caught ruling of its own kind
      (`try-write-refused`), as ENG-22's clean runs are, so caught counts (digest
      `caughtErrors`) include it; the human lines name it apart. A write whose execution depends
      on data (CDO's cached access token, bug #80680) is a "may". Whether the wider value uses

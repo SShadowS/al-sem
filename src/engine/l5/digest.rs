@@ -4223,6 +4223,11 @@ pub struct DigestEntryResult {
     /// They are no COMMIT row; each is listed here with why. Sorted, each
     /// once.
     pub suppressed_commits: Vec<SuppressedCommit>,
+    /// ENG-10: the root is a `[TryFunction]` that may run a write the server
+    /// refuses inside a try call: its answer holds only for a caller that
+    /// calls it as a statement (`traps::try_root_assumption`). Set by the
+    /// literal pass; false before it.
+    pub try_root_refusal: bool,
 }
 
 /// A commit that runs on no route as a commit (B4/L16): what happens to it
@@ -6146,6 +6151,7 @@ fn digest_one_root<'i>(
             literal_dead_sites: Vec::new(),
             literal_narrowed_sites: Vec::new(),
             suppressed_commits: suppressed_commits.into_iter().collect(),
+            try_root_refusal: false,
         })
     }
 }

@@ -240,6 +240,19 @@ pub(crate) fn entry_assumption(clean_entry: bool, normal_commit: bool) -> Option
     })
 }
 
+/// ENG-10: the assumption every forward error answer of a root that is
+/// itself a `[TryFunction]` and may run a refused write rests on (prove's
+/// assumptions, explain's and digest's header). `None` otherwise.
+#[must_use]
+pub(crate) fn try_root_assumption(try_root_refusal: bool) -> Option<String> {
+    try_root_refusal.then(|| {
+        "assumes the routine's callers call it as a statement: it is a [TryFunction], and a \
+         caller that uses its return value gets an error no try call catches when the server \
+         refuses a database write, LockTable or Commit it runs (on premises by default)"
+            .to_string()
+    })
+}
+
 /// L30: whether `r` collects errors (`[ErrorBehavior(ErrorBehavior::Collect)]`):
 /// a collectible error raised under it is collected and raised when the
 /// collecting procedure ends, unless the code clears it (module doc).

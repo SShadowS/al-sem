@@ -72,7 +72,9 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// 11 (ENG-09): a checked `Codeunit.Run` commits.
 /// 12 (ENG-22): a checked `Codeunit.Run` raises its own error when a write is
 /// pending at it.
-pub const SUMMARY_SCHEMA: u32 = 12;
+/// 13 (ENG-10): a try call whose value is used raises an error when a
+/// database write inside it is refused.
+pub const SUMMARY_SCHEMA: u32 = 13;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -514,12 +516,21 @@ fn own_keys(
                     // ENG-22: a checked run's own error keys as its cone row
                     // does (`ERROR_IMPLICIT|checked-run`, `delta::cone_twin`).
                     crate::engine::l4::capability_cone::RUN_COMMIT.to_string()
+                } else if f.resource_id.as_deref()
+                    == Some(crate::engine::l4::capability_cone::WRITE_IN_TRY)
+                {
+                    // ENG-10: a try call's refusal keys as its cone row does
+                    // (`ERROR_IMPLICIT|write-in-try`).
+                    crate::engine::l4::capability_cone::WRITE_IN_TRY.to_string()
                 } else {
                     String::new()
                 };
                 let shown = match msg.split_once(':') {
                     None if msg == crate::engine::l4::capability_cone::RUN_COMMIT => {
                         " (checked run; raised if a write is pending at it)".to_string()
+                    }
+                    None if msg == crate::engine::l4::capability_cone::WRITE_IN_TRY => {
+                        " (try call; raised if a database write inside it is refused)".to_string()
                     }
                     Some(("label", n)) => format!(" (label {n})"),
                     Some(("text", h)) => format!(" (text #{})", &h[..8.min(h.len())]),

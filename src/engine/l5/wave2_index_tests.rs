@@ -1386,6 +1386,7 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
         literal_dead_sites: Vec::new(),
         literal_narrowed_sites: Vec::new(),
         suppressed_commits: Vec::new(),
+        try_root_refusal: false,
     }];
     crate::engine::l5::digest_cli::literal_reach_pass(
         &tree,
@@ -1524,6 +1525,7 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
         literal_dead_sites: Vec::new(),
         literal_narrowed_sites: Vec::new(),
         suppressed_commits: Vec::new(),
+        try_root_refusal: false,
     }];
     crate::engine::l5::digest_cli::literal_reach_pass(
         &tree,
@@ -1660,6 +1662,7 @@ fn cdo_crossing_census() {
             literal_dead_sites: Vec::new(),
             literal_narrowed_sites: Vec::new(),
             suppressed_commits: Vec::new(),
+            try_root_refusal: false,
         }];
         let started = std::time::Instant::now();
         crate::engine::l5::digest_cli::literal_reach_pass(

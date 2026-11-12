@@ -204,6 +204,30 @@ fn a_new_checked_runs_error_is_one_change() {
     );
 }
 
+/// ENG-10: a new try call's refusal is one change: its own key explains its
+/// cone row (`ERROR_IMPLICIT|write-in-try`).
+///
+/// Break: drop `cone_twin`'s `["error", "error-implicit", r]` arm → the
+/// try call's cone row is printed beside its own key.
+#[test]
+fn a_new_try_calls_refusal_is_one_change() {
+    let b = summary(&[], &[], complete());
+    let n = summary(
+        &[("error|error-implicit|write-in-try", &[site(7, "TryInsert")])],
+        &["ERROR_IMPLICIT|write-in-try", "ERROR_IMPLICIT|"],
+        complete(),
+    );
+    let (own, cone) = root_delta(&b, &n);
+    assert_eq!(
+        own.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+        vec!["error|error-implicit|write-in-try"]
+    );
+    assert_eq!(
+        cone.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+        vec!["ERROR_IMPLICIT|"]
+    );
+}
+
 /// A call the analyzed body no longer makes is removed even when the new
 /// side's cone is incomplete (the call is read off the body, not the cone);
 /// an effect key under the same coverage is only "no longer observed".

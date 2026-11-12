@@ -218,6 +218,9 @@ pub struct ProveObligations {
     /// also holds only if the callers do not call the root under
     /// `[CommitBehavior(Ignore)]` or `(Error)`.
     pub(crate) trap_assumes_normal_commit: bool,
+    /// ENG-10: the root is a `[TryFunction]` that may run a refused write
+    /// (`traps::try_root_assumption`). From the entry.
+    pub(crate) try_root_refusal: bool,
 }
 
 /// r3 §7 R1: the events a cone raises that an unloaded subscriber could
@@ -508,6 +511,7 @@ fn compute_obligations(
         suppressed_commits: entry.suppressed_commits.clone(),
         trap_assumes_clean_entry: false,
         trap_assumes_normal_commit: false,
+        try_root_refusal: entry.try_root_refusal,
     }
 }
 
@@ -2159,6 +2163,11 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
     // also rest on a `Commit()` before the run ending the write.
     if o.trap_assumes_normal_commit {
         m.insert("assumesNoCommitBehaviorAtEntry".into(), true.into());
+    }
+    // ENG-10 (additive): present only when the root is a try function that
+    // may run a refused write.
+    if o.try_root_refusal {
+        m.insert("assumesStatementCallsOnly".into(), true.into());
     }
     serde_json::Value::Object(m)
 }
@@ -3914,6 +3923,9 @@ fn assumption_sentences(o: &ProveObligations) -> Vec<String> {
         o.trap_assumes_clean_entry,
         o.trap_assumes_normal_commit,
     ));
+    out.extend(crate::engine::l5::traps::try_root_assumption(
+        o.try_root_refusal,
+    ));
     if out.is_empty() && o.assumption().is_some() {
         out.push(format!(
             "assumes no subscribers beyond those considered in {universe}; the analysis follows \
@@ -4381,6 +4393,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             suppressed_commits: Vec::new(),
             trap_assumes_clean_entry: false,
             trap_assumes_normal_commit: false,
+            try_root_refusal: false,
         };
         // G42: say WHY there is no answer (an `unknown` with no blocker read
         // like an answer and hid a mistyped id or a missing app-guid prefix):
@@ -5507,6 +5520,7 @@ mod tests {
             entry_diagnostics,
             declaration_only: false,
             suppressed_commits: Vec::new(),
+            try_root_refusal: false,
         }
     }
 
