@@ -37,6 +37,58 @@ fn speed_gate_fails_when_a_timed_call_fails() {
     assert!(!text.contains("cdo-speed: PASS"), "{text}");
 }
 
+/// TLS-25: `--rounds` outside 1 to 5 (there are 5 round routines) is refused
+/// at once, as a usage error naming the limit, before any server starts. The
+/// same setup as above: with a valid count the gate would start both servers
+/// and fail the warm-up (exit 1, "round 0"), so exit 2 and no "round 0" show
+/// the refusal came first. `--rounds 5` is the precondition: it starts.
+///
+/// Mutation (2026-11-12): drop the range check in `main` -> `--rounds 6`
+/// starts the servers, fails the warm-up on the empty workspace (exit 1);
+/// FAIL. Restored, passes.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_gate_refuses_more_rounds_than_routines() {
+    let ws = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let exe = env!("CARGO_BIN_EXE_alsem");
+    let run = |rounds: &str| {
+        let r = std::process::Command::new("python3")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+            .arg(ws.path())
+            .args([
+                "--base-exe",
+                exe,
+                "--head-exe",
+                exe,
+                "--rounds",
+                rounds,
+                "--out",
+            ])
+            .arg(out.path())
+            .output()
+            .expect("spawn python3 scripts/cdo-speed");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&r.stdout),
+            String::from_utf8_lossy(&r.stderr)
+        );
+        (r.status.code(), text)
+    };
+    let (code, text) = run("5");
+    assert_eq!(code, Some(1), "precondition: 5 rounds start: {text}");
+    assert!(text.contains("round 0"), "precondition: {text}");
+    for bad in ["6", "0"] {
+        let (code, text) = run(bad);
+        assert_eq!(code, Some(2), "--rounds {bad}: {text}");
+        assert!(text.contains("give 1 to 5"), "--rounds {bad}: {text}");
+        assert!(
+            !text.contains("round 0"),
+            "--rounds {bad}: nothing started: {text}"
+        );
+    }
+}
+
 /// `cdo-gate --summary=<run>` on a run folder written by hand (no speed
 /// phase): every test phase exited 0. With each phase passing tests, PASS and
 /// exit 0 (the precondition); with `lsp` exiting 0 on "0 passed" (a filter
