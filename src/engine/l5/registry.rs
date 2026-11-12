@@ -767,11 +767,12 @@ fn role_scope_and_sort(
         })
         .collect();
 
-    scoped.sort_by(|a, b| {
-        compare_natural(&a.detector, &b.detector)
-            .then_with(|| primary_location_key(a).cmp(&primary_location_key(b)))
-            .then_with(|| a.root_cause_key.cmp(&b.root_cause_key))
-    });
+    sort_by_detector_location_cause(
+        &mut scoped,
+        |f| &f.detector,
+        primary_location_key,
+        |f| &f.root_cause_key,
+    );
     scoped
 }
 
@@ -835,6 +836,58 @@ fn tokenize(s: &str) -> Vec<String> {
         out.push(cur);
     }
     out
+}
+
+/// TLS-27: each name's rank under [`compare_natural`]: an exact monotone image of its
+/// order, so `rank[a].cmp(&rank[b]) == compare_natural(a, b)` for every pair. Names that
+/// compare Equal without being the same string (`"d1"` and `"d01"`: their number tokens
+/// are both 1) share a rank, so a later tie-break decides between them, as before.
+pub(crate) fn natural_ranks<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> std::collections::HashMap<String, u32> {
+    let mut distinct: Vec<&str> = names.into_iter().collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    distinct.sort_by(|a, b| compare_natural(a, b));
+    let mut ranks = std::collections::HashMap::with_capacity(distinct.len());
+    let mut rank = 0u32;
+    for (i, name) in distinct.iter().enumerate() {
+        if i > 0 && compare_natural(distinct[i - 1], name) != std::cmp::Ordering::Equal {
+            rank += 1;
+        }
+        ranks.insert((*name).to_string(), rank);
+    }
+    ranks
+}
+
+/// TLS-27: the findings' order: detector by [`compare_natural`], then the primary
+/// location key, then the root-cause key. A STABLE sort, so findings tying on all three
+/// keep their order. The same order as comparing
+/// `compare_natural(detector).then(location_key.cmp).then(root_cause_key.cmp)` on every
+/// pair. But each item's keys are built once (decorate, sort, undecorate), not twice per
+/// comparison: the detector as its [`natural_ranks`] rank, the location key as its
+/// string.
+///
+/// The location key stays the STRING `"{unit}:{line}:{column}"`, compared as text. That
+/// is not the order of `(unit, line, column)` compared field by field: `"a1:…"` sorts
+/// before `"a:…"`, because `'1' < ':'`.
+pub(crate) fn sort_by_detector_location_cause<T>(
+    items: &mut Vec<T>,
+    detector: impl Fn(&T) -> &str,
+    location_key: impl Fn(&T) -> String,
+    root_cause_key: impl Fn(&T) -> &str,
+) {
+    let ranks = natural_ranks(items.iter().map(&detector));
+    let mut keyed: Vec<(u32, String, T)> = items
+        .drain(..)
+        .map(|t| (ranks[detector(&t)], location_key(&t), t))
+        .collect();
+    keyed.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| root_cause_key(&a.2).cmp(root_cause_key(&b.2)))
+    });
+    items.extend(keyed.into_iter().map(|(_, _, t)| t));
 }
 
 #[cfg(test)]
@@ -1451,5 +1504,130 @@ mod tests {
     #[test]
     fn natural_shorter_prefix_first() {
         assert_eq!(compare_natural("d4", "d4x"), Ordering::Less);
+    }
+
+    /// The names under test: real detector shapes plus the corners of
+    /// `compare_natural` (numeric-equal spellings, a numeric first token,
+    /// prefixes, the empty name).
+    const RANK_NAMES: [&str; 14] = [
+        "d10",
+        "d2",
+        "d02",
+        "d1",
+        "d01",
+        "d1a",
+        "d4x",
+        "d4",
+        "1a",
+        "a1",
+        "d",
+        "",
+        "d4-repeated-lookup-in-loop",
+        "d55-event-publish-in-loop",
+    ];
+
+    /// TLS-27: the rank is an EXACT monotone image of `compare_natural`: for
+    /// every pair, comparing ranks gives what `compare_natural` gives, Equal
+    /// included (`d1`/`d01` and `d2`/`d02` share a rank).
+    ///
+    /// DISCRIMINATION (2026-11-12): giving each distinct name its own rank
+    /// (the sorted position, no Equal sharing) fails on `"d2"` vs `"d02"`
+    /// (Greater, not Equal), and `decorated_sort_equals_the_old_comparator`
+    /// fails with it; restored, both pass.
+    #[test]
+    fn natural_ranks_are_an_exact_monotone_image_of_compare_natural() {
+        let ranks = natural_ranks(RANK_NAMES.iter().copied());
+        assert_eq!(
+            compare_natural("d01", "d1"),
+            Ordering::Equal,
+            "precondition"
+        );
+        for a in RANK_NAMES {
+            for b in RANK_NAMES {
+                assert_eq!(
+                    ranks[a].cmp(&ranks[b]),
+                    compare_natural(a, b),
+                    "{a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
+    fn located(id: &str, detector: &str, unit: &str, line: u32, cause: &str) -> Finding {
+        let mut f = test_finding(id);
+        f.detector = detector.to_string();
+        f.primary_location.source_unit_id = unit.to_string();
+        f.primary_location.start_line = line;
+        f.root_cause_key = cause.to_string();
+        f
+    }
+
+    /// TLS-27, the production call site: `role_scope_and_sort` orders by the
+    /// detector's natural order (`d02` ties `d2`; `d10` after both), then the
+    /// location key AS TEXT (`"a1:1:1"` before `"a:1:1"`, because `'1' <
+    /// ':'`; a field-wise `(unit, line, column)` order would put `a` first),
+    /// then the root-cause key, and keeps input order on a full tie (`t1`
+    /// before `t2`). The expected order is stated by hand.
+    ///
+    /// DISCRIMINATION (2026-11-12): a field-wise location key
+    /// (`"{unit}\0{line:010}\0{column:010}"`) fails (`a` before `a1`);
+    /// restored, passes.
+    #[test]
+    fn findings_sort_by_natural_detector_then_location_text_then_cause() {
+        let input = vec![
+            located("late", "d10", "a", 1, "k"),
+            located("a-k2", "d2", "a", 1, "k2"),
+            located("t1", "d2", "b", 1, "k"),
+            located("a1", "d02", "a1", 1, "k"),
+            located("a-k1", "d2", "a", 1, "k1"),
+            located("t2", "d2", "b", 1, "k"),
+        ];
+        let ids: Vec<String> = role_scope_and_sort(input, &std::collections::HashMap::new())
+            .into_iter()
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(ids, ["a1", "a-k1", "a-k2", "t1", "t2", "late"]);
+    }
+
+    /// TLS-27: the decorated sort gives the order the old comparator gave
+    /// (`compare_natural` on the detector, then the location key's string,
+    /// then the root-cause key, a stable `sort_by` over those three), on
+    /// 2,000 items with many full ties, so input order decides among them.
+    ///
+    /// DISCRIMINATION (2026-11-12): an unstable sort (`sort_unstable_by`) in
+    /// `sort_by_detector_location_cause` fails (tied items reordered);
+    /// restored, passes.
+    #[test]
+    fn decorated_sort_equals_the_old_comparator() {
+        // (detector, location key, root-cause key, input index)
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n) as usize
+        };
+        let units = ["a", "a1", "b", "u0", "u10", "u2"];
+        let items: Vec<(&str, String, String, usize)> = (0..2000)
+            .map(|i| {
+                let d = RANK_NAMES[next(RANK_NAMES.len() as u64)];
+                let loc = format!("{}:{}:{}", units[next(6)], next(12), next(3));
+                (d, loc, format!("k{}", next(3)), i)
+            })
+            .collect();
+        let mut old = items.clone();
+        old.sort_by(|a, b| {
+            compare_natural(a.0, b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        let mut new = items;
+        sort_by_detector_location_cause(&mut new, |t| t.0, |t| t.1.clone(), |t| &t.2);
+        let ties = old
+            .windows(2)
+            .filter(|w| (w[0].0, &w[0].1, &w[0].2) == (w[1].0, &w[1].1, &w[1].2))
+            .count();
+        assert!(ties > 50, "precondition: many full ties ({ties})");
+        assert_eq!(new, old);
     }
 }
