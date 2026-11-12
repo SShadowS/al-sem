@@ -458,3 +458,44 @@ fn beyond_a_crossing_the_two_kinds_of_commit_stay_apart() {
         "under Ignore only the run's commit is left: {r}"
     );
 }
+
+/// The human outputs name the run's commit as such: its anchor is the
+/// `Codeunit.Run` (where BC commits), not a `Commit()`.
+#[test]
+fn the_human_outputs_name_a_checked_runs_commit() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let line = line_of("Codeunit.Run(", "procedure Checked(");
+    let want = format!("COMMIT (checked Codeunit.Run) at ws:src/cr.al:{line}");
+    for args in [
+        vec![
+            "prove",
+            ws,
+            "CR Caller::Checked",
+            "may-commit",
+            "--format",
+            "human",
+        ],
+        vec![
+            "explain",
+            ws,
+            "--routine",
+            "CR Caller::Checked",
+            "--format",
+            "human",
+        ],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(args.iter().copied().chain(["--single-app"]))
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("spawn alsem");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains(&want), "{} wants `{want}`:\n{text}", args[0]);
+        assert!(
+            !text.contains(&format!("COMMIT at ws:src/cr.al:{line}")),
+            "{}: no plain COMMIT at the run:\n{text}",
+            args[0]
+        );
+    }
+}
