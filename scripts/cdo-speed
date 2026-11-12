@@ -24,7 +24,8 @@ alive for the whole run, asked the same calls in turn:
   warm-up (round 0, one sample per call): the first ask builds the CDO model
     (`build`), then one call of each tool builds the per-revision artifacts and the
     test universe (`warm-tests`);
-  rounds 1..N (default 3): one CDO routine per round, a different one each round
+  rounds 1..N (default 3, at most 5, as many as ROUND_ROUTINES has; a larger --rounds is
+    refused before anything starts): one CDO routine per round, a different one each round
     (a resident answer is kept, so asking the same routine again measures
     nothing), asked prove may-commit, explain, digest, query effects, tests and
     impact. Round 1 is RunReportID, the routine of the round-4 slowdown.
@@ -467,13 +468,22 @@ def main():
     ap.add_argument("--head", help="a commit to time instead of the working tree")
     ap.add_argument("--base-exe", help="a built base binary (noise measurements; no build)")
     ap.add_argument("--head-exe", help="a built head binary (noise measurements; no build)")
-    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--rounds", type=int, default=3,
+                    help=f"timed rounds, 1 to {len(ROUND_ROUTINES)} (one new routine per round; "
+                         "default 3)")
     ap.add_argument("--max-rounds", type=int, default=len(ROUND_ROUTINES))
     ap.add_argument("--out", help="the folder for outputs and speed.json")
     ap.add_argument("--build-only", action="store_true", help="build both binaries, time nothing")
     ap.add_argument("--no-build", action="store_true",
                     help="the working tree's release-fast alsem is already built")
     args = ap.parse_args()
+    # TLS-25: each round times a routine no round timed before, so there are at most as many
+    # rounds as routines. Refused here, before anything is built or started: a run asked for
+    # more once timed the warm-up and every round (minutes on CDO), then stopped with an
+    # IndexError and wrote no speed.json.
+    if not 1 <= args.rounds <= len(ROUND_ROUTINES):
+        ap.error(f"--rounds {args.rounds}: give 1 to {len(ROUND_ROUTINES)}, one round per "
+                 f"routine in ROUND_ROUTINES (a routine timed again measures nothing new)")
     args.max_rounds = min(max(args.max_rounds, args.rounds), len(ROUND_ROUTINES))
 
     if not sys.platform.startswith("linux"):
