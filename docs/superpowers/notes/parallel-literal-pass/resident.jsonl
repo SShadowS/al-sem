@@ -1,0 +1,15 @@
+{"config": "w1", "step": "warm", "wall_s": 36.7, "peak_mib": 5587.4, "exits": [0]}
+{"config": "w1", "step": "witness", "wall_s": 3.7, "peak_mib": 5892.2, "exits": [0]}
+{"config": "w1", "step": "witness x2", "wall_s": 3.9, "peak_mib": 5989.0, "exits": [0, 0]}
+{"config": "w1", "step": "trees", "wall_s": 206.3, "peak_mib": 6903.8, "exits": [0]}
+{"config": "w1", "step": "trees x2", "wall_s": 381.6, "peak_mib": 7928.6, "exits": [0, 0]}
+{"config": "w8", "step": "warm", "wall_s": 33.6, "peak_mib": 5617.6, "exits": [0]}
+{"config": "w8", "step": "witness", "wall_s": 4.3, "peak_mib": 5924.3, "exits": [0]}
+{"config": "w8", "step": "witness x2", "wall_s": 3.9, "peak_mib": 6020.1, "exits": [0, 0]}
+{"config": "w8", "step": "trees", "wall_s": 140.1, "peak_mib": 6890.0, "exits": [0]}
+{"config": "w8", "step": "trees x2", "wall_s": 263.6, "peak_mib": 8088.8, "exits": [0, 0]}
+{"config": "lowmem", "step": "warm", "wall_s": 31.5, "peak_mib": 4590.9, "exits": [0]}
+{"config": "lowmem", "step": "witness", "wall_s": 3.0, "peak_mib": 4875.8, "exits": [0]}
+{"config": "lowmem", "step": "witness x2", "wall_s": 3.3, "peak_mib": 4969.3, "exits": [0, 0]}
+{"config": "lowmem", "step": "trees", "wall_s": 194.1, "peak_mib": 5561.0, "exits": [0]}
+{"config": "lowmem", "step": "trees x2", "wall_s": 18.2, "peak_mib": 5614.5, "exits": [-1, -1]}
