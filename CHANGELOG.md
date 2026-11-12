@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[TryFunction]` procedures may write (the PDF service's token cache is CDO bug #80680, guarded
   by a token warm-up the engine cannot see).
 
+### Changed (TLS-21: impact's up walk runs roots in parallel)
+
+- **One-shot `alsem impact` (and `--part up`) walks the up part over 8 roots at once instead of
+  one.** It uses the same worker count and thread pool as TLS-22's literal pass
+  (`AL_SEM_REACH_WORKERS` for measurement). The output is byte-identical at any worker count, and
+  equal to master's on a fixture (`tests/fixtures/up-parallel`). The resident engine (`alsem mcp`,
+  `engine-host`) still walks one root at a time. A traced CDO `impact --diff` spent 93 % of its
+  46 s up part in the per-root walks and 0.2 % in the union walk. Measured times and memory:
+  TBD (measurement pending).
+- **`impact-up`'s `cost.scratchBytes` now sums every walk scratch** (one per walk in flight). It
+  grows with the worker count and can differ between runs, like `walkMs`. The resident-vs-CLI
+  comparison test now blanks it too. `cost.walksUs` is still the sum of each walk's own time, so
+  with several workers it is larger than the wall time. Spec:
+  `docs/superpowers/specs/2026-11-12-parallel-up-walk.md`.
+
 ### Changed (TLS-09: the gate's optimized build is `release-fast`)
 
 - **`scripts/ci-steps build` and `perf-bounds` build with `--profile release-fast` instead of

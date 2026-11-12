@@ -1599,7 +1599,7 @@ mod tests {
             &mut WalkScratch::default(),
             &mut v,
         );
-        summary(&v, g, &mut Captions::new(HashMap::new()))
+        summary(&v, g, &Captions::new(HashMap::new()))
     }
 
     /// Round-2 r2 §2.1 steps 3-4 (W2, replacing W1's mask predicate): the
