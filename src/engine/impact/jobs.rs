@@ -606,6 +606,7 @@ impl Job for UpJob<'_> {
         &self,
         _: SideIx,
         g: Result<&crate::program::impact_graph::SitedGraph, &str>,
+        workers: &crate::engine::l5::digest_cli::ReachWorkers,
     ) -> Result<SideDoc, JobFailure> {
         let g = match g {
             Ok(g) => g,
@@ -615,7 +616,7 @@ impl Job for UpJob<'_> {
                 ))));
             }
         };
-        let mut captions = super::up::Captions::new(self.texts.clone());
+        let captions = super::up::Captions::new(self.texts.clone());
         let v = super::up::up(
             g,
             &super::up::UpArgs {
@@ -623,8 +624,9 @@ impl Job for UpJob<'_> {
                 assume_no_dependents: self.assume_no_dependents,
                 keep: super::up::Keep::new(self.detail),
                 cancel: None,
+                workers: workers.clone(),
             },
-            &mut captions,
+            &captions,
         );
         Ok(SideDoc::new(Ok::<Value, String>(v)))
     }

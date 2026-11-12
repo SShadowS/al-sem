@@ -1,8 +1,9 @@
 //! **Who reaches each changed routine** (agent-tasks design §8.4 step 2): R0's
 //! reverse walks over the production universe's sited graph.
 //!
-//! - Per root, [`walk_one`] with one scratch reused across roots and a
-//!   visitor that keeps COUNTS and the first few witnesses only
+//! - Per root, [`walk_one`] (TLS-21: several roots at once on the one-shot
+//!   CLI, each walk on a scratch from a stash of one per walk in flight) and
+//!   a visitor that keeps COUNTS and the first few witnesses only
 //!   ([`RootUp`]): its direct callers (explain's `callers:` definition,
 //!   [`direct_callers`], with each caller's first call site), ancestors by
 //!   tier, entries by kind (page actions by caption), event publishers that
@@ -589,13 +590,51 @@ impl ConeVisitor for Up<'_> {
 }
 
 /// Page-action captions, read from the analyzed source (the files of the
-/// shown entries only, each parsed once).
+/// shown entries only). Shared by the up walk's tasks (TLS-21): a file is
+/// parsed outside the lock, and the first result inserted is kept. Two tasks
+/// that miss the same file at once may both parse it; a value depends only on
+/// its file, so either result is the same.
 pub struct Captions {
     /// Workspace-relative path -> its text.
     texts: HashMap<String, Arc<str>>,
     /// Unit -> per object (lowercased name): its actions `(name lc, caption,
     /// first line, last line)` (0-based).
-    parsed: HashMap<String, Vec<ObjectActions>>,
+    parsed: std::sync::Mutex<HashMap<String, Arc<Vec<ObjectActions>>>>,
+    #[cfg(test)]
+    race: Option<CaptionRace>,
+}
+
+/// Tests: a forced race on `unit`, in two steps. A second task to ask for
+/// `unit` waits, before it reads the cache, until the first task has missed
+/// and is about to parse (`first_parsing`). The first task is then held
+/// between its parse and its insert until the second has read the cache
+/// (`lookups`). So the second read always falls inside the first task's
+/// miss-to-insert window. A timeout in either step sets `timed_out`, so a
+/// test can tell the race did not happen.
+#[cfg(test)]
+pub(crate) struct CaptionRace {
+    pub(crate) unit: String,
+    pub(crate) timeout: std::time::Duration,
+    pub(crate) arrivals: std::sync::atomic::AtomicUsize,
+    pub(crate) first_parsing: std::sync::atomic::AtomicBool,
+    pub(crate) lookups: std::sync::atomic::AtomicUsize,
+    pub(crate) timed_out: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+impl CaptionRace {
+    /// Wait until `done` holds or the timeout passes (then `timed_out`).
+    fn wait(&self, done: impl Fn() -> bool) {
+        let until = std::time::Instant::now() + self.timeout;
+        while !done() {
+            if std::time::Instant::now() >= until {
+                self.timed_out
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
 
 /// One action: `(name lc, caption, first line, last line)` (0-based).
@@ -608,18 +647,75 @@ impl Captions {
     pub fn new(texts: HashMap<String, Arc<str>>) -> Captions {
         Captions {
             texts,
-            parsed: HashMap::new(),
+            parsed: std::sync::Mutex::default(),
+            #[cfg(test)]
+            race: None,
         }
     }
 
-    fn actions(&mut self, unit: &str) -> &[ObjectActions] {
+    /// Tests: the cache with a [`CaptionRace`] on `unit`.
+    #[cfg(test)]
+    pub(crate) fn with_race(mut self, unit: &str, timeout: std::time::Duration) -> Captions {
+        self.race = Some(CaptionRace {
+            unit: unit.to_string(),
+            timeout,
+            arrivals: std::sync::atomic::AtomicUsize::new(0),
+            first_parsing: std::sync::atomic::AtomicBool::new(false),
+            lookups: std::sync::atomic::AtomicUsize::new(0),
+            timed_out: std::sync::atomic::AtomicBool::new(false),
+        });
+        self
+    }
+
+    /// Tests: the race this cache was given.
+    #[cfg(test)]
+    pub(crate) fn race(&self) -> Option<&CaptionRace> {
+        self.race.as_ref()
+    }
+
+    /// Tests: how many files the cache holds.
+    #[cfg(test)]
+    pub(crate) fn cached(&self) -> usize {
+        self.parsed.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    fn actions(&self, unit: &str) -> Arc<Vec<ObjectActions>> {
         // Units and local names spell a workspace file `ws:<rel>` or `<rel>`.
         let unit = unit.strip_prefix("ws:").unwrap_or(unit);
-        if !self.parsed.contains_key(unit) {
-            let v = self
-                .texts
+        let lock = || self.parsed.lock().unwrap_or_else(|p| p.into_inner());
+        // Tests: a later task waits for the first one's miss before reading.
+        #[cfg(test)]
+        let race = self.race.as_ref().filter(|r| r.unit == unit);
+        #[cfg(test)]
+        if let Some(r) = race
+            && r.arrivals.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        {
+            r.wait(|| r.first_parsing.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        let hit = lock().get(unit).map(Arc::clone);
+        // Tests: a lookup counts once the cache was read; the first one that
+        // missed is held below.
+        #[cfg(test)]
+        let first_miss = race.and_then(|r| {
+            let k = r.lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (hit.is_none() && k == 0).then_some(r)
+        });
+        if let Some(v) = hit {
+            return v;
+        }
+        #[cfg(test)]
+        if let Some(r) = first_miss {
+            r.first_parsing
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        // Parsed outside the lock: tasks needing other files do not wait.
+        let v = Arc::new(
+            self.texts
                 .get(unit)
                 .map(|t| {
+                    let _s = crate::engine::perf_trace::span("impact", "impact.up.caption_parse");
+                    // Parses, not files: two tasks may parse the same file.
+                    crate::engine::perf_trace::counter_delta("impact.up.caption_parses", 1);
                     let f = al_syntax::parse(t);
                     f.objects
                         .iter()
@@ -641,17 +737,20 @@ impl Captions {
                         })
                         .collect()
                 })
-                .unwrap_or_default();
-            self.parsed.insert(unit.to_string(), v);
+                .unwrap_or_default(),
+        );
+        #[cfg(test)]
+        if let Some(r) = first_miss {
+            r.wait(|| r.lookups.load(std::sync::atomic::Ordering::SeqCst) >= 2);
         }
-        &self.parsed[unit]
+        Arc::clone(lock().entry(unit.to_string()).or_insert(v))
     }
 
     /// The `(action name, caption)` of a page-action entry: an action's
     /// trigger node (its enclosing member names the action), or a page
     /// reached over an action's `RunObject` site (the site's line names it).
     fn of(
-        &mut self,
+        &self,
         g: &SitedGraph,
         n: NodeIx,
         site: Option<SiteIx>,
@@ -960,7 +1059,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
 }
 
 /// What one walk found, as JSON.
-fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
+fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
     let (mut local, mut dep, mut open) = (0usize, 0usize, 0usize);
     for (n, b) in &up.best {
         if up.root_nodes.contains(n) || g.flags(*n) & flag::HUB != 0 {
@@ -1132,20 +1231,138 @@ pub struct UpArgs<'a> {
     pub roots: &'a [String],
     pub assume_no_dependents: bool,
     pub keep: Keep,
-    pub cancel: Option<&'a dyn Fn() -> bool>,
+    /// Shared by the tasks walking at once, so `Sync`.
+    pub cancel: Option<&'a (dyn Fn() -> bool + Sync)>,
+    /// How many roots walk at once (TLS-21), stated by the route.
+    pub workers: crate::engine::l5::digest_cli::ReachWorkers,
 }
 
-/// The up part's JSON over `g`.
-#[must_use]
-pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
-    let opts = WalkOptions {
+/// One root's result (TLS-21): its row and what its walk cost.
+struct RootOut {
+    row: Value,
+    states: usize,
+    visitor_bytes: usize,
+    walk_us: u64,
+}
+
+/// The scratches of the walks in flight (TLS-21): a walk takes one, or makes
+/// one when none is free, and gives it back, so no more exist than walks in
+/// flight. Each walk resets its scratch, so what one walk left never reaches
+/// another's answer.
+#[derive(Default)]
+struct Scratches(std::sync::Mutex<Vec<WalkScratch>>);
+
+impl Scratches {
+    fn take(&self, _workers: &crate::engine::l5::digest_cli::ReachWorkers) -> WalkScratch {
+        if let Some(s) = self.0.lock().unwrap_or_else(|p| p.into_inner()).pop() {
+            return s;
+        }
+        #[cfg(test)]
+        if let Some(p) = _workers.probe() {
+            p.scratches_made
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        WalkScratch::default()
+    }
+
+    fn put(&self, s: WalkScratch) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).push(s);
+    }
+}
+
+/// A walk's options from the up part's arguments. Each task builds its own:
+/// `WalkOptions` holds a plain `&dyn Fn` and is not `Sync`.
+fn walk_options<'a>(args: &UpArgs<'a>) -> WalkOptions<'a> {
+    WalkOptions {
         assume_no_dependents: args.assume_no_dependents,
-        cancel: args.cancel,
+        cancel: args.cancel.map(|c| c as &dyn Fn() -> bool),
         ..Default::default()
-    };
-    let mut scratch = WalkScratch::default();
-    let mut all_nodes: Vec<NodeIx> = Vec::new();
-    let mut roots_out = Vec::with_capacity(args.roots.len());
+    }
+}
+
+/// One root's walk over its nodes (its `#if` arms walk together) and its row.
+fn walk_root(
+    g: &SitedGraph,
+    args: &UpArgs<'_>,
+    shared: &Shared<'_>,
+    captions: &Captions,
+    scratches: &Scratches,
+    id: &str,
+    nodes: &[NodeIx],
+) -> RootOut {
+    let opts = walk_options(args);
+    let mut v = Up::new(g, args.keep, nodes, shared);
+    let mut scratch = scratches.take(&args.workers);
+    let t = std::time::Instant::now();
+    if nodes.len() == 1 {
+        walk_one(g, nodes[0], &opts, &mut scratch, &mut v);
+    } else {
+        walk_multi(g, nodes, &opts, &mut scratch, &mut v);
+    }
+    let walk_us = t.elapsed().as_micros() as u64;
+    scratches.put(scratch);
+    let mut s = summary(&v, g, captions);
+    s["stableId"] = json!(id);
+    s["status"] = json!("walked");
+    s["display"] = json!(display(g, nodes[0]));
+    s["nodes"] = json!(nodes.len());
+    s["callers"] = callers_json(g, nodes, args.keep.per_list);
+    s["nearestAncestors"] = json!(
+        v.ancestors
+            .iter()
+            .filter_map(|&n| {
+                g.stable_id(n).map(|id| {
+                    json!({"stableId": id, "display": display(g, n),
+                           "hops": v.best.get(&n).map(|b| b.hops)})
+                })
+            })
+            .collect::<Vec<_>>()
+    );
+    RootOut {
+        row: s,
+        states: v.states,
+        visitor_bytes: v.bytes(),
+        walk_us,
+    }
+}
+
+/// `/proc/self/status`'s `key` line in KiB (Linux).
+fn status_kib(key: &str) -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = s.lines().find(|l| l.starts_with(key))?;
+    line[key.len()..]
+        .trim_start_matches(':')
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// TLS-21, measurement only: the up walk's own memory window. Resets the
+/// process's peak mark (`5` into `/proc/self/clear_refs`, Linux) and returns
+/// the resident size at the start, in KiB. `None` (nothing reported) unless
+/// tracing is on AND the route asked for it ([`ReachWorkers::up_window`]: a
+/// one-shot run of a binary started with `AL_SEM_UP_WALK_WINDOW=1`, never a
+/// resident revision, whose memory budget reads the same mark), or when the
+/// reset fails. The reset also resets what `ru_maxrss` and the batch census
+/// report, so such a run's process peak is not the command's.
+///
+/// [`ReachWorkers::up_window`]: crate::engine::l5::digest_cli::ReachWorkers::up_window
+fn walk_window_start(workers: &crate::engine::l5::digest_cli::ReachWorkers) -> Option<u64> {
+    if !workers.up_window()
+        || !crate::engine::perf_trace::enabled(crate::engine::perf_trace::Detail::Stages)
+    {
+        return None;
+    }
+    std::fs::write("/proc/self/clear_refs", "5").ok()?;
+    status_kib("VmRSS")
+}
+
+/// The up part's JSON over `g`. The walked roots run `args.workers` at a time
+/// (TLS-21: the one-shot CLI 8 capped by the cores, a resident revision 1);
+/// rows keep root order.
+#[must_use]
+pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
     let started = std::time::Instant::now();
     // Every changed routine's nodes (each `#if` arm, symbol-only copies
     // too): their entries are left out of both sides of every walk's share.
@@ -1157,59 +1374,135 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
             .flat_map(|id| g.nodes_with_stable_id(id))
             .collect(),
     );
+    // After the entry inventory's first build: the window holds the walks.
+    let window = walk_window_start(&args.workers);
+    // Each root's nodes, in root order; empty: not in the graph.
+    let roots: Vec<(&String, Vec<NodeIx>)> = args
+        .roots
+        .iter()
+        .map(|id| {
+            let nodes = g
+                .nodes_with_stable_id(id)
+                .into_iter()
+                .filter(|&n| g.flags(n) & flag::SYMBOL_ONLY == 0)
+                .collect();
+            (id, nodes)
+        })
+        .collect();
+    let mut all_nodes: Vec<NodeIx> = roots.iter().flat_map(|(_, n)| n.clone()).collect();
+    let scratches = Scratches::default();
+    #[cfg(test)]
+    let first_walked = roots.iter().position(|(_, n)| !n.is_empty());
+    #[cfg(test)]
+    let walked = roots.iter().filter(|(_, n)| !n.is_empty()).count();
+    let task = |(_i, (id, nodes)): (usize, &(&String, Vec<NodeIx>))| -> RootOut {
+        if nodes.is_empty() {
+            return RootOut {
+                row: json!({"stableId": id, "status": "not-in-graph"}),
+                states: 0,
+                visitor_bytes: 0,
+                walk_us: 0,
+            };
+        }
+        #[cfg(test)]
+        let _in = args.workers.probe().map(|p| {
+            use std::sync::atomic::Ordering::SeqCst;
+            p.up_tasks.fetch_add(1, SeqCst);
+            p.pool_threads
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(rayon::current_num_threads());
+            // In flight first, so a held first root counts while it waits.
+            let in_flight = p.enter();
+            let hold = *p.hold_first_root.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(timeout) = hold
+                && Some(_i) == first_walked
+            {
+                let until = std::time::Instant::now() + timeout;
+                while p.up_done.load(SeqCst) + 1 < walked {
+                    if std::time::Instant::now() >= until {
+                        p.first_root_timed_out.store(true, SeqCst);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            in_flight
+        });
+        let out = walk_root(g, args, &shared, captions, &scratches, id, nodes);
+        #[cfg(test)]
+        if let Some(p) = args.workers.probe() {
+            p.up_done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        out
+    };
+    let outs: Vec<RootOut> = {
+        let _s = crate::engine::perf_trace::span("impact", "impact.up.roots");
+        let n = args.workers.count();
+        // Serial when asked, and from inside a rayon worker: there `install`
+        // would let the blocked worker run other jobs while it waits (the
+        // literal pass's reason, TLS-22); such a caller is parallel already.
+        let in_rayon = n > 1 && rayon::current_thread_index().is_some();
+        if in_rayon {
+            crate::engine::perf_trace::counter_delta("impact.up.serial_in_rayon", 1);
+        }
+        if n <= 1 || in_rayon {
+            roots.iter().enumerate().map(task).collect()
+        } else {
+            use rayon::prelude::*;
+            // One root per task: per-root cost is uneven, work stealing
+            // balances it; an indexed collect keeps root order.
+            crate::engine::l5::digest_cli::reach_pool(n).install(|| {
+                roots
+                    .par_iter()
+                    .enumerate()
+                    .with_max_len(1)
+                    .map(task)
+                    .collect()
+            })
+        }
+    };
     let mut states = 0usize;
-    // The largest visitor any one walk held (one is alive at a time).
+    // The largest visitor of any one walk.
     let mut visitor_bytes = 0usize;
     let mut walks_us = 0u64;
-    for id in args.roots {
-        let nodes: Vec<NodeIx> = g
-            .nodes_with_stable_id(id)
-            .into_iter()
-            .filter(|&n| g.flags(n) & flag::SYMBOL_ONLY == 0)
-            .collect();
-        if nodes.is_empty() {
-            roots_out.push(json!({"stableId": id, "status": "not-in-graph"}));
-            continue;
-        }
-        all_nodes.extend(&nodes);
-        let mut v = Up::new(g, args.keep, &nodes, &shared);
-        let t = std::time::Instant::now();
-        // One root's nodes (its `#if` arms) walk together.
-        if nodes.len() == 1 {
-            walk_one(g, nodes[0], &opts, &mut scratch, &mut v);
-        } else {
-            walk_multi(g, &nodes, &opts, &mut scratch, &mut v);
-        }
-        walks_us += t.elapsed().as_micros() as u64;
-        states += v.states;
-        visitor_bytes = visitor_bytes.max(v.bytes());
-        let mut s = summary(&v, g, captions);
-        s["stableId"] = json!(id);
-        s["status"] = json!("walked");
-        s["display"] = json!(display(g, nodes[0]));
-        s["nodes"] = json!(nodes.len());
-        s["callers"] = callers_json(g, &nodes, args.keep.per_list);
-        s["nearestAncestors"] = json!(
-            v.ancestors
-                .iter()
-                .filter_map(|&n| {
-                    g.stable_id(n).map(|id| {
-                        json!({"stableId": id, "display": display(g, n),
-                                                               "hops": v.best.get(&n).map(|b| b.hops)})
-                    })
-                })
-                .collect::<Vec<_>>()
-        );
-        roots_out.push(s);
+    let mut roots_out = Vec::with_capacity(outs.len());
+    for o in outs {
+        states += o.states;
+        visitor_bytes = visitor_bytes.max(o.visitor_bytes);
+        walks_us += o.walk_us;
+        roots_out.push(o.row);
     }
     all_nodes.sort_unstable();
     all_nodes.dedup();
     let mut u = Up::new(g, args.keep, &all_nodes, &shared);
+    // One scratch for the union walk; the idle ones go first (their bytes
+    // still count: the per-root pass held them).
+    let mut idle = scratches.0.into_inner().unwrap_or_else(|p| p.into_inner());
+    let mut scratch = idle.pop().unwrap_or_default();
+    let idle_bytes: usize = idle.iter().map(WalkScratch::bytes).sum();
+    drop(idle);
     let t = std::time::Instant::now();
-    let ustats = walk_multi(g, &all_nodes, &opts, &mut scratch, &mut u);
+    let ustats = {
+        let _s = crate::engine::perf_trace::span("impact", "impact.up.union_walk");
+        walk_multi(g, &all_nodes, &walk_options(args), &mut scratch, &mut u)
+    };
     walks_us += t.elapsed().as_micros() as u64;
+    // Every scratch's capacity: the scratch memory the pass held.
+    let scratch_bytes = idle_bytes + scratch.bytes();
+    drop(scratch);
     visitor_bytes = visitor_bytes.max(u.bytes());
-    let union = summary(&u, g, captions);
+    let union = {
+        let _s = crate::engine::perf_trace::span("impact", "impact.up.union_summary");
+        summary(&u, g, captions)
+    };
+    crate::engine::perf_trace::counter("impact.up.scratch_bytes", scratch_bytes as u64);
+    if let Some(start) = window
+        && let Some(peak) = status_kib("VmHWM")
+    {
+        crate::engine::perf_trace::counter("impact.up.rss_start_mb", start / 1024);
+        crate::engine::perf_trace::counter("impact.up.peak_mb", peak / 1024);
+    }
     json!({
         "schema": SCHEMA,
         "version": 1,
@@ -1226,12 +1519,20 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &mut Captions) -> Value {
         "cost": {"perRootStates": states, "unionStates": ustats.states,
                  "walkMs": started.elapsed().as_millis() as u64,
                  // The walks alone (per root and the union), without the
-                 // summaries and captions: the up-walk phase's own time.
+                 // summaries and captions: the sum of each walk's own time,
+                 // so more than the wall time when roots walk at once.
                  "walksUs": walks_us,
-                 "scratchBytes": scratch.bytes(), "visitorBytes": visitor_bytes,
+                 // Every scratch's capacity (one per walk in flight, TLS-21):
+                 // varies with the worker count and between runs, a
+                 // measurement like `walkMs`, not part of the answer.
+                 "scratchBytes": scratch_bytes, "visitorBytes": visitor_bytes,
                  "inventoryBytes": shared.inv.bytes()},
     })
 }
+
+#[cfg(test)]
+#[path = "up_par_tests.rs"]
+pub(crate) mod up_par_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1358,7 +1659,7 @@ mod tests {
             &mut WalkScratch::default(),
             &mut v,
         );
-        summary(&v, g, &mut Captions::new(HashMap::new()))
+        summary(&v, g, &Captions::new(HashMap::new()))
     }
 
     /// Round-2 r2 §2.1 steps 3-4 (W2, replacing W1's mask predicate): the

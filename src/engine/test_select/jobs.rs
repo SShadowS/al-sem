@@ -271,6 +271,7 @@ impl Job for SelectJob<'_> {
         &self,
         _: SideIx,
         g: Result<&crate::program::impact_graph::SitedGraph, &str>,
+        _: &crate::engine::l5::digest_cli::ReachWorkers,
     ) -> Result<SideDoc, JobFailure> {
         let g = match g {
             Ok(g) => g,

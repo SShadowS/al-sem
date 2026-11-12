@@ -324,6 +324,7 @@ mod cli_temp_blob_not_file;
 mod cli_tests_selection;
 mod cli_this_argument;
 mod cli_typed_run_declared_procedure;
+mod cli_up_parallel;
 mod cli_update_baseline_write;
 mod cli_variant_type_tests;
 mod cli_workspace_fingerprint_closure;
