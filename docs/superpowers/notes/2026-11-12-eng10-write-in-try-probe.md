@@ -38,6 +38,29 @@ failure with another text is BC's own error, which nothing caught.
 | T10 `if Codeunit.Run(Writer) then;` inside the try (Writer's `OnRun` inserts) | the run returns false and catches the refusal ("…'INSERT' is not allowed…" is the last error); the try returns true |
 | T11 `Codeunit.Run(Writer);` inside the try (unchecked) | **not caught**, the same error, raised in Writer's `OnRun` |
 
+Second run, same day (review: shapes the first run did not cover):
+
+| Scenario | Outcome |
+|---|---|
+| T13 `Ok := TryTakes(InsertReturning())`: the write is in the try call's argument | **not caught**: "…'INSERT' is not allowed inside the call to 'RootMethodScope'…", raised in `InsertReturning` |
+| T14 `Ok := TryOuter()`, whose body is `if TryInsert() then;` | **not caught** (an outer used try does not catch it either) |
+| T15 `Ok := TryAssertWrite()`, whose body is `asserterror DoInsert();` | caught by `asserterror`; the try returns true |
+| T16 `Ok := TryRunsInnerTry()`, whose body is `if Codeunit.Run(Inner) then;`, `Inner` does `Ok := TryW()` and `TryW` inserts | caught by the checked run; the outer try returns true |
+| T17 `TryOuter();` (result not used) around `if TryInsert() then;` | **not caught** ("…inside the call to 'T17_UnusedTry_InnerUsedTryWrites'…"): the inner used try is refused as before |
+
+Third run, same day (review: which uses of the value make it a try call for the write):
+
+| Scenario | Outcome |
+|---|---|
+| T18 `exit(TryInsert())` (in a helper whose result is assigned) | **not caught**: "…'INSERT' is not allowed inside the call to 'T18_ExitTry_Insert'…" |
+| T19 `TakesBool(TryInsert())`: the value as an argument | **not caught**, the same error |
+| T20 `Ok := AlwaysTrue() and TryInsert()` | **not caught**, the same error |
+| T02 (again) `TryInsert();` as a statement | ok, the row is written |
+
+So for the write refusal every use of the value counts as a try call; only a call in statement
+position is ordinary. (Whether those wider shapes also CATCH an `Error()` was not measured; the
+trap rule keeps reading only `Ok :=` and whole conditions, which is the safe side for catching.)
+
 So: with the result used, a database write (and `LockTable`, `Commit()`) anywhere the try call
 reaches raises an error that the try call does **not** catch; a checked `Codeunit.Run` between
 them catches it as it catches any error. With the result not used the call is ordinary and the
@@ -343,6 +366,165 @@ codeunit 50942 "WT Probe Test"
         Codeunit.Run(Codeunit::"WT Writer");
     end;
 }
+```
+
+Second run: add this codeunit before codeunit 50942, and these tests and helpers inside it.
+
+```al
+codeunit 50943 "WT Inner Try"
+{
+    trigger OnRun()
+    var
+        Ok: Boolean;
+    begin
+        Ok := TryW();
+        Error('INNER ok=%1 err=%2', Ok, GetLastErrorText());
+    end;
+
+    [TryFunction]
+    local procedure TryW()
+    var
+        R: Record "WT Row";
+    begin
+        R.K := 6;
+        R.Insert();
+    end;
+}
+```
+
+```al
+    [Test]
+    procedure T13_UsedTry_WriteInArgument()
+    var
+        Ok: Boolean;
+    begin
+        Seed();
+        ClearLastError();
+        Ok := TryTakes(InsertReturning());
+        Measure('T13 used try, write in its argument', Ok);
+    end;
+
+    [Test]
+    procedure T14_OuterUsedTry_InnerUsedTryWrites()
+    var
+        Ok: Boolean;
+    begin
+        Seed();
+        ClearLastError();
+        Ok := TryOuter();
+        Measure('T14 outer used try around an inner used try that writes', Ok);
+    end;
+
+    [Test]
+    procedure T15_UsedTry_AsserterrorAroundWrite()
+    var
+        Ok: Boolean;
+    begin
+        Seed();
+        ClearLastError();
+        Ok := TryAssertWrite();
+        Measure('T15 used try, asserterror around the write', Ok);
+    end;
+
+    [Test]
+    procedure T16_OuterTry_CheckedRun_InnerTryWrites()
+    var
+        Ok: Boolean;
+    begin
+        Seed();
+        ClearLastError();
+        Ok := TryRunsInnerTry();
+        Measure('T16 outer try, checked run, inner used try that writes', Ok);
+    end;
+
+    [Test]
+    procedure T17_UnusedTry_InnerUsedTryWrites()
+    begin
+        Seed();
+        ClearLastError();
+        TryOuter();
+        Measure('T17 unused outer try around an inner used try that writes', true);
+    end;
+
+    local procedure InsertReturning(): Boolean
+    var
+        R: Record "WT Row";
+    begin
+        R.K := 5;
+        exit(R.Insert());
+    end;
+
+    [TryFunction]
+    local procedure TryTakes(B: Boolean)
+    begin
+    end;
+
+    [TryFunction]
+    local procedure TryOuter()
+    begin
+        if TryInsert() then;
+    end;
+
+    [TryFunction]
+    local procedure TryAssertWrite()
+    begin
+        asserterror DoInsert();
+    end;
+
+    [TryFunction]
+    local procedure TryRunsInnerTry()
+    begin
+        if Codeunit.Run(Codeunit::"WT Inner Try") then;
+    end;
+```
+
+Third run: add inside codeunit 50942.
+
+```al
+    [Test]
+    procedure T18_ExitTry_Insert()
+    var
+        Ok: Boolean;
+    begin
+        Seed();
+        ClearLastError();
+        Ok := ExitTry();
+        Measure('T18 exit(TryInsert())', Ok);
+    end;
+
+    [Test]
+    procedure T19_TryAsArgument_Insert()
+    begin
+        Seed();
+        ClearLastError();
+        TakesBool(TryInsert());
+        Measure('T19 TryInsert() as an argument', true);
+    end;
+
+    [Test]
+    procedure T20_TryInAnd_Insert()
+    var
+        Ok: Boolean;
+    begin
+        Seed();
+        ClearLastError();
+        Ok := AlwaysTrue() and TryInsert();
+        Measure('T20 Ok := AlwaysTrue() and TryInsert()', Ok);
+    end;
+
+    local procedure ExitTry(): Boolean
+    begin
+        exit(TryInsert());
+    end;
+
+    local procedure TakesBool(B: Boolean)
+    begin
+    end;
+
+    local procedure AlwaysTrue(): Boolean
+    begin
+        exit(true);
+    end;
 ```
 
 ## To run it on Windows
