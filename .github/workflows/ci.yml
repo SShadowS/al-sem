@@ -104,12 +104,14 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: scripts/ci-steps build
 
-      - name: Perf bounds (release-only; 3x CLAUDE.md targets, T0.5)
+      - name: Perf bounds (optimized build only; 3x CLAUDE.md targets, T0.5)
         env:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
-        # Reuses the release build above (same profile, same target/ dir) —
-        # this only compiles+links the test binary. The bounds checks are
-        # `#[cfg(not(debug_assertions))]`-gated in tests/perf_bounds.rs, so
-        # `--release` is what makes them compile in at all; see that file's
-        # module doc for why a debug-build timing assert would be meaningless.
+        # Reuses the optimized build above (same profile, `release-fast` since
+        # TLS-09, same target/ dir) — this only compiles+links the test binary.
+        # The bounds checks are `#[cfg(not(debug_assertions))]`-gated in
+        # tests/perf_bounds.rs, so an optimized profile is what makes them compile
+        # in at all; see that file's module doc for why a debug-build timing assert
+        # would be meaningless. The shipped `release-ship` profile is built by
+        # build-and-deploy.yml on every code push to master.
         run: scripts/ci-steps perf-bounds

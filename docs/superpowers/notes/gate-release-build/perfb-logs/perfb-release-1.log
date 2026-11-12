@@ -1,0 +1,15 @@
+ 10:47:51 up 8 days, 12:01,  0 users,  load average: 4.20, 6.80, 10.89
+[perf_bounds] batch_write_check(2000 jobs): 15.572119ms
+[perf_bounds] build_full_1000_files: min=75.66377ms bound=6s samples=[75.66377ms, 91.332677ms, 93.605999ms]
+[perf_bounds] build_full_100_files: min=8.837565ms bound=1.5s samples=[8.837565ms, 9.822338ms, 10.977011ms]
+[perf_bounds] compute_all(1000): min=8.886829ms architectural_bound=150ms samples=[10.24112ms, 9.558305ms, 9.291835ms, 9.359332ms, 9.542602ms, 9.37888ms, 9.118747ms, 9.111228ms, 8.886829ms]
+[perf_bounds] compute_all scaling: t(500)=4.852978ms t(2000)=22.540989ms ratio=4.645 samples500=[5.502372ms, 5.748787ms, 5.8237ms, 5.329214ms, 5.399905ms, 5.71139ms, 6.750293ms, 4.885721ms, 4.852978ms] samples2000=[28.098756ms, 27.116873ms, 25.512951ms, 30.711817ms, 30.793509ms, 28.876203ms, 22.540989ms, 22.841155ms, 22.668619ms]
+[perf_bounds] compute_summaries_v2_bundle(1000): min=68.159477ms bound=230ms samples=[76.320563ms, 70.958553ms, 69.744291ms, 68.522055ms, 68.159477ms]
+[perf_bounds] incoming: min=4.016987ms bound=75ms samples=[4.582381ms, 4.376863ms, 4.236062ms, 4.094943ms, 4.016987ms]
+[perf_bounds] prepare: min=2.028µs bound=3ms samples=[4.015µs, 2.565µs, 2.464µs, 2.069µs, 2.028µs]
+[perf_bounds] outgoing: min=13.699µs bound=3ms samples=[16.241µs, 23.15µs, 14.147µs, 14.688µs, 13.699µs]
+[perf_bounds] rung1_body_edit: min=22.894395ms absolute_bound=300ms synthetic_bound=100ms samples=[23.131124ms, 24.136021ms, 22.894395ms]
+[perf_bounds] recursive_scc_db_effects(400 files, 4 x 800-member recursive SCCs): min=138.90892ms bound=650ms samples=[148.55129ms, 147.746666ms, 150.392953ms, 157.819178ms, 138.90892ms]
+[perf_bounds] rung1_body_edit_scoped: min=1.522096ms absolute_bound=300ms synthetic_bound=65ms samples=[2.375425ms, 1.554212ms, 1.522096ms]
+[perf_bounds] rung2_signature_edit: min=41.96397ms absolute_bound=4.5s synthetic_bound=750ms samples=[41.96397ms, 42.952552ms, 43.912615ms]
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.81s

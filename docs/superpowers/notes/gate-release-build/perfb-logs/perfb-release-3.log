@@ -1,0 +1,15 @@
+ 10:48:12 up 8 days, 12:01,  0 users,  load average: 4.39, 6.68, 10.77
+[perf_bounds] batch_write_check(2000 jobs): 15.34781ms
+[perf_bounds] build_full_1000_files: min=88.52188ms bound=6s samples=[88.52188ms, 94.839609ms, 93.943499ms]
+[perf_bounds] build_full_100_files: min=8.063702ms bound=1.5s samples=[9.14622ms, 8.063702ms, 8.199566ms]
+[perf_bounds] compute_all(1000): min=9.849905ms architectural_bound=150ms samples=[9.849905ms, 10.864882ms, 11.090668ms, 11.071119ms, 10.940486ms, 10.331534ms, 10.341143ms, 11.327469ms, 10.816037ms]
+[perf_bounds] compute_all scaling: t(500)=5.146921ms t(2000)=23.141161ms ratio=4.496 samples500=[5.39926ms, 9.358613ms, 5.246147ms, 5.225305ms, 5.528529ms, 5.281462ms, 5.201642ms, 5.146921ms, 5.24041ms] samples2000=[25.453624ms, 23.141161ms, 25.332307ms, 26.030083ms, 26.246513ms, 25.529159ms, 25.286086ms, 25.661682ms, 24.839449ms]
+[perf_bounds] compute_summaries_v2_bundle(1000): min=60.502422ms bound=230ms samples=[60.502422ms, 64.007562ms, 69.100403ms, 65.207566ms, 64.757206ms]
+[perf_bounds] incoming: min=3.355553ms bound=75ms samples=[3.355553ms, 3.628953ms, 3.521599ms, 3.463074ms, 3.428999ms]
+[perf_bounds] outgoing: min=9.613µs bound=3ms samples=[12.072µs, 10.362µs, 10.041µs, 9.613µs, 10.581µs]
+[perf_bounds] prepare: min=2.041µs bound=3ms samples=[4.206µs, 2.73µs, 2.264µs, 2.207µs, 2.041µs]
+[perf_bounds] recursive_scc_db_effects(400 files, 4 x 800-member recursive SCCs): min=136.814941ms bound=650ms samples=[166.431143ms, 144.496964ms, 141.251004ms, 184.584778ms, 136.814941ms]
+[perf_bounds] rung1_body_edit: min=13.277041ms absolute_bound=300ms synthetic_bound=100ms samples=[14.789609ms, 13.418746ms, 13.277041ms]
+[perf_bounds] rung1_body_edit_scoped: min=2.463807ms absolute_bound=300ms synthetic_bound=65ms samples=[3.134019ms, 2.463807ms, 2.546572ms]
+[perf_bounds] rung2_signature_edit: min=49.313841ms absolute_bound=4.5s synthetic_bound=750ms samples=[53.152707ms, 49.313841ms, 58.972527ms]
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.85s

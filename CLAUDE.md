@@ -32,11 +32,13 @@ directory is still `U:/Git/al-call-hierarchy`; renaming the GitHub repo does not
 
 ```bash
 cargo build                    # Debug build
-cargo build --release          # Optimized release (full LTO, cu=1 — ~4 min for alsem; SLOW). Unwinds on panic,
-                               # so the gates' release build and `perf_bounds` share artifacts; the SHIPPED
-                               # binaries are `--profile release-ship` (= release + panic = "abort")
-cargo build --profile release-fast  # Thin LTO — USE THIS for measurement/triage loops (alsem/aldump on DO);
-                                    # full --release only for the SHA-pinned north-star measure, perf_bounds, benches
+cargo build --release          # Optimized release (full LTO, cu=1 — ~10 min for every bin; SLOW). The SHIPPED
+                               # binaries are `--profile release-ship` (= release + panic = "abort"), built on every
+                               # code push to master by build-and-deploy.yml and at a tag by release.yml
+cargo build --profile release-fast  # Thin LTO (~3.5 min) — USE THIS for measurement/triage loops (alsem/aldump on DO).
+                                    # Also the gates' optimized build (`ci-steps build`/`perf-bounds`, TLS-09: it unwinds,
+                                    # so the two share artifacts); full --release only for the SHA-pinned north-star
+                                    # measure and benches
                                     # `aldump --snapshot-memory <ws> [--single-app] [--hash]` under /usr/bin/time -v
                                     # re-measures cone memory; reference values: cone-memory spec §13
                                     # `aldump --session-refresh <ws-COPY> --verify` measures the
@@ -70,7 +72,7 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
 |------|------|---------|--------------|
 | 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::`; per agent task `scripts/ci-steps task-affected` | only what you touched (`task-affected`: fmt, dev clippy, gen-syntax, the lib tests and the test binaries the changed paths reach; an unmapped path runs the whole suite) |
 | 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, the WHOLE suite once — which already includes every `check-goldens` target |
-| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, release build, `perf_bounds`) plus the CDO suite and the CDO speed and memory check |
+| 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, the `release-fast` build, `perf_bounds` on it) plus the CDO suite and the CDO speed and memory check |
 
 - **The debug suites never run the CDO tests.** `ci-steps test`, `check-goldens` and
   the pre-commit hook unset `CDO_WS`, so the CDO-gated tests skip there whatever your
@@ -380,7 +382,8 @@ rewritten for the engine-backed LSP surface at T3 Task 16) against a determinist
 synthetic corpus (`tests/perf_support/`) — 1000 codeunits with real cross-file call
 fan-in/fan-out for the query rows, exercising `LspSnapshot`/`lsp::handlers`/
 `lsp::updater` (no legacy `Indexer` involved — that pipeline is deleted, see
-Architecture above). A release-only CI gate (`tests/perf_bounds.rs`) asserts every
+Architecture above). An optimized-build-only CI gate (`tests/perf_bounds.rs`, built with
+`release-fast` since TLS-09) asserts every
 operation stays within 3x its target on every PR (rung 1/rung 2 additionally carry a
 corpus-relative bound — see that file's own doc), so an order-of-magnitude regression
 fails loudly even though the day-to-day numbers have wide headroom. Re-run the bench for
