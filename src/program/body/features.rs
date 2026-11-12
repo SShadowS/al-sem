@@ -34,6 +34,7 @@
 //!   - `PCallSite.start_may_fail`
 //!   - `PCallSite.checked_run`
 //!   - `PCallSite.write_txn_query`
+//!   - `PCallSite.try_call`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -335,6 +336,21 @@ pub struct PCallSite {
     /// `in_statement_position`; deserialized rows default it to `false`.
     #[serde(skip)]
     pub write_txn_query: bool,
+    /// True iff the resolver decided this call may start a `[TryFunction]`
+    /// (any resolved callee, any `#if` arm declaring it) and its value is used
+    /// (not [`Self::in_statement_position`]). ENG-10 (measured on BC 28 on
+    /// premises, Windows and the Linux sidecar): with
+    /// `DisableWriteInsideTryFunctions` on, a database write the call reaches
+    /// raises an error the try call does not catch; every use of the value
+    /// counts (`Ok :=`, a condition, `exit(..)`, an argument, `a and ..`), only
+    /// a call statement is ordinary. Wider than [`Self::result_tested`] on
+    /// purpose: catching needs a definite trap, the refusal a possible one.
+    /// Set by `program_calls` after resolution, never by the body walk.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`; deserialized rows default it to `false`.
+    #[serde(skip)]
+    pub try_call: bool,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -1242,7 +1258,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 26, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 27, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 
