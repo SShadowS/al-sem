@@ -7,11 +7,11 @@
   "findings": [
     {
       "detector": "d50-checked-run-implicit-commit",
-      "id": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0",
-      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0",
-      "title": "Codeunit.Run implicit commit within a posting span",
-      "rootCause": "A Codeunit.Run whose Boolean return value is used in StageRows performs an implicit commit on successful return while StageRows (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction.",
-      "severity": "info",
+      "id": "d50/pending-write/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0",
+      "rootCauseKey": "d50/pending-write/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0",
+      "title": "Checked Codeunit.Run with a write pending raises an error",
+      "rootCause": "A Codeunit.Run whose Boolean result is used in StageRows runs while a database write may be pending (D50 TG Header, D50 TG Line, D50 TG Entry). A checked run needs a clean transaction: with a write pending, BC raises \"An error occurred and the transaction is stopped.\" at the run itself, the checked form does not catch it (the run does not return false), and nothing of the caller's is committed (measured on BC 28). Routine-level approximation: the writes may be pending on some callers' routes only.",
+      "severity": "medium",
       "confidence": {
         "level": "possible",
         "evidence": []
@@ -33,21 +33,6 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/TempGate.al",
             "range": {
-              "startLine": 47,
-              "startColumn": 4,
-              "endLine": 60,
-              "endColumn": 8
-            },
-            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
-            "syntaxKind": "procedure"
-          },
-          "note": "transaction-managing routine StageRows contains the implicit-commit callsite"
-        },
-        {
-          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
-          "sourceAnchor": {
-            "sourceUnitId": "ws:src/TempGate.al",
-            "range": {
               "startLine": 59,
               "startColumn": 11,
               "endLine": 59,
@@ -56,11 +41,11 @@
             "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a",
             "syntaxKind": "call_expression"
           },
-          "note": "Codeunit.Run implicit commit (on success) — return value consumed"
+          "note": "checked Codeunit.Run in StageRows with a write that may be pending (D50 TG Header, D50 TG Line, D50 TG Entry): BC raises an error at the run",
+          "callsiteId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#1989b0a7fe8db73c44f9289d97611a977b94394b38da37a1d2f168e76665a31a/cs0"
         }
       ],
       "affectedObjects": [
-        "11111111-0000-0000-0000-00000000d50c:Codeunit:50220",
         "11111111-0000-0000-0000-00000000d50c:Codeunit:50220"
       ],
       "affectedTables": [
@@ -70,7 +55,7 @@
       ],
       "fixOptions": [
         {
-          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "description": "Commit() before the checked run when the writes before it may be committed, or move the writes after the run.",
           "safety": "low"
         }
       ],
@@ -79,15 +64,15 @@
           "source": "tree-sitter"
         }
       ],
-      "fingerprint": "bb0256b72e41fc3a"
+      "fingerprint": "5d8bfa8c63a71765"
     },
     {
       "detector": "d50-checked-run-implicit-commit",
-      "id": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601/cs0",
-      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601/cs0",
-      "title": "Codeunit.Run implicit commit within a posting span",
-      "rootCause": "A Codeunit.Run whose Boolean return value is used in PostBuffers performs an implicit commit on successful return while PostBuffers (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction.",
-      "severity": "info",
+      "id": "d50/pending-write/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#a015d42ffe196941668a7d705a7fea50edae4f3c26881633cbd580faa5991b75/cs0",
+      "rootCauseKey": "d50/pending-write/11111111-0000-0000-0000-00000000d50c:Codeunit:50220#a015d42ffe196941668a7d705a7fea50edae4f3c26881633cbd580faa5991b75/cs0",
+      "title": "Checked Codeunit.Run with a write pending raises an error",
+      "rootCause": "A Codeunit.Run whose Boolean result is used in StageMixedRows runs while a database write may be pending (D50 TG Header, D50 TG Line). A checked run needs a clean transaction: with a write pending, BC raises \"An error occurred and the transaction is stopped.\" at the run itself, the checked form does not catch it (the run does not return false), and nothing of the caller's is committed (measured on BC 28). Routine-level approximation: the writes may be pending on some callers' routes only.",
+      "severity": "medium",
       "confidence": {
         "level": "possible",
         "evidence": []
@@ -95,58 +80,42 @@
       "primaryLocation": {
         "sourceUnitId": "ws:src/TempGate.al",
         "range": {
-          "startLine": 96,
+          "startLine": 78,
           "startColumn": 11,
-          "endLine": 96,
+          "endLine": 78,
           "endColumn": 50
         },
-        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#a015d42ffe196941668a7d705a7fea50edae4f3c26881633cbd580faa5991b75",
         "syntaxKind": "call_expression"
       },
       "evidencePath": [
         {
-          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#a015d42ffe196941668a7d705a7fea50edae4f3c26881633cbd580faa5991b75",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/TempGate.al",
             "range": {
-              "startLine": 84,
-              "startColumn": 4,
-              "endLine": 97,
-              "endColumn": 8
-            },
-            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
-            "syntaxKind": "procedure"
-          },
-          "note": "transaction-managing routine PostBuffers contains the implicit-commit callsite"
-        },
-        {
-          "routineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
-          "sourceAnchor": {
-            "sourceUnitId": "ws:src/TempGate.al",
-            "range": {
-              "startLine": 96,
+              "startLine": 78,
               "startColumn": 11,
-              "endLine": 96,
+              "endLine": 78,
               "endColumn": 50
             },
-            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#9006bae8c2d674d9e89fa97c51df774f3a3dfb52de659cc68fe9d000e4da8601",
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#a015d42ffe196941668a7d705a7fea50edae4f3c26881633cbd580faa5991b75",
             "syntaxKind": "call_expression"
           },
-          "note": "Codeunit.Run implicit commit (on success) — return value consumed"
+          "note": "checked Codeunit.Run in StageMixedRows with a write that may be pending (D50 TG Header, D50 TG Line): BC raises an error at the run",
+          "callsiteId": "11111111-0000-0000-0000-00000000d50c:Codeunit:50220#a015d42ffe196941668a7d705a7fea50edae4f3c26881633cbd580faa5991b75/cs0"
         }
       ],
       "affectedObjects": [
-        "11111111-0000-0000-0000-00000000d50c:Codeunit:50220",
         "11111111-0000-0000-0000-00000000d50c:Codeunit:50220"
       ],
       "affectedTables": [
         "11111111-0000-0000-0000-00000000d50c:Table:50220",
-        "11111111-0000-0000-0000-00000000d50c:Table:50221",
-        "11111111-0000-0000-0000-00000000d50c:Table:50222"
+        "11111111-0000-0000-0000-00000000d50c:Table:50221"
       ],
       "fixOptions": [
         {
-          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "description": "Commit() before the checked run when the writes before it may be committed, or move the writes after the run.",
           "safety": "low"
         }
       ],
@@ -155,7 +124,7 @@
           "source": "tree-sitter"
         }
       ],
-      "fingerprint": "84d973f6ec97e1ff"
+      "fingerprint": "08448237fc78e16a"
     }
   ]
 }

@@ -2757,15 +2757,21 @@ pub struct Place {
 impl Place {
     /// A row's place: its effect type at its evidence's file and line.
     fn of_row(e: &DigestEffectFull, note: String) -> Place {
+        // ENG-22: the error a checked run raises itself has a name of its own.
+        let lead = if crate::engine::l5::digest_cli::is_run_error_row(&e.effect_type, &e.detail) {
+            crate::engine::l5::digest_cli::RUN_ERROR_LABEL.to_string()
+        } else {
+            e.effect_type.clone()
+        };
         match (&e.evidence.file, e.evidence.line) {
             (Some(f), Some(l)) => Place {
-                lead: e.effect_type.clone(),
+                lead,
                 file: Some(f.clone()),
                 line: Some(shown(l) as usize),
                 note,
             },
             _ => Place {
-                lead: format!("{} at {}", e.effect_type, row_anchor(e)),
+                lead: format!("{lead} at {}", row_anchor(e)),
                 file: None,
                 line: None,
                 note,

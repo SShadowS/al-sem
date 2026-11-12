@@ -464,6 +464,16 @@ fn an_error_behind_a_definite_trap_does_not_escape() {
         let caught = p["slice"]["caught"].as_array().unwrap_or_else(|| {
             panic!("{routine}: the slice names the caught site: {}", p["slice"])
         });
+        // ENG-22: a clean checked run's own error is left out too, named by
+        // its own kind; the callee's error is the other one.
+        let (own, caught): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = caught
+            .iter()
+            .partition(|c| c["trap"]["kind"] == "checked-run-pending-write");
+        assert_eq!(
+            own.len(),
+            usize::from(kind == "checked-run"),
+            "{routine}: {own:?}"
+        );
         assert_eq!(caught.len(), 1, "{routine}: {caught:?}");
         assert_eq!(caught[0]["trap"]["kind"], kind, "{routine}: {caught:?}");
         let h = human(
@@ -673,8 +683,9 @@ fn explain_and_digest_do_not_list_a_caught_error_as_the_routines_own() {
         &["digest", "ws", "--routine", id, "--format", "json"],
     );
     let entry = &digest["payload"]["entries"][0];
-    // One error place (its dialog row, `UI_ERROR`, is no error place).
-    assert_eq!(entry["summary"]["caughtErrors"], 1, "{}", entry["summary"]);
+    // One error place (its dialog row, `UI_ERROR`, is no error place), and
+    // (ENG-22) the clean checked run's own error.
+    assert_eq!(entry["summary"]["caughtErrors"], 2, "{}", entry["summary"]);
     let effects = entry["effects"].as_array().unwrap();
     // ENG-09: the checked run's own commit is a live row of the routine;
     // every other row is the caught error.
@@ -995,7 +1006,8 @@ fn explain_and_digest_state_what_a_caught_error_assumes() {
             &["digest", "ws", "--routine", id, "--format", "json"],
         );
         let summary = &d["payload"]["entries"][0]["summary"];
-        assert_eq!(summary["caughtErrors"], 1, "{routine}: {summary}");
+        // The callee's error and (ENG-22) the clean run's own.
+        assert_eq!(summary["caughtErrors"], 2, "{routine}: {summary}");
         assert_eq!(
             summary["assumesNoPendingWriteAtEntry"], true,
             "{routine}: {summary}"

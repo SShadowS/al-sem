@@ -607,6 +607,9 @@ fn attach_program_calls_with(
     for (ri, ci) in dataset_ops.may_fail_sites {
         rows.workspace.routines[ri].call_sites[ci].start_may_fail = true;
     }
+    for (ri, ci) in dataset_ops.write_txn_query_sites {
+        rows.workspace.routines[ri].call_sites[ci].write_txn_query = true;
+    }
     for (ri, ci) in dataset_ops.checked_run_sites {
         rows.workspace.routines[ri].call_sites[ci].checked_run = true;
     }
@@ -1774,6 +1777,17 @@ fn convert<'a>(
             {
                 dataset_ops.checked_run_sites.push((ri, ci));
             }
+            // ENG-22: the platform's `IsInWriteTransaction()` (bare or
+            // `Database.`), as the resolver decided it (a procedure of that
+            // name is no such call).
+            if program_edge.is_some_and(|ce| {
+                ce.edge.routes.iter().any(|r| {
+                    matches!(&r.target, RouteTarget::Builtin(b)
+                        if b.0 == "isinwritetransaction" || b.0 == "Database::isinwritetransaction")
+                })
+            }) {
+                dataset_ops.write_txn_query_sites.push((ri, ci));
+            }
             edges.extend(site_edges);
             bindings_per_site.push((cs.id.clone(), bindings));
             // B6: the platform's own operations on the run object's dataset.
@@ -1884,6 +1898,9 @@ struct DatasetOps {
     /// ENG-09: the (row, call site) indexes of checked `Codeunit.Run`s
     /// (`PCallSite::checked_run`).
     checked_run_sites: Vec<(usize, usize)>,
+    /// ENG-22: the sites that call the platform's `IsInWriteTransaction()`
+    /// (`PCallSite::write_txn_query`).
+    write_txn_query_sites: Vec<(usize, usize)>,
 }
 
 /// Where a route's target lives relative to the model (engine-switch S7.3).

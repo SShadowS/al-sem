@@ -54,6 +54,12 @@
 //! `r0/ws-d50-temp-gate` (4), `r0/ws-d50-pos` (1),
 //! `r0/ws-txn-d49-neg-run-boundary` (1), cross and single each, and
 //! `dep/dep_ledger` cross (its dependency's `Ok := Codeunit.Run(..)`, inherited).
+//!
+//! Re-recorded (2026-11-12, ENG-22: a checked `Codeunit.Run` raises its own
+//! error when a write is pending at it) with `REMINT_POLICY_FACTS_ORACLE=1`:
+//! the same 9 cases moved by the same amounts, each checked run's
+//! `error-implicit` fact (resource `checked-run`) beside its commit: `direct`
+//! +1 per run, `inherited` plus the copies; no count down.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

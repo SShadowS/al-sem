@@ -1,8 +1,15 @@
 # ENG-09 probe: what a checked `Codeunit.Run` commits (L16 item 2, L28)
 
-Measured 2026-11-11 on the BC 28.4 Linux sidecar (`http://bc`, instance `BC`). **Windows
-confirmation pending** (owner question q-20261112T021007-384a506a). The probe app was removed
-after the run.
+Measured 2026-11-11 on the BC 28.4 Linux sidecar (`http://bc`, instance `BC`). The probe app was
+removed after the run.
+
+**Confirmed on Windows** by the owner, 2026-11-12 (BC 28.0.54946.56477, Cronus28, test runner
+130451, isolation off; q-20261112T021007-384a506a). The shape: an `Insert` pending, then
+`Ok := Codeunit.Run(C)`. The run itself raises "An error occurred and the transaction is
+stopped." The error is **not caught by the checked form**: the run does not return `false`. This
+holds whether `C` succeeds or calls `Error()`. The caller's row count afterwards is 0, so the
+insert was not committed. Controls: with no run the count is 0; with `Commit()` before `Error()`
+it is 1. The sidecar run did not show the uncaught part, because F ran inside a `[TryFunction]`.
 
 ## What it tests
 
@@ -154,6 +161,123 @@ codeunit 50985 "CR Probe Test"
     local procedure TryOnly()
     begin
         if Codeunit.Run(Codeunit::"CR Noop") then;
+    end;
+}
+```
+
+## Second probe (ENG-22): does `IsInWriteTransaction()` match the run's failure?
+
+Measured 2026-11-12 on the BC 28.4 Linux sidecar. **Confirmed on Windows** by the owner
+(q-20261112T043721-7da83bae): BC 28.0.54946.56477, Cronus28, test runner 130451,
+TestPermissions=Disabled with a permission set; all seven states gave the same result as the
+sidecar (the table below), the error text "An error occurred and the transaction is stopped",
+and `IsInWriteTransaction()` true exactly when the run failed. App
+`e22e22e0-0000-4000-8000-0000000000e9` ("ENG22 IsInWriteTransaction Probe", ids 50960-50979,
+removed after the run). Each state starts after a `Commit()` (nothing pending); the probe records
+`IsInWriteTransaction()` and whether a checked run of an empty codeunit (inside a `[TryFunction]`)
+succeeds.
+
+| State | `IsInWriteTransaction()` | Checked run |
+|---|---|---|
+| A: nothing | No | ok |
+| B: an `Insert` pending | Yes | fails ("An error occurred and the transaction is stopped.") |
+| C: `Insert`, then `Commit()` | No | ok |
+| D: a plain `Get` | No | ok |
+| E: `LockTable`, then `FindSet` | Yes | fails |
+| F: `ModifyAll` that matched no row | Yes | fails |
+| G: `Insert`, then `if IsInWriteTransaction() then Commit();` | No | ok |
+
+So in every state tried, the method was true exactly when the run failed: `if
+IsInWriteTransaction() then Commit();` leaves nothing pending, and a locking read (E) or a write
+statement that changed no row (F) opens the transaction as a write does. A first attempt with an
+`Insert` inside a failing `[TryFunction]` was refused by this server ("Call to the function
+'INSERT' is not allowed inside the call to 'RootMethodScope' when it is used as a TryFunction",
+the `DisableWriteInsideTryFunctions` behaviour of engine limits L23) and was left out.
+
+`src/Probe.al` (app.json as above, version 1.0.0.1):
+
+```al
+table 50960 "IW Row"
+{
+    fields { field(1; K; Integer) { } field(2; V; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50961 "IW Noop"
+{
+    trigger OnRun()
+    begin
+    end;
+}
+codeunit 50962 "IW Probe Test"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Measure()
+    var
+        R: Record "IW Row";
+        R2: Record "IW Row";
+        Results: Text;
+    begin
+        R.DeleteAll();
+        R.K := 1;
+        R.Insert();
+        Commit();
+
+        Results += ' || [A nothing] ' + State();
+        Commit();
+
+        R.K := 2;
+        R.Insert();
+        Results += ' || [B pending insert] ' + State();
+        Commit();
+
+        R.K := 3;
+        R.Insert();
+        Commit();
+        Results += ' || [C insert then Commit] ' + State();
+        Commit();
+
+        R2.Get(1);
+        Results += ' || [D Get (read)] ' + State();
+        Commit();
+
+        R2.LockTable();
+        R2.FindSet();
+        Results += ' || [E LockTable + FindSet] ' + State();
+        Commit();
+
+        R2.Reset();
+        R2.SetRange(K, 9999);
+        R2.ModifyAll(V, 1);
+        Results += ' || [F ModifyAll on no rows] ' + State();
+        Commit();
+
+        R.K := 4;
+        R.Insert();
+        if IsInWriteTransaction() then
+            Commit();
+        Results += ' || [G insert, guarded Commit] ' + State();
+        Commit();
+
+        Error('MEASURED%1', Results);
+    end;
+
+    local procedure State(): Text
+    var
+        Iwt: Boolean;
+    begin
+        Iwt := IsInWriteTransaction();
+        ClearLastError();
+        if TryRun() then
+            exit(StrSubstNo('iwt=%1 run=ok', Iwt));
+        exit(StrSubstNo('iwt=%1 run=ERR %2', Iwt, GetLastErrorText()));
+    end;
+
+    [TryFunction]
+    local procedure TryRun()
+    begin
+        if Codeunit.Run(Codeunit::"IW Noop") then;
     end;
 }
 ```

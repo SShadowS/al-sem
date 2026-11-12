@@ -5500,8 +5500,13 @@ fn digest_one_root<'i>(
                 // `[CommitBehavior]` changes it, and it happens only when the
                 // run ends without an error, which the caller survives (the
                 // run returns `false`), so it is never `unconditional`.
-                let run_commit =
-                    effect_type == "COMMIT" && crate::engine::l5::commit_scope::is_run_commit(fact);
+                // ENG-22: the error a checked run raises itself needs a write
+                // pending at the run, so it is never `unconditional` either;
+                // both keep ids and groups of their own (`run_commit` names
+                // either kind).
+                let run_commit = fact.resource_id()
+                    == Some(crate::engine::l4::capability_cone::RUN_COMMIT)
+                    && matches!(effect_type, "COMMIT" | "ERROR_IMPLICIT");
                 let mut offers: Vec<PartOffer> = Vec::with_capacity(parts.len());
                 for (bnd, ix) in parts {
                     let split = match cb {
@@ -5908,7 +5913,7 @@ fn digest_one_root<'i>(
             // ENG-09: a checked run's commit and a `Commit()` behind one
             // crossing are two group rows with one boundary terminal; the
             // run's keeps an id of its own.
-            if acc.effect_type == "COMMIT"
+            if matches!(acc.effect_type, "COMMIT" | "ERROR_IMPLICIT")
                 && detail.iter().any(|(k, v)| {
                     k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT
                 })

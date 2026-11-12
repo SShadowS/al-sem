@@ -16,7 +16,10 @@
 //! it (an earlier iteration). A site's effects are its own physical table
 //! writes and published events, plus, for a call, the callee's whole cone. The
 //! call toward the Commit itself never counts, even inside a loop: what it
-//! reaches is that span member's to count.
+//! reaches is that span member's to count. A checked `Codeunit.Run` in the
+//! callee's cone leaves nothing pending (it commits its own writes or rolls
+//! them back, ENG-22): a workspace callee that reaches one is walked
+//! ([`RunCleanCones`]), and only the writes outside those runs count.
 //!
 //! A `Commit()` statement on the way to the target (an earlier statement of a
 //! block that holds it) ends the earlier transaction: what ran before it is
@@ -100,6 +103,274 @@ pub(crate) struct PendingCtx<'a> {
     pub cone_derived: &'a ConeDerivedStore,
     /// The ids with two or more rows (#160 step 11b §4.6).
     pub collided: &'a HashSet<&'a str>,
+    /// The callees' cones without their checked runs; `None` counts each
+    /// callee's whole cone (a caller that holds one routine's sites only).
+    pub clean: Option<&'a RunCleanCones<'a>>,
+}
+
+/// ENG-22: the writes and events a called routine leaves pending, with every
+/// checked `Codeunit.Run` in its cone left out (BC commits the run's own writes
+/// when it succeeds and rolls them back when it fails: none stay pending,
+/// measured on BC 28 and confirmed on Windows, engine limits L28).
+///
+/// Only the routines whose forward sites are known (workspace callers: the
+/// primary graph) and that reach a checked run over them are walked; every
+/// other routine reached counts its whole cone, so a run inside dependency
+/// code still counts its writes (an over-count, never a missed write).
+///
+/// Not walked either: a routine with no summary, a collided id, and a routine
+/// whose cone follows an edge (a typed edge with a target) that its forward
+/// sites lack. So a walked routine's cone is its own writes plus its forward
+/// successors' cones, and leaving a run's target out drops only what is
+/// behind the run. Besides, a walked routine adds its group's residue
+/// ([`Self::residue`]): the writes its cone holds that neither its group's own
+/// writes nor the cone of a routine called from outside the group (a checked
+/// run's target included) explain. That catches a cone fact with no edge
+/// behind it; it subtracts by table, so such a fact on a table a run also
+/// writes is still dropped (no such fact is known; on CDO the residue was empty
+/// for every routine, 4,694 checked).
+pub(crate) struct RunCleanCones<'a> {
+    /// The routines walked: they reach a checked run over `fwd`, have a
+    /// summary and one row (a collided id's edges are read through one row
+    /// only, so its whole cone counts).
+    walk: HashSet<&'a str>,
+    /// A walked routine → its group (strongly connected over `fwd`).
+    group_of: HashMap<&'a str, usize>,
+    groups: Vec<Vec<&'a str>>,
+    residue: std::sync::Mutex<HashMap<usize, std::sync::Arc<Effects<'a>>>>,
+    memo: std::sync::Mutex<HashMap<&'a str, std::sync::Arc<Pending>>>,
+}
+
+/// Physical tables written and events published, borrowed.
+#[derive(Default)]
+struct Effects<'a> {
+    tables: HashSet<&'a str>,
+    events: HashSet<&'a str>,
+}
+
+impl<'a> Effects<'a> {
+    /// A routine's whole cone (read by its own id when it has no summary).
+    fn add_cone(&mut self, x: &'a str, cx: &PendingCtx<'a>) {
+        let id = cx.summaries.get(x).map_or(x, |s| s.routine_id.as_str());
+        let cd = cx.cone_derived;
+        self.tables
+            .extend(cd.physical_write_ids_of(id).map(|i| cd.resolve_res(i)));
+        self.events
+            .extend(cd.event_ids_of(id).iter().map(|i| cd.resolve_res(*i)));
+    }
+
+    /// A routine's own physical writes and publishes.
+    fn add_direct(&mut self, x: &'a str, cx: &PendingCtx<'a>) {
+        let Some(s) = cx.summaries.get(x) else {
+            return;
+        };
+        for f in &s.capability_facts_direct {
+            let Some(rid) = f.resource_id.as_deref() else {
+                continue;
+            };
+            match f.resource_kind {
+                "table" if write_op_bit(f.op).is_some() && !fact_is_known_temp(f) => {
+                    self.tables.insert(rid);
+                }
+                "event" if f.op == "publish" => {
+                    self.events.insert(rid);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The site `from → to` is a checked run.
+fn is_run_edge(
+    from: &str,
+    site: Option<&str>,
+    to: &str,
+    routines: &HashMap<&str, &ModelRoutine>,
+) -> bool {
+    let Some(site) = site else { return false };
+    routines
+        .get(from)
+        .and_then(|r| r.call_sites.iter().find(|c| c.id == site))
+        .is_some_and(|cs| is_checked_run(cs, routines.get(to).copied()))
+}
+
+impl<'a> RunCleanCones<'a> {
+    /// The routines to walk (those that reach a checked run over `fwd`, with a
+    /// summary and one row) and their groups.
+    pub(crate) fn build(
+        fwd: &'a ForwardSites<'a>,
+        routines: &HashMap<&'a str, &'a ModelRoutine>,
+        summaries: &HashMap<String, FullRoutineSummary>,
+        collided: &HashSet<&'a str>,
+        typed: &[crate::engine::l4::combined_graph::TypedEdge],
+    ) -> Self {
+        let mut callers: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        let mut reaches_run = HashSet::new();
+        let mut queue = Vec::new();
+        for (&from, outs) in fwd {
+            for &(site, to) in outs {
+                callers.entry(to).or_default().push(from);
+                if is_run_edge(from, site, to, routines) && reaches_run.insert(from) {
+                    queue.push(from);
+                }
+            }
+        }
+        while let Some(x) = queue.pop() {
+            for &c in callers.get(x).map_or(&[][..], Vec::as_slice) {
+                if reaches_run.insert(c) {
+                    queue.push(c);
+                }
+            }
+        }
+        // Review round 4: a routine whose cone follows an edge the forward
+        // sites lack is not walked. Its residue cannot tell that edge's write
+        // apart from the same table behind a checked run (the residue
+        // subtracts by table), so its whole cone counts.
+        let mut unseen_edge: HashSet<&str> = HashSet::new();
+        for e in typed {
+            let Some(to) = e.to.as_deref() else {
+                continue;
+            };
+            if reaches_run.contains(e.from.as_str())
+                && !fwd
+                    .get(e.from.as_str())
+                    .is_some_and(|outs| outs.iter().any(|&(_, t)| t == to))
+            {
+                unseen_edge.insert(e.from.as_str());
+            }
+        }
+        let walk: HashSet<&'a str> = reaches_run
+            .into_iter()
+            .filter(|x| {
+                summaries.contains_key(*x) && !collided.contains(x) && !unseen_edge.contains(x)
+            })
+            .collect();
+        // Groups over every forward site between walked routines (a checked
+        // run's edge included: what loops back through it is one group).
+        let mut nodes: Vec<String> = walk.iter().map(|x| x.to_string()).collect();
+        nodes.sort();
+        let edges_by_from: HashMap<String, Vec<String>> = walk
+            .iter()
+            .map(|&x| {
+                let mut to: Vec<String> = fwd
+                    .get(x)
+                    .map_or(&[][..], Vec::as_slice)
+                    .iter()
+                    .filter(|(_, t)| walk.contains(t))
+                    .map(|(_, t)| t.to_string())
+                    .collect();
+                to.sort();
+                to.dedup();
+                (x.to_string(), to)
+            })
+            .collect();
+        let sccs = crate::engine::l4::scc::tarjan_scc(&crate::engine::l4::scc::SccInputGraph {
+            nodes: &nodes,
+            edges_by_from: &edges_by_from,
+        });
+        let by_name: HashMap<&str, &'a str> = walk.iter().map(|&x| (x, x)).collect();
+        let groups: Vec<Vec<&'a str>> = sccs
+            .sccs
+            .iter()
+            .map(|s| s.members.iter().map(|m| by_name[m.as_str()]).collect())
+            .collect();
+        let group_of = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(i, g)| g.iter().map(move |&x| (x, i)))
+            .collect();
+        RunCleanCones {
+            walk,
+            group_of,
+            groups,
+            residue: std::sync::Mutex::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Group `g`'s residue: what its members' cones hold that neither the
+    /// members' own writes nor the cone of a routine they call outside the
+    /// group (over any forward site, a checked run's included) explain: the
+    /// cone's facts over edges the forward sites lack.
+    fn residue(&self, g: usize, cx: &PendingCtx<'a>) -> std::sync::Arc<Effects<'a>> {
+        let lock = || self.residue.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(r) = lock().get(&g) {
+            return r.clone();
+        }
+        let members = &self.groups[g];
+        let mut cone = Effects::default();
+        let mut known = Effects::default();
+        for &x in members {
+            cone.add_cone(x, cx);
+            known.add_direct(x, cx);
+            for &(_, to) in cx.fwd.get(x).map_or(&[][..], Vec::as_slice) {
+                if self.group_of.get(to) != Some(&g) {
+                    known.add_cone(to, cx);
+                }
+            }
+        }
+        cone.tables.retain(|t| !known.tables.contains(t));
+        cone.events.retain(|e| !known.events.contains(e));
+        let r = std::sync::Arc::new(cone);
+        lock().insert(g, r.clone());
+        r
+    }
+
+    /// `callee`'s pending effects, or `None` when it is not walked (its whole
+    /// cone counts).
+    fn of(&self, callee: &'a str, cx: &PendingCtx<'a>) -> Option<std::sync::Arc<Pending>> {
+        if !self.walk.contains(callee) {
+            return None;
+        }
+        let lock = || self.memo.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(p) = lock().get(callee) {
+            return Some(p.clone());
+        }
+        let mut out = Effects::default();
+        let mut groups_added: HashSet<usize> = HashSet::new();
+        let mut seen: HashSet<&'a str> = HashSet::from([callee]);
+        let mut stack = vec![callee];
+        while let Some(x) = stack.pop() {
+            if !self.walk.contains(x) {
+                out.add_cone(x, cx);
+                continue;
+            }
+            out.add_direct(x, cx);
+            let g = self.group_of[x];
+            if groups_added.insert(g) {
+                let r = self.residue(g, cx);
+                out.tables.extend(r.tables.iter().copied());
+                out.events.extend(r.events.iter().copied());
+            }
+            for &(site, to) in cx.fwd.get(x).map_or(&[][..], Vec::as_slice) {
+                if !is_run_edge(x, site, to, cx.routines) && seen.insert(to) {
+                    stack.push(to);
+                }
+            }
+        }
+        // The walk follows forward sites the cone does not (on CDO 140
+        // routines' sites reach writes their cone leaves out): keep only the
+        // cone's, so leaving the runs out can remove a write, never add one.
+        let mut cone = Effects::default();
+        cone.add_cone(callee, cx);
+        let out = std::sync::Arc::new(Pending {
+            tables: out
+                .tables
+                .into_iter()
+                .filter(|t| cone.tables.contains(t))
+                .map(str::to_string)
+                .collect(),
+            events: out
+                .events
+                .into_iter()
+                .filter(|e| cone.events.contains(e))
+                .map(str::to_string)
+                .collect(),
+        });
+        lock().insert(callee, out.clone());
+        Some(out)
+    }
 }
 
 /// What `r` has pending when control reaches any of `targets`, and how it got
@@ -153,6 +424,11 @@ pub(crate) struct Before {
     /// or a loop of its own): the transaction open when the routine was
     /// entered has ended before any target is reached.
     pub committed: bool,
+    /// ENG-22 review: a target may have run before itself (it sits in a loop
+    /// that holds it, so an earlier pass ran it). The targets are left out of
+    /// `sites` all the same; a reader that asks what is pending AT a target
+    /// counts the target's own leftovers from that earlier pass.
+    pub repeats: bool,
 }
 
 /// The sites of `r` that may run in the open transaction before control
@@ -176,11 +452,22 @@ pub(crate) fn sites_before_where(
     let mut sites: BTreeSet<String> = BTreeSet::new();
     let mut all = whole_body || r.statement_tree.is_none();
     let mut committed = !targets.is_empty();
+    // ENG-22: the platform's `IsInWriteTransaction()` calls join the commit
+    // ids (call-site ids never collide with operation ids), so
+    // `if IsInWriteTransaction() then Commit();` reads as a `Commit()`
+    // ([`is_guarded_commit`]); under a `[CommitBehavior]` that stops commits
+    // (`commits_end` false) it ends nothing either.
     let commits: BTreeSet<&str> = r
         .operation_sites
         .iter()
         .filter(|o| commits_end && o.kind == "commit")
         .map(|o| o.id.as_str())
+        .chain(
+            r.call_sites
+                .iter()
+                .filter(|c| commits_end && c.write_txn_query)
+                .map(|c| c.id.as_str()),
+        )
         .collect();
     if let Some(tree) = &r.statement_tree
         && !all
@@ -215,13 +502,15 @@ pub(crate) fn sites_before_where(
     // when a loop runs it earlier: what it reaches is the span member's to
     // count (its writes before ITS call toward the Commit), and its whole cone
     // also holds the Commit and everything after it.
+    let mut repeats = false;
     for t in targets {
-        sites.remove(*t);
+        repeats |= sites.remove(*t);
     }
     Before {
         sites,
         all,
         committed,
+        repeats,
     }
 }
 
@@ -296,6 +585,7 @@ fn effects(
         summaries,
         cone_derived,
         collided,
+        clean,
     } = *cx;
     let mut out = Pending::default();
     if let Some(s) = summaries.get(&r.id) {
@@ -357,6 +647,11 @@ fn effects(
         let Some(callee) = summaries.get(*to) else {
             continue;
         };
+        if let Some(p) = clean.and_then(|c| c.of(to, cx)) {
+            out.tables.extend(p.tables.iter().cloned());
+            out.events.extend(p.events.iter().cloned());
+            continue;
+        }
         for id in cone_derived.physical_write_ids_of(&callee.routine_id) {
             out.tables.insert(cone_derived.resolve_res(id).to_string());
         }
@@ -429,6 +724,45 @@ fn is_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
     n.operation_id
         .as_deref()
         .is_some_and(|id| commits.contains(id))
+        || is_guarded_commit(n, commits)
+}
+
+/// ENG-22: `if IsInWriteTransaction() then Commit();` ends the open write
+/// transaction on both paths: when the platform method is false nothing is
+/// pending, otherwise the `Commit()` ends it (measured on BC 28:
+/// `IsInWriteTransaction()` is true exactly when a checked run fails). Only
+/// that shape: the whole condition is the call, not negated (`path_hint`),
+/// the call is the platform's (its id is in `commits`, put there by
+/// [`sites_before_where`] from `PCallSite::write_txn_query`), there is no
+/// `else`, and the `then` branch is one `Commit()` statement. Any other
+/// branch commit (`if X then Commit()`) ends nothing, as before.
+fn is_guarded_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
+    use crate::program::body::features::PathHint;
+    if n.kind != "if"
+        || n.path_hint != Some(PathHint::CondCall { negated: false })
+        || !kids(&n.else_children).is_empty()
+    {
+        return false;
+    }
+    let [leaf] = kids(&n.condition_leaves) else {
+        return false;
+    };
+    if !leaf
+        .callsite_id
+        .as_deref()
+        .is_some_and(|c| commits.contains(c))
+    {
+        return false;
+    }
+    let mut then = kids(&n.children);
+    while let [only] = then {
+        if only.kind == "block" {
+            then = kids(&only.children);
+        } else {
+            break;
+        }
+    }
+    matches!(then, [stmt] if stmt.operation_id.as_deref().is_some_and(|id| commits.contains(id)))
 }
 
 /// Add to `out` the sites that may run before `t` in the statement list
@@ -468,7 +802,22 @@ fn walk_node(
 ) {
     let leaves = kids(&n.condition_leaves);
     if walk_list(leaves, t, commits, out, cleared) {
-        return; // `t` is in the condition (or the arguments)
+        // `t` is in the condition (or the arguments). A `while` condition
+        // runs again after each pass of the body, and a `repeat` condition
+        // after the body of the same pass: the body may run before `t`
+        // (ENG-22 review). A `for` range is evaluated once, before the body.
+        // An earlier pass also ran the whole condition (round 2): `t` itself
+        // and the operands after it (`while Worker() do;`).
+        if matches!(n.kind.as_str(), "while" | "repeat") {
+            for c in kids(&n.children)
+                .iter()
+                .chain(kids(&n.else_children))
+                .chain(leaves)
+            {
+                collect_reaching(c, out);
+            }
+        }
+        return;
     }
     // A condition (or a call's arguments) runs before the body (or the call).
     for l in leaves {

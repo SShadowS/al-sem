@@ -97,8 +97,7 @@ fn is_ui_window_sink(t: &str) -> bool {
 // isTrustedCommitRoot (UNTRUSTED_ROOT_KINDS)
 // ---------------------------------------------------------------------------
 
-/// `page-action` is DELIBERATELY absent -- see the fuller note on
-/// `D50_UNTRUSTED_ROOT_KINDS`. Narrowly: every routine gaining AST-DERIVED
+/// `page-action` is DELIBERATELY absent. Narrowly: every routine gaining AST-DERIVED
 /// `page-action` also carries `trigger-page`, which IS listed, and
 /// [`is_trusted_commit_root`] below is ANY-quantified, so the extra kind cannot
 /// change the verdict.

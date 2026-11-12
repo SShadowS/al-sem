@@ -232,6 +232,8 @@ fn cone_twin(own: &str) -> Option<String> {
         // ENG-09: a checked run's commit (`keys`: `commit|checked-run`).
         ["commit", r] => format!("COMMIT|{r}"),
         ["error", "error-throw", _] => "ERROR_THROW|".into(),
+        // ENG-22: a checked run's own error (`keys`: `error|error-implicit|checked-run`).
+        ["error", "error-implicit", r] if !r.is_empty() => format!("ERROR_IMPLICIT|{r}"),
         ["error", _, _] => "ERROR_IMPLICIT|".into(),
         ["ui", op] => format!("{}|", op.to_ascii_uppercase().replace('-', "_")),
         ["http", _] => "HTTP|".into(),

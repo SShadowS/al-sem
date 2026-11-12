@@ -7,11 +7,11 @@
   "findings": [
     {
       "detector": "d50-checked-run-implicit-commit",
-      "id": "d50/11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01/cs0",
-      "rootCauseKey": "d50/11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01/cs0",
-      "title": "Codeunit.Run implicit commit within a posting span",
-      "rootCause": "A Codeunit.Run whose Boolean return value is used in RunWorkerChecked performs an implicit commit on successful return while PostDocument (a transaction-managing routine) is reachable in the routine-level implicit-commit span. Routine-level approximation — may include writes not proven to precede the implicit commit. Review whether the implicit commit splits a posting transaction.",
-      "severity": "info",
+      "id": "d50/pending-write/11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01/cs0",
+      "rootCauseKey": "d50/pending-write/11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01/cs0",
+      "title": "Checked Codeunit.Run with a write pending raises an error",
+      "rootCause": "A Codeunit.Run whose Boolean result is used in RunWorkerChecked runs while a database write may be pending (D50 Header, D50 Line, D50 Entry). A checked run needs a clean transaction: with a write pending, BC raises \"An error occurred and the transaction is stopped.\" at the run itself, the checked form does not catch it (the run does not return false), and nothing of the caller's is committed (measured on BC 28). Routine-level approximation: the writes may be pending on some callers' routes only.",
+      "severity": "medium",
       "confidence": {
         "level": "possible",
         "evidence": []
@@ -41,7 +41,7 @@
             "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50200#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359",
             "syntaxKind": "procedure"
           },
-          "note": "transaction-managing routine: PostDocument"
+          "note": "PostDocument may write before the run, and no Commit() ends it"
         },
         {
           "routineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01",
@@ -56,11 +56,11 @@
             "enclosingRoutineId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01",
             "syntaxKind": "call_expression"
           },
-          "note": "Codeunit.Run implicit commit (on success) in RunWorkerChecked — return value consumed"
+          "note": "checked Codeunit.Run in RunWorkerChecked with a write that may be pending (D50 Header, D50 Line, D50 Entry): BC raises an error at the run",
+          "callsiteId": "11111111-0000-0000-0000-00000000d50a:Codeunit:50200#7cd26a13814a57bbaa2741a0d3e3102aca87ef2d0e3fdc5506b50fc874ac8f01/cs0"
         }
       ],
       "affectedObjects": [
-        "11111111-0000-0000-0000-00000000d50a:Codeunit:50200",
         "11111111-0000-0000-0000-00000000d50a:Codeunit:50200"
       ],
       "affectedTables": [
@@ -70,7 +70,7 @@
       ],
       "fixOptions": [
         {
-          "description": "If atomicity matters, avoid the checked Run mid-transaction or restructure so the posting completes before the implicit commit.",
+          "description": "Commit() before the checked run when the writes before it may be committed, or move the writes after the run.",
           "safety": "low"
         }
       ],
@@ -79,7 +79,7 @@
           "source": "tree-sitter"
         }
       ],
-      "fingerprint": "2923ea56173f66ed"
+      "fingerprint": "d570ce79f44351d6"
     }
   ]
 }

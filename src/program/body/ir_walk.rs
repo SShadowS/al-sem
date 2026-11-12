@@ -1464,6 +1464,7 @@ impl<'a> SpineCtx<'a> {
                     // Set after resolution (`program_calls`), never here.
                     start_may_fail: false,
                     checked_run: false,
+                    write_txn_query: false,
                 });
                 self.cs_arg_exprs.push(args.clone());
             }
