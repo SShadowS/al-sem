@@ -403,6 +403,22 @@ callers' question reads (`commit_scope::declared`).
   (their order is unknown). The second applies to the trap search only; `transaction_spans`'s own
   pending walk (`pending_writes`) still leaves sibling subscribers out (its stated
   under-approximation).
+- ENG-22 review round 1 (astra, Fable), all in the trap search: a call in a loop runs again after
+  its own earlier pass, so what it left is pending at it (`Before::repeats`); a subscriber or
+  trigger of a table event shares the sibling rule (subscribers of one record operation), and one
+  fired by a write operation is entered with that write pending (conservative for `OnBefore…`
+  events and `OnInsert`-style triggers, which run before the write); `LockTable` counts as a write
+  (measured on the BC 28.4 sidecar: `LockTable` then a read makes `IsInWriteTransaction()` true
+  and a checked run after it fails). d50 also seeds the variable form (`Ok := C.Run()`).
+- **`if IsInWriteTransaction() then Commit();` ends the write** on both paths, in the trap search
+  and the transaction spans (d50). Measured on the BC 28.4 sidecar (probe note, second probe):
+  `IsInWriteTransaction()` was true exactly when a checked run failed, in all seven states tried
+  (nothing, a pending insert, after a `Commit()`, a plain `Get`, `LockTable` + `FindSet`, a
+  `ModifyAll` that matched no row, the guarded commit itself); Windows confirmation pending. Only
+  that shape: the whole condition is the platform's call (resolver-decided,
+  `PCallSite::write_txn_query`, so a procedure of that name does not count), not negated, no
+  `else`, and the `then` branch is one `Commit()`. CDO's `CDOLegacyeDocDispatcher:254-255` has it;
+  d50's one CDO finding there was a false positive from the branch commit.
 
 **Left.**
 - An error row of the callee under a run a write may be pending at keeps its old ruling
@@ -416,6 +432,25 @@ callers' question reads (`commit_scope::declared`).
 - An unchecked `Codeunit.Run` with a write pending was not measured; nothing is added for it.
 - The same shape with `[CommitBehavior(Error)]` on the routine, where `C` only does `Commit()`, and
   no write pending: the commit error inside the run has no row (B4/L16, item 4).
+- "Not raised" is carried as a `caught` ruling of its own kind (`checked-run-pending-write`), so a
+  count of caught error sites (digest `caughtErrors`, prove's caught list) includes clean runs'
+  own errors; the human lines name them apart ("not raised").
+- A trap outside the run that catches its error is assumed from the trap rule, not measured for
+  an outer checked run (`if Codeunit.Run(Outer)` whose `OnRun` writes and then runs a checked
+  `Inner`); the probe measured a TryFunction only.
+- The cone carries the run's error unconditionally; only the answers that run the trap pass
+  (prove, its slice, explain, digest) rule it. `alsem fingerprint`/`policy check` facts and impact's
+  key list a possible error at every checked run (an over-statement; impact's label says
+  "raised if a write is pending at it").
+- d50 reads `transaction_spans`, whose pending walk is coarser than the trap search: it counts
+  only writes to a known table (a `RecordRef` write, a `LockTable`, the record operation that
+  fires a subscriber, and sibling subscribers are left out: wrong negatives), and a helper's
+  whole write cone counts even when the helper's writes are inside its own checked run (wrong
+  positives).
+- `ReadIsolation := IsolationLevel::UpdLock` (a locking read without `LockTable`) was not
+  measured and does not count as a write.
+- A group row beyond a dependency crossing (a run's error in dependency code) gets its terminal
+  witness from the run's own terminals (review round 1); no test reaches a group row of this kind.
 - Platform-side database writes before a checked run (`IsolatedStorage.Set`, Media import and
   similar) do not count as a pending write. Whether BC counts them as a write transaction is not
   established.

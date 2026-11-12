@@ -60,7 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The "is a write pending at this checked run" search** (it also decides when a checked run
   catches a callee's error) missed two shapes: a run in a `while`/`repeat` condition after an
   earlier pass of a body that writes, and a subscriber entered after another subscriber of the
-  same event that writes. Both now count as a write that may be pending.
+  same event that writes. Both now count as a write that may be pending. Review round 1 found
+  four more: a call in a loop after its own earlier pass wrote; a table-event subscriber or
+  trigger (its siblings, and the write operation that fires it); and `LockTable`, which opens a
+  write transaction (measured on the BC 28.4 sidecar).
+- **`if IsInWriteTransaction() then Commit();` ends the write** (that shape only: the platform's
+  call as the whole condition, not negated, no `else`, one `Commit()`), in prove's trap search and
+  in the transaction spans. Measured on the BC 28.4 sidecar: `IsInWriteTransaction()` was true
+  exactly when a checked run failed, in seven transaction states (Windows confirmation pending).
+  Before, a branch `Commit()` ended nothing, and d50's one CDO finding (CDOLegacyeDocDispatcher,
+  which commits that way before its run) was a false positive.
 
 ### Changed (ENG-22: d50 reports the error, not an implicit commit)
 
@@ -69,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now reports a checked run at which a physical write may be pending (BC raises an error at the
   run), severity medium, rule `CheckedRunWithPendingWrite` (was `CheckedRunImplicitCommit`). The
   posting-name and three-table "transaction manager" tests and the medium tier for a nearby
-  explicit `Commit()` are gone with the old claim. Finding ids are `d50/pending-write/<site>`, so
+  explicit `Commit()` are gone with the old claim. It also sees the variable form
+  `Ok := C.Run()`. Finding ids are `d50/pending-write/<site>`, so
   the fingerprints are new: **a suppression or baseline of the old d50 finding does not carry
   over**; review the new findings before suppressing them again. The detector name
   (`d50-checked-run-implicit-commit`) is unchanged so existing `--detector` lists keep working.
