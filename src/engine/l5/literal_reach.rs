@@ -1709,6 +1709,9 @@ pub(crate) struct LiteralReach<'a> {
     /// declares a behavior (every commit runs normally) or no checked run
     /// exists.
     commit_graph: Option<CbGraph<'a>>,
+    /// ENG-10: what a try call may run that the server refuses
+    /// ([`TryRefusal`]); `None` when no call site is a try call.
+    refusal: Option<TryRefusal<'a>>,
 }
 
 /// B7 review (a checked run inside an open write transaction): the write
@@ -1726,6 +1729,23 @@ struct PendingWrites<'a> {
     may_write: HashSet<&'a str>,
     /// Per routine, its in-edges as (caller, position in the caller's `out`).
     rev: HashMap<&'a str, Vec<(&'a str, u32)>>,
+}
+
+/// ENG-10 (measured on BC 28 on premises, Windows and the Linux sidecar):
+/// with `DisableWriteInsideTryFunctions` on, a database write (`Insert`,
+/// `Modify`, `ModifyAll`, `Delete`), a `LockTable` or a `Commit()` that runs
+/// inside a try call raises an error no try call catches; a checked
+/// `Codeunit.Run` or `asserterror` between them catches it, and a temporary
+/// record's write is allowed. Kept apart from [`PendingWrites`], whose
+/// meaning (a write left pending) ENG-22 settled.
+struct TryRefusal<'a> {
+    /// The operation ids the server refuses inside a try call: non-temporary
+    /// writes, `LockTable`s and `Commit()`s.
+    ops: HashSet<&'a str>,
+    /// The routines from which such an operation, or code that is not known
+    /// (a callee with no row, a call no edge resolves), may run without
+    /// crossing a checked run or an `asserterror` call.
+    closure: HashSet<&'a str>,
 }
 
 /// [`LiteralReach::soft_checked_runs`]: the soft runs (caller, out-edge
@@ -1880,6 +1900,17 @@ impl TrapAt {
             TrapKind::RunCheck => format!(
                 "raised by the checked Codeunit.Run itself{} if a write is pending there: a \
                  checked run needs a clean transaction (measured on BC 28)",
+                match (&self.file, self.line) {
+                    (Some(f), Some(l)) => format!(" at {f}:{}", crate::engine::line_base::shown(l)),
+                    _ => String::new(),
+                }
+            ),
+            // ENG-10: the try call's own error.
+            TrapKind::TryRefusal => format!(
+                "raised by the try call{} if a database write runs inside it on a server that \
+                 refuses one there (on premises with DisableWriteInsideTryFunctions on, measured \
+                 on BC 28; Learn: on by default on premises, no such restriction online); no \
+                 try call catches it",
                 match (&self.file, self.line) {
                     (Some(f), Some(l)) => format!(" at {f}:{}", crate::engine::line_base::shown(l)),
                     _ => String::new(),
@@ -2285,7 +2316,16 @@ impl<'a> LiteralReach<'a> {
             builtin_sites,
             pending: None,
             commit_graph: None,
+            refusal: None,
         };
+        if reach
+            .by_stable
+            .values()
+            .chain(reach.arm_rows.values().flatten())
+            .any(|r| r.call_sites.iter().any(|c| c.try_call))
+        {
+            reach.refusal = Some(reach.build_try_refusal());
+        }
         // B7 review: the write facts, only when some checked run needs them.
         // ENG-22: also for a checked run with no edge (its own error).
         if reach
@@ -3140,6 +3180,214 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// B7 review: the snapshot's write facts ([`PendingWrites`]).
+    /// ENG-10: [`TryRefusal`] over the whole snapshot.
+    fn build_try_refusal(&self) -> TryRefusal<'a> {
+        use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
+        let mut ops: HashSet<&'a str> = HashSet::new();
+        let mut seeds: HashSet<&'a str> = HashSet::new();
+        for rec in self.terminals.records() {
+            if !matches!(rec.effect_type, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE")
+                || matches!(rec.temp, TerminalTemp::Known(true))
+            {
+                continue;
+            }
+            seeds.insert(rec.owner);
+            if !matches!(rec.terminal, TerminalSite::None) {
+                ops.insert(rec.terminal.id());
+            }
+        }
+        for (&id, &r) in &self.by_stable {
+            let one = [r];
+            let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
+            for row in rows {
+                for op in row
+                    .operation_sites
+                    .iter()
+                    .filter(|o| o.kind == "lock" || o.kind == "commit")
+                {
+                    ops.insert(op.id.as_str());
+                    seeds.insert(id);
+                }
+                // A call no edge resolves (not a platform method): unknown code.
+                let sited: HashSet<&str> = self
+                    .out
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|&(_, s, _, _)| s.and_then(EdgeSite::guarded))
+                    .collect();
+                if row.call_sites.iter().any(|c| {
+                    !sited.contains(c.id.as_str()) && !self.builtin_sites.contains(c.id.as_str())
+                }) {
+                    seeds.insert(id);
+                }
+            }
+        }
+        let mut rev: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        for (&f, list) in &self.out {
+            let traps = self.traps.get(f).map_or(&[][..], Vec::as_slice);
+            for (j, &(to, _, _, _)) in list.iter().enumerate() {
+                // A checked run or asserterror catches the refusal.
+                if traps.iter().any(|&(t, k)| {
+                    t as usize == j && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+                }) {
+                    continue;
+                }
+                rev.entry(to).or_default().push(f);
+                if !self.by_stable.contains_key(to) {
+                    seeds.insert(to);
+                }
+            }
+        }
+        let mut closure = seeds.clone();
+        let mut q: VecDeque<&'a str> = seeds.into_iter().collect();
+        while let Some(x) = q.pop_front() {
+            for &p in rev.get(x).map_or(&[][..], Vec::as_slice) {
+                if closure.insert(p) {
+                    q.push_back(p);
+                }
+            }
+        }
+        TryRefusal { ops, closure }
+    }
+
+    /// ENG-10: the routines `root` reaches without crossing a checked run or
+    /// an `asserterror` call: a try call's refusal error raised in one of them
+    /// leaves the root (no try call catches it, the probe's T14).
+    pub(crate) fn refusal_reach(&self, root: &str) -> Option<OpenReach<'a>> {
+        self.open_reach(root, &|_, _, k| {
+            matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror)
+        })
+    }
+
+    /// ENG-10: the error the try call at `site` raises when the server
+    /// refuses a write inside it, from the root `open` was built for
+    /// ([`Self::refusal_reach`]). `Caught` by [`TrapKind::TryRefusal`] when
+    /// nothing inside the call may be refused ("not raised"); `Caught` by the
+    /// trap that stops it when every route from the root crosses a checked
+    /// run or an `asserterror` call; otherwise `UnlessWritePending` with
+    /// [`TrapKind::TryRefusal`] (raised on such a server, never
+    /// unconditional). `None` when the site has no known owner.
+    pub(crate) fn try_refusal_verdict(
+        &self,
+        root: &str,
+        open: Option<&OpenReach<'a>>,
+        site: &str,
+    ) -> Option<TrapVerdict> {
+        let w = self.refusal.as_ref()?;
+        let owner = self.op_owner(site)?;
+        let row = self.row_at(owner, site)?;
+        let cs = row.call_sites.iter().find(|c| c.id == site)?;
+        let a = &cs.source_anchor;
+        let at = TrapAt {
+            kind: TrapKind::TryRefusal,
+            routine: owner.to_string(),
+            file: Some(a.source_unit_id.clone()),
+            line: Some(a.start_line),
+        };
+        let outs = self.out.get(owner).map_or(&[][..], Vec::as_slice);
+        // What a call site of `owner` runs may be refused: a target in the
+        // closure, a target with no row, or no edge at all (not a platform
+        // method): unknown code.
+        let runs_refused = |s: &str| {
+            let mut edge = false;
+            for &(to, es, _, _) in outs {
+                if es.and_then(EdgeSite::guarded) == Some(s) {
+                    edge = true;
+                    if w.closure.contains(to) || !self.by_stable.contains_key(to) {
+                        return true;
+                    }
+                }
+            }
+            !edge && !self.builtin_sites.contains(s)
+        };
+        // Learn: "Arguments for a try function are evaluated inside the try
+        // function" (the probe's T13): what the argument list runs counts.
+        let within = |b: &crate::program::body::features::PAnchor| {
+            b.source_unit_id == a.source_unit_id
+                && (b.start_line, b.start_column) >= (a.start_line, a.start_column)
+                && (b.end_line, b.end_column) <= (a.end_line, a.end_column)
+        };
+        let inside = runs_refused(site)
+            || row
+                .call_sites
+                .iter()
+                .filter(|c| c.id != site && within(&c.source_anchor))
+                .any(|c| runs_refused(&c.id))
+            || row
+                .operation_sites
+                .iter()
+                .filter(|o| within(&o.source_anchor))
+                .any(|o| w.ops.contains(o.id.as_str()));
+        if !inside {
+            return Some(TrapVerdict::Caught(at));
+        }
+        match open {
+            Some(o) if !o.parent.contains_key(owner) => {
+                // Every route crosses a checked run or `asserterror`: name the
+                // first on one route (a route that crosses none would have put
+                // `owner` in `o`).
+                let all = self.open_reach(root, &|_, _, _| false)?;
+                let caught_by = self
+                    .open_steps(&all, owner)
+                    .into_iter()
+                    .find_map(|s| self.catching_trap(&s));
+                Some(match caught_by {
+                    Some(t) => TrapVerdict::Caught(t),
+                    None => TrapVerdict::UnlessWritePending(at),
+                })
+            }
+            _ => Some(TrapVerdict::UnlessWritePending(at)),
+        }
+    }
+
+    /// ENG-10: whether a refused operation (or unknown code) may run from
+    /// `routine` (stable id) without crossing a checked run or `asserterror`.
+    pub(crate) fn may_refuse(&self, routine: &str) -> bool {
+        self.refusal
+            .as_ref()
+            .is_some_and(|w| w.closure.contains(routine))
+    }
+
+    /// ENG-10: whether `op` is an operation the server refuses inside a try
+    /// call (a non-temporary write, a `LockTable`, a `Commit()`).
+    pub(crate) fn is_refused_op(&self, op: &str) -> bool {
+        self.refusal.as_ref().is_some_and(|w| w.ops.contains(op))
+    }
+
+    /// ENG-10: whether any call site is a try call (the refusal facts exist).
+    pub(crate) fn has_try_calls(&self) -> bool {
+        self.refusal.is_some()
+    }
+
+    /// ENG-10: the checked run or `asserterror` trap step `s` crosses, as a
+    /// [`TrapAt`] at the step's call site.
+    fn catching_trap(&self, s: &Step<'a>) -> Option<TrapAt> {
+        let traps = self.traps.get(s.from)?;
+        let outs = self.out.get(s.from)?;
+        let kind = traps.iter().find_map(|&(j, k)| {
+            let (to, site, _, _) = outs[j as usize];
+            (to == s.to
+                && site == s.site
+                && matches!(k, TrapKind::CheckedRun | TrapKind::Asserterror))
+            .then_some(k)
+        })?;
+        let anchor = s
+            .site
+            .and_then(EdgeSite::guarded)
+            .and_then(|id| {
+                self.row_at(s.from, id)
+                    .and_then(|r| r.call_sites.iter().find(|c| c.id == id))
+            })
+            .map(|c| &c.source_anchor);
+        Some(TrapAt {
+            kind,
+            routine: s.from.to_string(),
+            file: anchor.map(|a| a.source_unit_id.clone()),
+            line: anchor.map(|a| a.start_line),
+        })
+    }
+
     fn build_pending_writes(&self) -> PendingWrites<'a> {
         use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
         {

@@ -5504,9 +5504,15 @@ fn digest_one_root<'i>(
                 // pending at the run, so it is never `unconditional` either;
                 // both keep ids and groups of their own (`run_commit` names
                 // either kind).
-                let run_commit = fact.resource_id()
+                // ENG-10: so does a try call's refusal error (raised only
+                // where the server refuses the write inside it).
+                let try_refusal = fact.resource_id()
+                    == Some(crate::engine::l4::capability_cone::WRITE_IN_TRY)
+                    && effect_type == "ERROR_IMPLICIT";
+                let run_commit = (fact.resource_id()
                     == Some(crate::engine::l4::capability_cone::RUN_COMMIT)
-                    && matches!(effect_type, "COMMIT" | "ERROR_IMPLICIT");
+                    && matches!(effect_type, "COMMIT" | "ERROR_IMPLICIT"))
+                    || try_refusal;
                 let mut offers: Vec<PartOffer> = Vec::with_capacity(parts.len());
                 for (bnd, ix) in parts {
                     let split = match cb {
@@ -5662,7 +5668,13 @@ fn digest_one_root<'i>(
                         // ENG-09: a checked run's commit is its own group.
                         Some(b) => format!(
                             "B|{effect_type}{}|{}|{}",
-                            if run_commit { "|run" } else { "" },
+                            if try_refusal {
+                                "|try"
+                            } else if run_commit {
+                                "|run"
+                            } else {
+                                ""
+                            },
                             if is_known_temp_snap(fact) { "kt" } else { "nt" },
                             b.id
                         ),
@@ -5875,7 +5887,9 @@ fn digest_one_root<'i>(
                             .filter(|(k, v)| {
                                 k == "commitBehavior"
                                     || (k == "resourceId"
-                                        && v == crate::engine::l4::capability_cone::RUN_COMMIT)
+                                        && (v == crate::engine::l4::capability_cone::RUN_COMMIT
+                                            || v
+                                                == crate::engine::l4::capability_cone::WRITE_IN_TRY))
                             })
                             .cloned(),
                     );
@@ -5919,6 +5933,14 @@ fn digest_one_root<'i>(
                 })
             {
                 key_effect_type = format!("{key_effect_type}|run");
+            }
+            // ENG-10: a try call's refusal error keeps an id of its own.
+            if acc.effect_type == "ERROR_IMPLICIT"
+                && detail.iter().any(|(k, v)| {
+                    k == "resourceId" && v == crate::engine::l4::capability_cone::WRITE_IN_TRY
+                })
+            {
+                key_effect_type = format!("{key_effect_type}|try");
             }
             let (canonical_key, link_signature) = build_canonical_key(
                 rid,

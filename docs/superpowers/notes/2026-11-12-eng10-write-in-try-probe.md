@@ -10,8 +10,12 @@ removed after the run.
 TestPermissions=Disabled with a permission set. All 13 outcomes match the sidecar: T00, T02, T08
 ok; T01, T03-T07, T09, T11, T12 raise "Call to the function X is not allowed…", not caught; T10's
 checked run catches it (the try returns true). One difference: the scope in the message reads
-`'RunTests'` on Windows, not `'RootMethodScope'`, so nothing may match on the scope name. **The
-second and third runs (T13-T20) are sidecar-only**: not part of that confirmation.
+`'RunTests'` on Windows, not `'RootMethodScope'`, so nothing may match on the scope name.
+
+**Second and third runs (T13-T20) confirmed on Windows** too (q-20261112T110129-63d6683c, same
+server and setup, 21 tests): not caught T13, T14, T17, T18, T19, T20 ("…INSERT is not
+allowed…"); caught, the try returns true, T15 (asserterror) and T16 (checked run). Scope names
+as on the sidecar, except `RunTests` for `RootMethodScope` (T17 and T18 name their test).
 
 ## Question
 
@@ -46,7 +50,7 @@ failure with another text is BC's own error, which nothing caught.
 | T10 `if Codeunit.Run(Writer) then;` inside the try (Writer's `OnRun` inserts) | the run returns false and catches the refusal ("…'INSERT' is not allowed…" is the last error); the try returns true |
 | T11 `Codeunit.Run(Writer);` inside the try (unchecked) | **not caught**, the same error, raised in Writer's `OnRun` |
 
-Second run, same day, **sidecar only** (review: shapes the first run did not cover):
+Second run, same day (review: shapes the first run did not cover):
 
 | Scenario | Outcome |
 |---|---|
@@ -56,7 +60,7 @@ Second run, same day, **sidecar only** (review: shapes the first run did not cov
 | T16 `Ok := TryRunsInnerTry()`, whose body is `if Codeunit.Run(Inner) then;`, `Inner` does `Ok := TryW()` and `TryW` inserts | caught by the checked run; the outer try returns true |
 | T17 `TryOuter();` (result not used) around `if TryInsert() then;` | **not caught** ("…inside the call to 'T17_UnusedTry_InnerUsedTryWrites'…"): the inner used try is refused as before |
 
-Third run, same day, **sidecar only** (review: which uses of the value make it a try call for the write):
+Third run, same day (review: which uses of the value make it a try call for the write):
 
 | Scenario | Outcome |
 |---|---|

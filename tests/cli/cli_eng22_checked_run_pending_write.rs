@@ -433,13 +433,23 @@ fn a_loop_body_and_a_sibling_subscriber_may_leave_a_write_pending() {
 }
 
 /// A trap outside the run still catches the run's own error: a used
-/// TryFunction around it.
+/// TryFunction around it. ENG-10: the try function's own `ModifyAll` is
+/// refused on premises (an error no try call catches), which is the one
+/// escaping row: the run's error is not among them.
 #[test]
 fn a_try_function_around_the_run_catches_its_error() {
     let t = workspace();
     let ws = t.path().to_str().unwrap();
     let r = ask(ws, "PW Caller::TryCaught", "throws-error", &[]);
-    assert_eq!(r["answer"], "no", "{r}");
+    assert!(run_errors(&r).is_empty(), "{r}");
+    let rows = r["evidence"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !rows.is_empty()
+            && rows
+                .iter()
+                .all(|e| e["detail"]["resourceId"] == "write-in-try"),
+        "{r}"
+    );
 }
 
 /// The `--site` slice and explain rule it the same way and name it.

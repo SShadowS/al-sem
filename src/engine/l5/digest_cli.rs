@@ -1378,6 +1378,17 @@ pub(crate) fn is_run_error_row(effect_type: &str, detail: &[(String, String)]) -
             .any(|(k, v)| k == "resourceId" && v == crate::engine::l4::capability_cone::RUN_COMMIT)
 }
 
+/// ENG-10: the error a try call raises when the server refuses a database
+/// write inside it (resource `write-in-try` on an implicit error).
+pub(crate) const TRY_REFUSAL_LABEL: &str = "ERROR (database write refused inside a try call)";
+
+pub(crate) fn is_try_refusal_row(effect_type: &str, detail: &[(String, String)]) -> bool {
+    effect_type == "ERROR_IMPLICIT"
+        && detail.iter().any(|(k, v)| {
+            k == "resourceId" && v == crate::engine::l4::capability_cone::WRITE_IN_TRY
+        })
+}
+
 pub(crate) fn is_run_commit_row(e: &DigestEffectFull) -> bool {
     e.effect_type == "COMMIT"
         && e.detail
@@ -2560,7 +2571,19 @@ fn judge_traps<'t>(
     };
     let scope = reach.trap_scope(&entry.routine_id, full, runs.as_ref());
     let collectors = reach.collectors_reached(full);
-    if scope.is_none() && !collectors && !has_run_error {
+    // ENG-10: a try call's refusal error is ruled by its own reach (no try
+    // call catches it), and a group caught only by a try call may hold one.
+    let refusal_open = if reach.has_try_calls() {
+        reach.refusal_reach(&entry.routine_id)
+    } else {
+        None
+    };
+    let has_refusal = reach.has_try_calls()
+        && rows.iter().any(|&i| {
+            let e = &entry.effects[i];
+            e.boundary_group || is_try_refusal_row(&e.effect_type, &e.detail)
+        });
+    if scope.is_none() && !collectors && !has_run_error && !has_refusal {
         return;
     }
     for i in rows {
@@ -2621,6 +2644,38 @@ fn judge_traps<'t>(
                 assumes_clean_entry = true;
                 assumes_normal_commit = by_commit;
             }
+        }
+        // ENG-10: the try call's own refusal error: whatever the ordinary
+        // traps said (an outer try call does not catch it).
+        if !e.boundary_group
+            && is_try_refusal_row(&e.effect_type, &e.detail)
+            && let Some(site) = e.evidence_callsite_id.as_deref()
+            && let Some(v) =
+                reach.try_refusal_verdict(&entry.routine_id, refusal_open.as_ref(), site)
+        {
+            trap = Some(v);
+            assumes_clean_entry = false;
+            assumes_normal_commit = false;
+        }
+        // ENG-10: a group a try call catches may hold the refusal of a write
+        // beyond the crossing, which the try call does not catch.
+        if e.boundary_group
+            && let Some(crate::engine::l5::literal_reach::TrapVerdict::Caught(at)) = &trap
+            && at.kind == crate::engine::l5::traps::TrapKind::TryFunction
+            && e.crossing
+                .as_ref()
+                .is_some_and(|c| c.targets.iter().any(|t| reach.may_refuse(t)))
+        {
+            trap = Some(
+                crate::engine::l5::literal_reach::TrapVerdict::UnlessWritePending(
+                    crate::engine::l5::literal_reach::TrapAt {
+                        kind: crate::engine::l5::traps::TrapKind::TryRefusal,
+                        ..at.clone()
+                    },
+                ),
+            );
+            assumes_clean_entry = false;
+            assumes_normal_commit = false;
         }
         let collected_by = if collectors && e.effect_type == "ERROR_THROW" && !e.boundary_group {
             reach

@@ -109,6 +109,11 @@ pub(crate) enum TrapKind {
     /// pending at it. Only a ruling of that error names it (never an entry
     /// of the trap table).
     RunCheck,
+    /// ENG-10: not a trap of the call edges: the server's refusal of a
+    /// database write inside a try call (on premises,
+    /// `DisableWriteInsideTryFunctions`), which raises the try call's own
+    /// error. Only a ruling of that error names it.
+    TryRefusal,
 }
 
 impl TrapKind {
@@ -128,6 +133,7 @@ impl TrapKind {
             TrapKind::Asserterror => "asserterror",
             TrapKind::IsolatedEvent => "isolated event",
             TrapKind::RunCheck => "clean-transaction check of the checked Codeunit.Run",
+            TrapKind::TryRefusal => "database-write refusal of the try call",
         }
     }
 
@@ -140,6 +146,7 @@ impl TrapKind {
             TrapKind::Asserterror => "asserterror",
             TrapKind::IsolatedEvent => "isolated-event",
             TrapKind::RunCheck => "checked-run-pending-write",
+            TrapKind::TryRefusal => "try-write-refused",
         }
     }
 }

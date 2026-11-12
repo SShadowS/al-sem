@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-10: a database write inside a used try call is refused on premises, engine limits L23 item 6)
+
+- **`throws-error` answered `no` for `Ok := TryInsert()`** whose try function inserts: it counted
+  the insert's error as caught by the TryFunction. On premises with `DisableWriteInsideTryFunctions`
+  on (Learn: the default there; no such restriction online), BC refuses the write and raises
+  "Call to the function 'INSERT' is not allowed inside the call to '…' when it is used as a
+  TryFunction.", which no try call catches. Measured on BC 28 on premises (Linux sidecar and
+  Windows 28.0.54946.56477, 21 scenarios; probe note
+  `docs/superpowers/notes/2026-11-12-eng10-write-in-try-probe.md`): refused are `Insert`,
+  `Modify`, `ModifyAll`, `Delete`, `LockTable` and `Commit()`, in the try function, a callee, an
+  unchecked `Codeunit.Run` or the call's arguments; not caught by the try call or an outer one;
+  caught by a checked `Codeunit.Run` or `asserterror` between; a temporary record's write is
+  allowed; every use of the value makes the call a try call, only a call statement does not.
+- Each such call (any resolved callee, any `#if` arm declaring `[TryFunction]`) now carries
+  `ERROR (database write refused inside a try call)` at its call site (`error-implicit`, resource
+  `write-in-try`), raised, never unconditional, where a refused operation or unknown code may run
+  inside it, "not raised" otherwise (trap kind `try-write-refused`; JSON verdict
+  `escapes-if-write-refused`). prove (and its `--site/--match/--op` slice, which also rules a
+  refused operation inside the try that way), explain and digest. CDO: 5 of its 30
+  `[TryFunction]` procedures may write (the PDF service's token cache is CDO bug #80680, guarded
+  by a token warm-up the engine cannot see).
+
 ### Changed (TLS-09: the gate's optimized build is `release-fast`)
 
 - **`scripts/ci-steps build` and `perf-bounds` build with `--profile release-fast` instead of

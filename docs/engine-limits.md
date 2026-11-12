@@ -533,10 +533,35 @@ literal reach, so measure speed when changing it.
 6. Not modeled:
    - errors in a try call's arguments. Learn says they are evaluated inside the try function, so
      they are caught; the answers report them as escaping, which is safe;
-   - a write inside a try method on premises with `DisableWriteInsideTryFunctions`: wrong answer
-     left, on premises only. It is a run-time error the answers do not add. Learn does not say
-     whether the try call catches it, so it is NOT known to be safe: `throws-error` may under-report
-     it.
+   - **Fixed (ENG-10):** a write inside a try call on premises with
+     `DisableWriteInsideTryFunctions` on (measured on BC 28 on premises, Linux sidecar and Windows
+     28.0.54946.56477, q-20261112T104134-338e9d4a and q-20261112T110129-63d6683c; probe
+     `docs/superpowers/notes/2026-11-12-eng10-write-in-try-probe.md`). A database write
+     (`Insert`, `Modify`, `ModifyAll`, `Delete`), `LockTable` or `Commit()` that runs inside a try
+     call raises an error that no try call catches (neither the try call itself nor an outer one);
+     a checked `Codeunit.Run` or `asserterror` between catches it; a temporary record's write is
+     allowed. Every use of the try function's value makes it a try call (`Ok :=`, a condition,
+     `exit(..)`, an argument, `a and ..`); only a call statement is ordinary; what the call's
+     arguments run is inside it. Each such call (`PCallSite::try_call`: any resolved callee, any
+     `#if` arm declaring `[TryFunction]`) carries the error at its call site, ruled per site:
+     raised (conditional, never unconditional: "if a database write runs inside it on a server
+     that refuses one") when a write, `LockTable`, `Commit()` or unknown code may run inside it
+     without crossing a checked run or `asserterror`, and not caught by any try call above;
+     "not raised" otherwise. A filtered slice (`--site`, `--match`, `--op`) on a refused
+     operation inside a try call rules it the same way. A boundary group a try call catches is
+     kept escaping when the code beyond its crossing may run a refused operation.
+   - **Left (ENG-10):** Learn says Business Central online has no such restriction; online was
+     not measured, and the rows name the setting rather than claim either way. Platform writes
+     (`IsolatedStorage.Set`, Media import and similar) are not counted as refused (not measured).
+     A root that is itself a try function is answered as called: a caller that uses its value
+     makes its writes refused, which the root's own answer does not state (its writes' own
+     implicit errors keep the answer `yes`; a try function whose body only commits or locks
+     answers `no`). "Not raised" is carried as a caught ruling of its own kind
+     (`try-write-refused`), as ENG-22's clean runs are, so caught counts (digest
+     `caughtErrors`) include it; the human lines name it apart. A write whose execution depends
+     on data (CDO's cached access token, bug #80680) is a "may". Whether the wider value uses
+     (`exit(..)`, an argument, `a and ..`) also CATCH an `Error()` was not measured: the trap rule
+     still reads only `Ok :=` and whole conditions (the safe side for catching).
 
 ### Declarations and objects
 

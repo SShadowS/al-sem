@@ -959,6 +959,12 @@ pub(crate) fn compute_slice(
     // ENG-22: the root's checked runs, for a run's own error (built only for
     // the errors question; cheap when none is in reach).
     let runs = if errors { reach.run_points(root) } else { None };
+    // ENG-10: the reach a try call's refusal error is ruled by.
+    let refusal_open = if errors && reach.has_try_calls() {
+        reach.refusal_reach(root)
+    } else {
+        None
+    };
     let scope = if trapped_question {
         reach.trap_scope(root, live, runs.as_ref())
     } else {
@@ -1050,6 +1056,32 @@ pub(crate) fn compute_slice(
             trap = Some(v);
             run_clean = clean;
         }
+        // ENG-10: a try call's refusal error, whatever the ordinary traps
+        // said (no try call catches it).
+        let try_refusal = rec.effect_type == "ERROR_IMPLICIT"
+            && tree.capability_facts[rec.fact].resource_id()
+                == Some(crate::engine::l4::capability_cone::WRITE_IN_TRY);
+        if try_refusal
+            && let Some(v) =
+                reach.try_refusal_verdict(root, refusal_open.as_ref(), rec.terminal.id())
+        {
+            trap = Some(v);
+        }
+        // ENG-10: a matching site that is itself a refused operation, caught
+        // only by a try call around it, raises the refusal there (the try
+        // call does not catch it), as the unfiltered answer's row at the try
+        // call says.
+        if let Some(TrapVerdict::Caught(at)) = &trap
+            && at.kind == crate::engine::l5::traps::TrapKind::TryFunction
+            && reach.is_refused_op(rec.terminal.id())
+        {
+            trap = Some(TrapVerdict::UnlessWritePending(
+                crate::engine::l5::literal_reach::TrapAt {
+                    kind: crate::engine::l5::traps::TrapKind::TryRefusal,
+                    ..at.clone()
+                },
+            ));
+        }
         if let Some(TrapVerdict::Caught(at)) = &trap {
             let anchor = r.and_then(|r| anchor_in(r, rec.terminal.id()));
             // B7 review: the ruling may rest on a checked run, which holds
@@ -1059,6 +1091,7 @@ pub(crate) fn compute_slice(
                     out.caught_assumes_clean_entry = true;
                     out.caught_assumes_normal_commit |= by_commit;
                 }
+                None if try_refusal => {}
                 None => {
                     out.caught_assumes_clean_entry |=
                         scope.as_ref().is_some_and(|s| s.clean_checked);
@@ -1086,6 +1119,8 @@ pub(crate) fn compute_slice(
             {
                 Some("checked Codeunit.Run with a write pending".to_string())
             }
+            // ENG-10: the error a try call raises when a write inside it is refused.
+            _ if try_refusal => Some("database write refused inside a try call".to_string()),
             _ => facts.as_ref().and_then(|f| f.op_name.clone()),
         };
         let table = match (&req.question, rec.resource) {
@@ -1836,6 +1871,12 @@ fn trap_at_value(at: &TrapAt) -> serde_json::Value {
 fn trap_verdict_value(t: &TrapVerdict) -> serde_json::Value {
     let (verdict, at) = match t {
         TrapVerdict::Caught(at) => ("caught", at),
+        // ENG-10: as `prove::trap_value`.
+        TrapVerdict::UnlessWritePending(at)
+            if at.kind == crate::engine::l5::traps::TrapKind::TryRefusal =>
+        {
+            ("escapes-if-write-refused", at)
+        }
         TrapVerdict::UnlessWritePending(at) => ("escapes-if-write-pending", at),
         TrapVerdict::SomeRoutes(at) => ("trapped-on-some-routes", at),
     };

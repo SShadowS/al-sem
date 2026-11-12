@@ -2760,6 +2760,8 @@ impl Place {
         // ENG-22: the error a checked run raises itself has a name of its own.
         let lead = if crate::engine::l5::digest_cli::is_run_error_row(&e.effect_type, &e.detail) {
             crate::engine::l5::digest_cli::RUN_ERROR_LABEL.to_string()
+        } else if crate::engine::l5::digest_cli::is_try_refusal_row(&e.effect_type, &e.detail) {
+            crate::engine::l5::digest_cli::TRY_REFUSAL_LABEL.to_string()
         } else {
             e.effect_type.clone()
         };
