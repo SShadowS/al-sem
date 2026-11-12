@@ -1798,8 +1798,10 @@ impl ReachWorkers {
 
 /// The literal pass's worker count (spec 2026-11-11 section 8.5): fixed, not
 /// the machine's core count, so peak memory is the same on any machine with
-/// at least this many cores.
-// shortcut: placeholder until TLS-22's CDO measurement chooses it (plan Task 5).
+/// at least this many cores. Measured on CDO (2026-11-12, release-fast, 22
+/// cores): `prove.reach_effects` of the 699-root `impact --diff` 87.1 s at
+/// 1, 51.3 s at 2, 35.5 s at 4, 29.4 s at 8, 35.6 s at 16 (peak RSS +5% at
+/// 8, +15% at 16); `docs/superpowers/notes/2026-11-12-parallel-literal-pass.md`.
 pub(crate) const REACH_WORKERS: usize = 8;
 
 static DEFAULT_REACH_WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -1812,7 +1814,7 @@ pub fn set_default_reach_workers(n: usize) {
 
 /// The worker count a caller with no setting of its own uses: the binary's,
 /// or [`REACH_WORKERS`] capped by the cores.
-pub(crate) fn default_reach_workers() -> ReachWorkers {
+pub fn default_reach_workers() -> ReachWorkers {
     ReachWorkers::new(*DEFAULT_REACH_WORKERS.get_or_init(|| {
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
         REACH_WORKERS.min(cores)

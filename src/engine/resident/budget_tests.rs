@@ -77,6 +77,82 @@ fn the_pre_model_estimate_follows_the_input_sizes() {
     );
 }
 
+/// TLS-22: a case that runs the literal pass (a request's trees, a witness
+/// batch) holds up to one root's working set per extra worker at once, so
+/// its TABLE estimate adds [`REACH_WORKER_MIB`] per extra worker, scaled by
+/// routine count like the table, and never more workers than roots. An
+/// unobserved 699-root ask that the table alone would admit is refused when
+/// the worker term does not fit (the overshoot the parallel pass would
+/// otherwise add to the budget's once-only overrun); serially it is admitted.
+/// Observed peaks include the term already and are read as they are.
+///
+/// DISCRIMINATION (2026-11-12): dropping the worker term from
+/// `Estimates::of_sized` (`case.table_mib() + 0 * workers`) fails the
+/// 8-worker estimate (900 MiB against 1,075); restored, passes.
+#[test]
+fn a_pass_running_cases_table_estimate_counts_the_extra_workers() {
+    let none = InputSizes::default();
+    let mut e = Estimates::new(false);
+    e.routines = Some(TABLE_ROUTINES);
+    e.reach_workers = 8;
+    let extra = 7 * REACH_WORKER_MIB;
+    assert_eq!(e.of_sized(Case::Trees, none, 699), (900 + extra) * MIB);
+    assert_eq!(
+        e.of_sized(Case::Fill("witness"), none, 64),
+        (60 + extra) * MIB
+    );
+    assert_eq!(
+        e.of_sized(Case::Trees, none, 3),
+        (900 + 2 * REACH_WORKER_MIB) * MIB,
+        "3 roots use 3 workers"
+    );
+    assert_eq!(
+        e.of_sized(Case::Trees, none, 1),
+        900 * MIB,
+        "one root: serial"
+    );
+    assert_eq!(
+        e.of_sized(Case::Fill("fold"), none, 699),
+        900 * MIB,
+        "a case that runs no pass"
+    );
+    e.routines = Some(TABLE_ROUTINES / 2);
+    assert_eq!(
+        e.of_sized(Case::Trees, none, 699),
+        (900 + extra) * MIB * (TABLE_ROUTINES / 2) / TABLE_ROUTINES,
+        "scaled by routine count"
+    );
+    e.routines = Some(TABLE_ROUTINES);
+    e.observe_sized(Case::Trees, 699, 4_000 * MIB);
+    assert_eq!(
+        e.of_sized(Case::Trees, none, 699),
+        4_000 * MIB,
+        "an observed peak is read as it is"
+    );
+
+    // Admission: 1000 MiB free fits the table's 900 MiB, not 900 + 175.
+    let budget_for = |workers: u64| {
+        let meter = Arc::new(FakeMeter::default());
+        meter.rss.store(4_000 * MIB, Ordering::SeqCst);
+        let mut e = Estimates::new(false);
+        e.routines = Some(TABLE_ROUTINES);
+        e.reach_workers = workers;
+        Budget::new(5_000 * MIB, meter, e)
+    };
+    let parallel = budget_for(8);
+    let est = parallel.estimate_sized(Case::Trees, none, 699);
+    assert!(
+        parallel.reserve_sized(Case::Trees, 699, est).is_err(),
+        "8 workers: refused before the work"
+    );
+    let serial = budget_for(1);
+    let est = serial.estimate_sized(Case::Trees, none, 699);
+    assert!(
+        serial.reserve_sized(Case::Trees, 699, est).is_ok(),
+        "serially it fits"
+    );
+}
+
 /// After the first build the table scales by routine count; an observed
 /// peak replaces it, the largest of the last three.
 #[test]

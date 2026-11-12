@@ -195,6 +195,13 @@ pub struct InputSizes {
     pub package_bytes: u64,
 }
 
+/// TLS-22: the literal pass's extra peak per extra worker, at CDO's size
+/// (scaled by routine count like the table): the one-shot 699-root
+/// `impact --diff` peaked 153 MiB higher at 8 workers than at 1 (about
+/// 22 MiB per extra worker), `--base` 149 MiB (2026-11-12,
+/// `docs/superpowers/notes/2026-11-12-parallel-literal-pass.md`).
+pub const REACH_WORKER_MIB: u64 = 25;
+
 /// Bytes of peak per `.al` byte (CDO single-app: 0.8 GB over 4.74 MiB).
 pub const PER_AL_BYTE: u64 = 180;
 
@@ -211,6 +218,10 @@ pub struct Estimates {
     pub per_package_byte: u64,
     /// The published revision's routine count (`None` before the first).
     pub routines: Option<u64>,
+    /// TLS-22: how many roots the literal pass runs at once in this session
+    /// (1 under `--low-mem`): a table estimate of a pass-running case adds
+    /// [`REACH_WORKER_MIB`] per extra worker ([`Estimates::of_sized`]).
+    pub reach_workers: u64,
     /// The last three observed peaks per case and size class
     /// ([`size_class`]).
     observed: BTreeMap<(Case, u32), VecDeque<u64>>,
@@ -248,6 +259,7 @@ impl Estimates {
             per_al_byte: PER_AL_BYTE,
             per_package_byte: PER_PACKAGE_BYTE,
             routines: None,
+            reach_workers: 1,
             observed: BTreeMap::new(),
         }
     }
@@ -289,10 +301,20 @@ impl Estimates {
         {
             return *max;
         }
+        // TLS-22: a case that runs the literal pass holds up to one root's
+        // working set per extra worker at once; an observed peak includes
+        // it, the table must add it.
+        let workers = match case {
+            Case::Trees | Case::Fill("witness") => {
+                self.reach_workers.min(units).saturating_sub(1) * REACH_WORKER_MIB
+            }
+            _ => 0,
+        };
+        let mib = case.table_mib() + workers;
         let table = match (case, self.routines) {
             (Case::Cold, _) | (Case::Incremental, None) => self.pre_model(sizes),
-            (_, None) => case.table_mib() * MIB,
-            (_, Some(r)) => (case.table_mib() * MIB).saturating_mul(r.max(1)) / TABLE_ROUTINES,
+            (_, None) => mib * MIB,
+            (_, Some(r)) => (mib * MIB).saturating_mul(r.max(1)) / TABLE_ROUTINES,
         };
         let smaller = self
             .observed
