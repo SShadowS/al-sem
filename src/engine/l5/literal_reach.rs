@@ -3312,7 +3312,13 @@ impl<'a> LiteralReach<'a> {
                 dirty |= before.sites.iter().any(|s| self.site_may_write(f, s, w));
                 // ENG-22 review: the site itself ran in an earlier pass of a
                 // loop that holds it, and what it left is pending now.
-                dirty |= before.repeats && site.is_some_and(|s| self.site_may_write(f, s, w));
+                dirty |= before.repeats
+                    && site.is_some_and(|s| {
+                        // A checked run's own writes end with it (review round
+                        // 2: a dynamic run has no edge to say so).
+                        !row.call_sites.iter().any(|c| c.id == s && c.checked_run)
+                            && self.site_may_write(f, s, w)
+                    });
                 committed &= before.committed;
             }
             (dirty, committed)

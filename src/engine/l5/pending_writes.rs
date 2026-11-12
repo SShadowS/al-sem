@@ -529,8 +529,14 @@ fn walk_node(
         // runs again after each pass of the body, and a `repeat` condition
         // after the body of the same pass: the body may run before `t`
         // (ENG-22 review). A `for` range is evaluated once, before the body.
+        // An earlier pass also ran the whole condition (round 2): `t` itself
+        // and the operands after it (`while Worker() do;`).
         if matches!(n.kind.as_str(), "while" | "repeat") {
-            for c in kids(&n.children).iter().chain(kids(&n.else_children)) {
+            for c in kids(&n.children)
+                .iter()
+                .chain(kids(&n.else_children))
+                .chain(leaves)
+            {
                 collect_reaching(c, out);
             }
         }

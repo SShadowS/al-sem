@@ -62,6 +62,13 @@ codeunit 52220 "PW Caller"
     begin
         if Codeunit.Run(Id) then;
     end;
+    procedure DynamicInLoop(Id: Integer; N: Integer)
+    var
+        I: Integer;
+    begin
+        for I := 1 to N do
+            if Codeunit.Run(Id) then;
+    end;
     procedure RunOnly()
     begin
         if Codeunit.Run(Codeunit::"PW Clean") then;
@@ -135,6 +142,18 @@ codeunit 52220 "PW Caller"
     begin
         if Codeunit.Run(Codeunit::"PW Clean") then;
         R.ModifyAll(V, 1);
+    end;
+    procedure WhileCallsRunThenWrite()
+    begin
+        while RunThenWriteTrue() do;
+    end;
+    local procedure RunThenWriteTrue(): Boolean
+    var
+        R: Record "PW Row";
+    begin
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+        R.ModifyAll(V, 1);
+        exit(true);
     end;
     procedure InsertFiresSubscriber()
     var
@@ -320,6 +339,10 @@ fn a_clean_checked_run_raises_nothing_and_says_what_it_assumes() {
     // is not among its rows.
     let r = ask(ws, "PW Caller::DynamicOnly", "throws-error", &[]);
     assert!(run_errors(&r).is_empty(), "DynamicOnly: {r}");
+    // Review round 2: in a loop, its earlier pass leaves nothing (a checked
+    // run's writes end with it), though it has no edge to say so.
+    let r = ask(ws, "PW Caller::DynamicInLoop", "throws-error", &[]);
+    assert!(run_errors(&r).is_empty(), "DynamicInLoop: {r}");
     for routine in ["CommitThenRun", "RunOnly", "LoopRunClean"] {
         let r = ask(ws, &format!("PW Caller::{routine}"), "throws-error", &[]);
         assert_eq!(r["answer"], "no", "{routine}: {r}");
@@ -456,6 +479,8 @@ fn a_repeated_call_and_a_table_event_leave_a_write_pending() {
     let ws = t.path().to_str().unwrap();
     for routine in [
         "PW Caller::LoopCallsRunThenWrite",
+        // Review round 2: the call is the loop's own condition.
+        "PW Caller::WhileCallsRunThenWrite",
         "PW Caller::InsertFiresSubscriber",
     ] {
         assert_eq!(escaping_run_errors(ws, routine), 1, "{routine}");
