@@ -1779,7 +1779,7 @@ fn corpus_trees() -> Vec<(
 /// for what is wrong in every order.
 ///
 /// Each probe-holding test in this file uses pool sizes no other test uses
-/// (5, 6; 3; 9; the resident route test 7): a pool is shared by every pass
+/// (5, 6; 9; the resident route test 7): a pool is shared by every pass
 /// of its size in the process, so two tests holding a first wave in one pool
 /// under a plain `cargo test` could starve each other (review, Opus I1).
 #[test]
@@ -1834,61 +1834,6 @@ fn the_default_worker_count_is_capped_by_the_cores() {
     assert_eq!(capped_by_cores(4), 4);
     assert_eq!(capped_by_cores(22), REACH_WORKERS);
     assert_eq!(capped_by_cores(0), 1, "an unknown count: serial");
-}
-
-/// TLS-22, owner decision 2026-11-12 (q-20261112T022816-833a1bd9): while
-/// another pass sharing the counter runs (another ask), a pass runs one root
-/// at a time. Started beside another, it is serial; when another starts
-/// while it runs (the probe adds one to the counter as its third root
-/// starts, the first wave of 3 in flight), every root it starts after that
-/// runs alone.
-///
-/// DISCRIMINATION (2026-11-12): without the workers' stop (`w > 0 &&
-/// others()`) it fails (3 roots at once after the other pass started,
-/// against 1); restored, passes.
-#[test]
-fn beside_another_pass_the_pass_runs_one_root_at_a_time() {
-    let (name, target, tree, roots) = corpus_trees()
-        .into_iter()
-        .max_by_key(|(_, _, _, r)| r.len())
-        .expect("a corpus tree");
-    assert!(
-        roots.len() > 8,
-        "precondition: {name} has more than 8 roots"
-    );
-    let run = |w: ReachWorkers| {
-        passed_root_entries(&tree, target.resolved(), &roots, false, BoundaryMode::On, w);
-    };
-    let held = |n| Some((n, std::time::Duration::from_secs(10)));
-    // Another pass starts while this one runs.
-    let w = ReachWorkers::new(3);
-    let counter = Arc::clone(w.passes.as_ref().unwrap());
-    let probe = Arc::new(PassProbe::default());
-    *probe.first_wave.lock().unwrap() = held(3);
-    *probe.another_at.lock().unwrap() = Some((2, Arc::clone(&counter)));
-    run(w.with_probe(Arc::clone(&probe)));
-    assert_eq!(probe.max(), 3, "precondition: alone, 3 roots at once");
-    assert!(
-        probe.started.load(std::sync::atomic::Ordering::SeqCst) > 4,
-        "precondition: roots started after the other pass"
-    );
-    assert_eq!(
-        probe.max_after.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "after the other pass started: one root at a time"
-    );
-    // Started while another runs (the counter still counts it).
-    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
-    let probe = Arc::new(PassProbe::default());
-    *probe.first_wave.lock().unwrap() = Some((3, std::time::Duration::from_millis(200)));
-    run(w.with_probe(Arc::clone(&probe)));
-    assert_eq!(probe.max(), 1, "started beside another: serial");
-    // The default setting shares one counter for the process.
-    let (a, b) = (default_reach_workers(), default_reach_workers());
-    assert!(Arc::ptr_eq(
-        a.passes.as_ref().unwrap(),
-        b.passes.as_ref().unwrap()
-    ));
 }
 
 /// TLS-22: the pass runs exactly `n` roots at once with `n` workers (the

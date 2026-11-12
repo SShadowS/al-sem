@@ -6,11 +6,7 @@ use super::*;
 fn budget(bytes: u64, rss: u64) -> (Budget, Arc<FakeMeter>) {
     let meter = Arc::new(FakeMeter::default());
     meter.rss.store(rss, Ordering::SeqCst);
-    // One worker: these tests pin the table and the size classes; the
-    // parallel pass's worker term has its own test.
-    let mut e = Estimates::new(false);
-    e.reach_workers = 1;
-    let b = Budget::new(bytes, meter.clone(), e);
+    let b = Budget::new(bytes, meter.clone(), Estimates::new(false));
     (b, meter)
 }
 
@@ -78,92 +74,6 @@ fn the_pre_model_estimate_follows_the_input_sizes() {
     assert_eq!(
         Estimates::new(true).pre_model(cdo),
         (4_970_000 * PER_AL_BYTE).max(ESTIMATE_FLOOR_SINGLE_APP)
-    );
-}
-
-/// TLS-22: a case that runs the literal pass (a request's trees, a witness
-/// batch) holds up to one root's working set per extra worker at once, so
-/// its TABLE estimate adds [`REACH_WORKER_MIB`] per extra worker, scaled by
-/// routine count like the table, and never more workers than roots. An
-/// unobserved 699-root ask that the table alone would admit is refused when
-/// the worker term does not fit (the overshoot the parallel pass would
-/// otherwise add to the budget's once-only overrun); serially it is admitted.
-/// Observed peaks include the term already and are read as they are.
-///
-/// DISCRIMINATION (2026-11-12): dropping the worker term from
-/// `Estimates::of_sized` (`case.table_mib() + 0 * workers`) fails the
-/// 8-worker estimate (900 MiB against 1,075); restored, passes.
-#[test]
-fn a_pass_running_cases_table_estimate_counts_the_extra_workers() {
-    // Admission's default count is the one a revision runs with, for any
-    // session, not only those the binary sets up (review, sol 1).
-    // DISCRIMINATION (2026-11-12): `reach_workers: 1` in `Estimates::new`
-    // fails here (1 against the default count on this host); restored,
-    // passes. (A one-core host has a default of 1 and cannot tell them apart.)
-    assert_eq!(
-        Estimates::new(false).reach_workers,
-        crate::engine::l5::digest_cli::default_reach_workers().count() as u64,
-        "admission and the work agree on the default"
-    );
-    let none = InputSizes::default();
-    let mut e = Estimates::new(false);
-    e.routines = Some(TABLE_ROUTINES);
-    e.reach_workers = 8;
-    let extra = 7 * REACH_WORKER_MIB;
-    assert_eq!(e.of_sized(Case::Trees, none, 699), (900 + extra) * MIB);
-    assert_eq!(
-        e.of_sized(Case::Fill("witness"), none, 64),
-        (60 + extra) * MIB
-    );
-    assert_eq!(
-        e.of_sized(Case::Trees, none, 3),
-        (900 + 2 * REACH_WORKER_MIB) * MIB,
-        "3 roots use 3 workers"
-    );
-    assert_eq!(
-        e.of_sized(Case::Trees, none, 1),
-        900 * MIB,
-        "one root: serial"
-    );
-    assert_eq!(
-        e.of_sized(Case::Fill("fold"), none, 699),
-        900 * MIB,
-        "a case that runs no pass"
-    );
-    e.routines = Some(TABLE_ROUTINES / 2);
-    assert_eq!(
-        e.of_sized(Case::Trees, none, 699),
-        (900 + extra) * MIB * (TABLE_ROUTINES / 2) / TABLE_ROUTINES,
-        "scaled by routine count"
-    );
-    e.routines = Some(TABLE_ROUTINES);
-    e.observe_sized(Case::Trees, 699, 4_000 * MIB);
-    assert_eq!(
-        e.of_sized(Case::Trees, none, 699),
-        4_000 * MIB,
-        "an observed peak is read as it is"
-    );
-
-    // Admission: 1000 MiB free fits the table's 900 MiB, not 900 + 175.
-    let budget_for = |workers: u64| {
-        let meter = Arc::new(FakeMeter::default());
-        meter.rss.store(4_000 * MIB, Ordering::SeqCst);
-        let mut e = Estimates::new(false);
-        e.routines = Some(TABLE_ROUTINES);
-        e.reach_workers = workers;
-        Budget::new(5_000 * MIB, meter, e)
-    };
-    let parallel = budget_for(8);
-    let est = parallel.estimate_sized(Case::Trees, none, 699);
-    assert!(
-        parallel.reserve_sized(Case::Trees, 699, est).is_err(),
-        "8 workers: refused before the work"
-    );
-    let serial = budget_for(1);
-    let est = serial.estimate_sized(Case::Trees, none, 699);
-    assert!(
-        serial.reserve_sized(Case::Trees, 699, est).is_ok(),
-        "serially it fits"
     );
 }
 
@@ -251,7 +161,6 @@ fn a_large_requests_peak_is_not_a_small_requests_estimate() {
     // An unobserved middle class: the table or a smaller class's peak.
     assert_eq!(b.estimate_sized(Case::Trees, none, 10), 900 * MIB);
     let mut e = Estimates::new(false);
-    e.reach_workers = 1;
     e.observe_sized(Case::Trees, 3, 1_000 * MIB);
     assert_eq!(e.of_sized(Case::Trees, none, 10), 1_000 * MIB);
     assert_eq!(e.of_sized(Case::Trees, none, 1), 900 * MIB);

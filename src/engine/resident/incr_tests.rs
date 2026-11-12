@@ -264,15 +264,19 @@ pub(super) fn pd_and_cold(
     (warm, cold, f.pd_report)
 }
 
-/// TLS-22: a `--low-mem` session builds revisions whose literal pass runs
-/// serially (memory before speed); the default session's run the default
-/// worker count. (That each route obeys its revision's count:
+/// TLS-22, owner decision 2026-11-12 (q-20261112T032637-1269d8fc): the
+/// resident engine runs the literal pass serially, in the default mode and
+/// under `--low-mem`, while a one-shot CLI read runs the default worker
+/// count. Measured on CDO: two 699-root impacts in a row peaked at 8,030 MiB
+/// with 8 workers (2 % under the 8 GiB budget), 7,929 MiB serially (3 %).
+/// (That each route obeys its revision's count:
 /// `every_route_runs_the_pass_with_its_revisions_worker_count`.)
 ///
-/// DISCRIMINATION (2026-11-11): the session ignoring `low_mem` (no
-/// `with_reach_workers` call) fails; restored, passes.
+/// DISCRIMINATION (2026-11-12): a revision defaulting to
+/// `default_reach_workers()` fails (8 against 1); restored, passes. (On a
+/// one-core host the default is 1 too and the break cannot show.)
 #[test]
-fn a_low_mem_session_runs_the_literal_pass_serially() {
+fn the_resident_engine_runs_the_literal_pass_serially() {
     let dir = tempfile::tempdir().unwrap();
     crate::engine::l5::test_support::write_fixture_rule_b(dir.path());
     let open = |low_mem: bool| {
@@ -281,14 +285,11 @@ fn a_low_mem_session_runs_the_literal_pass_serially() {
                 .with_low_mem(low_mem),
         )
     };
+    assert_eq!(pin(&open(false)).reach_workers_count(), 1, "default mode");
     assert_eq!(pin(&open(true)).reach_workers_count(), 1, "--low-mem");
-    let default = crate::engine::l5::digest_cli::default_reach_workers().count();
-    assert_eq!(pin(&open(false)).reach_workers_count(), default, "default");
-    // On a one-core host the default is 1 too (capped by the cores:
-    // `the_default_worker_count_is_capped_by_the_cores`), so this test cannot
-    // tell `--low-mem` apart there; it says so instead of failing.
-    if default == 1 {
-        eprintln!("one core: --low-mem and the default are both serial here");
+    let cli = crate::engine::l5::digest_cli::default_reach_workers().count();
+    if cli == 1 {
+        eprintln!("one core: the CLI is serial here too, so the break cannot show");
     }
 }
 

@@ -4222,13 +4222,6 @@ mod engine {
             if let Some(n) = self.estimate_floor {
                 estimates.floor = n;
             }
-            // TLS-22: the literal pass's worker count, as the session's
-            // revisions run it (serial under --low-mem).
-            estimates.reach_workers = if self.low_mem {
-                1
-            } else {
-                al_sem::engine::l5::digest_cli::default_reach_workers().count() as u64
-            };
             let bytes = self.memory_budget.unwrap_or_else(|| {
                 al_sem::engine::resident::budget::default_budget(single, self.low_mem)
             });

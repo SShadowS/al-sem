@@ -4,10 +4,12 @@ Spec: `docs/superpowers/specs/2026-11-11-parallel-literal-reach.md` section 8 (r
 Opus, three rounds). Plan: `docs/superpowers/plans/2026-11-11-tls22-parallel-literal-pass.md`.
 
 **What changed.** The literal pass (`literal_reach_entries`, span `prove.reach_effects`) ran the
-roots of a read one after another. It now runs them on a pool of a fixed number of threads
-(`REACH_WORKERS` = 8, capped by the core count), one root per task. Everything the roots share is
-either read-only or a cache whose value depends only on its key, so the answer is the same at any
-worker count. The resident engine under `--low-mem` keeps the pass serial (memory before speed).
+roots of a read one after another. In a one-shot CLI read (`alsem impact`, `digest`, `prove`) it
+now runs them on a pool of a fixed number of threads (`REACH_WORKERS` = 8, capped by the core
+count), one root per task. Everything the roots share is either read-only or a cache whose value
+depends only on its key, so the answer is the same at any worker count. **The resident engine (the
+context server) keeps the pass serial** (owner decision 2026-11-12, q-20261112T032637-1269d8fc,
+below: its 8 GiB budget kept only 2 % headroom with 8 workers).
 
 ## How it was measured
 
@@ -52,19 +54,34 @@ worker count. The resident engine under `--low-mem` keeps the pass serial (memor
 
 ## Resident results (`alsem mcp`, CDO)
 
-| Config | Model build | 20-root digest | Two digests at once | 699-root impact | Two impacts at once | Peak after the two impacts |
-|--------|------------:|---------------:|--------------------:|----------------:|--------------------:|---------------------------:|
-| 1 worker | 36.7 s | 3.7 s | 3.9 s | 206.3 s | 381.6 s | 7,929 MiB |
-| 8 workers | 33.6 s | 4.3 s | 3.9 s | **140.1 s** | **263.6 s** | 8,089 MiB |
-| `--low-mem` | 31.5 s | 3.0 s | 3.3 s | 194.1 s | one refused | 5,615 MiB |
+"Two at once" below means two asks sent together. They do NOT run together: the MCP pool sends
+every call for one (workspace, universe) to one engine child, and the child runs heavy asks
+(impact, digest, prove) one at a time on its one heavy worker (`src/mcp/pool.rs`,
+`src/engine/host/child.rs`). So the second impact runs after the first, on top of what the first
+left resident; the walls show it (the pair takes about twice one ask at any worker count).
 
-- **A 699-root impact on the resident engine falls 32 % (206 -> 140 s) at the same peak** (6,904 ->
-  6,890 MiB after it); two at once fall 31 %, and their peak rises 160 MiB (2 %), to 8,089 MiB.
-  That is under the 8 GiB budget (8,192 MiB), but close; with 1 worker it was 7,929 MiB.
-- **Headroom: about 1 %.** Two concurrent 699-root asks peaked at 8,089 MiB against the 8,192 MiB
-  budget (with 1 worker: 7,929 MiB, 3 %). The figure is the sum of VmHWM over the server and its
-  engine children, so it is an upper bound on the engine's own RSS, which is what the budget
-  meters; it is still close.
+| Config | Model build | 20-root digest | Two digests | 699-root impact (its peak) | Two impacts in a row | Peak after them |
+|--------|------------:|---------------:|------------:|---------------------------:|---------------------:|----------------:|
+| 1 worker | 36.7 s | 3.7 s | 3.9 s | 206.3 s (6,904 MiB) | 381.6 s | **7,929 MiB** |
+| 8 workers | 33.6 s | 4.3 s | 3.9 s | 140.1 s (6,890 MiB) | 263.6 s | 8,089 MiB |
+| 8 workers, rerun at `e1f36353` | 43.6 s | 5.1 s | 5.7 s | 169.7 s (**6,985 MiB**) | 260.1 s | **8,030 MiB** |
+| `--low-mem` | 31.5 s | 3.0 s | 3.3 s | 194.1 s (5,561 MiB) | one refused | 5,615 MiB |
+
+- **Headroom against the 8 GiB budget (8,192 MiB)** after two 699-root impacts: 2.0 % with 8
+  workers (8,030 MiB; 8,089 in the first run), 3.2 % serially (7,929 MiB). The figure is the sum of
+  VmHWM over the server and its engine children, an upper bound on the engine's own RSS, which is
+  what the budget meters. The gap between them, 100-160 MiB, is about the run-to-run noise (the
+  model build's peak moved 5,471 -> 5,587 MiB between runs), so it is not a precise number.
+- **The decision.** First (q-20261112T022816-833a1bd9, from the design mantra, principle 21): keep 8
+  workers for a lone ask and lower the count while two or more run. That was built and tested, and
+  measured as above: it never fires, because two passes never run at once in one engine child, and
+  the second ask's peak is its own pass on top of the first's retained state. So (q-20261112T032637-1269d8fc,
+  recommended by this lane): **the resident engine runs the pass serially**, which keeps the old
+  ~3 % headroom; the one-shot CLI keeps 8 workers, where the gate spends its time. The inert
+  concurrency policy was removed rather than kept as a guard that cannot fire, and with the resident
+  engine serial the admission estimate needs no worker term, so that went too.
+- **What the resident engine gives up:** a 699-root impact 206 -> 140 s (32 %) with 8 workers.
+  Test: `the_resident_engine_runs_the_literal_pass_serially` (default mode and `--low-mem`).
 - **What the budget does when it is passed** (`resident/budget.rs`, module doc): admission checks
   each reservation BEFORE the work, `rss + reserved + estimate <= budget`, with the estimate the
   largest of the case's last three observed peaks for that size class (by roots), or the CDO table
@@ -73,27 +90,12 @@ worker count. The resident engine under `--low-mem` keeps the pass serial (memor
   case's estimate, and no new reservation fits until the RSS is back under the budget. After one
   such ask, the next ones are refused cleanly (as `--low-mem`'s second ask was, below), not
   overshot.
-- **At 16 workers or on a bigger workspace.** Production does not run 16: the count is the
-  constant 8 (capped by the cores); only `AL_SEM_REACH_WORKERS` changes it, for measurement. At 16
-  the one-shot diff's peak rose 15 % over serial, against 5 % at 8. On a bigger workspace the extra
-  memory over serial is about 7 times the largest root's working set at 8 workers, so it grows with
-  the per-root search size; the first large ask there could overshoot once as described above.
-- **So the estimate counts the workers (done in TLS-22, at the orchestrator's request).** Before a
-  case is observed, `Estimates::of_sized` adds `REACH_WORKER_MIB` (25 MiB, from the measured
-  ~22 MiB per extra worker on CDO) per extra worker to the table estimate of the two cases that run
-  the pass (`Trees`, `Fill("witness")`), never more workers than the ask's roots, scaled by routine
-  count like the table. On CDO a cold 699-root `Trees` ask is estimated at 1,075 MiB instead of
-  900 at 8 workers; `--low-mem` (serial) keeps 900. An observed peak already includes the workers'
-  memory and is read as before, so the measured resident runs above are unchanged: each pair of
-  concurrent asks followed a single one of its kind and was admitted on that observation.
-  Test: `a_pass_running_cases_table_estimate_counts_the_extra_workers` (a 699-root ask the table
-  alone admits is refused at 8 workers, admitted serially).
-- Left: a workspace whose per-root working set is far above CDO's still gets an estimate made at
-  CDO's per-worker rate (scaled only by routine count) until its first observation.
-- The witness case (digests of 10-20 roots) does not change: its pass is a small part of it.
-- The table constants of the admission estimates (`Case::table_mib` for `Trees` and
-  `Fill("witness")` in `resident/budget.rs`) are not raised: the measured peaks did not rise beyond
-  noise for either case. The worker term is added beside them (below).
+- **The one-shot CLI at 16 workers or on a bigger workspace.** Production does not run 16: the
+  count is the constant 8 (capped by the cores); only `AL_SEM_REACH_WORKERS` changes it, for
+  measurement. At 16 the one-shot diff's peak rose 15 % over serial, against 5 % at 8. A one-shot
+  read has no memory budget; its extra over serial is about 7 times the largest root's working set,
+  so it grows with the per-root search size.
+- The admission estimates (`resident/budget.rs`) are unchanged: the resident engine is serial.
 - **`--low-mem`: two 699-root impacts at once, the second is refused** ("memory budget: the trees
   needs about 1204 MiB; budget 6144 MiB, resident 5153 MiB ... retained floor 5153 MiB", rerun with
   `lowmem_x2.py`). That is the budget rule as it was: `--low-mem` runs the pass serially, so the

@@ -338,7 +338,7 @@ pub struct Revision {
     raw_seed: Vec<Arc<Artifact>>,
     /// The `Raw` fills' subjects ([`Revision::raw_counts`]).
     raw_counts: RawCounts,
-    /// TLS-22: the literal pass's worker count ([`Revision::with_reach_workers`]).
+    /// TLS-22: the literal pass's worker count: serial (tests may set it).
     reach_workers: crate::engine::l5::digest_cli::ReachWorkers,
     #[cfg(test)]
     reach_probe: Arc<crate::engine::l5::digest_cli::PassProbe>,
@@ -444,14 +444,19 @@ impl Revision {
             raw_seed,
             raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
-            reach_workers: crate::engine::l5::digest_cli::default_reach_workers(),
+            // Serial in the resident engine (owner decision 2026-11-12,
+            // q-20261112T032637-1269d8fc): the parallel pass left about 2 %
+            // of the 8 GiB budget for two impacts in a row, serial about 3 %;
+            // one-shot CLI reads keep the workers.
+            reach_workers: crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
             #[cfg(test)]
             reach_probe: Arc::default(),
         }
     }
 
-    /// The revision with the literal pass's worker count `n` (TLS-22: its
-    /// session gives 1 under `--low-mem`).
+    /// Tests: the revision with the literal pass's worker count `n` (the
+    /// resident engine runs it serially).
+    #[cfg(test)]
     #[must_use]
     pub fn with_reach_workers(self, n: crate::engine::l5::digest_cli::ReachWorkers) -> Revision {
         Revision {
