@@ -40,7 +40,10 @@
 //! new ids on purpose, so a baseline of the old claim must NOT suppress the
 //! new one. Only `ws-d50-medium`, `ws-d50-pos` and `ws-d50-temp-gate` moved
 //! (their d50 fingerprints, baselines, and the run call sites d50's evidence
-//! now names); every other fixture's record is byte-identical.
+//! now names), and `ws-txn-d49-neg-run-boundary`, which gained its first d50
+//! finding (`Rec.Modify(); if CU.Run(Rec) then;`, the variable form d50 now
+//! seeds: BC refuses that run); every other fixture's record is
+//! byte-identical.
 //!
 //! A recorded string is a stable id and nothing else (`stable_id_re`), so the
 //! record cannot move for the reason the migration legitimately moves other

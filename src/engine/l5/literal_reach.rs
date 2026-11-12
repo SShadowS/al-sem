@@ -3162,6 +3162,20 @@ impl<'a> LiteralReach<'a> {
                     }
                 }
             }
+            // ENG-22 (measured on the BC 28.4 sidecar): `LockTable` then a
+            // read opens a write transaction (`IsInWriteTransaction()` is
+            // true) and a checked run after it fails, as after a write. A
+            // `LockTable` call counts as a write here.
+            for (&id, &r) in &self.by_stable {
+                let one = [r];
+                let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
+                for row in rows {
+                    for op in row.operation_sites.iter().filter(|o| o.kind == "lock") {
+                        write_sites.insert(op.id.as_str());
+                        seeds.insert(id);
+                    }
+                }
+            }
             let mut rev: HashMap<&'a str, Vec<(&'a str, u32)>> = HashMap::new();
             for (&f, list) in &self.out {
                 for (j, &(to, _, _, _)) in list.iter().enumerate() {
@@ -3296,6 +3310,9 @@ impl<'a> LiteralReach<'a> {
                     None => crate::engine::l5::pending_writes::sites_before(row, &[], true),
                 };
                 dirty |= before.sites.iter().any(|s| self.site_may_write(f, s, w));
+                // ENG-22 review: the site itself ran in an earlier pass of a
+                // loop that holds it, and what it left is pending now.
+                dirty |= before.repeats && site.is_some_and(|s| self.site_may_write(f, s, w));
                 committed &= before.committed;
             }
             (dirty, committed)
@@ -3309,17 +3326,28 @@ impl<'a> LiteralReach<'a> {
         self.out[f][j as usize].1.and_then(EdgeSite::guarded)
     }
 
-    /// ENG-22 review: whether another subscriber of the event that out-edge
-    /// `j` of publisher `p` dispatches may leave a write pending. The
-    /// subscribers of one event run in an order the engine does not know,
-    /// so one may run before the subscriber `j` enters.
-    fn sibling_may_write(&self, p: &'a str, j: u32, w: &PendingWrites<'a>) -> bool {
+    /// ENG-22 review: whether out-edge `j` of `p`, an event-like edge (an
+    /// event dispatch, a table event or an implicit trigger), is entered with
+    /// a write pending that its own site leaves: another subscriber or
+    /// trigger of the same site may write first (their order is not known to
+    /// the engine), or (a table event or trigger) the record operation that
+    /// fires it is itself a write. The second is conservative for `OnBefore…`
+    /// events and `OnInsert`-style triggers, which run before the write.
+    fn event_entry_may_be_dirty(&self, p: &'a str, j: u32, w: &PendingWrites<'a>) -> bool {
+        let is_event =
+            |kind: &str| matches!(kind, "event-dispatch" | "table-event" | "implicit-trigger");
         let out = &self.out[p];
-        let Some(EdgeSite::Event(ev)) = out[j as usize].1 else {
+        let (_, site, _, kind) = out[j as usize];
+        if !is_event(kind) || site.is_none() {
             return false;
-        };
-        out.iter().enumerate().any(|(k, &(to, site, _, _))| {
-            k != j as usize && site == Some(EdgeSite::Event(ev)) && w.may_write.contains(to)
+        }
+        if let Some(EdgeSite::Guarded(op)) = site
+            && w.write_sites.contains(op)
+        {
+            return true;
+        }
+        out.iter().enumerate().any(|(k, &(to, s, _, kd))| {
+            k != j as usize && s == site && is_event(kd) && w.may_write.contains(to)
         })
     }
 
@@ -3504,7 +3532,7 @@ impl<'a> LiteralReach<'a> {
                                 anc.contains(p)
                                     && !self.is_checked_run_edge(p, j)
                                     && (pending_at(p, self.edge_site(p, j), &dirty)
-                                        || self.sibling_may_write(p, j, w))
+                                        || self.event_entry_may_be_dirty(p, j, w))
                             });
                     if entered_dirty {
                         dirty.insert(x);

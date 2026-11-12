@@ -33,6 +33,7 @@
 //!   - `PCallSite.implicit_receiver`
 //!   - `PCallSite.start_may_fail`
 //!   - `PCallSite.checked_run`
+//!   - `PCallSite.write_txn_query`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -322,6 +323,18 @@ pub struct PCallSite {
     /// `in_statement_position`; deserialized rows default it to `false`.
     #[serde(skip)]
     pub checked_run: bool,
+    /// True iff the resolver decided this call is the platform's
+    /// `IsInWriteTransaction()` (bare or `Database.`), not a procedure of
+    /// that name. ENG-22: `if IsInWriteTransaction() then Commit();` ends the
+    /// open write transaction on both paths (measured on BC 28: the method
+    /// is true exactly when a checked run would fail), so the pending-write
+    /// walk reads that statement as a `Commit()`. Set by `program_calls`
+    /// after resolution, never by the body walk.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`; deserialized rows default it to `false`.
+    #[serde(skip)]
+    pub write_txn_query: bool,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -1229,7 +1242,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 25, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 26, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

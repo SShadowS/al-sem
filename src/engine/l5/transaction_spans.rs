@@ -553,8 +553,11 @@ fn frame_key(r: &ModelRoutine) -> (String, usize) {
 /// writes pending at it make the run fail; ENG-22). Codeunit.Run only; `objectRunReturnUsed === true` only (the
 /// STRICT affirmative predicate). NOT Page.Run / Report.Run.
 fn is_checked_codeunit_run(cs: &PCallSite) -> bool {
-    matches!(&cs.callee, PCallee::ObjectRun { object_kind, .. } if object_kind == "Codeunit")
-        && cs.object_run_return_used == Some(true)
+    // ENG-22 review: also a codeunit variable's `Ok := C.Run()`, as the
+    // resolver decided it (`PCallSite::checked_run`, the trap rule's).
+    cs.checked_run
+        || (matches!(&cs.callee, PCallee::ObjectRun { object_kind, .. } if object_kind == "Codeunit")
+            && cs.object_run_return_used == Some(true))
 }
 
 /// What the seed routine's parameters must be for `site` (a Commit, or a

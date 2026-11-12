@@ -2730,9 +2730,10 @@ fn literal_reach_entries<'t>(
                     } else {
                         e.effect_type.as_str()
                     };
-                    // ENG-09: a group of checked runs' commits ends on one.
+                    // ENG-09: a group of checked runs' commits ends on one;
+                    // ENG-22 review: so does a group of their own errors.
                     let run = crate::engine::l4::capability_cone::RUN_COMMIT;
-                    let marker = (ty == "COMMIT"
+                    let marker = (matches!(ty, "COMMIT" | "ERROR_IMPLICIT")
                         && e.detail.iter().any(|(k, v)| k == "resourceId" && v == run))
                     .then_some(run);
                     let ops = vec![(String::new(), reach.terminal_ops((ty, marker)))];

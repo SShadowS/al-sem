@@ -519,7 +519,7 @@ fn own_keys(
                 };
                 let shown = match msg.split_once(':') {
                     None if msg == crate::engine::l4::capability_cone::RUN_COMMIT => {
-                        " (checked run with a write pending)".to_string()
+                        " (checked run; raised if a write is pending at it)".to_string()
                     }
                     Some(("label", n)) => format!(" (label {n})"),
                     Some(("text", h)) => format!(" (text #{})", &h[..8.min(h.len())]),

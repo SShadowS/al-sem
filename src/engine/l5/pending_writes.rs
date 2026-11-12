@@ -153,6 +153,11 @@ pub(crate) struct Before {
     /// or a loop of its own): the transaction open when the routine was
     /// entered has ended before any target is reached.
     pub committed: bool,
+    /// ENG-22 review: a target may have run before itself (it sits in a loop
+    /// that holds it, so an earlier pass ran it). The targets are left out of
+    /// `sites` all the same; a reader that asks what is pending AT a target
+    /// counts the target's own leftovers from that earlier pass.
+    pub repeats: bool,
 }
 
 /// The sites of `r` that may run in the open transaction before control
@@ -176,11 +181,22 @@ pub(crate) fn sites_before_where(
     let mut sites: BTreeSet<String> = BTreeSet::new();
     let mut all = whole_body || r.statement_tree.is_none();
     let mut committed = !targets.is_empty();
+    // ENG-22: the platform's `IsInWriteTransaction()` calls join the commit
+    // ids (call-site ids never collide with operation ids), so
+    // `if IsInWriteTransaction() then Commit();` reads as a `Commit()`
+    // ([`is_guarded_commit`]); under a `[CommitBehavior]` that stops commits
+    // (`commits_end` false) it ends nothing either.
     let commits: BTreeSet<&str> = r
         .operation_sites
         .iter()
         .filter(|o| commits_end && o.kind == "commit")
         .map(|o| o.id.as_str())
+        .chain(
+            r.call_sites
+                .iter()
+                .filter(|c| commits_end && c.write_txn_query)
+                .map(|c| c.id.as_str()),
+        )
         .collect();
     if let Some(tree) = &r.statement_tree
         && !all
@@ -215,13 +231,15 @@ pub(crate) fn sites_before_where(
     // when a loop runs it earlier: what it reaches is the span member's to
     // count (its writes before ITS call toward the Commit), and its whole cone
     // also holds the Commit and everything after it.
+    let mut repeats = false;
     for t in targets {
-        sites.remove(*t);
+        repeats |= sites.remove(*t);
     }
     Before {
         sites,
         all,
         committed,
+        repeats,
     }
 }
 
@@ -429,6 +447,45 @@ fn is_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
     n.operation_id
         .as_deref()
         .is_some_and(|id| commits.contains(id))
+        || is_guarded_commit(n, commits)
+}
+
+/// ENG-22: `if IsInWriteTransaction() then Commit();` ends the open write
+/// transaction on both paths: when the platform method is false nothing is
+/// pending, otherwise the `Commit()` ends it (measured on BC 28:
+/// `IsInWriteTransaction()` is true exactly when a checked run fails). Only
+/// that shape: the whole condition is the call, not negated (`path_hint`),
+/// the call is the platform's (its id is in `commits`, put there by
+/// [`sites_before_where`] from `PCallSite::write_txn_query`), there is no
+/// `else`, and the `then` branch is one `Commit()` statement. Any other
+/// branch commit (`if X then Commit()`) ends nothing, as before.
+fn is_guarded_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
+    use crate::program::body::features::PathHint;
+    if n.kind != "if"
+        || n.path_hint != Some(PathHint::CondCall { negated: false })
+        || !kids(&n.else_children).is_empty()
+    {
+        return false;
+    }
+    let [leaf] = kids(&n.condition_leaves) else {
+        return false;
+    };
+    if !leaf
+        .callsite_id
+        .as_deref()
+        .is_some_and(|c| commits.contains(c))
+    {
+        return false;
+    }
+    let mut then = kids(&n.children);
+    while let [only] = then {
+        if only.kind == "block" {
+            then = kids(&only.children);
+        } else {
+            break;
+        }
+    }
+    matches!(then, [stmt] if stmt.operation_id.as_deref().is_some_and(|id| commits.contains(id)))
 }
 
 /// Add to `out` the sites that may run before `t` in the statement list

@@ -87,6 +87,62 @@ codeunit 52220 "PW Caller"
         while Codeunit.Run(Codeunit::"PW Clean") do
             I += 1;
     end;
+    procedure GuardedCommitThenRun()
+    var
+        R: Record "PW Row";
+    begin
+        R.ModifyAll(V, 1);
+        if IsInWriteTransaction() then
+            Commit();
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    procedure OtherGuardThenRun(B: Boolean)
+    var
+        R: Record "PW Row";
+    begin
+        R.ModifyAll(V, 1);
+        if B then
+            Commit();
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    procedure NegatedGuardThenRun()
+    var
+        R: Record "PW Row";
+    begin
+        R.ModifyAll(V, 1);
+        if not IsInWriteTransaction() then
+            Commit();
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    procedure LockThenRun()
+    var
+        R: Record "PW Row";
+    begin
+        R.LockTable();
+        if R.FindFirst() then;
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+    end;
+    procedure LoopCallsRunThenWrite()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 2 do
+            RunThenWrite();
+    end;
+    local procedure RunThenWrite()
+    var
+        R: Record "PW Row";
+    begin
+        if Codeunit.Run(Codeunit::"PW Clean") then;
+        R.ModifyAll(V, 1);
+    end;
+    procedure InsertFiresSubscriber()
+    var
+        R: Record "PW Row";
+    begin
+        R.K := 7;
+        R.Insert();
+    end;
     procedure TryCaught()
     begin
         if TryPendingRun() then;
@@ -119,6 +175,14 @@ codeunit 52231 "PW Sub A"
         R: Record "PW Row";
     begin
         R.ModifyAll(V, 2);
+    end;
+}
+codeunit 52233 "PW Row Sub"
+{
+    [EventSubscriber(ObjectType::Table, Database::"PW Row", 'OnAfterInsertEvent', '', false, false)]
+    local procedure AfterInsert(var Rec: Record "PW Row"; RunTrigger: Boolean)
+    begin
+        if Codeunit.Run(Codeunit::"PW Clean") then;
     end;
 }
 codeunit 52232 "PW Sub B"
@@ -343,4 +407,98 @@ fn the_site_slice_and_explain_name_the_runs_error() {
         )),
         "{card}"
     );
+}
+
+/// The run-error rows of `routine`'s `throws-error` answer that escape (not
+/// ruled "not raised").
+fn escaping_run_errors(ws: &str, routine: &str) -> usize {
+    let r = ask(ws, routine, "throws-error", &[]);
+    run_errors(&r)
+        .iter()
+        .filter(|e| e["trap"]["verdict"] == "escapes-if-write-pending")
+        .count()
+}
+
+/// ENG-22 (measured on the BC 28.4 sidecar: `IsInWriteTransaction()` is true
+/// exactly when a checked run fails): `if IsInWriteTransaction() then
+/// Commit();` ends the write on both paths, so the run after it is clean.
+/// Only that shape: a commit under another condition, or under the negated
+/// call, ends nothing.
+#[test]
+fn a_commit_guarded_by_is_in_write_transaction_ends_the_write() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let r = ask(ws, "PW Caller::GuardedCommitThenRun", "throws-error", &[]);
+    assert_eq!(r["answer"], "no", "{r}");
+    for routine in [
+        "PW Caller::OtherGuardThenRun",
+        "PW Caller::NegatedGuardThenRun",
+    ] {
+        assert_eq!(escaping_run_errors(ws, routine), 1, "{routine}");
+    }
+}
+
+/// ENG-22 (measured on the BC 28.4 sidecar): `LockTable` then a read opens a
+/// write transaction, and a checked run after it fails.
+#[test]
+fn a_lock_table_leaves_the_transaction_open() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    assert_eq!(escaping_run_errors(ws, "PW Caller::LockThenRun"), 1);
+}
+
+/// ENG-22 review: a call in a loop runs again after its own earlier pass
+/// wrote; a subscriber of an `OnAfterInsert` event runs with the insert
+/// pending.
+#[test]
+fn a_repeated_call_and_a_table_event_leave_a_write_pending() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    for routine in [
+        "PW Caller::LoopCallsRunThenWrite",
+        "PW Caller::InsertFiresSubscriber",
+    ] {
+        assert_eq!(escaping_run_errors(ws, routine), 1, "{routine}");
+    }
+}
+
+/// d50 reads the same facts: the variable form `Ok := C.Run()` is a seed
+/// (ENG-22 review), and a run after `if IsInWriteTransaction() then
+/// Commit();` has nothing pending.
+#[test]
+fn d50_sees_the_variable_form_and_the_guarded_commit() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let out = run(&[
+        "analyze",
+        ws,
+        "--detector",
+        "d50-checked-run-implicit-commit",
+        "--format",
+        "json",
+        "--scope",
+        "all",
+    ]);
+    let v: Value = serde_json::from_str(&out).expect("json");
+    let mut lines: Vec<u64> = Vec::new();
+    let mut stack = vec![&v];
+    while let Some(x) = stack.pop() {
+        match x {
+            Value::Object(m) => {
+                if m.get("detector").and_then(Value::as_str)
+                    == Some("d50-checked-run-implicit-commit")
+                    && let Some(l) = m.get("primaryLocation").and_then(|p| p["line"].as_u64())
+                {
+                    lines.push(l);
+                }
+                stack.extend(m.values());
+            }
+            Value::Array(a) => stack.extend(a.iter()),
+            _ => {}
+        }
+    }
+    let var_run = line_of("C.Run()", "procedure PendingThenVarRun(");
+    let guarded = line_of("Codeunit.Run(", "procedure GuardedCommitThenRun(");
+    assert!(lines.contains(&var_run), "{lines:?} want {var_run}: {out}");
+    assert!(!lines.contains(&guarded), "{lines:?} not {guarded}");
 }

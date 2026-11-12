@@ -3322,11 +3322,15 @@
       ]
     },
     "r0-corpus/ws-txn-d49-neg-run-boundary": {
-      "findings": [],
+      "findings": [
+        "d50-checked-run-implicit-commit|al-sem/v1=850c497132ef404f"
+      ],
       "stableIds": [
         "11111111-0000-0000-0000-0000000d4906:Codeunit:50000#5485782bdac545af653373d4a904a69d0a66c826bdc71ad1435a47c0093f6872",
+        "11111111-0000-0000-0000-0000000d4906:Codeunit:50000#5485782bdac545af653373d4a904a69d0a66c826bdc71ad1435a47c0093f6872/cs0",
         "11111111-0000-0000-0000-0000000d4906:Codeunit:50001#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
-      ]
+      ],
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"850c497132ef404f\"\n  ]\n}\n"
     },
     "r0-corpus/ws-txn-d49-neg-temp-write": {
       "findings": [],
