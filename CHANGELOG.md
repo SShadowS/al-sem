@@ -45,6 +45,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   146.3 s cold, 3 units compiled against 257. Where a reflink copy fails it removes the
   partial copy and the build runs cold. Note: `docs/superpowers/notes/2026-11-11-warm-deps.md`.
 
+### Fixed (ENG-22: a checked `Codeunit.Run` with a write pending raises an error, engine limits L28)
+
+- **The run's own error.** BC (measured on the BC 28.4 Linux sidecar, confirmed on Windows BC
+  28.0.54946.56477 by the owner) refuses a checked `Codeunit.Run` while a write is pending: the run
+  itself raises "An error occurred and the transaction is stopped.", the checked form does not
+  catch it, and nothing of the caller's is committed. `R.ModifyAll(V, 1); if
+  Codeunit.Run(Codeunit::"C") then;` answered `throws-error: no`; each checked run now carries
+  that error at its call site, `ERROR (checked Codeunit.Run with a write pending)`, raised (never
+  `unconditional`) where a write may be pending at the run on some route from the root, and "not
+  raised" where none may, with the callers' entry assumption stated. prove, its `--site/--match`
+  slice, explain and digest; impact keys it `error|error-implicit|checked-run`
+  (`SUMMARY_SCHEMA` 11 → 12).
+- **The "is a write pending at this checked run" search** (it also decides when a checked run
+  catches a callee's error) missed two shapes: a run in a `while`/`repeat` condition after an
+  earlier pass of a body that writes, and a subscriber entered after another subscriber of the
+  same event that writes. Both now count as a write that may be pending.
+
+### Changed (ENG-22: d50 reports the error, not an implicit commit)
+
+- **d50 changed meaning** (owner decision q-20261112T025612-62a3ca62, id kept). It reported "a
+  checked Codeunit.Run performs an implicit commit … within a posting span", which BC does not do.
+  It now reports a checked run at which a physical write may be pending (BC raises an error at the
+  run), severity medium, rule `CheckedRunWithPendingWrite` (was `CheckedRunImplicitCommit`). The
+  posting-name and three-table "transaction manager" tests and the medium tier for a nearby
+  explicit `Commit()` are gone with the old claim. Finding ids are `d50/pending-write/<site>`, so
+  the fingerprints are new: **a suppression or baseline of the old d50 finding does not carry
+  over**; review the new findings before suppressing them again. The detector name
+  (`d50-checked-run-implicit-commit`) is unchanged so existing `--detector` lists keep working.
+
 ### Fixed (ENG-09: a checked `Codeunit.Run` commits, engine limits L16 item 2)
 
 - **`if Codeunit.Run(X) then` no longer answers `may-commit no` when X has no `Commit()`.** It did

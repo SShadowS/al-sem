@@ -214,8 +214,6 @@ CHANGELOG "B2 per-arm ids").
   - `Access` in one arm (`internal`);
   - `SingleInstance` in one arm (`bool_prop`).
 - *Other readers.*
-  - d50 still reads a conditional `InherentCommitBehavior` as suppressing its finding (an advisory
-    detector, fewer findings).
   - A raiser's route through an event isolated in some builds only says `no guard on the route`
     without naming the builds that isolate it.
   - `alsem graph` does not label a subscription whose `[EventSubscriber]` is in one arm.
@@ -284,7 +282,7 @@ CHANGELOG "B2 per-arm ids").
 | L15 (P1) | `ReadIsolation` UpdLock/RepeatableRead and `FindSet(true)` are plain reads, never locks. On CDO, `RunMigration :307-308` takes an update lock and the answer says `locks: none`. Approach: record isolation per read in the body walk, then emit a lock fact. | confirmed | M | — |
 | L16 (P2) | **Fixed in wave 2 (B4).** `[CommitBehavior]` now decides every forward commit and error answer (prove, its `--site/--match` slice, digest, explain). ENG-09: a checked `Codeunit.Run` commits (item 2). What is left, numbered: [L16 in detail](#l16-in-detail). | fixed (remainder stated) | M | — |
 | L27 | `callers-have-pending-writes` says `no` when a caller holds a `LockTable` but wrote nothing, so an agent about to add a lock gets no hint. | new | S | L3 |
-| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. Nothing models it. CDO avoids it by committing first (`CDOQueueManagement:46`). Measured on the BC 28.4 Linux sidecar (ENG-09 probe): an `Insert` followed by a checked run fails at the run ("An error occurred and the transaction is stopped.", inside a `[TryFunction]`). Confirmed on Windows (BC 28.0.54946.56477, owner, q-20261112T021007-384a506a): the run raises that error itself and it is not caught by the checked form (the run does not return `false`), whether the callee succeeds or fails, and the caller's write is not committed. Probe code and results: `docs/superpowers/notes/2026-11-11-eng09-checked-run-probe.md`. **Wave 2 (B7 review):** the forward error answers read a pending write at the run, but the run's own error is still not an error site, so a run with a write pending and no other error answers a wrong `no`. Details: [L28 in detail](#l28-in-detail). | partial | M | L23 |
+| L28 | A checked `Codeunit.Run` inside an open write transaction is a run-time error in BC. CDO avoids it by committing first (`CDOQueueManagement:46`). Measured on the BC 28.4 Linux sidecar (ENG-09 probe): an `Insert` followed by a checked run fails at the run ("An error occurred and the transaction is stopped.", inside a `[TryFunction]`). Confirmed on Windows (BC 28.0.54946.56477, owner, q-20261112T021007-384a506a): the run raises that error itself and it is not caught by the checked form (the run does not return `false`), whether the callee succeeds or fails, and the caller's write is not committed. Probe code and results: `docs/superpowers/notes/2026-11-11-eng09-checked-run-probe.md`. **Wave 2 (B7 review):** the forward error answers read a pending write at the run. **ENG-22:** the run's own error is an error site, raised where a write may be pending at the run and not raised (with the callers' entry assumption) where none may; d50 reports it. Details and what is left: [L28 in detail](#l28-in-detail). | partial | M | L23 |
 
 #### L16 in detail
 
@@ -345,8 +343,9 @@ callers' question reads (`commit_scope::declared`).
    then Error(…)` answers `commits-on-success-path unknown` where `yes` holds (an under-statement);
    the `CbGraph` carrier exclusion has no test that reaches it (only an `#if`-arms routine where one
    arm holds only a checked run and another a `Commit()` would differ); d34 counts a `Commit()`
-   only, so a checked run in a loop is no finding; and `transaction_spans` and d50 (older than
-   ENG-09) still read a checked run as committing the caller's posting, which L28 contradicts.
+   only, so a checked run in a loop is no finding. ENG-22: `transaction_spans` and d50 no longer
+   read a checked run as committing the caller's posting (L28): d50 reports the error BC raises at
+   a run with a physical write pending.
 3. `alsem fingerprint` (and `policy check`, which reads its capabilities) does not apply the rule:
    it says `commit: yes` for a root whose only commit is ignored or errors. That over-states; it
    never says a wrong `no`.
@@ -386,15 +385,37 @@ callers' question reads (`commit_scope::declared`).
   `summary.assumesNoPendingWriteAtEntry` / `assumesNoCommitBehaviorAtEntry` and
   `coverage.assumptions`), not only prove.
 
+- **ENG-22: the run's own error is an error site.** Each checked run (keyword, variable and dynamic
+  form; `PCallSite::checked_run`) carries an implicit error at its call site (resource
+  `checked-run`, its own impact key `error|error-implicit|checked-run`), labelled
+  `ERROR (checked Codeunit.Run with a write pending)`. It is ruled per root
+  (`LiteralReach::run_error_verdict`, in the digest's trap pass and the `--site/--match` slice):
+  where a write may be pending at the run on some route it is raised, never `unconditional`
+  (`escapes-if-write-pending`, kind `checked-run-pending-write`); where none may, it is not raised
+  (prove prints "not raised", JSON a `caught` verdict of that kind) and the answer states the
+  callers' entry assumption, plus the `[CommitBehavior]` one when a `Commit()` ends the write. A
+  trap outside the run (a used TryFunction around it) still catches it. Before,
+  `R.ModifyAll(V, 1); if Codeunit.Run(Codeunit::"C") then;` with a `C` that raises nothing
+  answered `throws-error: no (every candidate decided)`.
+- ENG-22 review (both holes also moved the existing "caught by a checked run" rulings): a run in a
+  `while` or `repeat` condition counts the loop body as run before it (an earlier pass), and a
+  subscriber is entered with a write pending when another subscriber of the same event may write
+  (their order is unknown). The second applies to the trap search only; `transaction_spans`'s own
+  pending walk (`pending_writes`) still leaves sibling subscribers out (its stated
+  under-approximation).
+
 **Left.**
-- **The run's own error is not added as an error site: wrong answer left.** The error BC raises at a
-  checked run with a write pending has no row. The answers keep the callee's errors instead, with
-  the condition (`escapes-if-write-pending`). So when the callee raises nothing,
-  `R.ModifyAll(V, 1); if Codeunit.Run(Codeunit::"C") then;` answers `throws-error: no (every
-  candidate decided)` with `limits: none`, and the answer does not mention this limit. The same
-  shape with `[CommitBehavior(Error)]` on the routine, where `C` only does `Commit()`, also answers
-  `no`: the commit error has no row either (B4/L16, "Fixed"). The commit answers do not model the
-  run's error either.
+- An error row of the callee under a run a write may be pending at keeps its old ruling
+  (`escapes-if-write-pending`), though with a write pending the run raises its own error before
+  the callee runs (an over-report, never a wrong `no`).
+- A run's own error under a trap on some routes only keeps that trap's words, not the run's
+  condition (still escaping, never `unconditional`). A run under `asserterror` at its own call site
+  is not ruled as caught.
+- A run's own error in dependency code beyond a crossing is part of the crossing's group row, not
+  ruled per run.
+- An unchecked `Codeunit.Run` with a write pending was not measured; nothing is added for it.
+- The same shape with `[CommitBehavior(Error)]` on the routine, where `C` only does `Commit()`, and
+  no write pending: the commit error inside the run has no row (B4/L16, item 4).
 - Platform-side database writes before a checked run (`IsolatedStorage.Set`, Media import and
   similar) do not count as a pending write. Whether BC counts them as a write transaction is not
   established.
