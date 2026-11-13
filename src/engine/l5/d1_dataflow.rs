@@ -75,8 +75,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::program::body::features::PLoop;
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 // Owned-value uncertainties survive only on the `#[cfg(test)]` oracle path
-// (`build_transitive_witness`); the production cohort path interns them into the
-// sink's `UncertaintyTable` and carries `UncertaintyId`s.
+// (`build_transitive_witness`); the production cohort path carries the
+// `UncertaintyId`s the context's `UncertaintyIndex` minted.
 #[cfg(test)]
 use crate::engine::l4::summary::{Uncertainty, dedupe_uncertainties};
 use crate::engine::l5::closed_world_temp::ClosedWorldTempParams;
@@ -2487,12 +2487,16 @@ pub(crate) const WITNESS_M_LAST: usize = 4;
 /// [`CohortRep`]).
 ///
 /// The ONLY difference from the owned-value form is representation:
-/// [`UncertaintyTable::intern`] is value-keyed, so the id sequence is a faithful
-/// relabelling of the value sequence, and [`UncertaintyTable::dedupe`] reproduces
+/// [`UncertaintyIndex::intern_value`](crate::engine::l5::detector_context::UncertaintyIndex::intern_value)
+/// is value-keyed, so the id sequence is a faithful relabelling of the value
+/// sequence, and
+/// [`UncertaintyIndex::dedupe`](crate::engine::l5::detector_context::UncertaintyIndex::dedupe)
+/// reproduces
 /// [`crate::engine::l4::summary::dedupe_uncertainties`]' key ordering and
 /// last-write-wins collision rule (argued in its own doc). Nothing is sampled,
 /// capped, or dropped.
-/// The representative path's uncertainty union, interned into `table`.
+/// The representative path's uncertainty union, as ids into the context's
+/// `UncertaintyIndex`.
 ///
 /// Walks the path seed→terminal and unions each node's uncertainty set, deduped
 /// last-write-wins by `uncertainty_key` — the order-sensitive rule
@@ -2579,8 +2583,8 @@ fn path_uncertainty_ids(
 /// a `Direct` winner carries its own loop/op); `term_node` is the terminal's
 /// graph node, `Some` on the terminal-outer scoring pass (where a fact winner is
 /// possible) and `None` on the direct-only pass (whose winners are all `Direct`).
-/// `table` is the owning sink's run-level [`UncertaintyTable`], which the
-/// uncertainty union is interned into.
+/// `cache` is the owning sink's [`PathUncertaintyCache`], which reuses an equal
+/// path's uncertainty union.
 #[allow(clippy::too_many_arguments)]
 fn build_cohort_rep<'a>(
     b: &BestRef<'a>,

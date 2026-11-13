@@ -3785,9 +3785,9 @@ mod assembly_tests {
     }
 
     /// Run the PRODUCTION cohort pipeline over a fixture and return the assembled
-    /// findings — `search_loops_cohorts` (which interns each cohort's uncertainty
-    /// union into the run's [`UncertaintyTable`]) + `assemble_cohort_findings`
-    /// (which resolves the winner's ids back through it). Distinct from
+    /// findings — `search_loops_cohorts` (which stores each cohort's uncertainty
+    /// union as ids into the context's `UncertaintyIndex`) +
+    /// `assemble_cohort_findings` (which resolves the winner's ids back through it). Distinct from
     /// [`assemble`] above, which drives the `#[cfg(test)]` `search_loops` oracle.
     fn assemble_cohorts(
         routines: &[ModelRoutine],
@@ -3906,8 +3906,8 @@ mod assembly_tests {
     }
 
     /// **Pins the interned-uncertainty USE, end to end.** The cohort's uncertainty
-    /// union is stored in `CohortRep` as `UncertaintyId`s into the run-level
-    /// `UncertaintyTable`; `assemble_cohort_findings` resolves them back at
+    /// union is stored in `CohortRep` as `UncertaintyId`s into the context's
+    /// `UncertaintyIndex`; `assemble_cohort_findings` resolves them back at
     /// `to_confidence`. This asserts the resolved `Finding.confidence` EXACTLY —
     /// level, `cappedBy`, and every evidence note in order — so a wrong id, a
     /// wrong table, a lost dedupe or a lost sort all fail here.
@@ -4135,7 +4135,7 @@ mod assembly_tests {
 
     /// **Pins the SHARED-note representation at the use site.** Every
     /// `Finding.confidence.evidence` record is a `ConfidenceEvidence` whose
-    /// `note` is an `Arc<str>` cloned from the run-level `UncertaintyTable` — one
+    /// `note` is an `Arc<str>` cloned from the context's `UncertaintyIndex` — one
     /// allocation per DISTINCT uncertainty rather than one per record. That is the entire
     /// memory claim of this change (7,418,849 records, 3,073 distinct notes on
     /// Base App 8020), and equality alone cannot see it: a version that rebuilt
