@@ -57,7 +57,10 @@ pub fn detect_d9(
         // ⟨issue 23 rule⟩ The gate and the count read PHYSICAL tables only:
         // writes to temporary records are not part of any transaction. Only the
         // writes pending at the Commit are this transaction's (S8 gap 3).
-        let table_count = span.pending_physical_tables.len();
+        // ENG-24 (orchestrator ruling): only the tables whose order is known
+        // count; another subscriber's (order unknown) appear in the text only.
+        let known = span.known_order_pending_tables();
+        let table_count = known.len();
         let effects_are_interesting =
             table_count >= MIN_INTERESTING_TABLES || !span.coverage_complete;
         if !effects_are_interesting {
@@ -78,7 +81,14 @@ pub fn detect_d9(
 
         // tableDesc: "writes {n} known table(s)" if n>0 else ("writes tables (effect scope unknown)"
         // if !coverage_complete else "writes tables").
-        let table_desc = if table_count > 0 {
+        let unordered = span.pending_order_unknown_tables.len();
+        let table_desc = if table_count > 0 && unordered > 0 {
+            // ENG-24: tables only another event subscriber (or a trigger) writes.
+            format!(
+                "writes {table_count} known table(s) before it (possibly also pending (order \
+                 unknown): {unordered} more in another event subscriber or trigger)"
+            )
+        } else if table_count > 0 {
             format!("writes {table_count} known table(s) before it")
         } else if !span.coverage_complete {
             "writes tables (effect scope unknown)".to_string()
@@ -109,7 +119,7 @@ pub fn detect_d9(
             evidence_path: path,
             additional_paths: None,
             affected_objects: vec![commit_routine.object_id.as_str().into()],
-            affected_tables: id_list(span.pending_physical_tables.clone()),
+            affected_tables: id_list(known),
             fix_options: vec![FixOption {
                 description: "If the span includes operations that are logically independent, \
                               split them into separate transactions with their own Commit boundaries."

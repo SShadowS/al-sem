@@ -433,7 +433,7 @@ callers' question reads (`commit_scope::declared`).
   (the Insert's error and the run's own); `R.LockTable(); if R.FindFirst() then;` before the run
   answers `yes`; `R.ModifyAll(V, 1); Commit();` before the run answers `no`, the run's own error
   "not raised (no write may be pending at the run)", with the callers' entry assumption. d50's
-  pending walk, coarser than prove's (the d50 item below), is task ENG-24.
+  pending walk was coarser than prove's: **fixed by ENG-24** (2026-11-13; the d50 item below).
 
 **Left.**
 - An error row of the callee under a run a write may be pending at keeps its old ruling
@@ -457,9 +457,44 @@ callers' question reads (`commit_scope::declared`).
   (prove, its slice, explain, digest) rule it. `alsem fingerprint`/`policy check` facts and impact's
   key list a possible error at every checked run (an over-statement; impact's label says
   "raised if a write is pending at it").
-- d50 reads `transaction_spans`, whose pending walk is coarser than the trap search: it counts
-  only writes to a known table (a `RecordRef` write, a `LockTable`, the record operation that
-  fires a subscriber, and sibling subscribers are left out: wrong negatives). A helper's writes
+- d50 reads `transaction_spans`, whose pending walk counted only writes to a known table (a
+  write whose table does not resolve, a `LockTable`, unknown code and sibling subscribers were
+  left out: wrong negatives). **Fixed by ENG-24:** one rule decides "may this leave a write
+  pending" for the trap search, the spans and the cone fold
+  (`cone_derived::op_may_leave_write_pending`, `pending_writes::is_unknown_code_call`, which
+  leaves a checked run out, a dynamic `Codeunit.Run(Id)` included), and both readers follow
+  unknown code back through calls with one closure (`pending_writes::reach_back`, never through
+  a checked run). A span names what has no physical table (`pending_other`: "a LockTable", "a
+  write to a table that does not resolve", "unknown code at <call>", "unknown code behind
+  <call>"). Review round 1 (astra) found the first walk wrong in the other direction: a record
+  operation whose OnAfter table event's subscriber reaches the run had its own write left out
+  (the probe had tested a subscriber that writes, not one that runs), and the other callees of
+  a dispatch counted only for an event subscriber outside the span. Now every callee of one
+  dispatch that may run before the one leading to the run or Commit counts, by run phase (an
+  OnBefore table event's subscriber, then the table's trigger, then the write, then an OnAfter
+  subscriber or an event subscriber; callees of the same phase in either order), a span member
+  among them, each through its cone minus its own checked runs. Their physical tables join the
+  span's pending tables and `pending_order_unknown_tables` lists the ones only they write. d50
+  (opt-in) counts them, marked "(order unknown)"; the default d8 and d9 gate on and list only
+  the tables whose order is known (`known_order_pending_tables`, orchestrator ruling: precision
+  a default detector cannot measure is noise), so the others never make a d8/d9 finding nor push
+  d9 over its two-table gate, and appear only in the text ("possibly also pending (order
+  unknown)"). The trap search changed on purpose: a dynamic checked `Codeunit.Run(Id)` is no
+  longer unknown code (CDO's one site, `CDO Legacy eDoc Dispatcher.RunExportEDocCodeunit`, moves
+  no `prove` answer). Review round 1 (gpt-6.1-sol): a callee with no row counts as unknown code
+  here too, as in the trap search (`UnknownCode::build` seeds it), and a codeunit variable's
+  checked `Run()` the resolver decided (`PCallSite::checked_run`; no `OnRun` row, or a symbol-only
+  dependency's) is no unknown code in either reader. Left: each reader seeds the closure
+  from its own inputs (the trap search from its guarded out-edges); a `LockTable` on a temporary
+  record counts as pending in both readers (an over-approximation the shared rule keeps); the
+  digest's pending line and explain's pending report still name physical tables only (explain
+  passes no unknown-code sites); the digest's transaction context of a Commit whose only
+  pending tables are order-unknown is `span-may-have-writes-order-unknown` (neither "known" nor
+  "no known" writes); a table event's phase is read from its name (`onbefore…`; any
+  other name counts as after the write). On CDO (base `67d75bea`) no default detector moves; d50
+  goes from 0 to 2 findings, both resting only on unknown code in dependencies (a chained
+  interface call left open, ENG-64, and a telemetry logger registered at run time) and false in
+  practice; it stays opt-in. A helper's writes
   inside its own checked run no longer count (the CDO landing measurement: both d50 findings on
   CDO's send-on-posting were this shape, and with the fix d50 has none there); this reaches
   workspace routines only, so a checked run inside dependency code still counts its writes (an

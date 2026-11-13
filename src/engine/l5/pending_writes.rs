@@ -53,6 +53,161 @@ use crate::program::model::workspace::ModelRoutine;
 /// event dispatch from a publisher).
 pub(crate) type ForwardSites<'a> = HashMap<&'a str, Vec<(Option<&'a str>, &'a str)>>;
 
+/// ENG-24: the one pending-write rule, kept by the cone fold
+/// ([`crate::engine::l4::cone_derived::op_may_leave_write_pending`]).
+pub(crate) use crate::engine::l4::cone_derived::op_may_leave_write_pending;
+
+/// ENG-24: the pending rule's other case, unknown code: a call site that no
+/// resolved edge leaves (`has_edge`), that the resolver did not classify as a
+/// platform method (`builtin`), and that is not a checked run (a dynamic
+/// `Codeunit.Run(Id)`: its writes end with the run, astra round 1). Read by
+/// the trap search's pending writes and by this walk ([`unknown_code_sites`]).
+pub(crate) fn is_unknown_code_call(
+    cs: &crate::program::body::features::PCallSite,
+    has_edge: bool,
+    builtin: bool,
+) -> bool {
+    // `is_checked_run` reads the resolver's `checked_run` too, which also
+    // covers a codeunit variable's `Ok := C.Run()` with no `OnRun` row (sol).
+    !has_edge && !builtin && !is_checked_run(cs, None)
+}
+
+/// ENG-24: the routines that may reach unknown code, `seeds` and every caller
+/// of one except through a checked run (its writes end with the run).
+/// `callers(x)` gives `x`'s callers over the edges that are not checked runs.
+/// The one closure the trap search's pending writes and this walk use.
+pub(crate) fn reach_back<'a, I>(
+    seeds: HashSet<&'a str>,
+    callers: impl Fn(&'a str) -> I,
+) -> HashSet<&'a str>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut out = seeds.clone();
+    let mut q: Vec<&'a str> = seeds.into_iter().collect();
+    while let Some(x) = q.pop() {
+        for p in callers(x) {
+            if out.insert(p) {
+                q.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// ENG-24: the unknown code the walk reads: the call sites ([`unknown_code_sites`])
+/// and the routines that may reach one ([`reach_back`]).
+#[derive(Default)]
+pub(crate) struct UnknownCode<'a> {
+    pub sites: HashSet<&'a str>,
+    pub reach: HashSet<&'a str>,
+}
+
+impl<'a> UnknownCode<'a> {
+    /// `sites`, and the routines over `fwd` that may reach one of them.
+    pub(crate) fn build(
+        sites: HashSet<&'a str>,
+        fwd: &ForwardSites<'a>,
+        routines: &HashMap<&'a str, &'a ModelRoutine>,
+    ) -> Self {
+        let mut seeds: HashSet<&'a str> = HashSet::new();
+        let mut callers: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        for (&from, outs) in fwd {
+            for &(site, to) in outs {
+                if !is_run_edge(from, site, to, routines) {
+                    callers.entry(to).or_default().push(from);
+                }
+                // A callee with no row: its code is not known, as the trap
+                // search seeds it (sol round 1).
+                if !routines.contains_key(to) {
+                    seeds.insert(to);
+                }
+            }
+        }
+        for (&id, r) in routines {
+            if r.call_sites.iter().any(|c| sites.contains(c.id.as_str())) {
+                seeds.insert(id);
+            }
+        }
+        let reach = reach_back(seeds, |x| callers.get(x).into_iter().flatten().copied());
+        UnknownCode { sites, reach }
+    }
+}
+
+/// ENG-24: the model's unknown-code call sites ([`is_unknown_code_call`] over
+/// every routine's call sites and the model's call edges).
+pub(crate) fn unknown_code_sites<'a>(
+    routines: &'a [ModelRoutine],
+    edges: &'a [crate::program::model::calls::CallEdge],
+) -> HashSet<&'a str> {
+    let mut sited: HashSet<&str> = HashSet::new();
+    let mut builtin: HashSet<&str> = HashSet::new();
+    for e in edges {
+        if e.to.is_some() {
+            sited.insert(e.callsite_id.as_str());
+        }
+        if e.resolution == crate::program::model::taxonomy::Resolution::Builtin {
+            builtin.insert(e.callsite_id.as_str());
+        }
+    }
+    routines
+        .iter()
+        .flat_map(|r| r.call_sites.iter())
+        .filter(|c| {
+            is_unknown_code_call(
+                c,
+                sited.contains(c.id.as_str()),
+                builtin.contains(c.id.as_str()),
+            )
+        })
+        .map(|c| c.id.as_str())
+        .collect()
+}
+
+/// ENG-24: the label of unknown code at a call site, by its text.
+pub(crate) fn pending_unknown_code(callee_text: &str) -> String {
+    format!("unknown code at {callee_text}")
+}
+
+/// ENG-24: how a sibling subscriber's label starts, so a reader can tell a
+/// finding that rests on one alone ([`pending_sibling`]).
+pub(crate) const PENDING_SIBLING_PREFIX: &str = "possibly pending: subscriber ";
+
+/// ENG-24: the label of another subscriber of an event a span member raises,
+/// whose cone may leave a write pending. Subscribers run in an order the
+/// engine does not know, so it may run before the one that reaches the run.
+pub(crate) fn pending_sibling(subscriber: &str, event: &str) -> String {
+    format!("{PENDING_SIBLING_PREFIX}{subscriber} of event {event} (order unknown)")
+}
+
+/// ENG-24: the label of code the same record operation runs before the span
+/// member it leads to (the table's trigger, an OnBefore event's subscriber).
+pub(crate) fn pending_runs_first(what: &str, name: &str, event: &str) -> String {
+    format!("possibly pending: {what} {name} of {event}, which runs first")
+}
+
+/// ENG-24: what a sibling subscriber `id` may leave pending when it returns:
+/// its cone without its checked runs ([`RunCleanCones`], astra round 1), and
+/// whether it may at all (that, or unknown code it may reach).
+pub(crate) fn sibling_pending<'a>(id: &'a str, cx: &PendingCtx<'a>) -> (Pending, bool) {
+    let p = match cx.clean.and_then(|c| c.of(id, cx)) {
+        Some(p) => (*p).clone(),
+        None => {
+            let mut e = Effects::default();
+            e.add_cone(id, cx);
+            Pending {
+                tables: e.tables.into_iter().map(str::to_string).collect(),
+                events: e.events.into_iter().map(str::to_string).collect(),
+                other: e.other.into_iter().map(str::to_string).collect(),
+            }
+        }
+    };
+    let may = !p.tables.is_empty()
+        || !p.other.is_empty()
+        || cx.unknown.is_some_and(|u| u.reach.contains(id));
+    (p, may)
+}
+
 pub(crate) fn forward_sites(reverse: &ReverseCallGraph) -> ForwardSites<'_> {
     let mut out: ForwardSites<'_> = HashMap::new();
     for (to, edges) in reverse {
@@ -71,7 +226,16 @@ pub(crate) fn forward_sites(reverse: &ReverseCallGraph) -> ForwardSites<'_> {
 pub(crate) struct Pending {
     pub tables: BTreeSet<String>,
     pub events: BTreeSet<String>,
+    /// ENG-24: what may leave a write pending without a physical table to
+    /// name, as labels a finding can show: [`PENDING_LOCK`],
+    /// [`PENDING_UNRESOLVED_WRITE`].
+    pub other: BTreeSet<String>,
 }
+
+/// ENG-24: a `LockTable` (it opens a write transaction once a read follows).
+pub(crate) const PENDING_LOCK: &str = "a LockTable";
+/// ENG-24: a write whose table does not resolve (a RecordRef's, typically).
+pub(crate) const PENDING_UNRESOLVED_WRITE: &str = "a write to a table that does not resolve";
 
 /// The sites of `r` that lead to a span member (`in_span`), and whether one of
 /// those edges has no site (then the whole body counts).
@@ -106,6 +270,8 @@ pub(crate) struct PendingCtx<'a> {
     /// The callees' cones without their checked runs; `None` counts each
     /// callee's whole cone (a caller that holds one routine's sites only).
     pub clean: Option<&'a RunCleanCones<'a>>,
+    /// ENG-24: the model's unknown code ([`UnknownCode`]); `None` counts none.
+    pub unknown: Option<&'a UnknownCode<'a>>,
 }
 
 /// ENG-22: the writes and events a called routine leaves pending, with every
@@ -146,6 +312,34 @@ pub(crate) struct RunCleanCones<'a> {
 struct Effects<'a> {
     tables: HashSet<&'a str>,
     events: HashSet<&'a str>,
+    /// ENG-24: the [`Pending::other`] labels.
+    other: HashSet<&'static str>,
+}
+
+/// ENG-24: the [`Pending::other`] labels a cone's presence bits stand for.
+fn cone_other(flags: u8) -> impl Iterator<Item = &'static str> {
+    use crate::engine::l4::cone_derived::{MAY_PENDING_LOCK, MAY_PENDING_UNRESOLVED_WRITE};
+    [
+        (MAY_PENDING_LOCK, PENDING_LOCK),
+        (MAY_PENDING_UNRESOLVED_WRITE, PENDING_UNRESOLVED_WRITE),
+    ]
+    .into_iter()
+    .filter(move |(bit, _)| flags & bit != 0)
+    .map(|(_, label)| label)
+}
+
+/// ENG-24: the [`Pending::other`] label of one direct fact, by the shared rule.
+fn fact_other(f: &crate::engine::l4::capability_cone::CapabilityFact) -> Option<&'static str> {
+    if f.resource_kind != "table" || !op_may_leave_write_pending(f.op, fact_is_known_temp(f)) {
+        return None;
+    }
+    if f.op == "lock" {
+        Some(PENDING_LOCK)
+    } else if f.resource_id.is_none() {
+        Some(PENDING_UNRESOLVED_WRITE)
+    } else {
+        None
+    }
 }
 
 impl<'a> Effects<'a> {
@@ -157,6 +351,7 @@ impl<'a> Effects<'a> {
             .extend(cd.physical_write_ids_of(id).map(|i| cd.resolve_res(i)));
         self.events
             .extend(cd.event_ids_of(id).iter().map(|i| cd.resolve_res(*i)));
+        self.other.extend(cone_other(cd.flags_of(id)));
     }
 
     /// A routine's own physical writes and publishes.
@@ -165,6 +360,7 @@ impl<'a> Effects<'a> {
             return;
         };
         for f in &s.capability_facts_direct {
+            self.other.extend(fact_other(f));
             let Some(rid) = f.resource_id.as_deref() else {
                 continue;
             };
@@ -312,6 +508,7 @@ impl<'a> RunCleanCones<'a> {
         }
         cone.tables.retain(|t| !known.tables.contains(t));
         cone.events.retain(|e| !known.events.contains(e));
+        cone.other.retain(|o| !known.other.contains(o));
         let r = std::sync::Arc::new(cone);
         lock().insert(g, r.clone());
         r
@@ -342,6 +539,7 @@ impl<'a> RunCleanCones<'a> {
                 let r = self.residue(g, cx);
                 out.tables.extend(r.tables.iter().copied());
                 out.events.extend(r.events.iter().copied());
+                out.other.extend(r.other.iter().copied());
             }
             for &(site, to) in cx.fwd.get(x).map_or(&[][..], Vec::as_slice) {
                 if !is_run_edge(x, site, to, cx.routines) && seen.insert(to) {
@@ -365,6 +563,14 @@ impl<'a> RunCleanCones<'a> {
                 .events
                 .into_iter()
                 .filter(|e| cone.events.contains(e))
+                .map(str::to_string)
+                .collect(),
+            // ENG-24: what the walk found outside the checked runs, kept only
+            // where the callee's cone holds it too (as for tables).
+            other: out
+                .other
+                .into_iter()
+                .filter(|o| cone.other.contains(o))
                 .map(str::to_string)
                 .collect(),
         });
@@ -563,8 +769,26 @@ pub(crate) fn pending_of(
     targets: &[&str],
     cx: &PendingCtx<'_>,
 ) -> Pending {
+    pending_of_written(r, before, targets, &BTreeSet::new(), cx)
+}
+
+/// [`pending_of`], where the record operations at `written` (targets) have
+/// written before the span member they lead to runs (an OnAfter table event's
+/// subscriber): their own writes count, their callees still do not.
+pub(crate) fn pending_of_written(
+    r: &ModelRoutine,
+    before: &Before,
+    targets: &[&str],
+    written: &BTreeSet<&str>,
+    cx: &PendingCtx<'_>,
+) -> Pending {
     let targets: BTreeSet<&str> = targets.iter().copied().collect();
-    effects(r, &before.sites, &targets, cx)
+    effects(r, &before.sites, &targets, written, cx)
+}
+
+/// ENG-24: the label of unknown code reached through a call, by its text.
+pub(crate) fn pending_unknown_code_behind(callee_text: &str) -> String {
+    format!("unknown code behind {callee_text}")
 }
 
 /// The effects of `sites` in `r`: its own physical writes and published events
@@ -577,6 +801,7 @@ fn effects(
     r: &ModelRoutine,
     sites: &BTreeSet<String>,
     targets: &BTreeSet<&str>,
+    written: &BTreeSet<&str>,
     cx: &PendingCtx<'_>,
 ) -> Pending {
     let PendingCtx {
@@ -586,8 +811,38 @@ fn effects(
         cone_derived,
         collided,
         clean,
+        unknown,
     } = *cx;
     let mut out = Pending::default();
+    // ENG-24: unknown code before the target (a call no edge resolves): it may
+    // write. A call into a routine that may reach unknown code (not through a
+    // checked run) is labeled by its own text.
+    if let Some(unknown) = unknown {
+        for cs in &r.call_sites {
+            if sites.contains(&cs.id) && unknown.sites.contains(cs.id.as_str()) {
+                out.other.insert(pending_unknown_code(&cs.callee_text));
+            }
+        }
+        for &(site, to) in fwd.get(r.id.as_str()).map_or(&[][..], Vec::as_slice) {
+            let Some(site) = site.filter(|s| sites.contains(*s)) else {
+                continue;
+            };
+            if !unknown.reach.contains(to) {
+                continue;
+            }
+            // A call site, or a record operation whose trigger or table
+            // event's subscriber reaches unknown code (Fable round 2).
+            let text = match r.call_sites.iter().find(|c| c.id == site) {
+                Some(cs) if is_checked_run(cs, routines.get(to).copied()) => continue,
+                Some(cs) => cs.callee_text.clone(),
+                None => match r.record_operations.iter().find(|o| o.id == site) {
+                    Some(o) => format!("{}.{}", o.record_variable_name, o.op),
+                    None => continue,
+                },
+            };
+            out.other.insert(pending_unknown_code_behind(&text));
+        }
+    }
     if let Some(s) = summaries.get(&r.id) {
         // A collided id's direct facts are the union of its rows' facts (rows
         // that share site ids, or `#if` arms each with their own, engine
@@ -613,10 +868,19 @@ fn effects(
             }
             // A fact with no site is the routine's own, at its entry (a
             // publisher's `publish`): before any target.
-            // A target that is not ALSO before itself (a loop) adds its event only.
-            let at_target = at.is_some_and(|w| !sites.contains(w) && targets.contains(w.as_str()));
-            if at.is_some_and(|w| !sites.contains(w)) && !at_target {
+            // A target that is not ALSO before itself (a loop) adds its event
+            // only, unless its operation has written by then (`written`).
+            let at_target = at.is_some_and(|w| {
+                !sites.contains(w) && targets.contains(w.as_str()) && !written.contains(w.as_str())
+            });
+            if at.is_some_and(|w| !sites.contains(w) && !written.contains(w.as_str())) && !at_target
+            {
                 continue;
+            }
+            // ENG-24: the shared rule's cases with no physical table to name:
+            // a `LockTable`, and a write whose table does not resolve.
+            if !at_target && let Some(label) = fact_other(f) {
+                out.other.insert(label.to_string());
             }
             let Some(rid) = f.resource_id.as_deref() else {
                 continue;
@@ -650,6 +914,7 @@ fn effects(
         if let Some(p) = clean.and_then(|c| c.of(to, cx)) {
             out.tables.extend(p.tables.iter().cloned());
             out.events.extend(p.events.iter().cloned());
+            out.other.extend(p.other.iter().cloned());
             continue;
         }
         for id in cone_derived.physical_write_ids_of(&callee.routine_id) {
@@ -658,6 +923,8 @@ fn effects(
         for id in cone_derived.event_ids_of(&callee.routine_id) {
             out.events.insert(cone_derived.resolve_res(*id).to_string());
         }
+        out.other
+            .extend(cone_other(cone_derived.flags_of(&callee.routine_id)).map(str::to_string));
     }
     out
 }
