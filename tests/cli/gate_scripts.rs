@@ -707,6 +707,9 @@ fn speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar() {
     ));
     // C flags (the grammar's parser is C), a target's Rust flags (review r2, sol).
     assert!(!t.build_keeps(&cache("cflags"), &[("CFLAGS", "-O0")]));
+    // cc-rs's host spelling (review r3, sol); `HOSTNAME` alone is no override.
+    assert!(!t.build_keeps(&cache("host-cflags"), &[("HOST_CFLAGS", "-O0")]));
+    assert!(t.build_keeps(&cache("hostname"), &[("HOSTNAME", "box")]));
     assert!(!t.build_keeps(
         &cache("target-flags"),
         &[(

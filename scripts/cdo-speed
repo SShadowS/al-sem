@@ -227,7 +227,12 @@ def grammar_dir(repo, archive):
 # grammar: any of these set means no key (review r1-r2, sol).
 BUILD_ENV_EXACT = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER",
                    "RUSTC_WORKSPACE_WRAPPER", "CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS",
-                   "LDFLAGS", "AR")
+                   "LDFLAGS", "AR",
+                   # cc-rs's host and target spellings (review r3, sol); by name, as a
+                   # `HOST_` prefix would also catch `HOSTNAME`.
+                   "HOST_CC", "HOST_CXX", "HOST_CFLAGS", "HOST_CXXFLAGS", "HOST_AR",
+                   "TARGET_CC", "TARGET_CXX", "TARGET_CFLAGS", "TARGET_CXXFLAGS", "TARGET_AR",
+                   "CRATE_CC_NO_DEFAULTS")
 BUILD_ENV_PREFIXES = ("CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_", "CFLAGS_",
                       "CXXFLAGS_", "CC_", "CXX_", "AR_", "CARGO_ENCODED_RUSTFLAGS")
 # Where and how fast a build runs, not what it compiles.
@@ -296,11 +301,12 @@ def record_tree_binary(repo, built, key_before):
     archive build (the build folder's path is embedded), not in what it runs.
     Entries older than TREE_ENTRY_DAYS go (a branch that never lands).
 
-    The binary is snapshotted first, as soon as cargo returns, before any check.
-    Limit (review r2, sol): another cargo build into `<target>/gate-release` that
-    finishes in the moment between this build's end and that copy would be kept
-    under this tree's key. Only ci-steps' build and perf-bounds use that folder, and
-    a landing runs `ci-steps all` to its end before `cdo-gate` starts."""
+    The binary is snapshotted first, as soon as cargo returns, before any check, and
+    the caller holds `.cdo-speed-build.lock` in that folder from the first key through
+    this snapshot, so no other cdo-speed builds there in between (review r2-r3, sol).
+    Limit: ci-steps' own build and perf-bounds also use `<target>/gate-release`
+    without that lock; a landing runs `ci-steps all` to its end before `cdo-gate`
+    starts, so they do not overlap there."""
     root = cache_root()
     trees = os.path.join(root, "trees")
     os.makedirs(trees, exist_ok=True)
@@ -676,14 +682,22 @@ def main():
             head_label = head_sha[:10]
         else:
             # TLS-34: the sources' key before the build, checked again after it.
-            key_before = None if args.no_build else working_tree_key(repo)
-            built = (os.path.join(gate_release_dir(repo), "release-fast", "alsem")
-                     if args.no_build else build_working_tree(repo, logf))
-            if not os.path.exists(built):
-                log(f"no binary at {built}")
-                return 2
-            if not args.no_build:
-                record_tree_binary(repo, built, key_before)
+            # One cdo-speed at a time builds into this folder and snapshots
+            # what it built (review r3, sol: two concurrent runs could swap the
+            # binary between one's build and its snapshot).
+            os.makedirs(gate_release_dir(repo), exist_ok=True)
+            with open(os.path.join(gate_release_dir(repo), ".cdo-speed-build.lock"),
+                      "w") as build_lock:
+                if not args.no_build:
+                    fcntl.flock(build_lock, fcntl.LOCK_EX)
+                key_before = None if args.no_build else working_tree_key(repo)
+                built = (os.path.join(gate_release_dir(repo), "release-fast", "alsem")
+                         if args.no_build else build_working_tree(repo, logf))
+                if not os.path.exists(built):
+                    log(f"no binary at {built}")
+                    return 2
+                if not args.no_build:
+                    record_tree_binary(repo, built, key_before)
             # A copy: a later build into the target folder cannot swap it mid-run.
             head_exe = os.path.join(outdir, "head-alsem")
             if not args.build_only:
