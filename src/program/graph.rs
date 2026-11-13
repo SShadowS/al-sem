@@ -79,6 +79,13 @@ pub struct ProgramGraph {
     /// 2b; empty on every successful ingest (the overwhelmingly common
     /// case) and in every in-memory test fixture that doesn't explicitly
     /// wire it.
+    ///
+    /// The CLI and LSP never fill it (TLS-47): the dependency loader
+    /// (`dependencies::load_all_apps`, Phase 3) parses the same
+    /// `SymbolReference.json` from the same image, with the same parser and cap,
+    /// and drops a package that fails as unreadable before the graph build. Only a
+    /// hand-built snapshot reaches this. Dropped packages are reported by
+    /// `alsem analyze`'s dependency ledger (`FreshCoverage`), not here.
     pub abi_ingest_errors: Vec<AbiIngestError>,
     /// The WORKSPACE's declarations as they occur in source, before the sort and
     /// dedup above (engine-switch S2b.3): one row per occurrence, with the node it

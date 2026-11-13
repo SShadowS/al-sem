@@ -7,6 +7,7 @@ Written 2026-11-09, at master `58d0c94e`.
   are kept in brackets.
 - **L27–L34** are further limits the probes noticed along the way.
 - **L35–L36** are limits the wave-2 B5 review found (2026-11-10).
+- **L37** is a reporting limit TLS-47 found (2026-11-13).
 - **B1–B8** are wrong answers or a crash that the probes found. **B9** is a wrong answer the
   wave-2 review probes found, and **B10** one that ENG-06 found while fixing B9. A wrong answer is worse than a limit: limits are stated in answers,
   these are not. They come first in the order.
@@ -796,6 +797,7 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
 | L21 (P10) | Every write through a `var` record parameter is "caller-dependent", even for local procedures and internal ones without friends, whose caller set is closed. CDO: 180 local and 66 internal such procedures. | partial | M | L11 |
 | L25 (P11) | Three interface cases print the same "open world": implementers followed but others possible; no implementer loaded; an implementer whose body is not loaded. The data to separate them exists. | confirmed | S | L11 |
 | L33 | `query touches --all` lists a routine as touching a table when its only use is passing a temporary record to a `var` parameter. | new | S | — |
+| L37 | **`aldump --program-call-graph-stats` does not list the dependency packages the loader drops** (unreadable, unidentified, encrypted). Calls into them count as `unknown`, and the stats do not say why; `alsem analyze`'s dependency ledger lists them. `ProgramGraph::abi_ingest_errors` cannot carry them: the loader parses `SymbolReference.json` with the same parser first and drops a package that fails, so the CLI never fills it. Found by TLS-47 (2026-11-13); pinned by `tests/cli/cli_aldump_abi_ingest_errors.rs`. | new | S | — |
 
 ### Server, tests and process
 

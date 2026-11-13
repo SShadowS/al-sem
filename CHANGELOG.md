@@ -235,6 +235,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `14fad659` against `28686add`, moved nothing: 2,308 / 32,576 findings, 0 fingerprints
     added or removed).
 
+### Fixed (TLS-47: dead doc links, and the dependency-drop limit stated)
+
+- **Doc links to the deleted `d1_cohort::UncertaintyTable` now name
+  `detector_context::UncertaintyIndex`**, which replaced it (`l4/summary.rs`,
+  `l5/confidence.rs`; in `d1_cohort.rs` and `d1.rs`, the docs that still described the old
+  table). `cargo doc` reports no `UncertaintyTable` link any more. Doc only.
+- **New engine limit L37 (`docs/engine-limits.md`):** `aldump --program-call-graph-stats`
+  does not list the dependency packages the loader drops (unreadable, unidentified,
+  encrypted), and calls into them count as `unknown`; `alsem analyze`'s dependency ledger
+  lists them. The planned fix, printing `ProgramGraph::abi_ingest_errors` in the stats, was
+  dropped: the loader parses `SymbolReference.json` with the same parser first and drops a
+  package that fails, so the CLI never fills that field (now stated in its doc). Pinned by
+  `cli_aldump_abi_ingest_errors` (the call is `unknown` and unlisted, and resolves with a
+  readable package) and `a_package_whose_symbols_do_not_parse_never_reaches_the_graph`
+  (with a discrimination proof). No output changes.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test

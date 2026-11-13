@@ -2092,6 +2092,11 @@ fn run_main() -> ExitCode {
         //   - ABI ingestion integrity summary
         //
         // Fully independent of L3.
+        //
+        // LIMIT (TLS-47): packages the loader drops (unreadable, unidentified,
+        // encrypted) are not listed here; calls into them count as `unknown`.
+        // See `alsem analyze`'s dependency ledger. Pinned by
+        // `tests/cli/cli_aldump_abi_ingest_errors.rs`.
         use al_sem::program::resolve::edge::{
             unknown_reason_breakdown, unknown_receiver_tier_breakdown,
         };
