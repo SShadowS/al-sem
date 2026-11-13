@@ -89,8 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **d56 judged a copy that a later copy overwrote**, and reported one finding per copy. So
   `Copy := Cursor; Copy := Temp; Copy.Modify()` was reported though the write writes the temporary
   copy, and two copies before one write (`Rec := Src; … Rec := Src; Rec.Modify()`) gave the same
-  id twice. Only the last whole-record assignment to the copy before the write now counts (in
-  source order; branches are not followed), which also makes it at most one finding per write.
+  id twice. Only the last whole-variable assignment to the copy before the write, in the same
+  loop, now counts (in source order; branches and nested loops are not followed; a field write
+  such as `Other.Copy := 1` is no overwrite), which also makes it at most one finding per write.
 - **d14 (dead routine) reported a procedure once per `#if` arm**, under one id: `#if not X` /
   `#else` arms with the same signature are one routine id. Arms whose findings say the same thing
   are one finding (the first arm). Arms that differ (one `local`, one `internal`) are each kept,

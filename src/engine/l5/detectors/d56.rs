@@ -99,6 +99,15 @@ pub fn detect_d56(
             })
             .collect();
 
+        // Innermost loop containing an assignment (assignments carry no
+        // loop_stack; containment is by anchor).
+        let innermost = |a: &crate::program::body::features::PAnchor| {
+            routine
+                .loops
+                .iter()
+                .filter(|l| anchor_within(a, &l.source_anchor))
+                .max_by_key(|l| (l.source_anchor.start_line, l.source_anchor.start_column))
+        };
         for asg in &routine.var_assignments {
             let Some(rhs_lc) = asg.rhs_identifier.as_deref() else {
                 continue;
@@ -107,14 +116,7 @@ pub fn detect_d56(
             if !record_names.contains(rhs_lc) || !record_names.contains(&asg.lhs_name) {
                 continue;
             }
-            // Innermost loop containing the assignment (assignments carry no
-            // loop_stack; containment is by anchor).
-            let Some(lp) = routine
-                .loops
-                .iter()
-                .filter(|l| anchor_within(&asg.source_anchor, &l.source_anchor))
-                .max_by_key(|l| (l.source_anchor.start_line, l.source_anchor.start_column))
-            else {
+            let Some(lp) = innermost(&asg.source_anchor) else {
                 continue;
             };
             candidates_considered += 1;
@@ -136,11 +138,16 @@ pub fn detect_d56(
             // must judge the later one (`Copy := Cursor; Copy := Temp;
             // Copy.Modify()` writes the temp copy). This also makes it at most
             // one finding per write: two copies before one write gave one id
-            // twice.
+            // twice. Only a whole-variable assignment overwrites (`Other.Copy
+            // := 1` names a field), and only one in the same innermost loop: an
+            // inner loop's copy cannot pair with this loop's write, so letting
+            // it overwrite would leave no finding at all.
             let overwritten = routine.var_assignments.iter().any(|other| {
-                other.lhs_name == asg.lhs_name
+                !other.lhs_is_member
+                    && other.lhs_name == asg.lhs_name
                     && before_anchor(&asg.source_anchor, &other.source_anchor)
                     && before_anchor(&other.source_anchor, &write.source_anchor)
+                    && innermost(&other.source_anchor).is_some_and(|l| l.id == lp.id)
             });
             if overwritten {
                 skipped_overwritten += 1;

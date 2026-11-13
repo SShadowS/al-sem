@@ -90,6 +90,48 @@ codeunit 52805 "E27 Overwrite"
             until Src.Next() = 0;
     end;
 }
+table 52806 "E27 Other"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+        field(2; Copy; Integer) { }
+    }
+    keys { key(PK; K) { } }
+}
+codeunit 52807 "E27 Not Overwritten"
+{
+    // A FIELD named like the clone is no overwrite.
+    procedure FieldNamed()
+    var
+        Src: Record "E27 Row";
+        Other: Record "E27 Other";
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                Copy := Src;
+                Other.Copy := 1;
+                Copy.Modify();
+            until Src.Next() = 0;
+    end;
+
+    // A copy in a NESTED loop is no overwrite for the outer loop's write.
+    procedure Nested()
+    var
+        Src: Record "E27 Row";
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                Copy := Src;
+                repeat
+                    Copy := Src;
+                until true;
+                Copy.Modify();
+            until Src.Next() = 0;
+    end;
+}
 codeunit 52804 "E27 Arms"
 {
 #if not CLEAN99
@@ -166,13 +208,21 @@ fn of<'a>(fs: &'a [serde_json::Value], detector: &str, object: &str) -> Vec<&'a 
 /// Temp Page" reports; drop the overwritten-copy skip -> "E27 Overwrite"
 /// reports (and "E27 Real Page" would report 2: round 1's per-write map and
 /// first-copy breaks failed there, and that map is now unreachable, so it is
-/// gone). Each fails; restored, it passes.
+/// gone). Round 2: count a field write as an overwrite -> `FieldNamed` is
+/// lost; count an inner loop's copy -> `Nested` is lost. Each fails; restored,
+/// it passes.
 #[test]
 fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     let fs = findings(SOURCE);
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Temp Page").is_empty());
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Temp Local").is_empty());
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Overwrite").is_empty());
+    let kept = of(&fs, "d56-clone-before-write-in-loop", "E27 Not Overwritten");
+    let names: Vec<&str> = kept
+        .iter()
+        .map(|f| f["primaryLocation"]["routineName"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["FieldNamed", "Nested"], "{kept:#?}");
     let real = of(&fs, "d56-clone-before-write-in-loop", "E27 Real Page");
     assert_eq!(real.len(), 1, "{real:#?}");
     // The evidence's first step is the copy; only SARIF prints it.
@@ -181,7 +231,12 @@ fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|r| r["ruleId"].as_str().is_some_and(|id| id.contains("d56")))
+        .filter(|r| {
+            r["ruleId"].as_str().is_some_and(|id| id.contains("d56"))
+                && r["message"]["text"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("— Fill copies"))
+        })
         .collect();
     assert_eq!(d56.len(), 1, "{d56:#?}");
     let copy_line = &d56[0]["codeFlows"][0]["threadFlows"][0]["locations"][0]["location"]["physicalLocation"]

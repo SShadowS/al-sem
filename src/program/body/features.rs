@@ -705,6 +705,11 @@ pub struct PVarAssignment {
     /// `rhs_identifier`, and excluded from `PartialEq` for the same reason.
     #[serde(skip)]
     pub rhs_member: Option<(String, String)>,
+    /// ENG-27: the target is a member (`X.F := …`), so `lhs_name` is the
+    /// member's name, not a variable's. INTERNAL-ONLY like `rhs_identifier`,
+    /// and excluded from `PartialEq` for the same reason.
+    #[serde(skip)]
+    pub lhs_is_member: bool,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
