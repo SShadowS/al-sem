@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-25: a record operation written without parentheses in expression position)
+
+- **`if R.FindFirst then`, `exit(not R.IsEmpty)`, `while L.Count > N do` made no record
+  operation.** The statement form `R.FindFirst;` was seen, but in expression position the
+  parens-less member never became a call: the resolver's parens-less filter kept only sites
+  whose every route reaches a routine, so a record operation (an implicit-trigger edge) was
+  dropped. `query touches --direction down` answered `no (every candidate decided)`, and
+  `prove … may-commit` answered `no` for `exit(R.Modify)` whose table's `OnAfterModifyEvent`
+  subscriber commits. The filter now keeps a site classified as a record operation unless its
+  table has a field of that name (`F.Count`, with a field `Count`, stays a field read). It covers
+  a member, the implicit `Rec` in a table, an array element and a `with` frame. Tests:
+  `tests/cli/cli_eng25_parenless_record_ops.rs`. Probe:
+  `docs/superpowers/notes/2026-11-12-eng25-parenless-record-ops-probe.md`.
+- On CDO (`bc3ccb18`, base `60981a1f`): findings at `--scope primary` 2258 -> 2310 (d1 +47, d3
+  +4, d56 +2, d11 −1), at `--scope all` 32520 -> 32584 (also d19 +1, d44 +1 net). Every moved
+  finding was checked against source: the new d1/d3 sites are parens-less reads; the d11 removal
+  is a `MODIFY` after a now-seen `if FIND then`; the d44 changes are new read pairs (one event
+  is at its 32-finding cap, so two pairs swap). The d56 pair (`CDOSetupWizardUserSetup.Page.al:57`,
+  twice) is a known false positive: the page's `Rec` is `SourceTableTemporary`, which the body
+  model ignores (task ENG-27). The L4 digests were re-frozen: 30,604 added read effects from
+  199 routines, none removed (`tests/l4-summary-baseline/README.md`).
+- **Baselines:** a new operation renumbers the later operations in its routine, and the strict
+  fingerprint hashes those numbers. On CDO 139 unchanged findings at `--scope primary` get a new
+  fingerprint (97 d1, 16 d3, 11 d10, 10 d21, 5 d33); their loose fingerprints do not move.
+  Re-create a baseline after upgrading. Making the fingerprint independent of operation order is
+  task ENG-28.
+
 ### Fixed (TLS-25: `cdo-speed --rounds` above 5 is refused up front)
 
 - **`scripts/cdo-speed --rounds N` with N above 5 crashed after minutes of timing.** There are 5
@@ -43,8 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X[1].Modify()` a record operation and hidden the codeunit's commit); an element of a
   `temporary` array is temporary; `Recs[ 1 ]` and
   `Recs[1]` are one receiver; `query effects` lists `GetBySystemId` as a read. A record
-  operation written without parentheses in expression position (`if R.FindFirst then`, about 96
-  sites in CDO) is still not seen: task ENG-25.
+  operation written without parentheses in expression position (`if R.FindFirst then`) was
+  still not seen: fixed by ENG-25.
 - Review round 3: a call result's `CalcFields(F)` reads its FlowFields' source tables and its
   `ModifyAll(F, …)` writes field `F` (`explain --field`); cross-app demand follows the triggers and
   table events a call result's record operation (and a FieldRef's `Validate`) raises, so a
