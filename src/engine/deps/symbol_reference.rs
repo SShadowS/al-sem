@@ -304,6 +304,8 @@ pub struct AbiObject {
     pub inherent_entitlements: Option<String>,
     /// A page's write-surface booleans (#302). Default (all `None`) elsewhere.
     pub page_props: AbiPageProps,
+    /// ENG-26: the object's `protected var` globals, `(name, type text)`.
+    pub protected_vars: Vec<(String, String)>,
 }
 
 /// A page's `Editable` / `InsertAllowed` / `ModifyAllowed` / `DeleteAllowed` /
@@ -545,6 +547,40 @@ struct RawObject {
     implemented_interfaces: Option<Vec<String>>,
     #[serde(rename = "Controls")]
     controls: Option<Vec<RawControl>>,
+    /// ENG-26: the object's global variables; only the `Protected` ones are
+    /// read (an extension of the object sees them).
+    #[serde(rename = "Variables")]
+    variables: Option<Vec<RawVariable>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct RawVariable {
+    #[serde(rename = "Name")]
+    name: Option<String>,
+    #[serde(rename = "TypeDefinition")]
+    type_definition: Option<RawTypeDef>,
+    #[serde(rename = "Protected")]
+    protected: Option<bool>,
+}
+
+/// ENG-26: an object's `protected var` globals as `(name, type text)`, the
+/// type in source shape (`Record "Sales Header"`, `… temporary` when marked),
+/// as the source path keeps them. A variable whose type does not reconstruct
+/// is left out: its extension's uses then stay unresolved, never a wrong type.
+fn protected_vars_of(o: &RawObject) -> Vec<(String, String)> {
+    o.variables
+        .iter()
+        .flatten()
+        .filter(|v| v.protected == Some(true))
+        .filter_map(|v| {
+            let td = v.type_definition.as_ref()?;
+            let mut ty = reconstruct_return_type_text(td)?;
+            if td.temporary == Some(true) {
+                ty.push_str(" temporary");
+            }
+            Some((v.name.clone()?, ty))
+        })
+        .collect()
 }
 
 // --- Helpers (mirror the TS module-level functions) -------------------------
@@ -1433,6 +1469,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
                     Some(ifaces.iter().map(|s| parse_abi_interface_name(s)).collect());
             }
             apply_access_properties(&mut abi_object, &o.properties);
+            abi_object.protected_vars = protected_vars_of(&o);
             if let Some(icb_raw) = raw_object_property(&o.properties, "InherentCommitBehavior") {
                 let member = match icb_raw.rfind("::") {
                     Some(sep) => icb_raw[sep + 2..].to_lowercase(),
@@ -1537,6 +1574,7 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
             ..Default::default()
         };
         apply_access_properties(&mut table_object, &t.properties);
+        table_object.protected_vars = protected_vars_of(&t);
         objects.push(table_object);
     }
 

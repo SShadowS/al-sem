@@ -686,7 +686,13 @@ fn ingest_abi_objects(
             query_columns: Vec::new(),
             // The symbol data has no dataset: not known (B6).
             dataset: Default::default(),
-            protected_vars: Vec::new(),
+            // ENG-26: the symbol data's `"Protected": true` variables, keyed
+            // folded as the source path keys them (`node_extract`).
+            protected_vars: abi_obj
+                .protected_vars
+                .iter()
+                .map(|(name, ty)| (name.fold_identifier().into(), ty.as_str().into()))
+                .collect(),
             // ABI ingestion is a JSON deserialization, never a tree-sitter parse — the
             // `parse_incomplete` concept (error-recovered CST) does not apply here; ABI's
             // own honesty is already captured via `TrustTier::SymbolOnly` above.

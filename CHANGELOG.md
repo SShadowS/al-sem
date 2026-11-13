@@ -41,6 +41,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "activity pin: never seen while the call ran"; restored, the six `mcp_server::faults` tests
   passed 5 runs out of 5.
 
+### Fixed (ENG-26: a base object's protected record used in an extension)
+
+- **`Other.Get('x')`, `Other.Modify(true)`, `exit(Other.IsEmpty)` on a base object's `protected var
+  Other: Record T` made no record operation** in a tableextension, pageextension or
+  reportextension: no receiver set held the base's protected variables, and the body walk sees one
+  file. `query touches --direction down` answered `no`, and `prove … may-commit` answered `no`
+  past a committing `OnModify`. Such a receiver is now typed by the variable's own declared table
+  (not a page's source table) and takes the record-operation path ENG-12 built for a function's
+  returned record, with its triggers (by the RunTrigger rule) and table events. The declaration's
+  `temporary` (or its absence) is the operation's temp state. A parens-less read is one too, unless
+  the table has a field of that name; on a protected RecordRef or a record of a table not loaded it
+  answers `unknown`. A same-named parameter, local or global, record or not, still hides it.
+- **A base object known only by its dependency's symbols** now gives its protected variables too:
+  the symbol file's `"Protected": true` variables are read (683 protected records in the Base
+  Application's symbols). Before, such a use answered `unknown`.
+- On CDO (`bc3ccb18`, base `7315f56d`): no finding moves at either scope (CDO declares no
+  protected record; its 15 extension uses of a Base Application protected name are all shadowed by
+  locals). Left: detectors that look for an earlier load of the receiver (d11, d21) cannot see one
+  made in another routine; `with Other do exit(IsEmpty)` over a protected record is not bound to
+  it (one file cannot see the base's variables) and answers `unknown`, never `no` (the cross-file
+  fix is task ENG-63).
+- Review round 2 (astra): a `SetRange`/`SetFilter` on a protected record (and on a function's
+  returned record, ENG-12) is an operation, so a FlowField filter reads its source table; the
+  declaration's `temporary` is read as its trailing modifier only (`Record "A temporary B"` is
+  not temporary); a table whose `TableType = Temporary` makes the operation temporary. No cache version moves: the on-disk dependency artifacts are pruned,
+  never read into the model. Tests: `tests/cli/cli_eng26_protected_var_record_ops.rs`.
+
 ### Changed (TLS-36: cdo-gate runs serial by default; the parallel layout is opt-in, pinned, and lib_cdo runs its longest tests first)
 
 - **Serial is the default again.** A serial and a parallel gate on the same tree (`d234c4a6`,

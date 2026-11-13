@@ -962,7 +962,11 @@ pub fn attach_appended_flow_field_reads(
     let needs = |op: &ModelRecordOperation| {
         op.dataset_reason.is_none()
             && op.table_id.is_some()
-            && (op.op == "CalcFields" || is_retrieval(&op.op))
+            // ENG-26 (review): a filter on a FlowField reads its source too.
+            && (op.op == "CalcFields"
+                || op.op == "SetRange"
+                || op.op == "SetFilter"
+                || is_retrieval(&op.op))
     };
     let any = appended.iter().any(|(&ri, &from)| {
         workspace.routines[ri].record_operations[from..]

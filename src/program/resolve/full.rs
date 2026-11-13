@@ -250,6 +250,10 @@ pub struct SiteFacts {
     /// name (`Count`, `Next`, …), so a parens-less `R.Count` there reads the
     /// field and is no call. `false` when the table is not known.
     pub record_op_field_named: bool,
+    /// ENG-26: the receiver is a base object's `protected var` in an
+    /// extension, so a parens-less use of it is a record operation (kept by
+    /// the parens-less filter even when its table did not resolve).
+    pub inherited_protected: bool,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -283,6 +287,9 @@ pub struct CallResultRecord {
     pub op: &'static str,
     /// The returned record's table (the function's declared return type).
     pub table: ObjectNodeId,
+    /// ENG-26: whether the record is `temporary`, when a declaration says so
+    /// (a base object's protected var); `None` for a call's result.
+    pub temporary: Option<bool>,
     /// Its trigger routes, after the site's RunTrigger rule.
     pub triggers: Vec<Route>,
     /// Its platform table-event publishers.
@@ -1068,19 +1075,35 @@ fn resolve_call_site_obligation(
                 // `FieldRef.Validate` is); a RecordRef: an honest open dispatch;
                 // a table not loaded: one unresolved route. Never a definite `no`.
                 let trigger_op = crate::program::resolve::edge::record_trigger_op(&method_lc);
-                if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
+                // ENG-26: the declared type of a base object's protected var
+                // this receiver names, if it does.
+                let inherited: Option<String> = receiver
+                    .and_then(|id| crate::record_ops::receiver_variable(&file.ir, id))
+                    .filter(|v| !v.starts_with("this."))
+                    .and_then(|v| inherited_protected_type(&v, obj_node, graph, index));
+                // ENG-26 (review): a filter too, whose FlowField reads its
+                // source table (`Other.SetRange(Total, 1)`).
+                if (trigger_op.is_some()
+                    || crate::record_ops::touches_table(&method_lc)
+                    || matches!(method_lc.as_str(), "setrange" | "setfilter"))
                     && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
-                    // Not a variable (`X`, `X[i]`): those are record operations,
-                    // or a variable the receiver sets do not hold (a base
-                    // object's `protected var` in an extension), left as before.
+                    // Not a variable (`X`, `X[i]`): those are record operations.
                     // A `this.X` that reaches here is one a same-named local
                     // shadows in the receiver sets: the resolver typed it from
                     // the globals, so it takes this path (ENG-12 review round 3).
+                    // ENG-26: nor is a base object's `protected var` record in
+                    // an extension: no receiver set holds it (the body walk
+                    // sees one file), so its operation is built here, typed by
+                    // the variable's own declared table (receiver Step 2c).
                     && receiver.is_some_and(|id| {
-                        crate::record_ops::receiver_variable(&file.ir, id)
-                            .is_none_or(|v| v.starts_with("this."))
+                        match crate::record_ops::receiver_variable(&file.ir, id) {
+                            None => true,
+                            Some(v) if v.starts_with("this.") => true,
+                            Some(_) => inherited.is_some(),
+                        }
                     })
                 {
+                    facts_out.inherited_protected = inherited.is_some();
                     let table_node = match &recv {
                         ReceiverType::Record { table: Some(tid) } => graph.object_first(tid),
                         _ => None,
@@ -1112,6 +1135,15 @@ fn resolve_call_site_obligation(
                             facts_out.call_result_record = Some(CallResultRecord {
                                 op,
                                 table: table_node.id.clone(),
+                                // A protected var's declaration says whether it
+                                // is temporary; a call's result does not.
+                                // The trailing modifier only, never a word of a
+                                // quoted table name (`Record "A temporary B"`).
+                                temporary: inherited.as_deref().map(|ty| {
+                                    crate::program::resolve::receiver::strip_trailing_temporary(ty)
+                                        .len()
+                                        != ty.trim_end().len()
+                                }),
                                 triggers,
                                 table_events:
                                     crate::program::resolve::resolver::resolve_table_events(
@@ -1688,8 +1720,31 @@ pub(crate) fn resolve_file_obligations(
                 )
                 .collect();
 
+            // ENG-26 (review): the object extends a base that has protected
+            // vars, which a `with` frame here may name (see `with_inherited`).
+            let base_has_protected = obj_node_opt.is_some_and(|o| {
+                crate::program::resolve::receiver::extension_base_object(o, graph, index)
+                    .flatten()
+                    .is_some_and(|base| !base.protected_vars.is_empty())
+            });
             for site in &sites {
+                // Inside such a `with`, the frame's record members come first,
+                // so a same-named variable does not settle the name.
+                // Only a bare RECORD-OPERATION name (`IsEmpty`): inside a `with`
+                // on a record this file knows, such a name is classified a
+                // record operation, never `Bare`; so a bare one means the
+                // frame's receiver is not known here. A field or variable read
+                // (`with SalesLine do … Quantity …`) stays as it was (Fable,
+                // ENG-26 round 3).
+                let inside_inherited_with = base_has_protected
+                    && matches!(
+                        site.with_state,
+                        crate::program::resolve::extract::WithState::InsideWith
+                    )
+                    && matches!(&site.shape, CalleeShape::Bare { name }
+                        if crate::record_ops::record_op_type(&name.fold_identifier()).is_some());
                 if site.parenless
+                    && !inside_inherited_with
                     && let CalleeShape::Bare { name } = &site.shape
                     && shadows.contains(&name.fold_identifier())
                 {
@@ -1753,11 +1808,38 @@ pub(crate) fn resolve_file_obligations(
                 // classified (`if R.FindFirst then`, `exit(R.IsEmpty)`) whose
                 // table declares no field of that name; otherwise it is a
                 // variable, field or built-in read.
-                let parenless_record_op = matches!(site.shape, CalleeShape::RecordOp { .. })
+                let parenless_record_op = (matches!(site.shape, CalleeShape::RecordOp { .. })
                     && kind == EdgeKind::ImplicitTrigger
-                    && !facts.record_op_field_named;
+                    && !facts.record_op_field_named)
+                    // ENG-26: a base object's protected record in an extension
+                    // (`exit(Other.IsEmpty)`), unless its table has a field of
+                    // that name (then a field read, as ENG-25's rule).
+                    || facts.call_result_record.as_ref().is_some_and(|cr| {
+                        let method_lc = match &site.shape {
+                            CalleeShape::Member { method, .. } => method.fold_identifier(),
+                            _ => return false,
+                        };
+                        obj_node_opt.is_some_and(|from| {
+                            !index.table_scope_may_have_field(graph, from, &cr.table, &method_lc)
+                        })
+                    })
+                    // A protected RecordRef (no fields) or a record of a table not
+                    // loaded: kept, so its open or unresolved route answers
+                    // `unknown`, never `no`.
+                    || (facts.inherited_protected && facts.call_result_record.is_none());
+                // ENG-26 (review): a bare name inside a `with` whose receiver
+                // this file does not resolve (a known record's frame makes a
+                // record operation instead), in an extension whose base has
+                // protected vars: the receiver may be one (`with Other do
+                // exit(IsEmpty)`), which one file cannot see. Kept unresolved,
+                // so the answer is `unknown`, never `no` (the cross-file fix is
+                // its own task, ENG-63).
+                let with_inherited = site.parenless
+                    && matches!(site.shape, CalleeShape::Bare { .. })
+                    && inside_inherited_with;
                 if site.parenless
                     && !parenless_record_op
+                    && !with_inherited
                     && (kind != EdgeKind::Call
                         || routes.is_empty()
                         || !routes.iter().all(|r| {
@@ -1769,6 +1851,19 @@ pub(crate) fn resolve_file_obligations(
                 {
                     continue;
                 }
+                // The `with` case above: whatever the bare name resolves to on
+                // its own, its receiver is not known here, so the site is one
+                // unresolved call (an `unknown`, never a decided `no`).
+                let (kind, shape, completeness, routes) = if with_inherited {
+                    (
+                        EdgeKind::Call,
+                        DispatchShape::Exact,
+                        completeness_for_shape(DispatchShape::Exact),
+                        vec![unknown_route(UnknownReason::UntrackedReceiver)],
+                    )
+                } else {
+                    (kind, shape, completeness, routes)
+                };
                 if site.parenless {
                     parenless.push(site.expr);
                 }
@@ -2096,6 +2191,27 @@ fn member_dataset_run(
         mode,
         effects: Vec::new(),
     })
+}
+
+/// ENG-26: the declared type text of `name` (a bare variable receiver) when it
+/// is a `protected var` of the object `from_object` extends. Shadowing needs no
+/// check here: a record parameter, local or global of the same name is in the
+/// receiver sets, so its call is a record operation and never reaches this
+/// path, and any other type types the receiver as that type (receiver Step 2
+/// comes before 2c).
+fn inherited_protected_type(
+    name: &str,
+    from_object: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> Option<String> {
+    let lc = name.fold_identifier();
+    crate::program::resolve::receiver::extension_base_object(from_object, graph, index)
+        .flatten()?
+        .protected_vars
+        .iter()
+        .find(|(n, _)| **n == *lc)
+        .map(|(_, ty)| ty.to_string())
 }
 
 /// The [`ReceiverFact`] for a member call whose receiver typed as `recv`
