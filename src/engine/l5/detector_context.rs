@@ -1602,12 +1602,14 @@ pub(crate) fn witness_non_primary_members(
 /// The one composition (#160 step 6 D1, D2): `compose_cone_over_graph` over
 /// `typed` with `inputs` (from [`det_cone_inputs`]) and `scope`. Returns the
 /// analysis and the raw facts of the members `scope.raw` contains, and prints
-/// the `witness.*` census lines (what was materialized, by role).
+/// the `witness.*` census lines (what was materialized, by role). `workers`:
+/// the walk's threads when it may run in parallel (TLS-29; 1 is serial).
 pub(crate) fn compose_capabilities(
     model: &Model,
     typed: &[crate::engine::l4::combined_graph::TypedEdge],
     inputs: DetConeInputs,
     scope: ConeScope,
+    workers: usize,
 ) -> (
     CapabilityAnalysis,
     crate::engine::l4::inherited_facts::InheritedFacts,
@@ -1618,6 +1620,7 @@ pub(crate) fn compose_capabilities(
         inputs,
         scope,
         crate::engine::l4::capability_cone::PdRetain::No,
+        workers,
     );
     (caps, raw)
 }
@@ -1641,6 +1644,7 @@ pub(crate) fn compose_capabilities_retained(
     inputs: DetConeInputs,
     scope: ConeScope,
     pd: crate::engine::l4::capability_cone::PdRetain<'_>,
+    workers: usize,
 ) -> (
     CapabilityAnalysis,
     crate::engine::l4::inherited_facts::InheritedFacts,
@@ -1666,6 +1670,7 @@ pub(crate) fn compose_capabilities_retained(
         &ws.routines,
         scope,
         pd,
+        workers,
     );
     cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
     // ⟨C1 Task 4⟩ Both cone inputs are dead here (`nodes` is one more full
@@ -1722,7 +1727,14 @@ pub(crate) fn compose_detector_artifacts(
             raw: WitnessScope::None,
         };
         let _s = pt::span("context", "context.capability_cones");
-        compose_capabilities(resolved, rel.cone(), det_cone_inputs(resolved, rel), scope).0
+        compose_capabilities(
+            resolved,
+            rel.cone(),
+            det_cone_inputs(resolved, rel),
+            scope,
+            1,
+        )
+        .0
     });
     build_detector_artifacts(resolved, demanded, rel, l4, cross, caps)
 }
