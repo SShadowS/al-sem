@@ -111,6 +111,12 @@ tableextension 52902 "E26 Ext" extends "E26 Base"
         with Other do
             exit(IsEmpty);
     end;
+    // The frame's member comes before a same-named parameter.
+    procedure WithShadow(IsEmpty: Boolean): Boolean
+    begin
+        with Other do
+            exit(IsEmpty);
+    end;
     // A local of the same name shadows the protected var.
     procedure ShadowedWrite()
     var
@@ -221,7 +227,9 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// of the type text -> `WriteOdd` reads temporary; drop the table-level
 /// `TableType = Temporary` check on appended operations -> `WriteBuf` reads
 /// persistent; drop the `with_inherited` rule -> `WithRead` answers `no`. Each
-/// fails; restored, it passes.
+/// fails; restored, it passes. Round 3: let a same-named variable settle a
+/// bare name inside such a `with` (the shadow skip) -> `WithShadow` answers
+/// `no`. Fails; restored, it passes.
 #[test]
 fn a_base_objects_protected_record_is_a_record_operation() {
     let t = workspace(SOURCE, "");
@@ -267,6 +275,8 @@ fn a_base_objects_protected_record_is_a_record_operation() {
     assert!(a.contains("1 on temporary records"), "WriteBuf: {a}");
     let a = touches(ws, "E26 Target", "\"E26 Ext\".WithRead");
     assert!(a.starts_with("answer: down: unknown"), "WithRead: {a}");
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".WithShadow");
+    assert!(a.starts_with("answer: down: unknown"), "WithShadow: {a}");
     let a = answer(&[
         "prove",
         ws,
@@ -276,6 +286,62 @@ fn a_base_objects_protected_record_is_a_record_operation() {
         "human",
     ]);
     assert!(a.starts_with("answer: yes"), "WriteOther may-commit: {a}");
+}
+
+/// A workspace whose ONLY appended operation is a protected record's filter
+/// on a FlowField: nothing else starts the appended FlowField pass.
+const FILTER_ONLY: &str = r#"
+table 52930 "E26F Target"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+}
+table 52931 "E26F Flow"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+        field(2; Total; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("E26F Target");
+        }
+    }
+    keys { key(PK; K) { } }
+}
+table 52932 "E26F Base"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+    protected var
+        FlowOther: Record "E26F Flow";
+}
+tableextension 52933 "E26F Ext" extends "E26F Base"
+{
+    procedure FilterFlow()
+    begin
+        FlowOther.SetRange(Total, 1);
+    end;
+}
+"#;
+
+/// A FlowField filter on a protected record reads its source table even when
+/// it is the only appended operation (astra, ENG-26 round 3).
+/// Break (2026-11-13): leave `SetRange`/`SetFilter` out of
+/// `attach_appended_flow_field_reads`' `needs` -> `FilterFlow` answers `no`.
+/// Fails; restored, it passes.
+#[test]
+fn a_filter_alone_reads_its_flowfield_source() {
+    let t = workspace(FILTER_ONLY, "");
+    let ws = t.path().to_str().unwrap();
+    let a = touches(ws, "E26F Target", "\"E26F Ext\".FilterFlow");
+    assert!(a.starts_with("answer: down: yes"), "{a}");
 }
 
 const DEP_GUID: &str = "e26e26e0-0000-4000-8000-0000000000bb";

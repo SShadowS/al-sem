@@ -1720,8 +1720,23 @@ pub(crate) fn resolve_file_obligations(
                 )
                 .collect();
 
+            // ENG-26 (review): the object extends a base that has protected
+            // vars, which a `with` frame here may name (see `with_inherited`).
+            let base_has_protected = obj_node_opt.is_some_and(|o| {
+                crate::program::resolve::receiver::extension_base_object(o, graph, index)
+                    .flatten()
+                    .is_some_and(|base| !base.protected_vars.is_empty())
+            });
             for site in &sites {
+                // Inside such a `with`, the frame's record members come first,
+                // so a same-named variable does not settle the name.
+                let inside_inherited_with = base_has_protected
+                    && matches!(
+                        site.with_state,
+                        crate::program::resolve::extract::WithState::InsideWith
+                    );
                 if site.parenless
+                    && !inside_inherited_with
                     && let CalleeShape::Bare { name } = &site.shape
                     && shadows.contains(&name.fold_identifier())
                 {
@@ -1813,15 +1828,7 @@ pub(crate) fn resolve_file_obligations(
                 // its own task, ENG-63).
                 let with_inherited = site.parenless
                     && matches!(site.shape, CalleeShape::Bare { .. })
-                    && matches!(
-                        site.with_state,
-                        crate::program::resolve::extract::WithState::InsideWith
-                    )
-                    && obj_node_opt.is_some_and(|o| {
-                        crate::program::resolve::receiver::extension_base_object(o, graph, index)
-                            .flatten()
-                            .is_some_and(|base| !base.protected_vars.is_empty())
-                    });
+                    && inside_inherited_with;
                 if site.parenless
                     && !parenless_record_op
                     && !with_inherited
