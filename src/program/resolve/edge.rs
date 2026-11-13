@@ -478,6 +478,22 @@ pub fn record_trigger_op(method_lc: &str) -> Option<&'static str> {
     })
 }
 
+/// ENG-15: the record-operation family a table trigger runs for, from its
+/// folded name: a table's `On<Op>` and a table extension's
+/// `OnBefore<Op>`/`OnAfter<Op>` (`OnAfterInsert`, a field's
+/// `OnBeforeValidate`, …). `None` for any other trigger. The one stem rule the
+/// implicit-trigger fan-out, its applicability contract and the open families
+/// read.
+#[must_use]
+pub fn trigger_family(name_lc: &str) -> Option<&'static str> {
+    let s = name_lc.strip_prefix("on")?;
+    record_trigger_op(s)
+        .or_else(|| s.strip_prefix("before").and_then(record_trigger_op))
+        .or_else(|| s.strip_prefix("after").and_then(record_trigger_op))
+        // `OnModifyAll` / `OnDeleteAll` are no triggers.
+        .filter(|f| s.ends_with(f))
+}
+
 /// Independent-checkability handle for a route's evidence (spec §5.5).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Witness {

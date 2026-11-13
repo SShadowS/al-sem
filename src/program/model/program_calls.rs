@@ -2074,11 +2074,7 @@ impl OpenFamilies {
                 )
                 // `On<Op>`, and a table extension's `OnBefore<Op>`/`OnAfter<Op>`
                 // (`OnBeforeValidate` on a field, `OnAfterInsert`, …).
-                && let Some(f) = r.id.name_lc.strip_prefix("on").and_then(|s| {
-                    family(s)
-                        .or_else(|| s.strip_prefix("before").and_then(family))
-                        .or_else(|| s.strip_prefix("after").and_then(family))
-                })
+                && let Some(f) = crate::program::resolve::edge::trigger_family(&r.id.name_lc)
             {
                 out.triggers.insert(f);
             }
@@ -2115,7 +2111,14 @@ impl OpenFamilies {
         use crate::program::resolve::edge::OpenBound;
         use crate::program::resolve::full::UnresolvedTable;
         open.iter().any(|b| match b {
-            OpenBound::Record { .. } if how == UnresolvedTable::NotLoaded => true,
+            OpenBound::Record { .. }
+                if matches!(
+                    how,
+                    UnresolvedTable::NotLoaded | UnresolvedTable::CodeNotLoaded
+                ) =>
+            {
+                true
+            }
             // Any table, and one whose code is not loaded may run anything.
             OpenBound::Record { .. } | OpenBound::RecordEvents { .. }
                 if how == UnresolvedTable::AnyTable && self.opaque_table =>

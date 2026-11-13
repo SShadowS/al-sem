@@ -273,6 +273,26 @@ pub enum UnresolvedTable {
     /// Entry"` without its app): that table's own triggers are code the engine
     /// cannot see, so a trigger-firing operation on it is always open.
     NotLoaded,
+    /// ENG-16: a known table whose code, or one of whose extensions' code, is
+    /// loaded from symbols only ([`table_code_not_loaded`]): its triggers are
+    /// unseen, so a trigger-firing operation on it is always open, as for
+    /// [`Self::NotLoaded`] (missing data is never absence).
+    CodeNotLoaded,
+}
+
+/// ENG-16: whether `table`'s own triggers may be code the engine cannot see:
+/// the table, or a table extension of it, is loaded from symbols only.
+pub(crate) fn table_code_not_loaded(
+    table: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> bool {
+    let symbol_only = |tier| tier == crate::snapshot::TrustTier::SymbolOnly;
+    symbol_only(table.tier)
+        || index
+            .table_extensions_of(&table.name.fold_identifier())
+            .iter()
+            .any(|e| graph.object_first(e).is_some_and(|o| symbol_only(o.tier)))
 }
 
 /// What a `FieldRef.Validate(…)` call validates (engine limits B9). The
@@ -1523,6 +1543,16 @@ fn resolve_call_site_obligation(
                     RouteTarget::Routine(id) => rule.admits(id),
                     _ => true,
                 });
+                // ENG-16: a known table whose code is loaded from symbols only
+                // has triggers the engine cannot see: a trigger-firing op on it
+                // is open, as on a table not loaded.
+                if let Some(op) = record_trigger_op(&op_lc)
+                    && rule.run_trigger != Some(false)
+                    && table_code_not_loaded(table_node, graph, index)
+                {
+                    facts_out.open.push(OpenBound::record(op, &rule));
+                    facts_out.record_table_unresolved = Some(UnresolvedTable::CodeNotLoaded);
+                }
                 // The platform table events: raised whatever the RunTrigger,
                 // so the site rule above never filters them.
                 *table_events_out = crate::program::resolve::resolver::resolve_table_events(

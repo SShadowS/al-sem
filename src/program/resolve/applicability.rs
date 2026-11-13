@@ -246,21 +246,15 @@ pub fn implicit_trigger_route_applicable(
     }
 
     // Trigger name + field specificity check.
+    // ENG-15: `On<Op>`, and a table extension's `OnBefore<Op>`/`OnAfter<Op>`.
+    let family = crate::program::resolve::edge::trigger_family(&target.name_lc);
     let trigger_name_ok = match &ctx.kind {
-        RecordOpKind::Insert => {
-            target.name_lc == "oninsert" && target.enclosing_member_lc.is_none()
-        }
-        RecordOpKind::Modify => {
-            target.name_lc == "onmodify" && target.enclosing_member_lc.is_none()
-        }
-        RecordOpKind::Delete => {
-            target.name_lc == "ondelete" && target.enclosing_member_lc.is_none()
-        }
-        RecordOpKind::Rename => {
-            target.name_lc == "onrename" && target.enclosing_member_lc.is_none()
-        }
+        RecordOpKind::Insert => family == Some("insert") && target.enclosing_member_lc.is_none(),
+        RecordOpKind::Modify => family == Some("modify") && target.enclosing_member_lc.is_none(),
+        RecordOpKind::Delete => family == Some("delete") && target.enclosing_member_lc.is_none(),
+        RecordOpKind::Rename => family == Some("rename") && target.enclosing_member_lc.is_none(),
         RecordOpKind::Validate => {
-            if target.name_lc != "onvalidate" {
+            if family != Some("validate") {
                 return false;
             }
             // Must target the SPECIFIC field's OnValidate.

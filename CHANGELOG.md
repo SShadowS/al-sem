@@ -273,6 +273,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     length prefixes without the path fail at "rename".
   - Found by TLS-45's stale-claim pass (OUTSTANDING Track B, now marked fixed).
 
+### Fixed (ENG-15, with ENG-16: table-extension triggers, and tables loaded from symbols only)
+
+- **A table extension's `OnBefore<Op>`/`OnAfter<Op>` triggers now run.** The trigger fan-out of
+  a record operation (`resolver::resolve_implicit_trigger`) looked up only `On<Op>`, so a
+  tableextension's `OnAfterInsert`, `OnBeforeModify` or a field's `OnAfterValidate` got no edge
+  and every answer through them was a definite `no` (re-probed on master `3dbf23ed`: `may-commit
+  no` for `Insert(true)`, `Modify(true)` and `Validate(F, …)` with a `Commit()` in each). One stem
+  rule now serves the fan-out, its applicability contract and the open families
+  (`resolve::edge::trigger_family`).
+- **A trigger-firing operation on a known table loaded from symbols only is `unknown`.** Such a
+  table (or one with a symbol-only extension) has triggers the engine cannot see; its operation
+  read as running none (`no`). It now has the open record edge, as a table not loaded does
+  (`full::table_code_not_loaded`, `UnresolvedTable::CodeNotLoaded`); prove names the gap ("… or
+  whose code is loaded from symbols only …"). `RunTrigger` false still runs none.
+- Engine limits B11 (new), B9 and B10 updated. Left: an operation on a function's returned record
+  and a `FieldRef.Validate` decided to a symbol-only table do not take the open gap. Tests:
+  `tests/cli/cli_eng15_ext_triggers.rs` (breaks recorded); the adapter test
+  `implicit_trigger_to_dependency_has_no_edge` now expects the open edge beside the dependency
+  trigger's external target.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
