@@ -55,7 +55,9 @@ pub(crate) fn walk_al_source(
 /// alone gave a renamed file, or the same bytes split differently across
 /// files, the same hash. Latent: no production code reads this hash today (the
 /// workspace root's copy in `Provenance` is never read, and the session
-/// identity skips the workspace app), so the fix protects a future reader.
+/// identity skips the workspace app; a `LocalRepoProvider` dependency would
+/// reach it, but `SnapshotBuilder.local_providers` is always empty in
+/// production), so the fix protects a future reader.
 /// Length-prefixed parts as in `source_deps`' content hash. Never persisted, so
 /// no cache version moves.
 fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
