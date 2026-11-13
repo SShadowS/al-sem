@@ -21,6 +21,44 @@ table 52700 "E25 Row"
     begin
         exit(FindFirst);
     end;
+    procedure ParamCount(Count: Integer): Integer
+    begin
+        exit(Count);
+    end;
+}
+table 52704 "E25 Quiet"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+    trigger OnModify()
+    begin
+        Commit();
+    end;
+}
+table 52705 "E25 Ext Base"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+}
+tableextension 52706 "E25 Ext A" extends "E25 Ext Base"
+{
+    fields
+    {
+        field(50; IsEmpty; Boolean) { }
+    }
+}
+tableextension 52707 "E25 Ext B" extends "E25 Ext Base"
+{
+    fields
+    {
+        field(51; IsEmpty; Integer) { }
+    }
 }
 table 52702 "E25 Fieldy"
 {
@@ -83,6 +121,25 @@ codeunit 52701 "E25 Ops"
         F: Record "E25 Fieldy";
     begin
         exit(F.Count);
+    end;
+    procedure RefCount(): Integer
+    var
+        RR: RecordRef;
+    begin
+        RR.Open(Database::"E25 Fieldy");
+        exit(RR.Count);
+    end;
+    procedure QuietModify(): Boolean
+    var
+        Q: Record "E25 Quiet";
+    begin
+        exit(Q.Modify);
+    end;
+    procedure AmbigRead(): Boolean
+    var
+        X: Record "E25 Ext Base";
+    begin
+        exit(X.IsEmpty);
     end;
 }
 codeunit 52703 "E25 Listener"
@@ -158,6 +215,7 @@ fn a_parenless_record_read_reads_its_table() {
         "\"E25 Ops\".ArrFind",
         "\"E25 Ops\".WithFind",
         "\"E25 Ops\".StmtFind",
+        "\"E25 Ops\".WhileNext",
     ] {
         let a = touches(ws, "E25 Row", from);
         assert!(a.starts_with("answer: down: yes"), "{from}: {a}");
@@ -166,20 +224,45 @@ fn a_parenless_record_read_reads_its_table() {
     assert!(a.starts_with("answer: down: no"), "FieldCount: {a}");
 }
 
+/// What is NOT a parens-less record operation, and one that is despite a
+/// field of its name: a bare parameter `Count` in a table reads the parameter;
+/// a field declared twice (two extensions, two types) is still a field; a
+/// RecordRef's `Count` is the method even when its table has a field `Count`.
+/// Breaks (2026-11-13): drop the implicit-`Rec` shadow skip in
+/// `resolve_file_obligations` -> `ParamCount` answers `yes`; go back to the
+/// unique-only `field_in_table` for the field veto -> `AmbigRead` answers
+/// `yes`; drop the `record_receiver` gate on the veto -> `RefCount` answers
+/// `no`. Each fails; restored, it passes.
+#[test]
+fn a_shadowing_name_or_field_is_no_parenless_record_operation() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let a = touches(ws, "E25 Row", "\"E25 Row\".ParamCount");
+    assert!(a.starts_with("answer: down: no"), "ParamCount: {a}");
+    let a = touches(ws, "E25 Ext Base", "\"E25 Ops\".AmbigRead");
+    assert!(a.starts_with("answer: down: no"), "AmbigRead: {a}");
+    let a = touches(ws, "E25 Fieldy", "\"E25 Ops\".RefCount");
+    assert!(a.starts_with("answer: down: yes"), "RefCount: {a}");
+}
+
+fn may_commit(ws: &str, routine: &str) -> String {
+    answer(&["prove", ws, routine, "may-commit", "--format", "human"])
+}
+
 /// A parens-less `Modify` runs no trigger (RunTrigger false) but raises the
-/// table events: its `OnAfterModifyEvent` subscriber commits.
-/// Break (2026-11-12): keep no parens-less record operation -> `no`.
+/// table events: "E25 Row"'s `OnAfterModifyEvent` subscriber commits. "E25
+/// Quiet" has the same committing `OnModify` and no subscriber, so its
+/// parens-less `Modify` cannot commit.
+/// Breaks (2026-11-12): keep no parens-less record operation ->
+/// `ModifyValue` answers `no`. (2026-11-13): make a parens-less `Modify`
+/// default to RunTrigger true (`applicability.rs`) -> `QuietModify` answers
+/// `yes`. Each fails; restored, it passes.
 #[test]
 fn a_parenless_modify_raises_its_table_events() {
     let t = workspace();
     let ws = t.path().to_str().unwrap();
-    let a = answer(&[
-        "prove",
-        ws,
-        "\"E25 Ops\"::ModifyValue",
-        "may-commit",
-        "--format",
-        "human",
-    ]);
-    assert!(a.starts_with("answer: yes"), "{a}");
+    let a = may_commit(ws, "\"E25 Ops\"::ModifyValue");
+    assert!(a.starts_with("answer: yes"), "ModifyValue: {a}");
+    let a = may_commit(ws, "\"E25 Ops\"::QuietModify");
+    assert!(a.starts_with("answer: no"), "QuietModify: {a}");
 }
