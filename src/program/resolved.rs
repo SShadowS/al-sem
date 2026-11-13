@@ -394,6 +394,7 @@ impl ResolvedProgram {
             primary_app_ref: _,
             event_flow_dual_publisher_alias_skips: _,
             recovered_files,
+            abi_ingest_errors: _,
             builtin_dispatch_audit: _,
             site_facts,
             parenless_calls,

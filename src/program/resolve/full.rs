@@ -584,6 +584,12 @@ pub struct ProgramReport {
     /// well-formed workspace; any entry means that file's IR may be missing
     /// content tree-sitter could not parse.
     pub recovered_files: Vec<String>,
+    /// `"<publisher>/<name>@<version>: <message>"` of every loaded dependency
+    /// whose ABI (`SymbolReference.json`) failed to ingest, sorted
+    /// ([`crate::program::graph::ProgramGraph::abi_ingest_errors`]). Such an app
+    /// looks empty to the resolver, so calls into it count as `unknown`; this
+    /// says why. Diagnostic only, never gates resolution (TLS-47).
+    pub abi_ingest_errors: Vec<String>,
     /// T0.3 builtin-dispatch justification audit — see [`BuiltinDispatchAudit`]'s
     /// doc. ADDITIVE diagnostic: never consulted by `histogram`/
     /// `classify_obligation`, does not change any route/edge.
@@ -2731,6 +2737,12 @@ pub(crate) fn resolve_full_program_reusing(
     // Task 3 (preprocessor foundations plan): additive Recovered-parse
     // diagnostic — surfaced, never gating (see `recovered_files`'s doc).
     let recovered_files = ctx.recovered_files();
+    let mut abi_ingest_errors: Vec<String> = graph
+        .abi_ingest_errors
+        .iter()
+        .map(|e| format!("{}: {}", graph.apps.resolve(e.app).short(), e.message))
+        .collect();
+    abi_ingest_errors.sort();
 
     (
         ProgramReport {
@@ -2742,6 +2754,7 @@ pub(crate) fn resolve_full_program_reusing(
             primary_app_ref,
             event_flow_dual_publisher_alias_skips,
             recovered_files,
+            abi_ingest_errors,
             builtin_dispatch_audit,
             site_facts,
             parenless_calls,
@@ -6570,61 +6583,6 @@ codeunit 50003 \"Check Dimensions\"
             }
             Ok(_) => panic!("nonexistent workspace must return Err"),
         }
-    }
-
-    /// TLS-47 (engine limit L37): a dependency whose `SymbolReference.json`
-    /// does not parse is dropped by the loader, so the graph never sees it and
-    /// `abi_ingest_errors` stays empty on the production build path.
-    ///
-    /// Discrimination (2026-11-13): making the loader accept a package whose
-    /// symbols fail (`extract_app_symbols(..).or_else(|_| Ok(Vec::new()))`)
-    /// fails here ("the loader drops the package"); reverted, passes.
-    #[test]
-    fn a_package_whose_symbols_do_not_parse_never_reaches_the_graph() {
-        use std::io::Write;
-        const DEP: &str = "cccc4747-0000-0000-0000-000000000148";
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
-        std::fs::write(
-            ws.join("app.json"),
-            format!(
-                r#"{{"id":"aaaa4747-0000-0000-0000-000000000148","name":"AbiWs","publisher":"probe","version":"1.0.0.0","dependencies":[{{"id":"{DEP}","name":"AbiDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
-            ),
-        )
-        .unwrap();
-        std::fs::create_dir_all(ws.join("src")).unwrap();
-        std::fs::write(
-            ws.join("src/Cu.al"),
-            "codeunit 50048 \"Abi Cu\"\n{\n    procedure A()\n    begin\n    end;\n}\n",
-        )
-        .unwrap();
-        let manifest = format!(
-            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{DEP}" Name="AbiDep" Publisher="probe" Version="1.0.0.0" Runtime="13.0" /></Package>"#
-        );
-        let mut zip_bytes = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = zip::ZipWriter::new(&mut zip_bytes);
-            let opts = zip::write::SimpleFileOptions::default();
-            zip.start_file("NavxManifest.xml", opts).unwrap();
-            zip.write_all(manifest.as_bytes()).unwrap();
-            zip.start_file("SymbolReference.json", opts).unwrap();
-            zip.write_all(b"{ this is not JSON").unwrap();
-            zip.finish().unwrap();
-        }
-        let mut bytes = vec![0u8; 40];
-        bytes.extend_from_slice(zip_bytes.get_ref());
-        std::fs::create_dir_all(ws.join(".alpackages")).unwrap();
-        std::fs::write(ws.join(".alpackages/probe_AbiDep_1.0.0.0.app"), bytes).unwrap();
-
-        let ctx = build_context_res(ws).expect("the workspace builds without the package");
-        assert!(
-            !ctx.snap.apps.iter().any(|u| u.id.guid == DEP),
-            "the loader drops the package"
-        );
-        assert!(
-            ctx.graph.abi_ingest_errors.is_empty(),
-            "so the graph has no ingest error for it"
-        );
     }
 
     #[test]

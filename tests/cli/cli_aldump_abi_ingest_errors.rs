@@ -1,9 +1,12 @@
-//! TLS-47 / engine limit L37: `aldump --program-call-graph-stats` does not list
-//! the dependency packages the loader drops. A package whose
-//! `SymbolReference.json` does not parse is dropped before the graph build (so
-//! `ProgramGraph::abi_ingest_errors` stays empty); a call into it counts as
-//! `unknown`, and nothing in the stats names the package. `alsem analyze`'s
-//! dependency ledger is where it is reported.
+//! TLS-47: `aldump --program-call-graph-stats` prints the loaded dependencies
+//! whose ABI failed to ingest (`abiIngestErrors`, and a stderr warning), and
+//! engine limit L37: a package the loader drops is not in the JSON at all.
+//!
+//! The two failures differ because the loader's typed parse skips members it
+//! does not name, while the ABI reader checks the whole value strictly (ENG-68):
+//! a `1e400` in a skipped member loads the package and fails its ABI; text that
+//! is not JSON drops the package. Calls into the dependency are `unknown` both
+//! ways.
 
 use std::path::Path;
 use std::process::Command;
@@ -17,6 +20,7 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// The stats JSON and stderr.
 fn stats(ws: &Path) -> (serde_json::Value, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_aldump"))
         .arg("--program-call-graph-stats")
@@ -29,24 +33,21 @@ fn stats(ws: &Path) -> (serde_json::Value, String) {
         "aldump failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let text = String::from_utf8(out.stdout).unwrap();
-    (serde_json::from_str(&text).expect("stats JSON"), text)
+    (
+        serde_json::from_slice(&out.stdout).expect("stats JSON"),
+        String::from_utf8(out.stderr).unwrap(),
+    )
 }
 
-fn dep_app(ws: &Path, symbols: &str) {
-    write_symbol_app(
-        &ws.join(".alpackages/probe_AbiDep_1.0.0.0.app"),
-        DEP,
-        "AbiDep",
-        "1.0.0.0",
-        symbols,
-    );
+/// The dependency's symbols with one codeunit `Abi Lib` (method `Work`), plus
+/// `extra` members at the top level.
+fn symbols(extra: &str) -> String {
+    format!(
+        r#"{{"RuntimeVersion":"13.0",{extra}"Codeunits":[{{"Id":50300,"Name":"Abi Lib","Methods":[{{"Name":"Work","Parameters":[]}}]}}],"AppId":"{DEP}","Name":"AbiDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    )
 }
 
-#[test]
-fn a_call_into_a_dropped_package_is_unknown_and_unlisted() {
-    let dir = tempfile::tempdir().unwrap();
-    let ws = dir.path();
+fn workspace(ws: &Path, symbols: &str) {
     write(
         &ws.join("app.json"),
         &format!(
@@ -57,27 +58,60 @@ fn a_call_into_a_dropped_package_is_unknown_and_unlisted() {
         &ws.join("src/Cu.al"),
         "codeunit 50047 \"Abi Cu\"\n{\n    procedure A()\n    var\n        L: Codeunit \"Abi Lib\";\n    begin\n        L.Work();\n    end;\n}\n",
     );
-
-    // A readable package: the call resolves through its ABI (non-vacuity).
-    dep_app(
-        ws,
-        &format!(
-            r#"{{"RuntimeVersion":"13.0","Codeunits":[{{"Id":50300,"Name":"Abi Lib","Methods":[{{"Name":"Work","Parameters":[]}}]}}],"AppId":"{DEP}","Name":"AbiDep","Publisher":"probe","Version":"1.0.0.0"}}"#
-        ),
+    write_symbol_app(
+        &ws.join(".alpackages/probe_AbiDep_1.0.0.0.app"),
+        DEP,
+        "AbiDep",
+        "1.0.0.0",
+        symbols,
     );
-    let (v, _) = stats(ws);
-    let p = &v["primaryScoped"];
-    assert_eq!(p["resolvedAbiExternal"], 1, "{p}");
-    assert_eq!(p["unknown"], 0, "{p}");
+}
 
-    // The same package with symbols that do not parse: the loader drops it.
-    dep_app(ws, "{ this is not JSON");
-    let (v, text) = stats(ws);
-    let p = &v["primaryScoped"];
-    assert_eq!(p["resolvedAbiExternal"], 0, "{p}");
-    assert_eq!(p["unknown"], 1, "the call into the dropped package: {p}");
+/// A readable ABI: the call resolves and nothing is reported (non-vacuity).
+#[test]
+fn a_readable_dependency_reports_no_ingest_error() {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), &symbols(""));
+    let (v, err) = stats(dir.path());
+    assert_eq!(v["primaryScoped"]["resolvedAbiExternal"], 1, "{v}");
+    assert_eq!(v["abiIngestErrors"]["count"], 0, "{}", v["abiIngestErrors"]);
+    assert!(!err.contains("could not be read"), "{err}");
+}
+
+/// The loader accepts the package (it skips `Junk`), the ABI reader rejects the
+/// out-of-range number: the stats name the app and the reason, on stdout and
+/// stderr.
+///
+/// Discrimination (2026-11-13): clearing `abi_ingest_errors` in
+/// `resolve_full_program_reusing` before the report fails here (count 0);
+/// reverted, passes.
+#[test]
+fn a_dependency_whose_abi_fails_to_ingest_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), &symbols(r#""Junk":1e400,"#));
+    let (v, err) = stats(dir.path());
+    assert_eq!(v["primaryScoped"]["unknown"], 1, "{v}");
+    let e = &v["abiIngestErrors"];
+    assert_eq!(e["count"], 1, "{e}");
+    let line = e["errors"][0].as_str().expect("an error line");
     assert!(
-        !text.contains("AbiDep"),
-        "the stats do not name the dropped package (L37): {text}"
+        line.starts_with("probe/AbiDep@1.0.0.0: ") && line.contains("number out of range"),
+        "{line}"
     );
+    assert!(
+        err.contains("aldump: warning: dependency ABI could not be read: probe/AbiDep@1.0.0.0: "),
+        "{err}"
+    );
+}
+
+/// L37: symbols that are not JSON make the loader drop the package, so it is
+/// not in the stats JSON, and the call into it is `unknown`. `alsem analyze`
+/// reports it.
+#[test]
+fn a_package_the_loader_drops_is_not_in_the_stats() {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path(), "{ this is not JSON");
+    let (v, _) = stats(dir.path());
+    assert_eq!(v["primaryScoped"]["unknown"], 1, "{v}");
+    assert_eq!(v["abiIngestErrors"]["count"], 0, "{}", v["abiIngestErrors"]);
 }

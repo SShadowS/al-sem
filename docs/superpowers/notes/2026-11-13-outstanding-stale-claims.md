@@ -62,9 +62,8 @@ in the tree.
    `noPublisherRoutine` (93 on CDO when recorded; undecided now).
 4. **Doc links to the deleted `d1_cohort::UncertaintyTable`**: `engine/l5/confidence.rs:35`,
    `engine/l4/summary.rs:84` and `:122` (doc-only).
-5. Lower priority, owner's call: `aldump` does not print `abi_ingest_errors` (correction,
-   TLS-47: the CLI never fills that field, because the loader drops a package whose symbols
-   fail before the graph build; the real gap is engine limit L37); d35 Group 2
+5. Lower priority, owner's call: `aldump` does not print `abi_ingest_errors` (done by
+   TLS-47; a package the loader drops never reaches that field, engine limit L37); d35 Group 2
    (`GuidedExperienceImpl` Commit at :115) should be re-measured now that conjunct guards
    exist; the symbol-only exemption cannot tell an empty `SymbolReference` from a
    serde-default one (`full.rs:3579`; no population).

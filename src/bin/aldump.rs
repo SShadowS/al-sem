@@ -2093,9 +2093,11 @@ fn run_main() -> ExitCode {
         //
         // Fully independent of L3.
         //
-        // LIMIT (TLS-47): packages the loader drops (unreadable, unidentified,
-        // encrypted) are not listed here; calls into them count as `unknown`.
-        // See `alsem analyze`'s dependency ledger. Pinned by
+        //   - ABI ingest errors of loaded dependencies (TLS-47)
+        //
+        // LIMIT (L37): packages the loader drops (unreadable, unidentified,
+        // encrypted) are not in the JSON (only a stderr warning); calls into
+        // them count as `unknown`. `alsem analyze` reports them. Pinned by
         // `tests/cli/cli_aldump_abi_ingest_errors.rs`.
         use al_sem::program::resolve::edge::{
             unknown_reason_breakdown, unknown_receiver_tier_breakdown,
@@ -2113,6 +2115,10 @@ fn run_main() -> ExitCode {
         let ph = &r.primary_histogram;
         let cov = &r.coverage;
         let abi = r.abi_integrity();
+        // Never silent about it: the JSON lists them too (`abiIngestErrors`).
+        for e in &r.abi_ingest_errors {
+            eprintln!("aldump: warning: dependency ABI could not be read: {e}");
+        }
 
         // Task 3: stratified `Unknown`-reason breakdown (charter §8). Purely
         // diagnostic — never changes `h`/`ph`/`cov` above. Rendered via
@@ -2222,6 +2228,12 @@ fn run_main() -> ExitCode {
                 "abiRoutesTotal": abi.abi_routes_total,
                 "abiMapped": abi.abi_mapped,
                 "abiUnmapped": abi.abi_unmapped,
+            },
+            // TLS-47: loaded dependencies whose ABI failed to ingest (they look
+            // empty, so calls into them are `unknown`). Expected `count: 0`.
+            "abiIngestErrors": {
+                "count": r.abi_ingest_errors.len(),
+                "errors": r.abi_ingest_errors,
             },
             // ── Collision-guard observability (Task 1) ───────────────────────
             // Publisher EventFlow edges skipped by the dual-publisher
