@@ -351,7 +351,9 @@ callers' question reads (`commit_scope::declared`).
    routine in two `#if` arms, a `[CommitBehavior(Error)]` arm holding only a checked run and a
    `[CommitBehavior(Ignore)]` arm holding only a `Commit()`. Without the exclusion the Ignore
    arm's `Commit()` takes the Error arm's behavior and `prove … throws-error` on its caller
-   answers `yes`; with it, `no` (`tests/cli/cli_eng23_commit_arms.rs`). The same shape named the
+   answers `yes` (its error row is the Ignore arm's `Commit()`); with it, `no`
+   (`tests/cli/cli_eng23_commit_arms.rs`). A single `[CommitBehavior(Error)]` routine holding only
+   a checked run answers `no` with and without the exclusion (the test's control). The same shape named the
    ignored commit's reason after the merged arms' word ("CommitBehavior Error on …X"); the digest
    and prove now name the behavior asked about (`Declared::reason_for`).
 3. `alsem fingerprint` (and `policy check`, which reads its capabilities) does not apply the rule:

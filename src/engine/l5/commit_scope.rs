@@ -313,16 +313,12 @@ impl Declared {
         }
     }
 
-    /// `CommitBehavior Error on <routine>` (or the object property's form).
-    #[must_use]
-    pub fn reason(self, routine_display: &str) -> String {
-        self.reason_word(self.word(), routine_display)
-    }
-
-    /// [`Self::reason`] for one behavior `bit` ([`I`] or [`E`]) the routine may
-    /// set: two `#if` arms of one id merge their declarations ([`Self::union`]),
-    /// so the merged word names one arm's while the reason asked is the
-    /// other's (ENG-23: an `Ignore`d commit reported as "CommitBehavior Error").
+    /// `CommitBehavior Error on <routine>` (or the object property's form) for
+    /// one behavior `bit` ([`I`] or [`E`]) the routine may set. Two `#if` arms
+    /// of one id merge their declarations ([`Self::union`]), so the merged
+    /// [`Self::word`] may name the other arm's (ENG-23: an `Ignore`d commit
+    /// was reported as "CommitBehavior Error"); there is no reason without a
+    /// bit for that reason.
     #[must_use]
     pub fn reason_for(self, bit: u8, routine_display: &str) -> String {
         let word = if bit == E {

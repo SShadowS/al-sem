@@ -78,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arms, a `[CommitBehavior(Error)]` arm holding only a checked run and a
   `[CommitBehavior(Ignore)]` arm holding only a `Commit()`. Without the exclusion, `prove …
   throws-error` on the caller answers `yes` (the ignored commit read as an error); with it,
-  `no`. Test: `tests/cli/cli_eng23_commit_arms.rs` (breaks recorded).
+  `no`. A single `[CommitBehavior(Error)]` routine holding only a checked run answers `no`
+  either way (the test's control). Test: `tests/cli/cli_eng23_commit_arms.rs` (breaks recorded).
 - **An ignored commit's reason named the wrong behavior.** In that shape the digest's
   `suppressedCommits` entry and prove's evidence said "CommitBehavior Error on …X" for a commit
   ignored under the other arm's `Ignore`: the reason read the merged arms' declaration word.

@@ -53,6 +53,19 @@ codeunit 53102 "E23 Ops"
     end;
 #endif
 }
+codeunit 53103 "E23 Plain"
+{
+    procedure RootPlain()
+    begin
+        Y();
+    end;
+
+    [CommitBehavior(CommitBehavior::Error)]
+    local procedure Y()
+    begin
+        if Codeunit.Run(Codeunit::"E23 Worker") then;
+    end;
+}
 "#;
 
 fn run(args: &[&str]) -> serde_json::Value {
@@ -81,19 +94,25 @@ fn run(args: &[&str]) -> serde_json::Value {
 /// `Commit()` stays ignored and raises nothing, the run's own error is not
 /// raised (nothing pending), so `Root` cannot throw.
 /// Break (2026-11-13): drop `&& !is_run_commit(f)` in `CbGraph::of_tree`
-/// (commit_scope.rs) -> `yes` ("COMMIT (an error: CommitBehavior Error on X)").
-/// Fails; restored, it passes.
+/// (commit_scope.rs) -> `yes`, its row the Ignore arm's `Commit()` (line 36)
+/// read as an error ("CommitBehavior Error on …X"). Fails; restored, it passes.
+/// Control (Fable round 1): `RootPlain`, one `[CommitBehavior(Error)]` routine
+/// holding only a checked run, answers `no` with and without the exclusion
+/// (run under the same break: still `no`), so the arms shape is the one that
+/// reaches it.
 #[test]
 fn a_checked_runs_commit_carries_no_commit_behavior() {
     let v = run(&["prove", "Codeunit \"E23 Ops\"::Root", "throws-error"]);
     assert_eq!(v["payload"]["result"]["answer"], "no", "{v}");
+    let p = run(&["prove", "Codeunit \"E23 Plain\"::RootPlain", "throws-error"]);
+    assert_eq!(p["payload"]["result"]["answer"], "no", "{p}");
 }
 
 /// The ignored commit's reason names the behavior it is ignored under
 /// (Ignore), not the merged arms' word (Error).
-/// Break (2026-11-13): `digest.rs` `why` calls `reason` instead of
-/// `reason_for(bit, …)` -> "CommitBehavior Error on …X". Fails; restored, it
-/// passes.
+/// Break (2026-11-13): `digest.rs` `why` took the merged declaration's word
+/// (the old `Declared::reason`, since removed) instead of `reason_for(bit, …)`
+/// -> "CommitBehavior Error on …X". Fails; restored, it passes.
 #[test]
 fn an_ignored_commits_reason_names_ignore() {
     let v = run(&["digest", "--routine", "Root"]);
