@@ -515,7 +515,7 @@ fn tree_of(
     scope: ConeScope,
 ) -> crate::engine::l5::snapshot::CapabilitySnapshot {
     let (mut caps, raw) =
-        compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope);
+        compose_capabilities(model, rel.cone(), det_cone_inputs(model, rel), scope, 1);
     let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
     compose_tree(
         model,

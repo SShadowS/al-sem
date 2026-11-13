@@ -5278,6 +5278,7 @@ mod tests {
                 derived: true,
                 raw: WitnessScope::None,
             },
+            1,
         );
         let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(
@@ -5419,6 +5420,7 @@ mod tests {
                 derived: true,
                 raw: WitnessScope::None,
             },
+            1,
         );
         let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
         let tree = crate::engine::l5::snapshot::compose_tree(

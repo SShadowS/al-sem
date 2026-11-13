@@ -241,6 +241,7 @@ pub(crate) fn tree_over(ws: &Path, scope: WitnessScope) -> (R3a5CrossAppBase, Ca
             derived: false,
             raw: scope,
         },
+        1,
     );
     let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
     let tree = compose_tree(

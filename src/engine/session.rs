@@ -948,7 +948,15 @@ pub(crate) fn compose_cone(
     scope: ConeScope,
 ) -> (CapabilityAnalysis, InheritedFacts) {
     let _s = pt::span("context", "context.capability_cones");
-    dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope)
+    // TLS-29: a one-shot walk with no raw member runs on the shared reach
+    // worker count.
+    dc::compose_capabilities(
+        model,
+        rel.cone(),
+        dc::det_cone_inputs(model, rel),
+        scope,
+        crate::engine::l5::digest_cli::default_reach_workers().count(),
+    )
 }
 
 /// [`compose_cone`] for a resident revision (context-server design §6.10,
@@ -968,6 +976,8 @@ pub(crate) fn compose_cone_retained(
         dc::det_cone_inputs(model, rel),
         scope,
         pd,
+        // A resident revision's walk is serial (TLS-22 rule).
+        1,
     )
 }
 
@@ -988,7 +998,7 @@ pub(crate) fn emit_raw_ids(
         derived: false,
         raw: WitnessScope::Subjects(subjects),
     };
-    dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope).1
+    dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope, 1).1
 }
 
 /// Rule B's app names and D9's source-less apps (#160 step 9) a tree reads;

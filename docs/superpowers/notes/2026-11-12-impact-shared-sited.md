@@ -60,7 +60,9 @@ program (a probe printed its `ViewKey` workspace and a different manifest stamp)
 tests-select reuse applies only when the test universe is the workspace itself. On CDO all of the
 saving comes from step 2 (main → up), which is why step1 alone measures as master.
 
-## Not measured here
+## The landing gate (follow-up, 2026-11-13)
 
-- The `cdo-gate` impact phase time (414 / 466 / 421 / 395 s on master in the 2026-11-12 gates):
-  it comes from the landing gate.
+TLS-28's landing `cdo-gate` (tree `bf2097d2`, landed as master `60981a1f`) ran the impact phase
+(`output_cdo_impact`) in 357 s. Without TLS-28 it took 414 / 466 / 421 / 395 s in the 2026-11-12
+gates and 385-530 s in the 2026-11-13 gates before this one. One gate under the usual outside
+load, so read it as consistent with the CPU saving above, not as a measured speedup.

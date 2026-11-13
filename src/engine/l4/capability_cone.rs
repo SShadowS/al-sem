@@ -33,8 +33,8 @@ use std::sync::Arc;
 use super::combined_graph::{CombinedGraph, TypedEdge, UncertaintyEdge, build_combined_graph};
 use super::cone_census;
 use super::cone_derived::{
-    ConeDerivedBuilder, ConeDerivedStore, ConeScope, FoldedRow, MemberMode, WitnessScope,
-    fact_is_known_temp,
+    ConeDerivedBuilder, ConeDerivedStore, ConeScope, DerivedFold, FoldedRow, MemberMode,
+    WitnessScope, fact_is_known_temp,
 };
 use super::inherited_facts::{InheritedBuilder, InheritedFacts, InheritedRef};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
@@ -1925,6 +1925,26 @@ fn candidate_wins(dist: usize, edge: &TypedOutEdge, cur: Option<(usize, &TypedOu
 /// first read and freed with the cone.
 type ClosedRowMemo = HashMap<usize, FoldedRow>;
 
+/// The closed-set memo rows a walk reads: the serial walk's
+/// [`ClosedRowMemo`], or a parallel task's view of its successors' shared
+/// rows (TLS-29, `par::SuccMemo`).
+trait MemoRows {
+    /// Callee SCC `j`'s row, built by `build` when there is none yet.
+    fn row(&mut self, j: usize, build: impl FnOnce() -> FoldedRow) -> &FoldedRow;
+    /// The rows alive now (the census's `memo_live_max`).
+    fn live(&self) -> usize;
+}
+
+impl MemoRows for ClosedRowMemo {
+    fn row(&mut self, j: usize, build: impl FnOnce() -> FoldedRow) -> &FoldedRow {
+        self.entry(j).or_insert_with(build)
+    }
+
+    fn live(&self) -> usize {
+        self.len()
+    }
+}
+
 /// The fact cones a walk reads, by SCC index. Shared (`Arc`): a resident
 /// fold's cone store keeps every non-root cone for the next revision, which
 /// reads an unchanged SCC's cone instead of rebuilding it (design §6.10).
@@ -1955,8 +1975,8 @@ fn inherited_facts_for_singleton<'g>(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     own: &'g [super::pd_solve::ResolvedEntry<'g>],
     mode: MemberMode,
-    derived: &mut ConeDerivedBuilder,
-    memo: &mut ClosedRowMemo,
+    derived: &mut impl DerivedFold,
+    memo: &mut impl MemoRows,
     stats: &mut ComposeStats,
     out: &mut InheritedBuilder,
 ) -> Vec<InheritedRef> {
@@ -2029,8 +2049,10 @@ fn inherited_facts_for_singleton<'g>(
             }
         }
         for j in callee_sccs {
-            if let std::collections::hash_map::Entry::Vacant(slot) = memo.entry(j) {
-                let _t = crate::engine::l5::detector_context::cones_census::start();
+            let _t = crate::engine::l5::detector_context::cones_census::start();
+            let mut built = false;
+            let row = memo.row(j, || {
+                built = true;
                 let mut entries = 0u64;
                 let row = derived.fold_set(
                     cones[&j]
@@ -2041,25 +2063,27 @@ fn inherited_facts_for_singleton<'g>(
                 );
                 stats.closed_memo_builds += 1;
                 stats.closed_memo_entries += entries;
-                slot.insert(row);
-                if crate::engine::l5::detector_context::cones_census::enabled() {
-                    crate::engine::l5::detector_context::cones_census::max(
-                        &crate::engine::l5::detector_context::cones_census::CLOSED_MEMO_LIVE_MAX,
-                        memo.len() as u64,
-                    );
-                }
+                row
+            });
+            if built {
                 crate::engine::l5::detector_context::cones_census::add_since(
                     &crate::engine::l5::detector_context::cones_census::SGL_MEMO_NANOS,
                     _t,
                 );
             }
             let _t = crate::engine::l5::detector_context::cones_census::start();
-            derived.fold_row(&memo[&j]);
+            derived.fold_row(row);
             stats.closed_memo_reads += 1;
             crate::engine::l5::detector_context::cones_census::add_since(
                 &crate::engine::l5::detector_context::cones_census::SGL_ROW_NANOS,
                 _t,
             );
+            if built && crate::engine::l5::detector_context::cones_census::enabled() {
+                crate::engine::l5::detector_context::cones_census::max(
+                    &crate::engine::l5::detector_context::cones_census::CLOSED_MEMO_LIVE_MAX,
+                    memo.live() as u64,
+                );
+            }
         }
         let _t = crate::engine::l5::detector_context::cones_census::start();
         for (_, e) in subst.iter().flatten() {
@@ -2738,6 +2762,61 @@ pub(crate) struct ComposeStats {
     pub(crate) singleton_scans: u64,
 }
 
+impl ComposeStats {
+    /// Add `o` into these stats (TLS-29: a parallel walk's per-SCC stats):
+    /// sums, `max_recursive_members` by max, `size_hist` per bucket.
+    /// Destructured so a new field must be placed here.
+    pub(crate) fn absorb(&mut self, o: &ComposeStats) {
+        let ComposeStats {
+            recursive_sccs,
+            recursive_members_all,
+            recursive_members_emitted,
+            recursive_roots,
+            self_loops,
+            max_recursive_members,
+            size_hist,
+            member_walks,
+            own_entries_recursive,
+            members_with_own_entry,
+            with_successor,
+            with_guarded_successor,
+            scc_sets_borrowed,
+            scc_sets_built,
+            scc_set_entries_folded,
+            closed_memo_builds,
+            closed_memo_reads,
+            closed_memo_entries,
+            scc_set_folds,
+            singleton_scans,
+        } = *o;
+        self.recursive_sccs += recursive_sccs;
+        self.recursive_members_all += recursive_members_all;
+        self.recursive_members_emitted += recursive_members_emitted;
+        self.recursive_roots += recursive_roots;
+        self.self_loops += self_loops;
+        self.max_recursive_members = self.max_recursive_members.max(max_recursive_members);
+        for (a, b) in self.size_hist.iter_mut().zip(size_hist) {
+            *a += b;
+        }
+        self.member_walks += member_walks;
+        self.own_entries_recursive += own_entries_recursive;
+        self.members_with_own_entry += members_with_own_entry;
+        self.with_successor += with_successor;
+        self.with_guarded_successor += with_guarded_successor;
+        self.scc_sets_borrowed += scc_sets_borrowed;
+        self.scc_sets_built += scc_sets_built;
+        self.scc_set_entries_folded += scc_set_entries_folded;
+        self.closed_memo_builds += closed_memo_builds;
+        self.closed_memo_reads += closed_memo_reads;
+        self.closed_memo_entries += closed_memo_entries;
+        self.scc_set_folds += scc_set_folds;
+        self.singleton_scans += singleton_scans;
+    }
+}
+
+#[path = "cone_walk_par.rs"]
+mod par;
+
 /// #160 step 7b §4.7: the T7'/T8' oracle's streamed raw fold. Test-only, so
 /// production builds carry no parameter and no per-routine branch for it.
 /// While [`raw_fold_hook::fold`] runs, every routine `compose_inherited_cones`
@@ -3283,6 +3362,7 @@ fn compose_inherited_cones(
     scope: &ConeScope,
     pd_reuse: Option<&super::pd_solve::PdReuse<'_>>,
     keep: Option<KeepCones<'_>>,
+    workers: usize,
 ) -> ComposedCones {
     let mut stats = ComposeStats::default();
     let mut cone_report = ConeReport {
@@ -3405,8 +3485,44 @@ fn compose_inherited_cones(
     };
     let mut changed: Option<HashSet<String>> = seed.map(|_| HashSet::new());
 
+    // TLS-29 census: each SCC's time and kept fact-cone size.
+    let census_on = crate::engine::l5::detector_context::cones_census::enabled();
+    let mut scc_nanos: Vec<u64> = vec![0; if census_on { scc.sccs.len() } else { 0 }];
+    let mut cone_len: Vec<u64> = scc_nanos.clone();
+    // TLS-29: a walk with no cone store (not a resident fold) and no raw
+    // member runs in parallel (`par`); the serial loop below then visits no
+    // SCC. Its leak check and tail hold for both.
+    let parallel = keep.is_none() && scope.raw.names_none();
+    let sched = parallel.then(|| par::sched_for(workers)).flatten();
+    if let Some(sched) = sched {
+        let walked = par::walk(
+            &par::Inputs {
+                g,
+                scc,
+                succ: &succ_sccs,
+                direct,
+                direct_raw,
+                cov,
+                routine_ids,
+                routines_by_id,
+                frames,
+                scope,
+                resolved: &resolved,
+            },
+            sched,
+        );
+        coverage_out = walked.coverage;
+        derived = walked.derived;
+        stats.absorb(&walked.stats);
+        if census_on {
+            scc_nanos = walked.scc_nanos;
+            cone_len = walked.cone_len;
+        }
+    }
+    let serial_sccs = if sched.is_some() { 0 } else { scc.sccs.len() };
     let empty_succ: BTreeSet<usize> = BTreeSet::new();
-    for i in 0..scc.sccs.len() {
+    for i in 0..serial_sccs {
+        let _t_scc = crate::engine::l5::detector_context::cones_census::start();
         let scc_entry = &scc.sccs[i];
         let succ_ids = succ_sccs.get(i).unwrap_or(&empty_succ);
 
@@ -3844,9 +3960,18 @@ fn compose_inherited_cones(
                 cov_cones.remove(y);
             }
         }
+        if let Some(t) = _t_scc {
+            scc_nanos[i] = t.elapsed().as_nanos() as u64;
+            cone_len[i] = fact_cones.get(&i).map_or(0, |c| c.len() as u64);
+        }
     }
 
     drop(walk_span);
+    if census_on {
+        crate::engine::l5::detector_context::cones_census::add_schedule(
+            &succ_sccs, &scc_nanos, &cone_len,
+        );
+    }
     // ⟨C1 Task 4⟩ Both maps MUST be empty here. Every non-root SCC's cone is
     // refcount-freed by its last predecessor (each of its predecessors runs
     // exactly once and decrements exactly once, so the counter always reaches
@@ -3917,7 +4042,9 @@ fn compose_inherited_cones(
     }
 
     crate::engine::l5::detector_context::cones_census::add_compose_stats(&stats);
-    if let Some((t0, before)) = rest_entry {
+    // A parallel walk's component timers sum over its workers, so wall minus
+    // components would go negative: not charged.
+    if let Some((t0, before)) = rest_entry.filter(|_| sched.is_none()) {
         let after = crate::engine::l5::detector_context::cones_census::component_snapshot();
         let comp: i64 = after
             .iter()
@@ -4080,6 +4207,7 @@ pub fn compose_cone_over_graph(
         routines,
         scope,
         PdRetain::No,
+        1,
     )
 }
 
@@ -4147,7 +4275,10 @@ pub(crate) fn pd_input_digests(
 
 /// [`compose_cone_over_graph`], keeping (and reusing) the producer solve's
 /// inputs as `pd` says. The outcome equals a plain composition's in every
-/// other field.
+/// other field. With `workers > 1`, a composition that keeps no cone store
+/// and emits no raw facts walks its SCCs in parallel (TLS-29, `par`); its
+/// outcome equals the serial walk's.
+#[allow(clippy::too_many_arguments)]
 pub fn compose_cone_over_graph_retained(
     typed: &[TypedEdge],
     nodes: &[String],
@@ -4156,6 +4287,7 @@ pub fn compose_cone_over_graph_retained(
     routines: &[ModelRoutine],
     scope: ConeScope,
     pd: PdRetain<'_>,
+    workers: usize,
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
@@ -4271,6 +4403,7 @@ pub fn compose_cone_over_graph_retained(
         &scope,
         reuse.as_ref(),
         keep,
+        workers,
     );
     // Plan 2026-11-03 L6: a kept store also keeps what a subject's raw
     // emission reads, the graph, its SCCs and the frames among them (their
@@ -5675,6 +5808,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
         },
         None,
         None,
+        1,
     );
 
     // ── Project ───────────────────────────────────────────────────────────
