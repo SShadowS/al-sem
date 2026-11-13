@@ -1684,15 +1684,12 @@ impl<'a, 'c> Visitor<'a, 'c> {
                 (DeclSource::ObjectProperty, None) => {}
                 // Engine limits B2: an attribute only some builds have.
                 (DeclSource::ConditionalAttribute, _) => {
+                    // Both words when two builds declare one each (sol round 1).
+                    let (word, becomes) = d.words();
                     self.commit_behavior.insert(format!(
-                        "{} on {} in some builds only (an added COMMIT below it may be {})",
-                        d.word(),
+                        "{word} on {} in some builds only (an added COMMIT below it may be \
+                         {becomes})",
                         self.ix.display(g, n),
-                        if d.states & crate::engine::l5::commit_scope::E != 0 {
-                            "an error"
-                        } else {
-                            "ignored"
-                        }
                     ));
                 }
             }

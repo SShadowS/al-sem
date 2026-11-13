@@ -285,12 +285,39 @@ pub struct Declared {
     /// The behaviors the routine's scope may set ([`N`]/[`I`]/[`E`] bits).
     pub states: u8,
     pub source: DeclSource,
+    /// ENG-23 (sol round 1): where the [`I`] bit comes from, and the [`E`]
+    /// bit. Two `#if` arms merge into one declaration ([`Self::union`]); one
+    /// arm's attribute must not be named as the source of the other arm's
+    /// behavior ([`Self::reason_for`]).
+    pub ignore_source: Option<DeclSource>,
+    pub error_source: Option<DeclSource>,
+}
+
+/// Of two sources of one behavior, the one a reason names: the first's
+/// unless the second is a definite attribute (the rule [`Declared::union`]
+/// had for the whole declaration).
+fn prefer(a: Option<DeclSource>, b: Option<DeclSource>) -> Option<DeclSource> {
+    match (a, b) {
+        (_, Some(DeclSource::Attribute)) | (None, _) => b,
+        _ => a,
+    }
 }
 
 impl Declared {
+    /// A declaration whose every behavior bit comes from `source`.
+    #[must_use]
+    pub fn new(states: u8, source: DeclSource) -> Declared {
+        Declared {
+            states,
+            source,
+            ignore_source: (states & I != 0).then_some(source),
+            error_source: (states & E != 0).then_some(source),
+        }
+    }
+
     /// Two declarations of one id (two `#if` arms, engine limits B2): every
     /// behavior either may set. The source stays the first's unless the
-    /// second is a definite attribute.
+    /// second is a definite attribute, per behavior bit too.
     #[must_use]
     pub fn union(self, other: Declared) -> Declared {
         Declared {
@@ -300,6 +327,8 @@ impl Declared {
             } else {
                 self.source
             },
+            ignore_source: prefer(self.ignore_source, other.ignore_source),
+            error_source: prefer(self.error_source, other.error_source),
         }
     }
 
@@ -313,18 +342,44 @@ impl Declared {
         }
     }
 
-    /// `CommitBehavior Error on <routine>` (or the object property's form).
+    /// Every declared value's word, and what an added commit below it becomes:
+    /// `("Ignore", "ignored")`, `("Error", "an error")`, or both when two
+    /// builds declare one each (`"Ignore or Error"`, sol round 1).
     #[must_use]
-    pub fn reason(self, routine_display: &str) -> String {
-        match self.source {
-            DeclSource::Attribute => format!("CommitBehavior {} on {routine_display}", self.word()),
+    pub fn words(self) -> (&'static str, &'static str) {
+        match (self.states & I != 0, self.states & E != 0) {
+            (true, true) => ("Ignore or Error", "ignored or an error"),
+            (false, true) => ("Error", "an error"),
+            _ => ("Ignore", "ignored"),
+        }
+    }
+
+    /// `CommitBehavior Error on <routine>` (or the object property's form) for
+    /// one behavior `bit` ([`I`] or [`E`]) the routine may set. Two `#if` arms
+    /// of one id merge their declarations ([`Self::union`]), so the merged
+    /// [`Self::word`] may name the other arm's (ENG-23: an `Ignore`d commit
+    /// was reported as "CommitBehavior Error"); there is no reason without a
+    /// bit for that reason.
+    #[must_use]
+    pub fn reason_for(self, bit: u8, routine_display: &str) -> String {
+        let (word, source) = if bit == E {
+            ("Error", self.error_source)
+        } else if bit == I {
+            ("Ignore", self.ignore_source)
+        } else {
+            (self.word(), None)
+        };
+        self.reason_word(word, source.unwrap_or(self.source), routine_display)
+    }
+
+    fn reason_word(self, word: &str, source: DeclSource, routine_display: &str) -> String {
+        match source {
+            DeclSource::Attribute => format!("CommitBehavior {word} on {routine_display}"),
             DeclSource::ObjectProperty => format!(
-                "InherentCommitBehavior {} on the object of {routine_display} (may apply)",
-                self.word()
+                "InherentCommitBehavior {word} on the object of {routine_display} (may apply)"
             ),
             DeclSource::ConditionalAttribute => format!(
-                "CommitBehavior {} on {routine_display} in some builds only (may apply)",
-                self.word()
+                "CommitBehavior {word} on {routine_display} in some builds only (may apply)"
             ),
         }
     }
@@ -350,14 +405,8 @@ impl Declared {
 pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declared> {
     use crate::engine::return_summary::commit_behavior_value;
     let without_attribute = match object.and_then(|o| o.inherent_commit_behavior.as_deref()) {
-        Some("ignore") => Some(Declared {
-            states: N | I,
-            source: DeclSource::ObjectProperty,
-        }),
-        Some("error") => Some(Declared {
-            states: N | E,
-            source: DeclSource::ObjectProperty,
-        }),
+        Some("ignore") => Some(Declared::new(N | I, DeclSource::ObjectProperty)),
+        Some("error") => Some(Declared::new(N | E, DeclSource::ObjectProperty)),
         _ => None,
     };
     let own = crate::program::attributes::find_own_definite_attribute(
@@ -366,14 +415,8 @@ pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declar
     )
     .map_or("normal", commit_behavior_value);
     match own {
-        "ignore" => Some(Declared {
-            states: I,
-            source: DeclSource::Attribute,
-        }),
-        "error" => Some(Declared {
-            states: E,
-            source: DeclSource::Attribute,
-        }),
+        "ignore" => Some(Declared::new(I, DeclSource::Attribute)),
+        "error" => Some(Declared::new(E, DeclSource::Attribute)),
         _ => {
             let may = r
                 .attributes_parsed
@@ -389,10 +432,17 @@ pub fn declared(r: &ModelRoutine, object: Option<&ModelObject>) -> Option<Declar
             if may == 0 {
                 return without_attribute;
             }
-            Some(Declared {
-                states: may | without_attribute.map_or(N, |d| d.states),
-                source: DeclSource::ConditionalAttribute,
-            })
+            // A bit the conditional attribute sets is its; a bit only the
+            // object property sets stays the property's (sol round 1).
+            let mut d = Declared::new(may, DeclSource::ConditionalAttribute);
+            if let Some(w) = without_attribute {
+                d.states |= w.states;
+                d.ignore_source = d.ignore_source.or(w.ignore_source);
+                d.error_source = d.error_source.or(w.error_source);
+            } else {
+                d.states |= N;
+            }
+            Some(d)
         }
     }
 }
@@ -1279,13 +1329,7 @@ mod tests {
     #[test]
     fn a_run_below_a_declaration_keeps_its_may() {
         let mut by_routine = HashMap::new();
-        by_routine.insert(
-            "Root".to_string(),
-            Declared {
-                states: I,
-                source: DeclSource::Attribute,
-            },
-        );
+        by_routine.insert("Root".to_string(), Declared::new(I, DeclSource::Attribute));
         let mut runs = HashMap::new();
         runs.insert("run".to_string(), Step::Run);
         let scopes = CommitScopes {
