@@ -354,7 +354,7 @@ pub(crate) fn evaluate_cannot_fail(args: &[PExpressionInfo], var_facts: &VarFact
         return false;
     };
     let var_name = |info: &PExpressionInfo| match info.kind.as_str() {
-        "identifier" | "quoted_identifier" => info.value.as_deref().map(str::to_ascii_lowercase),
+        "identifier" | "quoted_identifier" => info.value.as_deref().map(al_syntax::fold_identifier),
         _ => None,
     };
     let Some((target_type, _)) = var_name(target).and_then(|n| var_facts(&n)) else {

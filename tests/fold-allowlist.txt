@@ -2,11 +2,15 @@
 #
 # AL identifiers (object, routine, field, variable, parameter, method, receiver, table names)
 # compare and key with ONE fold: `al_syntax::fold_identifier` / `eq_fold_identifier`. In
-# src/engine and src/program, `.to_lowercase()`, `.to_ascii_lowercase()` and
-# `eq_ignore_ascii_case(` are allowed only where the value is NOT an identifier:
+# src/engine and src/program, `.to_lowercase()`, `.to_ascii_lowercase()`,
+# `eq_ignore_ascii_case(` and their path forms passed as a function (`str::to_lowercase`,
+# `str::to_ascii_lowercase`, `char::to_lowercase`, `char::to_ascii_lowercase`) are allowed
+# only where the value is NOT an identifier:
 #   - identity inputs that must not move (ids, fingerprints, root-cause and event-id keys);
 #   - paths, file names, extensions, app/package names, GUIDs;
 #   - fixed ASCII keywords, type text, char-level checks, display text;
+#   - text sliced at byte offsets taken from another string (a fold can change a byte
+#     length: `İ` is 2 bytes, `i` 1); fold only what is extracted;
 #   - test code.
 # Each line is `<count> <path>`: the exact number of those calls the file holds today. The
 # guard fails when a count differs. A NEW call: use the identifier fold if it touches an
@@ -22,20 +26,20 @@
 11 src/engine/deps/symbol_reference.rs
 1 src/engine/follow_up.rs
 2 src/engine/gate/diff/cli.rs
-1 src/engine/gate/diff/passes.rs
+2 src/engine/gate/diff/passes.rs
 1 src/engine/gate/diff/preflight.rs
 9 src/engine/ids.rs
 2 src/engine/impact/base.rs
 2 src/engine/impact/delta.rs
 10 src/engine/impact/keys.rs
-3 src/engine/impact/scan.rs
+5 src/engine/impact/scan.rs
 1 src/engine/l4/capability_cone.rs
 1 src/engine/l4/combined_graph.rs
 1 src/engine/l4/effect_query_cli.rs
 2 src/engine/l4/query_v5.rs
 1 src/engine/l5/callers_context.rs
 1 src/engine/l5/commit_scope.rs
-1 src/engine/l5/cross_rules.rs
+3 src/engine/l5/cross_rules.rs
 4 src/engine/l5/detector_context.rs
 2 src/engine/l5/detector_context_11b_tests.rs
 1 src/engine/l5/detector_context_arm_tests.rs
@@ -43,6 +47,7 @@
 2 src/engine/l5/detectors/d13.rs
 1 src/engine/l5/detectors/d14.rs
 5 src/engine/l5/detectors/d18.rs
+1 src/engine/l5/detectors/d46.rs
 3 src/engine/l5/detectors/d4.rs
 2 src/engine/l5/detectors/d57.rs
 1 src/engine/l5/detectors/d59.rs
@@ -56,16 +61,17 @@
 1 src/engine/l5/literal_flow_tests.rs
 1 src/engine/l5/literal_reach.rs
 3 src/engine/l5/prove.rs
-2 src/engine/l5/prove_slice.rs
+3 src/engine/l5/prove_slice.rs
 3 src/engine/l5/registry.rs
 11 src/engine/l5/routine_rollup.rs
-3 src/engine/l5/selector_index.rs
+5 src/engine/l5/selector_index.rs
 6 src/engine/l5/snapshot.rs
 8 src/engine/l5/snapshot_full.rs
-5 src/engine/l5/snapshot_full/key_classes.rs
+6 src/engine/l5/snapshot_full/key_classes.rs
 2 src/engine/perf_trace.rs
 1 src/engine/resident/budget.rs
 1 src/engine/result_header.rs
+2 src/engine/root_classification.rs
 5 src/engine/snapshot.rs
 5 src/engine/source_excerpt.rs
 4 src/engine/test_select/scope.rs
@@ -91,9 +97,10 @@
 3 src/program/model/projection.rs
 1 src/program/model/record_types.rs
 2 src/program/model/role.rs
+1 src/program/model/workspace.rs
 1 src/program/model/rules_tests.rs
 1 src/program/node.rs
-8 src/program/node_extract.rs
+9 src/program/node_extract.rs
 1 src/program/pack/mod.rs
 3 src/program/page_ui.rs
 8 src/program/recordref_table.rs
@@ -102,7 +109,7 @@
 2 src/program/resolve/background.rs
 4 src/program/resolve/closed_enum.rs
 4 src/program/resolve/compiler_oracle.rs
-5 src/program/resolve/decl_surface.rs
+7 src/program/resolve/decl_surface.rs
 3 src/program/resolve/differential.rs
 4 src/program/resolve/event.rs
 13 src/program/resolve/extract.rs
@@ -111,8 +118,8 @@
 6 src/program/resolve/index.rs
 1 src/program/resolve/interface_holder.rs
 4 src/program/resolve/method_id.rs
-58 src/program/resolve/receiver.rs
-7 src/program/resolve/resolver.rs
+59 src/program/resolve/receiver.rs
+8 src/program/resolve/resolver.rs
 5 src/program/resolve/semantic_golden.rs
 1 src/program/session/workspace_tests.rs
 3 src/program/source_deps.rs

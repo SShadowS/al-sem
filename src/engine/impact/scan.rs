@@ -246,7 +246,10 @@ fn first_word(code: &str) -> String {
 /// "My X"(`, `trigger OnRun()`), lowercased, quotes removed; `None` when the
 /// line is no routine header.
 fn routine_header(raw: &str, code: &str) -> Option<Option<String>> {
-    let lc = al_syntax::fold_identifier(code.trim_start());
+    // Both sides stay on the ASCII fold: `off` below is a byte offset taken from
+    // one and used in the other, and the identifier fold can change a byte length
+    // (`İ` is 2 bytes, `i` 1). Only the extracted name is folded (TLS-43 r4).
+    let lc = code.trim_start().to_ascii_lowercase();
     let mut rest = lc.as_str();
     for m in ["local ", "internal ", "protected "] {
         if let Some(r) = rest.strip_prefix(m) {
@@ -260,7 +263,7 @@ fn routine_header(raw: &str, code: &str) -> Option<Option<String>> {
         return None;
     }
     // The name from the raw text, at the same offset (quotes are kept there).
-    let raw_lc = al_syntax::fold_identifier(raw.trim_start());
+    let raw_lc = raw.trim_start().to_ascii_lowercase();
     let off = raw_lc.len() - rest.len() + (rest.len() - after.len());
     let name_part = raw_lc.get(off..).unwrap_or("").trim_start();
     let name = if let Some(q) = name_part.strip_prefix('"') {
@@ -271,7 +274,7 @@ fn routine_header(raw: &str, code: &str) -> Option<Option<String>> {
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect()
     };
-    Some((!name.is_empty()).then_some(name))
+    Some((!name.is_empty()).then(|| al_syntax::fold_identifier(&name)))
 }
 
 /// `begin`/`case` minus `end` words of `code`.

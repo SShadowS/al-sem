@@ -12,10 +12,16 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const CALLS: [&str; 3] = [
+/// The method forms, and the path forms passed as a function
+/// (`.map(str::to_lowercase)`; review r4, Fable).
+const CALLS: [&str; 7] = [
     ".to_lowercase()",
     ".to_ascii_lowercase()",
     "eq_ignore_ascii_case(",
+    "str::to_lowercase",
+    "str::to_ascii_lowercase",
+    "char::to_lowercase",
+    "char::to_ascii_lowercase",
 ];
 
 fn count_in(dir: &Path, root: &Path, out: &mut BTreeMap<String, usize>) {

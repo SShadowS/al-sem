@@ -148,15 +148,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - d60's and d61's root-cause keys;
     - `capability_cone.rs`' `ValueSource` variable name;
     - d3's accessed-field text;
+    - `gate/diff/renames.rs`' rename-table key (self-consistent, `alsem diff` only);
     - `ir_walk.rs`'s `/grv/` id input (nothing reads it);
     - `impact/keys.rs`' label key: its text keeps `to_lowercase`, but a label variable with a
       non-ASCII capital is now found, so its key moves from the hash form to `label:…`.
   - **A guard stops a fourth round**: `fold_guard_tests::identifier_folds_stay_on_the_allowlist`
-    counts `to_lowercase` / `to_ascii_lowercase` / `eq_ignore_ascii_case` per file in
-    `src/engine` and `src/program` against `tests/fold-allowlist.txt` (102 files, 421 calls).
-    The file's header says which kinds of site may keep them. Any difference fails. Limit: it
-    counts per file, so a swap inside one file passes. Discrimination: one added
-    `.to_lowercase()` in d19 fails it, naming the file.
+    counts `to_lowercase` / `to_ascii_lowercase` / `eq_ignore_ascii_case`, method and path
+    forms (`.map(str::to_lowercase)`, review r4), per file in `src/engine` and `src/program`
+    against `tests/fold-allowlist.txt` (105 files). The file's header says which kinds of site
+    may keep them. Any difference fails. Limit: it counts per file, so a swap inside one file
+    passes. Discrimination: one added `.to_lowercase()` in d19 fails it, naming the file.
+  - **Review r4 (Fable)** found one site where the sweep folded text that is sliced at a byte
+    offset taken from another string: `impact/scan.rs`' `routine_header`. A header with `İ`
+    (`procedure İndkøbTest()`) underflowed the offset (a panic in a debug build, the wrong
+    name `e` in release). Both strings are back on the ASCII fold and only the extracted name
+    folds. Witness: `impact::scan::tests::a_header_name_with_a_dotted_capital_i_is_read_whole`
+    (break: the raw line folded before the slice).
   - Every changed compare gives the same result as the old one on ASCII input, so no existing
     golden moved: only the Nordic fixture's lines did.
   - Tests, each with a discrimination proof (the break named, then reverted):
