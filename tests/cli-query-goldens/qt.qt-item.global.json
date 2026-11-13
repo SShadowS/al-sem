@@ -19,7 +19,7 @@
         ],
         "limits": [],
         "reasons": [],
-        "scope": "dependencies: 0 apps",
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
         "universe": "cross-app"
       }
     },

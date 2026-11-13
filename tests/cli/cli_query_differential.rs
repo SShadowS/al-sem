@@ -1465,3 +1465,54 @@ fn query_effects_whole_cone_with_an_unresolved_call_says_not_searched() {
         "{j}"
     );
 }
+
+/// TLS-49: touches' machine token for a miss (`down.absence.index`) states
+/// the scope line's fact. A routine whose cone enters no dependency code,
+/// asked about a table it does not touch: the header says "dependency code:
+/// none reached", the token `whole-cone`, and the human miss line names no
+/// depth.
+///
+/// DISCRIMINATION (2026-11-13): `index_depth` answering the one-routine-deep
+/// pair for both arms fails here at the token; restored, passes.
+#[test]
+fn query_touches_miss_index_states_the_scope_fact() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"aaaa1111-0000-0000-0000-0000000000ba","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50400,"to":50499}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/All.al"),
+        "table 50400 \"Q One\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ntable 50401 \"Q Two\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50402 \"Q Writer\"\n{\n    procedure Run()\n    var\n        R: Record \"Q One\";\n    begin\n        R.Insert();\n    end;\n}\n",
+    )
+    .unwrap();
+    let ws = dir.path().to_string_lossy().to_string();
+    let argv = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "Q Two",
+        "--from",
+        "Q Writer.Run",
+        "--direction",
+        "down",
+    ];
+    let (h, j) = scope_both_ways(&argv);
+    assert_eq!(h.as_deref(), Some(j.as_str()));
+    assert!(j.starts_with("dependency code: none reached;"), "{j}");
+    let (json, _) = run_alsem(&argv, "json");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        v["payload"]["down"]["absence"]["index"], "whole-cone",
+        "{}",
+        v["payload"]["down"]
+    );
+    let (human, _) = run_alsem(&argv, "human");
+    assert!(
+        !human.contains("one routine into dependency code"),
+        "{human}"
+    );
+}

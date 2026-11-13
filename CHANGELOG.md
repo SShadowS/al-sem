@@ -332,8 +332,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a routine-scoped `query touches` now states its real scope ("dependency code: none
     reached", or the full-cone text when the cone enters dependency code). Before, it said "per
     operation, one routine into dependency code" whatever the answer;
-  - workspace-wide and failed answers, which state no depth in human form, now state none in
-    JSON either ("dependencies: N apps" only);
+  - failed answers, which state no scope in human form, state no depth in JSON either
+    ("dependencies: N apps" only);
   - the effects header carries the literal-arguments sentence the human one has;
   - `query effects`' `payload.summary.scope` has a new value, `whole-cone`, when the cone
     enters no dependency code (was `operations-one-routine-deep; …`). `QUERY_SCHEMA_VERSION`
@@ -361,10 +361,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     variant, now with a fixture;
   - `discovery_skips_folders_git_ignores`.
 - Goldens moved: 25 query and batch JSON goldens, plus `ignoredByGit` in the impact
-  `diff.json` and the tests `universe.post.json`. No non-CDO human golden moved. The CDO
+  `diff.json` and the tests `universe.post.json`. The only non-CDO human goldens moved are the
+  four workspace-wide touches answers (below). The CDO
   goldens were not run on this branch, and the union can move their human text.
-- Left: touches' `down.absence.index` and the workspace-wide `index`/`note` tokens still say
-  "operations-one-routine-deep" whatever the header states.
+- **`query touches`' machine tokens follow the same fact.** `down.absence.index` is
+  `whole-cone` when the cone enters no dependency code (was always
+  `operations-one-routine-deep`), and the human miss line then drops "(per operation, one
+  routine into dependency code)". Pinned by `query_touches_miss_index_states_the_scope_fact`,
+  with a discrimination proof. The workspace-wide list reads no cone and stands on the
+  per-operation index, so it now prints "scope: per operation, one routine into dependency
+  code" in both headers, as its `note` and `index` say. Four human and JSON goldens moved
+  (`*.global`).
 
 ### Changed (TLS-48: engine limits B8, the last two small-output items)
 

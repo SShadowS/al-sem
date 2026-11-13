@@ -797,6 +797,21 @@ fn enters_dependency_code(
     ) || effects.iter().any(|e| in_dependency(e.operation_id))
 }
 
+/// TLS-49: the depth the per-operation touches index stands on, from the same
+/// fact as the scope line ([`enters_dependency_code`]): the machine token and
+/// the body's parenthetical. With no dependency code entered the index covers
+/// the whole cone, so neither states a depth.
+fn index_depth(enters_dependency: bool) -> (&'static str, &'static str) {
+    if enters_dependency {
+        (
+            "operations-one-routine-deep",
+            " (per operation, one routine into dependency code)",
+        )
+    } else {
+        ("whole-cone", "")
+    }
+}
+
 /// [`enters_dependency_code`]'s rule over a read cone: any visited
 /// dependency routine, a cut-short search, or a dependency entry point or
 /// crossing site in the rollup. Not probed on a real shape (TLS-49): the
@@ -1858,8 +1873,8 @@ fn query_scope_json(payload: &Value, deps: &LoadedDependencies) -> Value {
     // line it prints (`push_scope`, `result.scope.lines`); the header joins
     // them with the dependencies clause exactly as the human header does
     // (`query_with_header`), so the two cannot state different facts. ENG-40
-    // (L1) builds on this. A failed answer or a workspace-wide touches answer
-    // prints no depth line, so neither header states one.
+    // (L1) builds on this. A failed answer prints no scope line, so neither
+    // header states a depth.
     let mut scope: Vec<String> = payload
         .pointer(&format!("/result/scope/{SCOPE_LINES}"))
         .and_then(Value::as_array)
@@ -2608,11 +2623,16 @@ fn render_query_touches_body(
                          code). A routine whose only touch is deeper in dependency code{unseen} \
                          is not listed. Scope it with --from <routine> --direction up."
                     ),
-                    // 3.2.0, additive.
-                    "index": "operations-one-routine-deep",
+                    // 3.2.0, additive. TLS-49: no cone is read here.
+                    "index": index_depth(true).0,
                 }),
             );
             human.push_str(&format!("--- touches {table_label} ---\n"));
+            // TLS-49: the list stands on the per-operation index with no cone
+            // read, so both headers state that depth (as `note` and `index` do).
+            let mut lines = Vec::new();
+            push_scope(&mut human, &mut lines, TOUCHES_SCOPE);
+            payload.insert("result".into(), json!({"scope": {SCOPE_LINES: lines}}));
             // Output validation V2 (§4.6, F23): the routine count is
             // transitive; the sites that touch the table directly are counted
             // apart, workspace and dependency sites apart, and listed (a listed
@@ -4116,6 +4136,8 @@ fn render_touches_down(
 ) {
     let beyond_writes = cone.map(Beyond::writes).unwrap_or_default();
     let beyond = beyond_of_table(&beyond_writes, table_id);
+    // TLS-49: the scope line's fact (the caller decides it the same way).
+    let (index_token, index_depth_text) = index_depth(enters_dependency_code(cone, &[], |_| false));
     let query = cx.query;
     let touches_down = query.touches_table(rix, table_id);
     let witnesses = query.touches(rix, table_id);
@@ -4185,7 +4207,7 @@ fn render_touches_down(
         // `beyond` when the whole cone may write it past an entry point.
         down["absence"] = json!({
             "answer": if beyond_n > 0 { "beyond" } else if reasons.is_empty() { "no" } else { "unknown" },
-            "index": "operations-one-routine-deep",
+            "index": index_token,
             "reasons": reasons.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
         });
     }
@@ -4193,18 +4215,20 @@ fn render_touches_down(
 
     if !touches_down {
         human.push_str(&if beyond_n > 0 {
-            "  down: no indexed touch (per operation, one routine into dependency code); the \
-             whole cone may write it beyond dependency calls (below)\n"
-                .to_string()
+            format!(
+                "  down: no indexed touch{index_depth_text}; the whole cone may write it beyond \
+                 dependency calls (below)\n"
+            )
         } else if reasons.is_empty() {
             "  down: no (every candidate decided) — no operation in this routine's cone touches \
              the table (the cone stays in workspace code, every call resolved, no table left \
              unresolved)\n"
                 .to_string()
         } else {
-            "  down: unknown — no indexed touch observed (per operation, one routine into \
-             dependency code), which is not proof of absence:\n"
-                .to_string()
+            format!(
+                "  down: unknown — no indexed touch observed{index_depth_text}, which is not \
+                 proof of absence:\n"
+            )
         });
         if beyond_n == 0 {
             for (_, text) in &reasons {
