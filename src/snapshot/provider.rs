@@ -53,9 +53,11 @@ pub(crate) fn walk_al_source(
 /// order (the walk sorts) for determinism; `None` if there are none
 /// (symbol-only). Each part is length-prefixed (TLS-46): hashing the texts
 /// alone gave a renamed file, or the same bytes split differently across
-/// files, the same hash, so a session kept a model built from the old files.
-/// The same scheme as `source_deps`' content hash. Kept in memory only
-/// (`Provenance`, the session identity, `DepCache`), so no cache version moves.
+/// files, the same hash. Latent: no production code reads this hash today (the
+/// workspace root's copy in `Provenance` is never read, and the session
+/// identity skips the workspace app), so the fix protects a future reader.
+/// Length-prefixed parts as in `source_deps`' content hash. Never persisted, so
+/// no cache version moves.
 fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
     if files.is_empty() {
         return None;
@@ -81,7 +83,8 @@ fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
 /// The workspace app's source from the frozen [`WorkspaceInputs`] (#160 step 1, spec
 /// §4.2.3 row 1): [`walk_al_source`]'s rules over the set's `.al` list instead
 /// of the disk. Every `al_files` entry in `rel_posix` order (nested apps
-/// included), the SAME `Arc<str>` texts, blake3 over the texts in that order;
+/// included), the SAME `Arc<str>` texts, hashed by [`source_root`] (each
+/// path and text, length-prefixed, in that order);
 /// no file is `Ok(None)` (symbol-only). A failed walk or an unreadable file
 /// fails with `walk_al_source`'s text, the walk's stored `io::Error` keeping
 /// its whole `source()` chain.

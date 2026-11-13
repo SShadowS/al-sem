@@ -94,16 +94,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (TLS-46: a source root's hash sees file names and boundaries)
 
-- **`SourceRoot.content_hash` hashed only the files' texts run together.** A source root
-  whose files were renamed, or whose same bytes were split differently across files, got
-  the same hash. That hash identifies a dependency's source to the resident engine's session
-  (`identity_of`, `program/session/workspace.rs`), so `alsem mcp` or the LSP's engine could
-  keep a model built from the old files.
+- **`SourceRoot.content_hash` hashed only the files' texts run together** (latent, no
+  user-visible effect today). A source root whose files were renamed, or whose same bytes
+  were split differently across files, got the same hash. No production code reads it yet:
+  the workspace root's copy in `Provenance` is never read, the session identity skips the
+  workspace app, and the dependency hashes it does read come from elsewhere (the `.app`
+  image's blake3, `source_deps`' own hash). The fix keeps a future reader from inheriting the
+  collision (review r1, Fable, corrected an earlier claim of a stale session model).
   - `snapshot/provider.rs::source_root` now hashes a version tag, then each file's path and
-    text, each length-prefixed. That is the scheme `source_deps` already used for source-folder
-    dependencies.
-  - Nothing persists this hash (`Provenance`, the session identity and `DepCache`'s weak
-    handle are all in memory), so no cache version moves.
+    text, each length-prefixed, as `source_deps` already length-prefixes its parts.
+  - Nothing persists this hash, so no cache version moves.
   - Test: `snapshot::provider::tests::workspace_root_hash_sees_paths_and_file_boundaries`,
     through `WorkspaceProvider`. The same files hash alike; a split at another boundary and a
     renamed file hash differently. Discrimination: the old texts-only scheme fails at "split";
