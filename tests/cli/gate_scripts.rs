@@ -802,6 +802,15 @@ fn speed_warm_seeds_a_commit_from_its_trees_gate_binary() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cdo_gate_pins_lane_two_by_core_type() {
+    // Without taskset the gate pins nothing (review r2, Opus): nothing to test.
+    let has_taskset = std::process::Command::new("sh")
+        .args(["-c", "command -v taskset"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_taskset {
+        eprintln!("cdo_gate_pins_lane_two_by_core_type: skipped, no taskset");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("meminfo"), "MemAvailable: 62914560 kB\n").unwrap();
     std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
@@ -898,8 +907,11 @@ fn cdo_gate_runs_every_lane_two_command_pinned() {
         ("lib_tests() {", 2),
     ] {
         let b = body(f);
+        // A `--list` (lib_tests' listing of the phase's tests) runs no test.
         assert_eq!(
-            b.matches("cargo test").count(),
+            b.lines()
+                .filter(|l| l.contains("cargo test") && !l.contains("--list"))
+                .count(),
             runs,
             "`{f}`: the cargo runs this test knows"
         );
@@ -917,8 +929,10 @@ fn cdo_gate_runs_every_lane_two_command_pinned() {
 /// would run nowhere (review r1, sol and Opus). `lib_tests` from the script,
 /// with a stub `cargo` that reports how many tests the long run found.
 ///
-/// Mutation (2026-11-13): `lib_tests` without its count check -> the run that
-/// finds 4 of 5 passes, and the assert fails.
+/// Mutations (2026-11-13): `lib_tests` without its count check -> the run that
+/// finds 4 of 5 passes, and the assert fails; without its listing check (the
+/// `orphans`) -> the sibling `cdo_crossing_census_v2` passes unrun, and the
+/// assert fails.
 #[cfg(unix)]
 #[test]
 fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
@@ -926,7 +940,13 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("cargo"),
-        "#!/bin/sh\nif echo \"$*\" | grep -q -- --exact; then n=${LONG_FOUND:-5}; else n=12; fi\n\
+        // `--list`: one plain test, and (`SIBLING`) a test whose name holds a
+        // long test's; else a run's result line.
+        "#!/bin/sh\nif echo \"$*\" | grep -q -- --list; then\n\
+         echo 'snapshot::snapshot::tests::builds_snapshot_over_cdo_workspace: test'\n\
+         [ -n \"$SIBLING\" ] && echo 'engine::l5::digest::wave2_index_tests::cdo_crossing_census_v2: test'\n\
+         exit 0\nfi\n\
+         if echo \"$*\" | grep -q -- --exact; then n=${LONG_FOUND:-5}; else n=12; fi\n\
          echo \"test result: ok. $n passed; 0 failed; 0 ignored; 0 measured; 3300 filtered out; finished in 1.00s\"\n",
     )
     .unwrap();
@@ -935,7 +955,7 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
         std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    let run = |found: &str| {
+    let run = |found: &str, sibling: bool| {
         let out = std::process::Command::new("bash")
             .arg("-c")
             .arg(concat!(
@@ -947,6 +967,7 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
             .arg(dir.path())
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .env("LONG_FOUND", found)
+            .env("SIBLING", if sibling { "1" } else { "" })
             .env(
                 "PATH",
                 format!(
@@ -962,11 +983,16 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
             String::from_utf8_lossy(&out.stdout).into_owned(),
         )
     };
-    let (code, text) = run("5");
+    let (code, text) = run("5", false);
     assert_eq!(code, Some(0), "precondition, all five found: {text}");
-    let (code, text) = run("4");
+    let (code, text) = run("4", false);
     assert_ne!(code, Some(0), "4 of 5 long tests found must fail: {text}");
     assert!(text.contains("found 4 of 5"), "{text}");
+    // A sibling added beside a long test (review r2, sol): the long run still
+    // finds 5, but the second run's substring --skip would drop the sibling.
+    let (code, text) = run("5", true);
+    assert_ne!(code, Some(0), "a test in neither run must fail: {text}");
+    assert!(text.contains("cdo_crossing_census_v2"), "{text}");
 }
 
 /// A warm build folder written by hand: one dependency, plus the two folders
