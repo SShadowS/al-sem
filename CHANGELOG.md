@@ -28,21 +28,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Commit, count with their cone minus their own checked runs, a span member among them (two
   subscribers that both reach the run: what one writes after its call is pending for the other).
   d50 labels them "possibly pending: subscriber X of event E (order unknown)" (or "…, which runs
-  first"). Their physical tables join the span's pending tables, so d8 and d9 count them too;
-  `TransactionSpan::pending_order_unknown_tables` lists the ones only they write, and d8, d9 and
-  d50 say "order unknown".
+  first"). Their physical tables join the span's pending tables;
+  `TransactionSpan::pending_order_unknown_tables` lists the ones only they write. d50 (opt-in)
+  counts them, marked "(order unknown)". The default d8 and d9 gate on and list only the tables
+  whose order is known (`TransactionSpan::known_order_pending_tables`): the others never make a
+  finding nor push d9 over its two-table gate, and appear only in the text as "possibly also
+  pending (order unknown)" (precision on a default detector that cannot be measured is noise).
 - On CDO (`bc3ccb18`, base `67d75bea`): no default detector moves at either scope (2,308 and
   32,576 findings, no fingerprint added or removed; d8 and d9's text is byte-identical). d50
   (opt-in) goes from 0 to 2 findings, on `CDO Subscribers` `RunDocHandleIsolated` and
   `LogAutoSendFailure`, both resting only on unknown code in dependencies: a chained interface
   call the resolver leaves open (`Provider.GetCache().GetSubscription` in Continia Core, whose
   one implementation only reads: ENG-64) and a telemetry logger registered at run time. Both
-  are false in practice, so d50 stays opt-in. d9's gate counts the order-unknown tables, so a d9
-  finding can rest on them alone (none on CDO: not measured). Left: a callee with no row, which the trap search
+  are false in practice, so d50 stays opt-in. Left: a callee with no row, which the trap search
   counts as unknown code, is not counted here; the digest and explain still name physical tables
   only; a `LockTable` on a temporary record counts (an over-approximation). Tests:
   `tests/cli/cli_eng24_pending_writes.rs` (one break on the shared rule fails both d50's test
   and the trap search's). Probe: `docs/superpowers/notes/2026-11-13-eng24-d50-pending-probe.md`.
+
+### Changed (ENG-24: the trap search does not count a dynamic checked run as unknown code)
+
+- **`prove`/`explain`/`digest`'s trap search:** a checked `Codeunit.Run(Id)` whose codeunit no
+  edge resolves no longer counts as unknown code that may leave a write pending. A checked run
+  is its own transaction (its writes are committed or rolled back with it, ENG-22), whatever
+  codeunit it runs. So a checked run after it is no longer reported as escaping on that account.
+  On CDO the one such site is `CDO Legacy eDoc Dispatcher.RunExportEDocCodeunit`
+  (`Codeunit.Run(ExportProcessorId, DocumentVariant)`); `prove … throws-error` on all 20
+  routines of that codeunit gives the same answers and checked-run verdicts before and after.
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 

@@ -136,6 +136,20 @@ pub struct TransactionSpan {
     pub pending_physical_by_routine: BTreeMap<String, usize>,
 }
 
+impl TransactionSpan {
+    /// ENG-24 (orchestrator ruling): the pending physical tables whose order
+    /// is known (`pending_physical_tables` minus
+    /// `pending_order_unknown_tables`): what the default detectors d8 and d9
+    /// gate on and list; the order-unknown ones only appear in their text.
+    pub fn known_order_pending_tables(&self) -> Vec<String> {
+        self.pending_physical_tables
+            .iter()
+            .filter(|t| !self.pending_order_unknown_tables.contains(*t))
+            .cloned()
+            .collect()
+    }
+}
+
 /// `roleOf(r) === "primary"` — true when NOT in the dependency universe.
 fn is_primary(routine: &ModelRoutine, dep_routine_ids: &BTreeSet<String>) -> bool {
     !dep_routine_ids.contains(&routine.id)

@@ -421,6 +421,16 @@ codeunit 53010 "E24 Ops2"
     procedure OnThing4()
     begin
     end;
+
+    procedure Post5()
+    begin
+        OnThing5();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnThing5()
+    begin
+    end;
 }
 codeunit 53013 "E24 Subs2"
 {
@@ -514,6 +524,28 @@ codeunit 53013 "E24 Subs2"
     begin
         Commit();
     end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"E24 Ops2", 'OnThing5', '', false, false)]
+    local procedure Sub5Writes()
+    var
+        Y: Record "E24 Y";
+    begin
+        Y.Get(1);
+        Y.Modify();
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"E24 Ops2", 'OnThing5', '', false, false)]
+    local procedure Sub5Commits()
+    var
+        T: Record "E24 T";
+        W: Record "E24 W";
+    begin
+        T.Get(1);
+        T.Modify();
+        W.Get(1);
+        W.Modify();
+        Commit();
+    end;
 }
 "#;
 
@@ -579,18 +611,24 @@ fn checked_runs_siblings_in_the_span_and_unknown_code_behind_a_call() {
     );
 }
 
-/// Finding 5: a sibling's physical tables reach the explicit-commit spans
-/// (d9 counts them), labeled order unknown.
-/// Break (2026-11-13): drop `tables.extend` in `add_dispatch_siblings` ->
-/// `Sub4Commits` has no d9 finding. Fails; restored, it passes.
+/// Finding 5, as the orchestrator narrowed it: a sibling's physical tables
+/// reach the explicit-commit spans (`pending_order_unknown_tables`), but the
+/// default d9 gates on the tables whose order is known. Sibling-only tables
+/// make no finding (`Sub4Commits`); next to known ones they are named as
+/// possibly also pending (`Sub5Commits`).
+/// Breaks (2026-11-13): d9 gates on `pending_physical_tables.len()` ->
+/// `Sub4Commits` gets a finding; drop `tables.extend` in
+/// `add_dispatch_siblings` -> `Sub5Commits` loses the "possibly also pending"
+/// part. Each fails; restored, it passes.
 #[test]
-fn a_siblings_tables_reach_d9_labeled() {
+fn a_siblings_tables_reach_d9_text_not_its_gate() {
     let fs = findings(ROUND2, "d9-transaction-span-summary");
-    let c = cause(&fs, "Sub4Commits").unwrap_or_else(|| panic!("{fs:?}"));
+    assert!(cause(&fs, "Sub4Commits").is_none(), "{fs:?}");
+    let c = cause(&fs, "Sub5Commits").unwrap_or_else(|| panic!("{fs:?}"));
     assert!(
         c.contains(
-            "writes 2 known table(s) before it (2 of them only in another event subscriber \
-             or trigger, which may run before it: order unknown)"
+            "writes 2 known table(s) before it (possibly also pending (order unknown): 1 more \
+             in another event subscriber or trigger)"
         ),
         "{c}"
     );

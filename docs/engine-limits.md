@@ -474,17 +474,20 @@ callers' question reads (`commit_scope::declared`).
   OnBefore table event's subscriber, then the table's trigger, then the write, then an OnAfter
   subscriber or an event subscriber; callees of the same phase in either order), a span member
   among them, each through its cone minus its own checked runs. Their physical tables join the
-  span's pending tables (d8 and d9 count them) and `pending_order_unknown_tables` lists the
-  ones only they write ("order unknown" in d8, d9 and d50). Left: a callee with no row, which
+  span's pending tables and `pending_order_unknown_tables` lists the ones only they write. d50
+  (opt-in) counts them, marked "(order unknown)"; the default d8 and d9 gate on and list only
+  the tables whose order is known (`known_order_pending_tables`, orchestrator ruling: precision
+  a default detector cannot measure is noise), so the others never make a d8/d9 finding nor push
+  d9 over its two-table gate, and appear only in the text ("possibly also pending (order
+  unknown)"). The trap search changed on purpose: a dynamic checked `Codeunit.Run(Id)` is no
+  longer unknown code (CDO's one site, `CDO Legacy eDoc Dispatcher.RunExportEDocCodeunit`, moves
+  no `prove` answer). Left: a callee with no row, which
   the trap search counts as unknown code, has no counterpart here; each reader seeds the closure
   from its own inputs (the trap search from its guarded out-edges); a `LockTable` on a temporary
   record counts as pending in both readers (an over-approximation the shared rule keeps); the
   digest's pending line and explain's pending report still name physical tables only (explain
   passes no unknown-code sites); a table event's phase is read from its name (`onbefore…`; any
-  other name counts as after the write); d9's gate (two pending tables) counts the
-  order-unknown tables too, so a d9 finding (default) can rest on them alone, and d8's
-  `affectedTables` (and so its fingerprint) can grow by them: neither happens on CDO, so it is
-  not measured. On CDO (base `67d75bea`) no default detector moves; d50
+  other name counts as after the write). On CDO (base `67d75bea`) no default detector moves; d50
   goes from 0 to 2 findings, both resting only on unknown code in dependencies (a chained
   interface call left open, ENG-64, and a telemetry logger registered at run time) and false in
   practice; it stays opt-in. A helper's writes
