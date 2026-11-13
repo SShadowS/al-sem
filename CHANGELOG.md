@@ -70,6 +70,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could not be checked from here. Not measured on CDO (the digest goldens of `output_cdo` show
   it at landing).
 
+### Fixed (ENG-23: a checked run's commit under `#if` arms; an ignored commit's reason)
+
+- **The `[CommitBehavior]` carrier exclusion of a checked run's commit is now tested.**
+  `commit_scope::is_run_commit` keeps a checked `Codeunit.Run`'s commit out of `CbGraph::of_tree`'s
+  carriers; nothing reached it. It changes an answer where one routine's `#if` arms put a
+  `[CommitBehavior(Error)]` arm holding only a checked run beside an arm holding a `Commit()`
+  (with `[CommitBehavior(Ignore)]` or no attribute): without the exclusion, `prove …
+  throws-error` on the caller answers `yes` (the other arm's commit read as an error); with it,
+  `no`. Controls answer the same either way: a single `[CommitBehavior(Error)]` routine holding
+  only a checked run, and a dependency entry with an Error-scoped checked-run helper and an
+  Ignore-scoped committing one. Test: `tests/cli/cli_eng23_commit_arms.rs` (breaks recorded).
+- **An ignored commit's reason named the wrong behavior.** In that shape the digest's
+  `suppressedCommits` entry and prove's evidence said "CommitBehavior Error on …X" for a commit
+  ignored under the other arm's `Ignore`: the reason read the merged arms' declaration word.
+  It now names the behavior asked about and that behavior's own source
+  (`commit_scope::Declared::reason_for`, read by the digest's `why`; the merge of the arms keeps
+  `ignore_source`/`error_source`, so an Ignore from the object's `InherentCommitBehavior` is not
+  reported as the other arm's attribute), and explain's callers context names both words when
+  two builds declare one each. Only a routine whose `#if` arms declare different behaviors moves; CDO's
+  own source declares no `[CommitBehavior]` at all (its dependencies were not searched; the
+  landing gate's CDO goldens would show a move).
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test

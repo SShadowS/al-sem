@@ -343,11 +343,25 @@ callers' question reads (`commit_scope::declared`).
    Left: a run that always fails (its `OnRun` raises an error on every path) still answers
    `may-commit yes` (an over-statement, never a wrong `no`); `Ok := Codeunit.Run(X); if not Ok
    then Error(…)` answers `commits-on-success-path unknown` where `yes` holds (an under-statement);
-   the `CbGraph` carrier exclusion has no test that reaches it (only an `#if`-arms routine where one
-   arm holds only a checked run and another a `Commit()` would differ); d34 counts a `Commit()`
+   d34 counts a `Commit()`
    only, so a checked run in a loop is no finding. ENG-22: `transaction_spans` and d50 no longer
    read a checked run as committing the caller's posting (L28): d50 reports the error BC raises at
-   a run with a physical write pending.
+   a run with a physical write pending. **ENG-23:** the `CbGraph` carrier exclusion
+   (`is_run_commit` in `CbGraph::of_tree`) is now tested. It changes an answer wherever one
+   routine's `#if` arms put a `[CommitBehavior(Error)]` arm holding only a checked run beside an
+   arm that holds a `Commit()`, whether that arm says `[CommitBehavior(Ignore)]` or nothing: without
+   the exclusion the other arm's `Commit()` takes the Error arm's behavior and `prove …
+   throws-error` on the caller answers `yes`; with it, `no` (`tests/cli/cli_eng23_commit_arms.rs`;
+   gpt-6.1-sol showed the first version's "one reachable shape" claim false). Controls that do
+   not move: a single `[CommitBehavior(Error)]` routine holding only a checked run, and a
+   dependency entry calling an Error-scoped helper with only a checked run and an Ignore-scoped
+   helper with a `Commit()` (rule B's crossing; `may-commit`, `commits-on-success-path`,
+   `throws-error` answer the same with and without the exclusion). The same shape named the
+   ignored commit's reason after the merged arms' word ("CommitBehavior Error on …X"); the digest
+   and prove now name the behavior asked about and its own source (`Declared::reason_for`, which
+   reads the per-bit `ignore_source`/`error_source` the merge keeps: an Ignore from the object's
+   `InherentCommitBehavior` in one arm is no "CommitBehavior Ignore" of the other arm's
+   attribute), and explain's callers context names both words when two builds declare one each.
 3. `alsem fingerprint` (and `policy check`, which reads its capabilities) does not apply the rule:
    it says `commit: yes` for a root whose only commit is ignored or errors. That over-states; it
    never says a wrong `no`.
