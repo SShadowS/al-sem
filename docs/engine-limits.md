@@ -433,7 +433,7 @@ callers' question reads (`commit_scope::declared`).
   (the Insert's error and the run's own); `R.LockTable(); if R.FindFirst() then;` before the run
   answers `yes`; `R.ModifyAll(V, 1); Commit();` before the run answers `no`, the run's own error
   "not raised (no write may be pending at the run)", with the callers' entry assumption. d50's
-  pending walk, coarser than prove's (the d50 item below), is task ENG-24.
+  pending walk was coarser than prove's: **fixed by ENG-24** (2026-11-13; the d50 item below).
 
 **Left.**
 - An error row of the callee under a run a write may be pending at keeps its old ruling
@@ -457,9 +457,18 @@ callers' question reads (`commit_scope::declared`).
   (prove, its slice, explain, digest) rule it. `alsem fingerprint`/`policy check` facts and impact's
   key list a possible error at every checked run (an over-statement; impact's label says
   "raised if a write is pending at it").
-- d50 reads `transaction_spans`, whose pending walk is coarser than the trap search: it counts
-  only writes to a known table (a `RecordRef` write, a `LockTable`, the record operation that
-  fires a subscriber, and sibling subscribers are left out: wrong negatives). A helper's writes
+- d50 reads `transaction_spans`, whose pending walk counted only writes to a known table (a
+  write whose table does not resolve, a `LockTable`, unknown code and sibling subscribers were
+  left out: wrong negatives). **Fixed by ENG-24:** one rule decides "may this leave a write
+  pending" for the trap search, the spans and the cone fold
+  (`cone_derived::op_may_leave_write_pending`, `pending_writes::is_unknown_code_site`), and a
+  span names what has no physical table (`pending_other`: "a LockTable", "a write to a table
+  that does not resolve", "unknown code at <call>"). Another subscriber of an event a span
+  member raises, whose cone may write, counts as "possibly pending … (order unknown)". A record
+  operation that fires a subscriber was already counted (the subscriber's cone). Left: unknown
+  code deeper in a callee's cone (no cone fact records it); siblings are judged by their whole
+  cone. On CDO nothing moves: its 6 checked runs have nothing pending, so d50 has 0 findings
+  there and its precision is not measured; it stays opt-in. A helper's writes
   inside its own checked run no longer count (the CDO landing measurement: both d50 findings on
   CDO's send-on-posting were this shape, and with the fix d50 has none there); this reaches
   workspace routines only, so a checked run inside dependency code still counts its writes (an

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-24: d50 misses a write the trap search counts)
+
+- **d50 (opt-in: a checked `Codeunit.Run` with a write pending) missed writes the trap search
+  counted.** Its transaction spans counted only writes to a known physical table, so a write
+  whose table does not resolve (a `RecordRef` parameter's), a `LockTable` (then a read, which
+  opens a write transaction), and unknown code (a call no edge resolves) before a checked run
+  gave no finding, while `prove … throws-error` raised the run's own error there. One rule now
+  serves both, and the cone fold: `cone_derived::op_may_leave_write_pending` and
+  `pending_writes::is_unknown_code_site`. A span carries what has no physical table to name
+  (`TransactionSpan::pending_other`) and d50 names it: "a LockTable", "a write to a table that
+  does not resolve", "unknown code at <call>". A lock inside a helper's own checked run still
+  stays out (ENG-22).
+- **Sibling subscribers:** another subscriber of an event raised on the way to the run, whose
+  cone may write, may run first (their order is not known): it counts, labeled "possibly
+  pending: subscriber X of event E (order unknown)".
+- On CDO (`bc3ccb18`, base `e58234bb`): nothing moves. d50 considers the same 6 checked runs and
+  reports none on both sides (nothing pending, even under the wider rule); no default detector
+  moves at either scope. With no finding on CDO, d50's precision is not measured; it stays
+  opt-in. Left: unknown code deeper in a callee's cone is not tracked. Tests:
+  `tests/cli/cli_eng24_pending_writes.rs` (one break on the shared rule fails both d50's test
+  and the trap search's). Probe: `docs/superpowers/notes/2026-11-13-eng24-d50-pending-probe.md`.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
