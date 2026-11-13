@@ -1277,6 +1277,41 @@ fn s_tools_freshness_description() -> String {
 mod faults {
     use super::*;
 
+    /// Asks `alsem_status` (ids from `first_id` up) until `ok` holds on its
+    /// `structuredContent`, and returns that answer. A fixed sleep before one
+    /// status read raced a loaded host (TLS-39); this waits for the state, and
+    /// a server that never reaches it still fails: when the running call is
+    /// answered first (the state was missed for its whole run), or at the 30 s
+    /// deadline.
+    fn status_until(
+        s: &mut Server,
+        first_id: i64,
+        what: &str,
+        ok: impl Fn(&Value) -> bool,
+    ) -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut id = first_id;
+        loop {
+            s.send(
+                json!(id),
+                "tools/call",
+                json!({"name": "alsem_status", "arguments": {}}),
+            );
+            let r = s.response();
+            assert_eq!(r["id"], id, "{what}: never seen while the call ran: {r}");
+            let st = r["result"]["structuredContent"].clone();
+            if ok(&st) {
+                return st;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} within 30 s: {st}"
+            );
+            id += 1;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     /// F-3 (agent-tasks design §2.5): `alsem_status` answers with a complete
     /// disk check while a heavy `alsem_explain` runs on the same engine (its
     /// child sleeps 3 s on every ask), and names the running call; the
@@ -1305,7 +1340,9 @@ mod faults {
             "tools/call",
             json!({"name": "alsem_explain", "arguments": {"routines": ["Archive"]}}),
         );
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        status_until(&mut s, 100, "the explain running", |st| {
+            st["engines"][0]["details"]["running"] == "alsem_explain"
+        });
         let start = std::time::Instant::now();
         s.send(
             json!(8),
@@ -1376,7 +1413,9 @@ mod faults {
     ///
     /// DISCRIMINATION (2026-11-05): not recording the child's phase in
     /// `run_command` (the `on_phase` closure not storing it) fails at
-    /// "activity pin" (`asking`); restored, it passes.
+    /// "activity pin" (`asking`); restored, it passes. Re-proved after TLS-39
+    /// (the status is now polled, not read once after a sleep): the same
+    /// break fails at "activity pin: never seen while the call ran".
     #[test]
     fn status_shows_a_build_in_progress() {
         let ws = ws_explain();
@@ -1386,8 +1425,9 @@ mod faults {
             "tools/call",
             json!({"name": "alsem_query_effects", "arguments": {"routine": "Archive"}}),
         );
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        let st = s.call(8, "alsem_status", json!({}))["structuredContent"].clone();
+        let st = status_until(&mut s, 100, "activity pin", |st| {
+            st["engines"][0]["details"]["freshness"]["activity"] == "pin"
+        });
         let e = &st["engines"][0]["details"];
         assert_eq!(e["running"], "alsem_query_effects", "{st}");
         assert_eq!(e["freshness"]["activity"], "pin", "activity pin: {st}");
