@@ -74,7 +74,15 @@ pub enum CalleeShape {
         target_is_name: bool,
     },
     /// A record operation on an explicit record-typed receiver: `Rec.SetRange(...)`.
-    RecordOp { receiver_text: String, op: String },
+    RecordOp {
+        receiver_text: String,
+        op: String,
+        /// The receiver expression when there is one (`X`, `Recs[1]`, a `with`
+        /// receiver), so receiver typing can read it (ENG-12: an array element
+        /// is typed by its element type). `None` for the implicit `Rec`. Not part
+        /// of equality, as `Member`'s `receiver` is not.
+        receiver: Option<ExprId>,
+    },
     /// A bare `Commit()` call.
     Commit,
     /// Any other call expression that doesn't match a known pattern.
@@ -114,10 +122,12 @@ impl PartialEq for CalleeShape {
                 CalleeShape::RecordOp {
                     receiver_text: rt1,
                     op: op1,
+                    ..
                 },
                 CalleeShape::RecordOp {
                     receiver_text: rt2,
                     op: op2,
+                    ..
                 },
             ) => rt1 == rt2 && op1 == op2,
             (CalleeShape::Commit, CalleeShape::Commit) => true,
@@ -223,8 +233,12 @@ pub enum WithState {
 /// `"record"` (case-insensitive), INCLUSIVE of `RecordRef`. This ensures that
 /// a `RecordRef`-typed var's record-op calls classify as `RecordOp` (matching L3,
 /// which makes no PCallSite for them).
-fn is_record_ty(ty: &str) -> bool {
-    ty.trim().to_ascii_lowercase().starts_with("record")
+pub(crate) fn is_record_ty(ty: &str) -> bool {
+    // ENG-12 (L36): an array of records receives through its elements.
+    crate::record_ops::receiver_type_of(ty)
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("record")
 }
 
 /// Compute the set of lowercased record-receiver variable names in scope for a
@@ -236,6 +250,65 @@ fn is_record_ty(ty: &str) -> bool {
 ///
 /// Object-level globals are NOT included here — pass them via `object_globals` in
 /// [`extract_sites`].
+/// The names (folded) a routine declares with a NON-record type: a parameter,
+/// local or named return value. They shadow an object global or `Rec` of the
+/// same name, so a call on them is no record operation (ENG-12 review: a local
+/// `X: array[2] of Codeunit W` under a global `X: Record T` made `X[1].Modify()`
+/// a record operation and hid the codeunit's call). Shared by both engines.
+pub(crate) fn routine_non_record_names(routine: &RoutineDecl) -> HashSet<String> {
+    let mut out: HashSet<String> = routine
+        .params
+        .iter()
+        .map(|p| (&p.name, p.ty.as_deref()))
+        .chain(routine.locals.iter().map(|v| (&v.name, v.ty.as_deref())))
+        .filter(|(_, ty)| !ty.is_some_and(is_record_ty))
+        .map(|(n, _)| n.fold_identifier())
+        .collect();
+    if let Some((name, ty)) = crate::program::body::ir_walk::named_return_var(routine)
+        && !is_record_ty(ty)
+    {
+        out.insert(name.fold_identifier());
+    }
+    out
+}
+
+/// The `this.` receiver keys (`record_ops::this_key`, folded) of the record
+/// globals (`globals`, folded names) no parameter, local or return value of
+/// the routine declares under ANY type: `this.X` names the global, so with a
+/// same-named declaration the bare-name sets cannot tell which (ENG-12 review
+/// round 3); such a `this.X` is no record-op receiver and is typed by the
+/// resolver from the globals instead. Shared by both engines.
+pub(crate) fn this_receivers<'g>(
+    globals: impl IntoIterator<Item = &'g String>,
+    routine: &RoutineDecl,
+) -> HashSet<String> {
+    let declared: HashSet<String> = routine
+        .params
+        .iter()
+        .map(|p| p.name.fold_identifier())
+        .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
+        .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+        .collect();
+    globals
+        .into_iter()
+        .filter(|g| !declared.contains(g.as_str()) && !g.starts_with("this."))
+        .map(|g| crate::record_ops::this_key(g).fold_identifier())
+        .collect()
+}
+
+/// [`routine_rvars`] plus the object's record globals, less the names the
+/// routine shadows with a non-record declaration.
+fn routine_receivers(routine: &RoutineDecl, object_globals: &HashSet<String>) -> HashSet<String> {
+    let mut rvars = routine_rvars(routine);
+    rvars.extend(object_globals.iter().cloned());
+    for n in routine_non_record_names(routine) {
+        rvars.remove(&n);
+    }
+    // `this.X`: an unshadowed record global (`this_receivers`).
+    rvars.extend(this_receivers(object_globals, routine));
+    rvars
+}
+
 pub fn routine_rvars(routine: &RoutineDecl) -> HashSet<String> {
     let mut rvars = HashSet::new();
     rvars.insert("rec".to_string());
@@ -387,20 +460,19 @@ fn classify_call(
             // Receiver must be a simple Identifier/QuotedIdentifier in rvars AND
             // method must be an L2 record op -- the SAME table, so the two engines
             // cannot drift (a hand copy here once lacked `rename`, #9).
-            let recv_lc = match &obj.kind {
-                ExprKind::Identifier(r) | ExprKind::QuotedIdentifier(r) => {
-                    Some(r.fold_identifier())
-                }
-                _ => None,
-            };
+            // `X` or an array element `X[i]` (ENG-12, L36).
+            let recv_lc = crate::record_ops::receiver_variable(&file.ir, *object)
+                .map(|r| r.fold_identifier());
             if let Some(ref r_lc) = recv_lc
                 && rvars.contains(r_lc)
                 && crate::record_ops::record_op_type(&method_lc).is_some()
             {
-                let receiver_text = src[obj.origin.byte.clone()].to_string();
+                let receiver_text =
+                    crate::record_ops::receiver_key_text(&src[obj.origin.byte.clone()]);
                 return CalleeShape::RecordOp {
                     receiver_text,
                     op: method_lc,
+                    receiver: Some(*object),
                 };
             }
 
@@ -461,20 +533,27 @@ fn classify_call(
             let op = name.fold_identifier();
             let receiver_text = match ctx.implicit {
                 ImplicitRecv::NotRecord => None,
-                ImplicitRecv::Rec => Some("Rec".to_string()),
-                ImplicitRecv::With(r) => {
-                    Some(src[file.ir.expr(r).origin.byte.clone()].trim().to_string())
-                }
+                ImplicitRecv::Rec => Some(("Rec".to_string(), None)),
+                ImplicitRecv::With(r) => Some((
+                    crate::record_ops::receiver_key_text(
+                        src[file.ir.expr(r).origin.byte.clone()].trim(),
+                    ),
+                    Some(r),
+                )),
             };
             match receiver_text {
-                Some(receiver_text)
+                Some((receiver_text, receiver))
                     if crate::record_ops::record_op_type(&op).is_some()
                         && !file.objects[ctx.object_idx]
                             .routines
                             .iter()
                             .any(|r| r.name.eq_fold_identifier(&op)) =>
                 {
-                    CalleeShape::RecordOp { receiver_text, op }
+                    CalleeShape::RecordOp {
+                        receiver_text,
+                        op,
+                        receiver,
+                    }
                 }
                 _ => CalleeShape::Bare { name: name.clone() },
             }
@@ -539,12 +618,9 @@ impl WithCtx {
     /// Depth incremented on entry to a `StmtKind::With` body, whose implicit
     /// receiver is `receiver` when that is a record variable.
     fn entered_with(self, file: &AlFile, receiver: ExprId, rvars: &HashSet<String>) -> WithCtx {
-        let is_record = match &file.ir.expr(receiver).kind {
-            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
-                rvars.contains(&x.fold_identifier())
-            }
-            _ => false,
-        };
+        // `with X do` or `with Recs[i] do` (ENG-12, L36).
+        let is_record = crate::record_ops::receiver_variable(&file.ir, receiver)
+            .is_some_and(|x| rvars.contains(&x.fold_identifier()));
         WithCtx {
             depth: self.depth + 1,
             implicit: if is_record {
@@ -988,8 +1064,7 @@ pub fn extract_sites(
         for routine in &obj.routines {
             if let Some(body) = routine.body {
                 let caller = routine.name.fold_identifier();
-                let mut rvars = routine_rvars(routine);
-                rvars.extend(object_globals.iter().cloned());
+                let rvars = routine_receivers(routine, object_globals);
                 let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
                 walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
             }
@@ -1030,8 +1105,7 @@ pub fn extract_sites_for_object(
     for routine in &obj.routines {
         if let Some(body) = routine.body {
             let caller = routine.name.fold_identifier();
-            let mut rvars = routine_rvars(routine);
-            rvars.extend(object_globals.iter().cloned());
+            let rvars = routine_receivers(routine, object_globals);
             let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
             walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
         }
@@ -1076,8 +1150,7 @@ pub fn extract_sites_for_routine(
         return Vec::new();
     };
     let caller = routine.name.fold_identifier();
-    let mut rvars = routine_rvars(routine);
-    rvars.extend(object_globals.iter().cloned());
+    let rvars = routine_receivers(routine, object_globals);
     let ctx = WithCtx::for_routine(src, file, obj_idx, routine);
     let mut out = Vec::new();
     walk_block_v2(file, src, body, unit, &caller, &rvars, ctx, &mut out);
@@ -1146,6 +1219,7 @@ codeunit 50102 "D"
         let op = |r: &str, o: &str| CalleeShape::RecordOp {
             receiver_text: r.to_string(),
             op: o.to_string(),
+            receiver: None,
         };
         let bare = |n: &str| CalleeShape::Bare {
             name: n.to_string(),

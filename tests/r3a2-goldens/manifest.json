@@ -31,7 +31,7 @@
       "inherited": 55
     },
     "recursiveCycleRoutines": 15,
-    "unresolvedCallRoutines": 43,
+    "unresolvedCallRoutines": 44,
     "opaqueCalleeUncertainties": 2,
     "uncertaintyKinds": {
       "ambiguous-overload": 3,
@@ -42,7 +42,7 @@
       "opaque-callee": 2,
       "parse-incomplete": 1,
       "record-table-unresolved": 8,
-      "unresolved-call": 13
+      "unresolved-call": 14
     },
     "parameterRolesWithCrossCallExitEffect": 52,
     "recursiveSccCount": 3,
@@ -3126,10 +3126,10 @@
           "direct": 27
         },
         "recursiveCycleRoutines": 0,
-        "unresolvedCallRoutines": 5,
+        "unresolvedCallRoutines": 6,
         "opaqueCalleeUncertainties": 0,
         "uncertaintyKinds": {
-          "unresolved-call": 5
+          "unresolved-call": 6
         },
         "parameterRolesWithCrossCallExitEffect": 0,
         "recursiveSccCount": 0,

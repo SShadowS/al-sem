@@ -780,6 +780,8 @@ fn page_may_modify(routine: &ModelRoutine, ctx: &DetectorContext, symbols: &Symb
 /// uses the SAME set the detectors apply intraprocedurally.
 pub(crate) const RECORD_LOAD_OPS: &[&str] = &[
     "Get",
+    // ENG-12 (L35): a record operation now, no longer only tier 1's call site.
+    "GetBySystemId",
     "FindFirst",
     "FindLast",
     "FindSet",
@@ -790,9 +792,11 @@ pub(crate) const RECORD_LOAD_OPS: &[&str] = &[
     "Copy",
 ];
 
-/// G-10 tier 1: platform BUILT-IN record loaders that are NOT in the L2
-/// record-op map (`record_op.rs`) — they surface as member CALL SITES, not
-/// record operations — but perform a complete row fetch, equivalent to `Get`
+/// G-10 tier 1: platform BUILT-IN record loaders seen as member CALL SITES,
+/// not record operations, that perform a complete row fetch, equivalent to `Get`
+/// (since ENG-12 `GetBySystemId` on a variable or an array element is a record
+/// operation in `RECORD_LOAD_OPS`; this tier still sees it on any other
+/// receiver, a call's result)
 /// for the "record is loaded" precondition. EXACT method names, matched
 /// case-insensitively. Deliberately conservative: only platform built-ins that
 /// load the full current record are listed; custom `FindXxx`/`GetXxx` wrappers
@@ -1455,7 +1459,9 @@ pub(crate) fn whole_set_break(
         "Reset" | "Copy" => Some(WholeSetBreak::ChangesSet),
         // A second retrieval on the DRIVER repositions the cursor, so the loop
         // stops visiting the rows it was going to visit.
-        "Find" | "FindFirst" | "FindLast" | "FindSet" | "Get" => Some(WholeSetBreak::SkipsRows),
+        "Find" | "FindFirst" | "FindLast" | "FindSet" | "Get" | "GetBySystemId" => {
+            Some(WholeSetBreak::SkipsRows)
+        }
         // SetLoadFields/AddLoadFields change which COLUMNS are fetched, not
         // which rows or in what order.
         //

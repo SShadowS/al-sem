@@ -3534,7 +3534,7 @@ fn op_family(op: &str) -> &'static str {
         "LockTable" => "lock",
         "Insert" | "Modify" | "ModifyAll" | "Delete" | "DeleteAll" | "Rename" => "write",
         "Validate" => "validate",
-        "Get" | "Next" | "IsEmpty" | "CalcFields" | "CalcSums" => "read",
+        "Get" | "GetBySystemId" | "Next" | "IsEmpty" | "CalcFields" | "CalcSums" => "read",
         o if o.starts_with("Find") || o.starts_with("Count") => "read",
         _ => "unclassified",
     }

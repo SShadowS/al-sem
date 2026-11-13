@@ -163,10 +163,15 @@
     {
       "routineId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#4ffe8a39c4e0ea2964bf2273e7accd1121d6be8fb3e29bf1b528b340f4eadbc0",
       "dbEffects": [],
-      "uncertainties": [],
+      "uncertainties": [
+        {
+          "kind": "unresolved-call",
+          "callsiteId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#4ffe8a39c4e0ea2964bf2273e7accd1121d6be8fb3e29bf1b528b340f4eadbc0/cs0"
+        }
+      ],
       "parameterRoles": [],
       "inRecursiveCycle": false,
-      "hasUnresolvedCalls": false
+      "hasUnresolvedCalls": true
     },
     {
       "routineId": "11111111-0000-0000-0000-000000abc200:Codeunit:50200#6a3a9d62e28a00fe92f7082263b23d7af707f2d02018568632dc49b95eb8206a",
