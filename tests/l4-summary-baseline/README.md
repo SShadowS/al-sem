@@ -269,6 +269,23 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   routines). 3 routines own the 5 CDO sites (`CDOeDocsSendCodeMigration`, 4 in two routines;
   `CDOEMailLog`'s `RecRef.GetBySystemId`), 9 callers inherit their effects. The table is
   `unknown` because this model is single-app. The reverse index moves with the same reads.
+- **2026-11-13, ENG-25** (`alsem/eng-25-parenless-record-ops`). Whole-program `8e952ad5…` ->
+  `fde6e4f3…`; reverse index `b7a20797…` -> `e35456be…`. Measured by dumping the canonical
+  serialization (`L4_CANONICAL_DUMP`) at the old digest (master `60981a1f`'s tree, unchanged
+  since ENG-12) and at the branch head `dea62b43`, and comparing each routine's records with
+  the operation and loop ordinals (`/opN`, `/loopN`) stripped, since a new operation renumbers
+  every later one in its routine. 5479 routines throughout, none added or removed. 2109 move,
+  all in their effects, none in any other field. (A first freeze at `2c867002`, `e8f8074c…`,
+  had one more routine moved only in ordinals: `CDO E-Mail Template Line::CopyTemplateLine`'s
+  local record `Copy` was read as `Rec.Copy`, the review-round-1 defect; its effects were the
+  same.) No effect is
+  removed and no write operation's effect changes. Every added effect is a read or a cursor
+  step written without parentheses in expression position (`if R.IsEmpty then`,
+  `exit(R.Count)`, `if Setup.Get then`): 30,604 effects, IsEmpty 17,541, Count 11,228,
+  FindFirst 1,605, Get 146, Next 26, FindSet 26, FindLast 19, Find 13. The
+  operations sit in 199 routines; the other routines inherit them through their calls. Top
+  tables: CDO 6175301 and 6175304, and `unknown` (RecordRef `Count`/`IsEmpty`). The reverse
+  index moves with the same reads.
 - **2026-11-11, ENG-06** (`alsem/eng-06-b9-fieldref-validate`, engine limits B9/B10).
   Whole-program `46ef73cc…` -> `a0ce2366…`; reverse index unchanged. 5479 routines
   throughout, none added or removed. Exact single-variable attribution on the pinned

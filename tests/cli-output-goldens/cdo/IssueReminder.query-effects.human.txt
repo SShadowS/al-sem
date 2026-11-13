@@ -1,5 +1,5 @@
 query effects Codeunit "CDO Issue Document"::IssueReminder   [cross-app]
-answer: 682 operations (writes, reads and locks below)
+answer: 712 operations (writes, reads and locks below)
 analysis partial (beyondDependencyCalls, locks, reads, validate, writes: 29 calls not resolved, 260 interface dispatches open world) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: reads, locks and validations one dependency routine deep · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 11 apps
 more: all: true lists every operation; format: "json" for every row
   defined at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:11
@@ -48,7 +48,7 @@ more: all: true lists every operation; format: "json" for every row
       representative path (CTS-CDN eDocument Log): IssueReminder → … → Codeunit "CTS-CDN Network Doc. Mgt." (6225516)::CreateEDocumentLog (Insert at dep:Continia Delivery Network:src/.dependencies/CDN/Codeunit/CTSCDNNetworkDocMgt.Codeunit.al:407); through the site at ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:228
     35 dependency routines entered at 40 dependency calls write only temporary records or no table (detail: true lists them)
   locks (3 tables; not writes): CDO Azure Application Setup (also written), CDO E-Mail Log (also written), Reminder/Fin. Charge Entry at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:160 in Codeunit "Reminder-Issue" (393)::OnRun; a RecordRef (table not resolved: RecordRef): 5 locks
-  reads: 466 on 78 tables (Get 105, Next 94, CalcFields 92, FindSet 85, FindFirst 43, IsEmpty 21, FindLast 16, Count 10; 197 on temporary records) — all: true lists them
+  reads: 493 on 79 tables (Get 106, Next 94, CalcFields 92, FindSet 85, FindFirst 44, IsEmpty 38, Count 18, FindLast 16; 208 on temporary records) — all: true lists them
   temporary records: 95 operations on 8 tables in 52 routines — all: true lists them
-  on a RecordRef (table not resolved: RecordRef): 88 operations in 35 routines (CalcFields 20, FindSet 18, Next 18, FindFirst 7, Find 5, LockTable 5, Modify 5, Count 3, Get 3, IsEmpty 3, Insert 1) — all: true lists them
+  on a RecordRef (table not resolved: RecordRef): 91 operations in 36 routines (CalcFields 20, FindSet 18, Next 18, FindFirst 7, Count 6, Find 5, LockTable 5, Modify 5, Get 3, IsEmpty 3, Insert 1) — all: true lists them
   next: alsem_prove {"routine": "Codeunit \"CDO Issue Document\"::IssueReminder", "question": "writes-table:CTS-CDN eDocument Log"} — follows the whole cone for one table, with its witness
