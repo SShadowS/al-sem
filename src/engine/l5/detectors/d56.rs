@@ -58,14 +58,13 @@ fn range_holds(r: (u32, u32, u32, u32), a: &PAnchor) -> bool {
     (r.0, r.1) <= p && p <= (r.2, r.3)
 }
 
+/// An `if` / `case` node's source range and the branch that holds a position.
+type BranchStep = ((u32, u32, u32, u32), Option<usize>);
+
 /// ENG-27: every `if` / `case` around `a` in the statement tree, with the
 /// branch that holds it (`if`: 0 then, 1 else; `case`: the branch's index;
 /// `None` when no branch holds it, e.g. the condition, or a range is missing).
-fn branch_path(
-    nodes: &[PCFNNode],
-    a: &PAnchor,
-    out: &mut Vec<((u32, u32, u32, u32), Option<usize>)>,
-) {
+fn branch_path(nodes: &[PCFNNode], a: &PAnchor, out: &mut Vec<BranchStep>) {
     let held = |list: &Option<Vec<PCFNNode>>| {
         list.iter()
             .flatten()
