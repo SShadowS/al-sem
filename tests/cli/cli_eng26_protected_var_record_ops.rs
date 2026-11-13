@@ -57,6 +57,19 @@ tableextension 52902 "E26 Ext" extends "E26 Base"
     begin
         Other.Modify(true);
     end;
+    // So does a NON-record local: this `Other.Modify(true)` is the codeunit's.
+    procedure ShadowedByCodeunit()
+    var
+        Other: Codeunit "E26 Helper";
+    begin
+        Other.Modify(true);
+    end;
+}
+codeunit 52906 "E26 Helper"
+{
+    procedure Modify(Flag: Boolean)
+    begin
+    end;
 }
 page 52903 "E26 Base Page"
 {
@@ -132,6 +145,10 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// passes. (An explicit shadowing check in `inherited_protected_var` made no
 /// difference when broken: a same-named record local is a record operation
 /// before this path, so the check was removed; `ShadowedWrite` pins the rule.)
+/// A NON-record local of the same name hides it too, through receiver typing's
+/// order (Step 2, declared names, before Step 2c, the base's protected vars).
+/// Break (2026-11-13): run Step 2c first in `infer_receiver_type` ->
+/// `ShadowedByCodeunit` touches "E26 Target". Fails; restored, it passes.
 #[test]
 fn a_base_objects_protected_record_is_a_record_operation() {
     let t = workspace(SOURCE, "");
@@ -155,6 +172,8 @@ fn a_base_objects_protected_record_is_a_record_operation() {
     assert!(a.starts_with("answer: down: no"), "ShadowedWrite: {a}");
     let a = touches(ws, "E26 Quiet", "\"E26 Ext\".ShadowedWrite");
     assert!(a.starts_with("answer: down: yes"), "ShadowedWrite: {a}");
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".ShadowedByCodeunit");
+    assert!(a.starts_with("answer: down: no"), "ShadowedByCodeunit: {a}");
     let a = answer(&[
         "prove",
         ws,
