@@ -260,6 +260,128 @@ fn the_parallel_walk_gives_the_serial_outcome() {
             7,
             "seed {seed}: every run was parallel"
         );
+        // Coverage only (`derived: false`): the members' coverage-only branch.
+        let cov_only = || ConeScope {
+            derived: false,
+            raw: WitnessScope::None,
+        };
+        let serial = seen(&compose(&ws, cov_only(), 1, None));
+        assert!(serial.rows.is_empty() && !serial.coverage.is_empty());
+        let par = seen(&compose(&ws, cov_only(), 3, None));
+        assert_eq!(par, serial, "seed {seed}: coverage only");
+    }
+}
+
+/// The guard frames and the producer solve's own entries under the parallel
+/// walk, on a real model (review r1, sol and Opus: the synthetic graphs have
+/// no routines, so no frame). `G` writes `Rec2` under `Flag`: `N`'s literal
+/// `false` contradicts the guard, `M`'s `true` satisfies it, and the
+/// recursive SCC {A, B} reaches the guarded entry. `W` is a
+/// parameter-dependent producer that the recursive SCC {P, Q} binds.
+/// Discrimination proof (2026-11-13): building the task's fact cone with no
+/// guard frame (`GuardAnchor { frame: None, .. }`) fails here (G's entry is
+/// no longer frame-bound: N's row gains the write, `with_guarded_successor`
+/// drops to 0). Passing no frame to the singleton walk instead stays green:
+/// no caller here has a guard parameter of its own.
+#[test]
+fn guards_and_own_entries_match_the_serial_walk() {
+    use crate::engine::l4::capability_cone::callsite_local_scan_tests::model;
+    use crate::engine::l4::exec_relation::ExecRelation;
+    use crate::engine::l5::detector_context::det_cone_inputs;
+    let m = model(
+        r#"
+codeunit 50100 C
+{
+    var
+        Rec2: Record Cust;
+
+    procedure W(Flag: Boolean; var R: Record Cust)
+    begin
+        if Flag then
+            R.Insert();
+    end;
+
+    procedure Q(Flag: Boolean)
+    var
+        R: Record Cust;
+    begin
+        W(Flag, R);
+        P();
+    end;
+
+    procedure P()
+    begin
+        Q(false);
+    end;
+
+    procedure A()
+    begin
+        B();
+    end;
+
+    procedure B()
+    begin
+        G(true);
+        A();
+    end;
+
+    procedure G(Flag: Boolean)
+    begin
+        if Flag then
+            Rec2.Modify();
+    end;
+
+    procedure N()
+    begin
+        G(false);
+    end;
+
+    procedure M()
+    begin
+        G(true);
+    end;
+}
+"#,
+    );
+    let rel = ExecRelation::single_app(&m);
+    let i = det_cone_inputs(&m, &rel);
+    let run = |workers: usize, sched: Option<Sched>| {
+        TEST_SCHED.with(|c| c.set(sched));
+        let out = compose_cone_over_graph_retained(
+            rel.cone(),
+            &i.nodes,
+            &i.direct_full,
+            &i.coverage_in,
+            &m.workspace.routines,
+            derived(),
+            PdRetain::No,
+            workers,
+        );
+        TEST_SCHED.with(|c| c.set(None));
+        seen(&out)
+    };
+    let serial = run(1, None);
+    let id = |name: &str| {
+        m.workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.id.clone())
+            .expect("a fixture routine")
+    };
+    assert!(
+        serial.rows[&id("N")].writes.is_empty() && !serial.rows[&id("M")].writes.is_empty(),
+        "precondition: the guard decides N's and M's rows"
+    );
+    assert!(
+        serial.stats.with_guarded_successor >= 1 && serial.stats.own_entries_recursive >= 1,
+        "precondition: a guarded successor entry and a recursive member's own entry"
+    );
+    for workers in [2, 8] {
+        assert_eq!(run(workers, None), serial, "{workers} workers");
+    }
+    for order in [Order::Lowest, Order::Highest, Order::Shuffled(3)] {
+        assert_eq!(run(1, Some(one_thread(order))), serial, "{order:?}");
     }
 }
 

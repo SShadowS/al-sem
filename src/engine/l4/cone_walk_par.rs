@@ -382,19 +382,9 @@ fn worker(cx: &Cx<'_, '_, '_>) {
         *slot.cone.lock().expect("a slot lock") = shared;
         *slot.out.lock().expect("a slot lock") = Some(out);
         slot.done.store(true, Ordering::Release);
-        // Merge the finished prefix. Whoever stores `out[i]` then locks, so
-        // `i` is merged by it or by an earlier holder.
-        {
-            let mut m = cx.merge.lock().expect("the merge lock");
-            while m.next < cx.n {
-                let next = m.next;
-                let Some(o) = cx.slots[next].out.lock().expect("a slot lock").take() else {
-                    break;
-                };
-                m.take(next, o);
-                m.next += 1;
-            }
-        }
+        // Free and release before merging (review r1, sol and Opus): the merge
+        // lock may wait behind a long prefix drain, and nothing on the
+        // critical path should.
         // Free each successor's cone once its last reader (this one, maybe)
         // is done.
         for &y in &cx.x.succ[i] {
@@ -410,14 +400,36 @@ fn worker(cx: &Cx<'_, '_, '_>) {
             .copied()
             .filter(|&p| cx.slots[p].left.fetch_sub(1, Ordering::AcqRel) == 1)
             .collect();
-        {
+        let pushed = newly.len();
+        let all_done = {
             let mut q = cx.queue.lock().expect("the queue lock");
             for p in newly {
                 q.ready.push(Reverse((cx.sched.prio(p, cx.n), p)));
             }
             q.finished += 1;
+            q.finished == cx.n
+        };
+        // One wakeup per SCC made ready; everyone at the end (the abort path
+        // wakes everyone itself).
+        if all_done {
+            cx.cv.notify_all();
+        } else {
+            for _ in 0..pushed {
+                cx.cv.notify_one();
+            }
         }
-        cx.cv.notify_all();
+        // Merge the finished prefix. Whoever stores `out[i]` then locks, so
+        // `i` is merged by it or by an earlier holder, before any worker
+        // returns (a worker returns only at the top of its loop).
+        let mut m = cx.merge.lock().expect("the merge lock");
+        while m.next < cx.n {
+            let next = m.next;
+            let Some(o) = cx.slots[next].out.lock().expect("a slot lock").take() else {
+                break;
+            };
+            m.take(next, o);
+            m.next += 1;
+        }
     }
 }
 
@@ -439,7 +451,10 @@ impl MemoRows for SuccMemo<'_> {
             build()
         });
         if built {
-            self.live.fetch_add(1, Ordering::Relaxed);
+            // The peak from this increment itself (review r1, sol): a later
+            // sample can miss it.
+            let now = self.live.fetch_add(1, Ordering::Relaxed) + 1;
+            census::max(&census::CLOSED_MEMO_LIVE_MAX, now as u64);
         }
         row
     }
@@ -541,11 +556,14 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
     } else {
         0
     };
-    // §4.2 step 1: one set per recursive SCC with an emitted member (every
-    // member re-folds here: there is no seed).
+    // §4.2 step 1: one set per recursive SCC with an emitted member. The
+    // serial loop's `.any(|m| routine_ids.contains(m) && refold(m))` is
+    // `emitted > 0` here: with no seed every member re-folds.
     let use_set = recursive && emitted > 0 && x.scope.derived;
+    let t = use_set.then(census::start).flatten();
     let root_set = (use_set && root_scc)
         .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &cones, x.direct, None));
+    census::add_since(&census::BFS_WALK_NANOS, t);
     let scc_set: Option<&ConeFacts> = if !use_set {
         None
     } else if let Some(set) = &root_set {
@@ -630,10 +648,17 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
         }
         rows.push((m.clone(), folder.finish_routine()));
         census::add_since(&census::DERIVED_NANOS, t);
+        let t = census::start();
         coverage.push((m.clone(), record));
+        census::add_since(&census::EMIT_NANOS, t);
     }
+    // As the serial loop: the set row's and the root set's destruction is
+    // recursive fold work. (A memo row's destruction is not charged here:
+    // it drops with its cone's last clone, on whichever worker that is.)
+    let t = census::start();
     drop(set_row);
     drop(root_set);
+    census::add_since(&census::BFS_FOLD_NANOS, t);
     let cone_len = fcone.as_ref().map_or(0, |c| c.len() as u64);
     let shared = fcone.map(|f| Shared {
         fact: Arc::new(f),
