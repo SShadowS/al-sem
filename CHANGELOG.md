@@ -44,6 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[TryFunction]` procedures may write (the PDF service's token cache is CDO bug #80680, guarded
   by a token warm-up the engine cannot see).
 
+### Changed (TLS-28: one-shot `alsem impact` builds the program once less)
+
+- **`alsem impact` reuses the call graph between its parts, with the same output.** The
+  command runs its parts in turn (main, up, tests-select), and each built the whole program
+  again. Inside one `alsem impact` process (`batch::sited_cache::with_sited_cache`, installed
+  only by `run_impact_cmd`), a view now keeps the sited graph (the may-execute call graph the up
+  and tests-select parts read), and a later part that reads only that graph, for the same
+  `ViewKey` and the same input bytes (`Manifest::consumed(..).stamp()`), runs on it instead of
+  building. The main part keeps the graph off its own program for the up part. The `--base`
+  side keeps nothing. A read with a file name that is not UTF-8 takes no part (its manifest key
+  is lossy; TLS-30 fixes the manifest). Measured on CDO (2026-11-13, release-fast, one run each
+  under outside load):
+  - program builds in `--diff`: 3 → 2 (the tests part runs on CDO's sibling test app, a
+    different program, so it still builds);
+  - CPU: `--diff` 679 → 561 s, `--base --no-tests` 863 → 777 s, `--routine` 346 → 242 s;
+  - peak: 3,553 → 3,554 MiB, 3,987 → 3,780 MiB, 3,239 → 3,291 MiB (run-to-run noise is several
+    percent);
+  - outputs byte-identical (`--base`: apart from its cache folder path and build timings).
+
+  Note: `docs/superpowers/notes/2026-11-12-impact-shared-sited.md`.
+
 ### Changed (TLS-27: the findings sort builds each sort key once)
 
 - **`alsem analyze` sorts its findings about 11 times faster, in the same order.** The sort

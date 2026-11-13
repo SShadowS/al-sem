@@ -28,8 +28,12 @@ purpose (one batch's witnesses alive at a time). That is option (B), small, afte
 The program is rebuilt because `impact::run::orchestrate` runs its parts in order (up needs
 main's roots, tests-select main's ids), and the CLI runs each part through
 `run_part_with_stdin` → `batch::standalone_output`: a fresh read and a fresh drive, so a fresh
-`build_view_model`. The three parts' `ViewKey`s are equal (workspace, `CrossApp`,
-`no_roots_config`).
+`build_view_model`. The main and up parts' `ViewKey`s are equal (workspace, `CrossApp`,
+`no_roots_config`). The tests-select part's is equal only when the test universe is the
+workspace itself; **on CDO it is not** (as built, measured): CDO's tests live in the sibling app
+`Test`, so the select part builds that test universe, a different program. On CDO the change
+therefore saves one build (the up part's), not two; see the note
+`docs/superpowers/notes/2026-11-12-impact-shared-sited.md`.
 
 ## 2. The change
 
@@ -63,7 +67,9 @@ the main view's lent program too (when no demand on the view asked for it, `View
 unset) and stores it, so the up part hits as well. This holds the sited graph through the main
 part's model, context and digest peak. **Kept only if peak memory rises by at most a few
 percent against master on CDO `impact --diff` and `--base`; otherwise step 1 alone ships and the
-note records the numbers.** Declared-needs rule: this changes a lifetime, never what a build
+note records the numbers.** As measured (2026-11-13): step 2 against step 1 +1.2% (`--diff`),
+−4.4% (`--base`), within the run-to-run noise; step 2 stays, and it carries all of CDO's saving.
+Declared-needs rule: this changes a lifetime, never what a build
 holds or drops for a view that needs it.
 
 Whether the main view's program yields the same `SitedGraph` as a sited-only build's program
