@@ -105,6 +105,7 @@
     ],
     "discovery": "auto",
     "discoveryComplete": true,
+    "ignoredByGit": 0,
     "searched": 2,
     "skipped": [
       {

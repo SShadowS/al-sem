@@ -826,6 +826,7 @@
       ],
       "discovery": "auto",
       "discoveryComplete": true,
+      "ignoredByGit": 0,
       "searched": 1,
       "skipped": [],
       "workspaceTests": 0
