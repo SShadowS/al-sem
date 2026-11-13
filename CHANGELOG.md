@@ -281,7 +281,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching the `reads:`/`locks:` absence lines, instead of "one dependency routine deep, not
   exhaustive beyond". The `--format json` header's `result.scope.scope` says the same. A cone
   that enters dependency code prints the old text. Goldens moved: `d8.onafterpostsalesdoc` and
-  `r2a-record-types.declaredvars` (human and JSON) and the batch `one-job` query golden. The
+  `r2a-record-types.declaredvars` (human and JSON), the batch `one-job` query golden, and the
+  CDO `UpdateLastUpload` query-effects golden (re-minted; only its scope clause moved). The
   "not searched" variant has no fixture.
 - **Test-app auto-discovery skips folders git ignores** (`.gitignore`, `.git/info/exclude`,
   the user's excludes file; one `git check-ignore` per folder read), unless the folder holds the
