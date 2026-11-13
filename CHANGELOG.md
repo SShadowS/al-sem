@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On CDO (`bc3ccb18`, base `e58234bb`): nothing moves. d50 considers the same 6 checked runs and
   reports none on both sides (nothing pending, even under the wider rule); no default detector
   moves at either scope. With no finding on CDO, d50's precision is not measured; it stays
-  opt-in. Left: unknown code deeper in a callee's cone is not tracked. Tests:
+  opt-in. Left: unknown code deeper in a callee's cone, and a callee with no row, are not
+  tracked here; only d50 reads the new labels (d8, d9, the digest and explain still name physical
+  tables only); a `LockTable` on a temporary record counts (an over-approximation). Tests:
   `tests/cli/cli_eng24_pending_writes.rs` (one break on the shared rule fails both d50's test
   and the trap search's). Probe: `docs/superpowers/notes/2026-11-13-eng24-d50-pending-probe.md`.
 

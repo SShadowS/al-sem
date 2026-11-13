@@ -466,8 +466,13 @@ callers' question reads (`commit_scope::declared`).
   that does not resolve", "unknown code at <call>"). Another subscriber of an event a span
   member raises, whose cone may write, counts as "possibly pending … (order unknown)". A record
   operation that fires a subscriber was already counted (the subscriber's cone). Left: unknown
-  code deeper in a callee's cone (no cone fact records it); siblings are judged by their whole
-  cone. On CDO nothing moves: its 6 checked runs have nothing pending, so d50 has 0 findings
+  code deeper in a callee's cone (no cone fact records it); a callee with no row, which the trap
+  search counts as unknown code, has no counterpart here; for unknown code the predicate is
+  shared but each reader builds its own inputs (the trap search from its guarded out-edges);
+  siblings are judged by their whole cone; a `LockTable` on a temporary record counts as pending
+  in both readers (an over-approximation the shared rule keeps); only d50 reads `pending_other`,
+  so the explicit-commit-span detectors (d8, d9), the digest's pending line and explain's
+  pending report still name physical tables only (explain passes no unknown-code sites). On CDO nothing moves: its 6 checked runs have nothing pending, so d50 has 0 findings
   there and its precision is not measured; it stays opt-in. A helper's writes
   inside its own checked run no longer count (the CDO landing measurement: both d50 findings on
   CDO's send-on-posting were this shape, and with the fix d50 has none there); this reaches
