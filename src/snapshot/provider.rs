@@ -59,7 +59,9 @@ pub(crate) fn walk_al_source(
 /// reach it, but `SnapshotBuilder.local_providers` is always empty in
 /// production), so the fix protects a future reader.
 /// Length-prefixed parts as in `source_deps`' content hash. Never persisted, so
-/// no cache version moves.
+/// no cache version moves. Limit: the hash sees the virtual path, which the
+/// walk builds with a lossy conversion, so two non-UTF-8 file names that
+/// convert alike hash alike (older than TLS-46; review sol r1).
 fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
     if files.is_empty() {
         return None;
@@ -295,7 +297,8 @@ mod tests {
     ///
     /// Discrimination (2026-11-13): `source_root` hashing the texts alone with no
     /// length prefix (the old scheme) fails at "split"; length prefixes kept but
-    /// the path left out fails at "rename". Restored, it passes.
+    /// the path left out fails at "rename"; path and text hashed with no length
+    /// prefix fails at "framing" (review sol r1). Restored, it passes.
     #[test]
     fn workspace_root_hash_sees_paths_and_file_boundaries() {
         let hash_of = |files: &[(&str, &str)]| {
@@ -326,6 +329,13 @@ mod tests {
             base,
             hash_of(&[("a.al", "codeunit 1 A { }"), ("c.al", "codeunit 2 B { }")]),
             "rename: b.al renamed c.al"
+        );
+        // Review sol r1: path and text concatenated with no length prefix read
+        // `a.alb.alc.al` for both sets; only the framing tells them apart.
+        assert_ne!(
+            hash_of(&[("a.al", "b.al"), ("c.al", "")]),
+            hash_of(&[("a.al", ""), ("b.alc.al", "")]),
+            "framing: path and text bytes that concatenate alike"
         );
     }
 
