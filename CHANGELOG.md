@@ -93,8 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those that run whenever the write does: in a loop that also holds the write, and in no `if` /
   `case` branch the write is outside of. A copy only in a branch (`Copy := Cursor; if X then
   Copy := Temp; Copy.Modify()`), in a nested loop the write is not in, or a field write such as
-  `Other.Copy := 1` overwrites nothing, so the earlier copy's finding stands. This also makes it
-  at most one finding per write.
+  `Other.Copy := 1` overwrites nothing, so the earlier copy's finding stands; so does a copy
+  behind an `if` / `case` whose source range is unknown. When several copies still reach one
+  write (one in a branch), it is one finding, naming the copy nearest the write.
 - **d14 (dead routine) reported a procedure once per `#if` arm**, under one id: `#if not X` /
   `#else` arms with the same signature are one routine id. Arms whose findings say the same thing
   are one finding (the first arm). Arms that differ (one `local`, one `internal`) are each kept,

@@ -150,6 +150,22 @@ codeunit 52807 "E27 Not Overwritten"
             until Src.Next() = 0;
     end;
 
+    // Two cursor copies, the second only in a branch: it overwrites nothing,
+    // so both reach the write, and that is still ONE finding.
+    procedure CondPersist()
+    var
+        Src: Record "E27 Row";
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                Copy := Src;
+                if Src.K > 0 then
+                    Copy := Src;
+                Copy.Modify();
+            until Src.Next() = 0;
+    end;
+
     // A copy and a write in a NESTED loop under an outer copy: the inner copy
     // overwrites the outer one, so one finding.
     procedure NestedWrite()
@@ -264,7 +280,8 @@ fn of<'a>(fs: &'a [serde_json::Value], detector: &str, object: &str) -> Vec<&'a 
 /// copies in the copy's own innermost loop -> `NestedWrite` reports twice.
 /// Round 4: drop `unconditional_before` from the overwrite check ->
 /// `Conditional` is lost; make every copy conditional -> `SameBranch` ("E27
-/// Overwrite") reports. Each fails; restored, it passes.
+/// Overwrite") reports. Round 5: drop the per-write map -> `CondPersist`
+/// reports twice. Each fails; restored, it passes.
 #[test]
 fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     let fs = findings(SOURCE);
@@ -279,7 +296,13 @@ fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     names.sort_unstable();
     assert_eq!(
         names,
-        ["Conditional", "FieldNamed", "Nested", "NestedWrite"],
+        [
+            "CondPersist",
+            "Conditional",
+            "FieldNamed",
+            "Nested",
+            "NestedWrite"
+        ],
         "{kept:#?}"
     );
     let real = of(&fs, "d56-clone-before-write-in-loop", "E27 Real Page");

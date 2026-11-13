@@ -54,8 +54,10 @@ pub(crate) const DETECTOR: &str = "d56-clone-before-write-in-loop";
 
 /// A source range `(start_line, start_col, end_line, end_col)` holds `a`'s start.
 fn range_holds(r: (u32, u32, u32, u32), a: &PAnchor) -> bool {
+    // The end is exclusive (tree-sitter's), so a statement right after a
+    // branch is not inside it.
     let p = (a.start_line, a.start_column);
-    (r.0, r.1) <= p && p <= (r.2, r.3)
+    (r.0, r.1) <= p && p < (r.2, r.3)
 }
 
 /// An `if` / `case` node's source range and the branch that holds a position.
@@ -71,6 +73,11 @@ fn branch_path(nodes: &[PCFNNode], a: &PAnchor, out: &mut Vec<BranchStep>) {
             .any(|n| n.source_range.is_some_and(|r| range_holds(r, a)))
     };
     for n in nodes {
+        // A branch without a range might hold `a`: unknown, so a step no
+        // write can match (the copy is then conditional).
+        if (n.kind == "if" || n.kind == "case") && n.source_range.is_none() {
+            out.push(((u32::MAX, u32::MAX, u32::MAX, u32::MAX), None));
+        }
         if (n.kind == "if" || n.kind == "case")
             && let Some(r) = n.source_range
             && range_holds(r, a)
@@ -106,9 +113,14 @@ fn unconditional_before(
     other: &PAnchor,
     write: &PAnchor,
 ) -> bool {
-    let Some(tree) = routine.statement_tree.as_deref() else {
-        return false;
-    };
+    routine
+        .statement_tree
+        .as_deref()
+        .is_some_and(|tree| unconditional_in(tree, other, write))
+}
+
+/// [`unconditional_before`] over one statement tree.
+fn unconditional_in(tree: &PCFNNode, other: &PAnchor, write: &PAnchor) -> bool {
     let (mut o, mut w) = (Vec::new(), Vec::new());
     branch_path(std::slice::from_ref(tree), other, &mut o);
     branch_path(std::slice::from_ref(tree), write, &mut w);
@@ -132,6 +144,7 @@ pub fn detect_d56(
     let mut skipped_source_temp = 0u64;
     let mut skipped_target_temp = 0u64;
     let mut skipped_overwritten = 0u64;
+    let mut skipped_same_write = 0u64;
     let mut skipped_key_remapped_clone = 0u64;
 
     for routine in &ws.routines {
@@ -164,6 +177,11 @@ pub fn detect_d56(
             })
             .collect();
 
+        // ENG-27: the finding kept per write op, and the copy it names. A copy
+        // in a branch does not overwrite (see `overwritten` below), so two
+        // copies can still reach one write; it is one finding, the nearest copy.
+        let mut per_write: std::collections::HashMap<&str, (usize, PAnchor)> =
+            std::collections::HashMap::new();
         // Innermost loop containing an assignment (assignments carry no
         // loop_stack; containment is by anchor).
         let innermost = |a: &crate::program::body::features::PAnchor| {
@@ -358,7 +376,19 @@ pub fn detect_d56(
                 loose_subject: None,
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
-            findings.push(finding);
+            let next = findings.len();
+            let (at, kept) = per_write
+                .entry(write.id.as_str())
+                .or_insert_with(|| (next, asg.source_anchor.clone()));
+            if *at == next {
+                findings.push(finding);
+            } else {
+                skipped_same_write += 1;
+                if before_anchor(kept, &asg.source_anchor) {
+                    findings[*at] = finding;
+                    *kept = asg.source_anchor.clone();
+                }
+            }
         }
     }
 
@@ -370,6 +400,79 @@ pub fn detect_d56(
     stats.add_skip("sourceTemp", skipped_source_temp);
     stats.add_skip("targetTemp", skipped_target_temp);
     stats.add_skip("overwrittenCopy", skipped_overwritten);
+    stats.add_skip("sameWrite", skipped_same_write);
     stats.add_skip("keyRemappedClone", skipped_key_remapped_clone);
     Ok(DetectorOutput::no_diag(findings, stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(kind: &str, range: Option<(u32, u32, u32, u32)>) -> PCFNNode {
+        PCFNNode {
+            kind: kind.to_string(),
+            operation_id: None,
+            callsite_id: None,
+            condition_guard: None,
+            condition_leaves: None,
+            children: None,
+            else_children: None,
+            is_case_else: false,
+            source_range: range,
+            path_hint: None,
+            table_case: None,
+            field_exit_guard: None,
+            table_exit_guard: None,
+            junction_guards: None,
+            value_fact: None,
+            flow: None,
+        }
+    }
+
+    fn at(line: u32, column: u32) -> PAnchor {
+        PAnchor {
+            source_unit_id: "u".into(),
+            start_line: line,
+            start_column: column,
+            end_line: line,
+            end_column: column + 1,
+            syntax_kind: "x".into(),
+        }
+    }
+
+    /// ENG-27 (astra round 5): an `if` whose range is missing might hold the
+    /// copy, so the copy is conditional (no overwrite), even though nothing
+    /// places it inside. Hand-stated tree: AL source always has ranges.
+    /// Break (2026-11-13): skip the rangeless-node step in `branch_path` ->
+    /// the copy counts as unconditional. Fails; restored, it passes.
+    #[test]
+    fn a_branch_without_a_range_makes_a_copy_conditional() {
+        let mut block = node("block", Some((0, 0, 9, 0)));
+        let mut iff = node("if", None);
+        iff.children = Some(vec![node("other", Some((2, 4, 2, 20)))]);
+        block.children = Some(vec![iff, node("op", Some((5, 4, 5, 20)))]);
+        assert!(!unconditional_in(&block, &at(2, 4), &at(5, 4)));
+        // Any copy in that tree is conditional: the rangeless `if` might hold
+        // it. Control: the same copy in a tree with no branch is unconditional.
+        assert!(!unconditional_in(&block, &at(1, 4), &at(5, 4)));
+        let mut plain = node("block", Some((0, 0, 9, 0)));
+        plain.children = Some(vec![node("other", Some((1, 4, 1, 20)))]);
+        assert!(unconditional_in(&plain, &at(1, 4), &at(5, 4)));
+    }
+
+    /// ENG-27 (astra round 5): a range's end is exclusive, so a write that
+    /// starts exactly where a branch ends is not in it. Hand-stated ranges.
+    /// Break (2026-11-13): make the end inclusive in `range_holds` -> the
+    /// write sits in the then-branch with the copy, which then counts as
+    /// unconditional. Fails; restored, it passes.
+    #[test]
+    fn a_write_at_a_branch_end_is_outside_it() {
+        let mut iff = node("if", Some((2, 0, 3, 10)));
+        iff.children = Some(vec![node("other", Some((3, 0, 3, 10)))]);
+        let mut block = node("block", Some((0, 0, 9, 0)));
+        block.children = Some(vec![iff]);
+        // Copy in the then-branch at (3,0); write starts at (3,10), the end.
+        assert!(!unconditional_in(&block, &at(3, 0), &at(3, 10)));
+    }
 }
