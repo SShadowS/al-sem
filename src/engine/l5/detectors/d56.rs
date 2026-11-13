@@ -139,15 +139,17 @@ pub fn detect_d56(
             // Copy.Modify()` writes the temp copy). This also makes it at most
             // one finding per write: two copies before one write gave one id
             // twice. Only a whole-variable assignment overwrites (`Other.Copy
-            // := 1` names a field), and only one in the same innermost loop: an
-            // inner loop's copy cannot pair with this loop's write, so letting
-            // it overwrite would leave no finding at all.
+            // := 1` names a field), and only one whose innermost loop also holds
+            // the write: an inner loop's copy before an OUTER write cannot pair
+            // with it (letting it overwrite would leave no finding), while one
+            // before an INNER write does, and then it is the copy that counts.
             let overwritten = routine.var_assignments.iter().any(|other| {
                 !other.lhs_is_member
                     && other.lhs_name == asg.lhs_name
                     && before_anchor(&asg.source_anchor, &other.source_anchor)
                     && before_anchor(&other.source_anchor, &write.source_anchor)
-                    && innermost(&other.source_anchor).is_some_and(|l| l.id == lp.id)
+                    && innermost(&other.source_anchor)
+                        .is_some_and(|l| write.loop_stack.iter().any(|id| id == &l.id))
             });
             if overwritten {
                 skipped_overwritten += 1;

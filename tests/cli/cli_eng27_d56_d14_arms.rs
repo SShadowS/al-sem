@@ -116,6 +116,23 @@ codeunit 52807 "E27 Not Overwritten"
             until Src.Next() = 0;
     end;
 
+    // A copy and a write in a NESTED loop under an outer copy: the inner copy
+    // overwrites the outer one, so one finding.
+    procedure NestedWrite()
+    var
+        Src: Record "E27 Row";
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                Copy := Src;
+                repeat
+                    Copy := Src;
+                    Copy.Modify();
+                until true;
+            until Src.Next() = 0;
+    end;
+
     // A copy in a NESTED loop is no overwrite for the outer loop's write.
     procedure Nested()
     var
@@ -209,8 +226,9 @@ fn of<'a>(fs: &'a [serde_json::Value], detector: &str, object: &str) -> Vec<&'a 
 /// reports (and "E27 Real Page" would report 2: round 1's per-write map and
 /// first-copy breaks failed there, and that map is now unreachable, so it is
 /// gone). Round 2: count a field write as an overwrite -> `FieldNamed` is
-/// lost; count an inner loop's copy -> `Nested` is lost. Each fails; restored,
-/// it passes.
+/// lost; count an inner loop's copy -> `Nested` is lost. Round 3: count only
+/// copies in the copy's own innermost loop -> `NestedWrite` reports twice.
+/// Each fails; restored, it passes.
 #[test]
 fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     let fs = findings(SOURCE);
@@ -218,11 +236,12 @@ fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Temp Local").is_empty());
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Overwrite").is_empty());
     let kept = of(&fs, "d56-clone-before-write-in-loop", "E27 Not Overwritten");
-    let names: Vec<&str> = kept
+    let mut names: Vec<&str> = kept
         .iter()
         .map(|f| f["primaryLocation"]["routineName"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["FieldNamed", "Nested"], "{kept:#?}");
+    names.sort_unstable();
+    assert_eq!(names, ["FieldNamed", "Nested", "NestedWrite"], "{kept:#?}");
     let real = of(&fs, "d56-clone-before-write-in-loop", "E27 Real Page");
     assert_eq!(real.len(), 1, "{real:#?}");
     // The evidence's first step is the copy; only SARIF prints it.
