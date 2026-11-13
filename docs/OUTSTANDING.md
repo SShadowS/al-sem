@@ -244,7 +244,13 @@ sizings marked pre-arc).
     Minor 12). Fine at CDO's ~603 MB peak; fold into the ProgramContext byte-census
     follow-up (borrow instead of clone if the census shows it matters).
 
-- [ ] **Fixture witnesses for the grammar-v4 semantic fixes** (from the 2026-08-12
+- [x] **Fixture witnesses for the grammar-v4 semantic fixes** — DONE 2026-11-13 (TLS-41).
+  The IR shape of each is pinned in `crates/al-syntax/src/lower/grammar_v4_tests.rs`
+  (an s-expression of each condition; one discrimination per shape: the source in the
+  other meaning fails), and end to end by the fixture `tests/r0-corpus/ws-grammar-v4-shapes`
+  (`l2_features.snapshot`, the root-class summary, the ids parent-baseline record). It
+  needed no r4 seed: r4 runs only its listed smoke fixtures. Original item:
+  (from the 2026-08-12
   v4.0.0 upgrade's golden triage): the two semantically riskiest v4 changes have NO
   witness in `tests/r0-corpus/` — (a) a dangling `else` now binds to the inner `if`
   (the one v4 change that alters program meaning), and (b) the operator-precedence
