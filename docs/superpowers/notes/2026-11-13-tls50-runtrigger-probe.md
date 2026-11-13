@@ -92,7 +92,8 @@ present, and the table and one extension in one app with a second extension in a
    `DeleteAll` raised the events for their one row, so only the row-by-row path ran.
 3. **With `true` every extension trigger runs, in either app.** The order:
    1. `OnBefore<Op>Event`;
-   2. the extensions' `OnBefore<Op>` (app 1's, then app 2's);
+   2. the extensions' `OnBefore<Op>` (in this run app 1's, then app 2's; what orders two
+      extensions was not measured);
    3. the table's `On<Op>`;
    4. the write;
    5. the extensions' `OnAfter<Op>`;
@@ -105,7 +106,8 @@ present, and the table and one extension in one app with a second extension in a
      - `Rec` holds the caller's values;
      - a read still sees the old row (`Modify`, `Delete`) or none (`Insert`).
    - In `OnAfter<Op>`, `Rec` holds the same values and a read sees the write.
-   - **A change to `Rec` in an `OnBefore<Op>` carries forward.** App 1's `OnBeforeModify` set
+   - **A change to `Rec` in `OnBeforeModify` carries forward** (Modify only; Insert and Delete
+     not measured). App 1's `OnBeforeModify` set
      `Val` to 102. App 2's `OnBeforeModify`, the table's `OnModify`, the write, the `OnAfter`
      triggers, the `OnAfterModifyEvent` and the caller's own record variable all saw 102.
    - **`xRec` is the caller's values, not the stored row**, in every trigger and in the Modify
@@ -133,7 +135,7 @@ The ENG-15 lane updates B11 before it lands (orchestrator, 2026-11-13). The sent
 false runs no extension trigger either (not re-measured on BC)" should become: "`RunTrigger`
 false, or the argument left out, runs no table or extension trigger, in the table's app or
 another; the table events still run with `RunTrigger` passed through (measured on BC 28 Linux,
-Windows pending: TLS-50,
+Windows pending, scope in the note: TLS-50,
 `docs/superpowers/notes/2026-11-13-tls50-runtrigger-probe.md`)."
 
 Every B11 claim checked against this run:
@@ -152,6 +154,8 @@ updated when Windows confirms.
 - More than one row for `ModifyAll`/`DeleteAll`, and either one with no table-event subscriber
   (the bulk path).
 - The global triggers (`OnDatabase<Op>`, `OnGlobal<Op>`).
+- What orders two extensions' triggers, and a `Rec` change in `OnBeforeInsert` or
+  `OnBeforeDelete`.
 - `Rename`, and an extension's `OnBeforeRename`/`OnAfterRename`.
 - `Validate`: field `OnValidate` and an extension's field `OnBeforeValidate`/`OnAfterValidate`.
   `Validate` has no RunTrigger argument.
