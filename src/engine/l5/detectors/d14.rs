@@ -251,10 +251,12 @@ pub fn detect_d14(
         findings.push(finding);
     }
 
+    let (mut findings, collapsed_arms) = one_finding_per_arm_claim(findings, fp_index);
     findings.sort_by(|a, b| a.id.cmp(&b.id));
 
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
+    stats.add_skip("sameArmClaim", collapsed_arms);
     stats.add_skip("other", skipped_other);
     stats.add_skip("nonLocal", skipped_non_local);
     stats.add_skip("propertyExpressionHost", skipped_property_expression_host);
@@ -264,6 +266,60 @@ pub fn detect_d14(
         diagnostics: vec![],
         d1_cohort_index: None,
     })
+}
+
+/// ENG-27: `#if` / `#else` arms of one procedure with the same signature are
+/// one routine id, so the model holds a row per arm and the loop above made a
+/// finding per row with the same id. Arms whose findings say the same thing
+/// (title, severity, root cause) are one finding, kept at the first arm in
+/// source order. Arms that say different things (one `local`, one `internal`)
+/// are each kept, as `<id>@arm<n>` by their order among the rows: never a line,
+/// which would move the fingerprint whenever code above moves (ENG-28).
+/// Returns the findings and how many rows were folded into another.
+fn one_finding_per_arm_claim(
+    findings: Vec<Finding>,
+    fp_index: &crate::engine::l5::fingerprint::FingerprintIndex<'_>,
+) -> (Vec<Finding>, u64) {
+    let mut groups: std::collections::BTreeMap<String, Vec<Finding>> =
+        std::collections::BTreeMap::new();
+    for f in findings {
+        groups.entry(f.id.clone()).or_default().push(f);
+    }
+    let mut out = Vec::new();
+    let mut collapsed = 0u64;
+    for (_, mut arms) in groups {
+        if arms.len() == 1 {
+            out.extend(arms);
+            continue;
+        }
+        arms.sort_by(|a, b| {
+            let (a, b) = (&a.primary_location, &b.primary_location);
+            (&a.source_unit_id, a.start_line, a.start_column).cmp(&(
+                &b.source_unit_id,
+                b.start_line,
+                b.start_column,
+            ))
+        });
+        let first = &arms[0];
+        let same = arms.iter().all(|f| {
+            f.title == first.title
+                && f.severity == first.severity
+                && f.root_cause == first.root_cause
+        });
+        if same {
+            collapsed += arms.len() as u64 - 1;
+            arms.truncate(1);
+            out.extend(arms);
+            continue;
+        }
+        for (n, mut f) in arms.into_iter().enumerate() {
+            f.id = format!("{}@arm{}", f.id, n + 1);
+            f.root_cause_key = f.id.clone();
+            f.fingerprint = Some(fp_index.fingerprint_of(&f));
+            out.push(f);
+        }
+    }
+    (out, collapsed)
 }
 
 /// Build a `SourceAnchor` from a `PAnchor` with the routine's own id as the
