@@ -95,6 +95,13 @@ codeunit 53302 "E19 Ops"
     begin
         Report.Execute(Report::"E19 Quiet", '');
     end;
+
+    procedure ViaRunRequestPageDynamic(Id: Integer)
+    var
+        Params: Text;
+    begin
+        Params := Report.RunRequestPage(Id);
+    end;
 }
 "#;
 
@@ -134,9 +141,11 @@ fn workspace() -> tempfile::TempDir {
 /// `RunRequestPage`, keyword and variable form, runs the request page (its
 /// `OnOpenPage` commits) and not `OnPreReport` (it raises an error).
 /// Breaks (2026-11-13): drop `"runrequestpage"` from `dataset::starts_object`
-/// -> `may-commit no` for both (master's answer); drop the
-/// `retain_started_triggers` calls -> `throws-error yes` (OnPreReport followed).
-/// Each fails; restored, it passes.
+/// -> `may-commit no` for both (master's answer); skip
+/// `retain_started_triggers` in `full.rs`'s keyword path -> `ViaRunRequestPage`
+/// `throws-error yes` (OnPreReport followed); skip it in the resolver's
+/// variable path -> `ViaRunRequestPageVar` `throws-error yes`. Each fails;
+/// restored, it passes.
 #[test]
 fn run_request_page_runs_the_request_page_only() {
     let t = workspace();
@@ -144,6 +153,20 @@ fn run_request_page_runs_the_request_page_only() {
         assert_eq!(answer(t.path(), routine, "may-commit"), "yes", "{routine}");
         assert_eq!(answer(t.path(), routine, "throws-error"), "no", "{routine}");
     }
+}
+
+/// CDO's shape (Fable round 1): a run-time report id is an open run, so a
+/// commit in some report's request page may run: `unknown`, never `no`
+/// (master `1bd755fc` answered `no`: the call was a plain built-in).
+/// Break (2026-11-13): drop `"runrequestpage"` from `dataset::starts_object`
+/// -> `no`. Fails; restored, it passes.
+#[test]
+fn a_run_request_page_of_a_runtime_id_is_open() {
+    let t = workspace();
+    assert_eq!(
+        answer(t.path(), "ViaRunRequestPageDynamic", "may-commit"),
+        "unknown"
+    );
 }
 
 /// A request page shown by `Run` (keyword or variable) may be cancelled, so

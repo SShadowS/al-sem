@@ -361,6 +361,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TriggerFires::Maybe`). `Execute`, `Print` and `SaveAs*` are unchanged. The program graph keeps
   a report's `UseRequestPage = false` (`DatasetNode::request_page_hidden`): **pack schema 19**,
   so dependency packs rebuild once.
+- On CDO (`bc3ccb18`, base `1bd755fc`): findings and fingerprints do not move at either scope;
+  unknown edges stay 0. CDO's three `Report.RunRequestPage(<run-time id>, …)` calls (two pages and
+  `CDO E-Mail Template Management.GetReportParameters`) move from a built-in to an honest
+  dynamic run: `honestDynamic` 23 → 26 and `resolvedCatalog` 6,134 → 6,131 (whole program and
+  primary-scoped alike); `alsem fingerprint` reports them `dynamic-target` instead of `builtin`.
+  Routines that reach `GetReportParameters` (through `CreateReportsForRecord`) gain that open
+  run in prove/explain/digest.
 - `alsem impact`: `R.RunRequestPage()` is a `run` site now, no longer a `declaredRunnable` one.
   Every dispatching built-in on a typed receiver now starts its object, so that rule has no source
   shape left. Tests: `tests/cli/cli_eng19_request_page_runs.rs` (breaks recorded). Left (L20): a
