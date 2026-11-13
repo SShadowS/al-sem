@@ -560,7 +560,7 @@ fn fold_type_text(t: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_lowercase()
+        .fold_identifier()
 }
 
 /// `(objects, routines)` that [`ingest_abi`] builds from `abi`: one

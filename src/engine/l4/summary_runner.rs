@@ -22,6 +22,7 @@
 //! a pass. There is no trace oracle for this fixpoint (roles convergence is
 //! checked by [`roles_change_key`], not a per-pass fingerprint sequence).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 use super::combined_graph::PrimaryGraph;
@@ -656,11 +657,11 @@ fn compute_record_roles(routine: &ModelRoutine, fields: &FieldIndex) -> Vec<Reco
         let mut copies_into_param = EffectPresence::No;
         let mut resets_filters_on_param = EffectPresence::No;
 
-        let rec_var_name_lc = rec_var.name.to_lowercase();
+        let rec_var_name_lc = rec_var.name.fold_identifier();
 
         // Field accesses — readsFields.
         for fa in &routine.field_accesses {
-            if fa.record_variable_name.to_lowercase() != rec_var_name_lc {
+            if fa.record_variable_name.fold_identifier() != rec_var_name_lc {
                 continue;
             }
             if let Some(fid) = resolve_field(&table_id, &fa.field_name, fields) {
@@ -670,7 +671,7 @@ fn compute_record_roles(routine: &ModelRoutine, fields: &FieldIndex) -> Vec<Reco
 
         // Record operations — may-fact bootstrap.
         for op in &routine.record_operations {
-            if op.record_variable_name.to_lowercase() != rec_var_name_lc {
+            if op.record_variable_name.fold_identifier() != rec_var_name_lc {
                 continue;
             }
             if op.op == "Validate"
@@ -703,9 +704,9 @@ fn compute_record_roles(routine: &ModelRoutine, fields: &FieldIndex) -> Vec<Reco
             }
         }
 
-        let may_use_record_ref = param.type_text.to_lowercase().contains("recordref")
-            || param.type_text.to_lowercase().contains("fieldref")
-            || param.type_text.to_lowercase().contains("variant");
+        let may_use_record_ref = param.type_text.fold_identifier().contains("recordref")
+            || param.type_text.fold_identifier().contains("fieldref")
+            || param.type_text.fold_identifier().contains("variant");
 
         let (reads_fields_fl, writes_fields_fl) = if may_use_record_ref {
             (FieldList::Unknown, FieldList::Unknown)
@@ -775,7 +776,7 @@ fn resolve_field(table_id: &str, field_name: &str, fields: &FieldIndex) -> Optio
         return None;
     }
     fields
-        .get(&(table_id.to_string(), field_name.to_lowercase()))
+        .get(&(table_id.to_string(), field_name.fold_identifier()))
         .cloned()
 }
 
@@ -909,7 +910,7 @@ fn compose_roles_only(
                 rv.is_parameter && rv.parameter_index == Some(param_role.parameter_index)
             });
             let (rec_var_name_lc, rec_var_id) = match rec_var {
-                Some(rv) => (rv.name.to_lowercase(), Some(rv.id.as_str())),
+                Some(rv) => (rv.name.fold_identifier(), Some(rv.id.as_str())),
                 None => continue,
             };
             let f = crate::engine::l4::cfg_walker::walk_param(
@@ -2985,7 +2986,7 @@ codeunit 50102 Cyc
         for t in &m.workspace.tables {
             for f in &t.fields {
                 fields
-                    .entry((t.id.clone(), f.name.to_lowercase()))
+                    .entry((t.id.clone(), f.name.fold_identifier()))
                     .or_insert_with(|| f.id.clone());
             }
         }

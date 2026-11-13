@@ -14,6 +14,7 @@
 //! differently.
 
 use super::workspace::{ModelObject, ModelTable};
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 /// A read-only lookup index over a workspace model's objects and tables.
@@ -49,12 +50,16 @@ impl<'a> SymbolTable<'a> {
             // number: every such object of a kind would share `type/0` (#83).
             if o.object_number != 0 {
                 by_type_number.insert(
-                    format!("{}/{}", o.object_type.to_lowercase(), o.object_number),
+                    format!("{}/{}", o.object_type.fold_identifier(), o.object_number),
                     i,
                 );
             }
             by_type_name.insert(
-                format!("{}/{}", o.object_type.to_lowercase(), o.name.to_lowercase()),
+                format!(
+                    "{}/{}",
+                    o.object_type.fold_identifier(),
+                    o.name.fold_identifier()
+                ),
                 i,
             );
         }
@@ -67,7 +72,7 @@ impl<'a> SymbolTable<'a> {
         let mut tables_by_name: HashMap<String, usize> = HashMap::new();
         let mut tables_by_id: HashMap<String, usize> = HashMap::new();
         for (i, t) in tables.iter().enumerate() {
-            let name_key = t.name.to_lowercase();
+            let name_key = t.name.fold_identifier();
             let keep_prev_name = tables_by_name
                 .get(&name_key)
                 .is_some_and(|&p| !tables[p].is_extension_stub && t.is_extension_stub);
@@ -97,18 +102,22 @@ impl<'a> SymbolTable<'a> {
         object_type: &str,
         object_number: i64,
     ) -> Option<&ModelObject> {
-        let key = format!("{}/{}", object_type.to_lowercase(), object_number);
+        let key = format!("{}/{}", object_type.fold_identifier(), object_number);
         self.by_type_number.get(&key).map(|&i| &self.objects[i])
     }
 
     pub fn object_by_type_name(&self, object_type: &str, name: &str) -> Option<&ModelObject> {
-        let key = format!("{}/{}", object_type.to_lowercase(), name.to_lowercase());
+        let key = format!(
+            "{}/{}",
+            object_type.fold_identifier(),
+            name.fold_identifier()
+        );
         self.by_type_name.get(&key).map(|&i| &self.objects[i])
     }
 
     pub fn table_by_name(&self, name: &str) -> Option<&ModelTable> {
         self.tables_by_name
-            .get(&name.to_lowercase())
+            .get(&name.fold_identifier())
             .map(|&i| &self.tables[i])
     }
 

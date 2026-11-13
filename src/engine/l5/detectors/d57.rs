@@ -71,7 +71,7 @@ pub fn detect_d57(
                 PCallee::Member { receiver, method }
                     if CLEAR_METHODS.iter().any(|m| m.eq_fold_identifier(method)) =>
                 {
-                    set.insert(receiver.to_lowercase());
+                    set.insert(receiver.fold_identifier());
                 }
                 // `argument_bindings.source_variable_name` is populated only for
                 // record-shaped identifiers (parameter/implicit-rec/local record —
@@ -83,14 +83,14 @@ pub fn detect_d57(
                 PCallee::Bare { name }
                     if name.eq_fold_identifier("Clear") && cs.argument_texts.len() == 1 =>
                 {
-                    set.insert(cs.argument_texts[0].trim().to_lowercase());
+                    set.insert(cs.argument_texts[0].trim().fold_identifier());
                 }
                 _ => {}
             }
         }
         for op in &r.record_operations {
             if op.op == "DeleteAll" || op.op == "Delete" {
-                set.insert(op.record_variable_name.to_lowercase());
+                set.insert(op.record_variable_name.fold_identifier());
             }
         }
     }
@@ -116,15 +116,13 @@ pub fn detect_d57(
             if !GROW_METHODS.iter().any(|m| m.eq_fold_identifier(method)) {
                 continue;
             }
-            let recv_lc = receiver.to_lowercase();
-            let Some(v) = routine
-                .variables
-                .iter()
-                .find(|v| v.name.to_lowercase() == recv_lc && v.scope.as_deref() == Some("global"))
-            else {
+            let recv_lc = receiver.fold_identifier();
+            let Some(v) = routine.variables.iter().find(|v| {
+                v.name.fold_identifier() == recv_lc && v.scope.as_deref() == Some("global")
+            }) else {
                 continue;
             };
-            let ty = v.declared_type.to_lowercase();
+            let ty = v.declared_type.fold_identifier();
             if !(ty.starts_with("list of") || ty.starts_with("dictionary of")) {
                 skipped_not_collection += 1;
                 continue;
@@ -154,11 +152,11 @@ pub fn detect_d57(
             if op.op != "Insert" {
                 continue;
             }
-            let var_lc = op.record_variable_name.to_lowercase();
+            let var_lc = op.record_variable_name.fold_identifier();
             let Some(rv) = routine
                 .record_variables
                 .iter()
-                .find(|rv| rv.name.to_lowercase() == var_lc)
+                .find(|rv| rv.name.fold_identifier() == var_lc)
             else {
                 continue;
             };

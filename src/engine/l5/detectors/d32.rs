@@ -23,6 +23,7 @@
 //!
 //! Within-detector sort: `a.id.cmp(&b.id)`.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::BTreeSet;
 
 use crate::engine::l5::confidence::to_confidence;
@@ -38,7 +39,7 @@ pub(crate) const DETECTOR: &str = "d32-constant-boolean-parameter";
 /// `isBooleanLiteral` — matches exactly "true" or "false" (case-insensitive,
 /// after trimming). Returns the canonical lowercase form, or `None`.
 fn is_boolean_literal(arg: &str) -> Option<&'static str> {
-    match arg.trim().to_lowercase().as_str() {
+    match arg.trim().fold_identifier().as_str() {
         "true" => Some("true"),
         "false" => Some("false"),
         _ => None,
@@ -53,7 +54,7 @@ fn is_boolean_literal(arg: &str) -> Option<&'static str> {
 /// non-underscore character (i.e. NOT `[A-Za-z0-9_]`).
 fn has_boolean_word(type_text: &str) -> bool {
     let needle = "boolean";
-    let lower = type_text.to_lowercase();
+    let lower = type_text.fold_identifier();
     let bytes = lower.as_bytes();
     let nlen = needle.len();
     let tlen = bytes.len();

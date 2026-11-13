@@ -25,6 +25,7 @@
 //!
 //! The walk is R0's own; this module only aggregates.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -721,12 +722,12 @@ impl Captions {
                         .iter()
                         .map(|o| {
                             (
-                                o.name.to_ascii_lowercase(),
+                                o.name.fold_identifier(),
                                 o.actions
                                     .iter()
                                     .map(|a| {
                                         (
-                                            a.name.to_ascii_lowercase(),
+                                            a.name.fold_identifier(),
                                             a.caption.first().cloned(),
                                             a.origin.start.row,
                                             a.origin.end.row,
@@ -756,7 +757,7 @@ impl Captions {
         site: Option<SiteIx>,
     ) -> Option<(String, Option<String>)> {
         let l = g.local_name(n)?;
-        let (object, file) = (l.object.to_ascii_lowercase(), l.file.to_string());
+        let (object, file) = (l.object.fold_identifier(), l.file.to_string());
         let d = g.display(n);
         let parts: Vec<&str> = d.splitn(3, "::").collect();
         let member = (parts.len() == 3).then(|| parts[1].to_string());

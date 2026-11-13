@@ -18,6 +18,7 @@
 //! falls back to a straight-line pass over the flat features — mirroring al-sem's
 //! `walkFlat` fallback.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use super::combined_graph::PrimaryGraph;
@@ -1117,7 +1118,7 @@ fn op_affects_param(op: &ModelRecordOperation, param: &ParamCtx) -> bool {
     {
         return true;
     }
-    op.record_variable_name.to_lowercase() == param.name_lc
+    op.record_variable_name.fold_identifier() == param.name_lc
 }
 
 fn apply_op(state: PerParamState, op: &ModelRecordOperation, param: &ParamCtx) -> PerParamState {
@@ -1248,7 +1249,7 @@ fn apply_call(
         let by_name = b
             .source_variable_name
             .as_deref()
-            .map(|n| n.to_lowercase() == param.name_lc)
+            .map(|n| n.fold_identifier() == param.name_lc)
             .unwrap_or(false);
         by_id || by_name
     });
@@ -1486,7 +1487,7 @@ fn field_list_to_loaded(fl: &FieldList) -> LoadedFields {
 }
 
 fn apply_field_read(state: PerParamState, fa: &PFieldAccess, param: &ParamCtx) -> PerParamState {
-    if fa.record_variable_name.to_lowercase() != param.name_lc {
+    if fa.record_variable_name.fold_identifier() != param.name_lc {
         return state;
     }
     if state.loaded == Loaded::Yes {
@@ -1689,7 +1690,7 @@ fn param_field_accesses<'a>(idx: &'a WalkIndexes, param: &ParamCtx) -> Vec<&'a P
     for key in keys {
         if let Some(list) = idx.fa_by_pos.get(key) {
             for fa in list {
-                if fa.record_variable_name.to_lowercase() == param.name_lc {
+                if fa.record_variable_name.fold_identifier() == param.name_lc {
                     out.push(fa);
                 }
             }
@@ -1770,7 +1771,7 @@ fn walk_flat(
         ));
     }
     for fa in &routine.field_accesses {
-        if fa.record_variable_name.to_lowercase() != param.name_lc {
+        if fa.record_variable_name.fold_identifier() != param.name_lc {
             continue;
         }
         events.push(FlatEvent::Field(
@@ -1797,7 +1798,7 @@ fn walk_flat(
             let by_name = b
                 .source_variable_name
                 .as_deref()
-                .map(|n| n.to_lowercase() == param.name_lc)
+                .map(|n| n.fold_identifier() == param.name_lc)
                 .unwrap_or(false);
             if !by_id && !by_name {
                 continue;

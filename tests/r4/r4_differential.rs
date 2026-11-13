@@ -1865,3 +1865,118 @@ fn differential_r4_findings_match_goldens() {
         SMOKE.iter().filter(|s| !s.ported).count(),
     );
 }
+
+/// TLS-43: identifiers with non-ASCII capitals meet one fold. The L2 builder folded
+/// them with `to_ascii_lowercase` (`Ændring` stays `Ændring`) while the detectors
+/// folded with `to_lowercase` (`ændring`), so d19 reported the used parameter
+/// `Ændring`, and d11's by-var load suppression (G-10 tier 2) missed `Ørder`
+/// loaded through `HentØrder(var ...)`. Each guard has a control in the fixture
+/// that must fire, so a silent detector cannot pass.
+///
+/// Discrimination (2026-11-13): `ir_walk.rs`'s four `identifier_ref_set` inserts
+/// back on `to_ascii_lowercase` fails at "used Ændring" (one insert alone does
+/// not: `Ændring` in `exit(Ændring + 1)` is recorded by another); the argument
+/// binding's `source_variable_name` back on it fails at "Ørder loaded by var";
+/// `d39_persist::record_reassigned` back on `eq_ignore_ascii_case` (review r1,
+/// Fable: the L2 `lhs_name` is folded, the parameter name raw) fails at
+/// "GemAndet reassigns Ørd"; the backfill's `global_rv_by_lc` key back on
+/// `to_ascii_lowercase` fails at "Ålcust is the object global" (`unknown`);
+/// the filter proof's `Reset` compare (`detectors/mod.rs`) back on its old
+/// `to_lowercase` (review r2, astra: `İ` lowercases to `i` + U+0307, the fold to
+/// `i`) fails at "the Reset on İndkøb clears the filter"; d33's own variable key
+/// back on `to_lowercase` while the shared filter helper folds (review r3,
+/// Fable) fails at "the inline SetRange on İndkøb filters". Restored, each passes.
+#[test]
+fn nordic_identifiers_meet_one_fold() {
+    let p = run_rust(
+        "ws-nordic-identifiers",
+        "ws-nordic-identifiers",
+        &[
+            "d19-unused-parameter",
+            "d11-modify-without-get",
+            "d39-record-left-dirty-across-chain",
+            "d33-unfiltered-bulk-write",
+        ],
+    );
+    let texts: Vec<String> = p
+        .findings
+        .iter()
+        .map(|f| serde_json::to_string(f).unwrap())
+        .collect();
+    let fired =
+        |det: &str, routine: &str| texts.iter().any(|t| t.contains(det) && t.contains(routine));
+    let all = texts.join("\n");
+    assert!(
+        fired("d19-unused-parameter", "LeavesUbrugt"),
+        "control: {all}"
+    );
+    assert!(
+        !fired("d19-unused-parameter", "UsesÆndring"),
+        "used Ændring: {all}"
+    );
+    assert!(
+        fired("d11-modify-without-get", "ModifyUnloaded"),
+        "control: {all}"
+    );
+    assert!(
+        !fired("d11-modify-without-get", "ModifyAfterHent"),
+        "Ørder loaded by var: {all}"
+    );
+    // d39 (`d39_persist`): a helper that reassigns its parameter before
+    // `Modify` persists another record, so the caller is flagged; one that
+    // modifies the caller's record persists it.
+    assert!(
+        fired(
+            "d39-record-left-dirty-across-chain",
+            "ValidatesThenGemAndet"
+        ),
+        "GemAndet reassigns Ørd: {all}"
+    );
+    assert!(
+        !fired(
+            "d39-record-left-dirty-across-chain",
+            "ValidatesThenGemSamme"
+        ),
+        "control: GemSamme persists it: {all}"
+    );
+
+    // d33 (`detectors/mod.rs`, the filter-by-call proof): a `Reset` on `İndkøb`
+    // after `Filtrer(İndkøb)` clears the filter, so its DeleteAll is reported;
+    // with no `Reset` the filter stands.
+    assert!(
+        fired("d33-unfiltered-bulk-write", "ResetThenDeleteAll"),
+        "the Reset on İndkøb clears the filter: {all}"
+    );
+    assert!(
+        !fired("d33-unfiltered-bulk-write", "FilteredDeleteAll"),
+        "control: the filter stands: {all}"
+    );
+    // An inline `İndkøb.SetRange` is a filter too (review r3, Fable: the caller's
+    // key and the shared helper must fold alike).
+    assert!(
+        !fired("d33-unfiltered-bulk-write", "FilteredInline"),
+        "the inline SetRange on İndkøb filters: {all}"
+    );
+
+    // The global record-variable backfill (`workspace.rs`): `HentØrder(Ålcust)`
+    // passes the object global, so its binding is `global`.
+    let ws = corpus_dir().join("ws-nordic-identifiers");
+    let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
+        false,
+        al_sem::engine::l5::registry::assembly_needs(&registered_detectors()),
+    )
+    .expect("the fixture builds a model");
+    let passes = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "PassesGlobal")
+        .expect("precondition: PassesGlobal is in the model");
+    let kinds: Vec<&str> = passes
+        .call_sites
+        .iter()
+        .flat_map(|c| c.argument_bindings.iter().map(|b| b.source_kind.as_str()))
+        .collect();
+    assert_eq!(kinds, ["global"], "Ålcust is the object global");
+}

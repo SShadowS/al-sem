@@ -2,6 +2,7 @@
 //! the one v2 solve that the detector context, digest, prove and query all
 //! take, over the view's `ExecRelation` and its SCC (#160 step 4).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -197,7 +198,7 @@ pub(crate) fn field_index(ws: &ModelEntities) -> FieldIndex {
     for table in &ws.tables {
         for field in &table.fields {
             field_index
-                .entry((table.id.clone(), field.name.to_lowercase()))
+                .entry((table.id.clone(), field.name.fold_identifier()))
                 .or_insert_with(|| field.id.clone());
         }
     }

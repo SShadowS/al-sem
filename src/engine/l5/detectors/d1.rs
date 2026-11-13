@@ -41,6 +41,7 @@
 // `BTreeMap<Vec<i32>, GroupBitmap>` with a bitmap partition — see the
 // finest-cohort assembly below); `assemble_findings` (the `#[cfg(test)]`
 // shadow-oracle path) still groups aggregates with one.
+use al_syntax::IdentifierFoldExt;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -187,11 +188,11 @@ pub(crate) fn flowfield_gate_blocks_downgrade(
     }
 
     for info in infos {
-        let arg_lc = unquoted_field_name(info).to_lowercase();
+        let arg_lc = unquoted_field_name(info).fold_identifier();
         let field = table
             .fields
             .iter()
-            .find(|f| f.name.to_lowercase() == arg_lc);
+            .find(|f| f.name.fold_identifier() == arg_lc);
         match field {
             // Unresolvable field name (not in the table) → conservative → block.
             None => return true,
@@ -661,8 +662,8 @@ pub(crate) fn edge_target_matches_callsite_callee(
     let Some(target) = routine_by_id.get(edge.to.as_str()) else {
         return true; // out-of-source target — accept (pre-G-18 behavior)
     };
-    crate::program::body::node_util::strip_quotes(callee_name).to_lowercase()
-        == target.name.to_lowercase()
+    crate::program::body::node_util::strip_quotes(callee_name).fold_identifier()
+        == target.name.fold_identifier()
 }
 
 /// The D1 WalkPolicy — holds references to the eager indexes the closures read.
@@ -1023,7 +1024,7 @@ pub(crate) fn detect_d1_premerge(resolved: &Model, ctx: &DetectorContext) -> Vec
             if !CURSOR_OPENER_OPS.contains(&op.op.as_str()) {
                 continue;
             }
-            cursor_opened_record_vars.insert(op.record_variable_name.to_lowercase());
+            cursor_opened_record_vars.insert(op.record_variable_name.fold_identifier());
         }
 
         // (a) Direct in-loop DB ops.
@@ -1035,7 +1036,7 @@ pub(crate) fn detect_d1_premerge(resolved: &Model, ctx: &DetectorContext) -> Vec
                 continue;
             }
             if op.op == "Next"
-                && cursor_opened_record_vars.contains(&op.record_variable_name.to_lowercase())
+                && cursor_opened_record_vars.contains(&op.record_variable_name.fold_identifier())
             {
                 continue;
             }
@@ -1306,7 +1307,7 @@ fn enumerate_direct_ops<'a>(
             if !CURSOR_OPENER_OPS.contains(&op.op.as_str()) {
                 continue;
             }
-            cursor_opened_record_vars.insert(op.record_variable_name.to_lowercase());
+            cursor_opened_record_vars.insert(op.record_variable_name.fold_identifier());
         }
 
         // (a) DIRECT in-loop db ops.
@@ -1318,7 +1319,7 @@ fn enumerate_direct_ops<'a>(
                 continue;
             }
             if op.op == "Next"
-                && cursor_opened_record_vars.contains(&op.record_variable_name.to_lowercase())
+                && cursor_opened_record_vars.contains(&op.record_variable_name.fold_identifier())
             {
                 continue;
             }

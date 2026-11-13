@@ -18,6 +18,7 @@ use super::{
     CapabilityExtra, CapabilityFact, CoverageReason, DispatchExtra, ExtractionContext, ValueSource,
     confidence_from_source,
 };
+use al_syntax::IdentifierFoldExt;
 
 /// Map an object-run kind string to the dispatch resourceKind.
 fn object_type_to_resource_kind(object_type: &str) -> &'static str {
@@ -68,7 +69,11 @@ pub fn extract_dispatch(
             }
             PCallee::Member { receiver, method } => {
                 // Page.RunModal (modal) / Report.Execute — not pre-classified.
-                let key = format!("{}|{}", receiver.to_lowercase(), method.to_lowercase());
+                let key = format!(
+                    "{}|{}",
+                    receiver.fold_identifier(),
+                    method.fold_identifier()
+                );
                 let (object_type, modal): (&str, Option<bool>) = match key.as_str() {
                     "page|runmodal" => ("Page", Some(true)),
                     "report|execute" => ("Report", None),

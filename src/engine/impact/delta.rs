@@ -25,6 +25,7 @@
 //! routine is deleted when the base has it and the working tree has no
 //! routine of that id and none paired with it; added the other way round.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Value, json};
@@ -532,13 +533,13 @@ fn unpaired_reason(id: &str, this: &Side<'_>, other: &Side<'_>) -> Option<String
         let ids = side.contract_ids();
         ids.get(rid).cloned()
     };
-    let name = name_of(this, id)?.to_lowercase();
+    let name = name_of(this, id)?.fold_identifier();
     let others: Vec<String> = other
         .contract_ids()
         .into_iter()
         .filter(|(rid, n)| {
             rid.rsplit_once('#').is_some_and(|(o, _)| o == object)
-                && n.to_lowercase() == name
+                && n.fold_identifier() == name
                 && !this.inventory.contains(rid)
         })
         .map(|(rid, _)| rid)

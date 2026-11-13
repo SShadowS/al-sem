@@ -35,6 +35,7 @@
 //! arc; a count that says "377" and a complete list is honest, a silently
 //! elided list is not.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::engine::l4::routine_interner::SolveIx;
@@ -1051,12 +1052,12 @@ fn resolve_table_selector_in(
         } else {
             None
         };
-    let want = selector.to_lowercase();
+    let want = selector.fold_identifier();
     let mut hits: Vec<&&crate::program::model::workspace::ModelTable> = real_by_id
         .values()
         .filter(|t| {
             number.is_some_and(|n| !t.is_extension_stub && t.table_number == n)
-                || t.name.to_lowercase() == want
+                || t.name.fold_identifier() == want
         })
         .collect();
     hits.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1120,7 +1121,7 @@ pub fn resolve_routine_selector<'a>(
             .is_none_or(|w| crate::engine::l5::selector_index::signature_matches(w, &r.parameters))
     };
     let routines = || routines().filter(|r| signature_ok(r));
-    let want = selector.to_lowercase();
+    let want = selector.fold_identifier();
     // `Object.Routine` as written, or (MCP output plan 3b: one selector
     // grammar for every tool) `Owner::Routine` / `Owner.Routine` with the
     // owner's type word and AL quotes optional, as explain, prove and digest
@@ -1128,14 +1129,14 @@ pub fn resolve_routine_selector<'a>(
     let split = crate::engine::l5::selector_index::split_qualified(selector);
     let qualified: Vec<&ModelRoutine> = routines()
         .filter(|r| {
-            format!("{}.{}", object_name(r), r.name).to_lowercase() == want
+            format!("{}.{}", object_name(r), r.name).fold_identifier() == want
                 || split
                     .as_ref()
                     .is_some_and(|q| q.selects(&r.object_type, object_name(r), &r.name))
         })
         .collect();
     let bare: Vec<&ModelRoutine> = routines()
-        .filter(|r| r.name.to_lowercase() == want)
+        .filter(|r| r.name.fold_identifier() == want)
         .collect();
     // V3 §2.1: a member form (`Object."Field"::Trigger`,
     // `Object.action(Name)::OnAction`), the one display of a member trigger.

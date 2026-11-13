@@ -87,7 +87,7 @@ pub fn detect_d19(
             .collect();
 
         for param in &routine.parameters {
-            let lc = param.name.to_lowercase();
+            let lc = al_syntax::fold_identifier(&param.name);
             if lc.is_empty() {
                 continue; // unnamed slot — never flag
             }

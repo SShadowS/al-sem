@@ -21,6 +21,7 @@
 use crate::engine::l5::digest_cli::DigestEntryFull;
 use crate::program::body::features::{PCFNNode, PCallee};
 use crate::program::model::workspace::{Model, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 /// The field number each guarded RecordRef write of `r` (by operation id)
@@ -30,11 +31,11 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     let Some(tree) = r.statement_tree.as_ref() else {
         return out;
     };
-    let lc = |s: &str| s.trim().trim_matches('"').to_ascii_lowercase();
+    let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
     let recordrefs: HashSet<String> = r
         .variables
         .iter()
-        .filter(|v| v.declared_type.trim().eq_ignore_ascii_case("recordref"))
+        .filter(|v| v.declared_type.trim().eq_fold_identifier("recordref"))
         .map(|v| lc(&v.name))
         .collect();
     if recordrefs.is_empty() {
@@ -63,7 +64,7 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
             .collect();
         if let PCallee::Member { receiver, method } = &cs.callee
             && matches!(
-                method.to_ascii_lowercase().as_str(),
+                method.fold_identifier().as_str(),
                 "gettable" | "open" | "copy" | "close"
             )
             && recordrefs.contains(&lc(receiver))
@@ -77,7 +78,7 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     let writes: HashMap<&str, String> = r
         .record_operations
         .iter()
-        .filter(|op| WRITE_OPS.contains(&op.op.to_ascii_lowercase().as_str()))
+        .filter(|op| WRITE_OPS.contains(&op.op.fold_identifier().as_str()))
         .map(|op| (op.id.as_str(), lc(&op.record_variable_name)))
         .collect();
     let top: &[PCFNNode] = match tree.kind.as_str() {
@@ -175,7 +176,7 @@ pub(crate) fn resolve_field_guarded_writes(
         .iter()
         .filter(|t| {
             !t.is_extension_stub
-                && (t.name.eq_ignore_ascii_case(table.trim())
+                && (t.name.eq_fold_identifier(table.trim())
                     || t.id.rsplit('/').next() == Some(table.trim()))
         })
         .collect();

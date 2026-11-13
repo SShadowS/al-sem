@@ -14,6 +14,7 @@
 
 use super::super::features::PExpressionInfo;
 use super::{ExtractionContext, ValueSource};
+use al_syntax::IdentifierFoldExt;
 
 const MAX_CHASE_DEPTH: u32 = 3;
 
@@ -70,7 +71,7 @@ fn classify_at_depth(
                 .value
                 .clone()
                 .unwrap_or_else(|| info.text.clone())
-                .to_lowercase();
+                .fold_identifier();
             classify_identifier(&name, ctx, depth)
         }
 
@@ -219,13 +220,13 @@ fn classify_member_expression(text: &str, ctx: &ExtractionContext) -> ValueSourc
 
     let receiver_raw = text[..dot_idx].trim();
     let field_raw = text[dot_idx + 1..].trim();
-    let receiver_lc = receiver_raw.to_lowercase();
+    let receiver_lc = receiver_raw.fold_identifier();
 
     let Some(sym) = ctx.variables.get(&receiver_lc) else {
         return ValueSource::Expression;
     };
 
-    let decl_type = sym.declared_type.to_lowercase();
+    let decl_type = sym.declared_type.fold_identifier();
     let is_record = decl_type.starts_with("record ")
         || decl_type == "record"
         || decl_type.starts_with("recordref");

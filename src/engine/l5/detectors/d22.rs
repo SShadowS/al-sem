@@ -23,6 +23,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d22-flowfield-without-calcfields";
 
@@ -51,18 +52,18 @@ pub fn detect_d22(
         let record_var_by_name_lc: std::collections::HashMap<String, _> = routine
             .record_variables
             .iter()
-            .map(|rv| (rv.name.to_lowercase(), rv))
+            .map(|rv| (rv.name.fold_identifier(), rv))
             .collect();
 
         let param_record_names: std::collections::HashSet<String> = routine
             .record_variables
             .iter()
             .filter(|rv| rv.is_parameter)
-            .map(|rv| rv.name.to_lowercase())
+            .map(|rv| rv.name.fold_identifier())
             .collect();
 
         for fa in &routine.field_accesses {
-            let record_var_key = fa.record_variable_name.to_lowercase();
+            let record_var_key = fa.record_variable_name.fold_identifier();
 
             // Skip by-var parameter records.
             if param_record_names.contains(&record_var_key) {
@@ -92,11 +93,11 @@ pub fn detect_d22(
             };
 
             // Find the field in the table (case-insensitive).
-            let field_name_lc = fa.field_name.to_lowercase();
+            let field_name_lc = fa.field_name.fold_identifier();
             let field = match table
                 .fields
                 .iter()
-                .find(|f| f.name.to_lowercase() == field_name_lc)
+                .find(|f| f.name.fold_identifier() == field_name_lc)
             {
                 Some(f) => f,
                 None => continue,
@@ -217,7 +218,7 @@ fn is_covered(
         if op.op != "CalcFields" {
             continue;
         }
-        if op.record_variable_name.to_lowercase() != record_var_key {
+        if op.record_variable_name.fold_identifier() != record_var_key {
             continue;
         }
         if !before_anchor(&op.source_anchor, access_anchor) {
@@ -229,7 +230,7 @@ fn is_covered(
         };
         if infos
             .iter()
-            .any(|info| unquoted_field_name(info).to_lowercase() == field_name_lc)
+            .any(|info| unquoted_field_name(info).fold_identifier() == field_name_lc)
         {
             return true;
         }

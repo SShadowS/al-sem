@@ -14,6 +14,7 @@
 //! the cli-c/c2 STEP-0 model-input check), so the policy output is a pure function
 //! of them.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use crate::engine::l4::capability_cone::CapabilityExtra;
@@ -387,7 +388,7 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
         },
         "object.kind" => match object_of(ctx) {
             // objectType is verbatim from AL source — lowercase for matching.
-            Some(o) => FieldValue::KnownStr(o.object_type.to_lowercase()),
+            Some(o) => FieldValue::KnownStr(o.object_type.fold_identifier()),
             None => FieldValue::Unknown(UnknownReason::FieldNotApplicable),
         },
         "object.appGuid" => match object_of(ctx) {

@@ -92,6 +92,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own source declares no `[CommitBehavior]` at all (its dependencies were not searched; the
   landing gate's CDO goldens would show a move).
 
+### Changed (TLS-43: some keys and names change for identifiers with non-ASCII capitals)
+
+- **Finding fingerprints: d60 only, and only names with `İ` or a word-final `Σ`.** d60 puts
+  the record variable's name into its root-cause key. That name is now lowercased with the
+  fold the rest of the engine uses. For a name containing the Turkish dotted capital `İ` or a
+  capital `Σ` at the end of a word, the finding's fingerprint changes: a `--baseline` file made
+  before this version no longer suppresses it, so it shows as new once and suppresses again
+  after `--update-baseline`. Every other name, Danish, Norwegian, Swedish and German letters
+  included, keeps its fingerprint. d61's and d3's keys hold ids, not names (review sol r2), so
+  their fingerprints do not move. What changes for them, and for d59 and d43 (through
+  `is_handled_re`), is which names they recognize: `İsHandled`, `İsAllowed` and a field
+  spelled with `İ` now read as their `I` spelling. d60's loose subject, `d60/{var}` when the
+  table is unknown, holds the same name, so it moves with the root-cause key.
+- **`alsem impact`: any non-ASCII capital.**
+  - A label variable whose name has a non-ASCII capital (`Ændring`, `İ…`) is now recognized
+    as a label, so its message key reads `label:…` instead of a hashed `expr:…`.
+  - `removedRoutineNames` prints such a routine name in the identifier fold (`ændring` where
+    it printed `Ændring`).
+- **prove / explain evidence:** a parameter or variable value source names such a variable in
+  the identifier fold (for `İ` / final `Σ`, as before for other letters).
+- `ir_walk.rs`'s `/grv/` id input changes too, but nothing reads that id, so no output moves.
+- No real workspace we have measured contains any of these names (TLS-42: CDO, its 11
+  packages and the test corpus have none). Measured on CDO (`bc3ccb18`, release-fast,
+  master `cb46eff4` against `9ae07d05`): nothing moves. That is 2,308 findings at
+  `--scope primary` and 32,576 at `--scope all`, with no fingerprint added or removed, and a
+  byte-identical `aldump --program-call-graph-stats` (0 unknown of 46,688 edges).
+
+### Fixed (TLS-43: identifiers with non-ASCII capitals meet one fold)
+
+- **The L2 builder and the detectors now fold identifiers the same way.** `ir_walk.rs` folded
+  identifiers with `to_ascii_lowercase` (`Ændring` stayed `Ændring`), and about 30 later sites
+  folded them with `to_lowercase` (`ændring`). On code with a non-ASCII capital in a name:
+  - d19 reported a used parameter as unused;
+  - the shared by-var load and filter suppressions (d11, d21, d33, d36 and others) did not
+    apply;
+  - the global record-variable backfill missed.
+  Found by TLS-42's census (`docs/superpowers/notes/2026-11-13-to-lowercase-census.md`).
+  - **One fold for identifiers across `src/engine` and `src/program`.** Every case-fold that
+    touches an AL identifier is now `fold_identifier` / `eq_fold_identifier`. The first three
+    passes went site by site and each left a seam, all found in review:
+    - **r1 (Fable):** ASCII-only readers (`eq_ignore_ascii_case`, local
+      `to_ascii_lowercase` helpers) matched the old L2 values and missed the new ones, some in
+      the unsafe direction (d39 dropped a real finding).
+    - **r2 (astra):** `to_lowercase` readers differ from the fold on `İ` and a word-final
+      `Σ`; d33's filter-by-call proof missed a `Reset` on `İndkøb` and suppressed a real
+      finding.
+    - **r3 (Fable):** the r2 fix folded the shared helpers in `detectors/mod.rs` but not
+      their callers (d33, d52, d3, d56).
+    - **The final pass is driven by classification, not by site**:
+      - every `to_lowercase` call classified by TLS-42's census table, plus the 18 it missed
+        (its test-code filter mistook a `#[cfg(test)] mod x;` declaration for the start of
+        test code; see the census note);
+      - every ASCII-only call: 295 classified by three read-only agents, 49 of them
+        identifiers.
+    - Identifier, keyword, type-text and user-selector sites fold. These keep their old
+      fold: identity inputs (ids, fingerprints, root-cause, event-id and `/rv/` keys, and
+      `literal_reach`'s probe of event ids), paths and app or package names, app GUIDs,
+      char-level checks, and two self-consistent identity groups (d4, d18).
+    - `predicate_evaluator.rs`'s policy globs now fold too: the ASCII-only matching kept for
+      al-sem parity is retired.
+  - **Identity sites that change, because they meet fold-built keys** (each only for a name
+    with `İ` or a word-final `Σ`; no committed baseline has one):
+    - d60's root-cause key;
+    - d61's guard-name match and d3's accessed-field text (which findings exist, not their
+      keys, which hold ids);
+    - d59's guard-name heuristic (its loose-subject key keeps `to_lowercase`; review sol r2,
+      witness `d59::tests::a_dotted_capital_i_guard_name_is_judged_like_its_i_spelling`);
+    - `capability_cone.rs`' `ValueSource` variable name;
+    - `gate/diff/renames.rs`' rename-table key (self-consistent, `alsem diff` only);
+    - `ir_walk.rs`'s `/grv/` id input (nothing reads it);
+    - `impact/keys.rs`' label key: its text keeps `to_lowercase`, but a label variable with a
+      non-ASCII capital is now found, so its key moves from the hash form to `label:…`.
+  - **A guard stops a fourth round**: `fold_guard_tests::identifier_folds_stay_on_the_allowlist`
+    counts `to_lowercase` / `to_ascii_lowercase` / `eq_ignore_ascii_case`, method and path
+    forms (`.map(str::to_lowercase)`, review r4), per file in `src/engine` and `src/program`
+    against `tests/fold-allowlist.txt` (105 files). The file's header says which kinds of site
+    may keep them. Any difference fails. Limit: it counts per file, so a swap inside one file
+    passes. Discrimination: one added `.to_lowercase()` in d19 fails it, naming the file.
+  - **Review r4 (Fable)** found one site where the sweep folded text that is sliced at a byte
+    offset taken from another string: `impact/scan.rs`' `routine_header`. A header with `İ`
+    (`procedure İndkøbTest()`) underflowed the offset (a panic in a debug build, the wrong
+    name `e` in release). Both strings are back on the ASCII fold and only the extracted name
+    folds. Witness: `impact::scan::tests::a_header_name_with_a_dotted_capital_i_is_read_whole`
+    (break: the raw line folded before the slice).
+  - **The second reviewer (sol, rounds 1 to 4)** found more:
+    - The sweep had folded `prove --match`'s message TEXT with the identifier fold. Message
+      text is prose, so it is back on Unicode's full lowercase, as on master: a typed `ος`
+      finds `ΟΣ`, whose word-final `Σ` lowercases to `ς`, where the identifier fold gives `σ`.
+      Only the variable holding the message takes the identifier fold. Witness
+      `cli_prove_dead_paths::a_message_match_lowercases_prose_not_identifiers` (break: the
+      text folded with `fold_identifier`).
+    - **sol r3:** `event_flow::is_handled_re` (used by d43 and the publisher branch facts)
+      matched a raw `İsHandled` parameter char-wise against ASCII and missed it, while its
+      folded spelling matched; it now folds first. The selector whole-signature compare
+      (`selector_index::fold_whole`) lowercased per char and gave `İ` a combining dot; it
+      now takes the identifier fold. Witnesses
+      `a_dotted_capital_i_is_handled_name_matches_like_its_folded_spelling` and
+      `a_whole_signature_with_a_dotted_capital_i_selects`, each with a break.
+    - **sol r4:** the FieldRef source reader (`recordref_table.rs`: `Field`, `FieldNo`) and
+      the closed-enum proof (`closed_enum.rs`: `FromInteger`) matched member names ASCII-only,
+      while the model side folds the same members. Both now take the identifier fold.
+      Witnesses `a_dotted_capital_i_field_member_is_a_field_source` and a `Fromİnteger` shape
+      in `i264_t3_rhs_shapes_complete_at_resolver`, each with a break. (The AL compiler most
+      likely binds no `Fİeld`; this keeps the engine's two readers agreeing.)
+    - The guard missed `eq_ignore_ascii_case` passed as a function
+      (`str::eq_ignore_ascii_case`). It now counts the `str::`, `char::`, `u8::` and `[u8]>::`
+      path forms; a planted `const` of that form in d19 fails it.
+  - Every changed compare gives the same result as the old one on ASCII input, so no existing
+    golden moved: only the Nordic fixture's lines did.
+  - Tests, each with a discrimination proof (the break named, then reverted):
+    - `r4_differential::nordic_identifiers_meet_one_fold` on the new fixture
+      `ws-nordic-identifiers`, each case with a control that must fire:
+      - d19 stays quiet on a used `Ændring` (break: the `identifier_ref_set` inserts);
+      - d11's by-var suppression covers `Ørder` loaded through `HentØrder` (break: the
+        argument binding's name);
+      - d39 flags a helper that reassigns its parameter before `Modify` (break:
+        `d39_persist::record_reassigned`);
+      - d33 reports the DeleteAll after `Reset` on `İndkøb` (break: the `Reset` compare back
+        on `to_lowercase`), and stays quiet when `İndkøb.SetRange` is written inline (break:
+        d33's own variable key back on `to_lowercase`);
+      - the global backfill types `Ålcust` as `global` (break: the `global_rv_by_lc` key).
+    - `param_guard::tests::a_nordic_flag_is_a_guard_until_it_is_assigned` pins
+      `frame_guards` directly (breaks: the assignment compare; the usable name). **Limit:**
+      that pins the helper, not its use. In prove the literal-value pass masks
+      `param_guard` (breaking its compares alone still passes the CLI tests), so the call
+      site is unpinned.
+    - `cli_prove_recref_guard::a_recordref_number_guard_reads_nordic_names_alike`: the
+      RecordRef guard answers are unchanged with `ÆRecRef`, `ØVariantRec`, `Ålias`,
+      `ÉRecordFilter` (break: `recref_flow::lc`).
+    - `cli_prove_dead_paths::a_write_behind_a_nordic_flag_is_read_alike`: the literal-dead
+      write answers are unchanged with `ÆUseQueue` (break: `literal_values::fold`).
+    - **No witness of their own** (fixed by the same swap, pinned by no test):
+      `literal_reach`'s assigned-Variant check, `field_guard`'s `FieldExist` guard,
+      `ui_events_error.rs`'s `Evaluate` check, `ir_walk.rs`'s initializer and
+      `fixed_local` compares, `recref_origin.rs`, and `d39_persist.rs`'s other two
+      compares. Only the identifier fold distinguishes them, and only on non-ASCII names.
+  - The new fixture also moved `l2_features.snapshot` and the root-class summary. The ids
+    parent-baseline record and the policy facts oracle were re-minted to add it (no other
+    fixture or case moved), and `FIXTURE_ROOTS` went 222 → 223.
+  - Measured on CDO: to be re-run on the final head after the reviews (the earlier run,
+    `14fad659` against `28686add`, moved nothing: 2,308 / 32,576 findings, 0 fingerprints
+    added or removed).
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test

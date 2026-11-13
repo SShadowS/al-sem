@@ -42,6 +42,7 @@ use crate::engine::ids::{
     to_stable_routine_id_from_parts,
 };
 use crate::program::body::scope;
+use al_syntax::IdentifierFoldExt;
 use std::path::Path;
 
 /// A discovered workspace `.al` file (the shared walk's type).
@@ -180,7 +181,7 @@ fn build_proutine(
     let attr_names_lc: Vec<String> = attributes_parsed
         .iter()
         .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-        .map(|n| n.to_lowercase())
+        .map(|n| n.fold_identifier())
         .collect();
     crate::program::body::control_context::apply_control_contexts(
         &mut features,

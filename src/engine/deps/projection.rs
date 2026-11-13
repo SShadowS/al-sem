@@ -29,6 +29,7 @@ use crate::engine::ids::{
     to_stable_table_id,
 };
 use crate::program::attributes::AttributeInfo;
+use al_syntax::IdentifierFoldExt;
 use std::collections::BTreeMap;
 
 /// A projected dependency parameter.
@@ -184,7 +185,7 @@ pub fn abi_canonical_string(r: &AbiRoutine) -> String {
 
 /// `^Record\b` (case-insensitive) — mirrors the TS `isRecord` regex.
 fn is_record_type(type_text: &str) -> bool {
-    let lower = type_text.to_lowercase();
+    let lower = type_text.fold_identifier();
     if let Some(rest) = lower.strip_prefix("record") {
         // `\b` after "record": next char is a non-word char or end.
         rest.chars()
@@ -317,7 +318,7 @@ pub fn project_abi_to_index(abi: &SymbolReferenceAbi, app_guid: &str) -> Project
         // only as a lookup; key emission walks the ORDERED field_names Vec.
         let fields_by_name: BTreeMap<String, String> = fields
             .iter()
-            .map(|f| (f.name.to_lowercase(), f.id.clone()))
+            .map(|f| (f.name.fold_identifier(), f.id.clone()))
             .collect();
 
         let keys: Vec<ProjectedKey> = t
@@ -331,7 +332,7 @@ pub fn project_abi_to_index(abi: &SymbolReferenceAbi, app_guid: &str) -> Project
                 fields: k
                     .field_names
                     .iter()
-                    .filter_map(|n| fields_by_name.get(&n.to_lowercase()).cloned())
+                    .filter_map(|n| fields_by_name.get(&n.fold_identifier()).cloned())
                     .collect(),
             })
             .collect();

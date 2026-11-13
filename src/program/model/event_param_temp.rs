@@ -22,6 +22,7 @@
 //!   3. it is raised at least once, and every raise binds the parameter to a
 //!      `Known(true)` source.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 use super::workspace::{Model, ModelRoutine};
@@ -35,7 +36,7 @@ fn unq(s: &str) -> &str {
 /// subscriber parameters by NAME, ASCII case-insensitively, quotes and
 /// surrounding whitespace ignored. Both directions of the mapping call this.
 pub(crate) fn event_param_names_match(a: &str, b: &str) -> bool {
-    unq(a).eq_ignore_ascii_case(unq(b))
+    unq(a).eq_fold_identifier(unq(b))
 }
 
 fn is_pd(ts: &PTempState, j: u32) -> bool {
@@ -106,10 +107,10 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
                             resolved_sites.contains(&(qi, cs.id.as_str()))
                                 || match &cs.callee {
                                     PCallee::Bare { name } => {
-                                        !unq(name).eq_ignore_ascii_case(unq(&p.name))
+                                        !unq(name).eq_fold_identifier(unq(&p.name))
                                     }
                                     PCallee::Member { method, .. } => {
-                                        !unq(method).eq_ignore_ascii_case(unq(&p.name))
+                                        !unq(method).eq_fold_identifier(unq(&p.name))
                                     }
                                     PCallee::Unknown => false,
                                     _ => true,

@@ -39,6 +39,7 @@ use super::Bindings;
 use crate::engine::l4::param_guard::is_exit_only;
 use crate::program::body::features::{PCFNNode, ValueFact, ValueLabel};
 use crate::program::model::workspace::{ModelRoutine, ModelTable};
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -90,7 +91,7 @@ pub(crate) fn variant_type_name(type_text: &str) -> Option<&'static str> {
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>()
-        .to_ascii_lowercase();
+        .fold_identifier();
     // A whole keyword: `Record "X"` and `Record X temporary`, not
     // `RecordRefWrapper`.
     let rest = &t[kw.len()..];
@@ -234,7 +235,7 @@ pub(super) fn fold(s: &str) -> String {
         .and_then(|x| x.strip_suffix('"'))
         .map(|x| x.replace("\"\"", "\""))
         .unwrap_or_else(|| t.to_string());
-    inner.trim().to_lowercase()
+    al_syntax::fold_identifier(inner.trim())
 }
 
 /// Split `s` at `sep` outside double quotes.
@@ -259,7 +260,7 @@ fn split_outside_quotes(s: &str, sep: char) -> Vec<&str> {
 fn after_keyword<'t>(t: &'t str, kw: &str) -> Option<&'t str> {
     let t = t.trim();
     let head = t.get(..kw.len())?;
-    if !head.eq_ignore_ascii_case(kw) {
+    if !head.eq_fold_identifier(kw) {
         return None;
     }
     let rest = &t[kw.len()..];
@@ -297,7 +298,7 @@ pub(super) fn enum_name(type_text: &str) -> Option<Arc<str>> {
 /// none of Integer, BigInteger, Option or Enum.
 pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     let t = type_text.trim();
-    if t.eq_ignore_ascii_case("integer") || t.eq_ignore_ascii_case("biginteger") {
+    if t.eq_fold_identifier("integer") || t.eq_fold_identifier("biginteger") {
         return Some(Domain::Int);
     }
     if option_members(t).is_some() {

@@ -662,3 +662,18 @@ fn compute_chain_report_primary_scope_filters() {
     assert_eq!(primary.total_roots, 1);
     assert_eq!(primary.chains[0].routine_id, Some("P".to_string()));
 }
+
+/// TLS-43 review sol r3: a raw `İsHandled` parameter is the same identifier
+/// as its folded spelling `ishandled` (an assignment's name), so both are
+/// IsHandled-shaped; d43 and `publisher_branch_facts` call this on raw
+/// parameter names.
+///
+/// DISCRIMINATION (2026-11-13): `is_handled_re` matching `name` unfolded
+/// fails at "İsHandled" and "İs_Handled"; restored, passes.
+#[test]
+fn a_dotted_capital_i_is_handled_name_matches_like_its_folded_spelling() {
+    for n in ["İsHandled", "ishandled", "İs_Handled", "IsHandled"] {
+        assert!(is_handled_re(n), "{n}");
+    }
+    assert!(!is_handled_re("İsHandledX2"));
+}

@@ -1497,7 +1497,7 @@ pub(crate) fn display_of_callee(callee: &PCallee) -> String {
 fn routine_attr_names_lc(r: &ModelRoutine) -> Vec<String> {
     r.attributes_parsed
         .iter()
-        .map(|a| a.name.to_lowercase())
+        .map(|a| al_syntax::fold_identifier(&a.name))
         .collect()
 }
 

@@ -15,6 +15,7 @@
 
 use super::workspace::{ModelEntities, ModelField, ModelKey, ModelTable};
 use crate::engine::ids::{encode_field_id, encode_table_id};
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashSet;
 
 /// Merge each TableExtension's fields into its base table's field set, mutating
@@ -101,7 +102,7 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         let by_name: std::collections::HashMap<String, String> = base
             .fields
             .iter()
-            .map(|f| (f.name.to_lowercase(), f.id.clone()))
+            .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
             .collect();
         for (index, k) in ext_keys.iter().enumerate() {
             let fields = k
@@ -138,10 +139,10 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
 /// real tables only (an extension stub carries the extension's name, never
 /// the base's, but is no base either).
 fn table_index_by_name(tables: &[ModelTable], name: &str) -> Option<usize> {
-    let want = name.to_lowercase();
+    let want = name.fold_identifier();
     let mut found = None;
     for (i, t) in tables.iter().enumerate() {
-        if !t.is_extension_stub && t.name.to_lowercase() == want {
+        if !t.is_extension_stub && t.name.fold_identifier() == want {
             found = Some(i); // LAST-wins
         }
     }

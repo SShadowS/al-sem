@@ -1361,7 +1361,7 @@ fn type_one_arg(
                             // ambiguous with `CreateInStream(var InStream)`).
                             match BUILTIN_OPTION_TYPES
                                 .iter()
-                                .find(|t| t.eq_ignore_ascii_case(n))
+                                .find(|t| t.eq_fold_identifier(n))
                             {
                                 Some(t) if named.canonical.is_none() => ArgDispatchInfo {
                                     canonical: Some(CanonicalArgType::Base(t.to_string())),

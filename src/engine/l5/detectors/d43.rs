@@ -32,6 +32,7 @@
 //! Within-detector sort by `compareStrings(a.id, b.id)` (byte order). Fingerprint
 //! computed PER-FINDING before the sort (al-sem computes it inside the loop).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::l5::detector_context::DetectorContext;
@@ -70,7 +71,7 @@ struct DispatchSite {
 
 /// `/^boolean$/i` — case-insensitive exact "boolean".
 fn is_boolean_type(type_text: &str) -> bool {
-    type_text.eq_ignore_ascii_case("boolean")
+    type_text.eq_fold_identifier("boolean")
 }
 
 /// `enumerateDispatchSites` — bridge the event-flow substrate with d43's dispatch-site
@@ -159,7 +160,7 @@ fn enumerate_dispatch_sites(
                 call_site
                     .argument_texts
                     .get(idx)
-                    .map(|t| t.trim().to_lowercase())
+                    .map(|t| al_syntax::fold_identifier(t.trim()))
             } else {
                 None
             };
@@ -177,7 +178,7 @@ fn enumerate_dispatch_sites(
         if let Some(ha) = &handled_actual {
             let call_row = call_site.source_anchor.start_line;
             let call_col = call_site.source_anchor.start_column;
-            let actual_lower = ha.variable_name.to_lowercase();
+            let actual_lower = al_syntax::fold_identifier(&ha.variable_name);
             for cref in &caller.condition_references {
                 if cref.identifier != actual_lower {
                     continue;

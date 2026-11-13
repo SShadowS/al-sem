@@ -15,6 +15,7 @@
 //!     (e.g. `var DocGroup`).
 //!  4. The string `"unknown table"`.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use crate::program::model::workspace::{ModelRoutine, ModelTable};
@@ -48,11 +49,11 @@ pub fn describe_table(
     }
     // Tier 2: declared record-variable type text → `<type> (type not loaded)`.
     if let Some(routine) = routine {
-        let lc = op.record_variable_name.to_lowercase();
+        let lc = op.record_variable_name.fold_identifier();
         if let Some(rv) = routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == lc)
+            .find(|v| v.name.fold_identifier() == lc)
             && let Some(table_name) = &rv.table_name
             && !table_name.is_empty()
         {
