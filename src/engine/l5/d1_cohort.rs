@@ -541,15 +541,12 @@ pub(crate) struct TerminalSink<'a> {
     /// Per terminal: every loop already inserted (any ctx) — the disjointness
     /// guard (a loop must appear in ≤1 ctx per terminal).
     seen: Vec<GroupBitmap>,
-    /// The run-level interned uncertainty store every [`CohortRep`] in this sink
-    /// indexes into. Owned HERE rather than by the caller so [`Self::insert`] can
-    /// hand `&mut` to it straight to the `build_rep` closure (disjoint field
-    /// borrows), which keeps `score_batch_to_sink`/`sink_emit` free of a second
-    /// threaded parameter. Moved out by [`Self::finalize`] to live on the run
-    /// alongside the cohorts that reference it.
-    /// The union memo paired with `uncertainties` — its ids are only meaningful
-    /// against THAT table, which is why the two live together and are handed to
-    /// `build_rep` together.
+    /// The per-path uncertainty-union memo: an equal path (the same sequence of
+    /// interned sets) reuses its union. Its ids index the context's
+    /// `UncertaintyIndex`, which owns every uncertainty. Owned HERE so
+    /// [`Self::insert`] can hand `&mut` to it straight to the `build_rep` closure
+    /// (disjoint field borrows), keeping `score_batch_to_sink`/`sink_emit` free
+    /// of a second threaded parameter. [`Self::finalize`] does not return it.
     path_cache: PathUncertaintyCache,
 }
 
