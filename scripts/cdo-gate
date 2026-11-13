@@ -396,10 +396,15 @@ stop_gate() {
     trap - INT TERM
     # Listed first, then signalled: a `| xargs kill` pipeline would list (and
     # kill) its own processes too.
-    local pids
-    pids=$(gate_descendants)
-    # shellcheck disable=SC2086
-    [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
+    local pids pass
+    # Twice: a process started between the first listing and its signal (cargo
+    # starting the next test binary) is caught by the second (review r3, Opus).
+    for pass in 1 2; do
+        pids=$(gate_descendants)
+        # shellcheck disable=SC2086
+        [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
+        [[ "$pass" == 1 ]] && sleep 0.5
+    done
     exit 130
 }
 trap stop_gate INT TERM
