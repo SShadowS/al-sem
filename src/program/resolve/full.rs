@@ -1070,15 +1070,20 @@ fn resolve_call_site_obligation(
                 let trigger_op = crate::program::resolve::edge::record_trigger_op(&method_lc);
                 if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
                     && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
-                    // Not a variable (`X`, `X[i]`): those are record operations,
-                    // or a variable the receiver sets do not hold (a base
-                    // object's `protected var` in an extension), left as before.
+                    // Not a variable (`X`, `X[i]`): those are record operations.
                     // A `this.X` that reaches here is one a same-named local
                     // shadows in the receiver sets: the resolver typed it from
                     // the globals, so it takes this path (ENG-12 review round 3).
+                    // ENG-26: nor is a base object's `protected var` record in
+                    // an extension: no receiver set holds it (the body walk
+                    // sees one file), so its operation is built here, typed by
+                    // the variable's own declared table (receiver Step 2c).
                     && receiver.is_some_and(|id| {
-                        crate::record_ops::receiver_variable(&file.ir, id)
-                            .is_none_or(|v| v.starts_with("this."))
+                        match crate::record_ops::receiver_variable(&file.ir, id) {
+                            None => true,
+                            Some(v) if v.starts_with("this.") => true,
+                            Some(v) => inherited_protected_var(&v, obj_node, graph, index),
+                        }
                     })
                 {
                     let table_node = match &recv {
@@ -1753,9 +1758,21 @@ pub(crate) fn resolve_file_obligations(
                 // classified (`if R.FindFirst then`, `exit(R.IsEmpty)`) whose
                 // table declares no field of that name; otherwise it is a
                 // variable, field or built-in read.
-                let parenless_record_op = matches!(site.shape, CalleeShape::RecordOp { .. })
+                let parenless_record_op = (matches!(site.shape, CalleeShape::RecordOp { .. })
                     && kind == EdgeKind::ImplicitTrigger
-                    && !facts.record_op_field_named;
+                    && !facts.record_op_field_named)
+                    // ENG-26: a base object's protected record in an extension
+                    // (`exit(Other.IsEmpty)`), unless its table has a field of
+                    // that name (then a field read, as ENG-25's rule).
+                    || facts.call_result_record.as_ref().is_some_and(|cr| {
+                        let method_lc = match &site.shape {
+                            CalleeShape::Member { method, .. } => method.fold_identifier(),
+                            _ => return false,
+                        };
+                        obj_node_opt.is_some_and(|from| {
+                            !index.table_scope_may_have_field(graph, from, &cr.table, &method_lc)
+                        })
+                    });
                 if site.parenless
                     && !parenless_record_op
                     && (kind != EdgeKind::Call
@@ -2096,6 +2113,23 @@ fn member_dataset_run(
         mode,
         effects: Vec::new(),
     })
+}
+
+/// ENG-26: `name` (a bare variable receiver) is a `protected var` of the
+/// object `from_object` extends. Shadowing needs no check here: a record
+/// parameter, local or global of the same name is in the receiver sets, so
+/// its call is a record operation and never reaches this path, and any other
+/// type types the receiver as that type (receiver Step 2 comes before 2c).
+fn inherited_protected_var(
+    name: &str,
+    from_object: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> bool {
+    let lc = name.fold_identifier();
+    crate::program::resolve::receiver::extension_base_object(from_object, graph, index)
+        .flatten()
+        .is_some_and(|base| base.protected_vars.iter().any(|(n, _)| **n == *lc))
 }
 
 /// The [`ReceiverFact`] for a member call whose receiver typed as `recv`
