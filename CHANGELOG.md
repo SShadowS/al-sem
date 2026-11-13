@@ -92,23 +92,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own source declares no `[CommitBehavior]` at all (its dependencies were not searched; the
   landing gate's CDO goldens would show a move).
 
-### Changed (TLS-43: some finding keys change for names with `İ` or a word-final `Σ`)
+### Changed (TLS-43: some keys and names change for identifiers with non-ASCII capitals)
 
-- **Only names containing the Turkish dotted capital `İ` or a capital `Σ` at the end of a word
-  are affected.** All other names, including every Danish, Norwegian, Swedish and German
-  letter, keep exactly the keys they had.
-- **d60, d61 and d3 findings:** their root-cause key includes the record variable, the guard
-  variable or the accessed field name. That name is now lowercased with the same fold the
-  rest of the engine uses, so for such a name the finding's fingerprint changes. A
-  `--baseline` file made before this version no longer suppresses those findings: they show
-  as new once, and suppress again after the baseline is updated (`--update-baseline`).
-- **`alsem impact`:** a label variable with such a name is now recognized as a label, so its
-  message key reads `label:…` instead of a hashed `expr:…`.
+- **Finding fingerprints: only names with `İ` or a word-final `Σ`.** d60, d61 and d3 put the
+  record variable, the guard variable or the accessed field name into their root-cause key.
+  That name is now lowercased with the fold the rest of the engine uses. For a name
+  containing the Turkish dotted capital `İ` or a capital `Σ` at the end of a word, the
+  finding's fingerprint changes: a `--baseline` file made before this version no longer
+  suppresses it, so it shows as new once and suppresses again after `--update-baseline`. Every
+  other name, Danish, Norwegian, Swedish and German letters included, keeps its fingerprint.
+- **`alsem impact`: any non-ASCII capital.**
+  - A label variable whose name has a non-ASCII capital (`Ændring`, `İ…`) is now recognized
+    as a label, so its message key reads `label:…` instead of a hashed `expr:…`.
+  - `removedRoutineNames` prints such a routine name in the identifier fold (`ændring` where
+    it printed `Ændring`).
 - **prove / explain evidence:** a parameter or variable value source names such a variable in
-  the identifier fold.
+  the identifier fold (for `İ` / final `Σ`, as before for other letters).
 - `ir_walk.rs`'s `/grv/` id input changes too, but nothing reads that id, so no output moves.
-- No real workspace we have measured contains such a name (TLS-42: CDO, its 11 packages and the
-  test corpus have none).
+- No real workspace we have measured contains any of these names (TLS-42: CDO, its 11
+  packages and the test corpus have none).
 
 ### Fixed (TLS-43: identifiers with non-ASCII capitals meet one fold)
 
