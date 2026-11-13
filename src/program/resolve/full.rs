@@ -584,8 +584,8 @@ pub struct ProgramReport {
     /// well-formed workspace; any entry means that file's IR may be missing
     /// content tree-sitter could not parse.
     pub recovered_files: Vec<String>,
-    /// `"<publisher>/<name>@<version>: <message>"` of every loaded dependency
-    /// whose ABI (`SymbolReference.json`) failed to ingest, sorted
+    /// `"<publisher>/<name>@<version>: <message>"` of every loaded symbol-only
+    /// dependency whose ABI (`SymbolReference.json`) failed to ingest, sorted
     /// ([`crate::program::graph::ProgramGraph::abi_ingest_errors`]). Such an app
     /// looks empty to the resolver, so calls into it count as `unknown`; this
     /// says why. Diagnostic only, never gates resolution (TLS-47).

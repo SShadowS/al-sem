@@ -238,8 +238,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (TLS-47: `aldump` reports dependency ABI ingest errors)
 
 - **`aldump --program-call-graph-stats` now prints `abiIngestErrors`** (`count`, and one
-  `"<publisher>/<name>@<version>: <message>"` line per loaded dependency whose
-  `SymbolReference.json` failed to ingest), and the same lines as `aldump: warning:` on
+  `"<publisher>/<name>@<version>: <message>"` line per loaded symbol-only dependency whose
+  `SymbolReference.json` failed to ingest; a dependency with embedded source is not checked
+  this way, and its symbol-only control add-ins are dropped silently on such a failure), and the same lines as `aldump: warning:` on
   stderr. Before, such a dependency looked empty, its calls counted as `unknown`, and the
   stats said nothing (`alsem analyze` already reported it). It happens when the loader's
   parse accepts the file but the ABI reader's stricter check rejects it, e.g. a `1e400` in a
