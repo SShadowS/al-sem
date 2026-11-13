@@ -785,7 +785,8 @@ fn run_json(ws: &std::path::Path, args: &[&str]) -> serde_json::Value {
 /// unknown code; unknown code reachable only through a helper's checked run
 /// ends with that run. None leaves a write pending at the next checked run,
 /// for d50 and the trap search alike.
-/// Breaks (2026-11-13): drop `!cs.checked_run` from `is_unknown_code_call` ->
+/// Breaks (2026-11-13): drop `cs.checked_run ||` from `traps::is_checked_run`
+/// (the one predicate every reader uses, sol round 2) ->
 /// `VarRunSymbolOnly` gets a d50 finding ("unknown code at S.Run"; the local
 /// `VarRunNoOnRun` stays clean either way, its run resolves); drop the
 /// `!is_run_edge` filter in `UnknownCode::build` -> `ViaIsolatedUnknown` gets

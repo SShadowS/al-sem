@@ -1436,6 +1436,50 @@ mod tests {
         );
     }
 
+    /// ENG-24 (sol round 2): the same callee with no row, reached through a
+    /// call the resolver decided is a checked run (`checked_run`, a codeunit
+    /// variable's `Ok := C.Run()` whose `OnRun` has no row), leaves nothing
+    /// pending: its code ends with the run. Stated by hand.
+    /// Break (2026-11-13): drop `cs.checked_run ||` from
+    /// `traps::is_checked_run` -> "unknown code behind C.Run". Fails;
+    /// restored, it passes.
+    #[test]
+    fn a_checked_run_to_a_callee_with_no_row_leaves_nothing_pending() {
+        let mut root = routine("rootr", "procedure");
+        let mut run = crate::engine::l5::test_support::call_site("rootr/cs0", "C.Run", vec![]);
+        run.checked_run = true;
+        root.call_sites.push(run);
+        root.call_sites
+            .push(object_run_call_site("rootr/cs1", "Codeunit", Some(true)));
+        let routines = vec![root];
+        let graph = graph_from_edges(
+            &["rootr", "ghostr"],
+            &[edge("rootr", "ghostr", "rootr/cs0")],
+        );
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        summaries.insert(
+            "rootr".to_string(),
+            summary("rootr", vec![], vec![], Some(coverage("complete"))),
+        );
+        let unknown: HashSet<&str> = HashSet::new();
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &[],
+            Some(&unknown),
+        );
+        let other = &spans
+            .iter()
+            .find(|s| s.seed_callsite_id.as_deref() == Some("rootr/cs1"))
+            .expect("the checked run's span")
+            .pending_other;
+        assert!(other.is_empty(), "{other:?}");
+    }
+
     /// ENG-22 review round 4: a helper whose cone follows an edge its forward
     /// sites lack (`h3 → u3`, a typed edge only) is not walked: `u3` writes
     /// `t/T`, which the run's target `w3` writes too, so the residue (by table)

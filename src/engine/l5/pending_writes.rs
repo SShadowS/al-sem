@@ -67,9 +67,9 @@ pub(crate) fn is_unknown_code_call(
     has_edge: bool,
     builtin: bool,
 ) -> bool {
-    // `cs.checked_run`: the resolver's decision, which also covers a codeunit
-    // variable's `Ok := C.Run()` with no `OnRun` row (sol round 1).
-    !has_edge && !builtin && !cs.checked_run && !is_checked_run(cs, None)
+    // `is_checked_run` reads the resolver's `checked_run` too, which also
+    // covers a codeunit variable's `Ok := C.Run()` with no `OnRun` row (sol).
+    !has_edge && !builtin && !is_checked_run(cs, None)
 }
 
 /// ENG-24: the routines that may reach unknown code, `seeds` and every caller
