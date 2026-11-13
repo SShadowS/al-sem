@@ -234,7 +234,7 @@ pub(super) fn fold(s: &str) -> String {
         .and_then(|x| x.strip_suffix('"'))
         .map(|x| x.replace("\"\"", "\""))
         .unwrap_or_else(|| t.to_string());
-    inner.trim().to_lowercase()
+    al_syntax::fold_identifier(inner.trim())
 }
 
 /// Split `s` at `sep` outside double quotes.

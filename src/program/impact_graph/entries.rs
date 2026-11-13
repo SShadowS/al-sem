@@ -119,10 +119,9 @@ impl EntryInventory {
             {
                 EntryKey::Action(
                     r.object.clone(),
-                    r.enclosing_member_lc
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase(),
+                    al_syntax::fold_identifier(
+                        r.enclosing_member_lc.as_deref().unwrap_or_default(),
+                    ),
                 )
             }
             _ => g.stable_id(n).map_or(EntryKey::Node(n), EntryKey::Stable),
@@ -165,7 +164,7 @@ impl EntryInventory {
                 for (object, name) in acts {
                     let e = intern(
                         &mut inv,
-                        EntryKey::Action(object.clone(), name.to_lowercase()),
+                        EntryKey::Action(object.clone(), al_syntax::fold_identifier(name)),
                         page,
                     );
                     if inv.action[e as usize].is_none() && inv.kinds[e as usize] == 0 {

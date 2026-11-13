@@ -159,7 +159,7 @@ fn enumerate_dispatch_sites(
                 call_site
                     .argument_texts
                     .get(idx)
-                    .map(|t| t.trim().to_lowercase())
+                    .map(|t| al_syntax::fold_identifier(t.trim()))
             } else {
                 None
             };
@@ -177,7 +177,7 @@ fn enumerate_dispatch_sites(
         if let Some(ha) = &handled_actual {
             let call_row = call_site.source_anchor.start_line;
             let call_col = call_site.source_anchor.start_column;
-            let actual_lower = ha.variable_name.to_lowercase();
+            let actual_lower = al_syntax::fold_identifier(&ha.variable_name);
             for cref in &caller.condition_references {
                 if cref.identifier != actual_lower {
                     continue;

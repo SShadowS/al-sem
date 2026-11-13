@@ -1865,3 +1865,48 @@ fn differential_r4_findings_match_goldens() {
         SMOKE.iter().filter(|s| !s.ported).count(),
     );
 }
+
+/// TLS-43: identifiers with non-ASCII capitals meet one fold. The L2 builder folded
+/// them with `to_ascii_lowercase` (`Ændring` stays `Ændring`) while the detectors
+/// folded with `to_lowercase` (`ændring`), so d19 reported the used parameter
+/// `Ændring`, and d11's by-var load suppression (G-10 tier 2) missed `Ørder`
+/// loaded through `HentØrder(var ...)`. Each guard has a control in the fixture
+/// that must fire, so a silent detector cannot pass.
+///
+/// Discrimination (2026-11-13): `ir_walk.rs`'s four `identifier_ref_set` inserts
+/// back on `to_ascii_lowercase` fails at "used Ændring" (one insert alone does
+/// not: `Ændring` in `exit(Ændring + 1)` is recorded by another); the argument
+/// binding's `source_variable_name` back on it fails at "Ørder loaded by var".
+/// Restored, it passes.
+#[test]
+fn nordic_identifiers_meet_one_fold() {
+    let p = run_rust(
+        "ws-nordic-identifiers",
+        "ws-nordic-identifiers",
+        &["d19-unused-parameter", "d11-modify-without-get"],
+    );
+    let texts: Vec<String> = p
+        .findings
+        .iter()
+        .map(|f| serde_json::to_string(f).unwrap())
+        .collect();
+    let fired =
+        |det: &str, routine: &str| texts.iter().any(|t| t.contains(det) && t.contains(routine));
+    let all = texts.join("\n");
+    assert!(
+        fired("d19-unused-parameter", "LeavesUbrugt"),
+        "control: {all}"
+    );
+    assert!(
+        !fired("d19-unused-parameter", "UsesÆndring"),
+        "used Ændring: {all}"
+    );
+    assert!(
+        fired("d11-modify-without-get", "ModifyUnloaded"),
+        "control: {all}"
+    );
+    assert!(
+        !fired("d11-modify-without-get", "ModifyAfterHent"),
+        "Ørder loaded by var: {all}"
+    );
+}

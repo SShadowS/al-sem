@@ -783,7 +783,7 @@ impl<'m> CrossRules<'m> {
         if p.is_var || !p.type_text.trim().eq_ignore_ascii_case("variant") {
             return false;
         }
-        let fold = |s: &str| s.trim().trim_matches('"').to_lowercase();
+        let fold = |s: &str| al_syntax::fold_identifier(s.trim().trim_matches('"'));
         let name = fold(&p.name);
         if r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name) {
             return false;

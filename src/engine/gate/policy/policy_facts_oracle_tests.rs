@@ -77,6 +77,10 @@
 //! Re-recorded (2026-11-13, TLS-41: the new fixture `ws-grammar-v4-shapes`) with
 //! `REMINT_POLICY_FACTS_ORACLE=1`: two cases added (`r0/ws-grammar-v4-shapes`
 //! single and cross, 5 routines, no facts); no other case moved.
+//!
+//! Re-recorded (2026-11-13, TLS-43: the new fixture `ws-nordic-identifiers`, with
+//! the one identifier fold) with `REMINT_POLICY_FACTS_ORACLE=1`: two cases added
+//! (single and cross, 5 routines, `direct` 6, `inherited` 2); no other case moved.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};
