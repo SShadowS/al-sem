@@ -114,7 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the identifier fold (for `İ` / final `Σ`, as before for other letters).
 - `ir_walk.rs`'s `/grv/` id input changes too, but nothing reads that id, so no output moves.
 - No real workspace we have measured contains any of these names (TLS-42: CDO, its 11
-  packages and the test corpus have none).
+  packages and the test corpus have none). Measured on CDO (`bc3ccb18`, release-fast,
+  master `cb46eff4` against `9ae07d05`): nothing moves. That is 2,308 findings at
+  `--scope primary` and 32,576 at `--scope all`, with no fingerprint added or removed, and a
+  byte-identical `aldump --program-call-graph-stats` (0 unknown of 46,688 edges).
 
 ### Fixed (TLS-43: identifiers with non-ASCII capitals meet one fold)
 
