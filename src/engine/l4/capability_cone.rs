@@ -3405,8 +3405,13 @@ fn compose_inherited_cones(
     };
     let mut changed: Option<HashSet<String>> = seed.map(|_| HashSet::new());
 
+    // TLS-29 census: each SCC's time and kept fact-cone size.
+    let census_on = crate::engine::l5::detector_context::cones_census::enabled();
+    let mut scc_nanos: Vec<u64> = vec![0; if census_on { scc.sccs.len() } else { 0 }];
+    let mut cone_len: Vec<u64> = scc_nanos.clone();
     let empty_succ: BTreeSet<usize> = BTreeSet::new();
     for i in 0..scc.sccs.len() {
+        let _t_scc = crate::engine::l5::detector_context::cones_census::start();
         let scc_entry = &scc.sccs[i];
         let succ_ids = succ_sccs.get(i).unwrap_or(&empty_succ);
 
@@ -3844,9 +3849,18 @@ fn compose_inherited_cones(
                 cov_cones.remove(y);
             }
         }
+        if let Some(t) = _t_scc {
+            scc_nanos[i] = t.elapsed().as_nanos() as u64;
+            cone_len[i] = fact_cones.get(&i).map_or(0, |c| c.len() as u64);
+        }
     }
 
     drop(walk_span);
+    if census_on {
+        crate::engine::l5::detector_context::cones_census::add_schedule(
+            &succ_sccs, &scc_nanos, &cone_len,
+        );
+    }
     // ⟨C1 Task 4⟩ Both maps MUST be empty here. Every non-root SCC's cone is
     // refcount-freed by its last predecessor (each of its predecessors runs
     // exactly once and decrements exactly once, so the counter always reaches

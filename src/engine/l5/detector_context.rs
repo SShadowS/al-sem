@@ -535,6 +535,106 @@ pub(crate) mod cones_census {
     /// adds. `BFS_WALK_NANOS` also holds the set builds and borrows, so
     /// `walk_total <= bfs_walk`; under `raw: WitnessScope::None` `walk_total` is 0.
     pub(crate) static WALK_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
+    /// TLS-29: how much parallelism the SCC walk holds, from each walk's
+    /// per-SCC times (summed over walks; widths and peaks are maxima).
+    /// `LEVEL` is 1 + the highest level among an SCC's successors; a
+    /// level-by-level walk runs one level at a time. `CRIT` is the longest
+    /// chain of SCC times (the bound for any scheduler), `LEVEL_BOUND` the sum
+    /// over levels of each level's slowest SCC (the level-by-level bound),
+    /// `NARROW` the time in levels of fewer than 8 SCCs. `PEAK_*`: the most
+    /// fact-cone entries alive at once, walking in Tarjan order (today) and
+    /// level by level (every cone of a level built before its frees).
+    pub(crate) static SCHED_SCCS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_LEVELS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_MAX_WIDTH: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_SUM_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_CRIT_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_LEVEL_BOUND_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_NARROW_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_MAX_SCC_NANOS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_PEAK_SERIAL: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SCHED_PEAK_LEVEL: AtomicU64 = AtomicU64::new(0);
+
+    /// Fold one walk's schedule into the TLS-29 counters: `succ[i]` the SCCs
+    /// `i` reads (all before `i`), `nanos[i]` its time, `cone_len[i]` its fact
+    /// cone's entries (0 for a root, whose cone is never kept).
+    pub(crate) fn add_schedule(
+        succ: &[std::collections::BTreeSet<usize>],
+        nanos: &[u64],
+        cone_len: &[u64],
+    ) {
+        let n = nanos.len();
+        let mut level = vec![0usize; n];
+        let mut crit = vec![0u64; n];
+        let mut uses = vec![0usize; n];
+        for i in 0..n {
+            let s = succ.get(i);
+            level[i] = s
+                .into_iter()
+                .flatten()
+                .map(|y| level[*y] + 1)
+                .max()
+                .unwrap_or(0);
+            crit[i] = nanos[i] + s.into_iter().flatten().map(|y| crit[*y]).max().unwrap_or(0);
+            for y in s.into_iter().flatten() {
+                uses[*y] += 1;
+            }
+        }
+        let levels = level.iter().max().map_or(0, |l| l + 1);
+        let mut width = vec![0u64; levels];
+        let mut slowest = vec![0u64; levels];
+        let mut level_nanos = vec![0u64; levels];
+        for i in 0..n {
+            width[level[i]] += 1;
+            slowest[level[i]] = slowest[level[i]].max(nanos[i]);
+            level_nanos[level[i]] += nanos[i];
+        }
+        // Live fact-cone entries, freeing a cone when its last reader is done.
+        let peak = |order: &mut dyn Iterator<Item = Vec<usize>>| {
+            let mut rem = uses.clone();
+            let (mut live, mut peak) = (0u64, 0u64);
+            for batch in order {
+                for &i in &batch {
+                    live += cone_len[i];
+                }
+                peak = peak.max(live);
+                for &i in &batch {
+                    for y in succ.get(i).into_iter().flatten() {
+                        rem[*y] -= 1;
+                        if rem[*y] == 0 {
+                            live -= cone_len[*y];
+                        }
+                    }
+                }
+            }
+            peak
+        };
+        let peak_serial = peak(&mut (0..n).map(|i| vec![i]));
+        let mut by_level: Vec<Vec<usize>> = vec![Vec::new(); levels];
+        for i in 0..n {
+            by_level[level[i]].push(i);
+        }
+        let peak_level = peak(&mut by_level.into_iter());
+        add(&SCHED_SCCS, n as u64);
+        max(&SCHED_LEVELS, levels as u64);
+        max(&SCHED_MAX_WIDTH, width.iter().copied().max().unwrap_or(0));
+        add(&SCHED_SUM_NANOS, nanos.iter().sum());
+        add(&SCHED_CRIT_NANOS, crit.iter().copied().max().unwrap_or(0));
+        add(&SCHED_LEVEL_BOUND_NANOS, slowest.iter().sum());
+        add(
+            &SCHED_NARROW_NANOS,
+            (0..levels)
+                .filter(|l| width[*l] < 8)
+                .map(|l| level_nanos[l])
+                .sum(),
+        );
+        max(
+            &SCHED_MAX_SCC_NANOS,
+            nanos.iter().copied().max().unwrap_or(0),
+        );
+        max(&SCHED_PEAK_SERIAL, peak_serial);
+        max(&SCHED_PEAK_LEVEL, peak_level);
+    }
 
     /// Fold one compose call's stats into the Cone-SCC census, if it is on.
     pub(crate) fn add_compose_stats(s: &crate::engine::l4::capability_cone::ComposeStats) {
@@ -693,6 +793,19 @@ pub(crate) mod cones_census {
             CONE_SCC_OWN_ENTRY_MEMBERS.load(Ordering::Relaxed),
             CONE_SCC_WITH_SUCCESSOR.load(Ordering::Relaxed),
             CONE_SCC_WITH_GUARDED_SUCCESSOR.load(Ordering::Relaxed),
+        );
+        eprintln!(
+            "[cones-census]   schedule: sccs={} levels={} max_width={} sum={:.1}ms crit={:.1}ms level_bound={:.1}ms narrow={:.1}ms max_scc={:.1}ms peak_entries_serial={} peak_entries_level={}",
+            SCHED_SCCS.load(Ordering::Relaxed),
+            SCHED_LEVELS.load(Ordering::Relaxed),
+            SCHED_MAX_WIDTH.load(Ordering::Relaxed),
+            ms(SCHED_SUM_NANOS.load(Ordering::Relaxed)),
+            ms(SCHED_CRIT_NANOS.load(Ordering::Relaxed)),
+            ms(SCHED_LEVEL_BOUND_NANOS.load(Ordering::Relaxed)),
+            ms(SCHED_NARROW_NANOS.load(Ordering::Relaxed)),
+            ms(SCHED_MAX_SCC_NANOS.load(Ordering::Relaxed)),
+            SCHED_PEAK_SERIAL.load(Ordering::Relaxed),
+            SCHED_PEAK_LEVEL.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   singleton: subst={:.1}ms scan_cone={:.1}ms scan_own={:.1}ms memo={:.1}ms row={:.1}ms open={:.1}ms own={:.1}ms raw={:.1}ms",
