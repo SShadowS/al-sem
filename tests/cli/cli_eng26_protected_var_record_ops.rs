@@ -117,6 +117,20 @@ tableextension 52902 "E26 Ext" extends "E26 Base"
         with Other do
             exit(IsEmpty);
     end;
+    // Controls: a field read inside a `with` stays decided, on a local record
+    // and on the protected one.
+    procedure WithLocalField(): Boolean
+    var
+        L: Record "E26 Target";
+    begin
+        with L do
+            exit(K = '');
+    end;
+    procedure WithOtherField(): Boolean
+    begin
+        with Other do
+            exit(K = '');
+    end;
     // A local of the same name shadows the protected var.
     procedure ShadowedWrite()
     var
@@ -229,7 +243,10 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// persistent; drop the `with_inherited` rule -> `WithRead` answers `no`. Each
 /// fails; restored, it passes. Round 3: let a same-named variable settle a
 /// bare name inside such a `with` (the shadow skip) -> `WithShadow` answers
-/// `no`. Fails; restored, it passes.
+/// `no`. Fails; restored, it passes. Fable (final head): drop the
+/// record-operation-name condition from `inside_inherited_with` ->
+/// `WithLocalField` and `WithOtherField` answer `unknown`. Fails; restored, it
+/// passes.
 #[test]
 fn a_base_objects_protected_record_is_a_record_operation() {
     let t = workspace(SOURCE, "");
@@ -277,6 +294,11 @@ fn a_base_objects_protected_record_is_a_record_operation() {
     assert!(a.starts_with("answer: down: unknown"), "WithRead: {a}");
     let a = touches(ws, "E26 Target", "\"E26 Ext\".WithShadow");
     assert!(a.starts_with("answer: down: unknown"), "WithShadow: {a}");
+    // Only a record-operation name is made unknown: a field read is not.
+    for from in ["\"E26 Ext\".WithLocalField", "\"E26 Ext\".WithOtherField"] {
+        let a = touches(ws, "E26 Target", from);
+        assert!(a.starts_with("answer: down: no"), "{from}: {a}");
+    }
     let a = answer(&[
         "prove",
         ws,

@@ -1730,11 +1730,19 @@ pub(crate) fn resolve_file_obligations(
             for site in &sites {
                 // Inside such a `with`, the frame's record members come first,
                 // so a same-named variable does not settle the name.
+                // Only a bare RECORD-OPERATION name (`IsEmpty`): inside a `with`
+                // on a record this file knows, such a name is classified a
+                // record operation, never `Bare`; so a bare one means the
+                // frame's receiver is not known here. A field or variable read
+                // (`with SalesLine do … Quantity …`) stays as it was (Fable,
+                // ENG-26 round 3).
                 let inside_inherited_with = base_has_protected
                     && matches!(
                         site.with_state,
                         crate::program::resolve::extract::WithState::InsideWith
-                    );
+                    )
+                    && matches!(&site.shape, CalleeShape::Bare { name }
+                        if crate::record_ops::record_op_type(&name.fold_identifier()).is_some());
                 if site.parenless
                     && !inside_inherited_with
                     && let CalleeShape::Bare { name } = &site.shape
