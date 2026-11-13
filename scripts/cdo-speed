@@ -682,14 +682,13 @@ def main():
             head_label = head_sha[:10]
         else:
             # TLS-34: the sources' key before the build, checked again after it.
-            # One cdo-speed at a time builds into this folder and snapshots
-            # what it built (review r3, sol: two concurrent runs could swap the
-            # binary between one's build and its snapshot).
+            # One cdo-speed at a time builds into this folder, snapshots what it
+            # built and copies its timed head (review r3-r4, sol: two concurrent
+            # runs could swap the binary between one's build and its copies).
             os.makedirs(gate_release_dir(repo), exist_ok=True)
             with open(os.path.join(gate_release_dir(repo), ".cdo-speed-build.lock"),
                       "w") as build_lock:
-                if not args.no_build:
-                    fcntl.flock(build_lock, fcntl.LOCK_EX)
+                fcntl.flock(build_lock, fcntl.LOCK_EX)
                 key_before = None if args.no_build else working_tree_key(repo)
                 built = (os.path.join(gate_release_dir(repo), "release-fast", "alsem")
                          if args.no_build else build_working_tree(repo, logf))
@@ -698,10 +697,10 @@ def main():
                     return 2
                 if not args.no_build:
                     record_tree_binary(repo, built, key_before)
-            # A copy: a later build into the target folder cannot swap it mid-run.
-            head_exe = os.path.join(outdir, "head-alsem")
-            if not args.build_only:
-                shutil.copy2(built, head_exe)
+                # A copy: a later build into the target folder cannot swap it mid-run.
+                head_exe = os.path.join(outdir, "head-alsem")
+                if not args.build_only:
+                    shutil.copy2(built, head_exe)
             dirty = git(repo, "status", "--porcelain", "--untracked-files=no")
             head_label = git(repo, "rev-parse", "--short=10", "HEAD") + (" + edits" if dirty else "")
     t_built = time.monotonic()
