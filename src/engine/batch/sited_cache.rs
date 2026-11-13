@@ -110,14 +110,9 @@ pub(super) fn stamp_for(on_view: &[(usize, &ViewDemand)]) -> Option<String> {
         return None;
     }
     let _s = crate::engine::perf_trace::span("batch", "batch.sited_cache.stamp");
-    let manifest = Manifest::consumed(&first.inputs, !cross_app);
-    // The manifest keys every file by its LOSSY path (`al:`, `src:`, `pkg:`):
-    // two names that are not UTF-8 can share a key, and the stamp then holds
-    // only the last one's identity. A read with any such name takes no part
-    // (review r1-r2, sol and Opus); a real U+FFFD in a name only costs the
-    // reuse.
-    let lossy = manifest.entries().keys().any(|k| k.contains('\u{fffd}'));
-    (!lossy).then(|| manifest.stamp())
+    // The manifest keys every file by its raw path bytes (TLS-30), so two
+    // names that read alike lossily keep two identities in the stamp.
+    Some(Manifest::consumed(&first.inputs, !cross_app).stamp())
 }
 
 /// `f` on the kept graph when it was built for `key` from inputs with

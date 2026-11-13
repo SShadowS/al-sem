@@ -234,9 +234,13 @@ fn package_ident(state: &crate::app_image::PackageState) -> Ident {
     }
 }
 
+/// A path for a message (lossy). Keys use [`path_key`] / [`rel_key`]
+/// (TLS-30: lossless), and [`key_path`] turns a key back into a path.
 fn path_text(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
+
+use crate::source_text::{key_path, path_key, rel_key};
 
 /// A manifest as the input descriptor carries it (agent-tasks design §1.2
 /// M0-6): every entry's identity and, for a file entry, the stat its hash
@@ -397,7 +401,7 @@ impl Manifest {
         );
         e.insert(
             "ws:app.json-paths".into(),
-            Ident::List(inputs.app_json_paths.iter().map(|p| path_text(p)).collect()),
+            Ident::List(inputs.app_json_paths.iter().map(|p| path_key(p)).collect()),
         );
         match &inputs.al_walk {
             Err(err) => {
@@ -410,13 +414,13 @@ impl Manifest {
                         inputs
                             .al_files
                             .iter()
-                            .map(|f| f.rel_posix.clone())
+                            .map(|f| rel_key(&f.rel_posix, &f.abs_path))
                             .collect(),
                     ),
                 );
                 for f in &inputs.al_files {
                     e.insert(
-                        format!("al:{}", f.rel_posix),
+                        format!("al:{}", rel_key(&f.rel_posix, &f.abs_path)),
                         match &f.text {
                             Ok(t) => Ident::bytes(t.as_bytes()),
                             Err(why) => Ident::Unreadable(why.clone()),
@@ -436,11 +440,10 @@ impl Manifest {
                             (
                                 d.spelled.clone(),
                                 Ident::bytes(&d.app_json_bytes),
-                                d.files
+                                d.file_keys
                                     .iter()
-                                    .map(|f| {
-                                        (f.virtual_path.clone(), Ident::bytes(f.text.as_bytes()))
-                                    })
+                                    .zip(d.files.iter())
+                                    .map(|(key, f)| (key.clone(), Ident::bytes(f.text.as_bytes())))
                                     .collect(),
                             )
                         })
@@ -451,7 +454,7 @@ impl Manifest {
         let consumed = inputs.closure.consumed();
         e.insert(
             "pkg:list".into(),
-            Ident::List(consumed.0.iter().map(|(p, _)| path_text(p)).collect()),
+            Ident::List(consumed.0.iter().map(|(p, _)| path_key(p)).collect()),
         );
         e.insert(
             "pkg:unreadable-folders".into(),
@@ -460,12 +463,12 @@ impl Manifest {
                     .closure
                     .unreadable
                     .iter()
-                    .map(|(p, _)| path_text(p))
+                    .map(|(p, _)| path_key(p))
                     .collect(),
             ),
         );
         for (p, state) in &consumed.0 {
-            e.insert(format!("pkg:{}", path_text(p)), package_ident(state));
+            e.insert(format!("pkg:{}", path_key(p)), package_ident(state));
         }
         Manifest {
             entries: e,
@@ -552,7 +555,7 @@ impl Manifest {
         paths.sort();
         e.insert(
             "ws:app.json-paths".into(),
-            Ident::List(paths.iter().map(|p| path_text(p)).collect()),
+            Ident::List(paths.iter().map(|p| path_key(p)).collect()),
         );
         let walk =
             crate::source_text::discover_al_files(workspace, crate::source_text::NestedApps::Walk);
@@ -560,14 +563,23 @@ impl Manifest {
             Err(err) => Ident::Unreadable(err.to_string()),
             Ok(found) => {
                 for f in &found {
-                    file(&mut e, format!("al:{}", f.rel_posix), &f.abs_path, &|| {
-                        match crate::source_text::read_al_source(&f.abs_path) {
+                    let key = format!("al:{}", rel_key(&f.rel_posix, &f.abs_path));
+                    file(
+                        &mut e,
+                        key,
+                        &f.abs_path,
+                        &|| match crate::source_text::read_al_source(&f.abs_path) {
                             Ok(t) => Ident::bytes(t.as_bytes()),
                             Err(err) => Ident::Unreadable(err.to_string()),
-                        }
-                    });
+                        },
+                    );
                 }
-                Ident::List(found.into_iter().map(|f| f.rel_posix).collect())
+                Ident::List(
+                    found
+                        .iter()
+                        .map(|f| rel_key(&f.rel_posix, &f.abs_path))
+                        .collect(),
+                )
             }
         };
         e.insert("ws:al-walk".into(), listing);
@@ -576,7 +588,7 @@ impl Manifest {
         for f in &files {
             file(
                 &mut e,
-                format!("pkg:{}", path_text(&f.path)),
+                format!("pkg:{}", path_key(&f.path)),
                 &f.path,
                 &|| {
                     let m =
@@ -591,12 +603,14 @@ impl Manifest {
         let walked = crate::program::source_deps::walk_with(
             workspace,
             &injected.sources,
-            &mut |spelled, rel, path| match cached(&src_key(spelled, rel), path, &|| {
-                match crate::source_text::read_al_source(path) {
+            &mut |spelled, rel, path| match cached(
+                &src_key(spelled, &rel_key(rel, path)),
+                path,
+                &|| match crate::source_text::read_al_source(path) {
                     Ok(t) => Ident::bytes(t.as_bytes()),
                     Err(err) => Ident::Unreadable(err.to_string()),
-                }
-            }) {
+                },
+            ) {
                 Ident::Unreadable(why) => Err(why),
                 id => Ok(id),
             },
@@ -609,7 +623,10 @@ impl Manifest {
                         (
                             d.spelled,
                             Ident::bytes(&d.app_json_bytes),
-                            d.files.into_iter().map(|(rel, _, id)| (rel, id)).collect(),
+                            d.files
+                                .into_iter()
+                                .map(|(rel, abs, id)| (rel_key(&rel, &abs), id))
+                                .collect(),
                         )
                     })
                     .collect()
@@ -617,11 +634,11 @@ impl Manifest {
         );
         e.insert(
             "pkg:list".into(),
-            Ident::List(files.iter().map(|f| path_text(&f.path)).collect()),
+            Ident::List(files.iter().map(|f| path_key(&f.path)).collect()),
         );
         e.insert(
             "pkg:unreadable-folders".into(),
-            Ident::List(unreadable.iter().map(|(p, _)| path_text(p)).collect()),
+            Ident::List(unreadable.iter().map(|(p, _)| path_key(p)).collect()),
         );
         Manifest {
             entries: e,
@@ -815,15 +832,17 @@ impl Manifest {
         for k in &differs {
             let k = k.as_str();
             let c = if let Some(rel) = k.strip_prefix("al:") {
-                let path = Some(path_text(&workspace.join(rel)));
+                let path = Some(path_text(&workspace.join(key_path(rel))));
                 if one_sided(k) {
                     change("al-walk", path, side(k))
                 } else {
                     change("al-file", path, None)
                 }
             } else if let Some(rest) = k.strip_prefix("src:") {
+                // The configured spelling holds no NUL, so the first NUL ends
+                // it (an encoded `rel` starts with its own).
                 let (spelled, rel) = rest.split_once('\u{0}').unwrap_or((rest, ""));
-                let path = Some(path_text(&workspace.join(spelled).join(rel)));
+                let path = Some(path_text(&workspace.join(spelled).join(key_path(rel))));
                 change(
                     src_category(spelled),
                     path,
@@ -873,14 +892,19 @@ impl Manifest {
                     Some("the package folders that could not be read".into()),
                 )
             } else if let Some(p) = k.strip_prefix("pkg:")
-                && injected_roots.iter().any(|r| Path::new(p).starts_with(r))
+                && injected_roots.iter().any(|r| key_path(p).starts_with(r))
             {
-                change("injected-packages", Some(p.to_string()), side_if(k))
+                change(
+                    "injected-packages",
+                    Some(path_text(&key_path(p))),
+                    side_if(k),
+                )
             } else if let Some(p) = k.strip_prefix("pkg:") {
+                let p = path_text(&key_path(p));
                 if one_sided(k) {
-                    change("package-list", Some(p.to_string()), side(k))
+                    change("package-list", Some(p), side(k))
                 } else {
-                    change("package", Some(p.to_string()), None)
+                    change("package", Some(p), None)
                 }
             } else if let Some(name) = k.strip_prefix("ws:") {
                 let path = || Some(path_text(&workspace.join(name)));

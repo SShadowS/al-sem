@@ -57,6 +57,9 @@ pub struct SourceDependency {
     pub app_json_bytes: Vec<u8>,
     /// Its `.al` files, `rel_posix` under `root`, sorted by the walk.
     pub files: Arc<Vec<SourceFile>>,
+    /// Each file's lossless key ([`crate::source_text::rel_key`]), in
+    /// `files` order: the resident manifest's `src:` keys (TLS-30).
+    pub file_keys: Vec<String>,
     /// blake3 over the `app.json` bytes and every file's path and text, each
     /// length-prefixed, in walk order. Unlike a `.app`'s source hash it
     /// covers the paths, so a rename is a change.
@@ -125,9 +128,11 @@ impl Walked<String> {
         };
         put(&self.app_json_bytes);
         let mut files = Vec::with_capacity(self.files.len());
-        for (rel, _, text) in self.files {
+        let mut file_keys = Vec::with_capacity(self.files.len());
+        for (rel, abs, text) in self.files {
             put(rel.as_bytes());
             put(text.as_bytes());
+            file_keys.push(crate::source_text::rel_key(&rel, &abs));
             files.push(SourceFile {
                 virtual_path: rel,
                 text: text.into(),
@@ -139,6 +144,7 @@ impl Walked<String> {
             app_json: self.app_json,
             app_json_bytes: self.app_json_bytes,
             files: Arc::new(files),
+            file_keys,
             content_hash: hasher.finalize().to_hex().to_string(),
         }
     }
