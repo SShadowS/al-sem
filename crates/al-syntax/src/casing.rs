@@ -17,7 +17,9 @@
 //! is the *only* one). A 1:n fold breaks the "identifier folds to one canonical string"
 //! invariant every fold call site in this codebase relies on, and is a *linguistic*
 //! casing operation the compiler does not perform on symbol names (matching .NET
-//! `OrdinalIgnoreCase`, which never applies full/special casing).
+//! `OrdinalIgnoreCase`, which never applies full/special casing). `str::to_lowercase()`
+//! also differs on one context-sensitive case: a word-final capital sigma `Σ` (U+03A3)
+//! becomes `ς`, where this fold gives `σ` (TLS-42 measured both, over every scalar).
 //!
 //! Fold behavior on the characters that matter:
 //! - **`ß` (German sharp S) stays `ß`.** Its only case transform is an *uppercase*

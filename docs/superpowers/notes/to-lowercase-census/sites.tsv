@@ -1,0 +1,329 @@
+src/bin/aldump.rs:361	type-or-keyword-text	file text prefix checked against "codeunit" keyword (dev tool)
+src/bin/aldump.rs:1075	user-text	CLI arg Obj::Routine target
+src/bin/aldump.rs:1112	ident-self	routine name vs CLI target, both to_lowercase (dev tool)
+src/bin/aldump.rs:1115	ident-self	object name vs CLI target, both to_lowercase (dev tool)
+src/engine/batch/manifest.rs:120	path-or-file	Windows-only lowercase of path component in manifest path canonicalization
+src/engine/deps/app_package_zip.rs:465	path-or-file	zip entry name lowercased for suffix match
+src/engine/deps/dep_artifact_l4.rs:101	path-or-file	zip entry name suffix ".al" check
+src/engine/deps/dep_artifact_l4.rs:517	type-or-keyword-text	attribute names to attr_names_lc for TryFunction gate
+src/engine/deps/projection.rs:187	type-or-keyword-text	type text lowercased for ^Record prefix check
+src/engine/deps/projection.rs:320	ident-self	field name key; probed at projection.rs:334 with to_lowercase
+src/engine/deps/projection.rs:334	ident-self	key field name probes fields_by_name built at projection.rs:320, both to_lowercase
+src/engine/deps/symbol_reference.rs:562	type-or-keyword-text	symbol-reference property name lookup key, both to_lowercase
+src/engine/deps/symbol_reference.rs:564	type-or-keyword-text	symbol-reference property name compared with lowercased query
+src/engine/deps/symbol_reference.rs:776	type-or-keyword-text	attribute arg text vs true/false; lowercase stored as value
+src/engine/deps/symbol_reference.rs:832	ident-vs-literal	attribute arg qualifier vs object-type keyword list
+src/engine/deps/symbol_reference.rs:1041	type-or-keyword-text	ABI attribute name matched against event attribute literals
+src/engine/deps/symbol_reference.rs:1138	type-or-keyword-text	ABI property name vs "calcformula"/"fieldclass"
+src/engine/deps/symbol_reference.rs:1143	type-or-keyword-text	ABI property value fieldclass text contains flowfield/flowfilter
+src/engine/deps/symbol_reference.rs:1156	type-or-keyword-text	ABI field data type base token for blob-like check
+src/engine/deps/symbol_reference.rs:1438	type-or-keyword-text	InherentCommitBehavior property member text vs ignore/error/allow
+src/engine/deps/symbol_reference.rs:1439	type-or-keyword-text	InherentCommitBehavior property text (no :: qualifier) vs option literals
+src/engine/gate/diff/cli.rs:78	path-or-file	CLI arg extension ".app" check
+src/engine/gate/diff/cli.rs:98	path-or-file	snapshot path extension hint (.json/.cbor/.gz)
+src/engine/gate/diff/renames.rs:241	ident-self	display name lowercased in rename grouping key; both sides to_lowercase
+src/engine/gate/policy/predicate_fields.rs:390	ident-vs-literal	object type keyword lowercased for policy predicate matching
+src/engine/ids.rs:243	identity	return type text lowercased into canonical routine signature (hashed)
+src/engine/ids.rs:245	identity	routine name lowercased into canonical signature (hashed id)
+src/engine/ids.rs:260	identity	contract-fact param name lowercased into canonical param spec (fingerprint)
+src/engine/ids.rs:262	identity	param type text lowercased into canonical param spec (fingerprint)
+src/engine/ids.rs:327	identity	routine_name lowercased into canonical routine key hash
+src/engine/ids.rs:336	identity	enclosing member lowercased into routine key hash
+src/engine/ids.rs:348	identity	app guid lowercased into sha256 routine app scope
+src/engine/ids.rs:426	identity	member lowercased into discriminated stable id hash
+src/engine/impact/base.rs:402	other	dependency app name as map key when id empty (both sides same code)
+src/engine/impact/delta.rs:535	ident-self	display name lowercased; compared with n.to_lowercase() at :541
+src/engine/impact/delta.rs:541	ident-self	candidate display name vs name built at :535, both to_lowercase
+src/engine/impact/keys.rs:341	identity	literal value lowercased into impact site key text
+src/engine/impact/keys.rs:344	identity	enum name lowercased into impact key text
+src/engine/impact/keys.rs:345	identity	enum member lowercased into impact key text
+src/engine/impact/keys.rs:349	identity	table field name lowercased into impact key text
+src/engine/impact/keys.rs:374	identity	label/name lowercased into emitted "label:{name}" impact key
+src/engine/impact/keys.rs:376	type-or-keyword-text	declared type text starts_with("label")
+src/engine/impact/keys.rs:384	identity	expression text lowercased then hashed into impact key
+src/engine/impact/keys.rs:422	identity	record op name lowercased into impact site ident
+src/engine/impact/keys.rs:423	identity	record variable name lowercased into impact site ident
+src/engine/impact/keys.rs:444	identity	callee text lowercased into impact call ident
+src/engine/l4/analysis.rs:200	ident-self	field name key; probed at summary_runner.rs:778 with to_lowercase
+src/engine/l4/capability_cone.rs:234	type-or-keyword-text	DataScope enum text contains ::company/::user
+src/engine/l4/capability_cone.rs:251	type-or-keyword-text	declared type text vs page/report
+src/engine/l4/capability_cone.rs:339	identity	identifier lowercased then emitted as ValueSource var_name (golden-visible)
+src/engine/l4/capability_cone.rs:423	ident-self	receiver lowercased to probe variables map built at :592 via to_lowercase
+src/engine/l4/capability_cone.rs:427	type-or-keyword-text	variable declared type lowercased for record prefix checks
+src/engine/l4/capability_cone.rs:592	ident-self	variable name key; probed with to_lowercase at :423/:636/:339
+src/engine/l4/capability_cone.rs:636	ident-self	receiver type lookup in variables map built at :592, both to_lowercase
+src/engine/l4/capability_cone.rs:797	ident-vs-literal	receiver|method key matched against "page|runmodal"/"report|execute"
+src/engine/l4/capability_cone.rs:879	ident-vs-literal	receiver vs "session" and method vs "logmessage"
+src/engine/l4/capability_cone.rs:881	ident-vs-literal	bare callee name vs "logmessage"
+src/engine/l4/capability_cone.rs:914	ident-vs-literal	receiver vs "isolatedstorage"
+src/engine/l4/capability_cone.rs:917	ident-vs-literal	method name matched in isolated_storage_op literals
+src/engine/l4/capability_cone.rs:963	ident-vs-literal	bare callee name vs "hyperlink"
+src/engine/l4/capability_cone.rs:995	ident-vs-literal	method name passed to is_file_write_call literal match
+src/engine/l4/capability_cone.rs:1066	ident-vs-literal	bare callee name matched against confirm/message/error
+src/engine/l4/capability_cone.rs:1095	ident-vs-literal	bare callee name vs "strmenu"
+src/engine/l4/capability_cone.rs:1100	ident-vs-literal	method name vs "runmodal"/"run"
+src/engine/l4/capability_cone.rs:1104	ident-vs-literal	receiver vs "page"/"report" literals
+src/engine/l4/cfg_walker.rs:1120	ident-self	record var name vs param.name_lc built summary_runner.rs:912 via to_lowercase
+src/engine/l4/cfg_walker.rs:1251	ident-self	source var name vs param.name_lc built summary_runner.rs:912 via to_lowercase
+src/engine/l4/cfg_walker.rs:1489	ident-self	field-access var name vs param.name_lc built summary_runner.rs:912 via to_lowercase
+src/engine/l4/cfg_walker.rs:1692	ident-self	field-access var name vs param.name_lc built summary_runner.rs:912 via to_lowercase
+src/engine/l4/cfg_walker.rs:1773	ident-self	field-access var name vs param.name_lc built summary_runner.rs:912 via to_lowercase
+src/engine/l4/cfg_walker.rs:1800	ident-self	source var name vs param.name_lc built summary_runner.rs:912 via to_lowercase
+src/engine/l5/cross_rules.rs:747	ident-self	variant arg/param/var names folded both sides, all to_lowercase
+src/engine/l5/cross_rules.rs:786	ident-vs-fold	param name vs var_assignments.lhs_name (ascii-lowered, ir_walk.rs:69)
+src/engine/l5/detectors/d10.rs:74	ident-self	loop driver var name, both sides to_lowercase
+src/engine/l5/detectors/d10.rs:87	ident-self	loop driver var name, both sides to_lowercase
+src/engine/l5/detectors/d11.rs:77	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d11.rs:84	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d11.rs:99	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d18.rs:112	ident-self	record var in in-memory dedup key
+src/engine/l5/detectors/d18.rs:119	identity	record var/field lower in finding id and loose_subject key
+src/engine/l5/detectors/d18.rs:164	identity	record var/field lower in finding id and loose_subject key
+src/engine/l5/detectors/d18.rs:165	identity	record var/field lower in finding id and loose_subject key
+src/engine/l5/detectors/d18.rs:219	identity	record var/field lower in finding id and loose_subject key
+src/engine/l5/detectors/d19.rs:90	ident-vs-fold	param name vs identifier_references ascii-lowered (ir_walk.rs:1275)
+src/engine/l5/detectors/d21.rs:64	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d21.rs:71	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d21.rs:86	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d22.rs:54	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d22.rs:61	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d22.rs:65	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d22.rs:95	ident-self	field name vs table field name/CalcFields arg, all to_lowercase
+src/engine/l5/detectors/d22.rs:99	ident-self	field name vs table field name/CalcFields arg, all to_lowercase
+src/engine/l5/detectors/d22.rs:220	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d22.rs:232	ident-self	field name vs table field name/CalcFields arg, all to_lowercase
+src/engine/l5/detectors/d29.rs:37	ident-vs-literal	event name matched to modify-event patterns
+src/engine/l5/detectors/d29.rs:113	ident-self	record param name vs op var, both to_lowercase
+src/engine/l5/detectors/d29.rs:127	ident-self	record param name vs op var, both to_lowercase
+src/engine/l5/detectors/d3.rs:53	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:102	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:197	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:207	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:249	ident-self	table field names, to_lowercase like normalize_load_field_arg
+src/engine/l5/detectors/d3.rs:265	ident-self	table field names, to_lowercase like normalize_load_field_arg
+src/engine/l5/detectors/d3.rs:291	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:324	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:330	identity	accessed field name lands in finding root-cause text
+src/engine/l5/detectors/d3.rs:369	ident-self	record var / argument text names, all to_lowercase
+src/engine/l5/detectors/d3.rs:530	ident-self	table field names, to_lowercase like normalize_load_field_arg
+src/engine/l5/detectors/d32.rs:41	ident-vs-literal	argument text matched to "true"/"false" literals
+src/engine/l5/detectors/d32.rs:56	type-or-keyword-text	type text searched for "boolean"
+src/engine/l5/detectors/d33.rs:66	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d33.rs:75	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d36.rs:59	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d36.rs:68	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d36.rs:85	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d36.rs:97	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d37.rs:102	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d37.rs:110	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d37.rs:135	ident-vs-fold	vs binding.source_variable_name ascii-lowered (ir_walk.rs:2882) at d37.rs:268
+src/engine/l5/detectors/d37.rs:206	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d39.rs:262	ident-vs-fold	vs source_variable_name ascii-lowered (ir_walk.rs:2882) at d39.rs:196
+src/engine/l5/detectors/d4.rs:112	ident-self	internal grouping key with record var name
+src/engine/l5/detectors/d4.rs:134	ident-self	record var name keys qualifying-count map, internal
+src/engine/l5/detectors/d4.rs:144	identity	record var lower goes into finding id d4/routine/loop/var
+src/engine/l5/detectors/d41.rs:109	ident-vs-fold	vs source_variable_name ascii-lowered (ir_walk.rs:2882) at d41.rs:99
+src/engine/l5/detectors/d42.rs:60	ident-vs-fold	vs source_variable_name ascii-lowered (ir_walk.rs:2882) at d42.rs:209
+src/engine/l5/detectors/d43.rs:162	ident-vs-fold	arg text vs condition_references ascii-lowered (ir_walk.rs:784) via :182
+src/engine/l5/detectors/d43.rs:180	ident-vs-fold	vs cref.identifier ascii-lowered (ir_walk.rs:784,797,2420)
+src/engine/l5/detectors/d5.rs:71	ident-vs-fold	driver later vs loop exhausting_advance var ascii-lowered (ir_walk.rs:906)
+src/engine/l5/detectors/d5.rs:99	ident-self	record var name vs driver, both to_lowercase
+src/engine/l5/detectors/d5.rs:134	ident-self	record var name vs driver, both to_lowercase
+src/engine/l5/detectors/d5.rs:149	ident-self	record var name vs driver, both to_lowercase
+src/engine/l5/detectors/d5.rs:157	ident-self	record var name vs driver, both to_lowercase
+src/engine/l5/detectors/d52.rs:61	ident-self	record param/var names, all to_lowercase
+src/engine/l5/detectors/d52.rs:68	ident-self	record param/var names, all to_lowercase
+src/engine/l5/detectors/d52.rs:112	ident-self	record param/var names, all to_lowercase
+src/engine/l5/detectors/d56.rs:160	ident-vs-fold	vs var_assignments lhs_name/rhs_identifier ascii-lowered (ir_walk.rs:69,1087)
+src/engine/l5/detectors/d56.rs:210	ident-vs-fold	vs var_assignments lhs_name/rhs_identifier ascii-lowered (ir_walk.rs:69,1087)
+src/engine/l5/detectors/d56.rs:248	ident-vs-fold	vs var_assignments lhs_name/rhs_identifier ascii-lowered (ir_walk.rs:69,1087)
+src/engine/l5/detectors/d56.rs:263	ident-vs-fold	vs var_assignments lhs_name/rhs_identifier ascii-lowered (ir_walk.rs:69,1087)
+src/engine/l5/detectors/d56.rs:295	ident-vs-fold	vs var_assignments lhs_name/rhs_identifier ascii-lowered (ir_walk.rs:69,1087)
+src/engine/l5/detectors/d56.rs:302	ident-vs-fold	vs var_assignments lhs_name/rhs_identifier ascii-lowered (ir_walk.rs:69,1087)
+src/engine/l5/detectors/d56.rs:308	ident-self	field name vs write_targets/pk via to_lowercase
+src/engine/l5/detectors/d56.rs:310	ident-self	field name vs write_targets/pk via to_lowercase
+src/engine/l5/detectors/d56.rs:311	ident-self	field name vs write_targets/pk via to_lowercase
+src/engine/l5/detectors/d57.rs:74	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:86	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:93	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:119	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:123	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:127	type-or-keyword-text	declared type text list/dictionary of
+src/engine/l5/detectors/d57.rs:157	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:161	ident-self	var/receiver names, all to_lowercase
+src/engine/l5/detectors/d57.rs:214	identity	var name lower in root_cause_key and loose_subject key
+src/engine/l5/detectors/d57.rs:253	identity	var name lower in root_cause_key and loose_subject key
+src/engine/l5/detectors/d58.rs:43	type-or-keyword-text	declared type text startswith "query"
+src/engine/l5/detectors/d58.rs:46	ident-self	query var name vs call receiver, both to_lowercase
+src/engine/l5/detectors/d58.rs:60	ident-self	query var name vs call receiver, both to_lowercase
+src/engine/l5/detectors/d59.rs:25	identity	guard param name goes into loose_subject key (fingerprint)
+src/engine/l5/detectors/d60.rs:113	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d60.rs:126	identity	var_lc goes into root_cause_key and loose_subject; also vs ascii advance var
+src/engine/l5/detectors/d60.rs:156	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d60.rs:182	ident-self	record var names, all to_lowercase
+src/engine/l5/detectors/d61.rs:46	ident-vs-literal	guard param name vs "ishandled"/"handled" literals
+src/engine/l5/detectors/d61.rs:216	identity	guard var text in root-cause text; compared to ascii cref.identifier
+src/engine/l5/detectors/d62.rs:204	type-or-keyword-text	declared type text codeunit/feature telemetry
+src/engine/l5/detectors/d62.rs:207	ident-self	var name vs receiver, both to_lowercase
+src/engine/l5/detectors/d62.rs:220	ident-self	var name vs receiver, both to_lowercase
+src/engine/l5/detectors/d65.rs:91	identity	compared value text goes into RuleKey in finding ids
+src/engine/l5/detectors/mod.rs:199	ident-vs-fold	load-points key probed with source_variable_name ascii (d40.rs:134)
+src/engine/l5/detectors/mod.rs:229	ident-vs-fold	key probed by ascii-lowered source_variable_name (d40.rs:134)
+src/engine/l5/detectors/mod.rs:508	ident-self	field names via to_lowercase, matched to to_lowercase args
+src/engine/l5/detectors/mod.rs:526	ident-self	field names via to_lowercase, matched to to_lowercase args
+src/engine/l5/detectors/mod.rs:542	ident-self	field names via to_lowercase, matched to to_lowercase args
+src/engine/l5/detectors/mod.rs:828	ident-vs-fold	var_lc vs binding.source_variable_name ascii (mod.rs:942, ir_walk.rs:2882)
+src/engine/l5/detectors/mod.rs:835	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:889	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:896	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:967	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:998	ident-vs-fold	vs eq_fold_identifier (mod.rs:1048,1054) and asg.lhs_name ascii (mod.rs:1020)
+src/engine/l5/detectors/mod.rs:1104	ident-vs-fold	var_lc vs source_variable_name ascii (mod.rs:1155,942)
+src/engine/l5/detectors/mod.rs:1113	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1127	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1183	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1274	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1297	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1371	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1375	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/detectors/mod.rs:1506	ident-self	record var/receiver/param names, all to_lowercase
+src/engine/l5/digest_cli.rs:122	path-or-file	changed-file path/key lowercased
+src/engine/l5/digest_cli.rs:182	path-or-file	changed-file path/key lowercased
+src/engine/l5/digest_cli.rs:471	path-or-file	changed-file path/key lowercased
+src/engine/l5/digest_cli.rs:601	path-or-file	changed-file path/key lowercased
+src/engine/l5/event_flow.rs:929	other	guard param name in pub struct field; no reader found
+src/engine/l5/explain.rs:1010	user-text	user-typed field selector vs field names
+src/engine/l5/explain.rs:1014	user-text	user-typed field selector vs field names
+src/engine/l5/literal_values.rs:237	ident-vs-fold	fold() of names; vs a.lhs_name ascii-lowered at :461 (ir_walk.rs:69)
+src/engine/l5/prove.rs:821	user-text	user query vs resource display/id tail
+src/engine/l5/prove.rs:823	user-text	user query vs resource display/id tail
+src/engine/l5/prove.rs:835	user-text	user query vs resource display/id tail
+src/engine/l5/prove_slice.rs:700	user-text	user needle matched in message text/var display
+src/engine/l5/prove_slice.rs:705	user-text	user needle matched in message text/var display
+src/engine/l5/prove_slice.rs:706	user-text	user needle matched in message text/var display
+src/engine/l5/routine_rollup.rs:474	ident-self	enclosing member in display grouping key, never probed; sibling keys ascii
+src/engine/l5/selector_index.rs:26	ident-self	display key built and probed with same normalizer
+src/engine/l5/selector_index.rs:220	ident-vs-literal	selector first word vs OBJECT_TYPE_WORDS literals
+src/engine/l5/selector_index.rs:588	user-text	asked selector vs candidate for did-you-mean distance
+src/engine/l5/selector_index.rs:1102	ident-self	selector parts and object/routine names, both to_lowercase
+src/engine/l5/selector_index.rs:1105	ident-self	selector parts and object/routine names, both to_lowercase
+src/engine/l5/selector_index.rs:1109	ident-self	selector parts and object/routine names, both to_lowercase
+src/engine/l5/selector_index.rs:1129	ident-vs-literal	selector first word vs OBJECT_TYPE_WORDS literals
+src/engine/l5/selector_index.rs:1132	type-or-keyword-text	object type word of selector
+src/engine/l5/selector_index.rs:1133	ident-self	selector parts and object/routine names, both to_lowercase
+src/engine/l5/selector_index.rs:1134	ident-self	selector parts and object/routine names, both to_lowercase
+src/engine/l5/selector_index.rs:1135	ident-self	selector parts and object/routine names, both to_lowercase
+src/engine/l5/snapshot_full.rs:866	type-or-keyword-text	accessModifier keyword matched to public/internal literals
+src/engine/l5/snapshot_full.rs:1518	identity	enclosingMember sort tie-break; orders golden inventory rows
+src/engine/l5/table_display.rs:51	ident-self	record var name vs record_variables name, both to_lowercase
+src/engine/l5/table_display.rs:55	ident-self	record var name vs record_variables name, both to_lowercase
+src/engine/return_summary.rs:328	type-or-keyword-text	attribute arg member text vs "ignore"/"error" option text
+src/engine/return_summary.rs:356	type-or-keyword-text	attribute arg member text vs "collect" option text
+src/engine/root_classification.rs:347	type-or-keyword-text	attribute name compared with "test"
+src/engine/root_classification.rs:610	ident-self	routine_name from roots config lowercased; compared to r.name.to_lowercase at :614
+src/engine/root_classification.rs:614	ident-self	r.name lowercased vs lc built at :610, both to_lowercase
+src/engine/snapshot.rs:246	path-or-file	directory name vs .alpackages/.git skip list
+src/engine/snapshot.rs:255	path-or-file	file extension compared with "al"
+src/engine/snapshot.rs:261	path-or-file	path component lowercased into file sort_key
+src/engine/snapshot.rs:317	path-or-file	directory name vs node_modules/.alpackages
+src/engine/snapshot.rs:324	path-or-file	file name compared with app.json
+src/program/abi_ingest.rs:563	type-or-keyword-text	type text fold for comparison (quotes, whitespace, lowercase)
+src/program/attributes.rs:135	type-or-keyword-text	attribute name lookup key
+src/program/attributes.rs:136	type-or-keyword-text	attribute name compared, both sides to_lowercase
+src/program/attributes.rs:163	type-or-keyword-text	attribute boolean value matched to "true"/"false"
+src/program/attributes.rs:221	type-or-keyword-text	ObsoleteState enum member compared to "removed"
+src/program/body/capability/dispatch_background.rs:71	ident-vs-literal	receiver|method key matched to "page|runmodal" literals
+src/program/body/capability/io.rs:94	ident-vs-literal	receiver "session" and method "logmessage" literals
+src/program/body/capability/io.rs:96	ident-vs-literal	bare callee name compared to "logmessage"
+src/program/body/capability/io.rs:134	type-or-keyword-text	DataScope argument text searched for "::company"/"::user"
+src/program/body/capability/io.rs:156	ident-vs-literal	receiver compared to "isolatedstorage"
+src/program/body/capability/io.rs:159	ident-vs-literal	method name matched to isolated_storage_op literals
+src/program/body/capability/io.rs:211	ident-vs-literal	bare callee name compared to "hyperlink"
+src/program/body/capability/io.rs:265	ident-vs-literal	method name matched to file-write literals
+src/program/body/capability/mod.rs:263	ident-self	receiver name probed in variables map keyed by to_lowercase (capability/mod.rs:358)
+src/program/body/capability/mod.rs:358	ident-self	variable name key built with to_lowercase, probed likewise
+src/program/body/capability/ui_events_error.rs:40	ident-vs-literal	bare callee matched to "confirm"/"message"/"error"
+src/program/body/capability/ui_events_error.rs:63	type-or-keyword-text	declared type compared to "page"/"report"
+src/program/body/capability/ui_events_error.rs:78	ident-vs-literal	bare callee compared to "strmenu"
+src/program/body/capability/ui_events_error.rs:83	ident-vs-literal	method name matched to "runmodal"/"run"
+src/program/body/capability/ui_events_error.rs:84	ident-vs-literal	receiver matched to "page"/"report"
+src/program/body/capability/value_source.rs:73	ident-self	identifier name lowercased then probed in ctx.variables (to_lowercase keys)
+src/program/body/capability/value_source.rs:222	ident-self	receiver lowercased, probed in ctx.variables
+src/program/body/capability/value_source.rs:228	type-or-keyword-text	declared type text checked for "record " prefix
+src/program/body/control_context.rs:103	type-or-keyword-text	parameter type text compared to "boolean"
+src/program/body/control_context.rs:104	ident-vs-fold	param name to_lowercase vs g.identifier built with to_ascii_lowercase (ir_walk.rs:784,2420)
+src/program/body/control_context.rs:112	ident-vs-fold	IsHandled var to_lowercase vs g.identifier to_ascii_lowercase (ir_walk.rs:784,2420)
+src/program/body/control_context.rs:513	ident-self	call-argument text set, probed with to_lowercase var names
+src/program/body/control_context.rs:522	type-or-keyword-text	declared type compared to "boolean"
+src/program/body/control_context.rs:523	ident-self	var name probed in to_lowercase-built arg set
+src/program/body/control_context.rs:525	ident-vs-fold	out names to_lowercase, later matched to g.identifier to_ascii_lowercase (ir_walk.rs:784)
+src/program/body/features.rs:945	ident-self	label segment unquoted lowercased; consumers fold with literal_values.rs:237 to_lowercase
+src/program/body/ir_walk.rs:1965	ident-vs-literal	method name (trimmed) checked against VARIANT_TESTS literals
+src/program/body/ir_walk.rs:2349	ident-self	table name from Database::"T" lowercased, probed in to_lowercase maps
+src/program/body/ir_walk.rs:2361	ident-self	bare name for literal flow; by_name keyed via literal_values.rs:237 to_lowercase
+src/program/body/ir_walk.rs:2368	ident-self	quoted bare name; same to_lowercase as literal_values.rs:237
+src/program/body/ir_walk.rs:3150	identity	param name lowercased into record-variable id "{routine}/rv/{name}"
+src/program/body/ir_walk.rs:3171	identity	variable name lowercased into record-variable id
+src/program/body/ir_walk.rs:3189	identity	variable name lowercased into record-variable id
+src/program/body/ir_walk.rs:3924	type-or-keyword-text	InherentCommitBehavior enum member lowercased, ranked via literals
+src/program/body/ir_walk.rs:3925	type-or-keyword-text	InherentCommitBehavior value lowercased, ranked via literals
+src/program/body/l2_workspace.rs:183	type-or-keyword-text	attribute names lowercased, matched to literal (TryFunction guard)
+src/program/body/l2_workspace.rs:268	other	comment text only, not a call
+src/program/body/rules.rs:641	ident-vs-literal	member name tested with starts_with("is")
+src/program/impact_graph/cone_probe.rs:201	ident-vs-fold	routine name.to_lowercase() vs r.name_lc built by fold_identifier at program/sig_fp.rs:158, graphify_export.rs:1109
+src/program/impact_graph/entries.rs:125	ident-vs-fold	enclosing_member_lc (fold_identifier, resolve/applicability.rs:430) re-lowercased; peer key entries.rs:168 raw to_lowercase
+src/program/impact_graph/entries.rs:168	ident-vs-fold	action name to_lowercase vs entries.rs:125 key from fold_identifier enclosing_member_lc
+src/program/impact_graph/facts.rs:207	type-or-keyword-text	attribute name compared to "test"
+src/program/model/abi_rows.rs:157	identity	param name lowercased into record-variable id "{routine}/rv/{name}"
+src/program/model/events.rs:133	type-or-keyword-text	attribute name matched to event attribute literals
+src/program/model/events.rs:147	identity	event name lowercased into event id "{object}/event/{name}"
+src/program/model/events.rs:182	type-or-keyword-text	object type text compared to object_type_lc
+src/program/model/events.rs:209	ident-vs-literal	record operation name matched to "insert"/"modify" literals
+src/program/model/extension_fields.rs:104	ident-vs-fold	field name to_lowercase key vs key members from lowerer fold_identifier (lower/mod.rs:849)
+src/program/model/extension_fields.rs:141	ident-self	table name probe, both sides to_lowercase
+src/program/model/extension_fields.rs:144	ident-self	table name compared, both sides to_lowercase
+src/program/model/flow_fields.rs:320	ident-vs-literal	method name from flow formula matched to literal functions
+src/program/model/flow_fields.rs:401	ident-self	table name key built with to_lowercase
+src/program/model/flow_fields.rs:419	ident-self	table name probe, same to_lowercase
+src/program/model/flow_fields.rs:546	ident-self	var_key, applied to both sides of every comparison
+src/program/model/record_types.rs:52	ident-self	record table name key; var names also to_lowercase in this file
+src/program/model/record_types.rs:67	type-or-keyword-text	declared type text checked for leading "record" keyword
+src/program/model/record_types.rs:110	other	doc comment text only, not a call
+src/program/model/record_types.rs:170	ident-self	record var name key, last-wins map; probed via op_variable_lc to_lowercase
+src/program/model/record_types.rs:215	ident-self	variable name to declared-type map; probed via to_lowercase
+src/program/model/record_types.rs:276	ident-vs-literal	record variable name compared to "rec"/"xrec"
+src/program/model/record_types.rs:291	ident-vs-literal	record variable name compared to "rec"/"xrec"
+src/program/model/record_types.rs:368	type-or-keyword-text	declared type compared to "recordref"
+src/program/model/record_types.rs:369	ident-self	recordref var-name set, probed with to_lowercase receiver (line 393)
+src/program/model/record_types.rs:377	ident-self	record var name to temp-state map key
+src/program/model/record_types.rs:393	ident-self	receiver lowercased, probed in recordref_var_names (same fold)
+src/program/model/record_types.rs:397	ident-vs-literal	method name matched to "open"/"gettable" arms
+src/program/model/record_types.rs:404	type-or-keyword-text	Open() second-argument text matched to "false"/"true"
+src/program/model/record_types.rs:421	ident-self	first arg identifier lowercased; probed in own to_lowercase maps
+src/program/model/record_types.rs:471	ident-self	local recordref var names set, probed with to_lowercase
+src/program/model/record_types.rs:481	ident-self	call argument text vs to_lowercase var name
+src/program/model/record_types.rs:490	ident-self	receiver vs to_lowercase var name
+src/program/model/record_types.rs:493	ident-vs-literal	method name matched to "open"/other literal arms
+src/program/model/record_types.rs:512	ident-self	assignment lhs vs to_lowercase var name
+src/program/model/symbol_table.rs:52	type-or-keyword-text	object type text in type/number key
+src/program/model/symbol_table.rs:57	ident-self	type/name key built and probed with to_lowercase
+src/program/model/symbol_table.rs:70	ident-self	table name key built and probed with to_lowercase (table_by_name)
+src/program/model/symbol_table.rs:100	type-or-keyword-text	object type text probing type/number key
+src/program/model/symbol_table.rs:105	ident-self	type/name key probe, same to_lowercase as build
+src/program/model/symbol_table.rs:111	ident-self	table_by_name probe against to_lowercase-built map
+src/program/model/workspace.rs:1097	ident-vs-fold	field name to_lowercase key vs key members from lowerer fold_identifier (al-syntax lower/mod.rs:849)
+src/program/model/workspace.rs:1129	type-or-keyword-text	TableType property value compared to "temporary"
+src/program/model/workspace.rs:1739	type-or-keyword-text	SourceTableTemporary property value compared to "true"
+src/program/model/workspace.rs:1747	type-or-keyword-text	boolean property value compared to "true"
+src/program/model/workspace.rs:1976	type-or-keyword-text	attribute names lowercased, matched to literal (TryFunction guard)
+src/program/model/workspace.rs:2028	ident-self	record var names set; probed with to_lowercase global name
+src/program/model/workspace.rs:2031	ident-self	global record var name probed in to_lowercase-built set
+src/program/model/workspace.rs:2185	ident-self	global record var map built with to_lowercase keys
+src/program/model/workspace.rs:2217	ident-vs-fold	arg text to_lowercase vs scope map keyed by ascii-lowercased PVariableSymbol.name (ir_walk.rs:3630)
+src/program/model/workspace.rs:2248	ident-vs-fold	receiver to_lowercase vs scope map keyed by ascii-lowercased var name (ir_walk.rs:3630)
+src/program/resolve/receiver.rs:3664	other	doc comment text only, not a call
+src/protocol.rs:35	path-or-file	Windows path lowercased for HashMap lookups
+src/source_text.rs:254	path-or-file	file name compared to "app.json"
+src/telemetry/hash.rs:25	identity	AL identifier lowercased before salted hash sent in telemetry
+src/telemetry/mod.rs:284	path-or-file	file extension for telemetry
+src/types.rs:33	type-or-keyword-text	object type keyword matched to literal arms
