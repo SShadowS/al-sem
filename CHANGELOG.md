@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscriber commits. The filter now keeps a site classified as a record operation, with two
   exceptions. On a `Record` whose table (or one of its extensions) declares a field of that name,
   it is a field read (`F.Count` with a field `Count`); a `RecordRef` has no fields by name, so
-  `RR.Count` stays the method. A bare name on the implicit `Rec` that a parameter, local, return
-  value or global declares is that variable (`exit(Count)` with a parameter `Count`); inside
+  `RR.Count` stays the method (alc 18.0.41 binds a parens-less `F.Count` to the field). A bare
+  name on the implicit `Rec` that a parameter, local, return value, global or the base object's
+  `protected var` declares is that variable (`exit(Count)` with a parameter `Count`); inside
   `with R do` the record's members come first, so those stay operations. It covers a member, the
   implicit `Rec`, an array element and a `with` frame. A table that does not resolve keeps the
   operation (its fields cannot be checked). Tests:
