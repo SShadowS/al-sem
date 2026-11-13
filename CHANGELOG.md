@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-36: cdo-gate runs serial by default; the parallel layout is opt-in, pinned, and lib_cdo runs its longest tests first)
+
+- **Serial is the default again.** A serial and a parallel gate on the same tree (`d234c4a6`,
+  server1): serial 875 s (impact 359, harness 42, lsp 7, l4 18, lib_cdo 274, peak 28.8 GB),
+  parallel 1,131 s (impact 510, lane 2 915 beside it, peak 27.0 GB). Lane 2 beside the impact
+  phase slows both more than the overlap saves. `CDO_GATE_LAYOUT=parallel` asks for the parallel
+  layout (still only when the memory check passes); `CDO_GATE_SERIAL=1` still wins over it.
+  Test: `gate_scripts::cdo_gate_is_serial_unless_parallel_is_asked`, with a discrimination proof.
+- **Lane 2 is pinned to a few CPUs beside the impact phase, and `lib_cdo` starts with its longest
+  tests.** TLS-32's first parallel gate fit easily in memory but saved no time: lane 2's tests ran
+  2.3-3.3× their time alone and the impact phase took 472 s against ~350. Each lib CDO test runs
+  parallel code inside (rayon), so "2 threads" fought the impact phase for every core.
+  - **The pin:** in the parallel layout, lane 2's phases run under `taskset`. Their thread pools
+    size themselves from the CPUs they may use, so lane 2 takes at most those.
+    - The CPUs are chosen by core type, from each CPU's maximum clock (sysfs) against the
+      fastest. Low-power cores (under 70%) are never used. The default is every efficiency core
+      (70-85%), so the impact phase keeps every performance core: on server1, a Core Ultra 9 185H,
+      that is 12-19.
+    - `CDO_GATE_LANE2_CPUS` takes a count (the last N non-low-power CPUs) or a list. Offline
+      CPUs are left out.
+    - On a CPU with no efficiency cores the default is the last 6. There is no pin when the
+      impact phase would keep fewer than 8 CPUs, or without `taskset`.
+    - The summary's layout line names the CPUs. (Review r1, Opus: "the last 6 CPUs" were 4
+      E-cores and both 2.5 GHz cores.)
+  - **Longest first:** libtest starts tests in name order, so `retained_emission` (~105 s alone)
+    started last. `lib_cdo` now runs its five longest tests by name first, then the rest, in
+    every layout, and the summary sums both runs. The second run's `--skip` matches substrings,
+    so the first run must report every long test or the phase fails: a renamed long test would
+    otherwise run in neither (review r1, sol and Opus).
+  - **Tests:** `gate_scripts::cdo_gate_pins_lane_two_by_core_type` (a fake host with sysfs and a
+    CPU mask), `gate_scripts::cdo_gate_runs_every_lane_two_command_pinned` and
+    `gate_scripts::lib_cdo_fails_when_a_long_test_is_not_found_by_name`, each with a
+    discrimination proof.
+  - **Measurement:** see the note `docs/superpowers/notes/2026-11-13-lib-cdo-census.md` (TLS-36
+    A/B); the result is the serial default above.
+
 ### Changed (TLS-32: cdo-gate runs lane 2 beside the impact phase when the host has the memory)
 
 - **`scripts/cdo-gate`'s test phases can overlap again, within the memory rules.**

@@ -88,15 +88,17 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud` on the Windows machine and
   `/home/sshadows/Projects/DO-cdo-baseline/Cloud` on the Linux machine (the same `bc3ccb18`
   worktree, transferred with matching hashes); pass it to `cdo-gate`.
-- **How `cdo-gate` runs (since 2026-11-09; layout TLS-32, 2026-11-13).** It builds every
-  target once, then runs `cli output_cdo` alone, then the impact ratchets
-  (`output_cdo::cdo_impact`) with lane 2 beside them when the memory allows:
-  `program_resolve_harness`, `lsp` (`program_graph::`, `snapshot_robustness::`),
-  `l4_summary_differential` and the lib's CDO tests (`--lib cdo`, not the whole lib), one
-  after another at `nice 10`. "The memory allows" means both the host's MemAvailable and
-  the container's free memory cover the two parts' worst plus 4 GiB, with lib_cdo at 2 or
-  1 thread(s). Otherwise lane 2 runs after them (`scripts/cdo-gate --layout` says which
-  now). Each phase has its own log under `target/cdo-gate-logs/<run>/`; the summary lists
+- **How `cdo-gate` runs (since 2026-11-09; layout TLS-32 and TLS-36, 2026-11-13).** It
+  builds every target once, then runs `cli output_cdo` alone, then the impact ratchets
+  (`output_cdo::cdo_impact`), then lane 2: `program_resolve_harness`, `lsp`
+  (`program_graph::`, `snapshot_robustness::`), `l4_summary_differential` and the lib's
+  CDO tests (`--lib cdo`, not the whole lib), one after another. **Serial is the default**:
+  on server1 it took 875 s against 1,131 s with lane 2 beside the impact phase (A/B on
+  `d234c4a6`, `docs/superpowers/notes/2026-11-13-lib-cdo-census.md`).
+  `CDO_GATE_LAYOUT=parallel` runs lane 2 beside the impact phase at `nice 10`, pinned to
+  the efficiency cores, when both the host's MemAvailable and the container's free memory
+  cover the two parts' worst plus 4 GiB (`scripts/cdo-gate --layout` says which it would
+  take now). Each phase has its own log under `target/cdo-gate-logs/<run>/`; the summary lists
   each phase's result, seconds and test counts, and the layout taken.
   `CDO_GATE_SERIAL=1` runs the phases in a row. A test that reads `CDO_WS` must go through `cdo_ws_or_enforce`, which fails
   the task gate when the calling test is outside the gate's filters (`on_the_cdo_gate`

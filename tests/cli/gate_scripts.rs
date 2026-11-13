@@ -315,6 +315,7 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", case.join("meminfo"))
             .env("CDO_GATE_CGROUP", &case)
+            .env("CDO_GATE_LAYOUT", "parallel")
             .env_remove("CDO_GATE_SERIAL");
         if serial {
             cmd.env("CDO_GATE_SERIAL", "1");
@@ -353,6 +354,7 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", &meminfo)
             .env("CDO_GATE_CGROUP", dir)
+            .env("CDO_GATE_LAYOUT", "parallel")
             .env_remove("CDO_GATE_SERIAL")
             .output()
             .expect("spawn bash scripts/cdo-gate --layout");
@@ -782,6 +784,263 @@ fn speed_warm_seeds_a_commit_from_its_trees_gate_binary() {
     let (code, text) = t2.speed(&["--warm", &head2], &cache2, false, &[]);
     assert_ne!(code, Some(0), "{text}");
     assert!(text.contains("building (once per commit)"), "{text}");
+}
+
+/// TLS-36: beside the impact phase, lane 2 is pinned by core type, read from a
+/// fake host: the CPU mask (`CDO_GATE_PROC_STATUS` for `/proc/self/status`) and
+/// sysfs (`CDO_GATE_SYS_CPU`: `online` and each CPU's `cpuinfo_max_freq`).
+/// - The host is a Core Ultra 9 185H as server1: CPUs 0-11 performance
+///   (4.8-5.1 GHz), 12-19 efficiency (3.8), 20-21 low-power (2.5).
+/// - The default takes every efficiency core (12-19); a count the last N
+///   non-low-power CPUs (`08` is eight); a list as given; 0 none.
+/// - Offline CPUs are left out. A CPU with no efficiency cores falls back to
+///   the last 6, and there is no pin when the impact phase would keep fewer
+///   than 8.
+///
+/// Mutations (2026-11-13): the low-power cut dropped (`mhz < 0.7 * top` never
+/// true) -> the default takes 12-21 (the low-power cores too) and fails; the
+/// efficiency band's upper edge dropped (every core counts as efficiency) ->
+/// the impact phase would keep fewer than 8, no pin, and the default fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn cdo_gate_pins_lane_two_by_core_type() {
+    // Without taskset the gate pins nothing (review r2, Opus): nothing to test.
+    let has_taskset = std::process::Command::new("sh")
+        .args(["-c", "command -v taskset"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_taskset {
+        eprintln!("cdo_gate_pins_lane_two_by_core_type: skipped, no taskset");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("meminfo"), "MemAvailable: 62914560 kB\n").unwrap();
+    std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
+    // A fake host: (CPU, max kHz) for each CPU, online list, CPU mask.
+    let host = |name: &str, cpus: &[(u32, u32)], online: &str, mask: &str| {
+        let sys = dir.path().join(name);
+        for &(c, khz) in cpus {
+            let f = sys.join(format!("cpu{c}/cpufreq"));
+            std::fs::create_dir_all(&f).unwrap();
+            std::fs::write(f.join("cpuinfo_max_freq"), format!("{khz}\n")).unwrap();
+        }
+        std::fs::write(sys.join("online"), format!("{online}\n")).unwrap();
+        std::fs::write(
+            sys.join("status"),
+            format!("Name:\tbash\nCpus_allowed_list:\t{mask}\n"),
+        )
+        .unwrap();
+        sys
+    };
+    let layout = |sys: &std::path::Path, want: Option<&str>| {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
+            .env("CDO_GATE_CGROUP", dir.path())
+            .env("CDO_GATE_LAYOUT", "parallel")
+            .env("CDO_GATE_PROC_STATUS", sys.join("status"))
+            .env("CDO_GATE_SYS_CPU", sys)
+            .env_remove("CDO_GATE_SERIAL")
+            .env_remove("CDO_GATE_LANE2_CPUS");
+        if let Some(w) = want {
+            cmd.env("CDO_GATE_LANE2_CPUS", w);
+        }
+        let out = cmd.output().expect("spawn bash scripts/cdo-gate --layout");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let check = |sys: &std::path::Path, want: Option<&str>, cpus: &str| {
+        let got = layout(sys, want);
+        assert!(
+            got.contains(&format!("lane 2 on CPUs {cpus} ")),
+            "{want:?}: want CPUs {cpus}, got {got}"
+        );
+    };
+    let ultra: Vec<(u32, u32)> = (0..22)
+        .map(|c| {
+            let khz = match c {
+                0 | 5..=11 => 4_800_000,
+                1..=4 => 5_100_000,
+                12..=19 => 3_800_000,
+                _ => 2_500_000,
+            };
+            (c, khz)
+        })
+        .collect();
+    let server1 = host("server1", &ultra, "0-21", "0-21");
+    check(&server1, None, "12,13,14,15,16,17,18,19");
+    check(&server1, Some("6"), "14,15,16,17,18,19");
+    check(&server1, Some("08"), "12,13,14,15,16,17,18,19");
+    check(&server1, Some("2-5"), "2-5");
+    check(&server1, Some("0"), "any");
+    // CPUs 18-21 offline: the efficiency cores left are 12-17.
+    let offline = host("offline", &ultra, "0-17", "0-21");
+    check(&offline, None, "12,13,14,15,16,17");
+    // No efficiency cores: the last 6; too few CPUs: no pin.
+    let even: Vec<(u32, u32)> = (0..22).map(|c| (c, 4_800_000)).collect();
+    check(
+        &host("even", &even, "0-21", "0-21"),
+        None,
+        "16,17,18,19,20,21",
+    );
+    let small: Vec<(u32, u32)> = (0..10).map(|c| (c, 4_800_000)).collect();
+    check(&host("small", &small, "0-9", "0-9"), None, "any");
+}
+
+/// TLS-36: every lane 2 command runs with the pin (`"${lane2_pin[@]}"`): the
+/// harness, lsp and l4 phases and both of lib_cdo's runs. The pin decided in
+/// `plan_layout` would otherwise not reach a phase that forgot it.
+///
+/// Mutation (2026-11-13): `"${lane2_pin[@]}"` dropped from `phase_lsp` ->
+/// named here.
+#[test]
+fn cdo_gate_runs_every_lane_two_command_pinned() {
+    let script = include_str!("../../scripts/cdo-gate");
+    let body = |head: &str| {
+        let start = script
+            .find(head)
+            .unwrap_or_else(|| panic!("scripts/cdo-gate has no `{head}`"));
+        let rest = &script[start..];
+        &rest[..rest.find("\n}").expect("a function's end")]
+    };
+    for (f, runs) in [
+        ("phase_harness() {", 1),
+        ("phase_lsp() {", 1),
+        ("phase_l4() {", 1),
+        ("lib_tests() {", 2),
+    ] {
+        let b = body(f);
+        // A `--list` (lib_tests' listing of the phase's tests) runs no test.
+        assert_eq!(
+            b.lines()
+                .filter(|l| l.contains("cargo test") && !l.contains("--list"))
+                .count(),
+            runs,
+            "`{f}`: the cargo runs this test knows"
+        );
+        assert_eq!(
+            b.matches("\"${lane2_pin[@]}\"").count(),
+            runs,
+            "`{f}`: every cargo run must carry \"${{lane2_pin[@]}}\""
+        );
+    }
+}
+
+/// TLS-36: lib_cdo's long-test run must account for every long test by name.
+/// A long test renamed to a longer name (`..._v2`) would match no `--exact`
+/// name and still be skipped by the second run's substring `--skip`, so it
+/// would run nowhere (review r1, sol and Opus). `lib_tests` from the script,
+/// with a stub `cargo` that reports how many tests the long run found.
+///
+/// Mutations (2026-11-13): `lib_tests` without its count check -> the run that
+/// finds 4 of 5 passes, and the assert fails; without its listing check (the
+/// `orphans`) -> the sibling `cdo_crossing_census_v2` passes unrun, and the
+/// assert fails; a failed listing not returning -> it reads as "no orphans",
+/// the phase passes, and the assert fails.
+#[cfg(unix)]
+#[test]
+fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("cargo"),
+        // `--list`: one plain test, and (`SIBLING`) a test whose name holds a
+        // long test's; else a run's result line.
+        "#!/bin/sh\nif echo \"$*\" | grep -q -- --list; then\n\
+         [ -n \"$LIST_FAILS\" ] && { echo 'error: could not compile'; exit 101; }\n\
+         echo 'snapshot::snapshot::tests::builds_snapshot_over_cdo_workspace: test'\n\
+         [ -n \"$SIBLING\" ] && echo 'engine::l5::digest::wave2_index_tests::cdo_crossing_census_v2: test'\n\
+         exit 0\nfi\n\
+         if echo \"$*\" | grep -q -- --exact; then n=${LONG_FOUND:-5}; else n=12; fi\n\
+         echo \"test result: ok. $n passed; 0 failed; 0 ignored; 0 measured; 3300 filtered out; finished in 1.00s\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        dir.path().join("cargo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    // `extra`: "", "SIBLING" (the listing names a sibling) or "LIST_FAILS".
+    let run = |found: &str, extra: &str| {
+        let out = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(concat!(
+                "logs=\"$1\"; profile=(); lane2_nice=(); lane2_pin=(); lib_threads=2; ",
+                "source <(sed -n '/^lib_long_tests=(/,/^)/p; /^lib_tests()/,/^}/p' \"$2\"); ",
+                "lib_tests"
+            ))
+            .arg("bash")
+            .arg(dir.path())
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .env("LONG_FOUND", found)
+            .env("SIBLING", if extra == "SIBLING" { "1" } else { "" })
+            .env("LIST_FAILS", if extra == "LIST_FAILS" { "1" } else { "" })
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    dir.path().display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .output()
+            .expect("spawn bash");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+    let (code, text) = run("5", "");
+    assert_eq!(code, Some(0), "precondition, all five found: {text}");
+    let (code, text) = run("4", "");
+    assert_ne!(code, Some(0), "4 of 5 long tests found must fail: {text}");
+    assert!(text.contains("found 4 of 5"), "{text}");
+    // A sibling added beside a long test (review r2, sol): the long run still
+    // finds 5, but the second run's substring --skip would drop the sibling.
+    let (code, text) = run("5", "SIBLING");
+    assert_ne!(code, Some(0), "a test in neither run must fail: {text}");
+    assert!(text.contains("cdo_crossing_census_v2"), "{text}");
+    // A listing that fails says nothing about siblings (review r3, sol).
+    let (code, text) = run("5", "LIST_FAILS");
+    assert_ne!(code, Some(0), "a failed listing must fail: {text}");
+    assert!(text.contains("could not list"), "{text}");
+}
+
+/// TLS-36: serial is the default, even with every byte of memory free; the
+/// parallel layout only when `CDO_GATE_LAYOUT=parallel` asks. Measured on
+/// server1 on one tree back to back: serial 875 s, parallel 1,131 s.
+///
+/// Mutation (2026-11-13): `plan_layout` without its `CDO_GATE_LAYOUT` check
+/// -> plenty of memory gives "parallel:" and the assert fails.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_is_serial_unless_parallel_is_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("meminfo"), "MemAvailable: 94371840 kB\n").unwrap();
+    std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
+    let layout = |asked: Option<&str>| {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
+            .env("CDO_GATE_CGROUP", dir.path())
+            .env_remove("CDO_GATE_SERIAL")
+            .env_remove("CDO_GATE_LAYOUT");
+        if let Some(a) = asked {
+            cmd.env("CDO_GATE_LAYOUT", a);
+        }
+        let out = cmd.output().expect("spawn bash scripts/cdo-gate --layout");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let got = layout(None);
+    assert!(
+        got.starts_with("sequential:") && got.contains("the default"),
+        "{got}"
+    );
+    let got = layout(Some("parallel"));
+    assert!(got.starts_with("parallel:"), "{got}");
+    let got = layout(Some("Parallel")); // only the exact word asks
+    assert!(got.starts_with("sequential:"), "{got}");
 }
 
 /// A warm build folder written by hand: one dependency, plus the two folders
