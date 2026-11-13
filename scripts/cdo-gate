@@ -689,8 +689,15 @@ lib_tests() {
     # A test the second run's substring `--skip` drops but that is no long test
     # (a sibling `..._v2` added beside one) would run in neither run: refuse it
     # (review r2, sol). From libtest's own listing of the phase's tests.
-    local orphans
-    orphans=$(cargo test "${profile[@]}" -p al-sem --lib -- cdo --list 2>/dev/null |
+    # A listing that fails says nothing about orphans: the phase fails (review
+    # r3, sol: it would otherwise read as "none").
+    local listing orphans
+    if ! listing=$(cargo test "${profile[@]}" -p al-sem --lib -- cdo --list 2>&1); then
+        echo "cdo-gate: lib_cdo: could not list the phase's tests:"
+        echo "$listing" | tail -n 20
+        return 1
+    fi
+    orphans=$(printf '%s\n' "$listing" |
         sed -n 's/: test$//p' | awk -v long="${lib_long_tests[*]}" '
             BEGIN { n = split(long, l, " ") }
             { exact = 0; caught = 0

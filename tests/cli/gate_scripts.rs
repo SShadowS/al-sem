@@ -932,7 +932,8 @@ fn cdo_gate_runs_every_lane_two_command_pinned() {
 /// Mutations (2026-11-13): `lib_tests` without its count check -> the run that
 /// finds 4 of 5 passes, and the assert fails; without its listing check (the
 /// `orphans`) -> the sibling `cdo_crossing_census_v2` passes unrun, and the
-/// assert fails.
+/// assert fails; a failed listing not returning -> it reads as "no orphans",
+/// the phase passes, and the assert fails.
 #[cfg(unix)]
 #[test]
 fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
@@ -943,6 +944,7 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
         // `--list`: one plain test, and (`SIBLING`) a test whose name holds a
         // long test's; else a run's result line.
         "#!/bin/sh\nif echo \"$*\" | grep -q -- --list; then\n\
+         [ -n \"$LIST_FAILS\" ] && { echo 'error: could not compile'; exit 101; }\n\
          echo 'snapshot::snapshot::tests::builds_snapshot_over_cdo_workspace: test'\n\
          [ -n \"$SIBLING\" ] && echo 'engine::l5::digest::wave2_index_tests::cdo_crossing_census_v2: test'\n\
          exit 0\nfi\n\
@@ -955,7 +957,8 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
         std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    let run = |found: &str, sibling: bool| {
+    // `extra`: "", "SIBLING" (the listing names a sibling) or "LIST_FAILS".
+    let run = |found: &str, extra: &str| {
         let out = std::process::Command::new("bash")
             .arg("-c")
             .arg(concat!(
@@ -967,7 +970,8 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
             .arg(dir.path())
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .env("LONG_FOUND", found)
-            .env("SIBLING", if sibling { "1" } else { "" })
+            .env("SIBLING", if extra == "SIBLING" { "1" } else { "" })
+            .env("LIST_FAILS", if extra == "LIST_FAILS" { "1" } else { "" })
             .env(
                 "PATH",
                 format!(
@@ -983,16 +987,20 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
             String::from_utf8_lossy(&out.stdout).into_owned(),
         )
     };
-    let (code, text) = run("5", false);
+    let (code, text) = run("5", "");
     assert_eq!(code, Some(0), "precondition, all five found: {text}");
-    let (code, text) = run("4", false);
+    let (code, text) = run("4", "");
     assert_ne!(code, Some(0), "4 of 5 long tests found must fail: {text}");
     assert!(text.contains("found 4 of 5"), "{text}");
     // A sibling added beside a long test (review r2, sol): the long run still
     // finds 5, but the second run's substring --skip would drop the sibling.
-    let (code, text) = run("5", true);
+    let (code, text) = run("5", "SIBLING");
     assert_ne!(code, Some(0), "a test in neither run must fail: {text}");
     assert!(text.contains("cdo_crossing_census_v2"), "{text}");
+    // A listing that fails says nothing about siblings (review r3, sol).
+    let (code, text) = run("5", "LIST_FAILS");
+    assert_ne!(code, Some(0), "a failed listing must fail: {text}");
+    assert!(text.contains("could not list"), "{text}");
 }
 
 /// A warm build folder written by hand: one dependency, plus the two folders
