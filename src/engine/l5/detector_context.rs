@@ -564,6 +564,28 @@ pub(crate) mod cones_census {
         cone_len: &[u64],
     ) {
         let n = nanos.len();
+        // `ALSEM_CONES_SCHEDULE_FILE`: the walk's schedule for an offline
+        // simulation, one line per SCC (`index nanos cone_len succ...`), each
+        // walk after a `walk <sccs>` line.
+        if let Some(path) = std::env::var_os("ALSEM_CONES_SCHEDULE_FILE") {
+            use std::fmt::Write as _;
+            let mut s = format!("walk {n}\n");
+            for i in 0..n {
+                let _ = write!(s, "{i} {} {}", nanos[i], cone_len[i]);
+                for y in succ.get(i).into_iter().flatten() {
+                    let _ = write!(s, " {y}");
+                }
+                s.push('\n');
+            }
+            let written = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, s.as_bytes()));
+            if let Err(e) = written {
+                eprintln!("[cones-census] schedule file {}: {e}", path.display());
+            }
+        }
         let mut level = vec![0usize; n];
         let mut crit = vec![0u64; n];
         let mut uses = vec![0usize; n];
