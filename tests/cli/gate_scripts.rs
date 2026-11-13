@@ -784,6 +784,50 @@ fn speed_warm_seeds_a_commit_from_its_trees_gate_binary() {
     assert!(text.contains("building (once per commit)"), "{text}");
 }
 
+/// TLS-36: beside the impact phase, lane 2 is pinned to the last
+/// `CDO_GATE_LANE2_CPUS` (default 6) of the CPUs the gate may use, read from
+/// its CPU mask (`CDO_GATE_PROC_STATUS` stands in for `/proc/self/status`);
+/// no pin when the count is 0 or would leave the impact phase fewer than 8.
+///
+/// Mutation (2026-11-13): `lane2_cpus` taking the FIRST CPUs instead of the
+/// last -> "0,1,2,3,4,5" and the assert fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn cdo_gate_pins_lane_two_beside_impact() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("meminfo"), "MemAvailable: 62914560 kB\n").unwrap();
+    std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
+    let layout = |mask: &str, want: Option<&str>| {
+        let status = dir.path().join("status");
+        std::fs::write(
+            &status,
+            format!("Name:\tbash\nCpus_allowed_list:\t{mask}\n"),
+        )
+        .unwrap();
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
+            .env("CDO_GATE_CGROUP", dir.path())
+            .env("CDO_GATE_PROC_STATUS", &status)
+            .env_remove("CDO_GATE_SERIAL")
+            .env_remove("CDO_GATE_LANE2_CPUS");
+        if let Some(w) = want {
+            cmd.env("CDO_GATE_LANE2_CPUS", w);
+        }
+        let out = cmd.output().expect("spawn bash scripts/cdo-gate --layout");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let got = layout("0-21", None);
+    assert!(got.contains("lane 2 on CPUs 16,17,18,19,20,21 "), "{got}");
+    let got = layout("0-3,8-21", Some("4"));
+    assert!(got.contains("lane 2 on CPUs 18,19,20,21 "), "{got}");
+    let got = layout("0-21", Some("0"));
+    assert!(got.contains("lane 2 on CPUs any "), "{got}");
+    let got = layout("0-9", None); // 10 CPUs: 6 for lane 2 would leave 4
+    assert!(got.contains("lane 2 on CPUs any "), "{got}");
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
