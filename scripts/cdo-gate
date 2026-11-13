@@ -369,6 +369,40 @@ mkdir -p "$logs_root" || exit 1
 find "$logs_root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
 logs="$logs_root/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$logs" || exit 1
+
+gate_pid=$$
+# A Ctrl-C or kill stops the gate's own processes and the gate itself, from the
+# first phase on: the speed build (in a process group of its own), the test
+# build, the speed timing, the test phases and the background lane, the memory
+# sampler. The trap is cleared first so it cannot re-enter, then every
+# descendant of this script gets TERM, then the gate exits instead of going on
+# to the next phase (review r1, sol and Opus). Installed before any phase, and
+# never replaced (review r4, sol). Not `kill 0`: that signals the whole process
+# group, which can hold the caller when the gate was not started in a group of
+# its own (review r2, sol). `run_phase` waits on each phase in the background,
+# so a TERM to the gate's PID alone runs this at once (review r3, sol).
+gate_descendants() {
+    ps -e -o pid=,ppid= | awk -v root="$gate_pid" '
+        { parent[$1] = $2 }
+        END {
+            for (p in parent) {
+                q = parent[p]
+                while (q != root && (q in parent) && q != parent[q]) q = parent[q]
+                if (q == root) print p
+            }
+        }'
+}
+stop_gate() {
+    trap - INT TERM
+    # Listed first, then signalled: a `| xargs kill` pipeline would list (and
+    # kill) its own processes too.
+    local pids
+    pids=$(gate_descendants)
+    # shellcheck disable=SC2086
+    [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
+    exit 130
+}
+trap stop_gate INT TERM
 echo "cdo-gate: logs in $logs"
 # ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
 : > "$logs/split-impact"
@@ -444,8 +478,8 @@ else
     speed_build=$!
     set +m
     stop_speed_build() { kill -- -"$speed_build" 2>/dev/null; }
-    # Its own group does not get the terminal's Ctrl-C: pass it on.
-    trap 'stop_speed_build; exit 130' INT TERM
+    # Its own group does not get the terminal's Ctrl-C: `stop_gate` (installed
+    # above) reaches it as a descendant.
 fi
 if ! run_phase build cargo test "${profile[@]}" --no-run \
     --test program_resolve_harness --test lsp --test l4_summary_differential \
@@ -613,36 +647,6 @@ memory_sampler() {
         sleep 2
     done
 }
-gate_pid=$$
-# A Ctrl-C or kill stops the gate's own processes (the background lane, the
-# running phase's cargo and tests, the sampler) and the gate itself: the trap is
-# cleared first so it cannot re-enter, then every descendant of this script gets
-# TERM, then the gate exits instead of going on to the next phase (review r1,
-# sol and Opus). Not `kill 0`: that signals the whole process group, which can
-# hold the caller when the gate was not started in a group of its own (review
-# r2, sol).
-gate_descendants() {
-    ps -e -o pid=,ppid= | awk -v root="$gate_pid" '
-        { parent[$1] = $2 }
-        END {
-            for (p in parent) {
-                q = parent[p]
-                while (q != root && (q in parent) && q != parent[q]) q = parent[q]
-                if (q == root) print p
-            }
-        }'
-}
-stop_gate() {
-    trap - INT TERM
-    # Listed first, then signalled: a `| xargs kill` pipeline would list (and
-    # kill) its own processes too.
-    local pids
-    pids=$(gate_descendants)
-    # shellcheck disable=SC2086
-    [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
-    exit 130
-}
-trap stop_gate INT TERM
 memory_sampler &
 sampler=$!
 # ⟨TLS-32⟩ The layout (`plan_layout`), decided when the parallel section would

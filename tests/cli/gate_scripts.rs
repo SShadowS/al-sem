@@ -381,6 +381,89 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
     check(43_495, Some(2_000), false, one);
 }
 
+/// TLS-32 review r3-r4 (sol): a TERM sent to the gate's PID alone, during its
+/// build phase, stops the gate at once (exit 130) and the phase's processes
+/// with it. A stub `cargo` first on `PATH` sleeps (as a long build would) and
+/// writes its PID; the gate runs `--no-speed` on an empty folder.
+///
+/// Mutation (2026-11-13): `run_phase` back to a foreground pipeline -> the
+/// trap waits for the 60 s build, and the gate misses the 20 s deadline.
+#[cfg(target_os = "linux")]
+#[test]
+fn cdo_gate_stops_at_once_on_term_during_its_build() {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let pid_file = stub.path().join("cargo.pid");
+    std::fs::write(
+        stub.path().join("cargo"),
+        format!(
+            "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        stub.path().join("cargo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut gate = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg("--no-speed")
+        .arg(ws.path())
+        .env("PATH", path)
+        .env("CARGO_TARGET_DIR", target.path())
+        .env_remove("CDO_GATE_SERIAL")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn bash scripts/cdo-gate");
+    // The build phase is running when the stub has written its PID.
+    let started = std::time::Instant::now();
+    while !pid_file.exists() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the gate never reached its build phase"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let build_pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let gate_pid = gate.id() as i32;
+    // SAFETY: plain kill(2) on a child process this test owns.
+    assert_eq!(unsafe { libc::kill(gate_pid, libc::SIGTERM) }, 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(s) = gate.try_wait().unwrap() {
+            break s;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = gate.kill();
+            // SAFETY: as above; clean up the stub's sleep.
+            unsafe { libc::kill(build_pid, libc::SIGKILL) };
+            panic!("the gate did not stop within 20 s of a TERM");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(130));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // SAFETY: signal 0 only probes whether the process exists.
+    let alive = unsafe { libc::kill(build_pid, 0) } == 0
+        && std::fs::read_to_string(format!("/proc/{build_pid}/stat"))
+            .is_ok_and(|s| !s.contains(") Z "));
+    assert!(!alive, "the build phase's process survived the gate");
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
