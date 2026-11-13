@@ -270,12 +270,15 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   `CDOEMailLog`'s `RecRef.GetBySystemId`), 9 callers inherit their effects. The table is
   `unknown` because this model is single-app. The reverse index moves with the same reads.
 - **2026-11-13, ENG-25** (`alsem/eng-25-parenless-record-ops`). Whole-program `8e952ad5…` ->
-  `e8f8074c…`; reverse index `b7a20797…` -> `e35456be…`. Measured by dumping the canonical
+  `fde6e4f3…`; reverse index `b7a20797…` -> `e35456be…`. Measured by dumping the canonical
   serialization (`L4_CANONICAL_DUMP`) at the old digest (master `60981a1f`'s tree, unchanged
-  since ENG-12) and at the branch head `2c867002`, and comparing each routine's records with
+  since ENG-12) and at the branch head `dea62b43`, and comparing each routine's records with
   the operation and loop ordinals (`/opN`, `/loopN`) stripped, since a new operation renumbers
-  every later one in its routine. 5479 routines throughout, none added or removed. 2110 move
-  raw: 1 only in ordinals, 2109 in their effects, none in any other field. No effect is
+  every later one in its routine. 5479 routines throughout, none added or removed. 2109 move,
+  all in their effects, none in any other field. (A first freeze at `2c867002`, `e8f8074c…`,
+  had one more routine moved only in ordinals: `CDO E-Mail Template Line::CopyTemplateLine`'s
+  local record `Copy` was read as `Rec.Copy`, the review-round-1 defect; its effects were the
+  same.) No effect is
   removed and no write operation's effect changes. Every added effect is a read or a cursor
   step written without parentheses in expression position (`if R.IsEmpty then`,
   `exit(R.Count)`, `if Setup.Get then`): 30,604 effects, IsEmpty 17,541, Count 11,228,
