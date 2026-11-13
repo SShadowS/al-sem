@@ -15,13 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose every route reaches a routine, so a record operation (an implicit-trigger edge) was
   dropped. `query touches --direction down` answered `no (every candidate decided)`, and
   `prove … may-commit` answered `no` for `exit(R.Modify)` whose table's `OnAfterModifyEvent`
-  subscriber commits. The filter now keeps a site classified as a record operation unless its
-  table has a field of that name (`F.Count`, with a field `Count`, stays a field read). It covers
-  a member, the implicit `Rec` in a table, an array element and a `with` frame. Tests:
+  subscriber commits. The filter now keeps a site classified as a record operation, with two
+  exceptions. On a `Record` whose table (or one of its extensions) declares a field of that name,
+  it is a field read (`F.Count` with a field `Count`); a `RecordRef` has no fields by name, so
+  `RR.Count` stays the method. A bare name on the implicit `Rec` that a parameter, local, return
+  value or global declares is that variable (`exit(Count)` with a parameter `Count`); inside
+  `with R do` the record's members come first, so those stay operations. It covers a member, the
+  implicit `Rec`, an array element and a `with` frame. A table that does not resolve keeps the
+  operation (its fields cannot be checked). Tests:
   `tests/cli/cli_eng25_parenless_record_ops.rs`. Probe:
   `docs/superpowers/notes/2026-11-12-eng25-parenless-record-ops-probe.md`.
 - On CDO (`bc3ccb18`, base `60981a1f`): findings at `--scope primary` 2258 -> 2310 (d1 +47, d3
-  +4, d56 +2, d11 −1), at `--scope all` 32520 -> 32584 (also d19 +1, d44 +1 net). Every moved
+  +4, d56 +2, d11 −1), at `--scope all` 32520 -> 32583 (d1 +56, d3 +4, d56 +2, d11 −1, d19 +1,
+  d44 +1 net). Every moved
   finding was checked against source: the new d1/d3 sites are parens-less reads; the d11 removal
   is a `MODIFY` after a now-seen `if FIND then`; the d44 changes are new read pairs (one event
   is at its 32-finding cap, so two pairs swap). The d56 pair (`CDOSetupWizardUserSetup.Page.al:57`,
