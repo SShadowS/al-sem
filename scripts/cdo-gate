@@ -32,7 +32,7 @@
 # with lane 2 (program_resolve_harness, lsp, l4_summary_differential, then the
 # lib's CDO tests, one after another) beside it when the host has the memory,
 # else after it; `CDO_GATE_SERIAL=1` runs every phase in a row. See
-# `choose_layout`; `--layout` prints the layout this host would take now. (The
+# `plan_layout`; `--layout` prints the layout this host would take now. (The
 # history below describes the older two-lane layout, `output_cdo` beside lane 2,
 # which TLS-23 retired for memory.)
 # Each phase writes its own log (the folder is printed at the start and the
@@ -70,38 +70,68 @@ layout_only=0
 
 # ⟨TLS-32, orchestrator 2026-11-13⟩ The test phases' layout. `output_cdo` runs
 # alone, then the impact phase. Lane 2 (harness, lsp, l4, lib_cdo) runs BESIDE
-# the impact phase, with `lib_cdo` at 2 threads, when the host has the memory;
-# otherwise after it. Measured 2026-11-13 (12 gates, the container's
-# unreclaimable MiB at each phase's worst): impact 17,521; lib_cdo at 4 threads
-# 30,136. Each lib CDO test alone peaks at most 4,552, except
-# `retained_emission_equals_a_composition_on_cdo` at 18,628 (TLS-32's census),
-# so lib_cdo at 2 threads is at most ~23,200. Together ~40,700 of the
-# container's 49,152: the owner's 4 GiB headroom rule holds with ~4 GiB to
-# spare. The host is the other bound: a serial gate starts at MemAvailable
-# >= 35 GB, so the parallel layout needs MemAvailable at its start for the
-# impact phase's worst, lane 2's worst and 4 GiB, before anything of either is
-# allocated (`CDO_GATE_PARALLEL_NEED_MIB` overrides it). Below that, lane 2 runs
-# after the impact phase, as the serial gates did. `CDO_GATE_SERIAL=1` runs every
-# phase one after another, as before. The summary names the layout taken.
-parallel_need_mib="${CDO_GATE_PARALLEL_NEED_MIB:-$((17600 + 23300 + 4096))}"
+# the impact phase when the memory allows it, else after it; `CDO_GATE_SERIAL=1`
+# runs every phase one after another, as before. The summary names the layout.
+#
+# The gate's own memory (its process tree's RSS, `memory.timeline`'s third
+# column; 12 gates, 2026-11-12/13): the impact phase at most 16,076 MiB.
+# lib_cdo's tests alone (TLS-32's census, `cdo` profile, one test per process):
+# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB, every other one
+# at most 4,552. So lib_cdo is at most ~18,700 at 1 thread and ~23,300 at 2;
+# the harness, lsp and l4 (≤ ~8,400 own) run before it, one at a time.
+#
+# Beside the impact phase, the most threads (2, then 1) whose need fits both
+# bounds, read once when the section starts (after `output_cdo`, whose memory
+# is then freed, and before either part allocates):
+#   need = impact's own worst + lib_cdo's own worst at that count + 4 GiB;
+#   - the container (`memory.max` minus what cannot be reclaimed now, which
+#     counts every agent in it): the owner's 4 GiB headroom rule;
+#   - the host (MemAvailable): the gate starts at >= 35 GB, sized for a serial
+#     gate, and must not push the host into swap.
+# Neither fits: lane 2 after the impact phase. Review r1 (sol and Opus): the
+# host alone said `parallel` while the container had ~42.7 GB free.
+impact_own_mib=16100
+lib_own_mib=(0 18700 23300)
+headroom_mib=4096
 lib_threads=4
+lane2_beside=0
+cgroup_dir="${CDO_GATE_CGROUP:-/sys/fs/cgroup}"
 host_available_mib() {
     awk '/^MemAvailable:/ { print int($2 / 1024) }' "${CDO_GATE_MEMINFO:-/proc/meminfo}"
 }
-# The layout a gate starting its parallel section now would take: `serial`,
-# `parallel` or `sequential` (lane 2 after the impact phase), and why.
-choose_layout() {
+# The container's free memory now, in MiB, or nothing when it has no limit.
+container_free_mib() {
+    local max
+    max=$(cat "$cgroup_dir/memory.max" 2>/dev/null)
+    [[ "$max" =~ ^[0-9]+$ ]] || return 0
+    # What cannot be reclaimed, as the sampler counts it (`unreclaimable_bytes`).
+    local used
+    used=$(awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" { n += $2 }
+                $1 == "slab_reclaimable" { n -= $2 }
+                END { print n + 0 }' "$cgroup_dir/memory.stat" 2>/dev/null)
+    echo $(((max - ${used:-0}) >> 20))
+}
+# Decide the layout: sets `layout_line`, `lane2_beside` and `lib_threads`.
+plan_layout() {
     if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
-        echo "serial: every phase one after another (CDO_GATE_SERIAL=1)"
+        layout_line="serial: every phase one after another (CDO_GATE_SERIAL=1)"
         return
     fi
-    local avail
+    local avail free t need
     avail=$(host_available_mib)
-    if [[ "$avail" =~ ^[0-9]+$ ]] && ((avail >= parallel_need_mib)); then
-        echo "parallel: lane 2 beside the impact phase, lib_cdo at 2 threads (host MemAvailable $avail MiB >= $parallel_need_mib MiB)"
-    else
-        echo "sequential: lane 2 after the impact phase (host MemAvailable ${avail:-unknown} MiB < $parallel_need_mib MiB)"
-    fi
+    free=$(container_free_mib)
+    for t in 2 1; do
+        need=$((impact_own_mib + lib_own_mib[t] + headroom_mib))
+        if [[ "$avail" =~ ^[0-9]+$ ]] && ((avail >= need)) &&
+            { [[ -z "$free" ]] || ((free >= need)); }; then
+            lane2_beside=1
+            lib_threads=$t
+            layout_line="parallel: lane 2 beside the impact phase, lib_cdo at $t thread(s) (need $need MiB; host MemAvailable $avail, container free ${free:-unlimited})"
+            return
+        fi
+    done
+    need=$((impact_own_mib + lib_own_mib[1] + headroom_mib))
+    layout_line="sequential: lane 2 after the impact phase (host MemAvailable ${avail:-unknown}, container free ${free:-unlimited}; 1 thread beside it needs $need MiB)"
 }
 usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
@@ -266,7 +296,8 @@ fi
 # ⟨TLS-32⟩ `--layout`: the test phases' layout a gate would take on this host
 # now (for an operator, and for its test), then exit.
 if [[ "$layout_only" == 1 ]]; then
-    choose_layout
+    plan_layout
+    echo "$layout_line"
     exit 0
 fi
 
@@ -450,6 +481,8 @@ phase_output_cdo() {
 # headroom, slower than the 1,170 s the phases took one after another). A lane
 # staged to fit the memory would have saved little more. Serial again; the
 # memory sampler stays (note `2026-11-11-cdo-gate-time.md`, "TLS-19/TLS-23").
+# ⟨TLS-32, 2026-11-13⟩ It runs after `output_cdo`, with lane 2 beside it when
+# the memory allows (`plan_layout`), else alone with lane 2 after it.
 phase_output_cdo_impact() {
     run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
 }
@@ -491,10 +524,11 @@ phase_l4() {
 # test outside that filter cannot hide: the shared gate (`crate::cdo::
 # cdo_ws_or_enforce`) panics in the task gate for any test the filter misses,
 # and `cdo_ws_is_read_only_through_the_gate` refuses a test that reads CDO_WS
-# around it. 4 threads: the CDO tests each build their own model (largest
-# alone ~4.2 GB), and this phase runs beside output_cdo; measured alone, cdo
-# profile, each test by itself (nextest -j 1): the longest 137 s
-# (`cdo_crossing_census`), 594 s summed.
+# around it. Threads: 4 when it runs alone; 2 or 1 beside the impact phase
+# (`plan_layout`, TLS-32). The CDO tests each build their own model; measured
+# alone (TLS-32's census, 2026-11-13, cdo profile, one test per process):
+# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB and 105 s, every
+# other test at most 4,552 MiB, 507 s summed (note `2026-11-13-lib-cdo-census.md`).
 phase_lib() {
     run_phase lib_cdo "${lane2_nice[@]}" \
         cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads="$lib_threads"
@@ -507,10 +541,12 @@ lane2() {
     phase_lib
 }
 
-# ⟨2026-11-09⟩ Lane 2 runs at a lower CPU priority (`nice -n 10`): the gate's
-# length is output_cdo's, whose impact ratchets run one-shot `alsem impact`
-# calls of 4-7 minutes that use only ~3 cores each. Starved at the start
-# (every other test busy) they ran longest; lane 2 now takes what they leave.
+# ⟨2026-11-09⟩ Lane 2 runs at a lower CPU priority (`nice -n 10`): beside it
+# runs the gate's longest phase, the impact ratchets' one-shot `alsem impact`
+# calls (minutes each, ~3 cores each). Starved at the start (every other test
+# busy) they ran longest; lane 2 takes what they leave. (Beside `output_cdo`
+# until TLS-23; beside the impact phase since TLS-32. Run after it, the nice
+# costs nothing.)
 lane2_nice=(nice -n 10)
 # ⟨TLS-19⟩ The container's memory while the test lanes run, against its
 # `memory.max`, in the summary. Not `memory.current`: it counts page cache,
@@ -557,28 +593,33 @@ memory_sampler() {
     done
 }
 gate_pid=$$
-# A Ctrl-C or kill stops the background lanes too.
-trap 'kill 0' INT TERM
+# A Ctrl-C or kill stops the background lane and the sampler too, and the gate
+# itself: the trap is cleared first (the TERM `kill 0` sends this script must
+# not re-enter it), then the gate exits instead of going on to the next phase
+# (review r1, sol and Opus).
+trap 'trap - INT TERM; kill 0; exit 130' INT TERM
 memory_sampler &
 sampler=$!
-# ⟨TLS-32⟩ The layout (see `choose_layout`), decided when the parallel section
-# would start: after `output_cdo`, whose memory is then freed.
+# ⟨TLS-32⟩ The layout (`plan_layout`), decided when the parallel section would
+# start: after `output_cdo`, whose memory is then freed.
 if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
     lane2_nice=()
     lane2
     phase_output_cdo
-    choose_layout > "$logs/layout"
+    plan_layout
+    echo "$layout_line" > "$logs/layout"
     phase_output_cdo_impact
 else
     phase_output_cdo
-    choose_layout > "$logs/layout"
-    if [[ "$(cat "$logs/layout")" == parallel:* ]]; then
-        lib_threads=2
+    plan_layout
+    echo "$layout_line" > "$logs/layout"
+    if ((lane2_beside)); then
         lane2 &
         lane2_pid=$!
         phase_output_cdo_impact
         wait "$lane2_pid"
     else
+        lib_threads=4
         phase_output_cdo_impact
         lane2
     fi

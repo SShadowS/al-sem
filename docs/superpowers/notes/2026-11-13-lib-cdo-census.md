@@ -68,11 +68,22 @@ totals, other agents included, so adding two phases' peaks over-counts a little.
   - with impact, ~40,700 (≥ 8.4 GiB free).
 - Lane 2 takes ~69 + ~254 s, inside the impact phase's 348 s. The test phases should go
   818 → ~515 s.
-- The host check, added by the orchestrator: a serial gate starts at host MemAvailable ≥ 35 GB.
-  - The parallel layout needs MemAvailable after `output_cdo` ≥ impact's worst + lane 2's worst
-    + 4 GiB (44,996 MiB), because neither has allocated yet at that point.
-  - Below it, lane 2 runs after the impact phase.
+- The memory check (the host bound from the orchestrator; the container bound from review r1,
+  sol and Opus), read once after `output_cdo`, when neither part has allocated yet:
+  - need = the impact phase's own worst (the gate's RSS, 16,076 over 12 gates, taken as 16,100)
+    + lib_cdo's own worst at that thread count (23,300 at 2, 18,700 at 1) + 4 GiB;
+  - it must fit both the host's MemAvailable (the gate starts at ≥ 35 GB, sized for a serial
+    gate; the host must not swap) and the container's free memory (`memory.max` minus what
+    cannot be reclaimed, every agent in it counted: the owner's rule);
+  - the most threads that fit win: 2 (needs 43,496), else 1 (38,896), else lane 2 runs after
+    the impact phase.
+  - Today the container's other agents hold ~6-10 GB, so 1 thread is the likely pick
+    (~75 s saved) and 2 threads (~300 s) only on a quiet container. TLS-35 (`retained_emission`'s
+    peak) would lower both needs.
   - `CDO_GATE_SERIAL=1` keeps every phase in a row.
+- Not pinned by a test: the scheduling itself (the branch on `lane2_beside`). The test checks
+  `plan_layout`'s decision through `--layout`; the summary's layout line and the landing gate
+  show the rest.
 - Risk to watch: in TLS-23's attempt the impact tests slowed under contention (1,047 s against
   428 s alone, beside a 4-thread lib_cdo). Here lane 2 runs niced, with lib_cdo at 2 threads.
   The landing gate's impact time shows whether that holds.

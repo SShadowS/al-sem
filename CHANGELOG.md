@@ -18,14 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     4,552 MiB; together 507 s.
   - **The new layout:**
     - `output_cdo` runs alone;
-    - then the impact phase, with lane 2 (harness, lsp, l4, then `lib_cdo` at 2 threads) beside
-      it;
-    - the worst estimate over 12 gates is ~40,700 of 49,152 MiB in the container;
-    - lane 2 (~320 s) fits inside the impact phase (~348 s), so about 300 s should come off each
-      gate's test phases (818 s).
-  - **The host check:** the parallel layout is taken only when the host's MemAvailable, read
-    after `output_cdo`, covers the impact phase's worst, lane 2's worst and 4 GiB (44,996 MiB;
-    `CDO_GATE_PARALLEL_NEED_MIB` overrides it). Otherwise lane 2 runs after the impact phase.
+    - then the impact phase, with lane 2 (harness, lsp, l4, then `lib_cdo`) beside it when the
+      memory allows;
+    - at 2 threads, lane 2 (~320 s) fits inside the impact phase (~348 s), so about 300 s should
+      come off each gate's test phases (818 s); at 1 thread (~580 s), about 75 s.
+  - **The memory check (review r1, sol and Opus):** read once after `output_cdo`.
+    - The need is the impact phase's own worst (16,100 MiB, the gate's RSS over 12 gates) plus
+      lib_cdo's own worst at that thread count (23,300 at 2, 18,700 at 1) plus 4 GiB.
+    - It must fit both the host's MemAvailable (the host must not swap) and the container's free
+      memory (`memory.max` minus what cannot be reclaimed, every agent in it counted: the 4 GiB
+      rule). The host alone once said `parallel` with the container at ~42.7 GB free.
+    - The most threads that fit win: 2, else 1, else lane 2 runs after the impact phase.
+  - **Ctrl-C** now stops the gate, not just the running phase. The trap clears itself, kills the
+    group and exits; it used to go on to the next phase.
   - **Kept:** `CDO_GATE_SERIAL=1` still runs every phase in a row.
   - **Reporting:** the summary names the layout taken, and `cdo-gate --layout` prints the one this
     host would take now.

@@ -262,30 +262,53 @@ fn speed_build_uses_the_gate_release_folder() {
     );
 }
 
-/// TLS-32: the test phases' layout (`cdo-gate --layout`, the decision the gate
-/// makes after `output_cdo`). Lane 2 runs beside the impact phase only when the
-/// host's MemAvailable covers the parallel need (`CDO_GATE_PARALLEL_NEED_MIB`,
-/// set here); below it lane 2 runs after; `CDO_GATE_SERIAL=1` wins over both.
-/// The host is a hand-written meminfo (`CDO_GATE_MEMINFO`).
+/// TLS-32: the test phases' layout (`cdo-gate --layout` prints what
+/// `plan_layout` decides, the decision the gate makes after `output_cdo`).
+/// Lane 2 runs beside the impact phase at the most threads (2, then 1) whose
+/// need (impact's own worst 16,100 + lib_cdo's own worst at that count, 23,300
+/// or 18,700, + 4,096 MiB) fits BOTH the host's MemAvailable and the
+/// container's free memory (`memory.max` minus what cannot be reclaimed);
+/// otherwise lane 2 runs after it; `CDO_GATE_SERIAL=1` wins over all. The host
+/// is a hand-written meminfo (`CDO_GATE_MEMINFO`) and the container a
+/// hand-written cgroup folder (`CDO_GATE_CGROUP`).
 ///
-/// Mutation (2026-11-13): `choose_layout`'s `avail >= need` flipped to `<=` ->
-/// the 60 GiB host is called sequential and the 10 GiB one parallel.
+/// Mutation (2026-11-13): `plan_layout`'s container test dropped (host only)
+/// -> the busy container is called parallel at 2 threads.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
+    const MIB: u64 = 1024 * 1024;
     let dir = tempfile::tempdir().unwrap();
-    let layout = |available_kib: u64, serial: bool| {
-        let meminfo = dir.path().join(format!("meminfo-{available_kib}"));
+    // host MemAvailable and container use in MiB (`None`: no container limit).
+    let layout = |host_mib: u64, used_mib: Option<u64>, serial: bool| {
+        let case = dir.path().join(format!("{host_mib}-{used_mib:?}-{serial}"));
+        std::fs::create_dir_all(&case).unwrap();
         std::fs::write(
-            &meminfo,
-            format!("MemTotal: 98000000 kB\nMemAvailable: {available_kib} kB\n"),
+            case.join("meminfo"),
+            format!(
+                "MemTotal: 98000000 kB\nMemAvailable: {} kB\n",
+                host_mib * 1024
+            ),
+        )
+        .unwrap();
+        let max = used_mib.map_or("max".to_string(), |_| (49_152 * MIB).to_string());
+        std::fs::write(case.join("memory.max"), format!("{max}\n")).unwrap();
+        // 1 GiB of reclaimable slab on top, which must not count.
+        std::fs::write(
+            case.join("memory.stat"),
+            format!(
+                "anon {}\nshmem 0\nkernel {}\nslab_reclaimable {}\n",
+                used_mib.unwrap_or(0) * MIB,
+                1024 * MIB,
+                1024 * MIB
+            ),
         )
         .unwrap();
         let mut cmd = std::process::Command::new("bash");
         cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .arg("--layout")
-            .env("CDO_GATE_MEMINFO", &meminfo)
-            .env("CDO_GATE_PARALLEL_NEED_MIB", "45000")
+            .env("CDO_GATE_MEMINFO", case.join("meminfo"))
+            .env("CDO_GATE_CGROUP", &case)
             .env_remove("CDO_GATE_SERIAL");
         if serial {
             cmd.env("CDO_GATE_SERIAL", "1");
@@ -294,26 +317,28 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
         assert_eq!(out.status.code(), Some(0));
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let plenty = 60 * 1024 * 1024; // 60 GiB, in KiB
-    let short = 10 * 1024 * 1024;
-    assert!(
-        layout(plenty, false).starts_with("parallel:"),
-        "{}",
-        layout(plenty, false)
-    );
-    assert!(
-        layout(short, false).starts_with("sequential:"),
-        "{}",
-        layout(short, false)
-    );
-    assert!(
-        layout(plenty, true).starts_with("serial:"),
-        "{}",
-        layout(plenty, true)
-    );
+    let check = |host: u64, used: Option<u64>, serial: bool, want: &str| {
+        let got = layout(host, used, serial);
+        assert!(
+            got.starts_with(want),
+            "host {host} MiB, container use {used:?} MiB, serial {serial}: want {want:?}, got {got}"
+        );
+    };
+    let two = "parallel: lane 2 beside the impact phase, lib_cdo at 2 thread(s)";
+    let one = "parallel: lane 2 beside the impact phase, lib_cdo at 1 thread(s)";
+    // Needs: 2 threads 43,496 MiB, 1 thread 38,896 MiB.
+    check(60_000, Some(2_000), false, two); // container free 47,152
+    check(60_000, Some(8_000), false, one); // container free 41,152
+    check(60_000, Some(12_000), false, "sequential:"); // container free 37,152
+    check(41_000, Some(2_000), false, one); // the host is short for 2
+    check(30_000, Some(2_000), false, "sequential:"); // the host is short for 1
+    check(60_000, None, false, two); // no container limit: the host decides
+    check(60_000, Some(2_000), true, "serial:");
     // Exactly at the need is enough; one MiB short is not.
-    assert!(layout(45000 * 1024, false).starts_with("parallel:"));
-    assert!(layout(44999 * 1024, false).starts_with("sequential:"));
+    check(60_000, Some(49_152 - 43_496), false, two);
+    check(60_000, Some(49_152 - 43_496 + 1), false, one);
+    check(43_496, Some(2_000), false, two);
+    check(43_495, Some(2_000), false, one);
 }
 
 /// A warm build folder written by hand: one dependency, plus the two folders
