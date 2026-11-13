@@ -287,6 +287,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read as running none (`no`). It now has the open record edge, as a table not loaded does
   (`full::table_code_not_loaded`, `UnresolvedTable::CodeNotLoaded`); prove names the gap ("… or
   whose code is loaded from symbols only …"). `RunTrigger` false still runs none.
+- On CDO (`bc3ccb18`, base `3dbf23ed`): the call-graph stats are identical (0 unknown edges,
+  whole program and primary-scoped); `--scope primary` moves nothing; `--scope all` gains 4
+  findings, all in Base App codeunit 9657 "Report Management Helper" (3 d3 in
+  `SelectedLayoutType`, 1 d14 on `ConvertLayoutType`), now demanded because CDO validates
+  `"Object ID to Run"`/`"Report Output Type"` on Job Queue Entry and Base App's tableextension 472
+  "Job Queue Entry Ext." has field `OnAfterValidate` triggers on both that call it. The d3 are
+  real by its rule; the d14 is the usual dependency-fragment d14 (it is called by
+  `SelectedLayoutType`).
 - Engine limits B11 (new), B9 and B10 updated. Left: an operation on a function's returned record
   and a `FieldRef.Validate` decided to a symbol-only table do not take the open gap. Tests:
   `tests/cli/cli_eng15_ext_triggers.rs` (breaks recorded); the adapter test
