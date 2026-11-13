@@ -1673,6 +1673,19 @@ pub(crate) fn resolve_file_obligations(
                 .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
                 .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
                 .chain(obj.globals.iter().map(|v| v.name.fold_identifier()))
+                // An extension sees its base object's `protected var` globals
+                // as its own (receiver Step 2c).
+                .chain(
+                    obj_node_opt
+                        .and_then(|o| {
+                            crate::program::resolve::receiver::extension_base_object(
+                                o, graph, index,
+                            )
+                        })
+                        .flatten()
+                        .into_iter()
+                        .flat_map(|base| base.protected_vars.iter().map(|(n, _)| n.to_string())),
+                )
                 .collect();
 
             for site in &sites {

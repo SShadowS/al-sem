@@ -60,6 +60,23 @@ tableextension 52707 "E25 Ext B" extends "E25 Ext Base"
         field(51; IsEmpty; Integer) { }
     }
 }
+table 52708 "E25 Prot Base"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+    protected var
+        Count: Integer;
+}
+tableextension 52709 "E25 Prot Ext" extends "E25 Prot Base"
+{
+    procedure ProtCount(): Integer
+    begin
+        exit(Count);
+    end;
+}
 table 52702 "E25 Fieldy"
 {
     fields
@@ -87,9 +104,7 @@ codeunit 52701 "E25 Ops"
     var
         R: Record "E25 Row";
     begin
-        if R.FindSet() then
-            repeat
-            until R.Next = 0;
+        while R.Next <> 0 do;
     end;
     procedure ModifyValue(): Boolean
     var
@@ -203,7 +218,8 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// a `with` frame. A `Count` that is a FIELD of its table stays a field read.
 /// Breaks (2026-11-12): keep no parens-less record operation in `full.rs`'s
 /// filter -> `IfFind` answers `no`; ignore `record_op_field_named` ->
-/// `FieldCount` answers `yes`. Each fails; restored, it passes.
+/// `FieldCount` answers `yes`. Each fails; restored, it passes. (2026-11-13)
+/// `WhileNext` has no other read, so the first break makes it `no` too.
 #[test]
 fn a_parenless_record_read_reads_its_table() {
     let t = workspace();
@@ -232,7 +248,10 @@ fn a_parenless_record_read_reads_its_table() {
 /// `resolve_file_obligations` -> `ParamCount` answers `yes`; go back to the
 /// unique-only `field_in_table` for the field veto -> `AmbigRead` answers
 /// `yes`; drop the `record_receiver` gate on the veto -> `RefCount` answers
-/// `no`. Each fails; restored, it passes.
+/// `no`; (round 2) leave the base object's `protected var` names out of the
+/// shadow set -> `ProtCount` answers `yes`. Each fails; restored, it passes.
+/// The field rule is the compiler's: alc 18.0.41 accepts `exit(F.Count)` as a
+/// Boolean and `exit(F.IsEmpty)` as a Text where those are fields (2026-11-13).
 #[test]
 fn a_shadowing_name_or_field_is_no_parenless_record_operation() {
     let t = workspace();
@@ -243,6 +262,8 @@ fn a_shadowing_name_or_field_is_no_parenless_record_operation() {
     assert!(a.starts_with("answer: down: no"), "AmbigRead: {a}");
     let a = touches(ws, "E25 Fieldy", "\"E25 Ops\".RefCount");
     assert!(a.starts_with("answer: down: yes"), "RefCount: {a}");
+    let a = touches(ws, "E25 Prot Base", "\"E25 Prot Ext\".ProtCount");
+    assert!(a.starts_with("answer: down: no"), "ProtCount: {a}");
 }
 
 fn may_commit(ws: &str, routine: &str) -> String {
