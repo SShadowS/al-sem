@@ -419,8 +419,8 @@ fn worker(cx: &Cx<'_, '_, '_>) {
             }
         }
         // Merge the finished prefix. Whoever stores `out[i]` then locks, so
-        // `i` is merged by it or by an earlier holder, before any worker
-        // returns (a worker returns only at the top of its loop).
+        // `i` is merged by it or by an earlier holder; the scope joins every
+        // worker and `walk` asserts `next == n` after it.
         let mut m = cx.merge.lock().expect("the merge lock");
         while m.next < cx.n {
             let next = m.next;
@@ -454,7 +454,9 @@ impl MemoRows for SuccMemo<'_> {
             // The peak from this increment itself (review r1, sol): a later
             // sample can miss it.
             let now = self.live.fetch_add(1, Ordering::Relaxed) + 1;
-            census::max(&census::CLOSED_MEMO_LIVE_MAX, now as u64);
+            if census::enabled() {
+                census::max(&census::CLOSED_MEMO_LIVE_MAX, now as u64);
+            }
         }
         row
     }
@@ -598,7 +600,9 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
             !mode.wants_raw(),
             "the parallel walk got a raw member {m:?}"
         );
+        let t = census::start();
         let record = coverage_record(m, x.cov, &ccone);
+        census::add_since(&census::EMIT_NANOS, t);
         if !mode.wants_derived() {
             coverage.push((m.clone(), record));
             continue;
