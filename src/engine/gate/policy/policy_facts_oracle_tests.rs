@@ -73,6 +73,10 @@
 //! `REMINT_POLICY_FACTS_ORACLE=1`: only `r0/ws-d3-method-stmt` (single and
 //! cross) moved, `direct` and `any` 5 -> 6: the read of `if Customer.FindSet
 //! then`. No count down.
+//!
+//! Re-recorded (2026-11-13, TLS-41: the new fixture `ws-grammar-v4-shapes`) with
+//! `REMINT_POLICY_FACTS_ORACLE=1`: two cases added (`r0/ws-grammar-v4-shapes`
+//! single and cross, 5 routines, no facts); no other case moved.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

@@ -45,6 +45,10 @@
 //! seeds: BC refuses that run); every other fixture's record is
 //! byte-identical.
 //!
+//! Re-minted 2026-11-13 (TLS-41) to add one fixture, `r0-corpus/ws-grammar-v4-shapes`
+//! (no findings; its five stable routine ids). The mint at `dc0608a6` left every
+//! other fixture's record byte-identical; `mintedAt` keeps the history.
+//!
 //! A recorded string is a stable id and nothing else (`stable_id_re`), so the
 //! record cannot move for the reason the migration legitimately moves other
 //! output: internal ids and the hashes derived from them.

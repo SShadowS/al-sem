@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
+
+- **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
+  or golden held the IR shape of either, so a grammar regression on `main` (which the build
+  follows unpinned) would have passed unseen.
+  - `crates/al-syntax/src/lower/grammar_v4_tests.rs` renders each condition or value as an
+    s-expression and checks it. A dangling `else` binds to the inner `if`. `and`, `or` and `xor`
+    bind tighter than `=` and `<` (`X = Y and C` is `(= X (and Y C))`). Unary minus binds
+    tighter than `*`. `..` appears only as a list element (`in [1, 3..5]`) or a case label.
+    Discrimination: each test's source rewritten to the other meaning (the `else` on the outer
+    `if`, the parentheses the other way, plain values for the ranges) fails; restored, each
+    passes. The `_other_meaning` tests keep those rewrites as executable contrasts.
+  - New r0-corpus fixture `ws-grammar-v4-shapes` (one routine per shape). It moved
+    `l2_features.snapshot` (+5 routines) and the r4f root-class summary (+3 public procedures).
+    It needed no r4 seed, because r4 runs only its listed smoke fixtures. The ids
+    parent-baseline record was re-minted by hand (`IDS_PARENT_BASELINE_MINT`) to add the
+    fixture, and every other fixture stayed byte-identical. The policy facts oracle was
+    re-recorded (`REMINT_POLICY_FACTS_ORACLE=1`: two cases added, none moved), and the
+    corpus count tripwire `FIXTURE_ROOTS` went 221 → 222. The snapshot digest moves with
+    positions too, so the fixture shows that something moved, and the lowerer tests show which
+    shape.
+
 ### Fixed (TLS-39: two MCP status tests wait for the state instead of sleeping)
 
 - **`mcp_server::faults::status_shows_a_build_in_progress` no longer races a loaded host.** It

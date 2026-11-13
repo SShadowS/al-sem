@@ -1722,6 +1722,20 @@
       "routines": 28,
       "sha256": "2db79c258d908aeb901f4220fdcb7f03221597232845cca67c7b009c34e06f4d"
     },
+    "r0/ws-grammar-v4-shapes cross": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "a3425c908f223819e6998af087a5c13fb672f6fcea874ea1ed98e22ee99abc51"
+    },
+    "r0/ws-grammar-v4-shapes single": {
+      "any": 0,
+      "direct": 0,
+      "inherited": 0,
+      "routines": 5,
+      "sha256": "a3425c908f223819e6998af087a5c13fb672f6fcea874ea1ed98e22ee99abc51"
+    },
     "r0/ws-implicit-trigger cross": {
       "any": 6,
       "direct": 2,
