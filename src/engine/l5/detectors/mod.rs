@@ -196,7 +196,7 @@ pub(crate) fn record_load_points<'a>(
         ) {
             continue;
         }
-        out.entry(op.record_variable_name.to_lowercase())
+        out.entry(al_syntax::fold_identifier(&op.record_variable_name))
             .or_default()
             .push(LoadPoint {
                 anchor: &op.source_anchor,
@@ -226,11 +226,13 @@ pub(crate) fn record_load_points<'a>(
                 .find(|r| r.parameter_index == b.parameter_index)
                 .is_some_and(|r| r.puts_in_loaded_state());
             if by_var && loads {
-                out.entry(name.to_lowercase()).or_default().push(LoadPoint {
-                    anchor: &cs.source_anchor,
-                    node_id: &cs.id,
-                    record_variable_id: b.source_record_variable_id.as_deref(),
-                });
+                out.entry(al_syntax::fold_identifier(name))
+                    .or_default()
+                    .push(LoadPoint {
+                        anchor: &cs.source_anchor,
+                        node_id: &cs.id,
+                        record_variable_id: b.source_record_variable_id.as_deref(),
+                    });
             }
         }
     }
@@ -825,7 +827,7 @@ pub(crate) fn record_loaded_by_call_before(
     record_variable_name: &str,
     op_anchor: &PAnchor,
 ) -> bool {
-    let var_lc = record_variable_name.to_lowercase();
+    let var_lc = al_syntax::fold_identifier(record_variable_name);
     for cs in &routine.call_sites {
         if !before_anchor(&cs.source_anchor, op_anchor) {
             continue;
@@ -995,7 +997,7 @@ pub(crate) fn record_loaded_by_assignment_before(
     assigned_from_loaded_var_before(
         routine,
         ctx,
-        &record_variable_name.to_lowercase(),
+        &al_syntax::fold_identifier(record_variable_name),
         op_anchor,
         MAX_ASSIGN_CHAIN_DEPTH,
     )
@@ -1101,7 +1103,7 @@ pub(crate) fn record_filtered_by_call_before(
     record_variable_name: &str,
     op_anchor: &PAnchor,
 ) -> bool {
-    let var_lc = record_variable_name.to_lowercase();
+    let var_lc = al_syntax::fold_identifier(record_variable_name);
     for cs in &routine.call_sites {
         if !before_anchor(&cs.source_anchor, op_anchor) {
             continue;

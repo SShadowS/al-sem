@@ -1,5 +1,5 @@
 {
-  "mintedAt": "044f7137; d50 fixtures re-minted for ENG-22 (d50 changed meaning, owner q-20261112T025612-62a3ca62); ws-grammar-v4-shapes added at dc0608a6 for TLS-41 (no other fixture moved)",
+  "mintedAt": "044f7137; d50 fixtures re-minted for ENG-22 (d50 changed meaning, owner q-20261112T025612-62a3ca62); ws-grammar-v4-shapes added at dc0608a6 for TLS-41 (no other fixture moved); ws-nordic-identifiers added on 14fad659 for TLS-43 (no other fixture moved)",
   "fixtures": {
     "fixtures/analyze-json": {
       "findings": [
@@ -2352,6 +2352,21 @@
       "stableIds": [
         "11111111-0000-0000-0000-000000000a01:Codeunit:50200#a15fbfb887bf1826e3f04ea76d6346e88cbd57b0a934f4d9a6a5b5385f360d7e"
       ]
+    },
+    "r0-corpus/ws-nordic-identifiers": {
+      "findings": [
+        "d11-modify-without-get|al-sem/v1=46df7d74e326a379",
+        "d19-unused-parameter|al-sem/v1=d58d2fedb796593a"
+      ],
+      "stableIds": [
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#2af67b7144dfbc4e021961e88dcd6d4046d3a82b268871a57f5b3f38443ee7be",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#4f5d232d835875086c96cab4cecf2558364668f7b0087d81d51544392566e049",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#66302123e09304550d84ee76f6aeb0bc4386c53b23d843a08dc7d0d229a6ca98",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#b8c61d2a68b89212b7414b11a931f9dde93f2c386a819073d9dc1285f795663f",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#f0927c9c6de05455a98ec8ec863e6bdff5d4d3228164d876fb1d96723fd599b7",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#f0927c9c6de05455a98ec8ec863e6bdff5d4d3228164d876fb1d96723fd599b7/op0"
+      ],
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"46df7d74e326a379\",\n    \"d58d2fedb796593a\"\n  ]\n}\n"
     },
     "r0-corpus/ws-object-name-shape": {
       "findings": [],

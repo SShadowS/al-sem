@@ -101,7 +101,7 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         let by_name: std::collections::HashMap<String, String> = base
             .fields
             .iter()
-            .map(|f| (f.name.to_lowercase(), f.id.clone()))
+            .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
             .collect();
         for (index, k) in ext_keys.iter().enumerate() {
             let fields = k

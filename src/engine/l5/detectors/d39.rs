@@ -259,7 +259,7 @@ pub fn detect_d39(
                 // Did caller persist the source variable after the callsite?
                 let persisted_after = caller.record_operations.iter().any(|op| {
                     PERSIST_OPS.contains(&op.op.as_str())
-                        && op.record_variable_name.to_lowercase() == source_name_lc
+                        && al_syntax::fold_identifier(&op.record_variable_name) == source_name_lc
                         && before_anchor(&cs.source_anchor, &op.source_anchor)
                 });
                 if persisted_after {

@@ -101,7 +101,7 @@ fn build_guard_eligibility(
     let mut by_var_bool_params = Vec::new();
     for p in parameters {
         if p.is_var && p.type_text.trim().to_lowercase() == "boolean" {
-            let lc = p.name.to_lowercase();
+            let lc = al_syntax::fold_identifier(&p.name);
             if !by_var_bool_params.contains(&lc) {
                 by_var_bool_params.push(lc);
             }
@@ -109,7 +109,7 @@ fn build_guard_eligibility(
     }
     let mut published_bool_vars = Vec::new();
     for v in is_handled_vars {
-        let lc = v.to_lowercase();
+        let lc = al_syntax::fold_identifier(v);
         if !published_bool_vars.contains(&lc) {
             published_bool_vars.push(lc);
         }
@@ -522,7 +522,7 @@ pub fn derive_is_handled_vars(features: &PFeatures) -> Vec<String> {
             && v.declared_type.trim().to_lowercase() == "boolean"
             && call_arg_name_set.contains(&v.name.to_lowercase())
         {
-            let lc = v.name.to_lowercase();
+            let lc = al_syntax::fold_identifier(&v.name);
             if !out.contains(&lc) {
                 out.push(lc);
             }

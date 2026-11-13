@@ -198,7 +198,7 @@ pub fn run(ws: &Path, args: &ProbeArgs) -> Result<Value, String> {
             g.nodes_with_stable_id(r)
         } else {
             let (obj, name) = r.rsplit_once("::").unwrap_or(("", r));
-            g.routines_named(&name.to_lowercase())
+            g.routines_named(&al_syntax::fold_identifier(name))
                 .into_iter()
                 .filter(|n| obj.is_empty() || object_name(*n).eq_ignore_ascii_case(obj))
                 .collect()

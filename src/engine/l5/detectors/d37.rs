@@ -132,7 +132,7 @@ pub fn detect_d37(
             }
 
             // Phase 3: precise verdict using callee.persistsCurrentRecord summary.
-            let source_variable_name_lc = op.record_variable_name.to_lowercase();
+            let source_variable_name_lc = al_syntax::fold_identifier(&op.record_variable_name);
             let source_record_variable_id = op.record_variable_id.as_deref();
             let helper_verdict = post_validate_helper_verdict(
                 routine,

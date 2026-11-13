@@ -57,7 +57,7 @@ fn compute_narrow_at_callsite(
     }
     let mut pending = Pending::None;
     for op in ops {
-        if op.record_variable_name.to_lowercase() != var_name_lc {
+        if al_syntax::fold_identifier(&op.record_variable_name) != var_name_lc {
             continue;
         }
         if !before_anchor(&op.source_anchor, callsite_anchor) {

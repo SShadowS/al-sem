@@ -1094,7 +1094,7 @@ fn index_table_ir(
         .collect();
     let fields_by_name: std::collections::HashMap<String, String> = fields
         .iter()
-        .map(|f| (f.name.to_lowercase(), f.id.clone()))
+        .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
         .collect();
     let keys: Vec<ModelKey> = o
         .keys
@@ -2182,7 +2182,7 @@ fn project_ir(
                     record_variables
                         .iter()
                         .filter(|rv| rv.scope.as_deref() == Some("global"))
-                        .map(|rv| (rv.name.to_lowercase(), rv))
+                        .map(|rv| (al_syntax::fold_identifier(&rv.name), rv))
                         .collect();
                 // Names whose INNERMOST declaration (params → locals → globals,
                 // first-wins in `features.variables`) is NOT the global —
@@ -2214,7 +2214,7 @@ fn project_ir(
                                     else {
                                         continue;
                                     };
-                                    let lc = text.trim().to_lowercase();
+                                    let lc = al_syntax::fold_identifier(text.trim());
                                     // Bare identifiers only — mirrors the L2 builder's
                                     // `arg_node.kind() == "identifier"` gate.
                                     if lc.is_empty()
@@ -2245,7 +2245,7 @@ fn project_ir(
                                 receiver, ..
                             } = &cs.callee
                         {
-                            let lc = receiver.trim().trim_matches('"').to_lowercase();
+                            let lc = al_syntax::fold_identifier(receiver.trim().trim_matches('"'));
                             if let Some(g) = global_rv_by_lc.get(&lc)
                                 && innermost_scope_by_lc.get(lc.as_str()).copied() == Some("global")
                             {

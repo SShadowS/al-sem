@@ -68,7 +68,7 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             let Some(loop_id) = loop_id else { continue };
             loop_driver
                 .entry(loop_id)
-                .or_insert_with(|| op.record_variable_name.to_lowercase());
+                .or_insert_with(|| al_syntax::fold_identifier(&op.record_variable_name));
         }
 
         for loop_info in &routine.loops {

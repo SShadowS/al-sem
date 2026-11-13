@@ -157,7 +157,7 @@ pub fn detect_d56(
         let record_names: HashSet<String> = routine
             .record_variables
             .iter()
-            .map(|rv| rv.name.to_lowercase())
+            .map(|rv| al_syntax::fold_identifier(&rv.name))
             .collect();
 
         // G-15(a) write-target proof (shared with d3): a `field_accesses` entry
@@ -207,7 +207,7 @@ pub fn detect_d56(
             // Written back inside the SAME loop, after the copy.
             let write = routine.record_operations.iter().find(|op| {
                 WRITE_BACK_OPS.contains(&op.op.as_str())
-                    && op.record_variable_name.to_lowercase() == asg.lhs_name
+                    && al_syntax::fold_identifier(&op.record_variable_name) == asg.lhs_name
                     && op.loop_stack.iter().any(|id| id == &lp.id)
                     && before_anchor(&asg.source_anchor, &op.source_anchor)
             });
@@ -245,7 +245,7 @@ pub fn detect_d56(
             // The copy SOURCE must be a live cursor.
             let src_is_cursor = routine.record_operations.iter().any(|op| {
                 CURSOR_OPS.contains(&op.op.as_str())
-                    && op.record_variable_name.to_lowercase() == rhs_lc
+                    && al_syntax::fold_identifier(&op.record_variable_name) == rhs_lc
             });
             if !src_is_cursor {
                 skipped_source_not_cursor += 1;
@@ -260,7 +260,7 @@ pub fn detect_d56(
             let src_is_temp = routine
                 .record_variables
                 .iter()
-                .any(|rv| rv.name.to_lowercase() == rhs_lc && is_known_temp_var(rv));
+                .any(|rv| al_syntax::fold_identifier(&rv.name) == rhs_lc && is_known_temp_var(rv));
             if src_is_temp {
                 skipped_source_temp += 1;
                 continue;
@@ -292,14 +292,15 @@ pub fn detect_d56(
                 .record_operations
                 .iter()
                 .filter(|op| {
-                    op.op == "SetCurrentKey" && op.record_variable_name.to_lowercase() == rhs_lc
+                    op.op == "SetCurrentKey"
+                        && al_syntax::fold_identifier(&op.record_variable_name) == rhs_lc
                 })
                 .filter_map(|op| op.field_arguments.as_ref())
                 .flatten()
                 .map(|f| normalize_load_field_arg(f))
                 .collect();
             let key_field_reassigned = routine.field_accesses.iter().any(|fa| {
-                fa.record_variable_name.to_lowercase() == asg.lhs_name
+                al_syntax::fold_identifier(&fa.record_variable_name) == asg.lhs_name
                     && before_anchor(&asg.source_anchor, &fa.source_anchor)
                     && before_anchor(&fa.source_anchor, &write.source_anchor)
                     && write_targets.contains(&(

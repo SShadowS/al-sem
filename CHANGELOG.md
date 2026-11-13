@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-43: identifiers with non-ASCII capitals meet one fold)
+
+- **The L2 builder and the detectors now fold identifiers the same way.** `ir_walk.rs` folded
+  identifiers with `to_ascii_lowercase` (`Ændring` stayed `Ændring`), and about 30 later sites
+  folded them with `to_lowercase` (`ændring`). On code with a non-ASCII capital in a name:
+  - d19 reported a used parameter as unused;
+  - the shared by-var load and filter suppressions (d11, d21, d33, d36 and others) did not
+    apply;
+  - the global record-variable backfill missed.
+  Found by TLS-42's census (`docs/superpowers/notes/2026-11-13-to-lowercase-census.md`).
+  - Every identifier fold in `ir_walk.rs` is now `fold_identifier`. Keyword, type-text and
+    string-literal folds stay ASCII. The sites that meet these values use `fold_identifier`
+    too: d5, d19, d37, d39, d41, d42, d43, d56; the shared helpers in `detectors/mod.rs`;
+    `cross_rules.rs`; `literal_values.rs`; `control_context.rs`; the field and global
+    record-variable maps in `workspace.rs` and `extension_fields.rs`; and the impact graph's
+    `entries.rs` and `cone_probe.rs`. Identity sites (ids, keys, fingerprints) are unchanged.
+  - `fold_identifier` is byte-identical to the ASCII fold on ASCII input, so no existing
+    golden moved.
+  - Test: `r4_differential::nordic_identifiers_meet_one_fold` on the new fixture
+    `ws-nordic-identifiers`. It checks that d19 stays quiet on a used `Ændring` and that
+    d11's by-var suppression covers `Ørder` loaded through `HentØrder`, each with a control
+    that must fire. Discrimination: the `identifier_ref_set` inserts back on the ASCII fold
+    fail at "used Ændring"; the argument binding's name back on it fails at "Ørder loaded by
+    var".
+  - The new fixture also moved `l2_features.snapshot` (+5 routines) and the root-class
+    summary (+4). The ids parent-baseline record and the policy facts oracle were re-minted to
+    add it (no other fixture or case moved), and `FIXTURE_ROOTS` went 222 → 223.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
