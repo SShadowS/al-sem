@@ -45,6 +45,7 @@
 //!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
+//!   - `PVarAssignment.lhs_is_member`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.path_hint`
