@@ -247,8 +247,8 @@ throughout (deleted in engine-switch S9); the items below note where the code li
     manual-binding or skip-on-license conditions.
 
 - [ ] **B3 Phase A follow-ups** (TLS-45, checked 2026-11-13: `calls_for(..).into_owned()`
-  and the `--l3-*` modes no longer exist; still open: `aldump` does not print
-  `abi_ingest_errors`) (recorded 2026-10-05 by the final fix wave; branch
+  and the `--l3-*` modes no longer exist; the `aldump` item is done by TLS-47, below)
+  (recorded 2026-10-05 by the final fix wave; branch
   `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
   - **Move the other L3 consumers onto the program engine's calls.** DONE for the
     single-app consumers in engine-switch S6 (2026-10-06): prove, digest, fingerprint,
@@ -266,6 +266,11 @@ throughout (deleted in engine-switch S9); the items below note where the code li
     dependency ledger feeds the `dependencies` diagnostics and the preflight's degraded
     state. Only a test was missing; `abi_ingest_error_reaches_the_dependency_diagnostics_and_the_preflight`
     now pins it, with a discrimination proof. `aldump` still does not print it.
+    **DONE by TLS-47 (2026-11-13):** `aldump --program-call-graph-stats` prints them
+    (`abiIngestErrors`, app and message, plus a stderr warning). A package the loader
+    drops outright never reaches the field; that is engine limit L37
+    (`docs/engine-limits.md`). The loader and the ABI reader disagree on what is valid
+    JSON (a `1e400` in a member the loader skips), which is ENG-68.
   - **`calls_for(..).into_owned()` clones the whole `ResolvedCalls`**
     (`detector_context.rs` and `capability_cone.rs` ordering base; final review
     Minor 12). Fine at CDO's ~603 MB peak; fold into the ProgramContext byte-census

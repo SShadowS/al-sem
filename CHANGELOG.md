@@ -231,9 +231,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The new fixture also moved `l2_features.snapshot` and the root-class summary. The ids
     parent-baseline record and the policy facts oracle were re-minted to add it (no other
     fixture or case moved), and `FIXTURE_ROOTS` went 222 → 223.
-  - Measured on CDO: to be re-run on the final head after the reviews (the earlier run,
-    `14fad659` against `28686add`, moved nothing: 2,308 / 32,576 findings, 0 fingerprints
-    added or removed).
+  - Measured on CDO on the final head: nothing moves (see the Changed section above).
+
+### Changed (TLS-47: `aldump` reports dependency ABI ingest errors)
+
+- **`aldump --program-call-graph-stats` now prints `abiIngestErrors`** (`count`, and one
+  `"<publisher>/<name>@<version>: <message>"` line per loaded symbol-only dependency whose
+  `SymbolReference.json` failed to ingest; a dependency with embedded source is not checked
+  this way, and its symbol-only control add-ins are dropped silently on such a failure), and the same lines as `aldump: warning:` on
+  stderr. Before, such a dependency looked empty, its calls counted as `unknown`, and the
+  stats said nothing (`alsem analyze` already reported it). It happens when the loader's
+  parse accepts the file but the ABI reader's stricter check rejects it, e.g. a `1e400` in a
+  member the loader skips (the disagreement is ENG-68). Pinned by
+  `cli_aldump_abi_ingest_errors`, with a discrimination proof.
+- **New engine limit L37 (`docs/engine-limits.md`):** a package the loader drops outright
+  (unreadable, unidentified, encrypted) is still not in the stats JSON; calls into it count
+  as `unknown`, and `alsem analyze` reports it.
+
+### Fixed (TLS-47: dead doc links)
+
+- **Doc links to the deleted `d1_cohort::UncertaintyTable` now name
+  `detector_context::UncertaintyIndex`**, which replaced it (`l4/summary.rs`,
+  `l5/confidence.rs`, `d1_cohort.rs`, `d1_dataflow.rs`, `detectors/d1.rs`), and the docs that
+  still described the old run-level table are corrected. Doc only.
 
 ### Fixed (TLS-46: a source root's hash sees file names and boundaries)
 

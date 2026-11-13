@@ -743,7 +743,7 @@ const WAVE_E2: &[Smoke] = &[
 /// differs from path-discovery order), DE-DUPLICATION (one uncertainty spans two
 /// nodes of the same path) and RESOLUTION (four distinct entries, so an off-by-one
 /// in the id → value mapping shows). Byte-comparing it here is what keeps
-/// `d1_cohort.rs`'s interned `UncertaintyTable` — and anything that later rewrites
+/// the interned ids (`detector_context::UncertaintyIndex`) — and anything that later rewrites
 /// how `Evidence` is built from it — honest.
 const WAVE_D1: &[Smoke] = &[
     Smoke {

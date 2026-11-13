@@ -541,15 +541,12 @@ pub(crate) struct TerminalSink<'a> {
     /// Per terminal: every loop already inserted (any ctx) — the disjointness
     /// guard (a loop must appear in ≤1 ctx per terminal).
     seen: Vec<GroupBitmap>,
-    /// The run-level interned uncertainty store every [`CohortRep`] in this sink
-    /// indexes into. Owned HERE rather than by the caller so [`Self::insert`] can
-    /// hand `&mut` to it straight to the `build_rep` closure (disjoint field
-    /// borrows), which keeps `score_batch_to_sink`/`sink_emit` free of a second
-    /// threaded parameter. Moved out by [`Self::finalize`] to live on the run
-    /// alongside the cohorts that reference it.
-    /// The union memo paired with `uncertainties` — its ids are only meaningful
-    /// against THAT table, which is why the two live together and are handed to
-    /// `build_rep` together.
+    /// The per-path uncertainty-union memo: an equal path (the same sequence of
+    /// interned sets) reuses its union. Its ids index the context's
+    /// `UncertaintyIndex`, which owns every uncertainty. Owned HERE so
+    /// [`Self::insert`] can hand `&mut` to it straight to the `build_rep` closure
+    /// (disjoint field borrows), keeping `score_batch_to_sink`/`sink_emit` free
+    /// of a second threaded parameter. [`Self::finalize`] does not return it.
     path_cache: PathUncertaintyCache,
 }
 
@@ -604,9 +601,9 @@ impl<'a> TerminalSink<'a> {
     /// the witness from the STILL-ALIVE per-batch `BatchSolver` — the arena is
     /// dropped after the batch, so the witness cannot be deferred to finalize.
     ///
-    /// `build_rep` receives this sink's [`UncertaintyTable`] to intern the
-    /// representative path's uncertainty union into; it is the sink's own field,
-    /// borrowed disjointly from `cohorts`.
+    /// `build_rep` receives this sink's [`PathUncertaintyCache`] to reuse an
+    /// equal path's uncertainty union; it is the sink's own field, borrowed
+    /// disjointly from `cohorts`.
     pub(crate) fn insert(
         &mut self,
         terminal: TerminalIx,
@@ -645,9 +642,9 @@ impl<'a> TerminalSink<'a> {
     }
 
     /// Finalize: yield, per reached terminal, its cohorts + per-verdict
-    /// reachable-loop bitmaps, PLUS the run-level [`UncertaintyTable`] every
-    /// `CohortRep.uncertainties` id sequence indexes into (moved out, not cloned —
-    /// the cohorts are meaningless without it, so the two travel together). Each
+    /// reachable-loop bitmaps. Every `CohortRep.uncertainties` id resolves
+    /// through the context's
+    /// [`UncertaintyIndex`](crate::engine::l5::detector_context::UncertaintyIndex). Each
     /// loop appears in exactly ONE ctx cohort per terminal (the disjointness
     /// invariant), so no cross-cohort subtraction is needed.
     pub(crate) fn finalize(self) -> Vec<TerminalCohorts<'a>> {
@@ -773,7 +770,7 @@ mod tests {
     }
 
     /// **The substitution contract, as a differential against the oracle it
-    /// replaces.** Interning + [`UncertaintyTable::dedupe`] + resolution must
+    /// replaces.** Interning + [`UncertaintyIndex::dedupe`] + resolution must
     /// yield the byte-identical `Vec<Uncertainty>` that
     /// [`dedupe_uncertainties`] — still live, still the `#[cfg(test)]` walker
     /// path's own de-duplicator — produces from the same input.

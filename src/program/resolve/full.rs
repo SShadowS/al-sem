@@ -584,6 +584,12 @@ pub struct ProgramReport {
     /// well-formed workspace; any entry means that file's IR may be missing
     /// content tree-sitter could not parse.
     pub recovered_files: Vec<String>,
+    /// `"<publisher>/<name>@<version>: <message>"` of every loaded symbol-only
+    /// dependency whose ABI (`SymbolReference.json`) failed to ingest, sorted
+    /// ([`crate::program::graph::ProgramGraph::abi_ingest_errors`]). Such an app
+    /// looks empty to the resolver, so calls into it count as `unknown`; this
+    /// says why. Diagnostic only, never gates resolution (TLS-47).
+    pub abi_ingest_errors: Vec<String>,
     /// T0.3 builtin-dispatch justification audit — see [`BuiltinDispatchAudit`]'s
     /// doc. ADDITIVE diagnostic: never consulted by `histogram`/
     /// `classify_obligation`, does not change any route/edge.
@@ -2731,6 +2737,12 @@ pub(crate) fn resolve_full_program_reusing(
     // Task 3 (preprocessor foundations plan): additive Recovered-parse
     // diagnostic — surfaced, never gating (see `recovered_files`'s doc).
     let recovered_files = ctx.recovered_files();
+    let mut abi_ingest_errors: Vec<String> = graph
+        .abi_ingest_errors
+        .iter()
+        .map(|e| format!("{}: {}", graph.apps.resolve(e.app).short(), e.message))
+        .collect();
+    abi_ingest_errors.sort();
 
     (
         ProgramReport {
@@ -2742,6 +2754,7 @@ pub(crate) fn resolve_full_program_reusing(
             primary_app_ref,
             event_flow_dual_publisher_alias_skips,
             recovered_files,
+            abi_ingest_errors,
             builtin_dispatch_audit,
             site_facts,
             parenless_calls,

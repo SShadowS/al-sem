@@ -173,6 +173,7 @@ mod cli_a_json_differential;
 mod cli_a_stats_differential;
 mod cli_a_terminal_differential;
 mod cli_a_with_evidence;
+mod cli_aldump_abi_ingest_errors;
 mod cli_analyze_call_hierarchy_json;
 mod cli_analyze_coverage_ledger;
 mod cli_analyze_program_calls;
