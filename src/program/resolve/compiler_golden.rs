@@ -244,7 +244,8 @@ pub enum Verdict {
     RunTriggerFalse,
     /// Program-only `Trigger` into a field's `OnValidate`: the compiler graph has
     /// no `Validate` trigger edges (S12). Rule: the target is a field-level
-    /// `OnValidate`.
+    /// trigger of the validate family (`OnValidate`, and a table extension
+    /// field's `OnBeforeValidate`/`OnAfterValidate`, ENG-15).
     ValidateTrigger,
     /// Program-only `Trigger` from a record operation written without a receiver
     /// (`Insert(true)` on the implicit `Rec`): the compiler graph has no trigger
@@ -453,9 +454,14 @@ fn classify_program_only(
     match class {
         EdgeClass::Run => Some(Verdict::ObjectRun),
         EdgeClass::Trigger => {
-            if target_id()
-                .is_some_and(|t| t.name_lc == "onvalidate" && t.enclosing_member_lc.is_some())
-            {
+            // A field's validate-family trigger: `OnValidate`, and (ENG-15) a
+            // table extension field's `OnBeforeValidate`/`OnAfterValidate`,
+            // which the program reaches since ENG-15; the compiler has no
+            // `Validate` trigger edges at all (A10, A11).
+            if target_id().is_some_and(|t| {
+                crate::program::resolve::edge::trigger_family(&t.name_lc) == Some("validate")
+                    && t.enclosing_member_lc.is_some()
+            }) {
                 Some(Verdict::ValidateTrigger)
             } else if all_sites(&|f| f.unqualified_record_op) {
                 Some(Verdict::UnqualifiedRecordOp)

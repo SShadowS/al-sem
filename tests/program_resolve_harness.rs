@@ -4034,13 +4034,19 @@ fn cdo_compiler_audit_explains_every_disagreement() {
         // a bare `Modify(true)` (Customer / Vendor `OnModify`, 2 pairs) and
         // `Validate("CDO Automatic statement", ..)` (the table extension field's
         // `OnValidate`, 1 pair).
+        // 41 -> 43 (2026-11-13, ENG-15: a table extension's OnBefore/OnAfter
+        // triggers run): CDO codeunit 6175338 `InitRecurringDailyJob` (line 426)
+        // and 6175405 `EnqueueOnHold` (line 246) validate Job Queue Entry
+        // fields whose Base App table extension 472 "Job Queue Entry Ext."
+        // declares a field `OnAfterValidate`; the compiler has no Validate
+        // trigger edges (A10/A11), so both pairs are program-only.
         (
             (
                 Side::ProgramOnly,
                 EdgeClass::Trigger,
                 Some(Verdict::ValidateTrigger),
             ),
-            41,
+            43,
         ),
         (
             (
