@@ -320,7 +320,7 @@ def record_tree_binary(repo, built, key_before):
         return
     try:
         _keep_tree_binary(repo, built, key_before)
-    except OSError as e:
+    except (OSError, subprocess.CalledProcessError) as e:
         log(f"the working tree's binary was not kept (it only saves a later build): {e}")
 
 
