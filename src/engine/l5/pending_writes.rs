@@ -127,7 +127,7 @@ impl<'a> UnknownCode<'a> {
     }
 }
 
-/// ENG-24: the model's unknown-code call sites ([`is_unknown_code_site`] over
+/// ENG-24: the model's unknown-code call sites ([`is_unknown_code_call`] over
 /// every routine's call sites and the model's call edges).
 pub(crate) fn unknown_code_sites<'a>(
     routines: &'a [ModelRoutine],

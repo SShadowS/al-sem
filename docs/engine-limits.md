@@ -461,19 +461,30 @@ callers' question reads (`commit_scope::declared`).
   write whose table does not resolve, a `LockTable`, unknown code and sibling subscribers were
   left out: wrong negatives). **Fixed by ENG-24:** one rule decides "may this leave a write
   pending" for the trap search, the spans and the cone fold
-  (`cone_derived::op_may_leave_write_pending`, `pending_writes::is_unknown_code_site`), and a
-  span names what has no physical table (`pending_other`: "a LockTable", "a write to a table
-  that does not resolve", "unknown code at <call>"). Another subscriber of an event a span
-  member raises, whose cone may write, counts as "possibly pending … (order unknown)". A record
-  operation that fires a subscriber was already counted (the subscriber's cone). Left: unknown
-  code deeper in a callee's cone (no cone fact records it); a callee with no row, which the trap
-  search counts as unknown code, has no counterpart here; for unknown code the predicate is
-  shared but each reader builds its own inputs (the trap search from its guarded out-edges);
-  siblings are judged by their whole cone; a `LockTable` on a temporary record counts as pending
-  in both readers (an over-approximation the shared rule keeps); only d50 reads `pending_other`,
-  so the explicit-commit-span detectors (d8, d9), the digest's pending line and explain's
-  pending report still name physical tables only (explain passes no unknown-code sites). On CDO nothing moves: its 6 checked runs have nothing pending, so d50 has 0 findings
-  there and its precision is not measured; it stays opt-in. A helper's writes
+  (`cone_derived::op_may_leave_write_pending`, `pending_writes::is_unknown_code_call`, which
+  leaves a checked run out, a dynamic `Codeunit.Run(Id)` included), and both readers follow
+  unknown code back through calls with one closure (`pending_writes::reach_back`, never through
+  a checked run). A span names what has no physical table (`pending_other`: "a LockTable", "a
+  write to a table that does not resolve", "unknown code at <call>", "unknown code behind
+  <call>"). Review round 1 (astra) found the first walk wrong in the other direction: a record
+  operation whose OnAfter table event's subscriber reaches the run had its own write left out
+  (the probe had tested a subscriber that writes, not one that runs), and the other callees of
+  a dispatch counted only for an event subscriber outside the span. Now every callee of one
+  dispatch that may run before the one leading to the run or Commit counts, by run phase (an
+  OnBefore table event's subscriber, then the table's trigger, then the write, then an OnAfter
+  subscriber or an event subscriber; callees of the same phase in either order), a span member
+  among them, each through its cone minus its own checked runs. Their physical tables join the
+  span's pending tables (d8 and d9 count them) and `pending_order_unknown_tables` lists the
+  ones only they write ("order unknown" in d8, d9 and d50). Left: a callee with no row, which
+  the trap search counts as unknown code, has no counterpart here; each reader seeds the closure
+  from its own inputs (the trap search from its guarded out-edges); a `LockTable` on a temporary
+  record counts as pending in both readers (an over-approximation the shared rule keeps); the
+  digest's pending line and explain's pending report still name physical tables only (explain
+  passes no unknown-code sites); a table event's phase is read from its name (`onbefore…`; any
+  other name counts as after the write). On CDO (base `67d75bea`) no default detector moves; d50
+  goes from 0 to 2 findings, both resting only on unknown code in dependencies (a chained
+  interface call left open, ENG-64, and a telemetry logger registered at run time) and false in
+  practice; it stays opt-in. A helper's writes
   inside its own checked run no longer count (the CDO landing measurement: both d50 findings on
   CDO's send-on-posting were this shape, and with the fix d50 has none there); this reaches
   workspace routines only, so a checked run inside dependency code still counts its writes (an

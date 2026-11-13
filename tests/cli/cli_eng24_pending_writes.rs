@@ -261,7 +261,9 @@ fn prove_checked_runs(source: &str, routine: &str) -> (String, Vec<String>) {
 /// The trap search reads the same rule: a `LockTable` then a read leaves a
 /// write pending at the checked run, so the run's own error escapes; with
 /// nothing before the run, `no`.
-/// Break (review round 1): see `d50_counts_every_write_the_trap_search_counts`.
+/// Break (2026-11-13, review round 1): drop the `lock` arm of
+/// `op_may_leave_write_pending` -> `LockThenRead`'s run is no longer
+/// `escapes-if-write-pending`. Fails; restored, it passes.
 #[test]
 fn the_shared_rule_drives_the_trap_search_too() {
     let (_, lock) = prove_checked_runs(SOURCE, "Codeunit \"E24 Ops\"::LockThenRead");
@@ -471,6 +473,9 @@ codeunit 53013 "E24 Subs2"
 /// Table events (astra round 1, finding 1): an OnAfter subscriber runs after
 /// its operation's write (pending); an OnBefore one before it (not); another
 /// subscriber of the same table event may run first (pending, labeled).
+/// Breaks (2026-11-13): no `written` targets in `span_template` -> `AfterInsT`
+/// has no finding; `run_phase` reads OnBefore as after the write ->
+/// `BeforeInsU` gets one. Each fails; restored, it passes.
 #[test]
 fn table_events_order_the_write_and_their_siblings() {
     let fs = d50(ROUND2);
@@ -491,6 +496,12 @@ fn table_events_order_the_write_and_their_siblings() {
 /// sibling's write inside its own checked run is not pending; a sibling that
 /// is itself in the span (both call `Check3`) counts what it writes after
 /// its call; unknown code behind a helper counts.
+/// Breaks (2026-11-13): drop `!is_checked_run` from `is_unknown_code_call` ->
+/// `DynThenRun` gets a finding (and the trap search answers
+/// `escapes-if-write-pending` for its second run); `sibling_pending` reads
+/// the whole cone -> `RunsCheck2` gets one; skip siblings in the span ->
+/// `Check3` has none; drop the "unknown code behind" loop in `effects` ->
+/// `ViaMissingHelper` has none. Each fails; restored, it passes.
 #[test]
 fn checked_runs_siblings_in_the_span_and_unknown_code_behind_a_call() {
     let fs = d50(ROUND2);
@@ -513,6 +524,8 @@ fn checked_runs_siblings_in_the_span_and_unknown_code_behind_a_call() {
 
 /// Finding 5: a sibling's physical tables reach the explicit-commit spans
 /// (d9 counts them), labeled order unknown.
+/// Break (2026-11-13): drop `tables.extend` in `add_dispatch_siblings` ->
+/// `Sub4Commits` has no d9 finding. Fails; restored, it passes.
 #[test]
 fn a_siblings_tables_reach_d9_labeled() {
     let fs = findings(ROUND2, "d9-transaction-span-summary");

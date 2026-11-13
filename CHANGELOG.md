@@ -14,20 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose table does not resolve (a `RecordRef` parameter's), a `LockTable` (then a read, which
   opens a write transaction), and unknown code (a call no edge resolves) before a checked run
   gave no finding, while `prove … throws-error` raised the run's own error there. One rule now
-  serves both, and the cone fold: `cone_derived::op_may_leave_write_pending` and
-  `pending_writes::is_unknown_code_site`. A span carries what has no physical table to name
-  (`TransactionSpan::pending_other`) and d50 names it: "a LockTable", "a write to a table that
-  does not resolve", "unknown code at <call>". A lock inside a helper's own checked run still
-  stays out (ENG-22).
-- **Sibling subscribers:** another subscriber of an event raised on the way to the run, whose
-  cone may write, may run first (their order is not known): it counts, labeled "possibly
-  pending: subscriber X of event E (order unknown)".
-- On CDO (`bc3ccb18`, base `e58234bb`): nothing moves. d50 considers the same 6 checked runs and
-  reports none on both sides (nothing pending, even under the wider rule); no default detector
-  moves at either scope. With no finding on CDO, d50's precision is not measured; it stays
-  opt-in. Left: unknown code deeper in a callee's cone, and a callee with no row, are not
-  tracked here; only d50 reads the new labels (d8, d9, the digest and explain still name physical
-  tables only); a `LockTable` on a temporary record counts (an over-approximation). Tests:
+  serves both, and the cone fold: `cone_derived::op_may_leave_write_pending`,
+  `pending_writes::is_unknown_code_call` (a checked run, a dynamic `Codeunit.Run(Id)` included,
+  is not unknown code: its writes end with it) and `pending_writes::reach_back`, the one closure
+  that follows unknown code back through calls (not through a checked run). A span carries what
+  has no physical table to name (`TransactionSpan::pending_other`) and d50 names it: "a
+  LockTable", "a write to a table that does not resolve", "unknown code at <call>", "unknown
+  code behind <call>". A lock inside a helper's own checked run still stays out (ENG-22).
+- **Table events:** a record operation whose OnAfter table event's subscriber reaches the run
+  has written by then, so its write is pending; an OnBefore subscriber's is not.
+- **The other callees of one dispatch** (another subscriber of the event, the table's trigger, an
+  OnBefore table event's subscriber), when they may run before the one that reaches the run or
+  Commit, count with their cone minus their own checked runs, a span member among them (two
+  subscribers that both reach the run: what one writes after its call is pending for the other).
+  d50 labels them "possibly pending: subscriber X of event E (order unknown)" (or "…, which runs
+  first"). Their physical tables join the span's pending tables, so d8 and d9 count them too;
+  `TransactionSpan::pending_order_unknown_tables` lists the ones only they write, and d8, d9 and
+  d50 say "order unknown".
+- On CDO (`bc3ccb18`, base `67d75bea`): no default detector moves at either scope (2,308 and
+  32,576 findings, no fingerprint added or removed; d8 and d9's text is byte-identical). d50
+  (opt-in) goes from 0 to 2 findings, on `CDO Subscribers` `RunDocHandleIsolated` and
+  `LogAutoSendFailure`, both resting only on unknown code in dependencies: a chained interface
+  call the resolver leaves open (`Provider.GetCache().GetSubscription` in Continia Core, whose
+  one implementation only reads: ENG-64) and a telemetry logger registered at run time. Both
+  are false in practice, so d50 stays opt-in. Left: a callee with no row, which the trap search
+  counts as unknown code, is not counted here; the digest and explain still name physical tables
+  only; a `LockTable` on a temporary record counts (an over-approximation). Tests:
   `tests/cli/cli_eng24_pending_writes.rs` (one break on the shared rule fails both d50's test
   and the trap search's). Probe: `docs/superpowers/notes/2026-11-13-eng24-d50-pending-probe.md`.
 
