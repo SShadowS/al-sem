@@ -21,6 +21,7 @@ fn speed_gate_fails_when_a_timed_call_fails() {
         .arg(ws.path())
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
         .arg(out.path())
+        .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -66,6 +67,7 @@ fn speed_gate_refuses_more_rounds_than_routines() {
                 "--out",
             ])
             .arg(out.path())
+            .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
             .output()
             .expect("spawn python3 scripts/cdo-speed");
         let text = format!(
@@ -246,6 +248,7 @@ fn speed_build_uses_the_gate_release_folder() {
         .arg("--out")
         .arg(target.path().join("out"))
         .env("CARGO_TARGET_DIR", target.path())
+        .env("ALSEM_SPEED_CACHE", target.path().join("speed-cache"))
         .env("PATH", path)
         .output()
         .expect("spawn python3 scripts/cdo-speed");
@@ -462,6 +465,323 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         && std::fs::read_to_string(format!("/proc/{build_pid}/stat"))
             .is_ok_and(|s| !s.contains(") Z "));
     assert!(!alive, "the build phase's process survived the gate");
+}
+
+/// TLS-34 review r1 (sol): no test here may write the real speed cache
+/// (`~/.cache/al-sem/cdo-speed`). A test that builds or warms through
+/// `cdo-speed` would leave a stub binary there, and a later gate could time
+/// against it as its base. Every `cdo-speed` run in this file sets
+/// `ALSEM_SPEED_CACHE` before it runs (`.output()` / `.spawn()`).
+///
+/// Mutation (2026-11-13): drop `ALSEM_SPEED_CACHE` from
+/// `speed_build_uses_the_gate_release_folder` -> named here.
+#[test]
+fn speed_tests_never_use_the_real_cache() {
+    let text = include_str!("gate_scripts.rs");
+    let needle = concat!("\"/scripts/", "cdo-speed\"");
+    let mut missing = Vec::new();
+    for (i, part) in text.split(needle).enumerate().skip(1) {
+        let run = part.split([';']).next().unwrap_or(part);
+        // Only a statement that runs the script (a copy of it is no run).
+        let Some(until) = [".output()", ".spawn()"]
+            .iter()
+            .filter_map(|end| run.find(end))
+            .min()
+        else {
+            continue;
+        };
+        if !run[..until].contains("ALSEM_SPEED_CACHE") {
+            missing.push(format!(
+                "run #{i}: {}",
+                run.lines().take(3).collect::<Vec<_>>().join(" ")
+            ));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "cdo-speed runs without ALSEM_SPEED_CACHE:\n{}",
+        missing.join("\n")
+    );
+}
+
+/// A throwaway checkout for TLS-34's tests: a git repo holding a copy of
+/// `scripts/cdo-speed` (which finds its repo from its own path) and one file,
+/// committed; a grammar clone (another git repo, `TREE_SITTER_AL_PATH`); a stub
+/// `cargo` that builds a placeholder `alsem` (or fails); an empty workspace; a
+/// base binary. Runs never touch the real checkout or cache.
+#[cfg(target_os = "linux")]
+struct Throwaway {
+    dir: tempfile::TempDir,
+}
+
+#[cfg(target_os = "linux")]
+impl Throwaway {
+    fn new() -> Throwaway {
+        use std::os::unix::fs::PermissionsExt;
+        let t = Throwaway {
+            dir: tempfile::tempdir().unwrap(),
+        };
+        for repo in ["repo", "grammar"] {
+            std::fs::create_dir_all(t.path(repo)).unwrap();
+            t.git(repo, &["init", "-q"]);
+            std::fs::write(t.path(repo).join("a.txt"), "one\n").unwrap();
+        }
+        std::fs::create_dir_all(t.path("repo/scripts")).unwrap();
+        std::fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"),
+            t.path("repo/scripts/cdo-speed"),
+        )
+        .unwrap();
+        for repo in ["repo", "grammar"] {
+            t.commit(repo);
+        }
+        std::fs::create_dir_all(t.path("ws")).unwrap();
+        std::fs::create_dir_all(t.path("bin-ok")).unwrap();
+        std::fs::create_dir_all(t.path("bin-fail")).unwrap();
+        std::fs::write(
+            t.path("bin-ok/cargo"),
+            // `EDIT_DURING_BUILD`: a file the "build" changes (the sources
+            // moving under a build).
+            "#!/bin/sh\n[ -n \"$EDIT_DURING_BUILD\" ] && echo edit >> \"$EDIT_DURING_BUILD\"\nmkdir -p \"$CARGO_TARGET_DIR/release-fast\" && printf built > \"$CARGO_TARGET_DIR/release-fast/alsem\"\n",
+        )
+        .unwrap();
+        std::fs::write(t.path("bin-fail/cargo"), "#!/bin/sh\nexit 1\n").unwrap();
+        for c in ["bin-ok/cargo", "bin-fail/cargo"] {
+            std::fs::set_permissions(t.path(c), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(t.path("base-alsem"), b"placeholder").unwrap();
+        t
+    }
+
+    fn path(&self, rel: &str) -> std::path::PathBuf {
+        self.dir.path().join(rel)
+    }
+
+    /// Through `crate::git::run` (scratch git: no hook variable, no system or
+    /// user config, a fixed identity), as every test-made repo must (review
+    /// r1, Opus; `tests/common/git.rs`).
+    fn git(&self, repo: &str, args: &[&str]) -> String {
+        let out = crate::git::run(&self.path(repo), args);
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    fn commit(&self, repo: &str) {
+        self.git(repo, &["add", "-A"]);
+        self.git(repo, &["commit", "-q", "-m", "c"]);
+    }
+
+    /// The cache key a kept binary of the repo's HEAD gets: tree + grammar.
+    fn key(&self) -> String {
+        let tree = self.git("repo", &["rev-parse", "HEAD^{tree}"]);
+        let grammar = self.git("grammar", &["rev-parse", "HEAD"]);
+        format!("{tree}-g{}", &grammar[..12])
+    }
+
+    /// `cdo-speed <args>` in the throwaway repo with `cache`, the stub cargo
+    /// (`ok` or failing), and `extra` env: (exit code, output).
+    fn speed(
+        &self,
+        args: &[&str],
+        cache: &std::path::Path,
+        ok: bool,
+        extra: &[(&str, &str)],
+    ) -> (Option<i32>, String) {
+        let stub = self.path(if ok { "bin-ok" } else { "bin-fail" });
+        let mut cmd = std::process::Command::new("python3");
+        // A clean environment: an inherited build override (RUSTFLAGS, a
+        // profile override, CFLAGS) would make every key `None` (review r2, sol).
+        cmd.arg(self.path("repo/scripts/cdo-speed"))
+            .args(args)
+            // From the throwaway folder: a relative `TREE_SITTER_AL_PATH` of
+            // `grammar` then names a real clone for git (not for the build).
+            .current_dir(self.dir.path())
+            .env_clear()
+            .env("HOME", self.path("home"))
+            .env("ALSEM_SPEED_CACHE", cache)
+            .env("CARGO_TARGET_DIR", self.path("target"))
+            .env("TREE_SITTER_AL_PATH", self.path("grammar"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stub.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            );
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        let run = cmd.output().expect("spawn python3 cdo-speed");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+        (run.status.code(), text)
+    }
+
+    /// The working tree's build (`--build-only`); whether it kept a binary
+    /// under the current key in `cache`.
+    fn build_keeps(&self, cache: &std::path::Path, extra: &[(&str, &str)]) -> bool {
+        let ws = self.path("ws");
+        let base = self.path("base-alsem");
+        let out = self.path("out");
+        let (code, text) = self.speed(
+            &[
+                ws.to_str().unwrap(),
+                "--build-only",
+                "--base-exe",
+                base.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            cache,
+            true,
+            extra,
+        );
+        assert_eq!(code, Some(0), "{text}");
+        // The script's own word (the key's format is pinned once, in the clean
+        // case of `speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar`).
+        text.contains("kept the working tree's binary")
+    }
+}
+
+/// TLS-34: the working tree's build keeps its binary under (tree, grammar)
+/// only when nothing else went into it: a clean work tree, an unmodified
+/// grammar clone, no Rust flags. Each case in a throwaway checkout.
+///
+/// Mutations (2026-11-13): `working_tree_key` without its status check -> the
+/// tracked change keeps a binary; the grammar's status with
+/// `--untracked-files=no` -> the untracked `scanner.c` keeps one; `build_key`
+/// without its absolute-path check -> the relative grammar path keeps one
+/// (the run's folder is the throwaway's, so git finds that clone);
+/// `CFLAGS` out of `BUILD_ENV_EXACT` -> the C-flags case keeps one; the key
+/// after the build not compared (`key = key_before`) -> the edited-during-build
+/// case keeps one; `record_tree_binary` not catching `OSError` -> the unwritable
+/// cache exits 1 (a speed failure) and `build_keeps`' exit assert fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar() {
+    let t = Throwaway::new();
+    let cache = |name: &str| t.path(&format!("cache-{name}"));
+    assert!(
+        t.build_keeps(&cache("clean"), &[]),
+        "precondition: a clean tree keeps"
+    );
+    assert_eq!(
+        std::fs::read(cache("clean").join("trees").join(t.key()).join("alsem")).unwrap(),
+        b"built"
+    );
+    // A tracked change.
+    std::fs::write(t.path("repo/a.txt"), "two\n").unwrap();
+    assert!(
+        !t.build_keeps(&cache("tracked"), &[]),
+        "a tracked change kept a binary"
+    );
+    t.git("repo", &["checkout", "-q", "--", "a.txt"]);
+    // An untracked file outside .gitignore.
+    std::fs::write(t.path("repo/new.txt"), "x\n").unwrap();
+    assert!(
+        !t.build_keeps(&cache("untracked"), &[]),
+        "an untracked file kept a binary"
+    );
+    std::fs::remove_file(t.path("repo/new.txt")).unwrap();
+    // A modified grammar clone.
+    std::fs::write(t.path("grammar/a.txt"), "two\n").unwrap();
+    assert!(
+        !t.build_keeps(&cache("grammar"), &[]),
+        "a modified grammar kept a binary"
+    );
+    t.git("grammar", &["checkout", "-q", "--", "a.txt"]);
+    // Rust flags or a profile override.
+    assert!(!t.build_keeps(&cache("flags"), &[("RUSTFLAGS", "-Ctarget-cpu=native")]));
+    assert!(!t.build_keeps(
+        &cache("profile"),
+        &[("CARGO_PROFILE_RELEASE_FAST_LTO", "off")]
+    ));
+    // C flags (the grammar's parser is C), a target's Rust flags (review r2, sol).
+    assert!(!t.build_keeps(&cache("cflags"), &[("CFLAGS", "-O0")]));
+    // cc-rs's host spelling (review r3, sol); `HOSTNAME` alone is no override.
+    assert!(!t.build_keeps(&cache("host-cflags"), &[("HOST_CFLAGS", "-O0")]));
+    assert!(t.build_keeps(&cache("hostname"), &[("HOSTNAME", "box")]));
+    assert!(!t.build_keeps(
+        &cache("target-flags"),
+        &[(
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+            "-Copt-level=0"
+        )]
+    ));
+    // An untracked file in the grammar clone (an added scanner.c is compiled).
+    std::fs::write(t.path("grammar/scanner.c"), "int x;\n").unwrap();
+    assert!(
+        !t.build_keeps(&cache("grammar-untracked"), &[]),
+        "an untracked grammar file kept a binary"
+    );
+    std::fs::remove_file(t.path("grammar/scanner.c")).unwrap();
+    // A relative grammar path (git and the build would resolve it differently).
+    assert!(
+        !t.build_keeps(&cache("relative"), &[("TREE_SITTER_AL_PATH", "grammar")]),
+        "a relative grammar path kept a binary"
+    );
+    // Another toolchain than the tree's pin (review r1, Opus).
+    assert!(!t.build_keeps(&cache("toolchain"), &[("RUSTUP_TOOLCHAIN", "nightly")]));
+    // The sources changed during the build: the key after is not the key before.
+    let a = t.path("repo/a.txt");
+    assert!(
+        !t.build_keeps(
+            &cache("during"),
+            &[("EDIT_DURING_BUILD", a.to_str().unwrap())]
+        ),
+        "a build whose sources changed under it kept a binary"
+    );
+    t.git("repo", &["checkout", "-q", "--", "a.txt"]);
+    // A cache that cannot be written only skips the keeping: the speed check
+    // still exits 0 (`build_keeps` asserts it; review r1, Opus).
+    std::fs::write(t.path("not-a-folder"), "x").unwrap();
+    assert!(!t.build_keeps(&t.path("not-a-folder"), &[]));
+    // Clean again: keeps.
+    assert!(
+        t.build_keeps(&cache("again"), &[]),
+        "a clean tree keeps again"
+    );
+}
+
+/// TLS-34: `cdo-speed --warm REV` seeds REV's entry from a binary kept for
+/// REV's tree and grammar and builds nothing (the stub cargo fails); with a
+/// new grammar commit the kept binary does not match, so it builds (and the
+/// stub fails).
+///
+/// Mutations (2026-11-13): `cached_binary` without its seeding step -> the
+/// first warm builds, the stub fails, the exit-code assert fails; the key
+/// without its grammar part (`f"{tree}"`) -> the moved grammar is seeded and
+/// the `assert_ne` fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_warm_seeds_a_commit_from_its_trees_gate_binary() {
+    let t = Throwaway::new();
+    let cache = t.path("cache");
+    assert!(
+        t.build_keeps(&cache, &[]),
+        "precondition: the gate kept its binary"
+    );
+    let head = t.git("repo", &["rev-parse", "HEAD"]);
+    let (code, text) = t.speed(&["--warm", &head], &cache, false, &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("seeded from a gate's build"), "{text}");
+    assert_eq!(
+        std::fs::read(cache.join("bin").join(&head).join("alsem")).unwrap(),
+        b"built"
+    );
+    // The grammar moved: the kept binary is not this build's.
+    let t2 = Throwaway::new();
+    let cache2 = t2.path("cache");
+    assert!(t2.build_keeps(&cache2, &[]));
+    std::fs::write(t2.path("grammar/a.txt"), "next\n").unwrap();
+    t2.commit("grammar");
+    let head2 = t2.git("repo", &["rev-parse", "HEAD"]);
+    let (code, text) = t2.speed(&["--warm", &head2], &cache2, false, &[]);
+    assert_ne!(code, Some(0), "{text}");
+    assert!(text.contains("building (once per commit)"), "{text}");
 }
 
 /// A warm build folder written by hand: one dependency, plus the two folders
