@@ -159,6 +159,47 @@ fn sym_workspace() -> tempfile::TempDir {
         if R.Get('A') then
             R.Modify(false);
     end;
+
+    local procedure GetSym(): Record "E16 Sym T"
+    var
+        R: Record "E16 Sym T";
+    begin
+        exit(R);
+    end;
+
+    procedure ModifyCallResult()
+    begin
+        GetSym().Modify(true);
+    end;
+
+    procedure ValidateFieldRef()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"E16 Sym T");
+        FR := RR.Field(1);
+        FR.Validate('A');
+    end;
+
+    procedure ImportSym(InS: InStream)
+    begin
+        if Xmlport.Import(Xmlport::"E16 Imp", InS) then;
+    end;
+}
+xmlport 53213 "E16 Imp"
+{
+    Direction = Import;
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(T; "E16 Sym T")
+            {
+                fieldelement(No; T."No.") { }
+            }
+        }
+    }
 }
 table 53211 "E16 Local T"
 {
@@ -219,5 +260,97 @@ fn a_trigger_op_on_a_symbol_only_table_is_unknown() {
         "{r:#}"
     );
     let r = may_commit(t.path(), "Codeunit \"E16 Probe\"::ModifySymNoTrigger");
+    assert_eq!(r["answer"], "no", "{r:#}");
+}
+
+/// ENG-69, folded into ENG-15 (sol round 1): every other path a record
+/// operation takes asks the same opacity check
+/// (`full::trigger_op_opens_unseen_code`): an operation on a function's
+/// returned record (the path an inherited protected var takes too, ENG-26), a
+/// decided `FieldRef.Validate`, and an XmlPort's own insert. Each was `no` on a
+/// symbol-only table.
+/// Breaks (2026-11-13): drop the flag on the call-result path
+/// (`CallResultRecord::code_not_loaded` false) -> `ModifyCallResult` `no`;
+/// on the FieldRef path (`FieldRefValidate::Decided::code_not_loaded` false)
+/// -> `ValidateFieldRef` `no`; on the dataset path
+/// (`DatasetEffect::code_not_loaded` false) -> `ImportSym` `no`. Each fails;
+/// restored, it passes.
+#[test]
+fn every_record_operation_path_opens_on_a_symbol_only_table() {
+    let t = sym_workspace();
+    for routine in ["ModifyCallResult", "ValidateFieldRef", "ImportSym"] {
+        let r = may_commit(t.path(), &format!("Codeunit \"E16 Probe\"::{routine}"));
+        assert_eq!(r["answer"], "unknown", "{routine}: {r:#}");
+    }
+}
+
+/// A source table whose EXTENSION is loaded from symbols only (sol round 1):
+/// the extension's triggers are unseen too. The table is a dependency's, with
+/// source; the extension is another dependency's, symbols only.
+fn ext_workspace() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e16e16e0-0000-4000-8000-0000000000ce","name":"E16 Host2","publisher":"t","version":"1.0.0.0","dependencies":[{"id":"22222222-0000-0000-0000-0000000000e4","name":"E16 Src","publisher":"t","version":"1.0.0.0"},{"id":"22222222-0000-0000-0000-0000000000e5","name":"E16 SymExt","publisher":"t","version":"1.0.0.0"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/a.al"),
+        r#"codeunit 53220 "E16 Probe2"
+{
+    procedure ModifySrc()
+    var
+        R: Record "E16 Src T";
+    begin
+        if R.Get(1) then
+            R.Modify(true);
+    end;
+
+    procedure ModifySrcNoTrigger()
+    var
+        R: Record "E16 Src T";
+    begin
+        if R.Get(1) then
+            R.Modify();
+    end;
+}
+"#,
+    )
+    .unwrap();
+    let src_symbols = r#"{"RuntimeVersion":"13.0","AppId":"22222222-0000-0000-0000-0000000000e4","Name":"E16 Src","Publisher":"t","Version":"1.0.0.0","Tables":[{"Id":70965,"Name":"E16 Src T","Fields":[{"Id":1,"Name":"K","TypeDefinition":{"Name":"Integer"}}]}]}"#;
+    crate::symbol_app::write_source_app(
+        &t.path().join(".alpackages/t_E16 Src_1.0.0.0.app"),
+        "22222222-0000-0000-0000-0000000000e4",
+        "E16 Src",
+        "1.0.0.0",
+        src_symbols,
+        &[(
+            "src/T.al",
+            "table 70965 \"E16 Src T\"\n{\n    fields { field(1; K; Integer) { } }\n    keys { key(PK; K) { } }\n}\n",
+        )],
+        "",
+    );
+    let ext_symbols = r#"{"RuntimeVersion":"13.0","AppId":"22222222-0000-0000-0000-0000000000e5","Name":"E16 SymExt","Publisher":"t","Version":"1.0.0.0","TableExtensions":[{"Id":70966,"Name":"E16 Src T Ext","TargetObject":"E16 Src T"}]}"#;
+    crate::symbol_app::write_symbol_app(
+        &t.path().join(".alpackages/t_E16 SymExt_1.0.0.0.app"),
+        "22222222-0000-0000-0000-0000000000e5",
+        "E16 SymExt",
+        "1.0.0.0",
+        ext_symbols,
+    );
+    t
+}
+
+/// A trigger-firing operation on a source table with a symbol-only extension
+/// is `unknown`; a `Modify()` (RunTrigger left out) stays `no`.
+/// Break (2026-11-13): drop the extension scan in `table_code_not_loaded` ->
+/// `ModifySrc` answers `no`. Fails; restored, it passes.
+#[test]
+fn a_symbol_only_extension_opens_its_table() {
+    let t = ext_workspace();
+    let r = may_commit(t.path(), "Codeunit \"E16 Probe2\"::ModifySrc");
+    assert_eq!(r["answer"], "unknown", "{r:#}");
+    let r = may_commit(t.path(), "Codeunit \"E16 Probe2\"::ModifySrcNoTrigger");
     assert_eq!(r["answer"], "no", "{r:#}");
 }

@@ -2942,6 +2942,7 @@ pub(crate) mod tests {
                     temporary: None,
                     triggers: vec![src(&on_modify), guarded],
                     table_events: vec![src(&event)],
+                    code_not_loaded: false,
                 }),
                 ..Default::default()
             },

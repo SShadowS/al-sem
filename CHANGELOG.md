@@ -295,8 +295,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Job Queue Entry Ext." has field `OnAfterValidate` triggers on both that call it. The d3 are
   real by its rule; the d14 is the usual dependency-fragment d14 (it is called by
   `SelectedLayoutType`).
-- Engine limits B11 (new), B9 and B10 updated. Left: an operation on a function's returned record
-  and a `FieldRef.Validate` decided to a symbol-only table do not take the open gap. Tests:
+- **Every record-operation path opens on a symbol-only table** (ENG-69 folded in, gpt-6.1-sol
+  review): an operation on a function's returned record or an inherited protected var, a decided
+  `FieldRef.Validate` and an XmlPort's own insert or modify ask the same check as a plain record
+  operation (`full::trigger_op_opens_unseen_code`), and so does a source table with a symbol-only
+  extension. Each answered `no` before.
+- Engine limits B11 (new), B9 and B10 updated. Tests:
   `tests/cli/cli_eng15_ext_triggers.rs` (breaks recorded); the adapter test
   `implicit_trigger_to_dependency_has_no_edge` now expects the open edge beside the dependency
   trigger's external target.

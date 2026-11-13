@@ -82,6 +82,10 @@ pub struct DatasetEffect {
     /// The table's platform-event publishers this operation raises
     /// ([`super::resolver::resolve_table_events`]).
     pub table_events: Vec<Route>,
+    /// ENG-15/16: the operation may run triggers on a table whose code is not
+    /// loaded (`full::trigger_op_opens_unseen_code`): the model adds the open
+    /// record edge.
+    pub code_not_loaded: bool,
 }
 
 /// `true` for a report method (folded) that runs the report without its
@@ -267,21 +271,35 @@ pub fn dataset_effects(
                     index,
                 )
             });
-            let (triggers, table_events) = match table.as_ref().and_then(|t| graph.object_first(t))
-            {
-                Some(t) if matches!(op, "Insert" | "Modify") => (
-                    crate::program::resolve::resolver::resolve_implicit_trigger(
-                        op, t, graph, index, surface,
-                    )
-                    .2,
-                    crate::program::resolve::resolver::resolve_table_events(
-                        &op.fold_identifier(),
-                        t,
-                        graph,
+            let (triggers, table_events, code_not_loaded) =
+                match table.as_ref().and_then(|t| graph.object_first(t)) {
+                    Some(t) if matches!(op, "Insert" | "Modify") => (
+                        crate::program::resolve::resolver::resolve_implicit_trigger(
+                            op, t, graph, index, surface,
+                        )
+                        .2,
+                        crate::program::resolve::resolver::resolve_table_events(
+                            &op.fold_identifier(),
+                            t,
+                            graph,
+                        ),
+                        // ENG-15/16: the platform's own insert or modify MAY run
+                        // the table's triggers (the module doc), so the shared
+                        // check with no RunTrigger stated.
+                        crate::program::resolve::full::trigger_op_opens_unseen_code(
+                            &op.fold_identifier(),
+                            &crate::program::resolve::applicability::TriggerSiteRule {
+                                is_validate: false,
+                                run_trigger: None,
+                                validate_field: None,
+                            },
+                            t,
+                            graph,
+                            index,
+                        ),
                     ),
-                ),
-                _ => (Vec::new(), Vec::new()),
-            };
+                    _ => (Vec::new(), Vec::new(), false),
+                };
             out.push(DatasetEffect {
                 owner: owner.id.clone(),
                 item,
@@ -291,6 +309,7 @@ pub fn dataset_effects(
                 temporary: it.and_then(|it| it.use_temporary),
                 triggers,
                 table_events,
+                code_not_loaded,
             });
         };
         let ops_of = |kind: DatasetItemKind,

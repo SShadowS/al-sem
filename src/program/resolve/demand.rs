@@ -299,6 +299,7 @@ mod tests {
                     temporary: None,
                     triggers: vec![src(&on_modify)],
                     table_events: vec![src(&event)],
+                    code_not_loaded: false,
                 }),
                 ..Default::default()
             },
@@ -315,6 +316,7 @@ mod tests {
                     field: "v".into(),
                     triggers: vec![src(&on_validate)],
                     table_events: vec![],
+                    code_not_loaded: false,
                 }),
                 ..Default::default()
             },
