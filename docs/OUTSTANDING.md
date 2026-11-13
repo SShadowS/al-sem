@@ -679,13 +679,32 @@ sizings marked pre-arc).
   the publish side lacks URI-ownership arbitration. Both narrow; build when a real
   client hits them
 
-- [ ] **`str::to_lowercase()` census in the advisory engine** (surfaced by the
+- [x] **`str::to_lowercase()` census in the advisory engine** — DONE 2026-11-13 (TLS-42),
+  note `docs/superpowers/notes/2026-11-13-to-lowercase-census.md` (site table beside it).
+  329 production sites classified. `to_lowercase` and `fold_identifier` differ only on `İ`
+  and a word-final `Σ`, and no input we hold (CDO, its 11 packages, the repo) contains
+  either. A migration for consistency alone is not recommended. The census found the real
+  gap below instead. Original item: (surfaced by the
   unicode-fold arc): ~364 sites across `src/engine/l2`-`l5` use full Unicode
   `to_lowercase()` (the 1:n-hazard primitive) as their own pre-existing convention —
   inconsistent with the new `fold_identifier` simple-fold choke point. One live
   interaction traced neutral-to-improving; population of divergent inputs is empty
   today. Migrate to `eq_fold_identifier`/`fold_identifier` layer-by-layer for
   consistency (low priority; advisory engine only)
+
+- [ ] **The L2 builder folds identifiers with `to_ascii_lowercase`; later layers compare with
+  `to_lowercase`** (from TLS-42's census). `src/program/body/ir_walk.rs` folds
+  `source_variable_name`, `condition_references`, `identifier_references`, variable names,
+  `var_assignments` and `exhausting_advance` with `to_ascii_lowercase`. About 30 sites in
+  L5, the model and the impact graph compare them with `to_lowercase` values. The two differ
+  on every non-ASCII capital (`Æ`, `Ø`, `Å`, `É` and so on), so on code with such identifiers:
+  - d19 reports a used parameter as unreferenced;
+  - the shared by-var-argument suppressions (d11, d21, d33, d36 and others) stop suppressing;
+  - the global record-variable backfill (`workspace.rs:2181`) misses.
+  CDO has no such identifiers, so nothing fires there; Nordic and German BC code does have
+  them. Fix: the identifier folds in `ir_walk.rs` become `fold_identifier`, plus the few sites
+  that meet fold-built keys. Witness: an r0-corpus fixture with Nordic names, with
+  discrimination proofs. About half a day. Details and site list in the TLS-42 note.
 
 - [x] **perf_bounds `compute_all_within_bound` CI flake** — addressed by #190 (lock +
   `min_of`); the repeat-green CI record is in #190's PR. Original item: (seen once,
