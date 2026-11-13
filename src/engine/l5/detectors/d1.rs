@@ -52,7 +52,7 @@ use crate::program::model::workspace::ModelTable;
 use crate::program::model::workspace::{Model, ModelEntities, ModelRecordOperation, ModelRoutine};
 // Only the `search_loops`/`WalkResult` shadow oracle still handles OWNED
 // uncertainties; the production cohort path carries `UncertaintyId`s and resolves
-// them through the run-level `UncertaintyTable`.
+// them through the context's `UncertaintyIndex`.
 #[cfg(test)]
 use crate::engine::l4::summary::Uncertainty;
 use crate::engine::l5::actionable_anchor::pick_actionable_anchor;
@@ -426,11 +426,11 @@ fn uncertainty_lites(uncertainties: &[Uncertainty]) -> Vec<UncertaintyLite> {
 }
 
 /// Convert a cohort's INTERNED uncertainty union to `UncertaintyLite`s, resolving
-/// each id through the run-level `table`. Order is the id sequence's order, which
-/// is the de-duped, key-sorted order `UncertaintyTable::dedupe` produced — the
+/// each id through the context's `index`. Order is the id sequence's order, which
+/// is the de-duped, key-sorted order `UncertaintyIndex::dedupe` produced — the
 /// same sequence the owned-value form produced before the ids existed.
 ///
-/// The clone is a pair of refcount bumps, not text: the table materialised each
+/// The clone is a pair of refcount bumps, not text: the index materialised each
 /// distinct uncertainty's `kind` and evidence note once, and every
 /// `Evidence` this produces shares those allocations (see
 /// [`crate::engine::l5::finding::Evidence`]).

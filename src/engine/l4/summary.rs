@@ -81,8 +81,9 @@ pub struct DbEffect {
 ///
 /// `Hash` is derived (field-wise, consistent with the derived `PartialEq`) so the
 /// value can key an intern map — see
-/// [`crate::engine::l5::d1_cohort::UncertaintyTable`], which stores one copy of
-/// each distinct uncertainty for a whole d1 run and hands out [`u32`] ids.
+/// [`crate::engine::l5::detector_context::UncertaintyIndex`], which stores one
+/// copy of each distinct uncertainty for the whole detector context and hands
+/// out ids.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uncertainty {
     pub kind: String,
@@ -119,7 +120,7 @@ impl From<&crate::engine::l4::combined_graph::Uncertainty> for Uncertainty {
 /// because that function is now written in terms of this one rather than
 /// repeating the `if let` chain. That identity,
 /// `uncertainty_key(u) == format!("{}|{}", u.kind, uncertainty_at(u))`, is what
-/// lets [`crate::engine::l5::d1_cohort::UncertaintyTable`] carry a cohort's
+/// lets [`crate::engine::l5::detector_context::UncertaintyIndex`] carry a cohort's
 /// uncertainty union as ids: the de-dup key and the confidence mapper's
 /// projection read the same pair of fields.
 ///
