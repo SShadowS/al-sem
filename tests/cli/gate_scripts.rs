@@ -262,6 +262,208 @@ fn speed_build_uses_the_gate_release_folder() {
     );
 }
 
+/// TLS-32: the test phases' layout (`cdo-gate --layout` prints what
+/// `plan_layout` decides, the decision the gate makes after `output_cdo`).
+/// Lane 2 runs beside the impact phase at the most threads (2, then 1) whose
+/// need (impact's own worst 16,100 + lib_cdo's own worst at that count, 23,300
+/// or 18,700, + 4,096 MiB) fits BOTH the host's MemAvailable and the
+/// container's free memory (`memory.max` minus what cannot be reclaimed);
+/// otherwise lane 2 runs after it; `CDO_GATE_SERIAL=1` wins over all. The host
+/// is a hand-written meminfo (`CDO_GATE_MEMINFO`) and the container a
+/// hand-written cgroup folder (`CDO_GATE_CGROUP`).
+///
+/// Mutations (2026-11-13): `plan_layout`'s container test dropped (host only)
+/// -> the busy container is called parallel at 2 threads; an unreadable
+/// container reported `unlimited` instead of `unknown` (fail open) -> "no
+/// memory.stat" is called parallel; `container_free_mib` without its numeric
+/// check -> `anon garbage` reads as 0 and is called parallel at 2 threads.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
+    const MIB: u64 = 1024 * 1024;
+    let dir = tempfile::tempdir().unwrap();
+    // host MemAvailable and container use in MiB (`None`: no container limit).
+    let layout = |host_mib: u64, used_mib: Option<u64>, serial: bool| {
+        let case = dir.path().join(format!("{host_mib}-{used_mib:?}-{serial}"));
+        std::fs::create_dir_all(&case).unwrap();
+        std::fs::write(
+            case.join("meminfo"),
+            format!(
+                "MemTotal: 98000000 kB\nMemAvailable: {} kB\n",
+                host_mib * 1024
+            ),
+        )
+        .unwrap();
+        let max = used_mib.map_or("max".to_string(), |_| (49_152 * MIB).to_string());
+        std::fs::write(case.join("memory.max"), format!("{max}\n")).unwrap();
+        // 1 GiB of reclaimable slab on top, which must not count.
+        std::fs::write(
+            case.join("memory.stat"),
+            format!(
+                "anon {}\nshmem 0\nkernel {}\nslab_reclaimable {}\n",
+                used_mib.unwrap_or(0) * MIB,
+                1024 * MIB,
+                1024 * MIB
+            ),
+        )
+        .unwrap();
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", case.join("meminfo"))
+            .env("CDO_GATE_CGROUP", &case)
+            .env_remove("CDO_GATE_SERIAL");
+        if serial {
+            cmd.env("CDO_GATE_SERIAL", "1");
+        }
+        let out = cmd.output().expect("spawn bash scripts/cdo-gate --layout");
+        assert_eq!(out.status.code(), Some(0));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let check = |host: u64, used: Option<u64>, serial: bool, want: &str| {
+        let got = layout(host, used, serial);
+        assert!(
+            got.starts_with(want),
+            "host {host} MiB, container use {used:?} MiB, serial {serial}: want {want:?}, got {got}"
+        );
+    };
+    let two = "parallel: lane 2 beside the impact phase, lib_cdo at 2 thread(s)";
+    let one = "parallel: lane 2 beside the impact phase, lib_cdo at 1 thread(s)";
+    // Needs: 2 threads 43,496 MiB, 1 thread 38,896 MiB.
+    check(60_000, Some(2_000), false, two); // container free 47,152
+    check(60_000, Some(8_000), false, one); // container free 41,152
+    check(60_000, Some(12_000), false, "sequential:"); // container free 37,152
+    check(41_000, Some(2_000), false, one); // the host is short for 2
+    check(30_000, Some(2_000), false, "sequential:"); // the host is short for 1
+    check(60_000, None, false, two); // no container limit: the host decides
+    check(60_000, Some(2_000), true, "serial:");
+    // An unknown container is no room (review r2, sol: fail closed): a
+    // `memory.stat` that cannot be read, or a `memory.max` that is no number.
+    let broken = dir.path().join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("memory.max"), format!("{}\n", 49_152 * MIB)).unwrap();
+    let meminfo = broken.join("meminfo");
+    std::fs::write(&meminfo, "MemAvailable: 62914560 kB\n").unwrap();
+    let unknown = |dir: &std::path::Path| {
+        let out = std::process::Command::new("bash")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", &meminfo)
+            .env("CDO_GATE_CGROUP", dir)
+            .env_remove("CDO_GATE_SERIAL")
+            .output()
+            .expect("spawn bash scripts/cdo-gate --layout");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let got = unknown(&broken); // no memory.stat
+    assert!(got.starts_with("sequential:"), "no memory.stat: {got}");
+    std::fs::write(broken.join("memory.stat"), "anon 0\nkernel 0\n").unwrap();
+    std::fs::write(broken.join("memory.max"), "garbage\n").unwrap();
+    let got = unknown(&broken);
+    assert!(
+        got.starts_with("sequential:"),
+        "a garbage memory.max: {got}"
+    );
+    // A malformed or partial memory.stat (review r3, sol: awk reads garbage as 0).
+    std::fs::write(broken.join("memory.max"), format!("{}\n", 49_152 * MIB)).unwrap();
+    for stat in ["anon garbage\nshmem 0\nkernel 0\n", "anon 0\nkernel 0\n"] {
+        std::fs::write(broken.join("memory.stat"), stat).unwrap();
+        let got = unknown(&broken);
+        assert!(
+            got.starts_with("sequential:"),
+            "memory.stat {stat:?}: {got}"
+        );
+    }
+    // Exactly at the need is enough; one MiB short is not.
+    check(60_000, Some(49_152 - 43_496), false, two);
+    check(60_000, Some(49_152 - 43_496 + 1), false, one);
+    check(43_496, Some(2_000), false, two);
+    check(43_495, Some(2_000), false, one);
+}
+
+/// TLS-32 review r3-r4 (sol): a TERM sent to the gate's PID alone, during its
+/// build phase, stops the gate at once (exit 130) and the phase's processes
+/// with it. A stub `cargo` first on `PATH` sleeps (as a long build would) and
+/// writes its PID; the gate runs `--no-speed` on an empty folder.
+///
+/// Mutation (2026-11-13): `run_phase` back to a foreground pipeline -> the
+/// trap waits for the 60 s build, and the gate misses the 20 s deadline.
+#[cfg(target_os = "linux")]
+#[test]
+fn cdo_gate_stops_at_once_on_term_during_its_build() {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let pid_file = stub.path().join("cargo.pid");
+    std::fs::write(
+        stub.path().join("cargo"),
+        format!(
+            "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        stub.path().join("cargo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut gate = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg("--no-speed")
+        .arg(ws.path())
+        .env("PATH", path)
+        .env("CARGO_TARGET_DIR", target.path())
+        .env_remove("CDO_GATE_SERIAL")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn bash scripts/cdo-gate");
+    // The build phase is running when the stub has written its PID.
+    let started = std::time::Instant::now();
+    while !pid_file.exists() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the gate never reached its build phase"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let build_pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let gate_pid = gate.id() as i32;
+    // SAFETY: plain kill(2) on a child process this test owns.
+    assert_eq!(unsafe { libc::kill(gate_pid, libc::SIGTERM) }, 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(s) = gate.try_wait().unwrap() {
+            break s;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = gate.kill();
+            // SAFETY: as above; clean up the stub's sleep.
+            unsafe { libc::kill(build_pid, libc::SIGKILL) };
+            panic!("the gate did not stop within 20 s of a TERM");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(130));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // SAFETY: signal 0 only probes whether the process exists.
+    let alive = unsafe { libc::kill(build_pid, 0) } == 0
+        && std::fs::read_to_string(format!("/proc/{build_pid}/stat"))
+            .is_ok_and(|s| !s.contains(") Z "));
+    assert!(!alive, "the build phase's process survived the gate");
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {

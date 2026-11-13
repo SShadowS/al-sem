@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-32: cdo-gate runs lane 2 beside the impact phase when the host has the memory)
+
+- **`scripts/cdo-gate`'s test phases can overlap again, within the memory rules.**
+  - **Why they stopped:** since TLS-23 the landing gate ran every phase in a row
+    (`CDO_GATE_SERIAL=1`), because `lib_cdo` (~30 GB at 4 threads) beside `output_cdo` (~27 GB)
+    broke the owner's 4 GiB headroom rule.
+  - **The census:** TLS-32 timed each lib CDO test alone (`cdo` profile, one thread). One test,
+    `retained_emission_equals_a_composition_on_cdo`, peaks at 18,628 MiB; the others at most at
+    4,552 MiB; together 507 s.
+  - **The new layout:**
+    - `output_cdo` runs alone;
+    - then the impact phase, with lane 2 (harness, lsp, l4, then `lib_cdo`) beside it when the
+      memory allows;
+    - at 2 threads, lane 2 (~320 s) fits inside the impact phase (~348 s), so about 300 s should
+      come off each gate's test phases (818 s); at 1 thread (~580 s), about 75 s.
+  - **The memory check (review r1, sol and Opus):** read once after `output_cdo`.
+    - The need is the impact phase's own worst (16,100 MiB, the gate's RSS over 12 gates) plus
+      lib_cdo's own worst at that thread count (23,300 at 2, 18,700 at 1) plus 4 GiB.
+    - It must fit both the host's MemAvailable (the host must not swap) and the container's free
+      memory (`memory.max` minus what cannot be reclaimed, every agent in it counted: the 4 GiB
+      rule). The host alone once said `parallel` with the container at ~42.7 GB free.
+    - The most threads that fit win: 2, else 1, else lane 2 runs after the impact phase.
+  - **Ctrl-C** now stops the gate, not just the running phase. The trap clears itself, sends TERM
+    to the gate's own descendants (not `kill 0`, which could reach the caller's process group)
+    and exits; it used to go on to the next phase.
+  - **An unreadable container** (`memory.max` or `memory.stat` that cannot be read or parsed)
+    counts as no room, so the gate takes the sequential layout. Only an explicit `max` means no
+    limit.
+  - **Kept:** `CDO_GATE_SERIAL=1` still runs every phase in a row.
+  - **Reporting:** the summary names the layout taken, and `cdo-gate --layout` prints the one this
+    host would take now.
+  - **Test:** `gate_scripts::cdo_gate_runs_lane_two_beside_impact_only_with_the_memory`, with a
+    discrimination proof.
+  - **To take it:** the landing gate must run without `CDO_GATE_SERIAL=1`.
+
 ### Changed (TLS-33: the speed check reuses ci-steps' optimized build)
 
 - **`cdo-gate`'s speed phase no longer rebuilds `al-sem` on the gate's critical path.**
