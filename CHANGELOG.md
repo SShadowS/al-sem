@@ -119,6 +119,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The new fixture also moved `l2_features.snapshot` (+5 routines) and the root-class
     summary (+4). The ids parent-baseline record and the policy facts oracle were re-minted to
     add it (no other fixture or case moved), and `FIXTURE_ROOTS` went 222 → 223.
+  - Measured on CDO (`cdo-measure`, `release-fast`, base `14fad659` against `28686add`,
+    workspace `bc3ccb18`, clean): the default detectors found 2,308 → 2,308 at
+    `--scope primary` and 32,576 → 32,576 at `--scope all`. Fingerprints: 0 added and 0
+    removed at both scopes. As expected: CDO's identifiers are all ASCII (TLS-42).
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
