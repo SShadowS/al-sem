@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On CDO the one such site is `CDO Legacy eDoc Dispatcher.RunExportEDocCodeunit`
   (`Codeunit.Run(ExportProcessorId, DocumentVariant)`); `prove … throws-error` on all 20
   routines of that codeunit gives the same answers and checked-run verdicts before and after.
+- **A codeunit variable's checked `Run()` whose `OnRun` has no row is a checked run everywhere**
+  (`traps::is_checked_run` honours the resolver's `PCallSite::checked_run`; review round 2,
+  gpt-6.1-sol): none declared, or a symbol-only dependency's. Before, the trap search, the
+  transaction spans and the commit scope read it as a plain call with no callee (unknown code,
+  a caller inside the run's transaction). CDO has no symbol-only dependency with code of its own,
+  so no CDO answer is expected to move; the landing gate's `output_cdo` prove goldens check it.
 - **`digest`'s `transactionContext` has a new value, `span-may-have-writes-order-unknown`:** a
   Commit whose only pending tables are another event subscriber's (order unknown) said
   `span-has-known-writes` (it had no known one). `span-has-known-writes` now reads the tables
