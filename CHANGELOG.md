@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-33: the speed check reuses ci-steps' optimized build)
+
+- **`cdo-gate`'s speed phase no longer rebuilds `al-sem` on the gate's critical path.**
+  - **Before:** `scripts/cdo-speed` built the working tree's `alsem` (release-fast) in the main
+    target folder. There it waited for the test build's lock, then recompiled `al-sem`: 255 s in
+    TLS-30's landing gate (`speed_build`), before any test phase could start.
+  - **Why:** `ci-steps all`, which a landing runs first, had already built the same profile for the
+    same tree, but in its own folder, `<target>/gate-release` (TLS-09).
+  - **Now:** `cdo-speed` builds the working tree in that folder (`gate_release_dir`), so cargo finds
+    it fresh. An edit since is rebuilt by cargo's freshness check, and a run with no `ci-steps`
+    build first builds there as before. `--no-build` reads the binary from there too.
+  - **Test:** `gate_scripts::speed_build_uses_the_gate_release_folder` (a stub `cargo` records the
+    folder it is given), with a discrimination proof.
+
 ### Fixed (TLS-30: the resident input manifest keys files by their raw path bytes)
 
 - **Two file names that differ only in non-UTF-8 bytes no longer share one manifest key.** The
