@@ -4509,7 +4509,7 @@ fn split_commit_part(
     let why = |bit: u8| -> Option<String> {
         let reason_on = |nodes: &[&str]| {
             cb.cause(nodes.iter().copied(), bit)
-                .map(|(id, d)| d.reason(&display(id)))
+                .map(|(id, d)| d.reason_for(bit, &display(id)))
         };
         let listed = ix
             .iter()

@@ -316,15 +316,33 @@ impl Declared {
     /// `CommitBehavior Error on <routine>` (or the object property's form).
     #[must_use]
     pub fn reason(self, routine_display: &str) -> String {
+        self.reason_word(self.word(), routine_display)
+    }
+
+    /// [`Self::reason`] for one behavior `bit` ([`I`] or [`E`]) the routine may
+    /// set: two `#if` arms of one id merge their declarations ([`Self::union`]),
+    /// so the merged word names one arm's while the reason asked is the
+    /// other's (ENG-23: an `Ignore`d commit reported as "CommitBehavior Error").
+    #[must_use]
+    pub fn reason_for(self, bit: u8, routine_display: &str) -> String {
+        let word = if bit == E {
+            "Error"
+        } else if bit == I {
+            "Ignore"
+        } else {
+            self.word()
+        };
+        self.reason_word(word, routine_display)
+    }
+
+    fn reason_word(self, word: &str, routine_display: &str) -> String {
         match self.source {
-            DeclSource::Attribute => format!("CommitBehavior {} on {routine_display}", self.word()),
+            DeclSource::Attribute => format!("CommitBehavior {word} on {routine_display}"),
             DeclSource::ObjectProperty => format!(
-                "InherentCommitBehavior {} on the object of {routine_display} (may apply)",
-                self.word()
+                "InherentCommitBehavior {word} on the object of {routine_display} (may apply)"
             ),
             DeclSource::ConditionalAttribute => format!(
-                "CommitBehavior {} on {routine_display} in some builds only (may apply)",
-                self.word()
+                "CommitBehavior {word} on {routine_display} in some builds only (may apply)"
             ),
         }
     }

@@ -70,6 +70,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could not be checked from here. Not measured on CDO (the digest goldens of `output_cdo` show
   it at landing).
 
+### Fixed (ENG-23: a checked run's commit under `#if` arms; an ignored commit's reason)
+
+- **The `[CommitBehavior]` carrier exclusion of a checked run's commit is now tested.**
+  `commit_scope::is_run_commit` keeps a checked `Codeunit.Run`'s commit out of `CbGraph::of_tree`'s
+  carriers; nothing reached it. Its one shape that changes an answer: a routine in two `#if`
+  arms, a `[CommitBehavior(Error)]` arm holding only a checked run and a
+  `[CommitBehavior(Ignore)]` arm holding only a `Commit()`. Without the exclusion, `prove …
+  throws-error` on the caller answers `yes` (the ignored commit read as an error); with it,
+  `no`. Test: `tests/cli/cli_eng23_commit_arms.rs` (breaks recorded).
+- **An ignored commit's reason named the wrong behavior.** In that shape the digest's
+  `suppressedCommits` entry and prove's evidence said "CommitBehavior Error on …X" for a commit
+  ignored under the other arm's `Ignore`: the reason read the merged arms' declaration word.
+  It now names the behavior asked about (`commit_scope::Declared::reason_for`, read by the
+  digest's `why`). Only a routine whose `#if` arms declare different behaviors moves; CDO's
+  own source declares no `[CommitBehavior]` at all (its dependencies were not searched; the
+  landing gate's CDO goldens would show a move).
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test

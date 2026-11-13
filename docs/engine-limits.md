@@ -343,11 +343,17 @@ callers' question reads (`commit_scope::declared`).
    Left: a run that always fails (its `OnRun` raises an error on every path) still answers
    `may-commit yes` (an over-statement, never a wrong `no`); `Ok := Codeunit.Run(X); if not Ok
    then Error(…)` answers `commits-on-success-path unknown` where `yes` holds (an under-statement);
-   the `CbGraph` carrier exclusion has no test that reaches it (only an `#if`-arms routine where one
-   arm holds only a checked run and another a `Commit()` would differ); d34 counts a `Commit()`
+   d34 counts a `Commit()`
    only, so a checked run in a loop is no finding. ENG-22: `transaction_spans` and d50 no longer
    read a checked run as committing the caller's posting (L28): d50 reports the error BC raises at
-   a run with a physical write pending.
+   a run with a physical write pending. **ENG-23:** the `CbGraph` carrier exclusion
+   (`is_run_commit` in `CbGraph::of_tree`) is now tested through its one reachable shape: a
+   routine in two `#if` arms, a `[CommitBehavior(Error)]` arm holding only a checked run and a
+   `[CommitBehavior(Ignore)]` arm holding only a `Commit()`. Without the exclusion the Ignore
+   arm's `Commit()` takes the Error arm's behavior and `prove … throws-error` on its caller
+   answers `yes`; with it, `no` (`tests/cli/cli_eng23_commit_arms.rs`). The same shape named the
+   ignored commit's reason after the merged arms' word ("CommitBehavior Error on …X"); the digest
+   and prove now name the behavior asked about (`Declared::reason_for`).
 3. `alsem fingerprint` (and `policy check`, which reads its capabilities) does not apply the rule:
    it says `commit: yes` for a root whose only commit is ignored or errors. That over-states; it
    never says a wrong `no`.
