@@ -55,10 +55,45 @@ calls 2). A single-app build is ~4-6 s.
    one after the other. If `retained_emission` started at t = 0 (for example in its own
    invocation running alongside the other four at 3 threads, holding the same memory as now),
    the run would end near the longest single test (~161 s): ~40 s, with no Rust change. Below
-   the line alone, and the gate's speed is noisy at that scale.
+   the line alone, and the gate's speed is noisy at that scale. **Tried as TLS-40 and dropped**
+   (see below).
 2. **The double build in `cdo_i369` and `cdo_crossing_census`.** Each builds the cross-app
    model once to find two routine ids, drops it, then builds it again scoped to those
    routines (`tree_over`): ~19 s of CPU each. They are not on the critical path, so the gate's
    wall time would not move.
 3. `parallel_solve`'s alone time moved from 42 s (TLS-32 census) to 110 s here under load 233;
    its cones phase is the most load-sensitive part of the run.
+
+## TLS-40: `retained_emission` first, tried and dropped
+
+**What was tried.** In `scripts/cdo-gate`'s `lib_tests`, at 2 or more threads,
+`retained_emission` ran alone in its own `cargo test` invocation from t = 0, beside the other
+four long tests at one thread fewer. The same number of tests ran at once, so memory was
+unchanged. It came with a `gate_scripts` test and three discrimination proofs. The change is on
+the unmerged branch `tools/tls-40-retained-first` (`fc1799f2`).
+
+**The A/B.** `lib_tests` was sourced from master's script (A, `db06b145`) and from the branch's
+(B), with one `cdo`-profile test binary (only the script differed), 4 threads, no pin, in ABBA
+order. Run 2026-11-13 on server1, with engine's builds held. It started at load 8.6 with 50 GiB
+free, then outside load (another project) rose to 26-30 for the last three runs.
+
+| run | lib_cdo wall | long run | load start → end |
+|---|---:|---|---|
+| A1 | 289.5 s | 231.6 s (5 tests, 4 threads) | 8.6 → 26.1 |
+| B1 | 255.6 s | `retained_emission` 159.0 s; the other four 196.1 s | 26.1 → 29.7 |
+| B2 | 257.9 s | `retained_emission` 156.6 s; the other four 198.2 s | 29.7 → 29.9 |
+| A2 | 260.0 s | 201.5 s | 29.9 → 27.8 |
+
+The rest of the phase (12 tests) took 56.6-58.4 s in every run.
+
+**Result.** A averaged 274.8 s and B 256.8 s: −18 s. But A2 against B is only −2 to −4 s, so
+most of the gap is A1, which began on a quiet host. That is within the noise and below the 40 s
+bar.
+
+**Why it fell short of ~40 s.** Giving `retained_emission` a slot of its own leaves the other
+four on 3 threads, and they become the new critical path at ~197 s (`derived_only` alone is
+~131-161 s, plus the others queued behind it). `retained_emission` alone also took ~157 s here,
+not the ~130 s it took in the gate.
+
+**Decision (orchestrator, 2026-11-13; mantra 13, 18):** dropped. The gain is within the noise
+and the script grows.
