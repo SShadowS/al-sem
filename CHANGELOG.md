@@ -94,13 +94,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (TLS-43: some keys and names change for identifiers with non-ASCII capitals)
 
-- **Finding fingerprints: only names with `İ` or a word-final `Σ`.** d60, d61 and d3 put the
-  record variable, the guard variable or the accessed field name into their root-cause key.
-  That name is now lowercased with the fold the rest of the engine uses. For a name
-  containing the Turkish dotted capital `İ` or a capital `Σ` at the end of a word, the
-  finding's fingerprint changes: a `--baseline` file made before this version no longer
-  suppresses it, so it shows as new once and suppresses again after `--update-baseline`. Every
-  other name, Danish, Norwegian, Swedish and German letters included, keeps its fingerprint.
+- **Finding fingerprints: d60 only, and only names with `İ` or a word-final `Σ`.** d60 puts
+  the record variable's name into its root-cause key. That name is now lowercased with the
+  fold the rest of the engine uses. For a name containing the Turkish dotted capital `İ` or a
+  capital `Σ` at the end of a word, the finding's fingerprint changes: a `--baseline` file made
+  before this version no longer suppresses it, so it shows as new once and suppresses again
+  after `--update-baseline`. Every other name, Danish, Norwegian, Swedish and German letters
+  included, keeps its fingerprint. d61's and d3's keys hold ids, not names (review sol r2), so
+  their fingerprints do not move. What changes for them, and for d59, is which names they
+  recognize: `İsHandled`, `İsAllowed` and a field spelled with `İ` now read as their `I`
+  spelling.
 - **`alsem impact`: any non-ASCII capital.**
   - A label variable whose name has a non-ASCII capital (`Ændring`, `İ…`) is now recognized
     as a label, so its message key reads `label:…` instead of a hashed `expr:…`.
@@ -147,9 +150,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       al-sem parity is retired.
   - **Identity sites that change, because they meet fold-built keys** (each only for a name
     with `İ` or a word-final `Σ`; no committed baseline has one):
-    - d60's and d61's root-cause keys;
+    - d60's root-cause key;
+    - d61's guard-name match and d3's accessed-field text (which findings exist, not their
+      keys, which hold ids);
+    - d59's guard-name heuristic (its loose-subject key keeps `to_lowercase`; review sol r2,
+      witness `d59::tests::a_dotted_capital_i_guard_name_is_judged_like_its_i_spelling`);
     - `capability_cone.rs`' `ValueSource` variable name;
-    - d3's accessed-field text;
     - `gate/diff/renames.rs`' rename-table key (self-consistent, `alsem diff` only);
     - `ir_walk.rs`'s `/grv/` id input (nothing reads it);
     - `impact/keys.rs`' label key: its text keeps `to_lowercase`, but a label variable with a

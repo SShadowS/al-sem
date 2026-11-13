@@ -20,16 +20,18 @@ use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d59-integrationevent-var-boolean-guard";
 
-/// A parameter name unquoted and folded: what [`is_guard_name`] judges and what the
-/// #252 loose subject keeps.
+/// A parameter name unquoted and folded as the #252 loose subject keeps it (an
+/// identity input: it keeps `to_lowercase`, so no stored subject moves).
 fn fold_guard_name(raw: &str) -> String {
     raw.trim_matches('"').to_lowercase()
 }
 
 /// Guard-name heuristic. Deny-list first (IsHandled is the sanctioned
-/// handshake), then permission/skip-shaped prefixes and substrings.
+/// handshake), then permission/skip-shaped prefixes and substrings. The name is
+/// an identifier, so it takes the identifier fold (TLS-43 review sol r2:
+/// `to_lowercase` turns `İsAllowed` into `i̇sallowed`, which no rule matched).
 fn is_guard_name(raw: &str) -> bool {
-    let n = fold_guard_name(raw);
+    let n = raw.trim_matches('"').fold_identifier();
     if n == "ishandled" || n == "handled" {
         return false;
     }
@@ -145,7 +147,7 @@ pub fn detect_d59(
 
 #[cfg(test)]
 mod tests {
-    use super::is_guard_name;
+    use super::{fold_guard_name, is_guard_name};
 
     #[test]
     fn guard_names_flagged() {
@@ -160,6 +162,19 @@ mod tests {
         ] {
             assert!(is_guard_name(n), "{n} should be a guard name");
         }
+    }
+
+    /// TLS-43 review sol r2: a guard name with a dotted capital `İ` is the
+    /// same identifier as its `I` spelling (AL's simple fold), so it is judged
+    /// alike; the loose-subject key keeps its old `to_lowercase` spelling.
+    ///
+    /// DISCRIMINATION (2026-11-13): `is_guard_name` back on `fold_guard_name`
+    /// (`to_lowercase`) fails at "İsAllowed"; restored, passes.
+    #[test]
+    fn a_dotted_capital_i_guard_name_is_judged_like_its_i_spelling() {
+        assert!(is_guard_name("İsAllowed"), "İsAllowed");
+        assert!(is_guard_name("IsAllowed"), "IsAllowed");
+        assert_eq!(fold_guard_name("İsAllowed"), "i\u{307}sallowed");
     }
 
     #[test]
