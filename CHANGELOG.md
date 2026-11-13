@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On CDO the one such site is `CDO Legacy eDoc Dispatcher.RunExportEDocCodeunit`
   (`Codeunit.Run(ExportProcessorId, DocumentVariant)`); `prove … throws-error` on all 20
   routines of that codeunit gives the same answers and checked-run verdicts before and after.
+- **`digest`'s `transactionContext` has a new value, `span-may-have-writes-order-unknown`:** a
+  Commit whose only pending tables are another event subscriber's (order unknown) said
+  `span-has-known-writes` (it had no known one). `span-has-known-writes` now reads the tables
+  whose order is known. Consumers: no code in bc-dev-mcp (checked at `bd6543b`) or in the
+  owner's other GitHub repos reads the value (it appears only in recorded fixtures); ConTinAI
+  could not be checked from here. Not measured on CDO (the digest goldens of `output_cdo` show
+  it at landing).
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 

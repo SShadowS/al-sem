@@ -486,9 +486,9 @@ callers' question reads (`commit_scope::declared`).
   from its own inputs (the trap search from its guarded out-edges); a `LockTable` on a temporary
   record counts as pending in both readers (an over-approximation the shared rule keeps); the
   digest's pending line and explain's pending report still name physical tables only (explain
-  passes no unknown-code sites), and the digest's transaction context says
-  `span-has-known-writes` when only order-unknown tables are pending (an over-statement kept on
-  purpose: "no known writes" there would read an unknown as a no); a table event's phase is read from its name (`onbefore…`; any
+  passes no unknown-code sites); the digest's transaction context of a Commit whose only
+  pending tables are order-unknown is `span-may-have-writes-order-unknown` (neither "known" nor
+  "no known" writes); a table event's phase is read from its name (`onbefore…`; any
   other name counts as after the write). On CDO (base `67d75bea`) no default detector moves; d50
   goes from 0 to 2 findings, both resting only on unknown code in dependencies (a chained
   interface call left open, ENG-64, and a telemetry logger registered at run time) and false in

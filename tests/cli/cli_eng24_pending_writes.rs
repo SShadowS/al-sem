@@ -633,3 +633,59 @@ fn a_siblings_tables_reach_d9_text_not_its_gate() {
         "{c}"
     );
 }
+
+/// The digest's transaction context of each effect of `routine` (sorted, deduped).
+fn digest_contexts(source: &str, routine: &str) -> Vec<String> {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e24e24e0-0000-4000-8000-0000000000aa","name":"E24","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(t.path().join("src/a.al"), source).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "digest",
+            t.path().to_str().unwrap(),
+            "--routine",
+            routine,
+            "--format",
+            "json",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+    fn walk(v: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let Some(s) = m.get("transactionContext").and_then(|s| s.as_str()) {
+                    out.insert(s.to_string());
+                }
+                m.values().for_each(|x| walk(x, out));
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut set = std::collections::BTreeSet::new();
+    walk(&v, &mut set);
+    set.into_iter().collect()
+}
+
+/// The digest's transaction context (orchestrator ruling): a Commit whose only
+/// pending tables are another subscriber's is neither "known writes" nor "no
+/// known writes" (`Sub4Commits`); one with its own writes keeps "known".
+/// Break (2026-11-13): drop the `TX_SPAN_MAY_WRITES` branch in `digest_cli`'s
+/// `tx_context_map` -> `Sub4Commits` reads `span-has-no-known-writes`. Fails;
+/// restored, it passes.
+#[test]
+fn the_digest_says_may_have_writes_for_order_unknown_tables() {
+    let sib = digest_contexts(ROUND2, "Sub4Commits");
+    assert_eq!(sib, ["span-may-have-writes-order-unknown"]);
+    let own = digest_contexts(ROUND2, "Sub5Commits");
+    assert!(own.iter().any(|c| c == "span-has-known-writes"), "{own:?}");
+    assert!(!own.iter().any(|c| c.starts_with("span-may")), "{own:?}");
+}
