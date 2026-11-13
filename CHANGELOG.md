@@ -42,6 +42,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     discrimination proof.
   - **To take it:** the landing gate must run without `CDO_GATE_SERIAL=1`.
 
+### Changed (TLS-34: the speed check's base is seeded from the landing gate's own binary)
+
+- **After a landing, the speed check's next base is no longer rebuilt.**
+  - **Before:** `scripts/merge-and-push` warmed it in the background with `cdo-speed --warm <new
+    master>` (TLS-18), which built that commit's release-fast `alsem` from a `git archive` copy:
+    ~4 min of CPU per landing. A gate starting right after a landing waited for that build on the
+    cache lock: 60 s of TLS-33's landing gate.
+  - **Now:** when `cdo-speed` builds the working tree (the gate's `speed_build`) on a clean work
+    tree, it keeps that binary in its cache under the tree's hash (`trees/<tree>/alsem`).
+    `cached_binary` (which `--warm` and every gate's base use) seeds a commit's entry from it when
+    there is no entry for the commit yet. A landing's merge commit has exactly the tree its gate
+    tested, so the warm step finds it and builds nothing.
+  - **Fallback:** a commit with no kept tree builds as before. Entries older than 7 days are
+    removed.
+  - **Bytes:** a seeded binary differs in bytes from an archive build (the build folder's path is
+    embedded), not in what it runs.
+  - **Tests:** `gate_scripts::speed_warm_seeds_a_commit_from_its_trees_gate_binary` and
+    `gate_scripts::speed_build_keeps_a_clean_trees_binary`, each with a discrimination proof.
+
 ### Changed (TLS-33: the speed check reuses ci-steps' optimized build)
 
 - **`cdo-gate`'s speed phase no longer rebuilds `al-sem` on the gate's critical path.**

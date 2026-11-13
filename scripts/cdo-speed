@@ -207,6 +207,41 @@ def cache_root():
         os.path.expanduser("~"), ".cache", "al-sem", "cdo-speed")
 
 
+TREE_ENTRY_DAYS = 7
+
+
+def record_tree_binary(repo, built):
+    """⟨TLS-34⟩ Keep the working tree's release-fast binary in the cache under its
+    tree hash, when the work tree is clean (no tracked change and no untracked file
+    outside .gitignore, as ci-steps' gate-pass record asks), so `cached_binary`
+    can seed a commit with that tree instead of building it. The binary differs in
+    bytes from an archive build (the build folder's path is embedded), not in what
+    it runs. Entries older than TREE_ENTRY_DAYS go (a branch that never lands)."""
+    if git(repo, "status", "--porcelain", "--untracked-files=normal"):
+        log("the work tree has changes: its binary is not kept for a later base")
+        return
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    root = cache_root()
+    trees = os.path.join(root, "trees")
+    dst = os.path.join(trees, tree, "alsem")
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, "lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.isdir(trees):
+            cutoff = time.time() - TREE_ENTRY_DAYS * 86400
+            for name in os.listdir(trees):
+                path = os.path.join(trees, name)
+                if os.path.getmtime(path) < cutoff:
+                    shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            tmp = dst + ".tmp"
+            shutil.copy2(built, tmp)
+            os.replace(tmp, dst)
+    log(f"kept the working tree's binary for tree {tree[:10]} (a later base of that tree "
+        f"builds nothing)")
+
+
 def cached_binary(repo, rev, logf):
     """The release-fast alsem of commit `rev`, built once per commit and cached."""
     sha = git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}")
@@ -218,6 +253,19 @@ def cached_binary(repo, rev, logf):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if os.path.exists(exe):
             log(f"{rev} = {sha[:10]}: cached binary {exe}")
+            return exe, sha
+        # ⟨TLS-34⟩ A gate that timed this commit's exact tree left its binary
+        # (`record_tree_binary`): a landing's merge commit has the tree its gate
+        # tested, so the warm step after a landing builds nothing.
+        tree = git(repo, "rev-parse", "--verify", f"{sha}^{{tree}}")
+        seeded = os.path.join(root, "trees", tree, "alsem")
+        if os.path.exists(seeded):
+            os.makedirs(os.path.dirname(exe), exist_ok=True)
+            tmp = exe + ".tmp"
+            shutil.copy2(seeded, tmp)
+            os.replace(tmp, exe)
+            log(f"{rev} = {sha[:10]}: seeded from a gate's build of its tree {tree[:10]} "
+                f"(no build) at {exe}")
             return exe, sha
         src = os.path.join(root, "build", "src")
         log(f"{rev} = {sha[:10]}: building (once per commit) in {src}")
@@ -544,6 +592,8 @@ def main():
             if not os.path.exists(built):
                 log(f"no binary at {built}")
                 return 2
+            if not args.no_build:
+                record_tree_binary(repo, built)
             # A copy: a later build into the target folder cannot swap it mid-run.
             head_exe = os.path.join(outdir, "head-alsem")
             if not args.build_only:
