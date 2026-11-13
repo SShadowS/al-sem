@@ -261,19 +261,18 @@ fn the_base_side_keeps_nothing() {
     assert!(!after, "the base part kept nothing");
 }
 
-/// Sol review r1: two `.al` names that are not UTF-8 and read alike
-/// (`b"\xff.al"`, `b"\xfe.al"` are both `\u{fffd}.al`) share one manifest
-/// key, so the stamp would miss an edit to the first: such a read takes no
-/// part, and every part builds. The rule is any manifest key with U+FFFD, so
-/// it covers `src:` and `pkg:` names the same way (sol review r2: package
-/// paths); this test states it with `.al` names.
+/// TLS-30 (it replaced TLS-28's stopgap, which kept such reads out): two
+/// `.al` names that are not UTF-8 and read alike (`b"\xff.al"`, `b"\xfe.al"`
+/// are both `\u{fffd}.al` lossily) keep two manifest keys, so the stamp holds
+/// both identities. Unchanged, the second part reuses the graph; after an
+/// edit to the FIRST twin it builds again.
 ///
-/// Discrimination (2026-11-12): `stamp_for` without its `lossy` check fails
-/// at "lossy twins: every part builds" (1 build seen, 2 expected); restored,
-/// passes.
+/// Discrimination (2026-11-13): the manifest keyed by the lossy `rel_posix`
+/// again (`rel_key` returning `rel_posix`) fails at "an edit to the first
+/// twin misses" (0 builds seen, 1 expected); restored, passes.
 #[cfg(unix)]
 #[test]
-fn lossy_twin_names_take_no_part() {
+fn lossy_twin_names_keep_their_identities() {
     use std::os::unix::ffi::OsStrExt;
     let dir = fixture_dir();
     let ws = dir.path().join("ws");
@@ -294,13 +293,33 @@ fn lossy_twin_names_take_no_part() {
             .any(|w| w[0].rel_posix == w[1].rel_posix),
         "precondition: two files share a lossy name"
     );
-    let b = with_sited_cache(|| {
+    // The twins' lossy names are equal, so their order is the directory's:
+    // the first one read is the one a lossy key loses (a later insert wins).
+    let first = inputs
+        .al_files
+        .windows(2)
+        .find(|w| w[0].rel_posix == w[1].rel_posix)
+        .map(|w| w[0].abs_path.clone())
+        .expect("the twins");
+    let (unchanged, edited) = with_sited_cache(|| {
+        up_part(&ws, false);
         let b0 = builds();
         up_part(&ws, false);
+        let unchanged = builds() - b0;
+        std::fs::write(
+            &first,
+            "codeunit 51491 \"UP Twin 51491\"\n{\n    // edited\n}\n",
+        )
+        .unwrap();
+        let b1 = builds();
         up_part(&ws, false);
-        builds() - b0
+        (unchanged, builds() - b1)
     });
-    assert_eq!(b, 2, "lossy twins: every part builds");
+    assert_eq!(
+        unchanged, 0,
+        "unchanged twins: the second part reuses the graph"
+    );
+    assert_eq!(edited, 1, "an edit to the first twin misses");
 }
 
 /// The first `.al` file under `ws`.

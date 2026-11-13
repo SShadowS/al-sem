@@ -270,6 +270,171 @@ fn a_source_dependency_file_edit_is_its_own_change_and_only_it_is_hashed() {
     assert_eq!(consumed, after, "consumed equals observed after the edit");
 }
 
+/// TLS-30: two names that are not UTF-8 and read alike (`b"\xff.al"` and
+/// `b"\xfe.al"`, both `\u{fffd}.al` lossily) keep two keys, in the workspace
+/// and in a source dependency. `consumed` agrees with an observation, the
+/// descriptor round trip keeps both, and an edit to the FIRST twin of each
+/// (the one a lossy key lost: a later insert wins) moves the stamp and is
+/// named by `changes`.
+///
+/// Discrimination (2026-11-13): the keys lossy again (`rel_key` returning
+/// `rel_posix`) fails at "precondition: two keys per twin pair" (1 `al:` key
+/// seen, 2 expected); `path_key` lossy again fails there too (1 package key
+/// seen, 2 expected); restored, passes.
+#[cfg(unix)]
+#[test]
+fn non_utf8_twin_names_keep_two_keys() {
+    use std::os::unix::ffi::OsStrExt;
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    let dep = t.path().join("dep");
+    let write = |p: &Path, text: &str| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write(
+        &ws.join("app.json"),
+        r#"{"id":"aaaaaaaa-0000-4000-8000-000000000001","name":"W","publisher":"t","version":"1.0.0.0"}"#,
+    );
+    write(
+        &ws.join(crate::program::source_deps::CONFIG_FILE),
+        r#"{ "sources": ["../dep"] }"#,
+    );
+    write(
+        &dep.join("app.json"),
+        r#"{"id":"dddddddd-0000-4000-8000-000000000001","name":"D","publisher":"t","version":"1.0.0.0"}"#,
+    );
+    // Package twins (review r1, Opus): their bytes are no valid `.app`; the
+    // manifest records each one's state either way.
+    for (name, text) in [(&b"\xff.app"[..], "one"), (&b"\xfe.app"[..], "two")] {
+        write(
+            &ws.join(".alpackages")
+                .join(std::ffi::OsStr::from_bytes(name)),
+            text,
+        );
+    }
+    for (folder, base) in [(&ws, 50100), (&dep, 50200)] {
+        for (i, name) in [&b"\xff.al"[..], &b"\xfe.al"[..]].into_iter().enumerate() {
+            let id = base + i;
+            write(
+                &folder.join(std::ffi::OsStr::from_bytes(name)),
+                &format!("codeunit {id} \"T{id}\" {{ }}\n"),
+            );
+        }
+    }
+
+    let before = observe_all(&ws);
+    let inputs = WorkspaceInputs::read(&ws, &READ);
+    assert_eq!(
+        Manifest::consumed(&inputs, false),
+        before,
+        "consumed equals observed"
+    );
+    let count = |prefix: &str| {
+        before
+            .entries()
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .count()
+    };
+    assert_eq!(
+        (
+            count("al:"),
+            count("src:"),
+            count("pkg:") - 2 // `pkg:list`, `pkg:unreadable-folders`
+        ),
+        (2, 2, 2),
+        "precondition: two keys per twin pair: {:?}",
+        before.entries().keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        Manifest::from_descriptor_entries(&before.descriptor_entries()).unwrap(),
+        before,
+        "the descriptor round trip keeps both"
+    );
+
+    // The first twin of each pair, by the walks' order.
+    let first_ws = inputs.al_files[0].abs_path.clone();
+    let first_dep =
+        crate::source_text::discover_al_files(&dep, crate::source_text::NestedApps::Walk).unwrap()
+            [0]
+        .abs_path
+        .clone();
+    // A message spells the path lossily (both twins alike): the folder and
+    // the U+FFFD name.
+    let shown = |folder: &Path| {
+        folder
+            .join(std::ffi::OsStr::from_bytes(b"\xff.al"))
+            .to_string_lossy()
+            .into_owned()
+    };
+    for (first, category, folder) in [
+        (&first_ws, "al-file", ws.clone()),
+        (&first_dep, "source-dependency", ws.join("../dep")),
+    ] {
+        let was = observe_all(&ws);
+        write(first, "codeunit 50999 \"Edited\" { }\n");
+        let now = observe_all(&ws);
+        assert_ne!(
+            was.stamp(),
+            now.stamp(),
+            "{category}: the edit moves the stamp"
+        );
+        let changes = was.changes(&now, &ws);
+        assert_eq!(changes.len(), 1, "{category}: one change: {changes:?}");
+        assert_eq!(changes[0].category, category);
+        assert_eq!(
+            changes[0].path.as_deref(),
+            Some(shown(&folder).as_str()),
+            "{category}: the edited file's path"
+        );
+    }
+    // Each package twin in turn: a lossy key loses one of them, whichever
+    // the discovery lists first.
+    for name in [&b"\xff.app"[..], &b"\xfe.app"[..]] {
+        let was = observe_all(&ws);
+        write(
+            &ws.join(".alpackages")
+                .join(std::ffi::OsStr::from_bytes(name)),
+            "edited",
+        );
+        let now = observe_all(&ws);
+        assert_ne!(
+            was.stamp(),
+            now.stamp(),
+            "{name:?}: the edit moves the stamp"
+        );
+        let changes = was.changes(&now, &ws);
+        assert_eq!(changes.len(), 1, "{name:?}: one change: {changes:?}");
+        assert_eq!(changes[0].category, "package");
+    }
+    assert_eq!(
+        Manifest::consumed(&WorkspaceInputs::read(&ws, &READ), false),
+        observe_all(&ws),
+        "consumed equals observed after the edits"
+    );
+}
+
+/// TLS-30 (review r1, sol and Opus): a non-UTF-8 injected package root
+/// comes back from the manifest as the same path, so a freshness check
+/// observes the folder that was read. Discrimination (2026-11-13):
+/// `inj:pkg-roots` written with the lossy `path_text` again fails here.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_injected_package_root_round_trips() {
+    use std::os::unix::ffi::OsStrExt;
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join(std::ffi::OsStr::from_bytes(b"pkgs-\xff"));
+    std::fs::create_dir_all(&root).unwrap();
+    let injected = Injected {
+        sources: Vec::new(),
+        package_roots: vec![root.clone()],
+    };
+    let m = Manifest::observe_scoped(t.path(), &injected, false, Hashing::All);
+    let back = Manifest::from_descriptor_entries(&m.descriptor_entries()).unwrap();
+    assert_eq!(back.injected().package_roots, vec![root]);
+}
+
 /// The categories of every kind of change (agent-tasks design §2.3): a
 /// file on one side only is a listing change with `added`/`removed`, an
 /// edit is its file's category, and the listing entry itself is not
