@@ -51,9 +51,12 @@ in the tree.
 
 1. **`SourceRoot.content_hash` ignores paths and file boundaries** (`src/snapshot/provider.rs:57-62`):
    it hashes the concatenated texts only, so a rename, or the same bytes split differently
-   across files, gives the same hash. Read by `program/dep_cache.rs:53-72` (dependency source
-   cache) and emitted at `engine/impact/jobs.rs:376`. Fix: fold each file's path and a
-   length prefix in; test two file sets with the same bytes split differently.
+   across files, gives the same hash. Fix: fold each file's path and a length prefix in;
+   test two file sets with the same bytes split differently. Correction (TLS-46 review): no
+   production code reads this hash. `program/dep_cache.rs:53-72` holds only dependency
+   roots, whose hash comes from the `.app` image or `program/source_deps.rs` (only a
+   `LocalRepoProvider`, never built in production, would put a `source_root` hash there),
+   and `engine/impact/jobs.rs:376` prints `source_deps`' own hash, a different scheme.
 2. **d55: several publish sites in one loop share one fingerprint** (`d55.rs:75`, the finding
    id at :72 carries the call site): baselining one silences the others (DO: 2 groups / 3
    excess, measured 2026-07-25). Not covered by ENG-28 (a different fingerprint cause).
