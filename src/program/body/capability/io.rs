@@ -20,6 +20,7 @@ use super::{
     CapabilityExtra, CapabilityFact, CoverageReason, ExtractionContext, HttpExtra, StorageExtra,
     ValueSource, confidence_from_source,
 };
+use al_syntax::IdentifierFoldExt;
 
 // ─── HTTP ────────────────────────────────────────────────────────────────────
 
@@ -91,9 +92,9 @@ pub fn extract_telemetry(
     for cs in &ctx.features.call_sites {
         let matches = match &cs.callee {
             PCallee::Member { receiver, method } => {
-                receiver.to_lowercase() == "session" && method.to_lowercase() == "logmessage"
+                receiver.fold_identifier() == "session" && method.fold_identifier() == "logmessage"
             }
-            PCallee::Bare { name } => name.to_lowercase() == "logmessage",
+            PCallee::Bare { name } => name.fold_identifier() == "logmessage",
             _ => false,
         };
         if !matches {
@@ -131,7 +132,7 @@ fn isolated_storage_op(method_lc: &str) -> Option<&'static str> {
 }
 
 fn parse_data_scope(text: &str) -> &'static str {
-    let lower = text.to_lowercase();
+    let lower = text.fold_identifier();
     if lower.contains("::company") {
         "Company"
     } else if lower.contains("::user") {
@@ -153,10 +154,10 @@ pub fn extract_isolated_storage(
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        if receiver.to_lowercase() != "isolatedstorage" {
+        if receiver.fold_identifier() != "isolatedstorage" {
             continue;
         }
-        let Some(op) = isolated_storage_op(&method.to_lowercase()) else {
+        let Some(op) = isolated_storage_op(&method.fold_identifier()) else {
             continue;
         };
 
@@ -208,7 +209,7 @@ pub fn extract_hyperlink(
         let PCallee::Bare { name } = &cs.callee else {
             continue;
         };
-        if name.to_lowercase() != "hyperlink" {
+        if name.fold_identifier() != "hyperlink" {
             continue;
         }
 
@@ -262,7 +263,7 @@ pub fn extract_file_blob(
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        if !is_file_write_call(&ctx.receiver_type_of(receiver), &method.to_lowercase()) {
+        if !is_file_write_call(&ctx.receiver_type_of(receiver), &method.fold_identifier()) {
             continue;
         }
 

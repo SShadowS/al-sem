@@ -317,7 +317,11 @@ fn member_call(text: &str) -> Option<(&str, String, &str)> {
     let method = segments[segments.len() - 1];
     let recv_len = head.rfind(method)?;
     let recv = head[..recv_len].trim_end().strip_suffix('.')?.trim();
-    Some((recv, logical_name(method).to_lowercase(), &body[open + 1..]))
+    Some((
+        recv,
+        logical_name(method).fold_identifier(),
+        &body[open + 1..],
+    ))
 }
 
 /// The field an argument names. A record-qualified field (`X."Total
@@ -398,7 +402,7 @@ impl<'a> Tables<'a> {
                 &mut real_by_name
             };
             by_name
-                .entry(t.name.to_lowercase())
+                .entry(t.name.fold_identifier())
                 .and_modify(|seen| {
                     if seen.is_some_and(|p| p.id != t.id) {
                         *seen = None;
@@ -416,7 +420,7 @@ impl<'a> Tables<'a> {
 
     /// The table a formula names, or why it is not decided.
     fn by_name(&self, name: &str) -> Result<&'a ModelTable, &'static str> {
-        let key = name.to_lowercase();
+        let key = name.fold_identifier();
         match self
             .real_by_name
             .get(&key)
@@ -540,7 +544,7 @@ fn is_retrieval(op: &str) -> bool {
 fn var_key(raw: &str) -> String {
     strip_quotes(raw.trim())
         .replace("\"\"", "\"")
-        .to_lowercase()
+        .fold_identifier()
 }
 
 /// A record receiver's key, spelled as a retrieval's receiver is

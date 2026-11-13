@@ -104,6 +104,15 @@ codeunit 50430 "Nordic Names"
         İndkøb.DeleteAll();
     end;
 
+    // d33 control (review r3, Fable): the filter is set inline, on `İndkøb` itself.
+    procedure FilteredInline()
+    var
+        İndkøb: Record "Nordic Order";
+    begin
+        İndkøb.SetRange("No.", 'X');
+        İndkøb.DeleteAll();
+    end;
+
     local procedure Filtrer(var Rec2: Record "Nordic Order")
     begin
         Rec2.SetRange("No.", 'X');

@@ -38,7 +38,7 @@ pub fn extract_ui(
         let PCallee::Bare { name } = &cs.callee else {
             continue;
         };
-        let Some(op) = ui_primitive_op(&name.to_lowercase()) else {
+        let Some(op) = ui_primitive_op(&name.fold_identifier()) else {
             continue;
         };
 
@@ -61,7 +61,7 @@ pub fn extract_ui(
 // ─── UI window-open ──────────────────────────────────────────────────────────
 
 fn is_page_or_report_type(declared_type: &str) -> bool {
-    let lower = declared_type.to_lowercase();
+    let lower = declared_type.fold_identifier();
     if lower == "page" || lower == "report" {
         return true;
     }
@@ -76,13 +76,13 @@ pub fn extract_ui_window_open(
 
     for cs in &ctx.features.call_sites {
         let matched = match &cs.callee {
-            PCallee::Bare { name } => name.to_lowercase() == "strmenu",
+            PCallee::Bare { name } => name.fold_identifier() == "strmenu",
             PCallee::ObjectRun { object_kind, .. } => {
                 object_kind == "Page" || object_kind == "Report"
             }
             PCallee::Member { receiver, method } => {
-                let method_lc = method.to_lowercase();
-                let receiver_lc = receiver.to_lowercase();
+                let method_lc = method.fold_identifier();
+                let receiver_lc = receiver.fold_identifier();
                 // `Run` too (G15): `MyPage.Run()` opens the page as `RunModal`
                 // does, only without waiting; it was missed.
                 if method_lc == "runmodal" || method_lc == "run" {

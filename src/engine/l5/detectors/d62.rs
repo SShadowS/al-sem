@@ -201,10 +201,10 @@ pub fn detect_d62(
             .variables
             .iter()
             .filter(|v| {
-                let t = v.declared_type.to_lowercase();
+                let t = v.declared_type.fold_identifier();
                 t.starts_with("codeunit") && t.contains("feature telemetry")
             })
-            .map(|v| v.name.to_lowercase())
+            .map(|v| v.name.fold_identifier())
             .collect();
         if ft_vars.is_empty() {
             continue;
@@ -217,7 +217,7 @@ pub fn detect_d62(
             if !method.eq_fold_identifier("LogUsage") {
                 continue;
             }
-            if !ft_vars.contains(&receiver.to_lowercase()) {
+            if !ft_vars.contains(&receiver.fold_identifier()) {
                 continue;
             }
             candidates_considered += 1;

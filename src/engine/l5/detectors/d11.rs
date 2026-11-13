@@ -34,6 +34,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d11-modify-without-get";
 
@@ -74,14 +75,14 @@ pub fn detect_d11(
             .record_variables
             .iter()
             .filter(|rv| rv.is_parameter)
-            .map(|rv| rv.name.to_lowercase())
+            .map(|rv| rv.name.fold_identifier())
             .collect();
 
         for op in &routine.record_operations {
             if !MUTATING_OPS.contains(&op.op.as_str()) {
                 continue;
             }
-            let var_key = op.record_variable_name.to_lowercase();
+            let var_key = op.record_variable_name.fold_identifier();
             if param_record_names.contains(&var_key) {
                 skipped_parameter += 1;
                 continue;
@@ -96,7 +97,7 @@ pub fn detect_d11(
             // Is there any LOAD_OP on the same record variable STRICTLY BEFORE this op?
             let loaded_before = routine.record_operations.iter().any(|other| {
                 LOAD_OPS.contains(&other.op.as_str())
-                    && other.record_variable_name.to_lowercase() == var_key
+                    && other.record_variable_name.fold_identifier() == var_key
                     && before_anchor(&other.source_anchor, &op.source_anchor)
             });
             if loaded_before {

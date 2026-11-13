@@ -44,6 +44,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PAnchor;
 use crate::program::model::calls::UpgradedBinding;
 use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d37-validate-without-persist";
 
@@ -99,7 +100,7 @@ pub fn detect_d37(
             .record_variables
             .iter()
             .filter(|rv| rv.is_parameter)
-            .map(|rv| rv.name.to_lowercase())
+            .map(|rv| rv.name.fold_identifier())
             .collect();
 
         for op in &routine.record_operations {
@@ -107,7 +108,7 @@ pub fn detect_d37(
                 continue;
             }
             candidates_considered += 1;
-            let var_key = op.record_variable_name.to_lowercase();
+            let var_key = op.record_variable_name.fold_identifier();
             // op.tempState.kind === "known" && op.tempState.value === true
             if super::is_known_temp(op) {
                 skipped_temp_record += 1;
@@ -203,7 +204,7 @@ fn later_persisted(
 ) -> &'static str {
     let mut sorted: Vec<&ModelRecordOperation> = ops
         .iter()
-        .filter(|o| o.record_variable_name.to_lowercase() == var_key)
+        .filter(|o| o.record_variable_name.fold_identifier() == var_key)
         .filter(|o| before_anchor(&validate_op.source_anchor, &o.source_anchor))
         .collect();
     sorted.sort_by(|a, b| {

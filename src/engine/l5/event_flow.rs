@@ -44,6 +44,7 @@
 //! consumes one node from the budget BEFORE the first expand, exactly as al-sem
 //! decrements `nodeBudget` before calling `expand(root, 0)`.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::engine::l4::capability_cone::CapabilityFact;
@@ -926,7 +927,7 @@ pub fn publisher_branch_facts(
         default_branch_facts: direct_facts,
         guarded_branch_facts: Vec::new(),
         unguarded_facts: Vec::new(),
-        guard_param_name: Some(guard_param.name.to_lowercase()),
+        guard_param_name: Some(guard_param.name.fold_identifier()),
     })
 }
 

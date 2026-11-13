@@ -16,6 +16,7 @@
 //! an `error` string (the TS "never throws" / catch posture).
 
 use crate::program::attributes::{AttributeArg, AttributeInfo};
+use al_syntax::IdentifierFoldExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -595,9 +596,9 @@ fn raw_object_property(
     property_name: &str,
 ) -> Option<String> {
     let props = properties.as_ref()?;
-    let lc = property_name.to_lowercase();
+    let lc = property_name.fold_identifier();
     for p in props {
-        if p.name.clone().unwrap_or_default().to_lowercase() == lc {
+        if p.name.clone().unwrap_or_default().fold_identifier() == lc {
             return p.value.clone();
         }
     }
@@ -809,7 +810,7 @@ fn classify_abi_arg(raw: &Option<Value>) -> AttributeArg {
         };
     }
 
-    let lower = trimmed.to_lowercase();
+    let lower = trimmed.fold_identifier();
     if lower == "true" || lower == "false" {
         return AttributeArg {
             kind: "boolean".to_string(),
@@ -865,7 +866,7 @@ fn classify_abi_arg(raw: &Option<Value>) -> AttributeArg {
         } else {
             member_raw.to_string()
         };
-        let kind = if is_object_type_keyword(&qualifier.to_lowercase()) {
+        let kind = if is_object_type_keyword(&qualifier.fold_identifier()) {
             "database_reference"
         } else {
             "qualified_enum_value"
@@ -1074,7 +1075,7 @@ fn parse_method(m: &RawMethod) -> AbiRoutine {
     let mut kind = "procedure".to_string();
     let mut event_kind = AbiEventKind::Unknown;
     for info in &attributes_parsed {
-        match info.name.to_lowercase().as_str() {
+        match info.name.fold_identifier().as_str() {
             "integrationevent" => {
                 kind = "event-publisher".to_string();
                 event_kind = AbiEventKind::Integration;
@@ -1171,12 +1172,12 @@ fn parse_field(f: &RawField) -> AbiField {
     let mut field_class = "Normal".to_string();
     let mut calc_formula = None;
     for p in f.properties.clone().unwrap_or_default().iter() {
-        let name = p.name.clone().unwrap_or_default().to_lowercase();
+        let name = p.name.clone().unwrap_or_default().fold_identifier();
         if name == "calcformula" {
             calc_formula = p.value.clone().filter(|v| !v.trim().is_empty());
         }
         if name == "fieldclass" {
-            let v = p.value.clone().unwrap_or_default().to_lowercase();
+            let v = p.value.clone().unwrap_or_default().fold_identifier();
             if v.contains("flowfield") {
                 field_class = "FlowField".to_string();
             } else if v.contains("flowfilter") {
@@ -1189,7 +1190,7 @@ fn parse_field(f: &RawField) -> AbiField {
         .split('[')
         .next()
         .unwrap_or(&data_type)
-        .to_lowercase();
+        .fold_identifier();
     AbiField {
         field_number: f.id.unwrap_or(0),
         name: f.name.clone().unwrap_or_default(),
@@ -1472,8 +1473,8 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
             abi_object.protected_vars = protected_vars_of(&o);
             if let Some(icb_raw) = raw_object_property(&o.properties, "InherentCommitBehavior") {
                 let member = match icb_raw.rfind("::") {
-                    Some(sep) => icb_raw[sep + 2..].to_lowercase(),
-                    None => icb_raw.to_lowercase(),
+                    Some(sep) => icb_raw[sep + 2..].fold_identifier(),
+                    None => icb_raw.fold_identifier(),
                 };
                 match member.as_str() {
                     "ignore" => abi_object.inherent_commit_behavior = Some("ignore".to_string()),

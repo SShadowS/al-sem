@@ -53,6 +53,7 @@ use crate::program::body::features::{PAnchor, PCallee};
 use crate::program::body::rules::{MessageSource, RuleKind};
 use crate::program::body::site_guards::{GuardArm, GuardKind};
 use crate::program::model::workspace::{Model, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 /// The most enclosing conditions shown per site on a route (design §9.4).
@@ -616,7 +617,7 @@ fn site_facts<'m>(
         let table = receiver.and_then(|rv| {
             r.record_variables
                 .iter()
-                .find(|v| v.name.eq_ignore_ascii_case(rv))
+                .find(|v| v.name.eq_fold_identifier(rv))
                 .and_then(|v| v.table_id.as_ref())
                 .and_then(|t| table_names.get(t.as_str()))
                 .map(|n| (*n).to_string())
@@ -638,9 +639,9 @@ fn site_facts<'m>(
 /// statement holds the site).
 fn message_of(r: &ModelRoutine, op_name: Option<&str>, anchor: Option<&PAnchor>) -> MessageText {
     let kinds: &[RuleKind] = match op_name {
-        Some(n) if n.eq_ignore_ascii_case("Error") => &[RuleKind::Error, RuleKind::ConfirmError],
-        Some(n) if n.eq_ignore_ascii_case("TestField") => &[RuleKind::TestField],
-        Some(n) if n.eq_ignore_ascii_case("FieldError") => &[RuleKind::FieldError],
+        Some(n) if n.eq_fold_identifier("Error") => &[RuleKind::Error, RuleKind::ConfirmError],
+        Some(n) if n.eq_fold_identifier("TestField") => &[RuleKind::TestField],
+        Some(n) if n.eq_fold_identifier("FieldError") => &[RuleKind::FieldError],
         // `Get`, `FindFirst`, `Evaluate`, a platform native: the platform's
         // own message.
         _ => return MessageText::Unknown { reason: "platform" },
@@ -674,7 +675,7 @@ fn message_of(r: &ModelRoutine, op_name: Option<&str>, anchor: Option<&PAnchor>)
     let Some(text) = m.text.clone() else {
         return MessageText::Unknown { reason: "computed" };
     };
-    let partial = if op_name.is_some_and(|n| n.eq_ignore_ascii_case("FieldError")) {
+    let partial = if op_name.is_some_and(|n| n.eq_fold_identifier("FieldError")) {
         Some("platform-wrapped")
     } else if has_placeholders(&text) {
         Some("placeholders")
@@ -697,13 +698,15 @@ enum One {
 }
 
 fn match_text_on(needle: &str, site: &SliceSite) -> One {
-    let n = needle.to_lowercase();
+    let n = needle.fold_identifier();
     match &site.message {
         Some(MessageText::Known {
             text, var, partial, ..
         }) => {
-            if text.to_lowercase().contains(&n)
-                || var.as_ref().is_some_and(|v| v.to_lowercase().contains(&n))
+            if text.fold_identifier().contains(&n)
+                || var
+                    .as_ref()
+                    .is_some_and(|v| v.fold_identifier().contains(&n))
             {
                 One::Yes {
                     by_kind_word: false,
@@ -753,7 +756,7 @@ fn outcome(req: &SliceRequest, site: &SliceSite, caller_dependent: bool) -> Outc
     }
     if let Some(op) = &req.op {
         verdicts.push(match &site.op_name {
-            Some(n) if n.eq_ignore_ascii_case(op) => One::Yes {
+            Some(n) if n.eq_fold_identifier(op) => One::Yes {
                 by_kind_word: false,
             },
             Some(_) => One::No,
@@ -764,7 +767,7 @@ fn outcome(req: &SliceRequest, site: &SliceSite, caller_dependent: bool) -> Outc
         let record_op = site
             .op_name
             .as_deref()
-            .is_some_and(|n| !n.eq_ignore_ascii_case("Error"));
+            .is_some_and(|n| !n.eq_fold_identifier("Error"));
         verdicts.push(match (&site.table, record_op) {
             (Some(name), _) if name_or_id_matches(Some(name), None, t) => One::Yes {
                 by_kind_word: false,

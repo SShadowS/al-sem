@@ -111,7 +111,7 @@ fn parse_node(v: &serde_json::Value) -> Option<(String, CNode)> {
     let object_key = if object_id != 0 {
         object_id.to_string()
     } else {
-        object_name.to_ascii_lowercase()
+        al_syntax::fold_identifier(&object_name)
     };
     Some((
         id.clone(),
@@ -120,7 +120,7 @@ fn parse_node(v: &serde_json::Value) -> Option<(String, CNode)> {
             app: app.to_ascii_lowercase(),
             object_type,
             object_key,
-            member: s(v, "memberName").map(|m| m.to_ascii_lowercase()),
+            member: s(v, "memberName").map(|m| al_syntax::fold_identifier(&m)),
             line: v.get("line").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
         },
     ))

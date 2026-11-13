@@ -326,7 +326,7 @@ pub fn commit_behavior_value(attr: &crate::program::attributes::AttributeInfo) -
     let Some(m) = member else {
         return "normal";
     };
-    match m.to_lowercase().as_str() {
+    match m.fold_identifier().as_str() {
         "ignore" => "ignore",
         "error" => "error",
         _ => "normal",
@@ -354,7 +354,7 @@ pub fn parse_has_error_behavior_collect(
     }
 
     member
-        .map(|m| m.to_lowercase() == "collect")
+        .map(|m| m.fold_identifier() == "collect")
         .unwrap_or(false)
 }
 

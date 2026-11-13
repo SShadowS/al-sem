@@ -132,6 +132,13 @@ Norwegian, Swedish, German or French identifiers.
   its review r1 (Fable) found those ASCII readers broken by it for non-ASCII names; TLS-43
   then swept every reader of the fields the L2 change touched. Any later fold change must
   include both forms of compare in its search.
+- **It also missed 18 production `to_lowercase` sites.** Its test-code filter took the first
+  `#[cfg(test)]` line of a file as the start of test code, so a `#[cfg(test)] mod x;`
+  declaration near the top (d1, `summary_runner.rs`, `effect_query_cli.rs`, `literal_reach.rs`,
+  `recref_flow.rs`, `l5/snapshot.rs`) hid every site below it. TLS-43's final pass found and
+  classified them; the right filter looks for `#[cfg(test)]` followed by `mod <name> {`.
+- TLS-43 now guards the result: `src/fold_guard_tests.rs` counts these calls per file against
+  `tests/fold-allowlist.txt`.
 
 - Classification is by three agents (sonnet, read-only) reading each site in context, with
   the categories fixed in advance. Their claims for the findings above were checked in the

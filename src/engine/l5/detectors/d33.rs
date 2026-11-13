@@ -30,6 +30,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d33-unfiltered-bulk-write";
 
@@ -63,7 +64,7 @@ pub fn detect_d33(
             .record_variables
             .iter()
             .filter(|rv| rv.is_parameter)
-            .map(|rv| rv.name.to_lowercase())
+            .map(|rv| rv.name.fold_identifier())
             .collect();
 
         for op in &routine.record_operations {
@@ -72,7 +73,7 @@ pub fn detect_d33(
             }
             candidates_considered += 1;
 
-            let var_key = op.record_variable_name.to_lowercase();
+            let var_key = op.record_variable_name.fold_identifier();
 
             // Skip temporary records.
             if super::is_known_temp(op) {

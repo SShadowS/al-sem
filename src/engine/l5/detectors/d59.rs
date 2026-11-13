@@ -16,6 +16,7 @@ use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::attributes::has_attribute;
 use crate::program::model::events::encode_event_id;
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d59-integrationevent-var-boolean-guard";
 
@@ -62,7 +63,7 @@ pub fn detect_d59(
             continue;
         }
         for p in &routine.parameters {
-            if !p.is_var || !p.type_text.trim().eq_ignore_ascii_case("boolean") {
+            if !p.is_var || !p.type_text.trim().eq_fold_identifier("boolean") {
                 continue;
             }
             candidates_considered += 1;

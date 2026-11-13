@@ -13,6 +13,7 @@
 //!
 //! Inert on cross-app contexts only via its normal skips (no resolver join used).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use crate::engine::l5::confidence::to_confidence;
@@ -58,14 +59,14 @@ pub fn detect_d52(
             .record_variables
             .iter()
             .filter(|rv| rv.is_parameter)
-            .map(|rv| (rv.name.to_lowercase(), rv.parameter_index))
+            .map(|rv| (rv.name.fold_identifier(), rv.parameter_index))
             .collect();
 
         for op in &routine.record_operations {
             if !BULK_OPS.contains(&op.op.as_str()) {
                 continue;
             }
-            let var_key = op.record_variable_name.to_lowercase();
+            let var_key = op.record_variable_name.fold_identifier();
             let Some(&param_index) = param_records.get(&var_key) else {
                 continue; // non-parameter receivers are d33's territory
             };
@@ -109,7 +110,7 @@ pub fn detect_d52(
                     routine
                         .record_variables
                         .iter()
-                        .find(|rv| rv.name.to_lowercase() == var_key)
+                        .find(|rv| rv.name.fold_identifier() == var_key)
                         .and_then(|rv| rv.table_name.clone())
                 })
                 .unwrap_or_else(|| "unknown table".to_string());

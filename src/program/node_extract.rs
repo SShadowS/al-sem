@@ -122,7 +122,7 @@ impl DatasetNode {
         for item in other.items {
             let same = self.items.iter_mut().find(|k| {
                 k.kind == item.kind
-                    && k.name.eq_ignore_ascii_case(&item.name)
+                    && k.name.eq_fold_identifier(&item.name)
                     && k.source_table == item.source_table
             });
             match same {

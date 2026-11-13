@@ -246,7 +246,7 @@ fn first_word(code: &str) -> String {
 /// "My X"(`, `trigger OnRun()`), lowercased, quotes removed; `None` when the
 /// line is no routine header.
 fn routine_header(raw: &str, code: &str) -> Option<Option<String>> {
-    let lc = code.trim_start().to_ascii_lowercase();
+    let lc = al_syntax::fold_identifier(code.trim_start());
     let mut rest = lc.as_str();
     for m in ["local ", "internal ", "protected "] {
         if let Some(r) = rest.strip_prefix(m) {
@@ -260,7 +260,7 @@ fn routine_header(raw: &str, code: &str) -> Option<Option<String>> {
         return None;
     }
     // The name from the raw text, at the same offset (quotes are kept there).
-    let raw_lc = raw.trim_start().to_ascii_lowercase();
+    let raw_lc = al_syntax::fold_identifier(raw.trim_start());
     let off = raw_lc.len() - rest.len() + (rest.len() - after.len());
     let name_part = raw_lc.get(off..).unwrap_or("").trim_start();
     let name = if let Some(q) = name_part.strip_prefix('"') {

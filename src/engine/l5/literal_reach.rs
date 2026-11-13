@@ -2242,7 +2242,7 @@ impl<'a> LiteralReach<'a> {
             .workspace
             .tables
             .iter()
-            .map(|t| (t.id.as_str(), Arc::from(t.name.to_lowercase())))
+            .map(|t| (t.id.as_str(), Arc::from(t.name.fold_identifier())))
             .collect();
         // B7/L23: the sites under asserterror, and the isolated events.
         let mut under_asserterror: HashSet<&str> = HashSet::new();

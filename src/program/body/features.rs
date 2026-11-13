@@ -57,6 +57,7 @@
 //!   - `PCFNNode.flow`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
+use al_syntax::IdentifierFoldExt;
 use serde::{Deserialize, Serialize};
 
 /// A projected source anchor. Columns are tree-sitter byte columns (which match
@@ -942,7 +943,7 @@ fn fold_label_segment(s: &str) -> Option<String> {
         .map(|x| x.replace("\"\"", "\""))
         .unwrap_or_else(|| t.to_string());
     let inner = inner.trim();
-    (!inner.is_empty()).then(|| inner.to_lowercase())
+    (!inner.is_empty()).then(|| inner.fold_identifier())
 }
 
 /// A label qualifier's segments, split at `::` and `.` outside quotes

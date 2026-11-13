@@ -102,36 +102,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     apply;
   - the global record-variable backfill missed.
   Found by TLS-42's census (`docs/superpowers/notes/2026-11-13-to-lowercase-census.md`).
-  - The identifier folds in `ir_walk.rs` are now `fold_identifier`. Keyword, type-text and
-    string-literal folds stay on `to_ascii_lowercase`; the record-variable ids (`…/rv/…`)
-    and the `icb` text stay on `to_lowercase` (identity inputs, unchanged).
-  - **Every reader of the values L2 emits now compares with `eq_fold_identifier` /
-    `fold_identifier`**, whatever fold it used before:
-    - the first pass: d5, d19, d37, d39, d41, d42, d43, d56, `detectors/mod.rs`,
-      `cross_rules.rs`, `literal_values.rs`, `control_context.rs`, the field and global
-      record-variable maps in `workspace.rs` / `extension_fields.rs`, and the impact graph's
-      `entries.rs` / `cone_probe.rs`;
-    - **review r1 (Fable)** found the ASCII-only readers (`eq_ignore_ascii_case`, local
-      `to_ascii_lowercase` helpers). They matched before and missed after the L2 change,
-      some in the unsafe direction: d39 dropped a real finding, and `param_guard` kept an
-      assigned parameter usable. Every file reading a field the L2 change touched
-      (`identifier_references`, `condition_references`, `lhs_name`, `rhs_identifier`,
-      `source_variable_name`, `exhausting_advance`, variable names, `varName`) was swept,
-      including `d39_persist.rs`, `param_guard.rs`, `literal_reach.rs`, `recref_flow.rs`,
-      `field_guard.rs`, `recref_origin.rs`, `ui_events_error.rs`, `callers_context.rs`,
-      `explain.rs`;
-    - **review r2 (astra)** found the `to_lowercase` readers still left. They differ from
-      the fold only on `İ` and a word-final `Σ`, but one was unsafe: d33's filter-by-call
-      proof missed a `Reset` on `İndkøb` and suppressed a real finding. Swept: the rest of
-      `detectors/mod.rs`, d5, d60, d61, `capability/mod.rs`, `value_source.rs`, the
-      variable map in `capability_cone.rs`, `control_context.rs`, `cross_rules.rs`.
-    - Not changed (not identifiers): char-level compares against fixed ASCII words, and app
-      GUIDs (the r1 sweep had folded four GUID sites; r2 reverted them).
-  - Identity: the stable-id inputs are unchanged, except that `ir_walk.rs`'s `/grv/` id input
-    sees the folded name for a non-ASCII capital (nothing reads it). `impact/keys.rs`' label
-    key keeps its spelling; only its lookup folds.
+  - **One fold for identifiers across `src/engine` and `src/program`.** Every case-fold that
+    touches an AL identifier is now `fold_identifier` / `eq_fold_identifier`. The first three
+    passes went site by site and each left a seam, all found in review:
+    - **r1 (Fable):** ASCII-only readers (`eq_ignore_ascii_case`, local
+      `to_ascii_lowercase` helpers) matched the old L2 values and missed the new ones, some in
+      the unsafe direction (d39 dropped a real finding).
+    - **r2 (astra):** `to_lowercase` readers differ from the fold on `İ` and a word-final
+      `Σ`; d33's filter-by-call proof missed a `Reset` on `İndkøb` and suppressed a real
+      finding.
+    - **r3 (Fable):** the r2 fix folded the shared helpers in `detectors/mod.rs` but not
+      their callers (d33, d52, d3, d56).
+    - **The final pass is driven by classification, not by site**:
+      - every `to_lowercase` call classified by TLS-42's census table, plus the 18 it missed
+        (its test-code filter mistook a `#[cfg(test)] mod x;` declaration for the start of
+        test code; see the census note);
+      - every ASCII-only call: 295 classified by three read-only agents, 49 of them
+        identifiers.
+    - Identifier, keyword, type-text and user-selector sites fold. These keep their old
+      fold: identity inputs (ids, fingerprints, root-cause, event-id and `/rv/` keys, and
+      `literal_reach`'s probe of event ids), paths and app or package names, app GUIDs,
+      char-level checks, and two self-consistent identity groups (d4, d18).
+    - `predicate_evaluator.rs`'s policy globs now fold too: the ASCII-only matching kept for
+      al-sem parity is retired.
+  - **Identity sites that change, because they meet fold-built keys** (each only for a name
+    with `İ` or a word-final `Σ`; no committed baseline has one):
+    - d60's and d61's root-cause keys;
+    - `capability_cone.rs`' `ValueSource` variable name;
+    - d3's accessed-field text;
+    - `ir_walk.rs`'s `/grv/` id input (nothing reads it);
+    - `impact/keys.rs`' label key: its text keeps `to_lowercase`, but a label variable with a
+      non-ASCII capital is now found, so its key moves from the hash form to `label:…`.
+  - **A guard stops a fourth round**: `fold_guard_tests::identifier_folds_stay_on_the_allowlist`
+    counts `to_lowercase` / `to_ascii_lowercase` / `eq_ignore_ascii_case` per file in
+    `src/engine` and `src/program` against `tests/fold-allowlist.txt` (102 files, 421 calls).
+    The file's header says which kinds of site may keep them. Any difference fails. Limit: it
+    counts per file, so a swap inside one file passes. Discrimination: one added
+    `.to_lowercase()` in d19 fails it, naming the file.
   - Every changed compare gives the same result as the old one on ASCII input, so no existing
-    golden moved.
+    golden moved: only the Nordic fixture's lines did.
   - Tests, each with a discrimination proof (the break named, then reverted):
     - `r4_differential::nordic_identifiers_meet_one_fold` on the new fixture
       `ws-nordic-identifiers`, each case with a control that must fire:
@@ -141,7 +150,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - d39 flags a helper that reassigns its parameter before `Modify` (break:
         `d39_persist::record_reassigned`);
       - d33 reports the DeleteAll after `Reset` on `İndkøb` (break: the `Reset` compare back
-        on `to_lowercase`);
+        on `to_lowercase`), and stays quiet when `İndkøb.SetRange` is written inline (break:
+        d33's own variable key back on `to_lowercase`);
       - the global backfill types `Ålcust` as `global` (break: the `global_rv_by_lc` key).
     - `param_guard::tests::a_nordic_flag_is_a_guard_until_it_is_assigned` pins
       `frame_guards` directly (breaks: the assignment compare; the usable name). **Limit:**

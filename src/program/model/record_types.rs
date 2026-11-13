@@ -49,7 +49,7 @@ fn op_variable_lc(raw: &str) -> String {
     };
     strip_quotes(raw.trim())
         .replace("\"\"", "\"")
-        .to_lowercase()
+        .fold_identifier()
 }
 
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
@@ -64,7 +64,7 @@ fn op_variable_lc(raw: &str) -> String {
 pub fn record_table_name_of(declared_type: &str) -> Option<String> {
     let trimmed = declared_type.trim();
     // Match a leading `Record` keyword (case-insensitive), word-bounded.
-    let lower = trimmed.to_lowercase();
+    let lower = trimmed.fold_identifier();
     if !lower.starts_with("record") {
         return None;
     }
@@ -167,7 +167,7 @@ pub fn resolve_routine_record_types(
     let mut var_index_by_name: HashMap<String, usize> = HashMap::new();
     for (i, variable) in routine.record_variables.iter_mut().enumerate() {
         // intentionally last-wins — record_variables has no name duplicates at this layer (Task 3 global-promotion must preserve this invariant)
-        var_index_by_name.insert(variable.name.to_lowercase(), i);
+        var_index_by_name.insert(variable.name.fold_identifier(), i);
         if let Some(table_name) = &variable.table_name {
             // `resolve_table_ref_to_id` accepts a NAME or a NUMBER — a synthetic
             // implicit `Rec` seeded from a codeunit `TableNo = <number>` carries the
@@ -212,7 +212,7 @@ pub fn resolve_routine_record_types(
     let mut variable_decl_by_name: HashMap<String, String> = HashMap::new();
     for v in routine.variables.iter() {
         variable_decl_by_name
-            .entry(v.name.to_lowercase())
+            .entry(v.name.fold_identifier())
             .or_insert(v.declared_type.clone());
     }
     for op in routine.record_operations.iter_mut() {
@@ -273,7 +273,7 @@ pub fn resolve_routine_record_types(
             if op.table_id.is_some() {
                 continue;
             }
-            let name = op.record_variable_name.to_lowercase();
+            let name = op.record_variable_name.fold_identifier();
             if name != "rec" && name != "xrec" {
                 continue;
             }
@@ -288,7 +288,7 @@ pub fn resolve_routine_record_types(
             if rv.table_id.is_some() {
                 continue;
             }
-            let name = rv.name.to_lowercase();
+            let name = rv.name.fold_identifier();
             if name != "rec" && name != "xrec" {
                 continue;
             }
@@ -365,8 +365,8 @@ pub fn resolve_routine_record_types(
         let recordref_var_names: std::collections::HashSet<String> = routine
             .variables
             .iter()
-            .filter(|v| v.declared_type.to_lowercase() == "recordref")
-            .map(|v| v.name.to_lowercase())
+            .filter(|v| v.declared_type.fold_identifier() == "recordref")
+            .map(|v| v.name.fold_identifier())
             .collect();
 
         if !recordref_var_names.is_empty() {
@@ -374,7 +374,7 @@ pub fn resolve_routine_record_types(
             let record_var_temp: HashMap<String, Option<bool>> = routine
                 .record_variables
                 .iter()
-                .map(|rv| (rv.name.to_lowercase(), rv.temp_state_known_value()))
+                .map(|rv| (rv.name.fold_identifier(), rv.temp_state_known_value()))
                 .collect();
 
             // Scan call sites for GetTable / Open on RecordRef vars (unconditional only).
@@ -390,18 +390,19 @@ pub fn resolve_routine_record_types(
                 else {
                     continue;
                 };
-                let receiver_lc = receiver.to_lowercase();
+                let receiver_lc = receiver.fold_identifier();
                 if !recordref_var_names.contains(&receiver_lc) {
                     continue;
                 }
-                let method_lc = method.to_lowercase();
+                let method_lc = method.fold_identifier();
                 match method_lc.as_str() {
                     "open" => {
                         // RecRef.Open(no)        → Known(false)
                         // RecRef.Open(no, false) → Known(false)
                         // RecRef.Open(no, true)  → Known(true)
                         // RecRef.Open(no, <other>) → skip (Unknown, conservative)
-                        let second_arg = cs.argument_texts.get(1).map(|t| t.trim().to_lowercase());
+                        let second_arg =
+                            cs.argument_texts.get(1).map(|t| t.trim().fold_identifier());
                         let ts = match second_arg.as_deref() {
                             None => Some(crate::program::body::scope::ts_known(false)),
                             Some("false") => Some(crate::program::body::scope::ts_known(false)),
@@ -418,7 +419,7 @@ pub fn resolve_routine_record_types(
                         let Some(source_name) = cs.argument_texts.first() else {
                             continue;
                         };
-                        let source_lc = source_name.trim().to_lowercase();
+                        let source_lc = source_name.trim().fold_identifier();
                         // Only bare identifiers (no dots, no parens, no spaces after trim).
                         if source_lc.contains('.')
                             || source_lc.contains('(')
@@ -468,7 +469,7 @@ pub fn resolve_routine_record_types(
                     && !v.is_parameter
                     && v.scope.as_deref() == Some("local")
             })
-            .map(|v| v.name.to_lowercase())
+            .map(|v| v.name.fold_identifier())
             .collect();
         let always_temp: std::collections::HashSet<String> = locals
             .into_iter()
@@ -478,7 +479,7 @@ pub fn resolve_routine_record_types(
                     if cs
                         .argument_texts
                         .iter()
-                        .any(|a| a.trim().to_lowercase() == *v_lc)
+                        .any(|a| a.trim().fold_identifier() == *v_lc)
                     {
                         return false;
                     }
@@ -487,10 +488,10 @@ pub fn resolve_routine_record_types(
                     else {
                         continue;
                     };
-                    if receiver.to_lowercase() != *v_lc {
+                    if receiver.fold_identifier() != *v_lc {
                         continue;
                     }
-                    match method.to_lowercase().as_str() {
+                    match method.fold_identifier().as_str() {
                         "open" => {
                             let temp = cs
                                 .argument_texts
@@ -509,7 +510,7 @@ pub fn resolve_routine_record_types(
                     && !routine
                         .var_assignments
                         .iter()
-                        .any(|a| a.lhs_name.trim().to_lowercase() == *v_lc)
+                        .any(|a| a.lhs_name.trim().fold_identifier() == *v_lc)
             })
             .collect();
         if !always_temp.is_empty() {

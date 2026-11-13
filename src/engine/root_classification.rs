@@ -345,7 +345,7 @@ fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
         test_attribute: routine
             .attributes_parsed
             .iter()
-            .any(|a| a.name.to_lowercase() == "test"),
+            .any(|a| a.name.fold_identifier() == "test"),
         default_access: routine.access_modifier.is_none(),
     });
     root_kinds_of_mask(mask).map(str::to_string).collect()
@@ -608,11 +608,11 @@ fn resolve_target<'a>(
             object_id,
             routine_name,
         } => {
-            let lc = routine_name.to_lowercase();
+            let lc = routine_name.fold_identifier();
             workspace
                 .routines
                 .iter()
-                .filter(|r| &r.object_id == object_id && r.name.to_lowercase() == lc)
+                .filter(|r| &r.object_id == object_id && r.name.fold_identifier() == lc)
                 .collect()
         }
     }

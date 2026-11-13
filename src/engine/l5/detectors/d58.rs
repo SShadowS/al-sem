@@ -40,10 +40,10 @@ pub fn detect_d58(
             .filter(|v| {
                 v.declared_type
                     .trim_start()
-                    .to_lowercase()
+                    .fold_identifier()
                     .starts_with("query")
             })
-            .map(|v| v.name.to_lowercase())
+            .map(|v| v.name.fold_identifier())
             .collect();
         if query_vars.is_empty() {
             continue;
@@ -57,7 +57,7 @@ pub fn detect_d58(
                 let PCallee::Member { receiver, method } = &cs.callee else {
                     continue;
                 };
-                if receiver.to_lowercase() != *qv {
+                if receiver.fold_identifier() != *qv {
                     continue;
                 }
                 let ev = if method.eq_fold_identifier("Open") {

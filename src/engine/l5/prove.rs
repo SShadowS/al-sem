@@ -40,6 +40,7 @@ use crate::engine::l5::digest_cli::{
 use crate::engine::l5::unresolved_cone::UnresolvedConeItem;
 use crate::engine::line_base::{shown, shown_opt};
 use crate::engine::session::{Cell, prove_plan};
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -790,7 +791,7 @@ fn names_a_known_table(model: &crate::program::model::workspace::Model, query: &
     let q = query.trim();
     model.workspace.tables.iter().any(|t| {
         !t.is_extension_stub
-            && (t.name.eq_ignore_ascii_case(q) || t.id.rsplit('/').next().is_some_and(|n| n == q))
+            && (t.name.eq_fold_identifier(q) || t.id.rsplit('/').next().is_some_and(|n| n == q))
     })
 }
 
@@ -818,9 +819,9 @@ pub(crate) fn name_or_id_matches(
     resource_id: Option<&str>,
     query: &str,
 ) -> bool {
-    let target = query.to_lowercase();
+    let target = query.fold_identifier();
     if let Some(disp) = resource_display
-        && disp.to_lowercase() == target
+        && disp.fold_identifier() == target
     {
         return true;
     }
@@ -832,7 +833,7 @@ pub(crate) fn name_or_id_matches(
             Some(sep) => &rid[sep + 1..],
             None => rid,
         };
-        if trailing.to_lowercase() == target {
+        if trailing.fold_identifier() == target {
             return true;
         }
     }
@@ -2256,8 +2257,7 @@ fn table_hits<'m>(
         .iter()
         .filter(|t| {
             !t.is_extension_stub
-                && (t.name.eq_ignore_ascii_case(q)
-                    || t.id.rsplit('/').next().is_some_and(|n| n == q))
+                && (t.name.eq_fold_identifier(q) || t.id.rsplit('/').next().is_some_and(|n| n == q))
         })
         .collect();
     hits.sort_by(|a, b| a.id.cmp(&b.id));
@@ -2357,7 +2357,7 @@ fn resolved_target(
             for e in &model.events.graph.events {
                 // A symbol synthesized from a subscription whose publisher
                 // the program does not hold (`unknown/…`) names no publisher.
-                if !e.event_name.eq_ignore_ascii_case(q)
+                if !e.event_name.eq_fold_identifier(q)
                     || e.publisher_object_id.starts_with("unknown")
                 {
                     continue;
@@ -4607,7 +4607,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             .graph
             .events
             .iter()
-            .any(|e| e.event_name.eq_ignore_ascii_case(event.trim()))
+            .any(|e| e.event_name.eq_fold_identifier(event.trim()))
     {
         return Err(format!(
             "prove: unknown event '{event}' in '{question_text}': no publisher of the program \

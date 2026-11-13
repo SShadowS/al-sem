@@ -1126,7 +1126,7 @@ fn index_table_ir(
         .properties
         .iter()
         .find(|p| p.name == "tabletype")
-        .map(|p| !p.conditional && p.value.trim().to_lowercase() == "temporary")
+        .map(|p| !p.conditional && p.value.trim().fold_identifier() == "temporary")
         .unwrap_or(false)
         || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     ModelTable {
@@ -1736,7 +1736,7 @@ fn project_ir(
                 .iter()
                 .any(|p| p.name == "sourcetabletemporary" && p.conditional)
         {
-            ir_prop("sourcetabletemporary").map(|v| v.trim().to_lowercase() == "true")
+            ir_prop("sourcetabletemporary").map(|v| v.trim().fold_identifier() == "true")
         } else {
             None
         };
@@ -1744,7 +1744,7 @@ fn project_ir(
         // (`Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`, Page only) —
         // substrate for d57/d64. Same exact-"true" boolean convention as
         // `source_table_temporary` above.
-        let bool_prop = |name: &str| ir_prop(name).map(|v| v.trim().to_lowercase() == "true");
+        let bool_prop = |name: &str| ir_prop(name).map(|v| v.trim().fold_identifier() == "true");
         let single_instance = if object_type == "Codeunit" {
             bool_prop("singleinstance")
         } else {
@@ -1973,7 +1973,7 @@ fn project_ir(
                 let attr_names_lc: Vec<String> = attrs_json
                     .iter()
                     .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                    .map(|n| n.to_lowercase())
+                    .map(|n| n.fold_identifier())
                     .collect();
                 crate::program::body::control_context::apply_control_contexts(
                     &mut features,
@@ -2025,10 +2025,10 @@ fn project_ir(
             if !object_global_record_vars.is_empty() {
                 let own_names: std::collections::HashSet<String> = record_variables
                     .iter()
-                    .map(|rv| rv.name.to_lowercase())
+                    .map(|rv| rv.name.fold_identifier())
                     .collect();
                 for g in &object_global_record_vars {
-                    let lc = g.name.to_lowercase();
+                    let lc = g.name.fold_identifier();
                     if own_names.contains(&lc) {
                         continue; // shadowed by the routine's own param/local
                     }
@@ -4398,7 +4398,7 @@ impl Model {
                     .record_variables
                     .iter()
                     .map(|v| PRecordVariable {
-                        name: v.name.to_lowercase(),
+                        name: v.name.fold_identifier(),
                         table_id: v.table_id.as_deref().map(to_stable_table_id),
                     })
                     .collect();
@@ -4417,7 +4417,7 @@ impl Model {
                     .map(|op| PRecordOperation {
                         operation_id: op.id.clone(),
                         op: op.op.clone(),
-                        record_variable_name: op.record_variable_name.to_lowercase(),
+                        record_variable_name: op.record_variable_name.fold_identifier(),
                         table_id: op.table_id.as_deref().map(to_stable_table_id),
                     })
                     .collect();
@@ -4466,10 +4466,10 @@ impl Model {
     /// Find a table by name (case-insensitive, LAST-wins — matching the symbol
     /// table the resolution queried).
     pub fn table_by_name(&self, name: &str) -> Option<TableView<'_>> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         let mut found = None;
         for t in &self.workspace.tables {
-            if t.name.to_lowercase() == want {
+            if t.name.fold_identifier() == want {
                 found = Some(t); // LAST-wins
             }
         }
@@ -4481,11 +4481,11 @@ impl RoutineView<'_> {
     /// Resolved StableTableId for the named record variable, or None if unresolved
     /// / absent.
     pub fn record_var_table_id(&self, name: &str) -> Option<String> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         self.routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == want)
+            .find(|v| v.name.fold_identifier() == want)
             .and_then(|v| v.table_id.as_deref().map(to_stable_table_id))
     }
 
@@ -4497,22 +4497,22 @@ impl RoutineView<'_> {
     /// variable, or None if absent / unset. Test-facing accessor for the Task 3
     /// global-promotion path.
     pub fn record_var_scope(&self, name: &str) -> Option<String> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         self.routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == want)
+            .find(|v| v.name.fold_identifier() == want)
             .and_then(|v| v.scope.clone())
     }
 
     /// The resolved `temp_state` Known value of the named record variable, or None
     /// if the var is absent or its temp_state is not `known`.
     pub fn record_var_temp_known(&self, name: &str) -> Option<bool> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         self.routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == want)
+            .find(|v| v.name.fold_identifier() == want)
             .and_then(|v| v.temp_state_known_value())
     }
 
@@ -4521,11 +4521,11 @@ impl RoutineView<'_> {
     /// the Task 3 member-var op temp_state backfill. Returns the FIRST matching op's
     /// state (walk order) — sufficient for the single-op-per-var test fixtures.
     pub fn first_record_op_temp_known(&self, var_name: &str) -> Option<bool> {
-        let want = var_name.to_lowercase();
+        let want = var_name.fold_identifier();
         self.routine
             .record_operations
             .iter()
-            .find(|op| op.record_variable_name.to_lowercase() == want)
+            .find(|op| op.record_variable_name.fold_identifier() == want)
             .and_then(|op| op.temp_state.as_ref())
             .and_then(|ts| if ts.kind == "known" { ts.value } else { None })
     }

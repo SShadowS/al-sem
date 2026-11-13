@@ -8,6 +8,7 @@
 
 use super::workspace::{ModelParameter, ModelRoutine};
 use crate::program::attributes::{AttributeInfo, bool_arg, find_attribute};
+use al_syntax::IdentifierFoldExt;
 
 /// One evidence record. The R2c surface only ever carries `{source}` (+ an optional
 /// `note` on synthesized symbols).
@@ -130,7 +131,7 @@ fn publisher_event_kind(attrs: &[AttributeInfo]) -> &'static str {
 /// (`RoutineNode::publisher_isolated`).
 pub(crate) fn parse_isolated(attrs: &[AttributeInfo]) -> Option<bool> {
     let isolated = attrs.iter().any(|a| {
-        let index = match a.name.to_lowercase().as_str() {
+        let index = match a.name.fold_identifier().as_str() {
             "integrationevent" => 2,
             "businessevent" | "internalevent" => 1,
             _ => return false,
@@ -179,7 +180,7 @@ impl UnreadableGap<'_> {
     #[must_use]
     pub fn may_match(&self, object_type: &str, name: &str, number: i64, event: &str) -> bool {
         use al_syntax::IdentifierFoldExt;
-        let object_type = object_type.to_lowercase();
+        let object_type = object_type.fold_identifier();
         let extension = object_type.ends_with("extension");
         let publisher_known = self.publisher_id.is_some() || self.publisher_name_lc.is_some();
         self.object_type_lc
@@ -206,7 +207,7 @@ impl UnreadableGap<'_> {
         field: Option<&str>,
     ) -> bool {
         use al_syntax::IdentifierFoldExt;
-        let stem = match op.to_lowercase().as_str() {
+        let stem = match op.fold_identifier().as_str() {
             "insert" => "insert",
             "modify" | "modifyall" => "modify",
             "delete" | "deleteall" => "delete",

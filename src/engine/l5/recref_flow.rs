@@ -345,7 +345,7 @@ impl<'a> RecRefFlow<'a> {
             .workspace
             .tables
             .iter()
-            .map(|t| (t.id.as_str(), Arc::from(t.name.to_lowercase())))
+            .map(|t| (t.id.as_str(), Arc::from(t.name.fold_identifier())))
             .collect();
         let single_instance = model
             .workspace

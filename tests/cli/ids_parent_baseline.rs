@@ -53,8 +53,9 @@
 //! control findings (d19 on `LeavesUbrugt`, d11 on `ModifyUnloaded`) and stable ids.
 //! The mint on `14fad659` with TLS-43's fold fix left every other fixture's record
 //! byte-identical. Re-minted again after TLS-43's review r1 grew the fixture (d39
-//! cases, the `Ålcust` global) and again after review r2 (the `İndkøb` d33
-//! cases): only that fixture's entry moved each time.
+//! cases, the `Ålcust` global), after review r2 (the `İndkøb` d33 cases) and after
+//! review r3 (the inline `SetRange` control): only that fixture's entry moved each
+//! time (checked by comparing the record with that entry left out).
 //!
 //! A recorded string is a stable id and nothing else (`stable_id_re`), so the
 //! record cannot move for the reason the migration legitimately moves other

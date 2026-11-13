@@ -50,7 +50,7 @@ pub fn pure_native(r: &ModelRoutine) -> Option<NativeBehaviour> {
         return None;
     }
     let ty = r.object_type.to_ascii_lowercase();
-    let name = r.name.to_ascii_lowercase();
+    let name = al_syntax::fold_identifier(&r.name);
     CATALOG
         .iter()
         .find(|(t, id, m, _)| *t == ty && *id == r.object_number && *m == name)

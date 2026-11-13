@@ -96,6 +96,7 @@
 
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::model::workspace::ModelRoutine;
+use al_syntax::IdentifierFoldExt;
 
 /// The kind of a trap (module doc).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -182,13 +183,13 @@ pub(crate) fn checked_run(cs: &PCallSite, callee: TrapCallee<'_>) -> bool {
             codeunit && cs.object_run_return_used == Some(true)
         }
         PCallee::Member { method, .. } => {
-            method.eq_ignore_ascii_case("run")
+            method.eq_fold_identifier("run")
                 && !cs.in_statement_position
                 && match callee {
                     TrapCallee::Object { codeunit } => codeunit,
-                    TrapCallee::Routine(c) => c.is_some_and(|c| {
-                        c.kind == "trigger" && c.name.eq_ignore_ascii_case("OnRun")
-                    }),
+                    TrapCallee::Routine(c) => {
+                        c.is_some_and(|c| c.kind == "trigger" && c.name.eq_fold_identifier("OnRun"))
+                    }
                 }
         }
         _ => false,
@@ -273,6 +274,6 @@ pub(crate) fn collects_errors(r: &ModelRoutine) -> bool {
             .unwrap_or(arg.text.as_str())
             .rsplit([':', '.'])
             .next()
-            .is_some_and(|m| m.trim().eq_ignore_ascii_case("collect"))
+            .is_some_and(|m| m.trim().eq_fold_identifier("collect"))
     })
 }

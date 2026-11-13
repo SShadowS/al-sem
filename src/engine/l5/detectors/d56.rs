@@ -35,6 +35,7 @@
 //!
 //! Severity: medium. Confidence: likely.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashSet;
 
 use crate::engine::l5::confidence::to_confidence;
@@ -306,10 +307,10 @@ pub fn detect_d56(
                     && write_targets.contains(&(
                         fa.source_anchor.start_line,
                         fa.source_anchor.start_column,
-                        fa.field_name.to_lowercase(),
+                        fa.field_name.fold_identifier(),
                     ))
-                    && (pk_fields.contains(&fa.field_name.to_lowercase())
-                        || current_key_fields.contains(&fa.field_name.to_lowercase()))
+                    && (pk_fields.contains(&fa.field_name.fold_identifier())
+                        || current_key_fields.contains(&fa.field_name.fold_identifier()))
             });
             if key_field_reassigned {
                 skipped_key_remapped_clone += 1;

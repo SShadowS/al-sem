@@ -43,6 +43,10 @@ pub mod census_hook;
 pub mod config;
 pub mod dependencies;
 pub mod engine;
+/// The one-fold guard: case-fold calls in `src/engine` / `src/program` against
+/// `tests/fold-allowlist.txt` (TLS-43) — see the module doc.
+#[cfg(test)]
+mod fold_guard_tests;
 /// The one way to spawn `git`: without the repository variables a git hook
 /// exports — see the module doc.
 pub mod git_env;

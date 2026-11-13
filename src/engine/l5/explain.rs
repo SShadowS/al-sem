@@ -1007,11 +1007,11 @@ pub(crate) fn find_field<'m>(
         ));
     };
     let number: Option<i64> = field.trim().parse().ok();
-    let want = field.trim().to_lowercase();
+    let want = field.trim().fold_identifier();
     let Some(mf) = mt
         .fields
         .iter()
-        .find(|f| f.name.to_lowercase() == want)
+        .find(|f| f.name.fold_identifier() == want)
         .or_else(|| number.and_then(|n| mt.fields.iter().find(|f| f.field_number == n)))
     else {
         return Err((

@@ -34,6 +34,7 @@
 //!   "no longer observed", not "removed", when the new side is incomplete
 //!   (§10.4, [`super::delta`]).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
@@ -508,7 +509,7 @@ fn own_keys(
                         .and_then(|id| r.operation_sites.iter().find(|o| o.id == id))
                         .and_then(|o| {
                             r.call_sites.iter().find(|c| {
-                                matches!(&c.callee, PCallee::Bare { name } if name.eq_ignore_ascii_case("error"))
+                                matches!(&c.callee, PCallee::Bare { name } if name.eq_fold_identifier("error"))
                                     && c.source_anchor.start_line == o.source_anchor.start_line
                                     && c.source_anchor.start_column == o.source_anchor.start_column
                             })
@@ -681,7 +682,7 @@ fn callers(names: &Names<'_>, r: &ModelRoutine) -> Callers {
             continue;
         };
         c.count += 1;
-        if from.object_type == "Page" && from.name.eq_ignore_ascii_case("OnAction") {
+        if from.object_type == "Page" && from.name.eq_fold_identifier("OnAction") {
             c.page_actions += 1;
         }
         if c.first.len() < 10 {

@@ -5,6 +5,7 @@
 //! walks found and cost, one JSON object. Not a user-facing tool: C, A and B1
 //! build theirs on the same walker.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::time::Instant;
@@ -200,7 +201,7 @@ pub fn run(ws: &Path, args: &ProbeArgs) -> Result<Value, String> {
             let (obj, name) = r.rsplit_once("::").unwrap_or(("", r));
             g.routines_named(&al_syntax::fold_identifier(name))
                 .into_iter()
-                .filter(|n| obj.is_empty() || object_name(*n).eq_ignore_ascii_case(obj))
+                .filter(|n| obj.is_empty() || object_name(*n).eq_fold_identifier(obj))
                 .collect()
         };
         match found.first() {

@@ -81,8 +81,8 @@
 //! Re-recorded (2026-11-13, TLS-43: the new fixture `ws-nordic-identifiers`, with
 //! the one identifier fold) with `REMINT_POLICY_FACTS_ORACLE=1`: two cases added
 //! (single and cross, 5 routines, `direct` 6, `inherited` 2); no other case moved.
-//! Re-recorded after its reviews r1 and r2 grew the fixture: the same two cases,
-//! now 14 routines, `direct` 16, `inherited` 8, `any` 24; no other case moved.
+//! Re-recorded after its reviews r1 to r3 grew the fixture: the same two cases,
+//! now 15 routines, `direct` 17, `inherited` 8, `any` 25; no other case moved.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

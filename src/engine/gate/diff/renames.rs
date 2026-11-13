@@ -1,6 +1,7 @@
 //! The rename overlay → rename table, with chain/overlap/stale diagnostics.
 //! Port of al-sem `src/diff/diff-renames.ts`.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
@@ -238,7 +239,7 @@ struct RoutineRow {
 
 impl RoutineRow {
     fn key(&self) -> (&str, String, bool) {
-        (&self.object, self.name.to_lowercase(), self.abi)
+        (&self.object, self.name.fold_identifier(), self.abi)
     }
 }
 

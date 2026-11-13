@@ -705,14 +705,18 @@ fn simple_uncertainty_op(kind: &str, operation_id: &str) -> Uncertainty {
 /// The object kind (`"Page"`, …) of a keyword run in member form
 /// (`Page.RunModal(..)`, `Codeunit.Run(..)`), or `None` for any other member call.
 fn keyword_run_kind(receiver: &str, method: &str) -> Option<String> {
-    let kind = match receiver.to_ascii_lowercase().as_str() {
+    let kind = match al_syntax::fold_identifier(receiver).as_str() {
         "page" => "Page",
         "codeunit" => "Codeunit",
         "report" => "Report",
         "xmlport" => "XmlPort",
         _ => return None,
     };
-    matches!(method.to_ascii_lowercase().as_str(), "run" | "runmodal").then(|| kind.to_string())
+    matches!(
+        al_syntax::fold_identifier(method).as_str(),
+        "run" | "runmodal"
+    )
+    .then(|| kind.to_string())
 }
 
 /// Build a ValueSource for an object-run callsite's target id (al-sem

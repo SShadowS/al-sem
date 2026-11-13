@@ -1883,7 +1883,9 @@ fn differential_r4_findings_match_goldens() {
 /// `to_ascii_lowercase` fails at "Ålcust is the object global" (`unknown`);
 /// the filter proof's `Reset` compare (`detectors/mod.rs`) back on its old
 /// `to_lowercase` (review r2, astra: `İ` lowercases to `i` + U+0307, the fold to
-/// `i`) fails at "the Reset on İndkøb clears the filter". Restored, each passes.
+/// `i`) fails at "the Reset on İndkøb clears the filter"; d33's own variable key
+/// back on `to_lowercase` while the shared filter helper folds (review r3,
+/// Fable) fails at "the inline SetRange on İndkøb filters". Restored, each passes.
 #[test]
 fn nordic_identifiers_meet_one_fold() {
     let p = run_rust(
@@ -1948,6 +1950,12 @@ fn nordic_identifiers_meet_one_fold() {
     assert!(
         !fired("d33-unfiltered-bulk-write", "FilteredDeleteAll"),
         "control: the filter stands: {all}"
+    );
+    // An inline `İndkøb.SetRange` is a filter too (review r3, Fable: the caller's
+    // key and the shared helper must fold alike).
+    assert!(
+        !fired("d33-unfiltered-bulk-write", "FilteredInline"),
+        "the inline SetRange on İndkøb filters: {all}"
     );
 
     // The global record-variable backfill (`workspace.rs`): `HentØrder(Ålcust)`
