@@ -305,7 +305,12 @@ pub fn check(descriptor: &InputDescriptor, opts: CheckOptions) -> Value {
     let mut reasons: Vec<String> = observed
         .unreadable()
         .into_iter()
-        .map(|(k, why)| format!("{k} could not be read: {why}"))
+        .map(|(k, why)| {
+            format!(
+                "{} could not be read: {why}",
+                crate::engine::resident::manifest::key_text(&k)
+            )
+        })
         .collect();
     reasons.truncate(10);
     let complete = reasons.is_empty();

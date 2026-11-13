@@ -174,13 +174,7 @@ fn injected_entries(e: &mut BTreeMap<String, Ident>, injected: &Injected) {
     if !injected.package_roots.is_empty() {
         e.insert(
             "inj:pkg-roots".into(),
-            Ident::List(
-                injected
-                    .package_roots
-                    .iter()
-                    .map(|p| path_text(p))
-                    .collect(),
-            ),
+            Ident::List(injected.package_roots.iter().map(|p| path_key(p)).collect()),
         );
     }
 }
@@ -238,6 +232,24 @@ fn package_ident(state: &crate::app_image::PackageState) -> Ident {
 /// (TLS-30: lossless), and [`key_path`] turns a key back into a path.
 fn path_text(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+/// A manifest key for a message: an encoded (non-UTF-8) path in it spelled
+/// lossily, as the paths `changes` names are. A key with no encoded path is
+/// itself.
+#[must_use]
+pub fn key_text(k: &str) -> String {
+    if !k.contains('\u{0}') {
+        return k.to_string();
+    }
+    let (prefix, rest) = k.split_at(k.find(':').map_or(0, |i| i + 1));
+    match rest.split_once('\u{0}') {
+        // `src:<spelled>\0<rel>`: the spelling, then the relative path.
+        Some((spelled, rel)) if !spelled.is_empty() => {
+            format!("{prefix}{spelled}/{}", path_text(&key_path(rel)))
+        }
+        _ => format!("{prefix}{}", path_text(&key_path(rest))),
+    }
 }
 
 use crate::source_text::{key_path, path_key, rel_key};
@@ -686,8 +698,10 @@ impl Manifest {
     /// empty for every universe but a test universe).
     #[must_use]
     pub fn injected(&self) -> Injected {
+        // `inj:pkg-roots` holds `path_key`s (TLS-30); `inj:sources` holds
+        // `injected_spelling`s, which `key_path` gives back as they are.
         let list = |k: &str| match self.entries.get(k) {
-            Some(Ident::List(v)) => v.iter().map(PathBuf::from).collect(),
+            Some(Ident::List(v)) => v.iter().map(|s| key_path(s)).collect(),
             _ => Vec::new(),
         };
         Injected {

@@ -28,9 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     source-dependency twins: agreement, the round trip, an edit to the first twin moving the
     stamp. `sited_cache_tests::lossy_twin_names_keep_their_identities` checks reuse and an edit
     that misses. Each has a discrimination proof (the lossy key put back).
-  - **Still lossy:** the `inj:` entries (a test universe's injected folders, spelled from a UTF-8
-    descriptor). Outside the manifest, the engine's own `ws:` unit ids and source-dependency
-    content hash still use the lossy `rel_posix`.
+  - **Injected package roots:** `inj:pkg-roots` are keyed the same way, and `injected()` gives
+    them back as the same paths, so a freshness check observes the folder that was read.
+  - **Still lossy:** `inj:sources` (a test universe's injected source folders). The engine
+    resolves such a folder from its lossy spelling (`source_deps::walk_with`), so a non-UTF-8 one
+    cannot be read in the first place. Outside the manifest, the engine's own `ws:` unit ids and
+    source-dependency content hash still use the lossy `rel_posix`.
+  - **Messages:** freshness's unreadable-input reasons spell a key's encoded path lossily
+    (`manifest::key_text`).
+  - **Windows:** a non-UTF-8 relative path is encoded as one OS string, so its `/` separators are
+    UTF-16 units like its names.
 
 ### Fixed (TLS-25: `cdo-speed --rounds` above 5 is refused up front)
 

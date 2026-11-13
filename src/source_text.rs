@@ -82,14 +82,16 @@ pub fn rel_key(rel_posix: &str, abs: &Path) -> String {
     if tail.iter().all(|c| c.to_str().is_some()) {
         return rel_posix.to_string();
     }
-    let mut raw = Vec::new();
+    // Joined as one OS string, so the separator is encoded like the names
+    // (one byte on Unix, one UTF-16 unit on Windows: review r1, sol and Opus).
+    let mut joined = std::ffi::OsString::new();
     for (i, c) in tail.iter().enumerate() {
         if i > 0 {
-            raw.push(b'/');
+            joined.push("/");
         }
-        raw.extend(os_bytes(c));
+        joined.push(c);
     }
-    raw_key(&raw)
+    raw_key(&os_bytes(&joined))
 }
 
 /// A [`path_key`] / [`rel_key`] back as a path, for messages and path tests:
