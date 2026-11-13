@@ -92,6 +92,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own source declares no `[CommitBehavior]` at all (its dependencies were not searched; the
   landing gate's CDO goldens would show a move).
 
+### Changed (TLS-43: some finding keys change for names with `İ` or a word-final `Σ`)
+
+- **Only names containing the Turkish dotted capital `İ` or a capital `Σ` at the end of a word
+  are affected.** All other names, including every Danish, Norwegian, Swedish and German
+  letter, keep exactly the keys they had.
+- **d60, d61 and d3 findings:** their root-cause key includes the record variable, the guard
+  variable or the accessed field name. That name is now lowercased with the same fold the
+  rest of the engine uses, so for such a name the finding's fingerprint changes. A
+  `--baseline` file made before this version no longer suppresses those findings: they show
+  as new once, and suppress again after the baseline is updated (`--update-baseline`).
+- **`alsem impact`:** a label variable with such a name is now recognized as a label, so its
+  message key reads `label:…` instead of a hashed `expr:…`.
+- **prove / explain evidence:** a parameter or variable value source names such a variable in
+  the identifier fold.
+- `ir_walk.rs`'s `/grv/` id input changes too, but nothing reads that id, so no output moves.
+- No real workspace we have measured contains such a name (TLS-42: CDO, its 11 packages and the
+  test corpus have none).
+
 ### Fixed (TLS-43: identifiers with non-ASCII capitals meet one fold)
 
 - **The L2 builder and the detectors now fold identifiers the same way.** `ir_walk.rs` folded
