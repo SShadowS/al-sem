@@ -102,6 +102,103 @@ codeunit 53302 "E19 Ops"
     begin
         Params := Report.RunRequestPage(Id);
     end;
+
+    procedure RrpDataItem()
+    begin
+        Report.RunRequestPage(Report::"E19 DataItem");
+    end;
+
+    procedure RrpPost()
+    begin
+        Report.RunRequestPage(Report::"E19 Post");
+    end;
+
+    procedure RrpInit()
+    begin
+        Report.RunRequestPage(Report::"E19 Init");
+    end;
+
+    procedure RunQuietPost()
+    begin
+        Report.Run(Report::"E19 QuietPost");
+    end;
+
+    procedure RrpOverloaded()
+    var
+        R: Report "E19 Over";
+        T: Text;
+    begin
+        T := R.RunRequestPage('');
+    end;
+}
+report 53310 "E19 DataItem"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(Num; Integer)
+        {
+            trigger OnAfterGetRecord()
+            begin
+                Error('row');
+            end;
+        }
+    }
+    requestpage
+    {
+    }
+}
+report 53311 "E19 Post"
+{
+    ProcessingOnly = true;
+    requestpage
+    {
+    }
+
+    trigger OnPostReport()
+    begin
+        Error('post');
+    end;
+}
+report 53312 "E19 Init"
+{
+    ProcessingOnly = true;
+    requestpage
+    {
+    }
+
+    trigger OnInitReport()
+    begin
+        Commit();
+    end;
+}
+report 53313 "E19 QuietPost"
+{
+    ProcessingOnly = true;
+    requestpage
+    {
+    }
+
+    trigger OnPostReport()
+    begin
+        Commit();
+    end;
+}
+report 53314 "E19 Over"
+{
+    ProcessingOnly = true;
+    requestpage
+    {
+        trigger OnOpenPage()
+        begin
+            Commit();
+        end;
+    }
+
+    procedure RunRequestPage(P: Code[250]): Text
+    begin
+        exit('');
+    end;
 }
 "#;
 
@@ -167,6 +264,39 @@ fn a_run_request_page_of_a_runtime_id_is_open() {
         answer(t.path(), "ViaRunRequestPageDynamic", "may-commit"),
         "unknown"
     );
+}
+
+/// Review round 1 (gpt-6.1-sol): `RunRequestPage` runs `OnInitReport` (a
+/// commit there is reached) and no data item and no `OnPostReport` (an error
+/// in either is not); a request page shown by `Run` may be cancelled before
+/// `OnPostReport` too.
+/// Breaks (2026-11-13): `start_runs_trigger` keeps member-level triggers ->
+/// `RrpDataItem` `throws-error yes`; it keeps `OnPostReport` -> `RrpPost`
+/// `throws-error yes`; `request_page_cancel_skips` takes `OnPreReport` only ->
+/// `RunQuietPost` `commits-on-success-path yes`. Each fails; restored, it
+/// passes.
+#[test]
+fn run_request_page_runs_init_and_no_dataitem_or_post_report() {
+    let t = workspace();
+    assert_eq!(answer(t.path(), "RrpDataItem", "throws-error"), "no");
+    assert_eq!(answer(t.path(), "RrpPost", "throws-error"), "no");
+    assert_eq!(answer(t.path(), "RrpInit", "may-commit"), "yes");
+    assert_eq!(
+        answer(t.path(), "RunQuietPost", "commits-on-success-path"),
+        "unknown"
+    );
+}
+
+/// A report that declares its own `RunRequestPage(Code[250])` (sol round 1):
+/// `R.RunRequestPage('')` may bind to the built-in, so the request page's
+/// commit is not ruled out; before `builtin_run_signatures` listed the
+/// built-in's signatures, any declared overload hid it (`no`).
+/// Break (2026-11-13): drop the `runrequestpage` arm of
+/// `builtin_run_signatures` -> `no`. Fails; restored, it passes.
+#[test]
+fn a_declared_run_request_page_does_not_hide_the_builtin() {
+    let t = workspace();
+    assert_ne!(answer(t.path(), "RrpOverloaded", "may-commit"), "no");
 }
 
 /// A request page shown by `Run` (keyword or variable) may be cancelled, so

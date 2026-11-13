@@ -2700,6 +2700,8 @@ pub(crate) fn builtin_run_signatures(kind: ObjectKind, method_lc: &str) -> &'sta
     const FORMAT: (&str, bool) = ("ReportFormat", false);
     match (kind, method_lc) {
         (ObjectKind::Report, "execute") => &[&[TEXT], &[TEXT, RECREF]],
+        // ENG-19 (sol round 1): `RunRequestPage([Parameters: Text]): Text`.
+        (ObjectKind::Report, "runrequestpage") => &[&[], &[TEXT]],
         (ObjectKind::Report, "print") => &[&[TEXT], &[TEXT, TEXT], &[TEXT, TEXT, RECREF]],
         (ObjectKind::Report, "saveas") => {
             &[&[TEXT, FORMAT, VAR_OUT], &[TEXT, FORMAT, VAR_OUT, RECREF]]

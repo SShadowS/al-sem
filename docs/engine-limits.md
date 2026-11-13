@@ -769,9 +769,12 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   `unknown`. `Execute`, `Print` and `SaveAs*` show no page and keep it unconditional. Left: a
   variable's `UseRequestPage(false)` call before `R.Run()` is not read (the page may show: the
   safe side; batch code often does this, ENG-72); an XmlPort's request page is not treated as
-  cancellable (not measured); `alsem impact`'s run hubs (`reverse::run_reaches_trigger`, page
-  actions' `RunObject` and dynamic runs) still read every report trigger for a dynamic
-  `RunRequestPage` (it over-selects tests, never hides one).
+  cancellable (not measured); `alsem impact` and `alsem graph` (the sited graph) still reach
+  every report trigger from a `RunRequestPage`, static or dynamic: a run is an edge to the
+  report's object node, whose lifecycle reaches all its triggers, and the run hubs
+  (`reverse::run_reaches_trigger`) read the full list too. It over-selects tests and never hides
+  one; keeping the subset needs a new edge shape in the `al-sem.callgraph` export, done with
+  bc-dev-mcp's parser (TLS-52, gpt-6.1-sol round 1).
 - Which request-page triggers one call runs is not read from the call: `RunModal(X, false)` (and a
   report with `UseRequestPage = false`) reaches `OnOpenPage`/`OnClosePage`, and `Execute` reaches
   `OnQueryClosePage`, all `conditional` (safe, imprecise).
