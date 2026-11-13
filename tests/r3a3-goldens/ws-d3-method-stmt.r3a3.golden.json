@@ -120,6 +120,24 @@
 							"value": false
 						}
 					}
+				},
+				{
+					"op": "read",
+					"resourceKind": "table",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"resourceId": "11111111-0000-0000-0000-00000000d03c:Table:18",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d03c:Codeunit:50300#62fbe6a775868bd1f6917f526b128a86a9cb645b6feca7207bdcfddf1cf32244/op1",
+					"extra": {
+						"kind": "table",
+						"opSubtype": "FindSet",
+						"recordVariableId": "9bdfba3c40627fcb/42d64f9e1f6124c68e2f3f35a091c8f725d81964ee40dd528ae2552b6f1347ba/rv/customer",
+						"tempState": {
+							"kind": "known",
+							"value": false
+						}
+					}
 				}
 			],
 			"capabilityFactsInherited": [],

@@ -67,6 +67,12 @@
 //! 12 -> 14: the `error-implicit` fact (resource `write-in-try`) of its two
 //! `if not TryStep()` calls; its statement calls (`TryStep();`,
 //! `asserterror TryStep();`) have none. No count down.
+//!
+//! Re-recorded (2026-11-12, ENG-25: a parens-less record operation in
+//! expression position is a record operation) with
+//! `REMINT_POLICY_FACTS_ORACLE=1`: only `r0/ws-d3-method-stmt` (single and
+//! cross) moved, `direct` and `any` 5 -> 6: the read of `if Customer.FindSet
+//! then`. No count down.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

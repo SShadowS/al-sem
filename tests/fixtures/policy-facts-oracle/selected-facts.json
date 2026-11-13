@@ -729,18 +729,18 @@
       "sha256": "b6d8d726ac1b39874fbf92ba35761ccc37d63f7ec726c429008a001db8676782"
     },
     "r0/ws-d3-method-stmt cross": {
-      "any": 5,
-      "direct": 5,
+      "any": 6,
+      "direct": 6,
       "inherited": 0,
       "routines": 4,
-      "sha256": "bad6248c6c5e86a08c8ad5137b7221d83633aabad5418c1d09f7e941265740f3"
+      "sha256": "ed28f07150d869a57b52d6faedd7ec4fafc6e54fc81799eb7e54d3b81f8f7fc9"
     },
     "r0/ws-d3-method-stmt single": {
-      "any": 5,
-      "direct": 5,
+      "any": 6,
+      "direct": 6,
       "inherited": 0,
       "routines": 4,
-      "sha256": "bad6248c6c5e86a08c8ad5137b7221d83633aabad5418c1d09f7e941265740f3"
+      "sha256": "ed28f07150d869a57b52d6faedd7ec4fafc6e54fc81799eb7e54d3b81f8f7fc9"
     },
     "r0/ws-d3-temp cross": {
       "any": 2,

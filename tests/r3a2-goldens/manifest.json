@@ -25,7 +25,7 @@
     "routineCount": 584,
     "routinesWithInheritedEffects": 57,
     "viaKinds": {
-      "direct": 328,
+      "direct": 329,
       "event-subscriber": 15,
       "implicit-trigger": 1,
       "inherited": 55
@@ -827,7 +827,7 @@
         "routineCount": 4,
         "routinesWithInheritedEffects": 0,
         "viaKinds": {
-          "direct": 4
+          "direct": 5
         },
         "recursiveCycleRoutines": 0,
         "unresolvedCallRoutines": 2,

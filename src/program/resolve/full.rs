@@ -246,6 +246,10 @@ pub struct SiteFacts {
     /// `{call site}/callresult`), with these triggers and table events, as a
     /// `FieldRef.Validate(…)`'s. `None` for any other call.
     pub call_result_record: Option<CallResultRecord>,
+    /// ENG-25: the record operation's table declares a FIELD of the method's
+    /// name (`Count`, `Next`, …), so a parens-less `R.Count` there reads the
+    /// field and is no call. `false` when the table is not known.
+    pub record_op_field_named: bool,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -1392,6 +1396,10 @@ fn resolve_call_site_obligation(
             // (`Record "G/L Entry"` without its app) differs from a RecordRef
             // that may hold any table ([`UnresolvedTable`]).
             let mut named_not_loaded = false;
+            // ENG-25: a field shadows the method only on a `Record`; a RecordRef
+            // has no fields by name, so `RR.Count` stays the method whatever its
+            // table declares.
+            let mut record_receiver = false;
             let table_node_opt: Option<&ObjectNode> = if let Some(obj_node) = obj_node_opt {
                 // ENG-12 (L36): the receiver expression, so an array element
                 // `Recs[1]` is typed by its element type (step 6).
@@ -1408,7 +1416,10 @@ fn resolve_call_site_obligation(
                 match recv {
                     ReceiverType::Record {
                         table: Some(ref tid),
-                    } => graph.object_first(tid),
+                    } => {
+                        record_receiver = true;
+                        graph.object_first(tid)
+                    }
                     ReceiverType::Record { table: None } => {
                         named_not_loaded = true;
                         None
@@ -1445,6 +1456,13 @@ fn resolve_call_site_obligation(
             };
 
             let (shape, completeness, routes) = if let Some(table_node) = table_node_opt {
+                // ENG-25: a field of the method's name on a Record makes a
+                // parens-less read of it a field read, not this call. Any
+                // declaration counts, ambiguous or in an extension.
+                facts_out.record_op_field_named = record_receiver
+                    && obj_node_opt.is_some_and(|from| {
+                        index.table_scope_may_have_field(graph, from, &table_node.id, &op_lc)
+                    });
                 let (shape, completeness, mut routes) =
                     resolve_implicit_trigger(&op_lc, table_node, graph, index, surface);
                 // S3.4: emit only the triggers this site can fire (a literal
@@ -1655,12 +1673,37 @@ pub(crate) fn resolve_file_obligations(
                 .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
                 .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
                 .chain(obj.globals.iter().map(|v| v.name.fold_identifier()))
+                // An extension sees its base object's `protected var` globals
+                // as its own (receiver Step 2c).
+                .chain(
+                    obj_node_opt
+                        .and_then(|o| {
+                            crate::program::resolve::receiver::extension_base_object(
+                                o, graph, index,
+                            )
+                        })
+                        .flatten()
+                        .into_iter()
+                        .flat_map(|base| base.protected_vars.iter().map(|(n, _)| n.to_string())),
+                )
                 .collect();
 
             for site in &sites {
                 if site.parenless
                     && let CalleeShape::Bare { name } = &site.shape
                     && shadows.contains(&name.fold_identifier())
+                {
+                    continue;
+                }
+                // ENG-25: so does it a bare name the extractor read as an
+                // operation on the implicit `Rec` (no receiver expression; a
+                // `with` frame has one, and its members come first there):
+                // `exit(Count)` with a parameter `Count` reads the parameter.
+                if site.parenless
+                    && let CalleeShape::RecordOp {
+                        op, receiver: None, ..
+                    } = &site.shape
+                    && shadows.contains(&op.fold_identifier())
                 {
                     continue;
                 }
@@ -1706,10 +1749,15 @@ pub(crate) fn resolve_file_obligations(
                     );
                 }
                 // A parens-less value read is a call only when it reaches a
-                // routine; otherwise it is a variable, field or built-in read.
-                // ponytail: a parens-less built-in (`Rec.Count`) is dropped too,
-                // as the compiler's graph does; keep it if built-in reads matter.
+                // routine, or (ENG-25) is a record operation the extractor
+                // classified (`if R.FindFirst then`, `exit(R.IsEmpty)`) whose
+                // table declares no field of that name; otherwise it is a
+                // variable, field or built-in read.
+                let parenless_record_op = matches!(site.shape, CalleeShape::RecordOp { .. })
+                    && kind == EdgeKind::ImplicitTrigger
+                    && !facts.record_op_field_named;
                 if site.parenless
+                    && !parenless_record_op
                     && (kind != EdgeKind::Call
                         || routes.is_empty()
                         || !routes.iter().all(|r| {
