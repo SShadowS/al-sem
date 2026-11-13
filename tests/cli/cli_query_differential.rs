@@ -1468,12 +1468,13 @@ fn query_effects_whole_cone_with_an_unresolved_call_says_not_searched() {
 
 /// TLS-49: touches' machine token for a miss (`down.absence.index`) states
 /// the scope line's fact. A routine whose cone enters no dependency code,
-/// asked about a table it does not touch: the header says "dependency code:
-/// none reached", the token `whole-cone`, and the human miss line names no
-/// depth.
+/// asked about a table it does not touch, with one call not resolved (so the
+/// miss is `unknown`): the header says "dependency code: none reached", the
+/// token `whole-cone`, and the human miss line names no depth.
 ///
 /// DISCRIMINATION (2026-11-13): `index_depth` answering the one-routine-deep
-/// pair for both arms fails here at the token; restored, passes.
+/// pair for both arms fails here at the token (asserted first); restored,
+/// passes.
 #[test]
 fn query_touches_miss_index_states_the_scope_fact() {
     let dir = tempfile::tempdir().unwrap();
@@ -1485,7 +1486,7 @@ fn query_touches_miss_index_states_the_scope_fact() {
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(
         dir.path().join("src/All.al"),
-        "table 50400 \"Q One\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ntable 50401 \"Q Two\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50402 \"Q Writer\"\n{\n    procedure Run()\n    var\n        R: Record \"Q One\";\n    begin\n        R.Insert();\n    end;\n}\n",
+        "table 50400 \"Q One\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ntable 50401 \"Q Two\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50402 \"Q Writer\"\n{\n    procedure Run()\n    var\n        R: Record \"Q One\";\n        C: Codeunit \"No Such Codeunit\";\n    begin\n        R.Insert();\n        C.DoIt();\n    end;\n}\n",
     )
     .unwrap();
     let ws = dir.path().to_string_lossy().to_string();
@@ -1511,6 +1512,11 @@ fn query_touches_miss_index_states_the_scope_fact() {
         v["payload"]["down"]
     );
     let (human, _) = run_alsem(&argv, "human");
+    // The unresolved call makes the miss `unknown`, the arm that named a depth.
+    assert!(
+        human.contains("down: unknown — no indexed touch observed, which is not proof"),
+        "{human}"
+    );
     assert!(
         !human.contains("one routine into dependency code"),
         "{human}"

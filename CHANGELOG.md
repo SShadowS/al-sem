@@ -360,18 +360,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `query_effects_whole_cone_with_an_unresolved_call_says_not_searched`, the "not searched"
     variant, now with a fixture;
   - `discovery_skips_folders_git_ignores`.
-- Goldens moved: 25 query and batch JSON goldens, plus `ignoredByGit` in the impact
-  `diff.json` and the tests `universe.post.json`. The only non-CDO human goldens moved are the
-  four workspace-wide touches answers (below). The CDO
-  goldens were not run on this branch, and the union can move their human text.
+- Goldens moved, against TLS-48:
+  - 21 query and batch JSON goldens;
+  - `ignoredByGit` in the impact `diff.json` and the tests `universe.post.json`;
+  - 4 human goldens, the workspace-wide touches answers (below). Their JSON is back at its old
+    text.
+
+  The CDO goldens were not run on this branch. The union, the touches miss line and the
+  workspace-wide scope line can move their human text.
 - **`query touches`' machine tokens follow the same fact.** `down.absence.index` is
   `whole-cone` when the cone enters no dependency code (was always
   `operations-one-routine-deep`), and the human miss line then drops "(per operation, one
   routine into dependency code)". Pinned by `query_touches_miss_index_states_the_scope_fact`,
   with a discrimination proof. The workspace-wide list reads no cone and stands on the
   per-operation index, so it now prints "scope: per operation, one routine into dependency
-  code" in both headers, as its `note` and `index` say. Four human and JSON goldens moved
-  (`*.global`).
+  code" in both headers, as its `note` and `index` say (the four `*.global` human goldens;
+  their JSON header states it as before). `down.absence.index` has a new value, `whole-cone`.
 
 ### Changed (TLS-48: engine limits B8, the last two small-output items)
 
