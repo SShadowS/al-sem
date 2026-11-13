@@ -581,7 +581,12 @@ throughout (deleted in engine-switch S9); the items below note where the code li
     subscriber wiring is whole-snapshot-scoped, so dep-derived edges may not be a
     pure function of the dep universe — if a dep subscriber can bind a primary
     publisher, a dep-only-keyed artifact is unsound. Settle both before speccing.
-  - **Latent soundness bug found while scoping this, independent of any cache:**
+  - **FIXED 2026-11-13 (TLS-46):** `source_root` now hashes each file's path and text,
+    length-prefixed, under a version tag. Nothing persists the hash, so no cache version
+    moved. Review found no production reader of it today (the session identity skips the
+    workspace app; dependency hashes come from the `.app` image and `source_deps`), so the
+    "verdict-changing" consequence below was latent. The original finding:
+    **Latent soundness bug found while scoping this, independent of any cache:**
     `SourceRoot.content_hash` (`snapshot/provider.rs:59-64`) folds only
     `f.text.as_bytes()`, concatenated — no `virtual_path`, no length prefix. Two
     workspaces that differ by a file RENAME, or by re-splitting the same bytes
