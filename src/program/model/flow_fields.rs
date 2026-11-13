@@ -957,8 +957,12 @@ pub fn attach_appended_flow_field_reads(
     workspace: &mut ModelEntities,
     appended: &HashMap<usize, usize>,
 ) {
+    // A dataset operation's receiver names no variable (no setup reaches it):
+    // it alone does not pay for a second pass.
     let needs = |op: &ModelRecordOperation| {
-        op.table_id.is_some() && (op.op == "CalcFields" || is_retrieval(&op.op))
+        op.dataset_reason.is_none()
+            && op.table_id.is_some()
+            && (op.op == "CalcFields" || is_retrieval(&op.op))
     };
     let any = appended.iter().any(|(&ri, &from)| {
         workspace.routines[ri].record_operations[from..]
@@ -1031,12 +1035,15 @@ impl<'a> Pass<'a> {
                 }
                 o if is_retrieval(o) => {
                     let key = receiver_key(&op.record_variable_name);
-                    for (k, arg, _) in &auto {
-                        if *k == key {
+                    let this = through_this(&op.record_variable_name);
+                    // The routine's own setups on the same binding: `this.G`
+                    // and a local `G` are two records (the global's own `G`
+                    // setup reaches `this.G` through the shared scope below).
+                    for (k, arg, setup_this) in &auto {
+                        if *k == key && *setup_this == this {
                             self.tables.reads_of(table_id, arg, true, &mut reads);
                         }
                     }
-                    let this = through_this(&op.record_variable_name);
                     let scopes = scopes_of
                         .entry((key.clone(), this))
                         .or_insert_with(|| self.sharing.scopes(routine, &key, this));

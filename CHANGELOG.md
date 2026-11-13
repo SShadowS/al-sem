@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`implicitTrigger`/`tableEvent` edges, OverApprox when the route is conditioned, as an edge's
   route is), so test selection reaches a trigger through them; a call result's retrieval (a
   shadowed `this.G.FindFirst()`) gets the FlowField reads of `this.G`'s `SetAutoCalcFields`, which
-  is scoped as the global whatever local shadows it; a variable whose quoted name holds `[`
+  is scoped as the global whatever local shadows it (and a local `G`'s setup is not `this.G`'s);
+  a variable whose quoted name holds `[`
   (`"Line [Temp]"`) is looked up by its whole name; `Recs[ 1 ].SetAutoCalcFields(F)` is spelled
   as its retrieval's receiver, and an array element's FlowField setup is shared only as its array
   variable is (another routine's local array no longer supplies it).

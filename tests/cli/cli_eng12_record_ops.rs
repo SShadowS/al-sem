@@ -308,6 +308,18 @@ codeunit 52612 "E12 This Cross"
         if this.G.FindFirst() then;
     end;
 }
+codeunit 52614 "E12 This Local"
+{
+    var
+        G: Record "E12 Row";
+    procedure LocalSetupGlobalRead()
+    var
+        G: Record "E12 Row";
+    begin
+        G.SetAutoCalcFields(Cnt);
+        if this.G.FindFirst() then;
+    end;
+}
 codeunit 52613 "E12 Bracket"
 {
     procedure Setup()
@@ -608,7 +620,9 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// the whole key up again (not its array variable) -> `Retrieve` answers
 /// `yes`. (2026-11-13): no retrievals in
 /// `attach_appended_flow_field_reads` (`CalcFields` only) -> `ShadowBoth`
-/// answers `no`; `scopes` ignoring `this` -> `ShadowRead` answers `no`;
+/// answers `no`; `scopes` ignoring `this` -> `ShadowRead` answers `no`; the
+/// own-routine match ignoring the `this` flag -> `LocalSetupGlobalRead`
+/// answers `yes`;
 /// `scopes` without the whole-key lookup -> `Bracket` `Read` answers `yes`
 /// (the name falls to the object's scope; a global there shares alike, so
 /// only a local tells).
@@ -625,6 +639,11 @@ fn a_spaced_element_is_the_element_its_flow_field_was_set_up_on() {
         ("\"E12 Local Setup\".Retrieve", "answer: down: no"),
         ("\"E12 This Flow\".ShadowBoth", "answer: down: yes"),
         ("\"E12 This Cross\".ShadowRead", "answer: down: yes"),
+        // A local `G`'s setup is not the global `this.G`'s (astra round 5).
+        (
+            "\"E12 This Local\".LocalSetupGlobalRead",
+            "answer: down: no",
+        ),
         // Another routine's local whose quoted name holds `[`: not shared.
         ("\"E12 Bracket\".Read", "answer: down: no"),
     ] {
