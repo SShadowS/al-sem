@@ -125,24 +125,74 @@ container_free_mib() {
         echo unknown
     fi
 }
-# ⟨TLS-36⟩ The CPUs lane 2 is pinned to beside the impact phase: the last
-# `CDO_GATE_LANE2_CPUS` (default 6) of the CPUs this gate may use, as a
-# `taskset -c` list. Nothing (no pin) when the count is 0, when it would leave
-# the impact phase fewer than 8 CPUs, or without `taskset`.
+# ⟨TLS-36⟩ The CPUs lane 2 is pinned to beside the impact phase, as a
+# `taskset -c` list; nothing (no pin) when `CDO_GATE_LANE2_CPUS` is 0, without
+# `taskset`, or when the pin would leave the impact phase fewer than 8 CPUs.
+# `CDO_GATE_LANE2_CPUS` is unset (the default), a count, or an explicit list
+# (`12-19`). Of the CPUs this gate may use (its mask) that are online, by each
+# one's maximum clock against the fastest's (sysfs `cpuinfo_max_freq`):
+#   - low-power cores (under 70%: the 2.5 GHz cores of a Core Ultra beside its
+#     5.1 GHz P-cores) are never used (review r1, Opus: "the last 6" was 4
+#     E-cores and both low-power cores, so lane 2's longest test ran on the
+#     slowest silicon);
+#   - the default takes every efficiency core (70% up to 85%), so the impact
+#     phase keeps every performance core (orchestrator 2026-11-13); on a CPU
+#     with none, the last 6;
+#   - a count takes the last `count` of the CPUs that are not low-power.
+# On server1 (Core Ultra 9 185H, 2026-11-13) the default is 12-19.
 lane2_cpus() {
-    local want=${CDO_GATE_LANE2_CPUS:-6} allowed
-    [[ "$want" =~ ^[0-9]+$ ]] && ((want > 0)) || return 0
+    local want=${CDO_GATE_LANE2_CPUS:-eff} sys=${CDO_GATE_SYS_CPU:-/sys/devices/system/cpu}
     command -v taskset >/dev/null || return 0
-    allowed=$(awk '/^Cpus_allowed_list:/ { print $2 }' "${CDO_GATE_PROC_STATUS:-/proc/self/status}")
-    echo "$allowed" | awk -v want="$want" -F, '
-        { for (i = 1; i <= NF; i++) {
-              n = split($i, r, "-")
-              lo = r[1]; hi = (n == 2 ? r[2] : r[1])
-              for (c = lo; c <= hi; c++) cpu[k++] = c
-          } }
+    if [[ "$want" =~ [-,] ]]; then
+        echo "$want"
+        return
+    fi
+    if [[ "$want" != eff ]]; then
+        # Decimal, never octal (`08`; review r1, sol); anything else: no pin.
+        [[ "$want" =~ ^[0-9]+$ ]] && ((10#$want > 0)) || return 0
+        want=$((10#$want))
+    fi
+    local allowed online
+    allowed=$(awk '/^Cpus_allowed_list:/ { print $2 }' \
+        "${CDO_GATE_PROC_STATUS:-/proc/self/status}" 2>/dev/null)
+    online=$(cat "$sys/online" 2>/dev/null)
+    [[ -n "$allowed" ]] || return 0
+    {
+        echo "allowed $allowed"
+        echo "online ${online:-$allowed}"
+        for f in "$sys"/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do
+            [[ -r "$f" ]] && echo "max ${f#"$sys"/cpu} $(cat "$f")"
+        done
+    } | awk -v want="$want" '
+        function expand(list, into,   parts, n, i, r, m, c) {
+            n = split(list, parts, ",")
+            for (i = 1; i <= n; i++) {
+                m = split(parts[i], r, "-")
+                for (c = r[1] + 0; c <= (m == 2 ? r[2] : r[1]) + 0; c++) into[c] = 1
+            }
+        }
+        $1 == "allowed" { expand($2, allowed) }
+        $1 == "online"  { expand($2, online) }
+        $1 == "max"     { split($2, p, "/"); mhz[p[1] + 0] = $3; if ($3 > top) top = $3 }
         END {
-            if (k - want < 8) exit
+            for (c = 0; c <= 4096; c++) {
+                if (!(c in allowed) || !(c in online)) continue
+                usable++
+                if (top > 0 && (c in mhz) && mhz[c] < 0.7 * top) continue
+                cpu[k++] = c
+                # Efficiency cores: under 85% of the fastest clock, at or over
+                # 70% (orchestrator 2026-11-13).
+                if (top > 0 && (c in mhz) && mhz[c] < 0.85 * top) eff[e++] = c
+            }
             out = ""
+            if (want == "eff" && e > 0) {
+                if (usable - e < 8) exit
+                for (i = 0; i < e; i++) out = out (out == "" ? "" : ",") eff[i]
+                print out
+                exit
+            }
+            if (want == "eff") want = 6
+            if (k < want || usable - want < 8) exit
             for (i = k - want; i < k; i++) out = out (out == "" ? "" : ",") cpu[i]
             print out
         }'
@@ -619,9 +669,11 @@ phase_l4() {
 # ⟨TLS-36⟩ Longest first: libtest starts tests in name order, so the longest
 # (`retained_emission`, ~105 s alone) started last and left a tail. The phase
 # runs the five longest by name first (`--exact`), then the rest (`--skip` each),
-# in every layout. A renamed long test is no longer matched by the first run and
-# runs in the second: nothing is lost, only the order. The summary sums both
-# runs' counts.
+# in every layout. The summary sums both runs' counts. `--skip` matches a
+# SUBSTRING while the first run matches exactly, so a long test renamed to a
+# longer name (`..._v2`) would run in neither (review r1, sol and Opus): the first
+# run must report every long test (passed, failed or ignored), or the phase
+# fails and says to update `lib_long_tests`.
 lib_long_tests=(
     engine::resident::revision::tests::retained_emission_equals_a_composition_on_cdo
     engine::l5::digest::wave2_index_tests::cdo_crossing_census
@@ -634,8 +686,15 @@ lib_tests() {
     for t in "${lib_long_tests[@]}"; do skips+=(--skip "$t"); done
     "${lane2_nice[@]}" "${lane2_pin[@]}" \
         cargo test "${profile[@]}" -p al-sem --lib -- --exact "${lib_long_tests[@]}" \
-        --test-threads="$lib_threads"
-    first=$?
+        --test-threads="$lib_threads" 2>&1 | tee "$logs/lib_cdo.long"
+    first=${PIPESTATUS[0]}
+    local seen
+    seen=$(grep -oE 'test result: [A-Za-z]+\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored' \
+        "$logs/lib_cdo.long" | awk '{ n += $4 + $6 + $8 } END { print n + 0 }')
+    if [[ "$seen" -ne "${#lib_long_tests[@]}" ]]; then
+        echo "cdo-gate: lib_cdo: the long-test run found $seen of ${#lib_long_tests[@]} tests by name: a renamed long test? update lib_long_tests in scripts/cdo-gate"
+        first=1
+    fi
     "${lane2_nice[@]}" "${lane2_pin[@]}" \
         cargo test "${profile[@]}" -p al-sem --lib cdo -- "${skips[@]}" \
         --test-threads="$lib_threads"
