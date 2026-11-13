@@ -373,3 +373,47 @@ fn discovery_skips_folders_git_ignores() {
     let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["Prod Tests", "Scratch Tests"]);
 }
+
+/// TLS-48 review r1: a search root inside an ignored folder (here a marked
+/// project folder under an ignored `mark/`) still finds its siblings (git
+/// reports all of the root ignored), and an ignored sibling that is a
+/// repository of its own (a nested clone) is still read as an app.
+///
+/// DISCRIMINATION (2026-11-13): starting the walk with `honor_ignore = true`
+/// fails at the first `names` (empty); dropping the `.git` arm of the
+/// `retain` fails at the second (no "Clone Tests"); restored, passes.
+#[test]
+fn an_ignored_root_and_an_ignored_clone_are_still_searched() {
+    let t = git_repo();
+    let r = t.path();
+    std::fs::write(r.join(".gitignore"), "mark/\nclone/\n").unwrap();
+    std::fs::create_dir_all(r.join("mark")).unwrap();
+    std::fs::write(r.join("mark").join(PROJECTS_MARKER), "").unwrap();
+    app(&r.join("mark/p1/App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("mark/p1/T"),
+        "22222222-2222-2222-2222-222222222222",
+        "Marked Tests",
+    );
+    let s = discover(&r.join("mark/p1/App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Marked Tests"]);
+
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("clone"),
+        "33333333-3333-3333-3333-333333333333",
+        "Clone Tests",
+    );
+    let ok = crate::git_env::git_command()
+        .arg("-C")
+        .arg(r.join("clone"))
+        .args(["init", "-q"])
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "git init clone failed");
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Clone Tests"]);
+}

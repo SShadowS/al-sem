@@ -48,9 +48,11 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
   (`query_scope_json`) says the same, read from the families' `depth`. ENG-40 (L1) builds on this
   text.
 - B8: test-app discovery does not read `.gitignore`. **Fixed by TLS-48** (2026-11-13): a folder
-  git ignores is not entered (one `git check-ignore` per folder level), unless it holds the
-  workspace; below such a folder nothing is skipped as ignored. When git cannot answer, nothing is
-  skipped, as before.
+  git ignores is not entered (one `git check-ignore` per folder read), unless it holds the
+  workspace or a `.git` of its own (a nested clone is still read as an app); below an ignored
+  folder that holds the workspace, and when the search root itself is ignored, nothing is skipped
+  as ignored. When git cannot answer, nothing is skipped, as before. Left: a skipped folder is not
+  listed in the scope, so "no dependent test app" and "your test app is ignored" read alike.
 
 | # | What is wrong | Probe evidence | Size |
 |---|---|---|---|

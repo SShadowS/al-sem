@@ -281,12 +281,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching the `reads:`/`locks:` absence lines, instead of "one dependency routine deep, not
   exhaustive beyond". The `--format json` header's `result.scope.scope` says the same. A cone
   that enters dependency code prints the old text. Goldens moved: `d8.onafterpostsalesdoc` and
-  `r2a-record-types.declaredvars` (human and JSON), the batch `one-job` query golden, and the CDO
-  `UpdateLastUpload` query-effects golden.
+  `r2a-record-types.declaredvars` (human and JSON) and the batch `one-job` query golden. The
+  "not searched" variant has no fixture.
 - **Test-app auto-discovery skips folders git ignores** (`.gitignore`, `.git/info/exclude`,
-  the user's excludes file), unless the folder holds the workspace; below such a folder nothing
-  is skipped as ignored. When git cannot answer, every folder is read, as before. Pinned by
-  `discovery_skips_folders_git_ignores`, with discrimination proofs.
+  the user's excludes file; one `git check-ignore` per folder read), unless the folder holds the
+  workspace or a `.git` of its own (a nested clone is still read as an app). Below an ignored
+  folder that holds the workspace, and when the search root itself is ignored, nothing is
+  skipped as ignored. When git cannot answer, every folder is read, as before. A skipped folder
+  is not listed in the scope. Pinned by `discovery_skips_folders_git_ignores` and
+  `an_ignored_root_and_an_ignored_clone_are_still_searched`, with discrimination proofs.
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 

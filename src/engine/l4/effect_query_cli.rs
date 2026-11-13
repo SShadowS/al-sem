@@ -1833,14 +1833,20 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
     // Engine limits B8 (TLS-48): the families say `wholeCone` when the cone
     // enters no dependency code (`family_scope`); the human scope line agrees.
     // ENG-40 (L1) builds on this text. Discrimination (2026-11-13): forcing
-    // `whole_cone` false fails the two `cli_query_differential` effects
-    // goldens; restored, passes.
-    let whole_cone = payload
-        .pointer("/result/scope/families/reads/depth")
-        .and_then(Value::as_str)
-        == Some("wholeCone");
-    let depth = if kind == "query.effects" && whole_cone {
-        "reads, locks, validate, writes: the whole cone, no dependency code entered"
+    // the whole-cone arm off fails the two `cli_query_differential` effects
+    // goldens; restored, passes. The "not searched" variant has no fixture.
+    let reads = |k: &str| {
+        payload
+            .pointer(&format!("/result/scope/families/reads/{k}"))
+            .and_then(Value::as_str)
+    };
+    let depth = if kind == "query.effects" && reads("depth") == Some("wholeCone") {
+        if reads("inventory") == Some("notExhaustive") {
+            "reads, locks, validate, writes: the whole cone, no dependency code entered (not \
+             searched: calls not resolved)"
+        } else {
+            "reads, locks, validate, writes: the whole cone, no dependency code entered"
+        }
     } else if kind == "query.effects" {
         "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
          beyond dependency calls: whole cone with literal arguments"
@@ -5623,8 +5629,8 @@ fn render_query_effects_body(
         // and `query_effects_full_down_list_with_via`; restored, passes).
         human.push_str(&format!(
             "  scope: reads, locks, validate, writes: the whole cone, no dependency code \
-             entered{}; operations ruled out by literal arguments are listed (explain and prove \
-             drop them)\n",
+             entered{}; operations and routes the literal arguments rule out are listed and \
+             marked (explain and prove drop them)\n",
             if call_not_resolved + open_world > 0 {
                 " (not searched: calls not resolved)"
             } else {
