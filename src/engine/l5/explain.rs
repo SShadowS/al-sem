@@ -896,10 +896,13 @@ fn name_apps(text: &str, apps: &[Value]) -> String {
     for a in apps {
         if let (Some(g), Some(n)) = (a["appId"].as_str(), a["name"].as_str()) {
             out = out.replace(
-                &format!("found only in {}:", g.fold_identifier()),
+                &format!("found only in {}:", g.to_ascii_lowercase()),
                 &format!("found only in {n}:"),
             );
-            out = out.replace(&format!("; {}:", g.fold_identifier()), &format!("; {n}:"));
+            out = out.replace(
+                &format!("; {}:", g.to_ascii_lowercase()),
+                &format!("; {n}:"),
+            );
         }
     }
     out
@@ -1351,7 +1354,7 @@ fn run_object_targets<'m>(model: &'m Model, page_app: &str, raw: &str) -> Vec<&'
         .collect();
     let own: Vec<&str> = matches
         .iter()
-        .filter(|o| o.app_guid.eq_fold_identifier(page_app))
+        .filter(|o| o.app_guid.eq_ignore_ascii_case(page_app))
         .map(|o| o.id.as_str())
         .collect();
     if own.is_empty() {

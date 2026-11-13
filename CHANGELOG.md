@@ -103,51 +103,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the global record-variable backfill missed.
   Found by TLS-42's census (`docs/superpowers/notes/2026-11-13-to-lowercase-census.md`).
   - The identifier folds in `ir_walk.rs` are now `fold_identifier`. Keyword, type-text and
-    string-literal folds stay ASCII, and so do the record-variable ids (`…/rv/…`, built
-    with `to_lowercase`) and the `icb` text. The sites that meet these values use
-    `fold_identifier` too: d5, d19, d37, d39, d41, d42, d43, d56; the shared helpers in
-    `detectors/mod.rs`; `cross_rules.rs`; `literal_values.rs`; `control_context.rs`; the
-    field and global record-variable maps in `workspace.rs` and `extension_fields.rs`; and
-    the impact graph's `entries.rs` and `cone_probe.rs`.
-  - **Review r1 (Fable) found the other half:** readers that compared the L2 values with a
-    raw name through an ASCII-only compare (`eq_ignore_ascii_case`, local
-    `to_ascii_lowercase` helpers) matched before and missed after the L2 change, some in the
-    unsafe direction (d39 dropping a real finding, `param_guard` keeping an assigned
-    parameter usable). Every file that reads a field the L2 change touched
-    (`identifier_references`, `condition_references`, `lhs_name`, `rhs_identifier`,
-    `source_variable_name`, `exhausting_advance`, variable names, `varName`) now compares
-    with `eq_fold_identifier` / `fold_identifier`: 29 files, including `d39_persist.rs`,
-    `param_guard.rs`, `literal_reach.rs`, `recref_flow.rs`, `field_guard.rs`,
-    `recref_origin.rs`, `ui_events_error.rs`, `callers_context.rs`, `explain.rs` and
-    `impact/keys.rs:376`. Char-level compares against fixed ASCII words stay ASCII.
+    string-literal folds stay on `to_ascii_lowercase`; the record-variable ids (`…/rv/…`)
+    and the `icb` text stay on `to_lowercase` (identity inputs, unchanged).
+  - **Every reader of the values L2 emits now compares with `eq_fold_identifier` /
+    `fold_identifier`**, whatever fold it used before:
+    - the first pass: d5, d19, d37, d39, d41, d42, d43, d56, `detectors/mod.rs`,
+      `cross_rules.rs`, `literal_values.rs`, `control_context.rs`, the field and global
+      record-variable maps in `workspace.rs` / `extension_fields.rs`, and the impact graph's
+      `entries.rs` / `cone_probe.rs`;
+    - **review r1 (Fable)** found the ASCII-only readers (`eq_ignore_ascii_case`, local
+      `to_ascii_lowercase` helpers). They matched before and missed after the L2 change,
+      some in the unsafe direction: d39 dropped a real finding, and `param_guard` kept an
+      assigned parameter usable. Every file reading a field the L2 change touched
+      (`identifier_references`, `condition_references`, `lhs_name`, `rhs_identifier`,
+      `source_variable_name`, `exhausting_advance`, variable names, `varName`) was swept,
+      including `d39_persist.rs`, `param_guard.rs`, `literal_reach.rs`, `recref_flow.rs`,
+      `field_guard.rs`, `recref_origin.rs`, `ui_events_error.rs`, `callers_context.rs`,
+      `explain.rs`;
+    - **review r2 (astra)** found the `to_lowercase` readers still left. They differ from
+      the fold only on `İ` and a word-final `Σ`, but one was unsafe: d33's filter-by-call
+      proof missed a `Reset` on `İndkøb` and suppressed a real finding. Swept: the rest of
+      `detectors/mod.rs`, d5, d60, d61, `capability/mod.rs`, `value_source.rs`, the
+      variable map in `capability_cone.rs`, `control_context.rs`, `cross_rules.rs`.
+    - Not changed (not identifiers): char-level compares against fixed ASCII words, and app
+      GUIDs (the r1 sweep had folded four GUID sites; r2 reverted them).
   - Identity: the stable-id inputs are unchanged, except that `ir_walk.rs`'s `/grv/` id input
-    and `impact/keys.rs`' label key now see the folded name for a non-ASCII capital (nothing
-    reads the first; the second moves only for such a name).
-  - Every changed compare is byte-identical to the old one on ASCII input, so no existing
-    golden or CDO number moved.
-  - Tests, each guard with a discrimination proof (the break named, then reverted):
+    sees the folded name for a non-ASCII capital (nothing reads it). `impact/keys.rs`' label
+    key keeps its spelling; only its lookup folds.
+  - Every changed compare gives the same result as the old one on ASCII input, so no existing
+    golden moved.
+  - Tests, each with a discrimination proof (the break named, then reverted):
     - `r4_differential::nordic_identifiers_meet_one_fold` on the new fixture
-      `ws-nordic-identifiers`, each case with a control that must fire. d19 stays quiet on a
-      used `Ændring` (break: the `identifier_ref_set` inserts back on the ASCII fold). d11's
-      by-var suppression covers `Ørder` loaded through `HentØrder` (break: the argument
-      binding's name). d39 flags a helper that reassigns its parameter before `Modify`
-      (break: `d39_persist::record_reassigned`). The global backfill types `Ålcust` as
-      `global` (break: the `global_rv_by_lc` key).
+      `ws-nordic-identifiers`, each case with a control that must fire:
+      - d19 stays quiet on a used `Ændring` (break: the `identifier_ref_set` inserts);
+      - d11's by-var suppression covers `Ørder` loaded through `HentØrder` (break: the
+        argument binding's name);
+      - d39 flags a helper that reassigns its parameter before `Modify` (break:
+        `d39_persist::record_reassigned`);
+      - d33 reports the DeleteAll after `Reset` on `İndkøb` (break: the `Reset` compare back
+        on `to_lowercase`);
+      - the global backfill types `Ålcust` as `global` (break: the `global_rv_by_lc` key).
+    - `param_guard::tests::a_nordic_flag_is_a_guard_until_it_is_assigned` calls
+      `frame_guards` directly, so the literal-value pass cannot mask it (breaks: the
+      assignment compare; the usable name).
     - `cli_prove_recref_guard::a_recordref_number_guard_reads_nordic_names_alike`: the
       RecordRef guard answers are unchanged with `ÆRecRef`, `ØVariantRec`, `Ålias`,
       `ÉRecordFilter` (break: `recref_flow::lc`).
     - `cli_prove_dead_paths::a_write_behind_a_nordic_flag_is_read_alike`: the literal-dead
       write answers are unchanged with `ÆUseQueue` (break: `literal_values::fold`).
-      **Limit:** `param_guard`'s own compares, broken alone, still pass, because the
-      literal-value pass decides the same answers on these shapes. `literal_reach`'s
-      assigned-Variant check has no witness of its own.
-  - The new fixture also moved `l2_features.snapshot` (+11 routines) and the root-class
-    summary. The ids parent-baseline record and the policy facts oracle were re-minted to add
-    it (no other fixture or case moved), and `FIXTURE_ROOTS` went 222 → 223.
-  - Measured on CDO (`cdo-measure`, `release-fast`, base `14fad659` against `28686add`,
-    workspace `bc3ccb18`, clean): the default detectors found 2,308 → 2,308 at
-    `--scope primary` and 32,576 → 32,576 at `--scope all`. Fingerprints: 0 added and 0
-    removed at both scopes. As expected: CDO's identifiers are all ASCII (TLS-42).
+    - **No witness of their own** (fixed by the same swap, pinned by no test):
+      `literal_reach`'s assigned-Variant check, `field_guard`'s `FieldExist` guard,
+      `ui_events_error.rs`'s `Evaluate` check, `ir_walk.rs`'s initializer and
+      `fixed_local` compares, `recref_origin.rs`, and `d39_persist.rs`'s other two
+      compares. Only the identifier fold distinguishes them, and only on non-ASCII names.
+  - The new fixture also moved `l2_features.snapshot` and the root-class summary. The ids
+    parent-baseline record and the policy facts oracle were re-minted to add it (no other
+    fixture or case moved), and `FIXTURE_ROOTS` went 222 → 223.
+  - Measured on CDO: to be re-run on the final head after the reviews (the earlier run,
+    `14fad659` against `28686add`, moved nothing: 2,308 / 32,576 findings, 0 fingerprints
+    added or removed).
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 

@@ -371,9 +371,12 @@ fn message_key(
     if text.starts_with('\'') {
         return format!("text:{}", short_hash(text));
     }
-    let name = text.trim_matches('"').to_lowercase();
+    // The lookup folds as the L2 names do; the key keeps its own spelling
+    // (an identity: it must not move with the fold).
+    let raw = text.trim_matches('"');
+    let name = raw.to_lowercase();
     if r.variables.iter().any(|v| {
-        al_syntax::eq_fold_identifier(&v.name, &name)
+        al_syntax::eq_fold_identifier(&v.name, raw)
             && v.declared_type.to_lowercase().starts_with("label")
     }) {
         return format!("label:{name}");

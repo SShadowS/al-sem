@@ -1,5 +1,5 @@
 {
-  "mintedAt": "044f7137; d50 fixtures re-minted for ENG-22 (d50 changed meaning, owner q-20261112T025612-62a3ca62); ws-grammar-v4-shapes added at dc0608a6 for TLS-41 (no other fixture moved); ws-nordic-identifiers added on 14fad659 for TLS-43 and re-minted after its review r1 (no other fixture moved)",
+  "mintedAt": "044f7137; d50 fixtures re-minted for ENG-22 (d50 changed meaning, owner q-20261112T025612-62a3ca62); ws-grammar-v4-shapes added at dc0608a6 for TLS-41 (no other fixture moved); ws-nordic-identifiers added on 14fad659 for TLS-43 and re-minted after its reviews r1 and r2 (no other fixture moved)",
   "fixtures": {
     "fixtures/analyze-json": {
       "findings": [
@@ -2357,24 +2357,29 @@
       "findings": [
         "d11-modify-without-get|al-sem/v1=46df7d74e326a379",
         "d19-unused-parameter|al-sem/v1=d58d2fedb796593a",
+        "d33-unfiltered-bulk-write|al-sem/v1=4821ea23935012ba",
         "d39-record-left-dirty-across-chain|al-sem/v1=c91ebb0da15d04bd"
       ],
       "stableIds": [
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#10e5c579d9bea8750a898dc934e1dbd58024f7ddd4fe61033f5644f1e21e5564",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#10e5c579d9bea8750a898dc934e1dbd58024f7ddd4fe61033f5644f1e21e5564/cs0",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#18a015058030416ac385bf1707e33de7ba006912d316cc63fa176e8167e48a26",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#2af67b7144dfbc4e021961e88dcd6d4046d3a82b268871a57f5b3f38443ee7be",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#4f5d232d835875086c96cab4cecf2558364668f7b0087d81d51544392566e049",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#66302123e09304550d84ee76f6aeb0bc4386c53b23d843a08dc7d0d229a6ca98",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#8bc9ae991389207bd995b952c3b1e77b5e672666d14ae6d534db855257480ca0",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#981485130dee99319e41ea2cd8907043854a2694a18fbbed4530787a39fab4ae",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#b8c61d2a68b89212b7414b11a931f9dde93f2c386a819073d9dc1285f795663f",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#cf1a3769f4c8d1e7e2b87f62527d5c59789554d12b3d894488bc118b7844a92f",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#d27008f363a9053754726da0c3d5f1a6c4f4dc1766e88d3bcba4a61d798c5db8",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#d27008f363a9053754726da0c3d5f1a6c4f4dc1766e88d3bcba4a61d798c5db8/op1",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#d7b6adcba533126767e7b4f8c241e6c622ea68ad0dae3ab366dd752299008e1c",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#e673a3e8faaa33faec538f26f47f5b0625994c607953a460b254ade0a81fc7a9",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#ec9949f2ec683265d8b917f738769d9a7f21f594369b55a9652cac7b6e7c7747",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#f0927c9c6de05455a98ec8ec863e6bdff5d4d3228164d876fb1d96723fd599b7",
         "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b43:Codeunit:50430#f0927c9c6de05455a98ec8ec863e6bdff5d4d3228164d876fb1d96723fd599b7/op0"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"46df7d74e326a379\",\n    \"c91ebb0da15d04bd\",\n    \"d58d2fedb796593a\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"46df7d74e326a379\",\n    \"4821ea23935012ba\",\n    \"c91ebb0da15d04bd\",\n    \"d58d2fedb796593a\"\n  ]\n}\n"
     },
     "r0-corpus/ws-object-name-shape": {
       "findings": [],

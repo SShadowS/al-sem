@@ -507,7 +507,11 @@ pub(crate) fn primary_key_field_names_lc(table: &ModelTable) -> HashSet<String> 
         .map(|k| {
             k.fields
                 .iter()
-                .filter_map(|fid| field_name_by_id.get(fid.as_str()).map(|n| n.to_lowercase()))
+                .filter_map(|fid| {
+                    field_name_by_id
+                        .get(fid.as_str())
+                        .map(|n| n.fold_identifier())
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -525,7 +529,7 @@ pub(crate) fn flow_field_names_lc(table: &ModelTable) -> HashSet<String> {
         .fields
         .iter()
         .filter(|f| f.field_class == "FlowField" || f.field_class == "FlowFilter")
-        .map(|f| f.name.to_lowercase())
+        .map(|f| f.name.fold_identifier())
         .collect()
 }
 
@@ -541,7 +545,7 @@ pub(crate) fn normalize_load_field_arg(raw: &str) -> String {
     } else {
         t
     };
-    t.to_lowercase()
+    t.fold_identifier()
 }
 
 /// G-9: page triggers in which the platform has already loaded the implicit
@@ -834,7 +838,7 @@ pub(crate) fn record_loaded_by_call_before(
         }
         // Tier 1: platform built-in loader called ON the record itself.
         if let PCallee::Member { receiver, method } = &cs.callee
-            && receiver.to_lowercase() == var_lc
+            && receiver.fold_identifier() == var_lc
             && PLATFORM_LOADER_METHODS
                 .iter()
                 .any(|m| m.eq_fold_identifier(method))
@@ -888,14 +892,14 @@ fn callee_loads_param(
     // record loaded-or-inserted either way).
     if callee.record_operations.iter().any(|op| {
         RECORD_LOAD_OPS.contains(&op.op.as_str())
-            && op.record_variable_name.to_lowercase() == param_lc
+            && op.record_variable_name.fold_identifier() == param_lc
     }) {
         return true;
     }
     for cs in &callee.call_sites {
         // Tier 1 inside the wrapper: `<param>.GetBySystemId(...)`.
         if let PCallee::Member { receiver, method } = &cs.callee
-            && receiver.to_lowercase() == param_lc
+            && receiver.fold_identifier() == param_lc
             && PLATFORM_LOADER_METHODS
                 .iter()
                 .any(|m| m.eq_fold_identifier(method))
@@ -966,7 +970,7 @@ fn callee_applies_op_to_by_var_arg(
             continue;
         };
         // …must satisfy the caller-supplied op predicate in the callee body.
-        if param_check(callee, &param_rv.name.to_lowercase()) {
+        if param_check(callee, &param_rv.name.fold_identifier()) {
             return true;
         }
     }
@@ -1112,7 +1116,7 @@ pub(crate) fn record_filtered_by_call_before(
         // whatever filters the callee applied.
         let reset_after_call = routine.record_operations.iter().any(|op| {
             op.op == "Reset"
-                && op.record_variable_name.to_lowercase() == var_lc
+                && op.record_variable_name.fold_identifier() == var_lc
                 && before_anchor(&cs.source_anchor, &op.source_anchor)
                 && before_anchor(&op.source_anchor, op_anchor)
         });
@@ -1126,7 +1130,7 @@ pub(crate) fn record_filtered_by_call_before(
         // G-17(a): member call ON the receiver to a filter method defined on
         // the receiver's own table.
         if let PCallee::Member { receiver, method } = &cs.callee
-            && receiver.to_lowercase() == var_lc
+            && receiver.fold_identifier() == var_lc
             && receiver_table_method_net_filters_self(routine, ctx, &var_lc, method)
         {
             return true;
@@ -1182,7 +1186,7 @@ fn receiver_table_method_net_filters_self(
     let Some(table_id) = routine
         .record_variables
         .iter()
-        .find(|rv| rv.name.to_lowercase() == var_lc)
+        .find(|rv| rv.name.fold_identifier() == var_lc)
         .and_then(|rv| rv.table_id.as_deref())
     else {
         return false;
@@ -1273,7 +1277,7 @@ pub(crate) fn record_filter_applied_before(
         if std::ptr::eq(other, bulk_op) {
             continue;
         }
-        if other.record_variable_name.to_lowercase() != var_key {
+        if other.record_variable_name.fold_identifier() != var_key {
             continue;
         }
         if !before_anchor(&other.source_anchor, &bulk_op.source_anchor) {
@@ -1296,7 +1300,7 @@ pub(crate) fn record_filter_applied_before(
 fn callee_net_filters_param(callee: &ModelRoutine, param_lc: &str) -> bool {
     let mut last: Option<&ModelRecordOperation> = None;
     for op in &callee.record_operations {
-        if op.record_variable_name.to_lowercase() != param_lc {
+        if op.record_variable_name.fold_identifier() != param_lc {
             continue;
         }
         if !RECORD_FILTER_OPS.contains(&op.op.as_str()) && op.op != "Reset" {
@@ -1370,11 +1374,11 @@ pub(crate) fn op_targets_virtual_system_table(
     {
         return false;
     }
-    let lc = op.record_variable_name.to_lowercase();
+    let lc = op.record_variable_name.fold_identifier();
     routine
         .record_variables
         .iter()
-        .find(|v| v.name.to_lowercase() == lc)
+        .find(|v| v.name.fold_identifier() == lc)
         .and_then(|v| v.table_name.as_deref())
         .is_some_and(is_virtual_system_table)
 }
@@ -1505,7 +1509,7 @@ pub(crate) fn whole_set_advance<'a>(
     }
     let advances: Vec<&&ModelRecordOperation> = ops_in_loop
         .iter()
-        .filter(|op| op.op == "Next" && op.record_variable_name.to_lowercase() == driver)
+        .filter(|op| op.op == "Next" && op.record_variable_name.fold_identifier() == driver)
         .collect();
     match advances.as_slice() {
         [only] if only.id == *advance_id && is_unit_advance(only) => Some(only.id.as_str()),

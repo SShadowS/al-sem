@@ -83,6 +83,32 @@ codeunit 50430 "Nordic Names"
         Ørd.Modify();
     end;
 
+    // d33 (review r2, astra): `Filtrer` filters `İndkøb` by var, then `Reset`
+    // clears that filter, so the DeleteAll is unfiltered. `İ` is the one letter
+    // whose `to_lowercase` (`i` + U+0307) differs from the identifier fold (`i`).
+    procedure ResetThenDeleteAll()
+    var
+        İndkøb: Record "Nordic Order";
+    begin
+        Filtrer(İndkøb);
+        İndkøb.Reset();
+        İndkøb.DeleteAll();
+    end;
+
+    // d33 control: the filter stands.
+    procedure FilteredDeleteAll()
+    var
+        İndkøb: Record "Nordic Order";
+    begin
+        Filtrer(İndkøb);
+        İndkøb.DeleteAll();
+    end;
+
+    local procedure Filtrer(var Rec2: Record "Nordic Order")
+    begin
+        Rec2.SetRange("No.", 'X');
+    end;
+
     // The global record-variable backfill: `Ålcust` is an object global, so
     // the argument binding of `HentØrder(Ålcust)` is `global`.
     procedure PassesGlobal()

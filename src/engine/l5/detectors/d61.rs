@@ -44,7 +44,7 @@ const CRITICAL_WRITE_OPS: &[&str] = &[
 ];
 
 fn is_ishandled_name(raw: &str) -> bool {
-    let n = raw.trim_matches('"').to_lowercase();
+    let n = raw.trim_matches('"').fold_identifier();
     n == "ishandled" || n == "handled"
 }
 
@@ -214,7 +214,7 @@ pub fn detect_d61(
             let name_from_text = if name_from_binding.is_none() {
                 cs.argument_texts
                     .get(param_index as usize)
-                    .map(|t| t.trim().to_lowercase())
+                    .map(|t| t.trim().fold_identifier())
             } else {
                 None
             };

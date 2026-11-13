@@ -348,4 +348,43 @@ mod tests {
         let many: Vec<Req> = (0..5).map(|i| (i, true)).collect();
         assert_eq!(conjoin(&many, &[]), Some(vec![]), "over the cap: dropped");
     }
+
+    /// TLS-43 (review r2, Fable): a flag named with a non-ASCII capital is read
+    /// by `frame_guards` itself, not only by the literal-value pass that masks it
+    /// in prove. `Kept`'s `if Ændret then Mark();` gives the call a requirement;
+    /// `Assigned` assigns `Ændret` first, so it is no usable guard. The L2 rows
+    /// (guards, assignments) carry the name folded (`ændret`), the parameter its
+    /// own spelling.
+    ///
+    /// Discrimination (2026-11-13): the assignment compare back on
+    /// `eq_ignore_ascii_case` fails at "assigned"; the usable name back on
+    /// `to_ascii_lowercase` fails at "the guard is read". Restored, it passes.
+    #[test]
+    fn a_nordic_flag_is_a_guard_until_it_is_assigned() {
+        use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
+        let src = "codeunit 50100 G\n{\n    procedure Kept(Ændret: Boolean)\n    begin\n        if Ændret then\n            Mark();\n    end;\n\n    procedure Assigned(Ændret: Boolean)\n    begin\n        Ændret := true;\n        if Ændret then\n            Mark();\n    end;\n\n    local procedure Mark()\n    begin\n    end;\n}\n";
+        let m = assemble_and_resolve_inline_program_default(
+            &[("src/G.al".to_string(), src.to_string())],
+            "11111111-0000-0000-0000-000000004343",
+        );
+        let r = |n: &str| {
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.name == n)
+                .unwrap_or_else(|| panic!("precondition: {n} is in the model"))
+        };
+        let kept = frame_guards(r("Kept"), |_, _| true);
+        assert!(
+            kept.as_ref().is_some_and(|f| !f.by_site.is_empty()),
+            "the guard is read: {:?}",
+            kept.map(|f| (f.usable, f.by_site))
+        );
+        let assigned = frame_guards(r("Assigned"), |_, _| true);
+        assert!(
+            assigned.as_ref().is_none_or(|f| f.usable.is_empty()),
+            "assigned: {:?}",
+            assigned.map(|f| f.usable)
+        );
+    }
 }

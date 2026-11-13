@@ -1880,8 +1880,10 @@ fn differential_r4_findings_match_goldens() {
 /// `d39_persist::record_reassigned` back on `eq_ignore_ascii_case` (review r1,
 /// Fable: the L2 `lhs_name` is folded, the parameter name raw) fails at
 /// "GemAndet reassigns Ørd"; the backfill's `global_rv_by_lc` key back on
-/// `to_ascii_lowercase` fails at "Ålcust is the object global" (`unknown`).
-/// Restored, each passes.
+/// `to_ascii_lowercase` fails at "Ålcust is the object global" (`unknown`);
+/// the filter proof's `Reset` compare (`detectors/mod.rs`) back on its old
+/// `to_lowercase` (review r2, astra: `İ` lowercases to `i` + U+0307, the fold to
+/// `i`) fails at "the Reset on İndkøb clears the filter". Restored, each passes.
 #[test]
 fn nordic_identifiers_meet_one_fold() {
     let p = run_rust(
@@ -1891,6 +1893,7 @@ fn nordic_identifiers_meet_one_fold() {
             "d19-unused-parameter",
             "d11-modify-without-get",
             "d39-record-left-dirty-across-chain",
+            "d33-unfiltered-bulk-write",
         ],
     );
     let texts: Vec<String> = p
@@ -1933,6 +1936,18 @@ fn nordic_identifiers_meet_one_fold() {
             "ValidatesThenGemSamme"
         ),
         "control: GemSamme persists it: {all}"
+    );
+
+    // d33 (`detectors/mod.rs`, the filter-by-call proof): a `Reset` on `İndkøb`
+    // after `Filtrer(İndkøb)` clears the filter, so its DeleteAll is reported;
+    // with no `Reset` the filter stands.
+    assert!(
+        fired("d33-unfiltered-bulk-write", "ResetThenDeleteAll"),
+        "the Reset on İndkøb clears the filter: {all}"
+    );
+    assert!(
+        !fired("d33-unfiltered-bulk-write", "FilteredDeleteAll"),
+        "control: the filter stands: {all}"
     );
 
     // The global record-variable backfill (`workspace.rs`): `HentØrder(Ålcust)`

@@ -111,7 +111,7 @@ pub fn detect_d60(
             .record_operations
             .iter()
             .filter(|op| CURSOR_OPS.contains(&op.op.as_str()))
-            .map(|op| op.record_variable_name.to_lowercase())
+            .map(|op| op.record_variable_name.fold_identifier())
             .collect();
 
         // One finding per (loop, var): first Modify wins.
@@ -124,7 +124,7 @@ pub fn detect_d60(
                 continue;
             };
             candidates_considered += 1;
-            let var_lc = op.record_variable_name.to_lowercase();
+            let var_lc = op.record_variable_name.fold_identifier();
             if !cursor_vars.contains(&var_lc) {
                 skipped_not_cursor += 1;
                 continue;
@@ -154,7 +154,7 @@ pub fn detect_d60(
             }
             if routine.record_operations.iter().any(|o| {
                 o.loop_stack.iter().any(|id| id == loop_id)
-                    && o.record_variable_name.to_lowercase() != var_lc
+                    && o.record_variable_name.fold_identifier() != var_lc
             }) {
                 skipped_body_other_record += 1;
                 continue;
@@ -180,7 +180,7 @@ pub fn detect_d60(
                 .iter()
                 .filter(|o| {
                     o.loop_stack.iter().any(|id| id == loop_id)
-                        && o.record_variable_name.to_lowercase() == var_lc
+                        && o.record_variable_name.fold_identifier() == var_lc
                 })
                 .collect();
             let Some(advance_id) = whole_set_advance(&driver_ops_in_loop, &var_lc, loop_info)

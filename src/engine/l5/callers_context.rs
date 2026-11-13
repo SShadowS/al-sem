@@ -526,7 +526,7 @@ impl<'a> Index<'a> {
                 .model
                 .primary_app
                 .as_ref()
-                .is_some_and(|p| p.app_guid.eq_fold_identifier(&t.app_guid));
+                .is_some_and(|p| p.app_guid.eq_ignore_ascii_case(&t.app_guid));
             return format_object("Table", &t.name, (!own).then_some(t.table_number));
         }
         match self.objects.get(id) {

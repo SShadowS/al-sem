@@ -21,6 +21,7 @@ use super::control_flow::{
 };
 use super::features::{PCFNNode, PCallSite, PFeatures, POperationSite};
 use super::scope::ParameterSymbol;
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -100,7 +101,7 @@ fn build_guard_eligibility(
 ) -> GuardEligibility {
     let mut by_var_bool_params = Vec::new();
     for p in parameters {
-        if p.is_var && p.type_text.trim().to_lowercase() == "boolean" {
+        if p.is_var && p.type_text.trim().fold_identifier() == "boolean" {
             let lc = al_syntax::fold_identifier(&p.name);
             if !by_var_bool_params.contains(&lc) {
                 by_var_bool_params.push(lc);
@@ -510,7 +511,7 @@ pub fn derive_is_handled_vars(features: &PFeatures) -> Vec<String> {
     let mut call_arg_name_set: Vec<String> = Vec::new();
     for cs in &features.call_sites {
         for arg in &cs.argument_texts {
-            let trimmed = arg.trim().to_lowercase();
+            let trimmed = arg.trim().fold_identifier();
             if !trimmed.is_empty() && !call_arg_name_set.contains(&trimmed) {
                 call_arg_name_set.push(trimmed);
             }
@@ -519,8 +520,8 @@ pub fn derive_is_handled_vars(features: &PFeatures) -> Vec<String> {
     let mut out = Vec::new();
     for v in &features.variables {
         if v.scope != "parameter"
-            && v.declared_type.trim().to_lowercase() == "boolean"
-            && call_arg_name_set.contains(&v.name.to_lowercase())
+            && v.declared_type.trim().fold_identifier() == "boolean"
+            && call_arg_name_set.contains(&v.name.fold_identifier())
         {
             let lc = al_syntax::fold_identifier(&v.name);
             if !out.contains(&lc) {

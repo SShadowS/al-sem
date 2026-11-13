@@ -744,7 +744,7 @@ impl<'m> CrossRules<'m> {
         if !matches!(info.kind.as_str(), "identifier" | "quoted_identifier") {
             return VariantAcross::Unknown;
         }
-        let fold = |s: &str| s.trim().trim_matches('"').to_lowercase();
+        let fold = |s: &str| s.trim().trim_matches('"').fold_identifier();
         let name = fold(&info.text);
         let c = self.row(caller);
         if let Some(p) = c.parameters.iter().find(|p| fold(&p.name) == name)
@@ -1299,7 +1299,7 @@ impl<'m> CrossRules<'m> {
         for o in &self.model.workspace.objects {
             let is_table = o.object_type == "Table"
                 && o.object_number == table.table_number
-                && o.app_guid.eq_fold_identifier(&table.app_guid);
+                && o.app_guid.eq_ignore_ascii_case(&table.app_guid);
             let extends = o.object_type == "TableExtension"
                 && o.extends_target_name
                     .as_deref()

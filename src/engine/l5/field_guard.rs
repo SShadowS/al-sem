@@ -194,7 +194,7 @@ pub(crate) fn resolve_field_guarded_writes(
     let workspace_declared = !primary_guid.is_empty()
         && asked
             .iter()
-            .all(|t| t.app_guid.eq_fold_identifier(primary_guid));
+            .all(|t| t.app_guid.eq_ignore_ascii_case(primary_guid));
     for (i, eff) in entry.effects.iter().enumerate() {
         if !crate::engine::l5::prove::writes_unknown_table(eff)
             || eff.origin_operation_ids.is_empty()

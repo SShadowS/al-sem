@@ -337,7 +337,7 @@ fn classify_value_source(
                 .value
                 .clone()
                 .unwrap_or_else(|| info.text.clone())
-                .to_lowercase();
+                .fold_identifier();
             classify_identifier(&name, variables, 0)
         }
         "member_expression" => classify_member_expression(&info.text, variables),
@@ -421,7 +421,7 @@ fn classify_member_expression(text: &str, variables: &HashMap<String, VarInfo>) 
     };
     let receiver_raw = text[..dot_idx].trim();
     let field_raw = text[dot_idx + 1..].trim();
-    let receiver_lower = receiver_raw.to_lowercase();
+    let receiver_lower = receiver_raw.fold_identifier();
     let Some(sym) = variables.get(&receiver_lower) else {
         return ValueSource::Expression;
     };
@@ -590,7 +590,7 @@ pub(crate) fn direct_facts_for_routine(
     let mut variables: HashMap<String, VarInfo> = HashMap::new();
     for v in routine.variables.iter() {
         variables.insert(
-            v.name.to_lowercase(),
+            v.name.fold_identifier(),
             VarInfo {
                 is_parameter: v.is_parameter,
                 parameter_index: v.parameter_index.unwrap_or(0),
@@ -634,7 +634,7 @@ pub(crate) fn direct_facts_for_routine(
     // (extractor.ts:147). Used by http / file-blob / ui-window-open families.
     let receiver_type_of = |name: &str| -> String {
         variables
-            .get(&name.to_lowercase())
+            .get(&name.fold_identifier())
             .map(|v| v.declared_type.clone())
             .unwrap_or_else(|| "unknown".to_string())
     };
@@ -5063,7 +5063,7 @@ impl R3a5CrossAppBase {
     pub(crate) fn loaded_app_names(&self) -> HashMap<String, String> {
         self.dependency_apps
             .iter()
-            .map(|a| (a.guid.fold_identifier(), a.name.clone()))
+            .map(|a| (a.guid.to_ascii_lowercase(), a.name.clone()))
             .collect()
     }
 

@@ -28,6 +28,7 @@ pub mod ui_events_error;
 pub mod value_source;
 
 use super::features::{PFeatures, PRoutine, PVariableSymbol};
+use al_syntax::IdentifierFoldExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -260,7 +261,7 @@ impl ExtractionContext<'_> {
     /// the variable isn't in the index. Mirrors `ctx.receiverTypeOf`.
     pub fn receiver_type_of(&self, receiver_name: &str) -> String {
         self.variables
-            .get(&receiver_name.to_lowercase())
+            .get(&receiver_name.fold_identifier())
             .map(|v| v.declared_type.clone())
             .unwrap_or_else(|| "unknown".to_string())
     }
@@ -355,7 +356,7 @@ pub fn extract_capabilities(routine: &PRoutine) -> CapabilityExtractionResult {
     // ── Build the dispatch context (variable index from the filtered view) ──
     let mut variables: HashMap<String, &PVariableSymbol> = HashMap::new();
     for v in &reachable_features.variables {
-        variables.insert(v.name.to_lowercase(), v);
+        variables.insert(v.name.fold_identifier(), v);
     }
     let ctx = ExtractionContext {
         features: &reachable_features,
