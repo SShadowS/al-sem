@@ -3195,10 +3195,15 @@ impl<'a> Converter<'a> {
             record_variable_name: receiver,
             record_variable_id: None,
             table_id,
-            temp_state: Some(PTempState {
-                kind: "unknown".to_string(),
-                value: None,
-                parameter_index: None,
+            // ENG-26: a protected var's declaration says whether it is
+            // temporary; a call's result does not.
+            temp_state: Some(match cr.temporary {
+                Some(t) => crate::program::body::scope::ts_known(t),
+                None => PTempState {
+                    kind: "unknown".to_string(),
+                    value: None,
+                    parameter_index: None,
+                },
             }),
             // `Validate(Field, …)`: its field, as written; `CalcFields(F1, …)`:
             // every field (their FlowField reads are attached after the op

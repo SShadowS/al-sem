@@ -250,6 +250,10 @@ pub struct SiteFacts {
     /// name (`Count`, `Next`, …), so a parens-less `R.Count` there reads the
     /// field and is no call. `false` when the table is not known.
     pub record_op_field_named: bool,
+    /// ENG-26: the receiver is a base object's `protected var` in an
+    /// extension, so a parens-less use of it is a record operation (kept by
+    /// the parens-less filter even when its table did not resolve).
+    pub inherited_protected: bool,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -283,6 +287,9 @@ pub struct CallResultRecord {
     pub op: &'static str,
     /// The returned record's table (the function's declared return type).
     pub table: ObjectNodeId,
+    /// ENG-26: whether the record is `temporary`, when a declaration says so
+    /// (a base object's protected var); `None` for a call's result.
+    pub temporary: Option<bool>,
     /// Its trigger routes, after the site's RunTrigger rule.
     pub triggers: Vec<Route>,
     /// Its platform table-event publishers.
@@ -1068,6 +1075,12 @@ fn resolve_call_site_obligation(
                 // `FieldRef.Validate` is); a RecordRef: an honest open dispatch;
                 // a table not loaded: one unresolved route. Never a definite `no`.
                 let trigger_op = crate::program::resolve::edge::record_trigger_op(&method_lc);
+                // ENG-26: the declared type of a base object's protected var
+                // this receiver names, if it does.
+                let inherited: Option<String> = receiver
+                    .and_then(|id| crate::record_ops::receiver_variable(&file.ir, id))
+                    .filter(|v| !v.starts_with("this."))
+                    .and_then(|v| inherited_protected_type(&v, obj_node, graph, index));
                 if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
                     && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
                     // Not a variable (`X`, `X[i]`): those are record operations.
@@ -1082,10 +1095,11 @@ fn resolve_call_site_obligation(
                         match crate::record_ops::receiver_variable(&file.ir, id) {
                             None => true,
                             Some(v) if v.starts_with("this.") => true,
-                            Some(v) => inherited_protected_var(&v, obj_node, graph, index),
+                            Some(_) => inherited.is_some(),
                         }
                     })
                 {
+                    facts_out.inherited_protected = inherited.is_some();
                     let table_node = match &recv {
                         ReceiverType::Record { table: Some(tid) } => graph.object_first(tid),
                         _ => None,
@@ -1117,6 +1131,12 @@ fn resolve_call_site_obligation(
                             facts_out.call_result_record = Some(CallResultRecord {
                                 op,
                                 table: table_node.id.clone(),
+                                // A protected var's declaration says whether it
+                                // is temporary; a call's result does not.
+                                temporary: inherited.as_deref().map(|ty| {
+                                    ty.split_whitespace()
+                                        .any(|w| w.eq_ignore_ascii_case("temporary"))
+                                }),
                                 triggers,
                                 table_events:
                                     crate::program::resolve::resolver::resolve_table_events(
@@ -1772,7 +1792,11 @@ pub(crate) fn resolve_file_obligations(
                         obj_node_opt.is_some_and(|from| {
                             !index.table_scope_may_have_field(graph, from, &cr.table, &method_lc)
                         })
-                    });
+                    })
+                    // A protected RecordRef (no fields) or a record of a table not
+                    // loaded: kept, so its open or unresolved route answers
+                    // `unknown`, never `no`.
+                    || (facts.inherited_protected && facts.call_result_record.is_none());
                 if site.parenless
                     && !parenless_record_op
                     && (kind != EdgeKind::Call
@@ -2115,21 +2139,25 @@ fn member_dataset_run(
     })
 }
 
-/// ENG-26: `name` (a bare variable receiver) is a `protected var` of the
-/// object `from_object` extends. Shadowing needs no check here: a record
-/// parameter, local or global of the same name is in the receiver sets, so
-/// its call is a record operation and never reaches this path, and any other
-/// type types the receiver as that type (receiver Step 2 comes before 2c).
-fn inherited_protected_var(
+/// ENG-26: the declared type text of `name` (a bare variable receiver) when it
+/// is a `protected var` of the object `from_object` extends. Shadowing needs no
+/// check here: a record parameter, local or global of the same name is in the
+/// receiver sets, so its call is a record operation and never reaches this
+/// path, and any other type types the receiver as that type (receiver Step 2
+/// comes before 2c).
+fn inherited_protected_type(
     name: &str,
     from_object: &ObjectNode,
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
-) -> bool {
+) -> Option<String> {
     let lc = name.fold_identifier();
     crate::program::resolve::receiver::extension_base_object(from_object, graph, index)
-        .flatten()
-        .is_some_and(|base| base.protected_vars.iter().any(|(n, _)| **n == *lc))
+        .flatten()?
+        .protected_vars
+        .iter()
+        .find(|(n, _)| **n == *lc)
+        .map(|(_, ty)| ty.to_string())
 }
 
 /// The [`ReceiverFact`] for a member call whose receiver typed as `recv`

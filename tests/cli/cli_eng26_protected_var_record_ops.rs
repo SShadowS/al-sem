@@ -35,6 +35,8 @@ table 52901 "E26 Base"
     keys { key(PK; K) { } }
     protected var
         Other: Record "E26 Target";
+        TempOther: Record "E26 Target" temporary;
+        RefOther: RecordRef;
 }
 tableextension 52902 "E26 Ext" extends "E26 Base"
 {
@@ -49,6 +51,14 @@ tableextension 52902 "E26 Ext" extends "E26 Base"
     procedure BareRead(): Boolean
     begin
         exit(Other.IsEmpty);
+    end;
+    procedure WriteTemp()
+    begin
+        TempOther.Modify(true);
+    end;
+    procedure BareRefRead(): Boolean
+    begin
+        exit(RefOther.IsEmpty);
     end;
     // A local of the same name shadows the protected var.
     procedure ShadowedWrite()
@@ -149,6 +159,12 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// order (Step 2, declared names, before Step 2c, the base's protected vars).
 /// Break (2026-11-13): run Step 2c first in `infer_receiver_type` ->
 /// `ShadowedByCodeunit` touches "E26 Target". Fails; restored, it passes.
+/// Review round 1 (Fable): the declaration's `temporary` (or its absence) is the
+/// op's temp state, and a parens-less read of a protected RecordRef answers
+/// `unknown`. Breaks: ignore `CallResultRecord::temporary` in
+/// `call_result_operation` -> `WriteOther` and `WriteTemp` read "possibly
+/// persistent"; drop the `inherited_protected` arm of the parens-less filter
+/// -> `BareRefRead` answers `no`. Each fails; restored, it passes.
 #[test]
 fn a_base_objects_protected_record_is_a_record_operation() {
     let t = workspace(SOURCE, "");
@@ -174,6 +190,14 @@ fn a_base_objects_protected_record_is_a_record_operation() {
     assert!(a.starts_with("answer: down: yes"), "ShadowedWrite: {a}");
     let a = touches(ws, "E26 Target", "\"E26 Ext\".ShadowedByCodeunit");
     assert!(a.starts_with("answer: down: no"), "ShadowedByCodeunit: {a}");
+    // The declaration says whether the record is temporary.
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".WriteOther");
+    assert!(a.contains("1 on a persistent record"), "WriteOther: {a}");
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".WriteTemp");
+    assert!(a.contains("1 on temporary records"), "WriteTemp: {a}");
+    // A protected RecordRef, read without parentheses: open, so `unknown`.
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".BareRefRead");
+    assert!(a.starts_with("answer: down: unknown"), "BareRefRead: {a}");
     let a = answer(&[
         "prove",
         ws,
