@@ -3671,7 +3671,7 @@ pub(crate) fn caller_scope_symbol<'a>(
 /// faithful port of the TS `/i` flag, itself a simple ASCII fold for a
 /// pure-ASCII pattern) — every byte offset used to slice comes straight from
 /// `trimmed_end`, so it is always a valid char boundary.
-fn strip_trailing_temporary(s: &str) -> String {
+pub(crate) fn strip_trailing_temporary(s: &str) -> String {
     const WORD: &str = "temporary";
     let trimmed_end = s.trim_end();
     let indices: Vec<(usize, char)> = trimmed_end.char_indices().collect();

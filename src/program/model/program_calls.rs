@@ -1742,6 +1742,14 @@ fn convert<'a>(
     // ENG-06 (`ResolvedCalls::loaded_only_tables`).
     let mut loaded_only_tables: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    // ENG-26: the tables whose rows are all temporary (`TableType =
+    // Temporary`), for the operations appended below.
+    let temporary_tables: std::collections::HashSet<&str> = ws
+        .tables
+        .iter()
+        .filter(|t| t.is_temporary)
+        .map(|t| t.id.as_str())
+        .collect();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order), then the dataset
     // operations' trigger and table-event edges (B6).
@@ -1869,7 +1877,18 @@ fn convert<'a>(
                 .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
                 .and_then(|f| f.call_result_record.as_ref())
             {
-                let (op, op_edges) = conv.call_result_operation(ix, r, cs, cr, &event_flow, &mut c);
+                let (mut op, op_edges) =
+                    conv.call_result_operation(ix, r, cs, cr, &event_flow, &mut c);
+                // ENG-26 (review): `record_types`' table-level rule for an
+                // appended operation, which that pass never sees: a table
+                // whose `TableType = Temporary` holds only temporary rows.
+                if op
+                    .table_id
+                    .as_deref()
+                    .is_some_and(|t| temporary_tables.contains(t))
+                {
+                    op.temp_state = Some(crate::program::body::scope::ts_known(true));
+                }
                 dataset_edges.extend(op_edges);
                 dataset_ops.ops.push((ri, vec![op]));
             }
@@ -3195,10 +3214,15 @@ impl<'a> Converter<'a> {
             record_variable_name: receiver,
             record_variable_id: None,
             table_id,
-            temp_state: Some(PTempState {
-                kind: "unknown".to_string(),
-                value: None,
-                parameter_index: None,
+            // ENG-26: a protected var's declaration says whether it is
+            // temporary; a call's result does not.
+            temp_state: Some(match cr.temporary {
+                Some(t) => crate::program::body::scope::ts_known(t),
+                None => PTempState {
+                    kind: "unknown".to_string(),
+                    value: None,
+                    parameter_index: None,
+                },
             }),
             // `Validate(Field, …)`: its field, as written; `CalcFields(F1, …)`:
             // every field (their FlowField reads are attached after the op
@@ -3206,6 +3230,9 @@ impl<'a> Converter<'a> {
             field_arguments: match cr.op {
                 "Validate" => cs.argument_texts.first().cloned().map(|f| vec![f]),
                 "CalcFields" => Some(cs.argument_texts.clone()),
+                // ENG-26 (review): a filter's field, so a FlowField filter
+                // reads its source table (`flow_fields` reads the first).
+                "SetRange" | "SetFilter" => cs.argument_texts.first().cloned().map(|f| vec![f]),
                 _ => None,
             },
             source_anchor: cs.source_anchor.clone(),

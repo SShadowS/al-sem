@@ -296,6 +296,7 @@ mod tests {
                 call_result_record: Some(CallResultRecord {
                     op: "Modify",
                     table: table.clone(),
+                    temporary: None,
                     triggers: vec![src(&on_modify)],
                     table_events: vec![src(&event)],
                 }),

@@ -239,6 +239,7 @@ mod cli_eng10_write_in_try;
 mod cli_eng12_record_ops;
 mod cli_eng22_checked_run_pending_write;
 mod cli_eng25_parenless_record_ops;
+mod cli_eng26_protected_var_record_ops;
 mod cli_eng27_d56_d14_arms;
 mod cli_envelope_detector_set;
 mod cli_error_boundary;
