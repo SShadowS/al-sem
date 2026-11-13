@@ -44,8 +44,8 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
 - B8: the query `scope:` line still says "one dependency routine deep" when no dependency code is
   entered. **Fixed by TLS-48** (2026-11-13): with no dependency code entered it reads "the whole
   cone, no dependency code entered" (plus "not searched: calls not resolved" when some are), as
-  the `locks:`/`reads:` absence lines do. Left: the `--format json` header `scope`
-  (`effect_query_cli.rs`, `query_scope_json`) still states the depth clause; ENG-40 (L1) rewrites that
+  the `locks:`/`reads:` absence lines do; the `--format json` header `scope`
+  (`query_scope_json`) says the same, read from the families' `depth`. ENG-40 (L1) builds on this
   text.
 - B8: test-app discovery does not read `.gitignore`. **Fixed by TLS-48** (2026-11-13): a folder
   git ignores is not entered (one `git check-ignore` per folder level), unless it holds the

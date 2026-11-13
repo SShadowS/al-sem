@@ -1830,7 +1830,18 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
             "an [EventSubscriber] the engine could not read may also run for these routines".into(),
         ]);
     }
-    let depth = if kind == "query.effects" {
+    // Engine limits B8 (TLS-48): the families say `wholeCone` when the cone
+    // enters no dependency code (`family_scope`); the human scope line agrees.
+    // ENG-40 (L1) builds on this text. Discrimination (2026-11-13): forcing
+    // `whole_cone` false fails the two `cli_query_differential` effects
+    // goldens; restored, passes.
+    let whole_cone = payload
+        .pointer("/result/scope/families/reads/depth")
+        .and_then(Value::as_str)
+        == Some("wholeCone");
+    let depth = if kind == "query.effects" && whole_cone {
+        "reads, locks, validate, writes: the whole cone, no dependency code entered"
+    } else if kind == "query.effects" {
         "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
          beyond dependency calls: whole cone with literal arguments"
     } else {
@@ -5605,7 +5616,8 @@ fn render_query_effects_body(
     if !enters_dependency {
         // Engine limits B8 (TLS-48): no dependency code entered, so no depth
         // clause; the search is the whole cone, as the absence lines above say.
-        // ENG-40 (L1) rewrites this scope text; keep the branches aligned.
+        // ENG-40 (L1) builds on this text; keep it aligned with
+        // `query_scope_json`'s header scope.
         // Pinned by the `cli_query_differential` goldens (discrimination
         // 2026-11-13: `if false` here fails `query_effects_event_subscriber_via`
         // and `query_effects_full_down_list_with_via`; restored, passes).

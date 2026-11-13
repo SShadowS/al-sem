@@ -279,9 +279,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its `scope:` line (the human header) now reads "reads, locks, validate, writes: the whole
   cone, no dependency code entered" (with "not searched: calls not resolved" when some are),
   matching the `reads:`/`locks:` absence lines, instead of "one dependency routine deep, not
-  exhaustive beyond". A cone that enters dependency code prints the old text. The `--format
-  json` header's `scope` is unchanged (ENG-40 rewrites it). Goldens moved:
-  `d8.onafterpostsalesdoc` and `r2a-record-types.declaredvars` human outputs, and the CDO
+  exhaustive beyond". The `--format json` header's `result.scope.scope` says the same. A cone
+  that enters dependency code prints the old text. Goldens moved: `d8.onafterpostsalesdoc` and
+  `r2a-record-types.declaredvars` (human and JSON), the batch `one-job` query golden, and the CDO
   `UpdateLastUpload` query-effects golden.
 - **Test-app auto-discovery skips folders git ignores** (`.gitignore`, `.git/info/exclude`,
   the user's excludes file), unless the folder holds the workspace; below such a folder nothing

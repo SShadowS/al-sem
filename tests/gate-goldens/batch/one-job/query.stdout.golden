@@ -105,7 +105,7 @@
         },
         "limits": [],
         "reasons": [],
-        "scope": "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments; dependencies: 0 apps",
+        "scope": "reads, locks, validate, writes: the whole cone, no dependency code entered; dependencies: 0 apps",
         "universe": "cross-app"
       }
     },
