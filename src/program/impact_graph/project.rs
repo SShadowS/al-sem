@@ -557,8 +557,19 @@ impl<'a> Builder<'a> {
                         };
                         // A dataset run's: whether the platform's own insert
                         // runs `OnInsert` is not documented (the operation's
-                        // `Maybe` trigger edge), so OverApprox.
-                        self.add(from.clone(), to, kind, conf, via, line, BTreeSet::new());
+                        // `Maybe` trigger edge), so OverApprox. The others, as
+                        // an edge's route (`engine_route`): a conditioned
+                        // route is OverApprox.
+                        let conditions: BTreeSet<&'static str> = match conf {
+                            Conf::OverApprox => BTreeSet::new(),
+                            _ => r.conditions.iter().map(|c| condition_str(*c)).collect(),
+                        };
+                        let conf = if conditions.is_empty() {
+                            conf
+                        } else {
+                            Conf::OverApprox
+                        };
+                        self.add(from.clone(), to, kind, conf, via, line, conditions);
                     }
                 }
             }
@@ -2938,7 +2949,9 @@ pub(crate) mod tests {
     /// the site's edge has no route, its facts hold a `CallResultRecord`.
     ///
     /// DISCRIMINATION (2026-11-13): skipping the `call_result_record` push in
-    /// `Projector`'s fact-op loop fails "the call result runs the trigger".
+    /// `Projector`'s fact-op loop fails "the call result runs the trigger";
+    /// dropping the route's conditions there fails "a conditioned trigger
+    /// route is OverApprox".
     #[test]
     fn a_call_result_record_op_runs_its_trigger_and_raises_its_table_event() {
         use crate::program::resolve::full::CallResultRecord;
@@ -2947,18 +2960,21 @@ pub(crate) mod tests {
         let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
         let table = w.obj(a, ObjectKind::Table, 50, "T", TrustTier::Workspace);
         let on_modify = w.trigger(&table, "OnModify");
+        let on_insert = w.trigger(&table, "OnInsert");
         let event = w.rtn_with(&table, "OnAfterModifyEvent", |r| {
             r.publisher_kind = Some(PublisherKind::Platform)
         });
         let p = w.rtn(&cu, "P");
         let site = w.edge(&p, EdgeKind::Call, DispatchShape::Multicast, vec![], 1);
+        let mut guarded = src(&on_insert);
+        guarded.conditions = vec![Condition::RunTriggerGuarded];
         w.site_facts.insert(
             site,
             SiteFacts {
                 call_result_record: Some(CallResultRecord {
                     op: "Modify",
                     table: table.clone(),
-                    triggers: vec![src(&on_modify)],
+                    triggers: vec![src(&on_modify), guarded],
                     table_events: vec![src(&event)],
                 }),
                 ..Default::default()
@@ -2974,6 +2990,12 @@ pub(crate) mod tests {
             o.edge("Cu.P", "T.OnAfterModifyEvent"),
             ("Event", "Resolved", "tableEvent"),
             "the call result raises the table event"
+        );
+        // A conditioned route is no unconditional edge (astra round 4).
+        assert_eq!(
+            o.edge("Cu.P", "T.OnInsert"),
+            ("Trigger", "OverApprox", "implicitTrigger"),
+            "a conditioned trigger route is OverApprox"
         );
     }
 }

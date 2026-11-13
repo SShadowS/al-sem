@@ -601,14 +601,18 @@ fn attach_program_calls_with(
     }
     // B6: the platform's dataset operations join their call site's row, after
     // the operations written in code (no site key: the site keys end above).
-    for (ri, mut ops) in dataset_ops.ops {
-        // ENG-12: a call result's `CalcFields` joins after the FlowField pass.
-        crate::program::model::flow_fields::attach_calc_fields_reads(
-            &rows.workspace.tables,
-            &mut ops,
-        );
-        rows.workspace.routines[ri].record_operations.extend(ops);
+    // ENG-12: they join after the FlowField pass, which then reads them (a
+    // call result's `CalcFields`, a shadowed `this.G.FindFirst()`).
+    let mut appended: HashMap<usize, usize> = HashMap::new();
+    for (ri, ops) in dataset_ops.ops {
+        let r = &mut rows.workspace.routines[ri];
+        appended.entry(ri).or_insert(r.record_operations.len());
+        r.record_operations.extend(ops);
     }
+    crate::program::model::flow_fields::attach_appended_flow_field_reads(
+        &mut rows.workspace,
+        &appended,
+    );
     for (ri, ci) in dataset_ops.may_fail_sites {
         rows.workspace.routines[ri].call_sites[ci].start_may_fail = true;
     }
@@ -3197,8 +3201,8 @@ impl<'a> Converter<'a> {
                 parameter_index: None,
             }),
             // `Validate(Field, …)`: its field, as written; `CalcFields(F1, …)`:
-            // every field (their FlowField reads are attached with the op,
-            // `flow_fields::attach_calc_fields_reads`).
+            // every field (their FlowField reads are attached after the op
+            // joins, `flow_fields::attach_appended_flow_field_reads`).
             field_arguments: match cr.op {
                 "Validate" => cs.argument_texts.first().cloned().map(|f| vec![f]),
                 "CalcFields" => Some(cs.argument_texts.clone()),

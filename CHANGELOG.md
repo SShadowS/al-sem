@@ -48,8 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Review round 3: a call result's `CalcFields(F)` reads its FlowFields' source tables and its
   `ModifyAll(F, …)` writes field `F` (`explain --field`); cross-app demand follows the triggers and
   table events a call result's record operation (and a FieldRef's `Validate`) raises, so a
-  dependency trigger reached only that way is loaded, and `alsem graph` exports them (Resolved
-  `implicitTrigger`/`tableEvent` edges), so test selection reaches a trigger through them; `Recs[ 1 ].SetAutoCalcFields(F)` is spelled
+  dependency trigger reached only that way is loaded, and `alsem graph` exports them
+  (`implicitTrigger`/`tableEvent` edges, OverApprox when the route is conditioned, as an edge's
+  route is), so test selection reaches a trigger through them; a call result's retrieval (a
+  shadowed `this.G.FindFirst()`) gets the FlowField reads of `this.G`'s `SetAutoCalcFields`, which
+  is scoped as the global whatever local shadows it; a variable whose quoted name holds `[`
+  (`"Line [Temp]"`) is looked up by its whole name; `Recs[ 1 ].SetAutoCalcFields(F)` is spelled
   as its retrieval's receiver, and an array element's FlowField setup is shared only as its array
   variable is (another routine's local array no longer supplies it).
 

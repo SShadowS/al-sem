@@ -268,8 +268,12 @@ mod tests {
     /// table event are demanded. Hand-stated: the site's edge has no route,
     /// its facts hold a `CallResultRecord`.
     ///
+    /// A FieldRef's decided `Validate` (ENG-06) likewise demands its trigger.
+    ///
     /// DISCRIMINATION (2026-11-12): dropping the `call_result_record` arm of
-    /// `fact_routes` fails "the call result's trigger is demanded".
+    /// `fact_routes` fails "the call result's trigger is demanded"; (2026-11-13)
+    /// dropping the `FieldRefValidate::Decided` arm fails "the FieldRef's
+    /// validate trigger is demanded".
     #[test]
     fn a_call_result_record_op_demands_its_trigger_and_table_event() {
         use crate::program::resolve::full::{CallResultRecord, SiteFacts};
@@ -298,10 +302,30 @@ mod tests {
                 ..Default::default()
             },
         );
+        // A FieldRef's decided `Validate` (ENG-06), on another site.
+        let on_validate = w.trigger(&table, "OnValidate");
+        let q = w.rtn(&cu, "Q");
+        let fr_site = w.edge(&q, EdgeKind::Call, DispatchShape::Multicast, vec![], 2);
+        w.site_facts.insert(
+            fr_site,
+            SiteFacts {
+                field_ref_validate: Some(FieldRefValidate::Decided {
+                    table: table.clone(),
+                    field: "v".into(),
+                    triggers: vec![src(&on_validate)],
+                    table_events: vec![],
+                }),
+                ..Default::default()
+            },
+        );
         let demand = w.with_inputs(a, |inp| cross_app_demand(a, inp.graph, inp.edges));
         assert!(
             demand.contains(&on_modify),
             "the call result's trigger is demanded"
+        );
+        assert!(
+            demand.contains(&on_validate),
+            "the FieldRef's validate trigger is demanded"
         );
         assert!(
             demand.contains(&event),

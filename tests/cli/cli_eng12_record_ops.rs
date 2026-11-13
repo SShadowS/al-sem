@@ -279,6 +279,50 @@ codeunit 52609 "E12 Spaced Both"
         if Recs[ 1 ].FindFirst() then;
     end;
 }
+codeunit 52611 "E12 This Flow"
+{
+    var
+        G: Record "E12 Row";
+    procedure ShadowBoth()
+    var
+        G: Integer;
+    begin
+        G := 1;
+        this.G.SetAutoCalcFields(Cnt);
+        if this.G.FindFirst() then;
+    end;
+}
+codeunit 52612 "E12 This Cross"
+{
+    var
+        G: Record "E12 Row";
+    procedure Setup()
+    begin
+        G.SetAutoCalcFields(Cnt);
+    end;
+    procedure ShadowRead()
+    var
+        G: Integer;
+    begin
+        G := 1;
+        if this.G.FindFirst() then;
+    end;
+}
+codeunit 52613 "E12 Bracket"
+{
+    procedure Setup()
+    var
+        "Line [Temp]": Record "E12 Row";
+    begin
+        "Line [Temp]".SetAutoCalcFields(Cnt);
+    end;
+    procedure Read()
+    var
+        "Line [Temp]": Record "E12 Row";
+    begin
+        if "Line [Temp]".FindFirst() then;
+    end;
+}
 codeunit 52610 "E12 Local Setup"
 {
     procedure Setup()
@@ -553,10 +597,22 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// same object once supplied the missing key (a local array's element was
 /// shared as an undeclared name, the implicit `Rec`); it is the routine's own
 /// local, shared with no other routine (`Retrieve`).
-/// Breaks (2026-11-12): `flow_fields::var_key` without `receiver_key_text`
+/// Round 4: a `this.G` under a same-named local is the global on both sides
+/// (its retrieval is a call-result op, appended after the FlowField pass:
+/// `ShadowBoth`; the setup in another routine: `ShadowRead`); a variable
+/// whose quoted name holds `[` is looked up whole (`"Line [Temp]"`, Fable):
+/// a local, so another routine's setup is not its own.
+/// Breaks (2026-11-12, re-run 2026-11-13): `flow_fields::receiver_key` without
+/// `receiver_key_text`
 /// -> `SpacedSetup` and `SpacedBoth` answer `no`; `Sharing::scopes` looking
 /// the whole key up again (not its array variable) -> `Retrieve` answers
-/// `yes`. Each fails; restored, it passes.
+/// `yes`. (2026-11-13): no retrievals in
+/// `attach_appended_flow_field_reads` (`CalcFields` only) -> `ShadowBoth`
+/// answers `no`; `scopes` ignoring `this` -> `ShadowRead` answers `no`;
+/// `scopes` without the whole-key lookup -> `Bracket` `Read` answers `yes`
+/// (the name falls to the object's scope; a global there shares alike, so
+/// only a local tells).
+/// Each fails; restored, it passes.
 #[test]
 fn a_spaced_element_is_the_element_its_flow_field_was_set_up_on() {
     let t = workspace();
@@ -567,6 +623,10 @@ fn a_spaced_element_is_the_element_its_flow_field_was_set_up_on() {
         ("\"E12 Spaced Both\".SpacedBoth", "answer: down: yes"),
         // Another routine's local array: its setup is not this one's.
         ("\"E12 Local Setup\".Retrieve", "answer: down: no"),
+        ("\"E12 This Flow\".ShadowBoth", "answer: down: yes"),
+        ("\"E12 This Cross\".ShadowRead", "answer: down: yes"),
+        // Another routine's local whose quoted name holds `[`: not shared.
+        ("\"E12 Bracket\".Read", "answer: down: no"),
     ] {
         let a = touches(ws, "E12 Plain", from);
         assert!(a.starts_with(want), "{from}: {a}");
