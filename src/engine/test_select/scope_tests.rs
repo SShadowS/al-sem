@@ -306,3 +306,70 @@ fn the_walk_does_not_enter_other_projects() {
     assert_eq!(names, ["Prod Tests Repo", "Prod Tests"]);
     assert_eq!(s.searched, 2, "TestRepo and work/Test only");
 }
+
+/// A REAL repository (`git init`): `check-ignore` needs one.
+fn git_repo() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    let ok = crate::git_env::git_command()
+        .arg("-C")
+        .arg(t.path())
+        .args(["init", "-q"])
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "git init failed");
+    t
+}
+
+/// A dependent test app at `dir`, named `name`.
+fn test_app(dir: &Path, id: &str, name: &str) {
+    app(dir, id, name, &[PROD]);
+    al(&dir.join("src"), "T.Codeunit.al", TEST_CU);
+}
+
+/// Engine limits B8 (TLS-48): auto-discovery does not enter a folder the
+/// repository's `.gitignore` ignores (a directory pattern, a bare name), and
+/// a folder that holds the workspace is entered even when ignored, with its
+/// workspace's siblings found.
+///
+/// DISCRIMINATION (2026-11-13): `walk` without the `retain` on `ignored`
+/// fails at the first `names` ("Copy Tests" and "Out Tests" found); passing
+/// `honor_ignore = true` to every child fails at the second (no "Scratch
+/// Tests"); restored, passes.
+#[test]
+fn discovery_skips_folders_git_ignores() {
+    let t = git_repo();
+    let r = t.path();
+    std::fs::write(r.join(".gitignore"), "build/\nOut\nscratch/\n").unwrap();
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("Test"),
+        "22222222-2222-2222-2222-222222222222",
+        "Prod Tests",
+    );
+    test_app(
+        &r.join("build/Copy"),
+        "33333333-3333-3333-3333-333333333333",
+        "Copy Tests",
+    );
+    test_app(
+        &r.join("Out"),
+        "44444444-4444-4444-4444-444444444444",
+        "Out Tests",
+    );
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Prod Tests"]);
+    assert_eq!(s.searched, 1, "Test only");
+
+    // A workspace in an ignored folder still finds its sibling there.
+    app(&r.join("scratch/App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("scratch/Tests"),
+        "55555555-5555-5555-5555-555555555555",
+        "Scratch Tests",
+    );
+    let s = discover(&r.join("scratch/App"), &ScopeRequest::default());
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Prod Tests", "Scratch Tests"]);
+}
