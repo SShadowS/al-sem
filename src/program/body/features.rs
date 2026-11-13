@@ -45,6 +45,7 @@
 //!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
+//!   - `PVarAssignment.lhs_is_member`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.path_hint`
@@ -705,6 +706,11 @@ pub struct PVarAssignment {
     /// `rhs_identifier`, and excluded from `PartialEq` for the same reason.
     #[serde(skip)]
     pub rhs_member: Option<(String, String)>,
+    /// ENG-27: the target is a member (`X.F := …`), so `lhs_name` is the
+    /// member's name, not a variable's. INTERNAL-ONLY like `rhs_identifier`,
+    /// and excluded from `PartialEq` for the same reason.
+    #[serde(skip)]
+    pub lhs_is_member: bool,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -1258,7 +1264,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 27, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 28, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

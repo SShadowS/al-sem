@@ -10,7 +10,7 @@
 //! deliberately, so it covers the `#[serde(skip)]` (and `PartialEq`-excluded) fields
 //! that a serialized golden CANNOT see: `PRecordOperation.in_until_condition` /
 //! `run_trigger`, `PCFNNode.source_range` / `is_case_else` / `path_hint`,
-//! `PVarAssignment.rhs_identifier`,
+//! `PVarAssignment.rhs_identifier` / `lhs_is_member`,
 //! `PRecordVariable.is_receiver`.
 //! Four such load-bearing fields silently broke during the migration precisely
 //! because the dual-run byte gate (serde + PartialEq) was blind to them; this gate

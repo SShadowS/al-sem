@@ -1099,6 +1099,10 @@ impl<'a> SpineCtx<'a> {
                         source_anchor: self.anchor(&st.origin),
                         rhs_identifier,
                         rhs_member,
+                        lhs_is_member: matches!(
+                            self.file.ir.expr(*target).kind,
+                            ExprKind::Member { .. }
+                        ),
                     });
                 }
                 use crate::program::body::features::FieldAccessKind;
