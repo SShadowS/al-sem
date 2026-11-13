@@ -157,16 +157,31 @@ def target_dir(repo):
     return os.environ.get("CARGO_TARGET_DIR") or os.path.join(repo, "target")
 
 
+def gate_release_dir(repo):
+    """The folder `scripts/ci-steps`' optimized build (`build` / `perf-bounds`) uses:
+    `<target>/gate-release`, spelled as ci-steps spells it (TLS-09)."""
+    return os.path.join(target_dir(repo), "gate-release")
+
+
 def build_working_tree(repo, logf):
-    """Build the working tree's alsem (release-fast) in place; return its path."""
+    """Build the working tree's alsem (release-fast) in ci-steps' optimized build folder;
+    return its path. ⟨TLS-33⟩ A landing gate runs `ci-steps all` first, which builds the
+    same profile and features there, so cargo finds every artifact fresh and builds nothing
+    (in the main target it rebuilt al-sem: 255 s on cdo-gate's critical path). An edit
+    since is rebuilt by cargo's own freshness check; with no ci-steps build first (a
+    scheduled run) it builds as before, in that folder. ci-steps' build and this one never
+    run at once (`ci-steps all` ends before `cdo-gate` starts), and cargo's build-folder
+    lock would make the second wait if they did."""
     log("building the working tree (release-fast, alsem)")
     t0 = time.monotonic()
+    env = dict(os.environ)
+    env["CARGO_TARGET_DIR"] = gate_release_dir(repo)
     rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem"],
-                        cwd=repo, stdout=logf, stderr=subprocess.STDOUT).returncode
+                        cwd=repo, env=env, stdout=logf, stderr=subprocess.STDOUT).returncode
     if rc != 0:
         raise SystemExit(f"cdo-speed: the working tree's build failed (log: {logf.name})")
     log(f"  built in {time.monotonic() - t0:.0f} s")
-    return os.path.join(target_dir(repo), "release-fast", "alsem")
+    return os.path.join(gate_release_dir(repo), "release-fast", "alsem")
 
 
 def default_base(repo, head_rev):
@@ -475,7 +490,8 @@ def main():
     ap.add_argument("--out", help="the folder for outputs and speed.json")
     ap.add_argument("--build-only", action="store_true", help="build both binaries, time nothing")
     ap.add_argument("--no-build", action="store_true",
-                    help="the working tree's release-fast alsem is already built")
+                    help="the working tree's release-fast alsem is already built "
+                         "(in <target>/gate-release, where --build-only builds it)")
     args = ap.parse_args()
     # TLS-25: each round times a routine no round timed before, so there are at most as many
     # rounds as routines. Refused here, before anything is built or started: a run asked for
@@ -523,8 +539,8 @@ def main():
             head_exe, head_sha = cached_binary(repo, args.head, logf)
             head_label = head_sha[:10]
         else:
-            built = (os.path.join(target_dir(repo), "release-fast", "alsem") if args.no_build
-                     else build_working_tree(repo, logf))
+            built = (os.path.join(gate_release_dir(repo), "release-fast", "alsem")
+                     if args.no_build else build_working_tree(repo, logf))
             if not os.path.exists(built):
                 log(f"no binary at {built}")
                 return 2

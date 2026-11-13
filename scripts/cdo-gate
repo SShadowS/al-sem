@@ -325,9 +325,12 @@ if [[ "$speed" -eq 0 ]]; then
     loud_no_speed
 else
     # The speed phase's two release-fast binaries (the working tree's, and the
-    # base commit's from its cache) are built beside the test build. The
-    # working tree's waits for the test build's lock on the target folder; the
-    # base's has a folder of its own.
+    # base commit's from its cache) are built beside the test build. ⟨TLS-33⟩
+    # The working tree's is built in ci-steps' optimized build folder
+    # (`<target>/gate-release`): after `ci-steps all` on the same tree it is
+    # already there and cargo builds nothing, and it never waits for the test
+    # build's lock (in the main target folder it did, then rebuilt al-sem: 255 s
+    # on the critical path). The base's has a folder of its own.
     # In a process group of its own (`set -m` for this one job), so stopping it
     # stops cdo-speed and its cargo builds too, not only the subshell: an
     # orphaned base build would hold the cache lock for minutes.

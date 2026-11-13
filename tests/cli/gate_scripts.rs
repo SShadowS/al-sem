@@ -203,6 +203,65 @@ fn speed_warm_reads_the_gates_own_cache_entry() {
     );
 }
 
+/// TLS-33: the speed check builds the working tree in ci-steps' optimized
+/// build folder (`<target>/gate-release`), where `ci-steps all` already built
+/// the same tree, not in the main target folder (where it rebuilt al-sem). A
+/// stub `cargo` first on `PATH` records the `CARGO_TARGET_DIR` it is given and
+/// leaves a binary there; the base is a given binary, so nothing else builds.
+///
+/// Mutation (2026-11-13): `build_working_tree` without its `CARGO_TARGET_DIR`
+/// -> the stub builds in the main target folder, `cdo-speed` finds no binary
+/// in `gate-release` and exits 2 (the exit-code assert fails).
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_build_uses_the_gate_release_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let target = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let stub = tempfile::tempdir().unwrap();
+    let record = stub.path().join("target-dir");
+    let cargo = stub.path().join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$CARGO_TARGET_DIR\" > '{}'\n\
+             mkdir -p \"$CARGO_TARGET_DIR/release-fast\" && : > \"$CARGO_TARGET_DIR/release-fast/alsem\"\n",
+            record.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let base = stub.path().join("base-alsem");
+    std::fs::write(&base, b"placeholder").unwrap();
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = std::process::Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .arg(ws.path())
+        .args(["--build-only", "--base-exe"])
+        .arg(&base)
+        .arg("--out")
+        .arg(target.path().join("out"))
+        .env("CARGO_TARGET_DIR", target.path())
+        .env("PATH", path)
+        .output()
+        .expect("spawn python3 scripts/cdo-speed");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.status.code(), Some(0), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&record).expect("the stub cargo ran"),
+        target.path().join("gate-release").display().to_string(),
+        "the working tree is built in ci-steps' folder: {text}"
+    );
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
