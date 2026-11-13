@@ -751,11 +751,24 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   Tests: `tests/cli/cli_eng08_xmlport_import_error.rs`.
 
 **Left.**
-- **`Report.RunRequestPage` is not a run: wrong answer left.** It runs the request page's `OnInit`,
-  `OnOpenPage`, `OnQueryClosePage` and `OnClosePage` (measured, above) but no `OnPreReport` and no
-  data item, and it resolves as a plain built-in, so a write in those triggers answers `no` through
-  it. CDO calls it twice, both with a run-time id. The fix needs the triggers one start method runs
-  (not the whole run's list), its keyword and variable forms, and B4's commit scope.
+- ~~**`Report.RunRequestPage` is not a run: wrong answer left.**~~ **Fixed by ENG-19**
+  (2026-11-13; re-probed on master `1bd755fc`: a `Commit()` in the request page's `OnOpenPage`
+  answered `may-commit no` through `Report.RunRequestPage(Report::X)` and `R.RunRequestPage()`).
+  It is now a start (`dataset::starts_object`), keyword and variable form, and runs only what it
+  measurably runs (`resolver::start_runs_trigger`): `OnInitReport` and the request page, no
+  `OnPreReport`, no data item, no `OnPostReport` (so an error in `OnPreReport` stays out of
+  `throws-error`), and no dataset. B4's commit scope reads it as a start, as for any run. CDO calls
+  it twice, both with a run-time id: an open run, as before.
+- ~~**A cancelled request page: `OnPreReport` stays `unconditional on success`.**~~ **Fixed by
+  ENG-19** (ENG-21 merged into it): `Run`/`RunModal` of a report whose request page may show
+  (`resolver::request_page_may_cancel`: not `UseRequestPage = false`, the new
+  `DatasetNode::request_page_hidden`, pack schema 19; not a literal `false` `RequestWindow`)
+  marks the report's own `OnPreReport`/`OnPostReport` `conditional` (`SiteFacts::
+  request_page_may_cancel`, the model's `TriggerFires::Maybe`); master answered
+  `commits-on-success-path yes` for a `Commit()` in `OnPreReport` through `Report.Run(X)`, now
+  `unknown`. `Execute`, `Print` and `SaveAs*` show no page and keep it unconditional. Left: a
+  variable's `UseRequestPage(false)` call before `R.Run()` is not read (the page may show: the
+  safe side); an XmlPort's request page is not treated as cancellable (not measured).
 - Which request-page triggers one call runs is not read from the call: `RunModal(X, false)` (and a
   report with `UseRequestPage = false`) reaches `OnOpenPage`/`OnClosePage`, and `Execute` reaches
   `OnQueryClosePage`, all `conditional` (safe, imprecise).

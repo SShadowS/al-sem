@@ -2377,6 +2377,58 @@ pub(crate) fn run_trigger_may_not_run(
     }
 }
 
+/// ENG-19: whether start method `method_lc` (folded) of an object of `kind`
+/// runs trigger `trigger_lc`, of [`run_triggers`]. `Report.RunRequestPage`
+/// runs `OnInitReport` and the request page (`OnInit`, `OnOpenPage`,
+/// `OnQueryClosePage`, `OnClosePage`, its record triggers) and stops: no
+/// `OnPreReport`, no data item, no `OnPostReport` (measured on the BC 28.4
+/// Linux sidecar, confirmed on Windows BC 28.0.54946.56477, engine limits
+/// L20). Every other start method runs them all.
+#[must_use]
+pub(crate) fn start_runs_trigger(
+    kind: ObjectKind,
+    method_lc: &str,
+    trigger_lc: &str,
+    member_level: bool,
+) -> bool {
+    !(matches!(kind, ObjectKind::Report | ObjectKind::ReportExtension)
+        && method_lc == "runrequestpage"
+        && (member_level || matches!(trigger_lc, "onprereport" | "onpostreport")))
+}
+
+/// [`start_runs_trigger`] over a run's routes: drop the trigger routes start
+/// method `method_lc` does not run (a route that names no trigger is kept).
+pub(crate) fn retain_started_triggers(routes: &mut Vec<Route>, method_lc: &str) {
+    routes.retain(|r| match &r.target {
+        RouteTarget::Routine(id) => start_runs_trigger(
+            id.object.kind,
+            method_lc,
+            id.name_lc.as_str(),
+            id.enclosing_member_lc.is_some(),
+        ),
+        _ => true,
+    });
+}
+
+/// ENG-21 (merged into ENG-19): whether start method `method_lc` (folded) of
+/// a report shows its request page, so the user may cancel it, which stops
+/// the run before `OnPreReport` (measured on the BC 28.4 Linux sidecar,
+/// confirmed on Windows, engine limits L20): `Run` and `RunModal`, unless the
+/// report hides it (`UseRequestPage = false`, [`ObjectNode`]'s dataset) or
+/// the call passes a literal `false` as `RequestWindow` (`request_window`,
+/// the keyword form's second argument). `Execute`, `Print` and `SaveAs*` show
+/// none; `RunRequestPage` stops after the page whatever the user does.
+#[must_use]
+pub(crate) fn request_page_may_cancel(
+    method_lc: &str,
+    report: &ObjectNode,
+    request_window: Option<bool>,
+) -> bool {
+    matches!(method_lc, "run" | "runmodal")
+        && !report.dataset.request_page_hidden
+        && request_window != Some(false)
+}
+
 /// Build a single Opaque boundary route (target exists but is not in our source).
 fn opaque_boundary_route(key: AbiRoutineKey) -> Route {
     Route {
@@ -3601,8 +3653,10 @@ pub(crate) fn resolve_member_with_args(
                 // ponytail: completeness is re-derived from the shape by the
                 // caller (`full.rs`), so a closed empty codeunit/XmlPort run reads
                 // `Partial` there; both classify as honest-empty.
-                let (shape, _, routes) =
+                let (shape, _, mut routes) =
                     dispatch_entry_trigger(&target_id, target_tier, *kind, graph, index, surface);
+                // ENG-19: `R.RunRequestPage()` runs its request page only.
+                retain_started_triggers(&mut routes, method_lc);
                 return (shape, routes);
             }
 

@@ -2528,11 +2528,11 @@ impl<'a> Converter<'a> {
                 // `OnAfterGetRecord`, …) that may not run at all. A call site
                 // reaches a trigger only through a run.
                 if callee.kind == "trigger"
-                    && crate::program::resolve::resolver::run_trigger_may_not_run(
+                    && (crate::program::resolve::resolver::run_trigger_may_not_run(
                         id.object.kind,
                         id.name_lc.as_str(),
                         id.enclosing_member_lc.is_some(),
-                    )
+                    ) || self.request_page_cancel_skips(ce, &id))
                 {
                     e.fires = Some(crate::engine::l4::combined_graph::TriggerFires::Maybe);
                 }
@@ -3278,6 +3278,22 @@ impl<'a> Converter<'a> {
             edges.push(open_record_edge(ix, r, &op, &op.id));
         }
         (op, edges)
+    }
+
+    /// ENG-21 (merged into ENG-19): whether the run at `ce` may stop before
+    /// trigger `id` because its request page may be cancelled
+    /// (`SiteFacts::request_page_may_cancel`): a report's (or report
+    /// extension's) own `OnPreReport`/`OnPostReport`.
+    fn request_page_cancel_skips(&self, ce: &ClassifiedEdge, id: &RoutineNodeId) -> bool {
+        matches!(
+            id.object.kind,
+            al_syntax::ir::ObjectKind::Report | al_syntax::ir::ObjectKind::ReportExtension
+        ) && id.enclosing_member_lc.is_none()
+            && matches!(id.name_lc.as_str(), "onprereport" | "onpostreport")
+            && self
+                .site_facts
+                .get(&ce.obligation_id)
+                .is_some_and(|f| f.request_page_may_cancel)
     }
 
     /// ENG-06: whether an operation whose table did not resolve (`how`),

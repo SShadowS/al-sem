@@ -419,7 +419,10 @@ fn one_file_workspace(al: &str) -> tempfile::TempDir {
 /// site and code; a `TestPage` declaration is a rule edge (`RULE`, no call
 /// site); a plain `Page` variable declaration yields no site at all.
 /// (`R.SaveAsPdf` was the example until B6 made it a run of the report's
-/// triggers, a `run` site; `RunRequestPage` is still a dispatching builtin.)
+/// triggers, a `run` site; `RunRequestPage` was until ENG-19 made it a run of
+/// the request page. Every dispatching builtin on a typed receiver now starts
+/// its object, so the first rule has no source shape left; the test pins the
+/// `run` site instead.)
 ///
 /// DISCRIMINATION (2026-11-07): `site_bits` classifying every
 /// `declaredRunnable` site as `RULE` (the anchor test dropped) fails "the
@@ -490,11 +493,20 @@ report 50100 "My Rep"
             })
             .collect()
     };
-    let prints = declared(named(&g, "prints"));
+    // ENG-19: `RunRequestPage` runs the report's request page, so it is a
+    // `run` site (as `SaveAsPdf` became one with B6), not `declaredRunnable`.
+    let prints_from = named(&g, "prints");
+    assert!(declared(prints_from).is_empty());
+    let prints: Vec<SiteIx> = (0..g.site_count() as u32)
+        .filter(|&s| {
+            let st = &g.sites()[s as usize];
+            st.from == prints_from && st.via() == "run"
+        })
+        .collect();
     assert_eq!(
         prints.len(),
         1,
-        "precondition: RunRequestPage makes one site"
+        "precondition: RunRequestPage makes one run site"
     );
     assert!(g.sites()[prints[0] as usize].anchor.is_some());
     assert_eq!(

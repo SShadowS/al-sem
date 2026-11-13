@@ -107,6 +107,12 @@ pub struct DatasetNode {
     pub may_import: bool,
     /// XmlPort only: a `Run` may export (`Direction` is `Export` or `Both`).
     pub may_export: bool,
+    /// ENG-19 (engine limits L20): Report only: `UseRequestPage = false` in
+    /// every build, so a run shows no request page (and none can be
+    /// cancelled). `false` (the default, also for a symbol-only report and an
+    /// older pack) means the page may show.
+    #[serde(default)]
+    pub request_page_hidden: bool,
 }
 
 impl DatasetNode {
@@ -119,6 +125,8 @@ impl DatasetNode {
         self.known &= other.known;
         self.may_import |= other.may_import;
         self.may_export |= other.may_export;
+        // Hidden only when every declaration hides it.
+        self.request_page_hidden &= other.request_page_hidden;
         for item in other.items {
             let same = self.items.iter_mut().find(|k| {
                 k.kind == item.kind
@@ -202,11 +210,25 @@ fn dataset_of(obj: &al_syntax::ir::ObjectDecl) -> DatasetNode {
     if !every_build_writes {
         (may_import, may_export) = (true, true);
     }
+    // ENG-19: `UseRequestPage` (default `true`): hidden only when every build
+    // writes `false` (an entry in one `#if` arm alone leaves the default
+    // possible, as for `Direction`).
+    let use_request_page: Vec<_> = obj
+        .properties
+        .iter()
+        .filter(|p| p.name == "userequestpage")
+        .collect();
+    let request_page_hidden = obj.kind == al_syntax::ir::ObjectKind::Report
+        && !use_request_page.is_empty()
+        && use_request_page
+            .iter()
+            .all(|p| !p.conditional && p.value.trim().eq_ignore_ascii_case("false"));
     DatasetNode {
         known: true,
         items,
         may_import: may_import && obj.kind == al_syntax::ir::ObjectKind::XmlPort,
         may_export: may_export && obj.kind == al_syntax::ir::ObjectKind::XmlPort,
+        request_page_hidden,
     }
 }
 
