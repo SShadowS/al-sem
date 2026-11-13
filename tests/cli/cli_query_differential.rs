@@ -1347,3 +1347,90 @@ fn query_effects_event_raise_decides_the_subscribers_temp_state() {
         assert_eq!(effects[0]["tempState"], want, "{decl}");
     }
 }
+
+/// The scope text of `alsem <argv>`'s human header (after " · scope: ";
+/// `None` when a failed answer prints no analysis line) and of its JSON
+/// header (`payload.result.scope.scope`).
+fn scope_both_ways(argv: &[&str]) -> (Option<String>, String) {
+    let (human, _) = run_alsem(argv, "human");
+    let (json, _) = run_alsem(argv, "json");
+    let h = human
+        .lines()
+        .find_map(|l| l.split(" · scope: ").nth(1))
+        .map(str::to_string);
+    let v: serde_json::Value = serde_json::from_str(&json).expect("JSON");
+    let j = v["payload"]["result"]["scope"]["scope"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no payload.result.scope.scope:\n{json}"))
+        .to_string();
+    (h, j)
+}
+
+/// TLS-49: the human and JSON headers state one scope, in every answer the
+/// corpus holds: effects (whole cone, entering dependency code), touches
+/// from a routine (cone entering or not), `up`-only and workspace-wide
+/// touches (no depth line, so neither header states one), and the failures
+/// (absent table, `down` without `--from`). Both come from one home, the
+/// lines the body prints (`push_scope`).
+///
+/// DISCRIMINATION (2026-11-13): making `query_scope_json` ignore the recorded
+/// lines fails here at the first case
+/// (`d1-multi-caller.modifyhelper.mc-customer.both`: human "dependency code:
+/// none reached; dependencies: 0 apps", JSON "dependencies: 0 apps");
+/// restored, passes.
+#[test]
+fn query_scope_is_one_fact_in_both_formats() {
+    for c in CORPUS {
+        let ws = fixtures_dir().join(c.workspace);
+        let ws_str = ws.to_string_lossy().to_string();
+        let mut argv: Vec<&str> = vec!["query", c.sub, &ws_str];
+        argv.extend_from_slice(c.args);
+        let (h, j) = scope_both_ways(&argv);
+        match h {
+            Some(h) => assert_eq!(h, j, "[{}] human and JSON headers differ", c.slug),
+            // A failed answer states no scope in human form; the JSON then
+            // states no depth either, only what was loaded.
+            None => assert!(
+                j.starts_with("dependencies: ") && !j.contains(';'),
+                "[{}] the JSON states a scope the human answer does not: {j}",
+                c.slug
+            ),
+        }
+    }
+}
+
+/// TLS-49 (e): a cone that enters no dependency code but holds a call the
+/// engine could not resolve says what it did not search, in both headers.
+///
+/// DISCRIMINATION (2026-11-13): dropping the clause's condition
+/// (`if false && call_not_resolved + open_world > 0`) fails here (no "not
+/// searched"); restored, passes.
+#[test]
+fn query_effects_whole_cone_with_an_unresolved_call_says_not_searched() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"aaaa1111-0000-0000-0000-0000000000b9","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50300,"to":50399}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/All.al"),
+        "table 50300 \"Q Row\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50301 \"Q Caller\"\n{\n    procedure Run()\n    var\n        R: Record \"Q Row\";\n        C: Codeunit \"No Such Codeunit\";\n    begin\n        R.Insert();\n        C.DoIt();\n    end;\n}\n",
+    )
+    .unwrap();
+    let ws = dir.path().to_string_lossy().to_string();
+    let (h, j) = scope_both_ways(&["query", "effects", &ws, "--routine", "Run"]);
+    assert_eq!(
+        h.as_deref(),
+        Some(j.as_str()),
+        "human and JSON headers differ"
+    );
+    assert!(
+        j.starts_with(
+            "reads, locks, validate, writes: the whole cone, no dependency code entered (not \
+             searched: calls not resolved);"
+        ),
+        "{j}"
+    );
+}
