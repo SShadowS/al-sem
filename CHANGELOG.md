@@ -76,6 +76,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `gate_scripts::speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar`, in a throwaway
     checkout with its own grammar clone, each with discrimination proofs.
 
+### Fixed (ENG-27: d56 on a copy into a temporary buffer, and the same finding id twice)
+
+- **d56 (record cloned before Modify/Delete in a loop) reported a copy into a temporary buffer as
+  "an extra SQL round-trip per row".** It skipped only a temporary copy SOURCE. Copying the cursor
+  into a temporary record and writing that is the remedy, not the problem, and the write is no
+  SQL call: a `SourceTableTemporary` page's `Rec` (the model already marks its operations
+  temporary) or a `temporary` local. d56 now skips a write it knows is temporary.
+- **d56 reported one finding per copy**, so two copies before one write (`Rec := Src; …
+  Rec := Src; Rec.Modify()`) gave the same id twice. It now reports one finding per write, naming
+  the copy nearest the write.
+- **d14 (dead routine) reported a procedure once per `#if` arm**, under one id: `#if not X` /
+  `#else` arms with the same signature are one routine id. Arms whose findings say the same thing
+  are one finding (the first arm). Arms that differ (one `local`, one `internal`) are each kept,
+  as `<id>@arm1`, `<id>@arm2`, numbered by order, never by line, so moving code does not move
+  their fingerprints.
+- On CDO (`bc3ccb18`, base `bb28c198`): `--scope primary` 2310 -> 2308 (d56 -2, the
+  `CDOSetupWizardUserSetup.Page.al` pair that ENG-25 surfaced); `--scope all` 32583 -> 32576 (d56
+  -5: that pair and three Base Application copies into a `temporary` local, in `PurchPost` and
+  `SalesPost` `AdjustPrepmtAmountLCY` and `ItemTrackingManagement`; d14 -2: `PageManagement`'s
+  two `#if CLEAN26` procedures). Nothing added; every removal checked against source. Duplicate
+  finding ids: 3 -> 0 (`all`), 1 -> 0 (`primary`).
+- Correction: ENG-25's note blamed the body model for the d56 false positive; the model already
+  marks a `SourceTableTemporary` page's `Rec` temporary (`record_types.rs`). Tests:
+  `tests/cli/cli_eng27_d56_d14_arms.rs`.
+
 ### Changed (TLS-33: the speed check reuses ci-steps' optimized build)
 
 - **`cdo-gate`'s speed phase no longer rebuilds `al-sem` on the gate's critical path.**
