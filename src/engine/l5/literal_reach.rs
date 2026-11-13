@@ -3654,10 +3654,17 @@ impl<'a> LiteralReach<'a> {
             let mut write_sites = HashSet::new();
             let mut siteless_writers = HashSet::new();
             let mut seeds: HashSet<&'a str> = HashSet::new();
+            // ENG-24: the one pending-write rule this search shares with d50's
+            // transaction spans (`pending_writes::op_may_leave_write_pending`).
+            use crate::engine::l5::pending_writes::op_may_leave_write_pending;
             for rec in self.terminals.records() {
-                if !matches!(rec.effect_type, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE")
-                    || matches!(rec.temp, TerminalTemp::Known(true))
-                {
+                let op = match rec.effect_type {
+                    "DB_INSERT" => "insert",
+                    "DB_MODIFY" => "modify",
+                    "DB_DELETE" => "delete",
+                    _ => continue,
+                };
+                if !op_may_leave_write_pending(op, matches!(rec.temp, TerminalTemp::Known(true))) {
                     continue;
                 }
                 seeds.insert(rec.owner);
@@ -3678,7 +3685,11 @@ impl<'a> LiteralReach<'a> {
                 let one = [r];
                 let rows = self.arm_rows.get(id).map_or(&one[..], Vec::as_slice);
                 for row in rows {
-                    for op in row.operation_sites.iter().filter(|o| o.kind == "lock") {
+                    for op in row
+                        .operation_sites
+                        .iter()
+                        .filter(|o| o.kind == "lock" && op_may_leave_write_pending("lock", false))
+                    {
                         write_sites.insert(op.id.as_str());
                         seeds.insert(id);
                     }
@@ -3705,22 +3716,24 @@ impl<'a> LiteralReach<'a> {
                     .filter_map(|&(_, s, _, _)| s.and_then(EdgeSite::guarded))
                     .collect();
                 if r.call_sites.iter().any(|c| {
-                    !sited.contains(c.id.as_str()) && !self.builtin_sites.contains(c.id.as_str())
+                    crate::engine::l5::pending_writes::is_unknown_code_call(
+                        c,
+                        sited.contains(c.id.as_str()),
+                        self.builtin_sites.contains(c.id.as_str()),
+                    )
                 }) {
                     seeds.insert(id);
                 }
             }
-            let mut may_write = seeds.clone();
-            let mut q: VecDeque<&'a str> = seeds.into_iter().collect();
-            while let Some(x) = q.pop_front() {
-                for &(p, j) in rev.get(x).map_or(&[][..], Vec::as_slice) {
-                    // A checked run's writes end with it (committed, or
-                    // rolled back on an error).
-                    if !self.is_checked_run_edge(p, j) && may_write.insert(p) {
-                        q.push_back(p);
-                    }
-                }
-            }
+            // A checked run's writes end with it (committed, or rolled back on
+            // an error). ENG-24: the closure d50's walk uses too.
+            let may_write = crate::engine::l5::pending_writes::reach_back(seeds, |x| {
+                rev.get(x)
+                    .into_iter()
+                    .flatten()
+                    .filter(|&&(p, j)| !self.is_checked_run_edge(p, j))
+                    .map(|&(p, _)| p)
+            });
             PendingWrites {
                 write_sites,
                 siteless_writers,
@@ -3748,11 +3761,15 @@ impl<'a> LiteralReach<'a> {
                 return true;
             }
         }
-        !has_edge
-            && !self.builtin_sites.contains(s)
-            && self
-                .row_at(f, s)
-                .is_some_and(|r| r.call_sites.iter().any(|c| c.id == s))
+        self.row_at(f, s)
+            .and_then(|r| r.call_sites.iter().find(|c| c.id == s))
+            .is_some_and(|c| {
+                crate::engine::l5::pending_writes::is_unknown_code_call(
+                    c,
+                    has_edge,
+                    self.builtin_sites.contains(s),
+                )
+            })
     }
 
     /// B7 review: for out-edge `j` of `f`, whether a write `f` itself makes

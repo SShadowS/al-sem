@@ -1987,6 +1987,11 @@ pub(crate) fn harvest_detector_artifacts(
     let transaction_spans = {
         let _s = pt::span("context", "context.transaction_spans");
         if demanded & substrate::TRANSACTION_SPANS != 0 {
+            // ENG-24: unknown code may write (the trap search's rule).
+            let unknown = crate::engine::l5::pending_writes::unknown_code_sites(
+                &ws.routines,
+                &resolved.calls.edges,
+            );
             compute_transaction_spans(
                 &ws.routines,
                 dep_routine_ids,
@@ -1994,6 +1999,7 @@ pub(crate) fn harvest_detector_artifacts(
                 &summaries,
                 &cone_derived,
                 &cone,
+                Some(&unknown),
             )
         } else {
             Vec::new()

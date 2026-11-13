@@ -152,8 +152,19 @@ pub fn detect_d8(
             root_cause: format!(
                 "{} calls Commit while reachable from {}, which writes {} tables before it. \
                  A mid-transaction Commit breaks rollback semantics \u{2014} if the surrounding \
-                 operation later fails, the data is left half-written.",
-                commit_routine.name, manager.name, write_count
+                 operation later fails, the data is left half-written.{}",
+                commit_routine.name,
+                manager.name,
+                write_count,
+                // ENG-24 (orchestrator ruling): tables only another event
+                // subscriber writes are in the text, not the affected tables.
+                match span.pending_order_unknown_tables.len() {
+                    0 => String::new(),
+                    n => format!(
+                        " Possibly also pending (order unknown): {n} table(s) written only in \
+                         another event subscriber or trigger."
+                    ),
+                }
             ),
             severity: "high".to_string(),
             confidence,
@@ -161,7 +172,7 @@ pub fn detect_d8(
             evidence_path: path,
             additional_paths: None,
             affected_objects: id_list(affected_objects),
-            affected_tables: id_list(span.pending_physical_tables.clone()),
+            affected_tables: id_list(span.known_order_pending_tables()),
             fix_options: vec![FixOption {
                 description: "Remove the Commit, or restructure so the surrounding transaction \
                               completes (returns control to its caller) before this code runs."

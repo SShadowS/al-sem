@@ -163,7 +163,11 @@ pub(crate) enum TrapCallee<'a> {
 /// transaction and turns its error into `false`.
 #[must_use]
 pub(crate) fn is_checked_run(cs: &PCallSite, callee: Option<&ModelRoutine>) -> bool {
-    checked_run(cs, TrapCallee::Routine(callee))
+    // ENG-24 (sol round 2): the resolver's decision (`PCallSite::checked_run`),
+    // which also covers a codeunit variable's `Ok := C.Run()` whose `OnRun` has
+    // no row (none declared, or a symbol-only dependency's): with no callee
+    // the member form below cannot tell.
+    cs.checked_run || checked_run(cs, TrapCallee::Routine(callee))
 }
 
 /// [`is_checked_run`] over either callee shape.

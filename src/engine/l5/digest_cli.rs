@@ -1299,6 +1299,9 @@ pub fn resolve_changed_roots(
 pub type TransactionContext = &'static str;
 const TX_SPAN_KNOWN_WRITES: TransactionContext = "span-has-known-writes";
 const TX_SPAN_NO_WRITES: TransactionContext = "span-has-no-known-writes";
+/// ENG-24: the only pending tables are another event subscriber's, whose order
+/// against the Commit is not known (`pending_order_unknown_tables`).
+const TX_SPAN_MAY_WRITES: TransactionContext = "span-may-have-writes-order-unknown";
 const TX_UNKNOWN: TransactionContext = "unknown";
 
 /// The transaction-context map: `commit_operation_id → TransactionContext`, over
@@ -1317,8 +1320,12 @@ fn tx_context_map(spans: &[TransactionSpan]) -> HashMap<String, TransactionConte
         }
         let tc: TransactionContext = if !span.coverage_complete {
             TX_UNKNOWN
-        } else if !span.pending_physical_tables.is_empty() {
+        } else if !span.known_order_pending_tables().is_empty() {
             TX_SPAN_KNOWN_WRITES
+        } else if !span.pending_physical_tables.is_empty() {
+            // ENG-24: only another event subscriber's tables, which may run
+            // before the Commit or after it: neither known nor none.
+            TX_SPAN_MAY_WRITES
         } else {
             TX_SPAN_NO_WRITES
         };
@@ -7691,10 +7698,14 @@ mod tests {
     /// The transaction context of a Commit names the writes PENDING at it, not
     /// everything the span can reach: a span whose only writes run after the
     /// Commit (`writes_tables` set, `pending_physical_tables` empty, both
-    /// stated by hand) has no known writes; one with a pending write has.
+    /// stated by hand) has no known writes; one with a pending write has; one
+    /// whose only pending table is another subscriber's (order unknown) may
+    /// have writes (ENG-24).
+    /// Break (2026-11-13): drop the `TX_SPAN_MAY_WRITES` branch -> `op/sibling`
+    /// reads `span-has-no-known-writes`. Fails; restored, it passes.
     #[test]
     fn tx_context_reads_the_writes_pending_at_the_commit() {
-        let span = |op: &str, pending: &[&str]| TransactionSpan {
+        let span = |op: &str, pending: &[&str], unordered: &[&str]| TransactionSpan {
             seed_kind: SeedKind::ExplicitCommit,
             commit_operation_id: op.to_string(),
             seed_callsite_id: None,
@@ -7706,11 +7717,20 @@ mod tests {
             span_roots: vec!["r".to_string()],
             coverage_complete: true,
             pending_physical_tables: pending.iter().map(|s| s.to_string()).collect(),
+            pending_order_unknown_tables: unordered.iter().map(|s| s.to_string()).collect(),
+            pending_other: vec![],
             pending_events: vec![],
             pending_physical_by_routine: Default::default(),
         };
-        let map = tx_context_map(&[span("op/after", &[]), span("op/before", &["t/Before"])]);
+        let map = tx_context_map(&[
+            span("op/after", &[], &[]),
+            span("op/before", &["t/Before"], &[]),
+            span("op/sibling", &["t/Sib"], &["t/Sib"]),
+            span("op/both", &["t/Before", "t/Sib"], &["t/Sib"]),
+        ]);
         assert_eq!(map["op/after"], TX_SPAN_NO_WRITES);
         assert_eq!(map["op/before"], TX_SPAN_KNOWN_WRITES);
+        assert_eq!(map["op/sibling"], TX_SPAN_MAY_WRITES);
+        assert_eq!(map["op/both"], TX_SPAN_KNOWN_WRITES);
     }
 }

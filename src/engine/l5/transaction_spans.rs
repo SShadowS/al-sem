@@ -57,13 +57,15 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use crate::engine::l4::combined_graph::CombinedEdge;
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ResBitset};
 use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, frame_guards_over};
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    Before, ForwardSites, Pending, PendingCtx, RunCleanCones, forward_sites, is_checked_run,
-    pending_of, rows_before, sites_before, toward_sites,
+    Before, ForwardSites, Pending, PendingCtx, RunCleanCones, UnknownCode, forward_sites,
+    is_checked_run, pending_of, pending_of_written, pending_runs_first, pending_sibling,
+    rows_before, sibling_pending, sites_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::{PCallSite, PCallee};
@@ -118,11 +120,34 @@ pub struct TransactionSpan {
     /// [`super::pending_writes`]): what this transaction leaves half-written.
     /// SORTED. `writes_tables` above is everything the span can reach.
     pub pending_physical_tables: Vec<String>,
+    /// ENG-24: the part of `pending_physical_tables` that only another callee
+    /// of a dispatch on the way writes (another subscriber of the event,
+    /// whose order is not known, or code the record operation runs first):
+    /// a reader labels them. SORTED.
+    pub pending_order_unknown_tables: Vec<String>,
+    /// ENG-24: what else may leave a write pending at the Commit or checked
+    /// run, as labels (`pending_writes::PENDING_*`): a `LockTable`, a write
+    /// whose table does not resolve. SORTED.
+    pub pending_other: Vec<String>,
     /// The events published before the Commit. SORTED.
     pub pending_events: Vec<String>,
     /// Each span member other than the Commit routine -> how many physical
     /// tables it writes before its call toward the Commit (d8's "manager" test).
     pub pending_physical_by_routine: BTreeMap<String, usize>,
+}
+
+impl TransactionSpan {
+    /// ENG-24 (orchestrator ruling): the pending physical tables whose order
+    /// is known (`pending_physical_tables` minus
+    /// `pending_order_unknown_tables`): what the default detectors d8 and d9
+    /// gate on and list; the order-unknown ones only appear in their text.
+    pub fn known_order_pending_tables(&self) -> Vec<String> {
+        self.pending_physical_tables
+            .iter()
+            .filter(|t| !self.pending_order_unknown_tables.contains(*t))
+            .cloned()
+            .collect()
+    }
 }
 
 /// `roleOf(r) === "primary"` — true when NOT in the dependency universe.
@@ -440,6 +465,9 @@ struct SpanTemplate {
     /// Pending writes of every member except the seed routine (whose part
     /// depends on WHICH Commit), and each member's own count.
     pending_others: Pending,
+    /// ENG-24: the physical tables another callee of a dispatch may leave
+    /// pending (`add_dispatch_siblings`); not in `pending_by_routine`.
+    sibling_tables: BTreeSet<String>,
     pending_by_routine: BTreeMap<String, usize>,
     routines_in_span: Vec<String>,
     writes_tables: Vec<String>,
@@ -521,8 +549,105 @@ struct SpanInputs<'a> {
     /// site, and the arms a member walk reads.
     arms: &'a ArmRows<'a>,
     fwd: &'a ForwardSites<'a>,
+    /// Every caller's out-edges ([`fwd`](Self::fwd) with each edge's kind and
+    /// event, ENG-24).
+    out_edges: &'a HashMap<&'a str, Vec<&'a CombinedEdge>>,
     /// [`pending_of`]'s lookups (the ones above, and the collided ids).
     pending: &'a PendingCtx<'a>,
+}
+
+/// ENG-24: an OnAfter table event's subscriber runs after its record
+/// operation has written ([`run_phase`]).
+const PHASE_AFTER_WRITE: u8 = 2;
+
+/// ENG-24: when the callee of `e` runs among everything one dispatch runs,
+/// for an edge all of whose callees run (not a call's alternatives, `None`):
+/// 0 an OnBefore table event's subscriber, 1 the table's own trigger, then the
+/// record operation's write, then 2 an OnAfter table event's subscriber or an
+/// event subscriber. A table event of another name counts as after the write
+/// (its write counts).
+fn run_phase(e: &CombinedEdge) -> Option<u8> {
+    match e.kind.as_str() {
+        "implicit-trigger" => Some(1),
+        "table-event" => Some(
+            match e
+                .event_id
+                .as_deref()
+                .and_then(|id| id.rsplit_once("/event/"))
+            {
+                Some((_, name)) if name.starts_with("onbefore") => 0,
+                _ => PHASE_AFTER_WRITE,
+            },
+        ),
+        "event-dispatch" => Some(PHASE_AFTER_WRITE),
+        _ => None,
+    }
+}
+
+fn edge_site(e: &CombinedEdge) -> Option<&str> {
+    e.callsite_id.as_deref().or(e.operation_id.as_deref())
+}
+
+/// ENG-24: what member `rid` (row `r`) adds to the span through the other
+/// callees of a dispatch that reaches a span member (`visited`): every callee
+/// of one runs, so one that may run before a span member's may leave a write
+/// pending there (another subscriber of the event, whose order is not known;
+/// the table's trigger or an OnBefore event's subscriber, which run first).
+/// Each such callee whose cone, without its checked runs, may leave a write
+/// pending adds a label to `member` and its physical tables to `tables`.
+fn add_dispatch_siblings<'a>(
+    rid: &str,
+    r: &ModelRoutine,
+    visited: &BTreeSet<String>,
+    inputs: &SpanInputs<'a>,
+    member: &mut Pending,
+    tables: &mut BTreeSet<String>,
+) {
+    let out = inputs.out_edges.get(rid).map_or(&[][..], Vec::as_slice);
+    let mut groups: BTreeMap<Option<&str>, Vec<(&'a CombinedEdge, u8)>> = BTreeMap::new();
+    for &e in out {
+        if let Some(ph) = run_phase(e) {
+            groups.entry(edge_site(e)).or_default().push((e, ph));
+        }
+    }
+    for group in groups.values() {
+        for &(e, ph) in group {
+            let latest_member_after = group
+                .iter()
+                .filter(|(e2, _)| e2.to != e.to && visited.contains(&e2.to))
+                .map(|&(_, ph2)| ph2)
+                .max();
+            let Some(member_ph) = latest_member_after.filter(|&m| ph <= m) else {
+                continue;
+            };
+            let (p, may) = sibling_pending(e.to.as_str(), inputs.pending);
+            if !may {
+                continue;
+            }
+            let name = inputs
+                .routine_by_id
+                .get(e.to.as_str())
+                .map_or(e.to.as_str(), |s| s.name.as_str());
+            let event = match e
+                .event_id
+                .as_deref()
+                .and_then(|id| id.rsplit_once("/event/"))
+            {
+                Some((_, n)) if e.kind == "table-event" => n,
+                _ => r.name.as_str(),
+            };
+            member
+                .other
+                .insert(match (ph < member_ph, e.kind.as_str()) {
+                    (false, _) => pending_sibling(name, event),
+                    (true, "implicit-trigger") => {
+                        pending_runs_first("trigger", name, "the same record operation")
+                    }
+                    (true, _) => pending_runs_first("subscriber", name, event),
+                });
+            tables.extend(p.tables);
+        }
+    }
 }
 
 /// Run-lifetime scratch: the two id bitsets the union fills and clears per
@@ -620,6 +745,7 @@ fn span_template<'c>(
         );
         let span_roots = span_roots_of(&visited, inputs.reverse, seed, seed_open);
         let mut pending_others = Pending::default();
+        let mut sibling_tables: BTreeSet<String> = BTreeSet::new();
         let mut pending_by_routine: BTreeMap<String, usize> = BTreeMap::new();
         let mut others_coverage_complete = true;
         for rid in visited.iter().filter(|r| r.as_str() != seed) {
@@ -631,22 +757,40 @@ fn span_template<'c>(
             // Engine limits B2: every `#if` arm (row) of the member that calls
             // toward the Commit, each up to its own call.
             let rows = inputs.arms.rows_or(rid, r);
+            // ENG-24: a record operation whose OnAfter table event's
+            // subscriber is a span member has written by the time it runs.
+            let written: BTreeSet<&str> = inputs
+                .out_edges
+                .get(rid.as_str())
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .filter(|e| {
+                    e.kind == "table-event"
+                        && run_phase(e) == Some(PHASE_AFTER_WRITE)
+                        && visited.contains(&e.to)
+                })
+                .filter_map(|e| edge_site(e))
+                .collect();
             let mut member = Pending::default();
             for (row, own, before) in rows_before(&rows, &targets, unsited) {
                 others_coverage_complete &=
                     member_coverage_complete(rid, Some(row), Some(&before), inputs);
-                let p = pending_of(row, &before, &own, inputs.pending);
+                let p = pending_of_written(row, &before, &own, &written, inputs.pending);
                 member.tables.extend(p.tables);
                 member.events.extend(p.events);
+                member.other.extend(p.other);
             }
+            add_dispatch_siblings(rid, r, &visited, inputs, &mut member, &mut sibling_tables);
             pending_by_routine.insert(rid.clone(), member.tables.len());
             pending_others.tables.extend(member.tables);
             pending_others.events.extend(member.events);
+            pending_others.other.extend(member.other);
         }
         cache.insert(
             key.clone(),
             SpanTemplate {
                 pending_others,
+                sibling_tables,
                 pending_by_routine,
                 routines_in_span: visited.iter().cloned().collect(),
                 writes_tables,
@@ -680,6 +824,7 @@ pub fn compute_transaction_spans(
     summaries: &HashMap<String, FullRoutineSummary>,
     cone_derived: &ConeDerivedStore,
     typed: &[crate::engine::l4::combined_graph::TypedEdge],
+    unknown_sites: Option<&HashSet<&str>>,
 ) -> Vec<TransactionSpan> {
     let mut spans: Vec<TransactionSpan> = Vec::new();
 
@@ -754,6 +899,11 @@ pub fn compute_transaction_spans(
     let arms = ArmRows::build(routines);
     let fwd = forward_sites(reverse);
     let clean = RunCleanCones::build(&fwd, &routine_by_id, summaries, &collided, typed);
+    let unknown = unknown_sites.map(|s| UnknownCode::build(s.clone(), &fwd, &routine_by_id));
+    let mut out_edges: HashMap<&str, Vec<&CombinedEdge>> = HashMap::new();
+    for e in reverse.values().flatten() {
+        out_edges.entry(e.from.as_str()).or_default().push(e);
+    }
     let pending = PendingCtx {
         fwd: &fwd,
         routines: &routine_by_id,
@@ -761,8 +911,10 @@ pub fn compute_transaction_spans(
         cone_derived,
         collided: &collided,
         clean: Some(&clean),
+        unknown: unknown.as_ref(),
     };
     let inputs = SpanInputs {
+        out_edges: &out_edges,
         commits_by_routine: &commits_by_routine,
         reverse,
         summaries,
@@ -778,8 +930,21 @@ pub fn compute_transaction_spans(
                       seed: &ModelRoutine,
                       at: &str,
                       before: &Before|
-     -> (Vec<String>, Vec<String>, bool) {
+     -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, bool) {
         let own = pending_of(seed, before, &[at], &pending);
+        let order_unknown: Vec<String> = t
+            .sibling_tables
+            .iter()
+            .filter(|s| !t.pending_others.tables.contains(*s) && !own.tables.contains(*s))
+            .cloned()
+            .collect();
+        let other: BTreeSet<String> = t
+            .pending_others
+            .other
+            .iter()
+            .cloned()
+            .chain(own.other)
+            .collect();
         let coverage_complete = t.others_coverage_complete
             && member_coverage_complete(&seed.id, Some(seed), Some(before), &inputs);
         let tables: BTreeSet<String> = t
@@ -788,6 +953,7 @@ pub fn compute_transaction_spans(
             .iter()
             .cloned()
             .chain(own.tables)
+            .chain(t.sibling_tables.iter().cloned())
             .collect();
         let events: BTreeSet<String> = t
             .pending_others
@@ -798,7 +964,9 @@ pub fn compute_transaction_spans(
             .collect();
         (
             tables.into_iter().collect(),
+            order_unknown,
             events.into_iter().collect(),
+            other.into_iter().collect(),
             coverage_complete,
         )
     };
@@ -831,8 +999,13 @@ pub fn compute_transaction_spans(
                 &mut template_cache,
                 &mut scratch,
             );
-            let (pending_physical_tables, pending_events, coverage_complete) =
-                pending_at(t, seed, commit_operation_id, &before);
+            let (
+                pending_physical_tables,
+                pending_order_unknown_tables,
+                pending_events,
+                pending_other,
+                coverage_complete,
+            ) = pending_at(t, seed, commit_operation_id, &before);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
                 + t.writes_tables.len()
@@ -850,6 +1023,8 @@ pub fn compute_transaction_spans(
                 span_roots: t.span_roots.clone(),
                 coverage_complete,
                 pending_physical_tables,
+                pending_order_unknown_tables,
+                pending_other,
                 pending_events,
                 pending_physical_by_routine: t.pending_by_routine.clone(),
             });
@@ -881,8 +1056,13 @@ pub fn compute_transaction_spans(
                 &mut template_cache,
                 &mut scratch,
             );
-            let (pending_physical_tables, pending_events, coverage_complete) =
-                pending_at(t, r, &cs.id, &before);
+            let (
+                pending_physical_tables,
+                pending_order_unknown_tables,
+                pending_events,
+                pending_other,
+                coverage_complete,
+            ) = pending_at(t, r, &cs.id, &before);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
                 + t.writes_tables.len()
@@ -902,6 +1082,8 @@ pub fn compute_transaction_spans(
                 span_roots: t.span_roots.clone(),
                 coverage_complete,
                 pending_physical_tables,
+                pending_order_unknown_tables,
+                pending_other,
                 pending_events,
                 pending_physical_by_routine: t.pending_by_routine.clone(),
             });
@@ -974,6 +1156,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1007,6 +1190,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
 
         let inner_span = spans
@@ -1061,6 +1245,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
 
         let inner_span = spans
@@ -1088,6 +1273,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         assert!(!spans[0].coverage_complete);
@@ -1114,6 +1300,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert!(!spans[0].coverage_complete);
     }
@@ -1198,8 +1385,99 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(pending_at_seed(&spans, "root/cs1"), vec!["t/M", "t/X"]);
+    }
+
+    /// ENG-24 (sol round 1): a resolved callee with no row (`ghost`: an edge,
+    /// but no model routine) is code not known, as the trap search seeds it:
+    /// pending at the checked run after it. Stated by hand: the graph holds
+    /// `ghost`, the routines do not.
+    /// Break (2026-11-13): drop the absent-row seed in `UnknownCode::build` ->
+    /// no label. Fails; restored, it passes.
+    #[test]
+    fn a_callee_with_no_row_is_unknown_code() {
+        let mut root = routine("rootg", "procedure");
+        root.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "rootg/cs0",
+                "Ghost",
+                vec![],
+            ));
+        root.call_sites
+            .push(object_run_call_site("rootg/cs1", "Codeunit", Some(true)));
+        let routines = vec![root];
+        let graph = graph_from_edges(&["rootg", "ghost"], &[edge("rootg", "ghost", "rootg/cs0")]);
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        summaries.insert(
+            "rootg".to_string(),
+            summary("rootg", vec![], vec![], Some(coverage("complete"))),
+        );
+        let unknown: HashSet<&str> = HashSet::new();
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &[],
+            Some(&unknown),
+        );
+        let other = &spans
+            .iter()
+            .find(|s| s.seed_callsite_id.as_deref() == Some("rootg/cs1"))
+            .expect("the checked run's span")
+            .pending_other;
+        assert!(
+            other.iter().any(|o| o == "unknown code behind Ghost"),
+            "{other:?}"
+        );
+    }
+
+    /// ENG-24 (sol round 2): the same callee with no row, reached through a
+    /// call the resolver decided is a checked run (`checked_run`, a codeunit
+    /// variable's `Ok := C.Run()` whose `OnRun` has no row), leaves nothing
+    /// pending: its code ends with the run. Stated by hand.
+    /// Break (2026-11-13): drop `cs.checked_run ||` from
+    /// `traps::is_checked_run` -> "unknown code behind C.Run". Fails;
+    /// restored, it passes.
+    #[test]
+    fn a_checked_run_to_a_callee_with_no_row_leaves_nothing_pending() {
+        let mut root = routine("rootr", "procedure");
+        let mut run = crate::engine::l5::test_support::call_site("rootr/cs0", "C.Run", vec![]);
+        run.checked_run = true;
+        root.call_sites.push(run);
+        root.call_sites
+            .push(object_run_call_site("rootr/cs1", "Codeunit", Some(true)));
+        let routines = vec![root];
+        let graph = graph_from_edges(
+            &["rootr", "ghostr"],
+            &[edge("rootr", "ghostr", "rootr/cs0")],
+        );
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        summaries.insert(
+            "rootr".to_string(),
+            summary("rootr", vec![], vec![], Some(coverage("complete"))),
+        );
+        let unknown: HashSet<&str> = HashSet::new();
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &[],
+            Some(&unknown),
+        );
+        let other = &spans
+            .iter()
+            .find(|s| s.seed_callsite_id.as_deref() == Some("rootr/cs1"))
+            .expect("the checked run's span")
+            .pending_other;
+        assert!(other.is_empty(), "{other:?}");
     }
 
     /// ENG-22 review round 4: a helper whose cone follows an edge its forward
@@ -1253,6 +1531,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &typed,
+            None,
         );
         assert_eq!(pending_at_seed(&spans, "root3/cs1"), vec!["t/T"]);
     }
@@ -1305,6 +1584,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(pending_at_seed(&spans, "root2/cs1"), vec!["t/W"]);
     }
@@ -1328,6 +1608,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1358,6 +1639,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert!(spans.is_empty());
     }
@@ -1376,6 +1658,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert!(spans.is_empty());
     }
@@ -1400,6 +1683,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].routines_in_span, spans[1].routines_in_span);
@@ -1466,6 +1750,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         assert_eq!(
