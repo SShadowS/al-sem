@@ -35,7 +35,7 @@
 //!
 //! Severity: medium. Confidence: likely.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -47,7 +47,6 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
-use crate::program::body::features::PAnchor;
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d56-clone-before-write-in-loop";
@@ -67,7 +66,7 @@ pub fn detect_d56(
     let mut skipped_source_not_cursor = 0u64;
     let mut skipped_source_temp = 0u64;
     let mut skipped_target_temp = 0u64;
-    let mut skipped_same_write = 0u64;
+    let mut skipped_overwritten = 0u64;
     let mut skipped_key_remapped_clone = 0u64;
 
     for routine in &ws.routines {
@@ -100,8 +99,6 @@ pub fn detect_d56(
             })
             .collect();
 
-        // ENG-27: the finding kept per write op, and the copy it names.
-        let mut per_write: HashMap<&str, (usize, PAnchor)> = HashMap::new();
         for asg in &routine.var_assignments {
             let Some(rhs_lc) = asg.rhs_identifier.as_deref() else {
                 continue;
@@ -133,6 +130,22 @@ pub fn detect_d56(
                 skipped_no_write_back += 1;
                 continue;
             };
+            // ENG-27: only the LAST whole-record assignment to the clone before
+            // the write can be what it writes (in source order; a branch is not
+            // followed). An earlier copy is overwritten, so the checks below
+            // must judge the later one (`Copy := Cursor; Copy := Temp;
+            // Copy.Modify()` writes the temp copy). This also makes it at most
+            // one finding per write: two copies before one write gave one id
+            // twice.
+            let overwritten = routine.var_assignments.iter().any(|other| {
+                other.lhs_name == asg.lhs_name
+                    && before_anchor(&asg.source_anchor, &other.source_anchor)
+                    && before_anchor(&other.source_anchor, &write.source_anchor)
+            });
+            if overwritten {
+                skipped_overwritten += 1;
+                continue;
+            }
             // The copy SOURCE must be a live cursor.
             let src_is_cursor = routine.record_operations.iter().any(|op| {
                 CURSOR_OPS.contains(&op.op.as_str())
@@ -267,22 +280,7 @@ pub fn detect_d56(
                 loose_subject: None,
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
-            // ENG-27: one finding per write. Two copies before one write
-            // (`Rec := Src; … Rec := Src; Rec.Modify()`) gave the same id twice;
-            // the copy nearest the write is the one it writes, so it wins.
-            let next = findings.len();
-            let (at, kept) = per_write
-                .entry(write.id.as_str())
-                .or_insert_with(|| (next, asg.source_anchor.clone()));
-            if *at == next {
-                findings.push(finding);
-            } else {
-                skipped_same_write += 1;
-                if before_anchor(kept, &asg.source_anchor) {
-                    findings[*at] = finding;
-                    *kept = asg.source_anchor.clone();
-                }
-            }
+            findings.push(finding);
         }
     }
 
@@ -293,7 +291,7 @@ pub fn detect_d56(
     stats.add_skip("sourceNotCursor", skipped_source_not_cursor);
     stats.add_skip("sourceTemp", skipped_source_temp);
     stats.add_skip("targetTemp", skipped_target_temp);
-    stats.add_skip("sameWrite", skipped_same_write);
+    stats.add_skip("overwrittenCopy", skipped_overwritten);
     stats.add_skip("keyRemappedClone", skipped_key_remapped_clone);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

@@ -74,6 +74,22 @@ codeunit 52803 "E27 Temp Local"
             until Src.Next() = 0;
     end;
 }
+codeunit 52805 "E27 Overwrite"
+{
+    procedure Fill()
+    var
+        Src: Record "E27 Row";
+        TempBuf: Record "E27 Row" temporary;
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                Copy := Src;
+                Copy := TempBuf;
+                Copy.Modify();
+            until Src.Next() = 0;
+    end;
+}
 codeunit 52804 "E27 Arms"
 {
 #if not CLEAN99
@@ -143,16 +159,20 @@ fn of<'a>(fs: &'a [serde_json::Value], detector: &str, object: &str) -> Vec<&'a 
 /// d56: a copy into a temporary buffer is no round-trip (the temp page's
 /// `Rec`, a `temporary` local); on a real record two copies before one write
 /// are ONE finding, naming the copy nearest the write.
+/// An earlier copy that a later one overwrites before the write is not what
+/// the write writes: `Copy := Src; Copy := TempBuf; Copy.Modify()` writes the
+/// temporary copy, so nothing is reported.
 /// Breaks (2026-11-13): drop the target-temp skip in `detect_d56` -> "E27
-/// Temp Page" and "E27 Temp Local" each report; keep a finding per (copy,
-/// write) -> "E27 Real Page" reports 2; keep the FIRST copy instead of the
-/// nearest -> its evidence (SARIF code flow) names the outer copy, not the
-/// inner one. Each fails; restored, it passes.
+/// Temp Page" reports; drop the overwritten-copy skip -> "E27 Overwrite"
+/// reports (and "E27 Real Page" would report 2: round 1's per-write map and
+/// first-copy breaks failed there, and that map is now unreachable, so it is
+/// gone). Each fails; restored, it passes.
 #[test]
 fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     let fs = findings(SOURCE);
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Temp Page").is_empty());
     assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Temp Local").is_empty());
+    assert!(of(&fs, "d56-clone-before-write-in-loop", "E27 Overwrite").is_empty());
     let real = of(&fs, "d56-clone-before-write-in-loop", "E27 Real Page");
     assert_eq!(real.len(), 1, "{real:#?}");
     // The evidence's first step is the copy; only SARIF prints it.
