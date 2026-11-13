@@ -236,6 +236,7 @@ mod cli_eng07_request_page;
 mod cli_eng08_xmlport_import_error;
 mod cli_eng09_checked_run_commit;
 mod cli_eng10_write_in_try;
+mod cli_eng12_record_ops;
 mod cli_eng22_checked_run_pending_write;
 mod cli_envelope_detector_set;
 mod cli_error_boundary;

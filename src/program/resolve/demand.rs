@@ -17,28 +17,50 @@
 //!   IsHandled guard and the writes behind it); both then continue forward, so the
 //!   publisher's other subscribers (d44) and the raiser's callees join. A record op
 //!   raising a platform table event is not such a raiser (see the edge loop).
+//! - A record operation the site facts carry instead of the edge (a call
+//!   result's, ENG-12, `GetRef().Modify(true)`; a FieldRef's `Validate`,
+//!   ENG-06) reaches its triggers as a call and its table events as one.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, RoutineNodeId};
-use crate::program::resolve::edge::{EdgeKind, RouteTarget};
-use crate::program::resolve::full::ClassifiedEdge;
+use crate::program::resolve::edge::{EdgeKind, Route, RouteTarget};
+use crate::program::resolve::full::{FieldRefValidate, ObligationId};
+use crate::program::resolved::EdgeView;
 
 /// The demanded routines: the primary app's, and the dependency routines the rules
-/// above reach. `edges` must hold every body's edges (the workspace's report and
-/// `ProgramContext::resolve_dependency_bodies`, `ProgramBody::all_edges`), event
-/// flow included. They are walked once.
+/// above reach. `edges` must hold every body's edges and site facts (the
+/// workspace's report and `ProgramContext::resolve_dependency_bodies`,
+/// `ProgramBody::edge_view`), event flow included. They are walked once.
 #[must_use]
-pub fn cross_app_demand<'a>(
+pub fn cross_app_demand(
     primary: AppRef,
     graph: &ProgramGraph,
-    edges: impl IntoIterator<Item = &'a ClassifiedEdge>,
+    edges: EdgeView<'_>,
 ) -> HashSet<RoutineNodeId> {
+    // The record operations only the site facts carry: (triggers, table events).
+    let fact_routes: HashMap<&ObligationId, (&[Route], &[Route])> = edges
+        .site_facts
+        .iter()
+        .filter_map(|(ob, f)| {
+            if let Some(cr) = &f.call_result_record {
+                return Some((ob, (&cr.triggers[..], &cr.table_events[..])));
+            }
+            match &f.field_ref_validate {
+                Some(FieldRefValidate::Decided {
+                    triggers,
+                    table_events,
+                    ..
+                }) => Some((ob, (&triggers[..], &table_events[..]))),
+                _ => None,
+            }
+        })
+        .collect();
     let mut forward: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
     let mut callers: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
     let mut publishers_of: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
-    for ce in edges {
+    for ce in edges.all_edges() {
         // A background start's target runs in another session: no finding
         // of the starter's own execution reads it, and the model's calls
         // never carry it (F3). Not demanded through it.
@@ -46,6 +68,25 @@ pub fn cross_app_demand<'a>(
             continue;
         }
         let from = &ce.edge.from;
+        if let Some((triggers, table_events)) = fact_routes.get(&ce.obligation_id) {
+            for to in triggers
+                .iter()
+                .chain(*table_events)
+                .filter_map(|r| match &r.target {
+                    RouteTarget::Routine(to) => Some(to),
+                    _ => None,
+                })
+            {
+                forward.entry(from).or_default().push(to);
+            }
+            // A trigger's caller, as an implicit trigger edge's (not a table
+            // event's, as below).
+            for route in *triggers {
+                if let RouteTarget::Routine(to) = &route.target {
+                    callers.entry(to).or_default().push(from);
+                }
+            }
+        }
         for route in &ce.edge.routes {
             let RouteTarget::Routine(to) = &route.target else {
                 continue;
@@ -142,9 +183,7 @@ mod tests {
             vec![src(&run_run)],
             2,
         );
-        let demand = w.with_inputs(a, |inp| {
-            cross_app_demand(a, inp.graph, inp.edges.all_edges())
-        });
+        let demand = w.with_inputs(a, |inp| cross_app_demand(a, inp.graph, inp.edges));
         assert!(demand.contains(&run_run), "a run codeunit is demanded");
         assert!(
             !demand.contains(&bg_run),
@@ -212,9 +251,7 @@ mod tests {
             vec![src(&vendor_event)],
             2,
         );
-        let demand = w.with_inputs(a, |inp| {
-            cross_app_demand(a, inp.graph, inp.edges.all_edges())
-        });
+        let demand = w.with_inputs(a, |inp| cross_app_demand(a, inp.graph, inp.edges));
         assert!(
             demand.contains(&dep_sub),
             "the dependency subscriber is demanded"
@@ -222,6 +259,77 @@ mod tests {
         assert!(
             !demand.contains(&dep_writer),
             "a dependency writer of the table is no raiser"
+        );
+    }
+
+    /// ENG-12: a record operation on a call result (`GetRef().Modify(true)`)
+    /// carries its trigger and table-event routes in the site facts only, the
+    /// edge itself routes nowhere. Its dependency trigger and the dependency
+    /// table event are demanded. Hand-stated: the site's edge has no route,
+    /// its facts hold a `CallResultRecord`.
+    ///
+    /// A FieldRef's decided `Validate` (ENG-06) likewise demands its trigger.
+    ///
+    /// DISCRIMINATION (2026-11-12): dropping the `call_result_record` arm of
+    /// `fact_routes` fails "the call result's trigger is demanded"; (2026-11-13)
+    /// dropping the `FieldRefValidate::Decided` arm fails "the FieldRef's
+    /// validate trigger is demanded".
+    #[test]
+    fn a_call_result_record_op_demands_its_trigger_and_table_event() {
+        use crate::program::resolve::full::{CallResultRecord, SiteFacts};
+        let mut w = World::default();
+        let a = w.app("W");
+        let d = w.app("D");
+        w.deps.push((a, d));
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let table = w.obj(d, ObjectKind::Table, 50, "T", TrustTier::EmbeddedSource);
+        let platform = |r: &mut crate::program::node_extract::RoutineNode| {
+            r.publisher_kind = Some(crate::program::resolve::event::PublisherKind::Platform)
+        };
+        let on_modify = w.trigger(&table, "OnModify");
+        let event = w.rtn_with(&table, "OnAfterModifyEvent", platform);
+        let p = w.rtn(&cu, "P");
+        let site = w.edge(&p, EdgeKind::Call, DispatchShape::Multicast, vec![], 1);
+        w.site_facts.insert(
+            site,
+            SiteFacts {
+                call_result_record: Some(CallResultRecord {
+                    op: "Modify",
+                    table: table.clone(),
+                    triggers: vec![src(&on_modify)],
+                    table_events: vec![src(&event)],
+                }),
+                ..Default::default()
+            },
+        );
+        // A FieldRef's decided `Validate` (ENG-06), on another site.
+        let on_validate = w.trigger(&table, "OnValidate");
+        let q = w.rtn(&cu, "Q");
+        let fr_site = w.edge(&q, EdgeKind::Call, DispatchShape::Multicast, vec![], 2);
+        w.site_facts.insert(
+            fr_site,
+            SiteFacts {
+                field_ref_validate: Some(FieldRefValidate::Decided {
+                    table: table.clone(),
+                    field: "v".into(),
+                    triggers: vec![src(&on_validate)],
+                    table_events: vec![],
+                }),
+                ..Default::default()
+            },
+        );
+        let demand = w.with_inputs(a, |inp| cross_app_demand(a, inp.graph, inp.edges));
+        assert!(
+            demand.contains(&on_modify),
+            "the call result's trigger is demanded"
+        );
+        assert!(
+            demand.contains(&on_validate),
+            "the FieldRef's validate trigger is demanded"
+        );
+        assert!(
+            demand.contains(&event),
+            "the call result's table event is demanded"
         );
     }
 }

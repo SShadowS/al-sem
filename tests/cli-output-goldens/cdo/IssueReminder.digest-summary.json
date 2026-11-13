@@ -11,7 +11,7 @@
   "routines": [
     {
       "analysis": "partial",
-      "answer": "may write 198 tables (12 owned by this app, 186 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 20; file 2; background tasks 4; isolated storage 17; telemetry 23; errors 283; analysis partial (interface-open-world; object-run-unresolved; record-table-unresolved; 260 interface calls open world, 25 dynamic calls not resolved)",
+      "answer": "may write 198 tables (12 owned by this app, 186 by dependencies), 2 writes on a table not resolved; commits: may; UI 17; HTTP 20; file 2; background tasks 4; isolated storage 17; telemetry 23; errors 283; analysis partial (interface-open-world; object-run-unresolved; record-table-unresolved; 260 interface calls open world, 28 dynamic calls not resolved)",
       "index": 1,
       "selector": "Codeunit \"CDO Issue Document\"::IssueReminder"
     }
@@ -21,5 +21,5 @@
   "shared": {},
   "testStatus": "not requested",
   "totalEffects": 881,
-  "totalUnresolved": 285
+  "totalUnresolved": 288
 }

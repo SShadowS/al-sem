@@ -35,7 +35,7 @@
       "table-event": 5
     },
     "combinedEdgeCount": 208,
-    "uncertaintyEdgeCount": 39,
+    "uncertaintyEdgeCount": 40,
     "eventDispatchEdgeCount": 41,
     "typedEdgeCount": 217,
     "typedEventDispatchCount": 41,
@@ -2782,7 +2782,7 @@
           "direct": 2
         },
         "combinedEdgeCount": 2,
-        "uncertaintyEdgeCount": 5,
+        "uncertaintyEdgeCount": 6,
         "eventDispatchEdgeCount": 0,
         "typedEdgeCount": 2,
         "typedEventDispatchCount": 0,

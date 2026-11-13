@@ -56,6 +56,7 @@ pub fn classify_op(op: &str) -> OpEffectClass {
         "FindLast" => OpEffectClass::DbRead,
         "Find" => OpEffectClass::DbRead,
         "Get" => OpEffectClass::DbRead,
+        "GetBySystemId" => OpEffectClass::DbRead,
         "Next" => OpEffectClass::DbRead,
         "Count" => OpEffectClass::DbRead,
         "CountApprox" => OpEffectClass::DbRead,

@@ -1025,12 +1025,20 @@ impl ModelRoutine {
 /// ([`ModelRoutine::field_ref_operations`]): `{call site id}/fieldref`.
 pub const FIELD_REF_OP_SUFFIX: &str = "/fieldref";
 
-/// The call site a `FieldRef` operation id stands for, `None` for any other
-/// operation id. A `FieldRef` operation has no operation site of its own, so
-/// its control context, order and `asserterror` state are its call site's.
+/// The suffix of a call-result record operation's id (ENG-12:
+/// `GetRef().Modify(true)`, a record operation on a function's returned record
+/// of a known table): `{call site id}/callresult`.
+pub const CALL_RESULT_OP_SUFFIX: &str = "/callresult";
+
+/// The call site a `FieldRef` or call-result operation id stands for, `None`
+/// for any other operation id. Such an operation has no operation site of its
+/// own, so its control context, order and `asserterror` state are its call
+/// site's.
 #[must_use]
 pub fn field_ref_op_call_site(op_id: &str) -> Option<&str> {
-    op_id.strip_suffix(FIELD_REF_OP_SUFFIX)
+    op_id
+        .strip_suffix(FIELD_REF_OP_SUFFIX)
+        .or_else(|| op_id.strip_suffix(CALL_RESULT_OP_SUFFIX))
 }
 
 /// What [`ModelRoutine::effect_operation_site`] returns.

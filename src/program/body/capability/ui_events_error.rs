@@ -248,6 +248,7 @@ pub(crate) fn implicit_error_record_op(
 ) -> Option<&'static str> {
     match op {
         "Get" if in_statement_position => Some("Get"),
+        "GetBySystemId" if in_statement_position => Some("GetBySystemId"),
         "Find" if in_statement_position => Some("Find"),
         "FindFirst" if in_statement_position => Some("FindFirst"),
         "FindLast" if in_statement_position => Some("FindLast"),

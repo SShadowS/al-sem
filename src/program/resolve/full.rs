@@ -240,6 +240,12 @@ pub struct SiteFacts {
     /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
     /// validates ([`field_ref_validate`]). `None` for any other call.
     pub field_ref_validate: Option<FieldRefValidate>,
+    /// ENG-12: a record operation on a function's returned record of a known
+    /// table (`GetRef().Modify(true)`, `F().FindFirst()`): the model makes it a
+    /// record operation of its own (`program_calls`, id
+    /// `{call site}/callresult`), with these triggers and table events, as a
+    /// `FieldRef.Validate(…)`'s. `None` for any other call.
+    pub call_result_record: Option<CallResultRecord>,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -265,6 +271,20 @@ pub enum UnresolvedTable {
 /// platform runs the field's `OnValidate` trigger and raises the table's
 /// `OnBeforeValidateEvent`/`OnAfterValidateEvent` for that field, as
 /// `Rec.Validate(Field, …)` does; the FieldRef only hides which table and field.
+/// ENG-12: a record operation on a function's returned record
+/// ([`SiteFacts::call_result_record`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallResultRecord {
+    /// The operation, as `record_ops::record_op_type` spells it (`Modify`).
+    pub op: &'static str,
+    /// The returned record's table (the function's declared return type).
+    pub table: ObjectNodeId,
+    /// Its trigger routes, after the site's RunTrigger rule.
+    pub triggers: Vec<Route>,
+    /// Its platform table-event publishers.
+    pub table_events: Vec<Route>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldRefValidate {
     /// Every binding of the FieldRef names this table's field.
@@ -1028,10 +1048,87 @@ fn resolve_call_site_obligation(
                     graph,
                     index,
                 ));
-                let (s, r) = resolve_member_with_args(
+                let (mut s, mut r) = resolve_member_with_args(
                     &recv, &method_lc, arity, obj_node, graph, index, surface, &args_info, build,
                 );
                 finding = builtin_dispatch_finding(&recv, &method_lc, &r, file, call_args);
+                // ENG-12 (ENG-06 review gap (b)): a record operation on a
+                // record no variable names (a call's result,
+                // `GetRef().Modify(true)`, `GetRef().FindFirst()`; an array
+                // element and `this.X` are record operations,
+                // `record_ops::receiver_variable`). On CDO 3 such sites, all in
+                // dependency code and all RecordRef results
+                // (`CreationFactory.GeteDocumentHeader().Modify`).
+                // A known table: a record operation of its own
+                // (`CallResultRecord`, built by the model as ENG-06's
+                // `FieldRef.Validate` is); a RecordRef: an honest open dispatch;
+                // a table not loaded: one unresolved route. Never a definite `no`.
+                let trigger_op = crate::program::resolve::edge::record_trigger_op(&method_lc);
+                if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
+                    && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
+                    // Not a variable (`X`, `X[i]`): those are record operations,
+                    // or a variable the receiver sets do not hold (a base
+                    // object's `protected var` in an extension), left as before.
+                    // A `this.X` that reaches here is one a same-named local
+                    // shadows in the receiver sets: the resolver typed it from
+                    // the globals, so it takes this path (ENG-12 review round 3).
+                    && receiver.is_some_and(|id| {
+                        crate::record_ops::receiver_variable(&file.ir, id)
+                            .is_none_or(|v| v.starts_with("this."))
+                    })
+                {
+                    let table_node = match &recv {
+                        ReceiverType::Record { table: Some(tid) } => graph.object_first(tid),
+                        _ => None,
+                    };
+                    match (table_node, &recv) {
+                        // A known table: the call stays the builtin call, and the
+                        // model makes the operation a record operation of its
+                        // own (`CallResultRecord`): its table, triggers (by the
+                        // site's RunTrigger rule) and table events, through the
+                        // ordinary record-operation path. No gap.
+                        (Some(table_node), _)
+                            if let Some(op) = crate::record_ops::record_op_type(&method_lc) =>
+                        {
+                            let mut triggers = Vec::new();
+                            if trigger_op.is_some() {
+                                let (_, _, mut trig) = resolve_implicit_trigger(
+                                    &method_lc, table_node, graph, index, surface,
+                                );
+                                let rule =
+                                    crate::program::resolve::applicability::TriggerSiteRule::of(
+                                        &method_lc, call_args, file, text,
+                                    );
+                                trig.retain(|t| match &t.target {
+                                    RouteTarget::Routine(id) => rule.admits(id),
+                                    _ => true,
+                                });
+                                triggers = trig;
+                            }
+                            facts_out.call_result_record = Some(CallResultRecord {
+                                op,
+                                table: table_node.id.clone(),
+                                triggers,
+                                table_events:
+                                    crate::program::resolve::resolver::resolve_table_events(
+                                        &method_lc, table_node, graph,
+                                    ),
+                            });
+                        }
+                        // A RecordRef result: its table is runtime-typed, an
+                        // honest open dispatch (no route, `DynamicOpen`).
+                        (None, ReceiverType::RecordRef) => {
+                            r = Vec::new();
+                            s = DispatchShape::DynamicOpen;
+                        }
+                        // A record of a table not loaded: one unresolved route,
+                        // never a definite `no`.
+                        _ => {
+                            r = vec![unknown_route(UnknownReason::CompoundReceiver)];
+                            s = DispatchShape::Exact;
+                        }
+                    }
+                }
                 // B9: a `FieldRef.Validate(…)` validates a field of the table
                 // the FieldRef holds.
                 if r.iter().any(|rt| {
@@ -1281,7 +1378,11 @@ fn resolve_call_site_obligation(
             }
         }
 
-        CalleeShape::RecordOp { receiver_text, op } => {
+        CalleeShape::RecordOp {
+            receiver_text,
+            op,
+            receiver,
+        } => {
             let receiver_lc = receiver_text.fold_identifier();
             let op_lc = op.fold_identifier();
 
@@ -1292,10 +1393,8 @@ fn resolve_call_site_obligation(
             // that may hold any table ([`UnresolvedTable`]).
             let mut named_not_loaded = false;
             let table_node_opt: Option<&ObjectNode> = if let Some(obj_node) = obj_node_opt {
-                // `RecordOp` carries no `ExprId` (Task 2 scoped the primitive
-                // to `CalleeShape::Member` only) — `None`/`None` here is
-                // unchanged behavior, not a gap (Task 3's Step 5 is also
-                // scoped to `CalleeShape::Member`).
+                // ENG-12 (L36): the receiver expression, so an array element
+                // `Recs[1]` is typed by its element type (step 6).
                 let recv = infer_receiver_type(
                     &receiver_lc,
                     routine,
@@ -1303,8 +1402,8 @@ fn resolve_call_site_obligation(
                     obj_node,
                     graph,
                     index,
-                    None,
-                    None,
+                    receiver.map(|id| (file, id)),
+                    Some((surface, with_state)),
                 );
                 match recv {
                     ReceiverType::Record {
@@ -1519,8 +1618,7 @@ pub(crate) fn resolve_file_obligations(
             .iter()
             .filter(|v| {
                 v.ty.as_deref()
-                    .map(|ty| ty.trim().to_ascii_lowercase().starts_with("record"))
-                    .unwrap_or(false)
+                    .is_some_and(crate::program::resolve::extract::is_record_ty)
             })
             .map(|v| v.name.fold_identifier())
             // Report dataitems and XmlPort table elements are record variables too

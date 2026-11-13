@@ -536,7 +536,7 @@ fn push(out: &mut Vec<FlowFieldRead>, field: &str, source: FlowFieldSource) {
 fn is_retrieval(op: &str) -> bool {
     matches!(
         op,
-        "Get" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "Next"
+        "Get" | "GetBySystemId" | "Find" | "FindFirst" | "FindLast" | "FindSet" | "Next"
     )
 }
 
@@ -546,30 +546,45 @@ fn var_key(raw: &str) -> String {
         .to_lowercase()
 }
 
-/// One routine's `SetAutoCalcFields` calls: (record key, field argument). A
-/// bare call is keyed by its implicit record frame
+/// A record receiver's key, spelled as a retrieval's receiver is
+/// (`record_ops::receiver_key_text`: `Recs[ 1 ]` is `Recs[1]`, `this.G` is `G`).
+/// Not for a declared name: its spaces are the name's (`Line [Temp]`).
+fn receiver_key(raw: &str) -> String {
+    var_key(&crate::record_ops::receiver_key_text(raw))
+}
+
+/// Whether a receiver is written through `this` (`this.G`): the object's
+/// global, whatever local shadows its name.
+fn through_this(raw: &str) -> bool {
+    raw.trim_start()
+        .get(..5)
+        .is_some_and(|p| p.eq_ignore_ascii_case("this."))
+}
+
+/// One routine's `SetAutoCalcFields` calls: (record key, field argument,
+/// written through `this`). A bare call is keyed by its implicit record frame
 /// (`PCallSite::implicit_receiver`: a `with` record, else `Rec`), the frame a
 /// bare retrieval takes its record from; a bare call with no record frame is
 /// not a record method.
-fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String)> {
+fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
     let mut out = Vec::new();
     for cs in &routine.call_sites {
-        let key = match &cs.callee {
+        let (key, this) = match &cs.callee {
             PCallee::Member { receiver, method }
                 if method.eq_ignore_ascii_case("setautocalcfields") =>
             {
-                var_key(receiver)
+                (receiver_key(receiver), through_this(receiver))
             }
             PCallee::Bare { name } if name.eq_ignore_ascii_case("setautocalcfields") => {
                 match &cs.implicit_receiver {
-                    Some(r) => var_key(r),
+                    Some(r) => (receiver_key(r), false),
                     None => continue,
                 }
             }
             _ => continue,
         };
         for arg in &cs.argument_texts {
-            out.push((key.clone(), arg.clone()));
+            out.push((key.clone(), arg.clone(), this));
         }
     }
     out
@@ -606,7 +621,7 @@ impl<'a> Sharing<'a> {
     /// its own local or parameter; the object for a global (and the group
     /// for a base object's global); the group for a name the routine does
     /// not declare (the implicit `Rec`).
-    fn scopes(&self, routine: &ModelRoutine, key: &str) -> Vec<String> {
+    fn scopes(&self, routine: &ModelRoutine, key: &str, this: bool) -> Vec<String> {
         let own = self.by_object.get(routine.object_id.as_str());
         let group_scopes = || -> Vec<String> {
             match own {
@@ -614,15 +629,27 @@ impl<'a> Sharing<'a> {
                 None => vec![format!("id:{}|{key}", routine.object_id)],
             }
         };
-        match routine.variables.iter().find(|v| var_key(&v.name) == key) {
-            Some(v) if v.scope.as_deref() == Some("global") => {
+        // Whether the routine sees `key` as a global (`None`: it declares no
+        // such name). `this.G` is the global whatever local shadows it; an
+        // array element (`recs[1]`) is shared as its array variable is, a
+        // name that itself holds `[` (`"Line [Temp]"`) as written.
+        let declared = if this {
+            Some(true)
+        } else {
+            let find = |k: &str| routine.variables.iter().find(|v| var_key(&v.name) == k);
+            find(key)
+                .or_else(|| find(strip_quotes(key.split('[').next().unwrap_or(key))))
+                .map(|v| v.scope.as_deref() == Some("global"))
+        };
+        match declared {
+            Some(true) => {
                 let mut s = vec![format!("obj:{}|{key}", routine.object_id)];
                 if own.is_some_and(|(_, base)| *base) {
                     s.extend(group_scopes());
                 }
                 s
             }
-            Some(_) => Vec::new(),
+            Some(false) => Vec::new(),
             None => group_scopes(),
         }
     }
@@ -914,24 +941,82 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
 /// and every routine's [`ModelRoutine::field_ref_operations`] (module doc).
 /// Runs after record types are resolved and extension fields merged.
 pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
-    let tables = Tables::new(&workspace.tables);
-    let sharing = Sharing::new(&workspace.objects);
-    // `SetAutoCalcFields` on a shared record: scope (module doc) -> field
-    // arguments. Every routine that retrieves that record in that scope gets
-    // them.
-    let mut shared_auto: HashMap<String, Vec<String>> = HashMap::new();
-    for routine in &workspace.routines {
-        for (key, arg) in auto_calc_calls(routine) {
-            for scope in sharing.scopes(routine, &key) {
-                shared_auto.entry(scope).or_default().push(arg.clone());
+    let pass = Pass::new(&workspace.tables, &workspace.objects, &workspace.routines);
+    for routine in &mut workspace.routines {
+        let mut ops = std::mem::take(&mut routine.record_operations);
+        pass.attach(routine, &mut ops);
+        routine.record_operations = ops;
+        routine.field_ref_operations = field_ref_operations(routine, &pass.tables);
+    }
+}
+
+/// ENG-12: [`attach_flow_field_reads`]'s rules for the operations appended
+/// after it ran (a call result's, `GetRef().CalcFields(F)`; a shadowed
+/// `this.G.FindFirst()`'s): for each `(routine, first appended op)`.
+pub fn attach_appended_flow_field_reads(
+    workspace: &mut ModelEntities,
+    appended: &HashMap<usize, usize>,
+) {
+    // A dataset operation's receiver names no variable (no setup reaches it):
+    // it alone does not pay for a second pass.
+    let needs = |op: &ModelRecordOperation| {
+        op.dataset_reason.is_none()
+            && op.table_id.is_some()
+            && (op.op == "CalcFields" || is_retrieval(&op.op))
+    };
+    let any = appended.iter().any(|(&ri, &from)| {
+        workspace.routines[ri].record_operations[from..]
+            .iter()
+            .any(needs)
+    });
+    if !any {
+        return;
+    }
+    let pass = Pass::new(&workspace.tables, &workspace.objects, &workspace.routines);
+    for (&ri, &from) in appended {
+        let routine = &mut workspace.routines[ri];
+        let mut ops = routine.record_operations.split_off(from);
+        pass.attach(routine, &mut ops);
+        routine.record_operations.extend(ops);
+    }
+}
+
+/// What every FlowField rule reads: the tables, the sharing groups, and each
+/// shared record's `SetAutoCalcFields` (scope, module doc -> field arguments;
+/// every routine that retrieves that record in that scope gets them).
+struct Pass<'a> {
+    tables: Tables<'a>,
+    sharing: Sharing<'a>,
+    shared_auto: HashMap<String, Vec<String>>,
+}
+
+impl<'a> Pass<'a> {
+    fn new(
+        tables: &'a [ModelTable],
+        objects: &'a [ModelObject],
+        routines: &[ModelRoutine],
+    ) -> Self {
+        let sharing = Sharing::new(objects);
+        let mut shared_auto: HashMap<String, Vec<String>> = HashMap::new();
+        for routine in routines {
+            for (key, arg, this) in auto_calc_calls(routine) {
+                for scope in sharing.scopes(routine, &key, this) {
+                    shared_auto.entry(scope).or_default().push(arg.clone());
+                }
             }
         }
+        Pass {
+            tables: Tables::new(tables),
+            sharing,
+            shared_auto,
+        }
     }
-    for routine in &mut workspace.routines {
+
+    /// Write the FlowField reads of `ops`, operations of `routine`.
+    fn attach(&self, routine: &ModelRoutine, ops: &mut [ModelRecordOperation]) {
         let auto = auto_calc_calls(routine);
-        let mut scopes_of: HashMap<String, Vec<String>> = HashMap::new();
-        let mut ops = std::mem::take(&mut routine.record_operations);
-        for op in &mut ops {
+        let mut scopes_of: HashMap<(String, bool), Vec<String>> = HashMap::new();
+        for op in ops {
             let Some(table_id) = op.table_id.as_deref() else {
                 op.flow_field_reads = Vec::new();
                 continue;
@@ -940,27 +1025,31 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
             match op.op.as_str() {
                 "CalcFields" => {
                     for arg in op.field_arguments.iter().flatten() {
-                        tables.reads_of(table_id, arg, true, &mut reads);
+                        self.tables.reads_of(table_id, arg, true, &mut reads);
                     }
                 }
                 "SetRange" | "SetFilter" => {
                     if let Some(arg) = op.field_arguments.as_ref().and_then(|a| a.first()) {
-                        tables.reads_of(table_id, arg, false, &mut reads);
+                        self.tables.reads_of(table_id, arg, false, &mut reads);
                     }
                 }
                 o if is_retrieval(o) => {
-                    let key = var_key(&op.record_variable_name);
-                    for (k, arg) in &auto {
-                        if *k == key {
-                            tables.reads_of(table_id, arg, true, &mut reads);
+                    let key = receiver_key(&op.record_variable_name);
+                    let this = through_this(&op.record_variable_name);
+                    // The routine's own setups on the same binding: `this.G`
+                    // and a local `G` are two records (the global's own `G`
+                    // setup reaches `this.G` through the shared scope below).
+                    for (k, arg, setup_this) in &auto {
+                        if *k == key && *setup_this == this {
+                            self.tables.reads_of(table_id, arg, true, &mut reads);
                         }
                     }
                     let scopes = scopes_of
-                        .entry(key.clone())
-                        .or_insert_with(|| sharing.scopes(routine, &key));
+                        .entry((key.clone(), this))
+                        .or_insert_with(|| self.sharing.scopes(routine, &key, this));
                     for scope in scopes.iter() {
-                        for arg in shared_auto.get(scope).into_iter().flatten() {
-                            tables.reads_of(table_id, arg, true, &mut reads);
+                        for arg in self.shared_auto.get(scope).into_iter().flatten() {
+                            self.tables.reads_of(table_id, arg, true, &mut reads);
                         }
                     }
                 }
@@ -968,8 +1057,6 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
             }
             op.flow_field_reads = reads;
         }
-        routine.record_operations = ops;
-        routine.field_ref_operations = field_ref_operations(routine, &tables);
     }
 }
 

@@ -16,6 +16,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before anything is built or started; so is `--rounds 0`. `--max-rounds` was already capped at
   5. Test: `tests/cli/gate_scripts.rs` `speed_gate_refuses_more_rounds_than_routines`.
 
+### Fixed (ENG-12: record operations the engine did not see, engine limits L35, L36 and B10's left item 1)
+
+- **`GetBySystemId` is a record read (L35).** `R.GetBySystemId(Id)`, a bare `GetBySystemId(Id)`
+  in a table and `RR.GetBySystemId(Id)` on a RecordRef answered `query touches --direction down:
+  no (every candidate decided)` for the record's own table; they are now read operations (d11/d21
+  count them as loading the record; an unchecked one in statement position is an implicit error,
+  as `Get`). The performance detectors' retrieval lists (d1, d3, d36, d4) are unchanged.
+- **A record array element is a record (L36).** `Recs[1].FindFirst()` and `with Recs[1] do
+  FindFirst()` made no record operation and answered `no`; an array of records (or of RecordRef)
+  now receives through its elements in both the body walk and the resolver, the table taken from
+  the element type, so `Recs[1].Modify(true)` also runs the table's triggers.
+- **A record operation on a record no variable names** answered a definite `no`:
+  `GetRef().Modify(true)` (a function's returned record) for `may-commit`, `GetRef().FindFirst()`
+  for `query touches`. A known table's call result is now a record operation of its own (the
+  resolver reads the table from the function's return type; the model builds the operation at the
+  call site, `{call site}/callresult`, with its triggers and table-event subscribers, as ENG-06
+  does for `FieldRef.Validate`); a RecordRef result is an honest open dispatch; an object global
+  through `this` (`this.X.FindSet()`) is a record operation on the global. On CDO, all in
+  dependency code: 13 `this.X` sites, and 3 RecordRef call results
+  (`CreationFactory.GeteDocumentHeader().Modify()`, `GeteDocumentHeader(): RecordRef`), honest
+  dynamic dispatches; no known-table call result. Base Application has 36 array-element writes.
+  Probe: `docs/superpowers/notes/2026-11-12-eng12-record-ops-probe.md`.
+- Review round 1: a non-record parameter, local or return value shadows a record global of its
+  name in both engines (a local `X: array[2] of Codeunit W` under a global `X: Record T` had made
+  `X[1].Modify()` a record operation and hidden the codeunit's commit); an element of a
+  `temporary` array is temporary; `Recs[ 1 ]` and
+  `Recs[1]` are one receiver; `query effects` lists `GetBySystemId` as a read. A record
+  operation written without parentheses in expression position (`if R.FindFirst then`, about 96
+  sites in CDO) is still not seen: task ENG-25.
+- Review round 3: a call result's `CalcFields(F)` reads its FlowFields' source tables and its
+  `ModifyAll(F, …)` writes field `F` (`explain --field`); cross-app demand follows the triggers and
+  table events a call result's record operation (and a FieldRef's `Validate`) raises, so a
+  dependency trigger reached only that way is loaded, and `alsem graph` exports them
+  (`implicitTrigger`/`tableEvent` edges, OverApprox when the route is conditioned, as an edge's
+  route is), so test selection reaches a trigger through them; a call result's retrieval (a
+  shadowed `this.G.FindFirst()`) gets the FlowField reads of `this.G`'s `SetAutoCalcFields`, which
+  is scoped as the global whatever local shadows it (and a local `G`'s setup is not `this.G`'s);
+  a variable whose quoted name holds `[`
+  (`"Line [Temp]"`) is looked up by its whole name; `Recs[ 1 ].SetAutoCalcFields(F)` is spelled
+  as its retrieval's receiver, and an array element's FlowField setup is shared only as its array
+  variable is (another routine's local array no longer supplies it).
+
 ### Fixed (ENG-10: a database write inside a used try call is refused on premises, engine limits L23 item 6)
 
 - **`throws-error` answered `no` for `Ok := TryInsert()`** whose try function inserts: it counted

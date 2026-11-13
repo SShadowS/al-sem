@@ -232,7 +232,11 @@ fn is_commit_callee(file: &AlFile, function: ExprId, database_shadowed: bool) ->
 /// unlike [`is_record_type_str`], which is the stricter record-VARIABLE test (temp
 /// state / table resolution) that excludes `RecordRef`.
 fn is_record_receiver_ty(ty: &str) -> bool {
-    ty.trim().to_ascii_lowercase().starts_with("record")
+    // ENG-12 (L36): an array of records receives through its elements.
+    crate::record_ops::receiver_type_of(ty)
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("record")
 }
 
 fn is_record_ty(v: &VarDecl) -> bool {
@@ -265,7 +269,11 @@ pub(crate) fn named_return_var(routine: &RoutineDecl) -> Option<(&str, &str)> {
 
 /// The AL `RecordRef` type, exactly (Q4): not `Record …`, not `RecordId`.
 fn is_record_ref_ty(ty: Option<&str>) -> bool {
-    ty.is_some_and(|t| t.trim().eq_ignore_ascii_case("recordref"))
+    ty.is_some_and(|t| {
+        crate::record_ops::receiver_type_of(t)
+            .trim()
+            .eq_ignore_ascii_case("recordref")
+    })
 }
 
 /// The lowercased names a routine's lexical scope resolves to a `RecordRef`
@@ -423,11 +431,24 @@ fn build_scope(
 
     let mut rvars = globals;
     rvars.extend(params_locals.iter().cloned());
+    let explicit_globals_all = explicit_globals.clone();
     let mut frvars = explicit_globals;
     if implicit_rec {
         frvars.insert("rec".to_string());
     }
     frvars.extend(params_locals);
+    // A non-record parameter, local or return value shadows a record global of
+    // its name (ENG-12 review), as the extractor's receivers do.
+    for n in crate::program::resolve::extract::routine_non_record_names(routine) {
+        let n = n.to_ascii_lowercase();
+        rvars.remove(&n);
+        frvars.remove(&n);
+    }
+    // `this.X`: an unshadowed record global, as the extractor's receivers.
+    let this_keys =
+        crate::program::resolve::extract::this_receivers(&explicit_globals_all, routine);
+    rvars.extend(this_keys.iter().cloned());
+    frvars.extend(this_keys);
     // Every name a bare identifier can resolve to before a field of the
     // implicit record: parameters, locals, the object's globals of any type,
     // its dataitems and procedures, and `Rec` / `xRec` themselves.
@@ -558,12 +579,9 @@ impl<'a> SpineCtx<'a> {
         use ExprKind::*;
         let (method, on_record) = match &self.file.ir.expr(function).kind {
             Member { object, member, .. } => {
-                let on_record = match &self.file.ir.expr(*object).kind {
-                    Identifier(x) | QuotedIdentifier(x) => {
-                        self.scope.rvars.contains(&x.to_ascii_lowercase())
-                    }
-                    _ => false,
-                };
+                // `X` or an array element `X[i]`, as the record-op arm.
+                let on_record = crate::record_ops::receiver_variable(&self.file.ir, *object)
+                    .is_some_and(|x| self.scope.rvars.contains(&x.to_ascii_lowercase()));
                 (member.to_ascii_lowercase(), on_record)
             }
             Identifier(m) | QuotedIdentifier(m) => {
@@ -1189,16 +1207,12 @@ impl<'a> SpineCtx<'a> {
             }
             With { receiver, body } => {
                 self.walk_expr(*receiver);
-                let is_record = match &self.file.ir.expr(*receiver).kind {
-                    ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
-                        self.scope.rvars.contains(&x.to_ascii_lowercase())
-                    }
-                    _ => false,
-                };
-                let text = self
-                    .raw(&self.file.ir.expr(*receiver).origin)
-                    .trim()
-                    .to_string();
+                // `with X do` or `with Recs[i] do` (ENG-12, L36).
+                let is_record = crate::record_ops::receiver_variable(&self.file.ir, *receiver)
+                    .is_some_and(|x| self.scope.rvars.contains(&x.to_ascii_lowercase()));
+                let text = crate::record_ops::receiver_key_text(
+                    self.raw(&self.file.ir.expr(*receiver).origin).trim(),
+                );
                 self.implicit.push(ImplicitFrame { is_record, text });
                 self.walk_block(*body);
                 self.implicit.pop();
@@ -1261,20 +1275,28 @@ impl<'a> SpineCtx<'a> {
             let mut receiver_is_record_ref = false;
             let record_op: Option<(&'static str, String)> = match &fe.kind {
                 Member { object, member, .. } => {
-                    let recv_name = match &self.file.ir.expr(*object).kind {
-                        Identifier(x) | QuotedIdentifier(x) => Some(x.to_ascii_lowercase()),
-                        _ => None,
-                    };
+                    // `X` or an array element `X[i]` (ENG-12, L36).
+                    let recv_name = crate::record_ops::receiver_variable(&self.file.ir, *object)
+                        .map(|x| x.to_ascii_lowercase());
                     let is_rec = recv_name
                         .as_ref()
                         .map(|r| self.scope.rvars.contains(r))
                         .unwrap_or(false);
                     match (is_rec, record_op_type(&member.to_ascii_lowercase())) {
                         (true, Some(op)) => {
-                            receiver_is_record_ref = recv_name
-                                .as_ref()
-                                .is_some_and(|r| self.scope.record_ref_vars.contains(r));
-                            Some((op, self.raw(&self.file.ir.expr(*object).origin).to_string()))
+                            // `this.x` names the global `x`, unshadowed by
+                            // construction (`extract::this_receivers`).
+                            receiver_is_record_ref = recv_name.as_ref().is_some_and(|r| {
+                                self.scope
+                                    .record_ref_vars
+                                    .contains(r.strip_prefix("this.").unwrap_or(r))
+                            });
+                            Some((
+                                op,
+                                crate::record_ops::receiver_key_text(
+                                    self.raw(&self.file.ir.expr(*object).origin),
+                                ),
+                            ))
                         }
                         _ => None,
                     }
