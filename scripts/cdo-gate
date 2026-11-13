@@ -99,17 +99,25 @@ cgroup_dir="${CDO_GATE_CGROUP:-/sys/fs/cgroup}"
 host_available_mib() {
     awk '/^MemAvailable:/ { print int($2 / 1024) }' "${CDO_GATE_MEMINFO:-/proc/meminfo}"
 }
-# The container's free memory now, in MiB, or nothing when it has no limit.
+# The container's free memory now, in MiB; `unlimited` when its `memory.max`
+# says `max`; `unknown` when either file cannot be read or parsed. Unknown
+# counts as no room (review r2, sol: it must not fail open).
 container_free_mib() {
-    local max
+    local max used
     max=$(cat "$cgroup_dir/memory.max" 2>/dev/null)
-    [[ "$max" =~ ^[0-9]+$ ]] || return 0
+    if [[ "$max" == max ]]; then
+        echo unlimited
+        return
+    fi
     # What cannot be reclaimed, as the sampler counts it (`unreclaimable_bytes`).
-    local used
-    used=$(awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" { n += $2 }
+    used=$(awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" { n += $2; seen = 1 }
                 $1 == "slab_reclaimable" { n -= $2 }
-                END { print n + 0 }' "$cgroup_dir/memory.stat" 2>/dev/null)
-    echo $(((max - ${used:-0}) >> 20))
+                END { if (seen) print n }' "$cgroup_dir/memory.stat" 2>/dev/null)
+    if [[ "$max" =~ ^[0-9]+$ && "$used" =~ ^-?[0-9]+$ ]]; then
+        echo $(((max - used) >> 20))
+    else
+        echo unknown
+    fi
 }
 # Decide the layout: sets `layout_line`, `lane2_beside` and `lib_threads`.
 plan_layout() {
@@ -123,15 +131,15 @@ plan_layout() {
     for t in 2 1; do
         need=$((impact_own_mib + lib_own_mib[t] + headroom_mib))
         if [[ "$avail" =~ ^[0-9]+$ ]] && ((avail >= need)) &&
-            { [[ -z "$free" ]] || ((free >= need)); }; then
+            { [[ "$free" == unlimited ]] || { [[ "$free" =~ ^[0-9]+$ ]] && ((free >= need)); }; }; then
             lane2_beside=1
             lib_threads=$t
-            layout_line="parallel: lane 2 beside the impact phase, lib_cdo at $t thread(s) (need $need MiB; host MemAvailable $avail, container free ${free:-unlimited})"
+            layout_line="parallel: lane 2 beside the impact phase, lib_cdo at $t thread(s) (need $need MiB; host MemAvailable $avail, container free $free)"
             return
         fi
     done
     need=$((impact_own_mib + lib_own_mib[1] + headroom_mib))
-    layout_line="sequential: lane 2 after the impact phase (host MemAvailable ${avail:-unknown}, container free ${free:-unlimited}; 1 thread beside it needs $need MiB)"
+    layout_line="sequential: lane 2 after the impact phase (host MemAvailable ${avail:-unknown}, container free $free; 1 thread beside it needs $need MiB)"
 }
 usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
@@ -593,11 +601,35 @@ memory_sampler() {
     done
 }
 gate_pid=$$
-# A Ctrl-C or kill stops the background lane and the sampler too, and the gate
-# itself: the trap is cleared first (the TERM `kill 0` sends this script must
-# not re-enter it), then the gate exits instead of going on to the next phase
-# (review r1, sol and Opus).
-trap 'trap - INT TERM; kill 0; exit 130' INT TERM
+# A Ctrl-C or kill stops the gate's own processes (the background lane, the
+# running phase's cargo and tests, the sampler) and the gate itself: the trap is
+# cleared first so it cannot re-enter, then every descendant of this script gets
+# TERM, then the gate exits instead of going on to the next phase (review r1,
+# sol and Opus). Not `kill 0`: that signals the whole process group, which can
+# hold the caller when the gate was not started in a group of its own (review
+# r2, sol).
+gate_descendants() {
+    ps -e -o pid=,ppid= | awk -v root="$gate_pid" '
+        { parent[$1] = $2 }
+        END {
+            for (p in parent) {
+                q = parent[p]
+                while (q != root && (q in parent) && q != parent[q]) q = parent[q]
+                if (q == root) print p
+            }
+        }'
+}
+stop_gate() {
+    trap - INT TERM
+    # Listed first, then signalled: a `| xargs kill` pipeline would list (and
+    # kill) its own processes too.
+    local pids
+    pids=$(gate_descendants)
+    # shellcheck disable=SC2086
+    [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
+    exit 130
+}
+trap stop_gate INT TERM
 memory_sampler &
 sampler=$!
 # ⟨TLS-32⟩ The layout (`plan_layout`), decided when the parallel section would

@@ -272,8 +272,10 @@ fn speed_build_uses_the_gate_release_folder() {
 /// is a hand-written meminfo (`CDO_GATE_MEMINFO`) and the container a
 /// hand-written cgroup folder (`CDO_GATE_CGROUP`).
 ///
-/// Mutation (2026-11-13): `plan_layout`'s container test dropped (host only)
-/// -> the busy container is called parallel at 2 threads.
+/// Mutations (2026-11-13): `plan_layout`'s container test dropped (host only)
+/// -> the busy container is called parallel at 2 threads; an unreadable
+/// container reported `unlimited` instead of `unknown` (fail open) -> "no
+/// memory.stat" is called parallel.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
@@ -334,6 +336,33 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
     check(30_000, Some(2_000), false, "sequential:"); // the host is short for 1
     check(60_000, None, false, two); // no container limit: the host decides
     check(60_000, Some(2_000), true, "serial:");
+    // An unknown container is no room (review r2, sol: fail closed): a
+    // `memory.stat` that cannot be read, or a `memory.max` that is no number.
+    let broken = dir.path().join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("memory.max"), format!("{}\n", 49_152 * MIB)).unwrap();
+    let meminfo = broken.join("meminfo");
+    std::fs::write(&meminfo, "MemAvailable: 62914560 kB\n").unwrap();
+    let unknown = |dir: &std::path::Path| {
+        let out = std::process::Command::new("bash")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", &meminfo)
+            .env("CDO_GATE_CGROUP", dir)
+            .env_remove("CDO_GATE_SERIAL")
+            .output()
+            .expect("spawn bash scripts/cdo-gate --layout");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let got = unknown(&broken); // no memory.stat
+    assert!(got.starts_with("sequential:"), "no memory.stat: {got}");
+    std::fs::write(broken.join("memory.stat"), "anon 0\nkernel 0\n").unwrap();
+    std::fs::write(broken.join("memory.max"), "garbage\n").unwrap();
+    let got = unknown(&broken);
+    assert!(
+        got.starts_with("sequential:"),
+        "a garbage memory.max: {got}"
+    );
     // Exactly at the need is enough; one MiB short is not.
     check(60_000, Some(49_152 - 43_496), false, two);
     check(60_000, Some(49_152 - 43_496 + 1), false, one);
