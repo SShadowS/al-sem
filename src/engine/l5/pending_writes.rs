@@ -817,16 +817,23 @@ fn effects(
             }
         }
         for &(site, to) in fwd.get(r.id.as_str()).map_or(&[][..], Vec::as_slice) {
-            let Some(cs) = site
-                .filter(|s| sites.contains(*s))
-                .and_then(|s| r.call_sites.iter().find(|c| c.id == s))
-            else {
+            let Some(site) = site.filter(|s| sites.contains(*s)) else {
                 continue;
             };
-            if unknown.reach.contains(to) && !is_checked_run(cs, routines.get(to).copied()) {
-                out.other
-                    .insert(pending_unknown_code_behind(&cs.callee_text));
+            if !unknown.reach.contains(to) {
+                continue;
             }
+            // A call site, or a record operation whose trigger or table
+            // event's subscriber reaches unknown code (Fable round 2).
+            let text = match r.call_sites.iter().find(|c| c.id == site) {
+                Some(cs) if is_checked_run(cs, routines.get(to).copied()) => continue,
+                Some(cs) => cs.callee_text.clone(),
+                None => match r.record_operations.iter().find(|o| o.id == site) {
+                    Some(o) => format!("{}.{}", o.record_variable_name, o.op),
+                    None => continue,
+                },
+            };
+            out.other.insert(pending_unknown_code_behind(&text));
         }
     }
     if let Some(s) = summaries.get(&r.id) {

@@ -481,7 +481,10 @@ callers' question reads (`commit_scope::declared`).
   record counts as pending in both readers (an over-approximation the shared rule keeps); the
   digest's pending line and explain's pending report still name physical tables only (explain
   passes no unknown-code sites); a table event's phase is read from its name (`onbefore…`; any
-  other name counts as after the write). On CDO (base `67d75bea`) no default detector moves; d50
+  other name counts as after the write); d9's gate (two pending tables) counts the
+  order-unknown tables too, so a d9 finding (default) can rest on them alone, and d8's
+  `affectedTables` (and so its fingerprint) can grow by them: neither happens on CDO, so it is
+  not measured. On CDO (base `67d75bea`) no default detector moves; d50
   goes from 0 to 2 findings, both resting only on unknown code in dependencies (a chained
   interface call left open, ENG-64, and a telemetry logger registered at run time) and false in
   practice; it stays opt-in. A helper's writes

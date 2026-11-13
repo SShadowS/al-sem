@@ -294,6 +294,23 @@ table 53013 "E24 W"
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
 }
+table 53014 "E24 X"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+
+    trigger OnInsert()
+    var
+        Missing: Codeunit "E24 Not Loaded";
+    begin
+        Missing.DoIt();
+    end;
+}
+table 53015 "E24 Y"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
 codeunit 53011 "E24 Worker2"
 {
     trigger OnRun()
@@ -334,6 +351,21 @@ codeunit 53010 "E24 Ops2"
     begin
         V.K := 1;
         V.Insert();
+    end;
+
+    procedure InsertXThenRun(var X: Record "E24 X" temporary)
+    begin
+        X.K := 1;
+        X.Insert(true);
+        if Codeunit.Run(Codeunit::"E24 Worker2") then;
+    end;
+
+    procedure InsertY()
+    var
+        Y: Record "E24 Y";
+    begin
+        Y.K := 1;
+        Y.Insert();
     end;
 
     procedure DynThenRun(Id: Integer)
@@ -419,6 +451,21 @@ codeunit 53013 "E24 Subs2"
         if Codeunit.Run(Codeunit::"E24 Worker2") then;
     end;
 
+    [EventSubscriber(ObjectType::Table, Database::"E24 Y", 'OnBeforeInsertEvent', '', false, false)]
+    local procedure BeforeInsYRuns(var Rec: Record "E24 Y"; RunTrigger: Boolean)
+    begin
+        if Codeunit.Run(Codeunit::"E24 Worker2") then;
+    end;
+
+    [EventSubscriber(ObjectType::Table, Database::"E24 Y", 'OnAfterInsertEvent', '', false, false)]
+    local procedure AfterInsYWrites(var Rec: Record "E24 Y"; RunTrigger: Boolean)
+    var
+        W: Record "E24 W";
+    begin
+        W.Get(1);
+        W.Modify();
+    end;
+
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"E24 Ops2", 'OnThing2', '', false, false)]
     local procedure OnlyIsolated()
     begin
@@ -475,7 +522,10 @@ codeunit 53013 "E24 Subs2"
 /// subscriber of the same table event may run first (pending, labeled).
 /// Breaks (2026-11-13): no `written` targets in `span_template` -> `AfterInsT`
 /// has no finding; `run_phase` reads OnBefore as after the write ->
-/// `BeforeInsU` gets one. Each fails; restored, it passes.
+/// `BeforeInsU` gets one; `add_dispatch_siblings` ignores the phase order
+/// (`ph <= m || true`) -> `BeforeInsYRuns` gets one; the "unknown code
+/// behind" loop skips a record operation's site -> `InsertXThenRun` has
+/// none (Fable round 2). Each fails; restored, it passes.
 #[test]
 fn table_events_order_the_write_and_their_siblings() {
     let fs = d50(ROUND2);
@@ -490,6 +540,13 @@ fn table_events_order_the_write_and_their_siblings() {
         ),
         "{sib}"
     );
+    // An OnAfter subscriber runs after an OnBefore one: its write is not
+    // pending there.
+    assert!(cause(&fs, "BeforeInsYRuns").is_none(), "{fs:?}");
+    // Unknown code in the table's trigger, behind a temporary record's
+    // insert (the insert itself writes nothing).
+    let x = cause(&fs, "InsertXThenRun").unwrap_or_else(|| panic!("{fs:?}"));
+    assert!(x.contains("unknown code behind X."), "{x}");
 }
 
 /// Findings 2, 3, 4, 6: a dynamic checked run is not unknown code; a

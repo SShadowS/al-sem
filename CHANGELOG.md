@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LogAutoSendFailure`, both resting only on unknown code in dependencies: a chained interface
   call the resolver leaves open (`Provider.GetCache().GetSubscription` in Continia Core, whose
   one implementation only reads: ENG-64) and a telemetry logger registered at run time. Both
-  are false in practice, so d50 stays opt-in. Left: a callee with no row, which the trap search
+  are false in practice, so d50 stays opt-in. d9's gate counts the order-unknown tables, so a d9
+  finding can rest on them alone (none on CDO: not measured). Left: a callee with no row, which the trap search
   counts as unknown code, is not counted here; the digest and explain still name physical tables
   only; a `LockTable` on a temporary record counts (an over-approximation). Tests:
   `tests/cli/cli_eng24_pending_writes.rs` (one break on the shared rule fails both d50's test
