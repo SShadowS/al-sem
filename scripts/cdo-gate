@@ -125,7 +125,30 @@ container_free_mib() {
         echo unknown
     fi
 }
-# Decide the layout: sets `layout_line`, `lane2_beside` and `lib_threads`.
+# ⟨TLS-36⟩ The CPUs lane 2 is pinned to beside the impact phase: the last
+# `CDO_GATE_LANE2_CPUS` (default 6) of the CPUs this gate may use, as a
+# `taskset -c` list. Nothing (no pin) when the count is 0, when it would leave
+# the impact phase fewer than 8 CPUs, or without `taskset`.
+lane2_cpus() {
+    local want=${CDO_GATE_LANE2_CPUS:-6} allowed
+    [[ "$want" =~ ^[0-9]+$ ]] && ((want > 0)) || return 0
+    command -v taskset >/dev/null || return 0
+    allowed=$(awk '/^Cpus_allowed_list:/ { print $2 }' "${CDO_GATE_PROC_STATUS:-/proc/self/status}")
+    echo "$allowed" | awk -v want="$want" -F, '
+        { for (i = 1; i <= NF; i++) {
+              n = split($i, r, "-")
+              lo = r[1]; hi = (n == 2 ? r[2] : r[1])
+              for (c = lo; c <= hi; c++) cpu[k++] = c
+          } }
+        END {
+            if (k - want < 8) exit
+            out = ""
+            for (i = k - want; i < k; i++) out = out (out == "" ? "" : ",") cpu[i]
+            print out
+        }'
+}
+# Decide the layout: sets `layout_line`, `lane2_beside`, `lib_threads` and
+# `lane2_pin`.
 plan_layout() {
     if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
         layout_line="serial: every phase one after another (CDO_GATE_SERIAL=1)"
@@ -140,7 +163,10 @@ plan_layout() {
             { [[ "$free" == unlimited ]] || { [[ "$free" =~ ^[0-9]+$ ]] && ((free >= need)); }; }; then
             lane2_beside=1
             lib_threads=$t
-            layout_line="parallel: lane 2 beside the impact phase, lib_cdo at $t thread(s) (need $need MiB; host MemAvailable $avail, container free $free)"
+            local cpus
+            cpus=$(lane2_cpus)
+            [[ -n "$cpus" ]] && lane2_pin=(taskset -c "$cpus")
+            layout_line="parallel: lane 2 beside the impact phase, lib_cdo at $t thread(s), lane 2 on CPUs ${cpus:-any} (need $need MiB; host MemAvailable $avail, container free $free)"
             return
         fi
     done
@@ -555,12 +581,12 @@ phase_output_cdo_impact() {
 # whole capability snapshot of the cross-app CDO model (45.8 GB) to read only
 # its call-site rows; it calls `compose_callsite_resolutions` (3.1 GB) since.
 phase_harness() {
-    run_phase program_resolve_harness "${lane2_nice[@]}" \
+    run_phase program_resolve_harness "${lane2_nice[@]}" "${lane2_pin[@]}" \
         cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=4
 }
 
 phase_lsp() {
-    run_phase lsp "${lane2_nice[@]}" \
+    run_phase lsp "${lane2_nice[@]}" "${lane2_pin[@]}" \
         cargo test "${profile[@]}" --test lsp -- program_graph:: snapshot_robustness::
 }
 
@@ -570,7 +596,7 @@ phase_lsp() {
 # the gate could not fail on it. The target's fixture members are cheap and run
 # alongside it.
 phase_l4() {
-    run_phase l4_summary_differential "${lane2_nice[@]}" \
+    run_phase l4_summary_differential "${lane2_nice[@]}" "${lane2_pin[@]}" \
         cargo test "${profile[@]}" --test l4_summary_differential
 }
 
@@ -589,9 +615,35 @@ phase_l4() {
 # alone (TLS-32's census, 2026-11-13, cdo profile, one test per process):
 # `retained_emission_equals_a_composition_on_cdo` 18,628 MiB and 105 s, every
 # other test at most 4,552 MiB, 507 s summed (note `2026-11-13-lib-cdo-census.md`).
+#
+# ⟨TLS-36⟩ Longest first: libtest starts tests in name order, so the longest
+# (`retained_emission`, ~105 s alone) started last and left a tail. The phase
+# runs the five longest by name first (`--exact`), then the rest (`--skip` each),
+# in every layout. A renamed long test is no longer matched by the first run and
+# runs in the second: nothing is lost, only the order. The summary sums both
+# runs' counts.
+lib_long_tests=(
+    engine::resident::revision::tests::retained_emission_equals_a_composition_on_cdo
+    engine::l5::digest::wave2_index_tests::cdo_crossing_census
+    engine::l4::capability_cone::scc_set_tests::derived_only_matches_raw_fold_on_cdo
+    engine::l5::digest::no_path_tests::cdo_i369_no_path_rows_and_fact_ids
+    engine::l4::pd_solve::tests::parallel_solve_equals_the_serial_walk_on_cdo
+)
+lib_tests() {
+    local skips=() t first rest
+    for t in "${lib_long_tests[@]}"; do skips+=(--skip "$t"); done
+    "${lane2_nice[@]}" "${lane2_pin[@]}" \
+        cargo test "${profile[@]}" -p al-sem --lib -- --exact "${lib_long_tests[@]}" \
+        --test-threads="$lib_threads"
+    first=$?
+    "${lane2_nice[@]}" "${lane2_pin[@]}" \
+        cargo test "${profile[@]}" -p al-sem --lib cdo -- "${skips[@]}" \
+        --test-threads="$lib_threads"
+    rest=$?
+    ((first == 0 && rest == 0))
+}
 phase_lib() {
-    run_phase lib_cdo "${lane2_nice[@]}" \
-        cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads="$lib_threads"
+    run_phase lib_cdo lib_tests
 }
 
 lane2() {
@@ -608,6 +660,14 @@ lane2() {
 # until TLS-23; beside the impact phase since TLS-32. Run after it, the nice
 # costs nothing.)
 lane2_nice=(nice -n 10)
+# ⟨TLS-36⟩ Beside the impact phase, lane 2 is also pinned to the host's last
+# `CDO_GATE_LANE2_CPUS` CPUs (`taskset`; default 6 of the CPUs this gate may
+# use; `plan_layout` sets it). Its tests' thread pools size themselves from the
+# CPUs they may use (rayon, `available_parallelism`), so lane 2 takes at most
+# those, and the impact phase keeps the rest. TLS-32's first parallel gate had
+# lane 2's tests at 2.3-3.3x their time alone and the impact phase at 472 s
+# against ~350: both fought for every core. Empty: no pin.
+lane2_pin=()
 # ⟨TLS-19⟩ The container's memory while the test lanes run, against its
 # `memory.max`, in the summary. Not `memory.current`: it counts page cache,
 # which the kernel reclaims before any OOM, so it sat at the limit (49151 of

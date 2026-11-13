@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-36: cdo-gate's parallel layout gives the impact phase its CPUs, and lib_cdo runs its longest tests first)
+
+- **Lane 2 is pinned to a few CPUs beside the impact phase, and `lib_cdo` starts with its longest
+  tests.** TLS-32's first parallel gate fit easily in memory but saved no time: lane 2's tests ran
+  2.3-3.3× their time alone and the impact phase took 472 s against ~350. Each lib CDO test runs
+  parallel code inside (rayon), so "2 threads" fought the impact phase for every core.
+  - **The pin:** in the parallel layout, lane 2's phases run under `taskset` on the last
+    `CDO_GATE_LANE2_CPUS` (default 6) CPUs the gate may use. Their thread pools size themselves
+    from the CPUs they may use, so lane 2 takes at most those, and the impact phase keeps the
+    rest. There is no pin when that would leave the impact phase fewer than 8 CPUs, or without
+    `taskset`. The summary's layout line names the CPUs.
+  - **Longest first:** libtest starts tests in name order, so `retained_emission` (~105 s alone)
+    started last. `lib_cdo` now runs its five longest tests by name first, then the rest, in
+    every layout. A renamed long test runs in the second pass; the summary sums both runs.
+  - **Test:** `gate_scripts::cdo_gate_pins_lane_two_beside_impact`, with a discrimination proof.
+  - **Measurement:** a serial and a parallel gate back to back on a quiet host decide whether the
+    parallel layout stays the default; see the note.
+
 ### Changed (TLS-32: cdo-gate runs lane 2 beside the impact phase when the host has the memory)
 
 - **`scripts/cdo-gate`'s test phases can overlap again, within the memory rules.**
