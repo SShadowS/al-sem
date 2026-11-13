@@ -1,0 +1,26 @@
+{
+  "id": "d75fcb8f-7337-4f82-b961-1f9c317a6732",
+  "name": "TLS50 RunTrigger Probe Ext",
+  "publisher": "bc-measure",
+  "version": "1.0.0.0",
+  "brief": "Throwaway probe: a table extension in another app than its table",
+  "description": "TLS-50 probe (al-sem), second app. Not for deployment anywhere that matters.",
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "dependencies": [
+    {
+      "id": "1a54c0c7-cf0c-4bfa-827c-5591ae1dff27",
+      "name": "TLS50 RunTrigger Probe",
+      "publisher": "bc-measure",
+      "version": "1.0.0.0"
+    }
+  ],
+  "idRanges": [
+    {
+      "from": 71060,
+      "to": 71069
+    }
+  ]
+}

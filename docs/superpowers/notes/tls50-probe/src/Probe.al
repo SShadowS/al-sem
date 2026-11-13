@@ -66,6 +66,9 @@ tableextension 71052 "TLS50 Item Ext" extends "TLS50 Item"
         L: Codeunit "TLS50 Log";
     begin
         L.Add('X.OnBeforeModify', Rec, xRec);
+        // Does a change made here reach the table trigger and the write?
+        if Rec.PK = 'MC' then
+            Rec.Val += 100;
     end;
 
     trigger OnAfterModify()
@@ -122,6 +125,20 @@ codeunit 71053 "TLS50 Log"
         Log.Insert(false);
     end;
 
+    procedure AddRtX(Src: Text; R: Record "TLS50 Item"; X: Record "TLS50 Item"; RunTrigger: Boolean)
+    var
+        Log: Record "TLS50 Log";
+        Db: Record "TLS50 Item";
+        Stored: Integer;
+    begin
+        Stored := -1;
+        if Db.Get(R.PK) then
+            Stored := Db.Val;
+        Log.Init();
+        Log.Msg := CopyStr(StrSubstNo('%1 rt=%2 rec=%3 x=%4 db=%5', Src, RunTrigger, R.Val, X.Val, Stored), 1, 250);
+        Log.Insert(false);
+    end;
+
     procedure Text(): Text
     var
         Log: Record "TLS50 Log";
@@ -161,13 +178,13 @@ codeunit 71053 "TLS50 Log"
     [EventSubscriber(ObjectType::Table, Database::"TLS50 Item", 'OnBeforeModifyEvent', '', false, false)]
     local procedure BM(var Rec: Record "TLS50 Item"; var xRec: Record "TLS50 Item"; RunTrigger: Boolean)
     begin
-        AddRt('E.OnBeforeModifyEvent', Rec, RunTrigger);
+        AddRtX('E.OnBeforeModifyEvent', Rec, xRec, RunTrigger);
     end;
 
     [EventSubscriber(ObjectType::Table, Database::"TLS50 Item", 'OnAfterModifyEvent', '', false, false)]
     local procedure AM(var Rec: Record "TLS50 Item"; var xRec: Record "TLS50 Item"; RunTrigger: Boolean)
     begin
-        AddRt('E.OnAfterModifyEvent', Rec, RunTrigger);
+        AddRtX('E.OnAfterModifyEvent', Rec, xRec, RunTrigger);
     end;
 
     [EventSubscriber(ObjectType::Table, Database::"TLS50 Item", 'OnBeforeDeleteEvent', '', false, false)]
@@ -306,6 +323,79 @@ codeunit 71054 "TLS50 Probe Tests"
         I.SetRange(PK, 'EF');
         I.DeleteAll(false);
         Error('MEASURED DeleteAllFalse: %1', L.Text());
+    end;
+
+    [Test]
+    procedure InsertOmit()
+    var
+        I: Record "TLS50 Item";
+    begin
+        L.Clear();
+        I.Init();
+        I.PK := 'IO';
+        I.Val := 5;
+        I.Insert();
+        Error('MEASURED InsertOmit: %1', L.Text());
+    end;
+
+    [Test]
+    procedure ModifyOmit()
+    var
+        I: Record "TLS50 Item";
+    begin
+        Seed('MO', 1);
+        I.Get('MO');
+        I.Val := 2;
+        I.Modify();
+        Error('MEASURED ModifyOmit: %1', L.Text());
+    end;
+
+    [Test]
+    procedure DeleteOmit()
+    var
+        I: Record "TLS50 Item";
+    begin
+        Seed('DO', 1);
+        I.Get('DO');
+        I.Delete();
+        Error('MEASURED DeleteOmit: %1', L.Text());
+    end;
+
+    [Test]
+    procedure ModifyAllOmit()
+    var
+        I: Record "TLS50 Item";
+    begin
+        Seed('AO', 1);
+        I.SetRange(PK, 'AO');
+        I.ModifyAll(Val, 3);
+        Error('MEASURED ModifyAllOmit: %1', L.Text());
+    end;
+
+    [Test]
+    procedure DeleteAllOmit()
+    var
+        I: Record "TLS50 Item";
+    begin
+        Seed('EO', 1);
+        I.SetRange(PK, 'EO');
+        I.DeleteAll();
+        Error('MEASURED DeleteAllOmit: %1', L.Text());
+    end;
+
+    /// The extension's OnBeforeModify adds 100 to Val for PK 'MC'.
+    [Test]
+    procedure ModifyChangedInOnBefore()
+    var
+        I: Record "TLS50 Item";
+        After: Record "TLS50 Item";
+    begin
+        Seed('MC', 1);
+        I.Get('MC');
+        I.Val := 2;
+        I.Modify(true);
+        After.Get('MC');
+        Error('MEASURED ModifyChangedInOnBefore: %1 || caller Rec after=%2 stored after=%3', L.Text(), I.Val, After.Val);
     end;
 
     [Test]
