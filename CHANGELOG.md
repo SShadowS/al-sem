@@ -32,8 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finding was checked against source: the new d1/d3 sites are parens-less reads; the d11 removal
   is a `MODIFY` after a now-seen `if FIND then`; the d44 changes are new read pairs (one event
   is at its 32-finding cap, so two pairs swap). The d56 pair (`CDOSetupWizardUserSetup.Page.al:57`,
-  twice) is a known false positive: the page's `Rec` is `SourceTableTemporary`, which the body
-  model ignores (task ENG-27). The L4 digests were re-frozen: 30,604 added read effects from
+  twice) is a known false positive: the page's `Rec` is `SourceTableTemporary`, so the copy is a
+  temporary buffer, but d56 checks only the copy's source for that, and emits one finding per
+  copy (task ENG-27). The L4 digests were re-frozen: 30,604 added read effects from
   199 routines, none removed (`tests/l4-summary-baseline/README.md`).
 - **Baselines:** a new operation renumbers the later operations in its routine, and the strict
   fingerprint hashes those numbers. On CDO 139 unchanged findings at `--scope primary` get a new
