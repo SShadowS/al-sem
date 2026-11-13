@@ -361,12 +361,9 @@ fn field_call(file: &AlFile, e: ExprId) -> Option<FieldSource> {
         ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n.clone(),
         _ => return None,
     };
-    let field = match member
-        .trim()
-        .trim_matches('"')
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    // A member name: the identifier fold, as the model side reads the same
+    // source (`model/flow_fields.rs`; TLS-43 review sol r4).
+    let field = match member.trim().trim_matches('"').fold_identifier().as_str() {
         "field" => args
             .first()
             .map_or(FieldArg::Unknown, |a| field_arg(file, *a)),
@@ -394,7 +391,7 @@ fn field_arg(file: &AlFile, e: ExprId) -> FieldArg {
             if !member
                 .trim()
                 .trim_matches('"')
-                .eq_ignore_ascii_case("fieldno")
+                .eq_fold_identifier("fieldno")
             {
                 return FieldArg::Unknown;
             }
@@ -571,5 +568,37 @@ mod tests {
         assert_eq!(local_recordref_bindings(&f, r, "Param"), None);
         assert_eq!(local_recordref_bindings(&f, r, "G"), None);
         assert_eq!(local_recordref_bindings(&f, r, "C"), None);
+    }
+
+    /// TLS-43 review sol r4: `Field` and `FieldNo` are member names, so they
+    /// take the identifier fold, as the model side reads the same source: a
+    /// `Fİeld(1)` / `FİeldNo` is the `Field(1)` / `FieldNo` it folds to.
+    ///
+    /// DISCRIMINATION (2026-11-13): `field_call` back on the ASCII fold
+    /// answers `None` (the dotted `Fİeld` is no source); `field_arg` back on
+    /// `eq_ignore_ascii_case` answers `Unknown` for `FİeldNo`; restored,
+    /// passes.
+    #[test]
+    fn a_dotted_capital_i_field_member_is_a_field_source() {
+        let src = "codeunit 50100 X\n{\n    procedure P()\n    var\n        R: RecordRef;\n        F: FieldRef;\n        G: FieldRef;\n        Cust: Record Customer;\n    begin\n        F := R.Fİeld(1);\n        G := R.Field(Cust.FİeldNo(Name));\n    end;\n}\n";
+        let f = al_syntax::parse(src);
+        let r = &f.objects[0].routines[0];
+        assert_eq!(
+            local_fieldref_sources(&f, r, "F"),
+            Some(vec![FieldSource {
+                recordref: "R".into(),
+                field: FieldArg::Number(1)
+            }])
+        );
+        assert_eq!(
+            local_fieldref_sources(&f, r, "G"),
+            Some(vec![FieldSource {
+                recordref: "R".into(),
+                field: FieldArg::FieldNo {
+                    record: "Cust".into(),
+                    field: "Name".into()
+                }
+            }])
+        );
     }
 }

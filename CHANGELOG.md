@@ -186,6 +186,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       now takes the identifier fold. Witnesses
       `a_dotted_capital_i_is_handled_name_matches_like_its_folded_spelling` and
       `a_whole_signature_with_a_dotted_capital_i_selects`, each with a break.
+    - **sol r4:** the FieldRef source reader (`recordref_table.rs`: `Field`, `FieldNo`) and
+      the closed-enum proof (`closed_enum.rs`: `FromInteger`) matched member names ASCII-only,
+      while the model side folds the same members. Both now take the identifier fold.
+      Witnesses `a_dotted_capital_i_field_member_is_a_field_source` and a `Fromİnteger` shape
+      in `i264_t3_rhs_shapes_complete_at_resolver`, each with a break. (The AL compiler most
+      likely binds no `Fİeld`; this keeps the engine's two readers agreeing.)
     - The guard missed `eq_ignore_ascii_case` passed as a function
       (`str::eq_ignore_ascii_case`). It now counts the `str::`, `char::`, `u8::` and `[u8]>::`
       path forms; a planted `const` of that form in d19 fails it.
