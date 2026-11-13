@@ -144,49 +144,17 @@ fn condition_str(c: Condition) -> &'static str {
     }
 }
 
-/// Trigger names a record operation of family `op` fires, and the platform table
-/// events it raises (folded).
-fn record_trigger_names(op: &str) -> (&'static [&'static str], &'static [&'static str]) {
-    match op {
-        "insert" => (
-            &["oninsert", "onbeforeinsert", "onafterinsert"],
-            &["onbeforeinsertevent", "onafterinsertevent"],
-        ),
-        "modify" => (
-            &["onmodify", "onbeforemodify", "onaftermodify"],
-            &["onbeforemodifyevent", "onaftermodifyevent"],
-        ),
-        "delete" => (
-            &["ondelete", "onbeforedelete", "onafterdelete"],
-            &["onbeforedeleteevent", "onafterdeleteevent"],
-        ),
-        "rename" => (
-            &["onrename", "onbeforerename", "onafterrename"],
-            &["onbeforerenameevent", "onafterrenameevent"],
-        ),
-        "validate" => (
-            &["onvalidate", "onbeforevalidate", "onaftervalidate"],
-            &["onbeforevalidateevent", "onaftervalidateevent"],
-        ),
-        _ => (&[], &[]),
-    }
+/// Whether a table trigger named `name_lc` runs for a record operation of family
+/// `op`: `On<Op>`, a table extension's `OnBefore<Op>`/`OnAfter<Op>` (the shared
+/// stem rule, [`crate::program::resolve::edge::trigger_family`]; ENG-15).
+fn is_record_trigger_of(name_lc: &str, op: &str) -> bool {
+    crate::program::resolve::edge::trigger_family(name_lc) == Some(op)
 }
 
-/// Table-extension triggers no record operation reaches yet (F5).
-fn is_unmodeled_record_trigger(name_lc: &str) -> bool {
-    matches!(
-        name_lc,
-        "onbeforeinsert"
-            | "onafterinsert"
-            | "onbeforemodify"
-            | "onaftermodify"
-            | "onbeforedelete"
-            | "onafterdelete"
-            | "onbeforerename"
-            | "onafterrename"
-            | "onbeforevalidate"
-            | "onaftervalidate"
-    )
+/// Whether a platform table event named `name_lc` is one a record operation of
+/// family `op` raises (`resolver::table_event_names`).
+fn is_record_event_of(name_lc: &str, op: &str) -> bool {
+    crate::program::resolve::resolver::table_event_names(op).is_some_and(|e| e.contains(&name_lc))
 }
 
 fn object_kind_from_lc(s: &str) -> Option<ObjectKind> {
@@ -243,10 +211,7 @@ pub(crate) const CANCEL_EVERY: u64 = 4096;
 pub(crate) fn trigger_op(name_lc: &str) -> Option<u8> {
     super::sited::RECORD_OPS
         .iter()
-        .position(|op| {
-            let (t, e) = record_trigger_names(op);
-            t.contains(&name_lc) || e.contains(&name_lc)
-        })
+        .position(|op| is_record_trigger_of(name_lc, op) || is_record_event_of(name_lc, op))
         .map(|i| i as u8)
 }
 
@@ -1273,13 +1238,8 @@ impl<'a> Builder<'a> {
                     }
                 }
                 Hub::Record(op) | Hub::RecordEvents(op) => {
-                    let (triggers, events) = record_trigger_names(op);
                     // A RunTrigger-false operation reaches no trigger (c02).
-                    let triggers: &[&str] = if matches!(hub, Hub::RecordEvents(_)) {
-                        &[]
-                    } else {
-                        triggers
-                    };
+                    let triggers_run = !matches!(hub, Hub::RecordEvents(_));
                     let targets: Vec<RoutineNodeId> = g
                         .routines
                         .iter()
@@ -1287,9 +1247,11 @@ impl<'a> Builder<'a> {
                             matches!(
                                 r.id.object.kind,
                                 ObjectKind::Table | ObjectKind::TableExtension
-                            ) && ((r.is_trigger && triggers.contains(&r.id.name_lc.as_str()))
+                            ) && ((triggers_run
+                                && r.is_trigger
+                                && is_record_trigger_of(r.id.name_lc.as_str(), op))
                                 || (r.publisher_kind == Some(PublisherKind::Platform)
-                                    && events.contains(&r.id.name_lc.as_str())))
+                                    && is_record_event_of(r.id.name_lc.as_str(), op)))
                         })
                         .map(|r| r.id.clone())
                         .collect();
@@ -1408,12 +1370,6 @@ impl<'a> Builder<'a> {
                     || r.event_subscribers.iter().any(|s| s.is_unreadable()))
             {
                 flags.push("unboundSubscriber");
-            }
-            if r.is_trigger
-                && r.id.object.kind == ObjectKind::TableExtension
-                && is_unmodeled_record_trigger(r.id.name_lc.as_str())
-            {
-                flags.push("unmodeledRecordTrigger");
             }
             if !flags.is_empty() {
                 out.insert(r.id.clone(), flags);
@@ -2595,7 +2551,8 @@ pub(crate) mod tests {
     /// reaches it (record operations still do not raise it); a synthetic PAGE
     /// publisher is not flagged (its page's runs raise it); an
     /// `[EventSubscriber]` with no incoming event edge is `unboundSubscriber`; a
-    /// table-extension `OnAfterInsert` is `unmodeledRecordTrigger`.
+    /// table-extension `OnAfterInsert` carries no flag (ENG-15 retired
+    /// `unmodeledRecordTrigger`).
     #[test]
     fn hidden_callers_flags() {
         let mut w = World::default();
@@ -2693,9 +2650,17 @@ pub(crate) mod tests {
             o.node("Cu.Unbound").hidden_callers,
             vec!["unboundSubscriber"]
         );
+        // ENG-15 (F5 closed): record operations reach a table extension's
+        // `OnAfterInsert`, so it carries no flag; the insert hub reaches it by
+        // the shared stem rule.
+        assert!(
+            o.node("TabExt.OnAfterInsert").hidden_callers.is_empty(),
+            "{:?}",
+            o.node("TabExt.OnAfterInsert").hidden_callers
+        );
         assert_eq!(
-            o.node("TabExt.OnAfterInsert").hidden_callers,
-            vec!["unmodeledRecordTrigger"]
+            o.edge("h:record:insert", "TabExt.OnAfterInsert"),
+            ("Trigger", "Open", "hubExpansion")
         );
     }
 

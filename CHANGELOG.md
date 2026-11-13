@@ -293,6 +293,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `implicit_trigger_to_dependency_has_no_edge` now expects the open edge beside the dependency
   trigger's external target.
 
+### Changed (ENG-15: `alsem graph` retires `unmodeledRecordTrigger`)
+
+- **The `hiddenCallers` flag `unmodeledRecordTrigger` is no longer emitted.** It marked a
+  table-extension `OnBefore<Op>`/`OnAfter<Op>` trigger (or field `OnBefore/OnAfterValidate`) no
+  record operation reached (callgraph export spec F5). ENG-15 closes F5: record operations now
+  reach them, as edges. No field is removed; bc-dev-mcp loses an over-select signal (it selected
+  more tests for such a trigger). The impact graph's trigger-name table reads the shared stem
+  rule (`resolve::edge::trigger_family`); `docs/al-compiler-callgraph-holes.md` A11 is now
+  "Better".
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test

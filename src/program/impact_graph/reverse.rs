@@ -138,7 +138,7 @@ pub enum HiddenChannel {
     /// The universal hub: callers of every node.
     Universal,
     /// A node's `hiddenCallers` flag (`unraisedPublisher`,
-    /// `unboundSubscriber`, `unmodeledRecordTrigger`).
+    /// `unboundSubscriber`; `unmodeledRecordTrigger` until ENG-15).
     Flag(&'static str),
 }
 

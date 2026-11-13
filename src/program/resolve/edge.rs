@@ -983,6 +983,30 @@ mod tests {
     use super::*;
     use crate::program::node::{AppRef, ObjKey, ObjectKind, ObjectNodeId, RoutineNodeId};
 
+    /// ENG-15: the stem rule's three forms per family, and no trigger for a
+    /// method that is not one (`OnModifyAll`, `OnDeleteAll`, `OnFoo`).
+    /// Break (2026-11-13): drop the `ends_with` filter -> `onmodifyall` reads
+    /// as `modify`. Fails; restored, it passes.
+    #[test]
+    fn trigger_family_reads_on_onbefore_and_onafter() {
+        for (name, want) in [
+            ("oninsert", Some("insert")),
+            ("onbeforeinsert", Some("insert")),
+            ("onafterinsert", Some("insert")),
+            ("onbeforemodify", Some("modify")),
+            ("onafterdelete", Some("delete")),
+            ("onafterrename", Some("rename")),
+            ("onbeforevalidate", Some("validate")),
+            ("onvalidate", Some("validate")),
+            ("onmodifyall", None),
+            ("onafterdeleteall", None),
+            ("onfoo", None),
+            ("insert", None),
+        ] {
+            assert_eq!(trigger_family(name), want, "{name}");
+        }
+    }
+
     fn rid(app: u32, name: &str) -> RoutineNodeId {
         RoutineNodeId {
             object: ObjectNodeId {

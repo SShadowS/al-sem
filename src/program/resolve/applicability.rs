@@ -724,6 +724,47 @@ mod tests {
         ));
     }
 
+    /// ENG-15: a table extension's `OnBefore<Op>`/`OnAfter<Op>` is an
+    /// applicable route of its operation, as the fan-out now emits it; another
+    /// family's is not.
+    /// Break (2026-11-13): the old `name_lc == "oninsert"` check -> `false`
+    /// for `onafterinsert`. Fails; restored, it passes.
+    #[test]
+    fn trigger_applicable_extension_before_and_after_triggers() {
+        let (graph, index, table_id, ext_id) = trigger_fixture();
+        let ctx = RecordOpCtx {
+            kind: RecordOpKind::Insert,
+            table: table_id,
+            field: None,
+            run_trigger: RunTrigger::True,
+        };
+        let target = |name: &str| RoutineNodeId {
+            object: ext_id.clone(),
+            name_lc: name.into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        assert!(implicit_trigger_route_applicable(
+            &ctx,
+            &target("onafterinsert"),
+            &graph,
+            &index
+        ));
+        assert!(implicit_trigger_route_applicable(
+            &ctx,
+            &target("onbeforeinsert"),
+            &graph,
+            &index
+        ));
+        assert!(!implicit_trigger_route_applicable(
+            &ctx,
+            &target("onaftermodify"),
+            &graph,
+            &index
+        ));
+    }
+
     #[test]
     fn trigger_applicable_insert_table_extension_true() {
         let (graph, index, table_id, ext_id) = trigger_fixture();

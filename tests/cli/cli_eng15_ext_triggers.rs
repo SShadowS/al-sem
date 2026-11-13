@@ -177,9 +177,13 @@ fn sym_workspace() -> tempfile::TempDir {
 /// ENG-16: a trigger-firing operation on a known table loaded from symbols only
 /// may run triggers the engine cannot see: `unknown`, with the gap named, not
 /// `no`. `Modify(false)` runs no trigger: still `no`.
-/// Break (2026-11-13): drop the `table_code_not_loaded` check in
+/// Breaks (2026-11-13): drop the `table_code_not_loaded` check in
 /// `full.rs`'s record-operation path -> `ModifySym` answers `no` (as master
-/// 3dbf23ed did). Fails; restored, it passes.
+/// 3dbf23ed did); let `OpenFamilies::may_run` open a `RecordEvents` bound on
+/// a code-not-loaded table -> `ModifySymNoTrigger` answers `unknown`. Each
+/// fails; restored, it passes. (A RunTrigger condition in `full.rs` itself
+/// was redundant with that bound: breaking it stayed green, so it was
+/// removed.)
 #[test]
 fn a_trigger_op_on_a_symbol_only_table_is_unknown() {
     let t = sym_workspace();

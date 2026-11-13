@@ -372,11 +372,7 @@ fn hidden_class(g: &SitedGraph, n: NodeIx, ch: &str) -> (&'static str, bool, &'s
             true,
             "a subscriber no event edge reaches: its publisher may be raised by a test",
         ),
-        "unmodeledRecordTrigger" => (
-            "unmodeled-record-trigger",
-            true,
-            "a record trigger no operation site is modelled for",
-        ),
+        // `unmodeledRecordTrigger` is no longer emitted (ENG-15 closed F5).
         _ => ("other", true, "a way to run no site shows"),
     }
 }
