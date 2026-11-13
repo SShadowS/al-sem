@@ -332,22 +332,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a routine-scoped `query touches` now states its real scope ("dependency code: none
     reached", or the full-cone text when the cone enters dependency code). Before, it said "per
     operation, one routine into dependency code" whatever the answer;
-  - workspace-wide, `up`-only and failed answers, which state no depth in human form, now state
-    none in JSON either ("dependencies: N apps" only);
+  - workspace-wide and failed answers, which state no depth in human form, now state none in
+    JSON either ("dependencies: N apps" only);
   - the effects header carries the literal-arguments sentence the human one has;
-  - `query effects`' `payload.summary.scope` is `whole-cone` when the cone enters no
-    dependency code (was `operations-one-routine-deep; …`).
+  - `query effects`' `payload.summary.scope` has a new value, `whole-cone`, when the cone
+    enters no dependency code (was `operations-one-routine-deep; …`). `QUERY_SCHEMA_VERSION`
+    is unchanged; the schema 4 and 5 mappings pass the new value through.
 - **`query effects` and `query touches` decide "the cone enters dependency code" with one
   check**, the union of the two they had: effects now also counts a dependency entry point or
-  crossing site, and touches a cut-short search. Both sides say less, never more.
+  crossing site, and touches a cut-short search. In effects that moves the families' depth
+  and limits, `summary.scopes` and the absence lines to the one-routine-deep wording, never
+  the reverse. In touches, a cut-short cone with no dependency routine visited now reads
+  "dependency code: full cone for physical writes, …" instead of "none reached". The task asked
+  for a probe first; none was run. The union was taken because explain's own "none reached"
+  rule reads the same two counts, and a crossing with no known target counts there with no
+  routine visited (`routine_rollup.rs`). Whether real code shows that shape is not measured.
+  Pinned by the hand-stated `the_cone_enters_dependency_code_on_any_dependency_count`.
 - **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
   scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
   when no test app is found.
-- Pinned by `query_scope_is_one_fact_in_both_formats` (the whole query corpus, human against
-  JSON), `query_effects_whole_cone_with_an_unresolved_call_says_not_searched` (the "not
-  searched" variant, now with a fixture) and `discovery_skips_folders_git_ignores`, each with a
-  discrimination proof. Goldens moved: 25 query and batch JSON goldens, plus `ignoredByGit` in
-  the impact `diff.json` and the tests `universe.post.json`. No human golden moved.
+- Pinned, each with a discrimination proof, by:
+  - `query_scope_is_one_fact_in_both_formats`: the whole query corpus, plus the output
+    fixture's effects and touches whose cone enters a dependency, human against JSON;
+  - the cone-not-read check in `digest_db_effects_carry_query_effects_temp_state`;
+  - `query_effects_whole_cone_with_an_unresolved_call_says_not_searched`, the "not searched"
+    variant, now with a fixture;
+  - `discovery_skips_folders_git_ignores`.
+- Goldens moved: 25 query and batch JSON goldens, plus `ignoredByGit` in the impact
+  `diff.json` and the tests `universe.post.json`. No non-CDO human golden moved. The CDO
+  goldens were not run on this branch, and the union can move their human text.
+- Left: touches' `down.absence.index` and the workspace-wide `index`/`note` tokens still say
+  "operations-one-routine-deep" whatever the header states.
 
 ### Changed (TLS-48: engine limits B8, the last two small-output items)
 

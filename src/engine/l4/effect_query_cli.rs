@@ -789,11 +789,26 @@ fn enters_dependency_code(
         return true;
     };
     let t = &b.entry.unresolved_traversal;
-    t.dependency_routines > 0
-        || t.truncated
-        || b.rollup.totals.entry_points > 0
-        || b.rollup.totals.crossing_sites > 0
-        || effects.iter().any(|e| in_dependency(e.operation_id))
+    cone_enters(
+        t.dependency_routines,
+        t.truncated,
+        b.rollup.totals.entry_points,
+        b.rollup.totals.crossing_sites,
+    ) || effects.iter().any(|e| in_dependency(e.operation_id))
+}
+
+/// [`enters_dependency_code`]'s rule over a read cone: any visited
+/// dependency routine, a cut-short search, or a dependency entry point or
+/// crossing site in the rollup. Not probed on a real shape (TLS-49): the
+/// last two can be counted with no routine visited (a crossing with no known
+/// target), as explain's own "none reached" rule allows for.
+fn cone_enters(
+    dependency_routines: usize,
+    truncated: bool,
+    entry_points: usize,
+    crossing_sites: usize,
+) -> bool {
+    dependency_routines > 0 || truncated || entry_points > 0 || crossing_sites > 0
 }
 
 /// Step 1b (astra top 5): how the root's cone, after the literal pass,
@@ -1843,8 +1858,8 @@ fn query_scope_json(payload: &Value, deps: &LoadedDependencies) -> Value {
     // line it prints (`push_scope`, `result.scope.lines`); the header joins
     // them with the dependencies clause exactly as the human header does
     // (`query_with_header`), so the two cannot state different facts. ENG-40
-    // (L1) builds on this. A failed answer, an `up`-only or a workspace-wide
-    // touches answer prints no depth line, so neither header states one.
+    // (L1) builds on this. A failed answer or a workspace-wide touches answer
+    // prints no depth line, so neither header states one.
     let mut scope: Vec<String> = payload
         .pointer(&format!("/result/scope/{SCOPE_LINES}"))
         .and_then(Value::as_array)
@@ -7078,6 +7093,22 @@ fn render_field_touches(
 mod tests {
     use super::*;
     use crate::program::model::workspace::{ModelDeclarationOnlyRoutine, ModelObject, ModelTable};
+
+    /// TLS-49 (d): one "enters dependency code" rule for query effects and
+    /// query touches, the union of the two they had. Hand-stated: nothing
+    /// counted reads as not entered; each input alone reads as entered.
+    ///
+    /// DISCRIMINATION (2026-11-13): dropping the `crossing_sites` term fails
+    /// at "a crossing site alone"; dropping `truncated` fails at "cut short";
+    /// restored, passes.
+    #[test]
+    fn the_cone_enters_dependency_code_on_any_dependency_count() {
+        assert!(!cone_enters(0, false, 0, 0), "nothing counted");
+        assert!(cone_enters(1, false, 0, 0), "a routine visited");
+        assert!(cone_enters(0, true, 0, 0), "cut short");
+        assert!(cone_enters(0, false, 1, 0), "an entry point alone");
+        assert!(cone_enters(0, false, 0, 1), "a crossing site alone");
+    }
 
     fn site(op: &str, line: u32, key: Option<&'static str>) -> TableSite {
         TableSite {

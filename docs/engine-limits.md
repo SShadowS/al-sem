@@ -47,12 +47,15 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
   the `locks:`/`reads:` absence lines do. **TLS-49** (2026-11-13): the human and JSON headers
   state one scope in every case. Every body scope line goes through `push_scope`, and the JSON
   header joins the recorded lines as the human one does. Before, the JSON stated a depth on its
-  own: in an answer whose cone was not read, in a failed answer, in `up`-only and workspace-wide
-  touches, and in every touches answer from a routine. `query effects`' `summary.scope` reads
+  own: in an answer whose cone was not read, in a failed answer, in workspace-wide touches, and
+  in every touches answer from a routine. `query effects`' `summary.scope` reads
   `whole-cone` in the no-dependency case. `query touches` and `query effects` share one "enters
-  dependency code" check, the union of the two they had. Pinned by
-  `query_scope_is_one_fact_in_both_formats` over the whole query corpus. ENG-40 (L1) builds on
-  this text.
+  dependency code" check, the union of the two they had. That union was not probed on real code
+  (see CHANGELOG TLS-49), and is pinned by a hand-stated test. Pinned by
+  `query_scope_is_one_fact_in_both_formats` (the query corpus and the output fixture's cone
+  entering a dependency) and, for a cone not read, by `digest_db_effects_carry_query_effects_temp_state`.
+  Left: touches' `down.absence.index` and the workspace-wide `index`/`note` tokens still say
+  "operations-one-routine-deep". ENG-40 (L1) builds on this text.
 - B8: test-app discovery does not read `.gitignore`. **Fixed by TLS-48** (2026-11-13): a folder
   git ignores is not entered (one `git check-ignore` per folder read), unless it holds the
   workspace or a `.git` of its own (a nested clone is still read as an app); below an ignored

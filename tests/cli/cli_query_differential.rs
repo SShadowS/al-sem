@@ -1367,11 +1367,12 @@ fn scope_both_ways(argv: &[&str]) -> (Option<String>, String) {
 }
 
 /// TLS-49: the human and JSON headers state one scope, in every answer the
-/// corpus holds: effects (whole cone, entering dependency code), touches
-/// from a routine (cone entering or not), `up`-only and workspace-wide
-/// touches (no depth line, so neither header states one), and the failures
-/// (absent table, `down` without `--from`). Both come from one home, the
-/// lines the body prints (`push_scope`).
+/// query corpus holds (no dependency loaded: effects whole cone, touches from
+/// a routine, `up`, workspace-wide, and the failures: absent table, `down`
+/// without `--from`) and on the output fixture, whose cone enters a
+/// dependency (effects and touches entering dependency code). Both come from
+/// one home, the lines the body prints (`push_scope`). Not covered: effects
+/// whose cone was not read (no CLI path gives one).
 ///
 /// DISCRIMINATION (2026-11-13): making `query_scope_json` ignore the recorded
 /// lines fails here at the first case
@@ -1380,6 +1381,36 @@ fn scope_both_ways(argv: &[&str]) -> (Option<String>, String) {
 /// restored, passes.
 #[test]
 fn query_scope_is_one_fact_in_both_formats() {
+    let fixture = crate::output_fixture::workspace()
+        .to_string_lossy()
+        .into_owned();
+    let q = crate::output_fixture::ISSUE_DOC_Q;
+    let entering: [(&str, Vec<&str>); 2] = [
+        (
+            "issuedoc.effects",
+            vec!["query", "effects", &fixture, "--routine", q],
+        ),
+        (
+            "issuedoc.base-register.touches",
+            vec![
+                "query",
+                "touches",
+                &fixture,
+                "--table",
+                "Base Register",
+                "--from",
+                q,
+            ],
+        ),
+    ];
+    for (slug, argv) in &entering {
+        let (h, j) = scope_both_ways(argv);
+        assert_eq!(h.as_deref(), Some(j.as_str()), "[{slug}] headers differ");
+        assert!(
+            !j.contains("no dependency code entered") && !j.contains("none reached"),
+            "[{slug}] the fixture's cone enters a dependency: {j}"
+        );
+    }
     for c in CORPUS {
         let ws = fixtures_dir().join(c.workspace);
         let ws_str = ws.to_string_lossy().to_string();
