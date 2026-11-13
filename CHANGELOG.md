@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-39: two MCP status tests wait for the state instead of sleeping)
+
+- **`mcp_server::faults::status_shows_a_build_in_progress` no longer races a loaded host.** It
+  slept a fixed 1 s and then read `alsem_status` once. Under load the engine child had not reached
+  its `pin` phase yet, so the read saw `asking` and failed ENG-27's landing `ci-steps all`. It now
+  asks `alsem_status` until `activity` is `pin`. The test still fails when the call is answered
+  before `pin` was ever seen, or at a 30 s deadline. `status_answers_during_a_heavy_call` had the
+  same sleep-then-read shape (500 ms, then it checked `running`) and now waits the same way.
+  Discrimination: not recording the child's phase (`on_phase` in `src/mcp/pool.rs`) fails at
+  "activity pin: never seen while the call ran"; restored, the six `mcp_server::faults` tests
+  passed 5 runs out of 5.
+
 ### Changed (TLS-36: cdo-gate runs serial by default; the parallel layout is opt-in, pinned, and lib_cdo runs its longest tests first)
 
 - **Serial is the default again.** A serial and a parallel gate on the same tree (`d234c4a6`,
