@@ -179,6 +179,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       Only the variable holding the message takes the identifier fold. Witness
       `cli_prove_dead_paths::a_message_match_lowercases_prose_not_identifiers` (break: the
       text folded with `fold_identifier`).
+    - **sol r3:** `event_flow::is_handled_re` (used by d43 and the publisher branch facts)
+      matched a raw `İsHandled` parameter char-wise against ASCII and missed it, while its
+      folded spelling matched; it now folds first. The selector whole-signature compare
+      (`selector_index::fold_whole`) lowercased per char and gave `İ` a combining dot; it
+      now takes the identifier fold. Witnesses
+      `a_dotted_capital_i_is_handled_name_matches_like_its_folded_spelling` and
+      `a_whole_signature_with_a_dotted_capital_i_selects`, each with a break.
     - The guard missed `eq_ignore_ascii_case` passed as a function
       (`str::eq_ignore_ascii_case`). It now counts the `str::`, `char::`, `u8::` and `[u8]>::`
       path forms; a planted `const` of that form in d19 fails it.

@@ -69,7 +69,11 @@ use crate::program::model::workspace::{ModelObject, ModelRoutine};
 /// middle characters (`"is😀handled"`, `"isßhandled"`) and lowercase-expanding chars
 /// are handled faithfully.
 pub fn is_handled_re(name: &str) -> bool {
-    let chars: Vec<char> = name.chars().collect();
+    // TLS-43 review sol r3: the identifier fold first, so a raw `İsHandled`
+    // matches as its folded spelling (an assignment's name) already did. The
+    // fold is 1:1 per char, so the length rules below are unchanged.
+    let folded = name.fold_identifier();
+    let chars: Vec<char> = folded.chars().collect();
     let is_lit: [char; 2] = ['i', 's'];
     let handled_lit: [char; 7] = ['h', 'a', 'n', 'd', 'l', 'e', 'd'];
 

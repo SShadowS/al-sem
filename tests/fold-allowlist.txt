@@ -64,7 +64,7 @@
 5 src/engine/l5/prove_slice.rs
 3 src/engine/l5/registry.rs
 11 src/engine/l5/routine_rollup.rs
-5 src/engine/l5/selector_index.rs
+4 src/engine/l5/selector_index.rs
 6 src/engine/l5/snapshot.rs
 8 src/engine/l5/snapshot_full.rs
 6 src/engine/l5/snapshot_full/key_classes.rs

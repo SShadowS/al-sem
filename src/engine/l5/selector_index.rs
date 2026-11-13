@@ -1235,13 +1235,16 @@ pub(crate) fn signature_matches(
         })
 }
 
-/// A parameter list's text as [`signature_matches`] compares it whole:
-/// lowercase, AL quotes and every whitespace dropped.
+/// A parameter list's text as [`signature_matches`] compares it whole: AL
+/// quotes and every whitespace dropped, then the identifier fold (the item
+/// matcher's; Unicode's per-char lowercase gave `İ` a combining dot, so a whole
+/// signature holding one never matched, TLS-43 review sol r3).
 fn fold_whole(s: &str) -> String {
-    s.chars()
+    let stripped: String = s
+        .chars()
         .filter(|c| *c != '"' && !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect()
+        .collect();
+    stripped.fold_identifier()
 }
 
 /// A routine's parameter types as a selector takes them: `(Integer, var
@@ -1699,6 +1702,30 @@ mod tests {
             "Codeunit X::Do(var Record \"CDO File\", option \" \",\"Attach as one file\",Merge)",
         );
         assert!(!signature_matches(&short.unwrap(), &params));
+    }
+
+    /// TLS-43 review sol r3: the whole-signature compare takes the identifier
+    /// fold, so a type holding `İ` and a comma (one parameter, which the item
+    /// split reads as two) selects by its `i` spelling.
+    ///
+    /// DISCRIMINATION (2026-11-13): `fold_whole` back on
+    /// the per-char Unicode lowercase (the old `flat_map`) fails here;
+    /// restored, passes.
+    #[test]
+    fn a_whole_signature_with_a_dotted_capital_i_selects() {
+        use crate::program::model::workspace::ModelParameter;
+        let params = vec![ModelParameter {
+            index: 0,
+            name: "P".into(),
+            type_text: "Option İ,Other".into(),
+            is_var: false,
+            is_record: false,
+            table_name: None,
+        }];
+        let (_, wanted) = split_signature("Codeunit X::F(Option i,Other)");
+        let wanted = wanted.unwrap();
+        assert_eq!(wanted.len(), 2, "precondition: the item split reads two");
+        assert!(signature_matches(&wanted, &params));
     }
 
     /// V3 §2.1: a member form keeps only the named owner, member, kind and
