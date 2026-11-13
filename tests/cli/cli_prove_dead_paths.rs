@@ -192,36 +192,48 @@ fn a_message_match_lowercases_prose_not_identifiers() {
     .unwrap();
     std::fs::write(
         ws.join("src/Greek.al"),
-        "codeunit 50430 \"G43 Greek\"\n{\n    procedure Fail()\n    begin\n        Error('ΟΣ');\n    end;\n}\n",
+        "codeunit 50430 \"G43 Greek\"\n{\n    procedure Fail()\n    begin\n        Error('ΟΣ');\n    end;\n\n    procedure FailLabel()\n    var\n        İletiErr: Label 'x';\n    begin\n        Error(İletiErr);\n    end;\n}\n",
     )
     .unwrap();
     let inv = alsem(
         t.path(),
         &["fingerprint", "ws", "--inventory-only", "--format", "json"],
     );
-    let id = inv["payload"]["routineInventory"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["routineName"] == "Fail")
-        .expect("precondition: Fail is in the inventory")["stableRoutineId"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let r = alsem(
-        t.path(),
-        &[
-            "prove",
-            "ws",
-            &id,
-            "throws-error",
-            "--match",
-            "ος",
-            "--deterministic",
-        ],
-    )["payload"]["result"]
-        .clone();
+    let id_of = |name: &str| -> String {
+        inv["payload"]["routineInventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["routineName"] == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is in the inventory"))
+            ["stableRoutineId"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let matched = |routine: &str, needle: &str| -> serde_json::Value {
+        alsem(
+            t.path(),
+            &[
+                "prove",
+                "ws",
+                &id_of(routine),
+                "throws-error",
+                "--match",
+                needle,
+                "--deterministic",
+            ],
+        )["payload"]["result"]
+            .clone()
+    };
+    let r = matched("Fail", "ος");
     assert_eq!(r["answer"], "yes", "the message matches: {r}");
+    // The variable holding the message is an identifier: `İletiErr` folds to
+    // `iletierr`, so `ileti` finds it (its text 'x' cannot match). Fable r6
+    // P2. DISCRIMINATION (2026-11-13): the variable side back on
+    // `to_lowercase` (`i̇letierr`) answers `no` here; restored, `yes`.
+    let r = matched("FailLabel", "ileti");
+    assert_eq!(r["answer"], "yes", "the message variable matches: {r}");
 }
 
 fn dead_path_answers(source: &str) {

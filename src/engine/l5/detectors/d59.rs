@@ -123,7 +123,7 @@ pub fn detect_d59(
                 cross_extension_subscribers: None,
                 cohort_contexts: None,
                 // #252: the event (= the anchor) and the parameter NAME (unquoted, as
-                // `is_guard_name` folds it); the position drops.
+                // `fold_guard_name` keeps it, the identity spelling); the position drops.
                 loose_subject: Some(LooseSubject {
                     object_id: None,
                     key: format!(

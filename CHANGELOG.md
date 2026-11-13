@@ -101,9 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before this version no longer suppresses it, so it shows as new once and suppresses again
   after `--update-baseline`. Every other name, Danish, Norwegian, Swedish and German letters
   included, keeps its fingerprint. d61's and d3's keys hold ids, not names (review sol r2), so
-  their fingerprints do not move. What changes for them, and for d59, is which names they
-  recognize: `İsHandled`, `İsAllowed` and a field spelled with `İ` now read as their `I`
-  spelling.
+  their fingerprints do not move. What changes for them, and for d59 and d43 (through
+  `is_handled_re`), is which names they recognize: `İsHandled`, `İsAllowed` and a field
+  spelled with `İ` now read as their `I` spelling. d60's loose subject, `d60/{var}` when the
+  table is unknown, holds the same name, so it moves with the root-cause key.
 - **`alsem impact`: any non-ASCII capital.**
   - A label variable whose name has a non-ASCII capital (`Ændring`, `İ…`) is now recognized
     as a label, so its message key reads `label:…` instead of a hashed `expr:…`.
@@ -172,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     name `e` in release). Both strings are back on the ASCII fold and only the extracted name
     folds. Witness: `impact::scan::tests::a_header_name_with_a_dotted_capital_i_is_read_whole`
     (break: the raw line folded before the slice).
-  - **Review sol r1** found two more:
+  - **The second reviewer (sol, rounds 1 to 4)** found more:
     - The sweep had folded `prove --match`'s message TEXT with the identifier fold. Message
       text is prose, so it is back on Unicode's full lowercase, as on master: a typed `ος`
       finds `ΟΣ`, whose word-final `Σ` lowercases to `ς`, where the identifier fold gives `σ`.

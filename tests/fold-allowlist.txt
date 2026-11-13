@@ -4,7 +4,8 @@
 # compare and key with ONE fold: `al_syntax::fold_identifier` / `eq_fold_identifier`. In
 # src/engine and src/program, `.to_lowercase()`, `.to_ascii_lowercase()`,
 # `eq_ignore_ascii_case(` and their path forms passed as a function (`str::to_lowercase`,
-# `str::to_ascii_lowercase`, `char::to_lowercase`, `char::to_ascii_lowercase`) are allowed
+# `str::to_ascii_lowercase`, `char::to_lowercase`, `char::to_ascii_lowercase`,
+# `str::`/`char::`/`u8::`/`[u8]>::eq_ignore_ascii_case`) are allowed
 # only where the value is NOT an identifier:
 #   - identity inputs that must not move (ids, fingerprints, root-cause and event-id keys);
 #   - paths, file names, extensions, app/package names, GUIDs;

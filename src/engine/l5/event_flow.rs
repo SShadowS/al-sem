@@ -65,9 +65,10 @@ use crate::program::model::workspace::{ModelObject, ModelRoutine};
 ///   - 10 chars: `chars[0..2]` match `"is"` (ci), `chars[2] != '\n'`, `chars[3..10]`
 ///     match `"handled"` (ci).
 ///
-/// Operates on `name.chars()` — NO whole-string `to_lowercase` — so multi-byte
-/// middle characters (`"is😀handled"`, `"isßhandled"`) and lowercase-expanding chars
-/// are handled faithfully.
+/// Operates on the chars of the name's identifier fold (1:1 per char, so the
+/// length rules hold; never a whole-string `to_lowercase`, which can expand a
+/// char), so multi-byte middle characters (`"is😀handled"`, `"isßhandled"`) are
+/// handled faithfully and `İsHandled` reads as `ishandled`.
 pub fn is_handled_re(name: &str) -> bool {
     // TLS-43 review sol r3: the identifier fold first, so a raw `İsHandled`
     // matches as its folded spelling (an assignment's name) already did. The
