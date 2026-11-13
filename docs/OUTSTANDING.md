@@ -56,6 +56,11 @@ sizings marked pre-arc).
 
 ## Open — buildable backlog (no blocker, pick up any time)
 
+*Every open item here and under Parked was checked against master `67d75bea` on 2026-11-13
+(TLS-45): `docs/superpowers/notes/2026-11-13-outstanding-stale-claims.md` has each claim's
+verdict and evidence. Paths into `src/engine/l2` and `src/engine/l3` are out of date
+throughout (deleted in engine-switch S9); the items below note where the code lives now.*
+
 - [ ] **Engine limits from output validation, rounds 1–4** (recorded 2026-11-09, master
   `58d0c94e`): see `docs/engine-limits.md`. It has 34 limits L1–L34, all probed on
   2026-11-09, and 8 wrong answers or crashes B1–B8 the probes found (among them: prove with a
@@ -70,7 +75,8 @@ sizings marked pre-arc).
   13–29 all still hold; ENG-14 and ENG-20 need a re-scope, and ENG-15/16 and ENG-19/21 pair
   up.
 
-- [ ] **False-positive causes exposed by S8.6** (recorded 2026-10-07; triage
+- [ ] **False-positive causes exposed by S8.6** (TLS-45: the blank-field rule is owned by
+  ENG-13) (recorded 2026-10-07; triage
   `s86-triage.md`, 43 new CDO/DO findings, all newly followed edges real).
   - **Event subscribers that exit on an event argument.** `if ExtensionId <> GetAppId()
     then exit` and `case ObjectID of`. The raiser passes a FIELD value (a Guided
@@ -128,7 +134,8 @@ sizings marked pre-arc).
     example "rows of table T are only inserted by app A with field F =
     ModuleInfo.Id", or a measured d45 rate under 30% on a new sample.
 
-- [ ] **d8 after S8 gap 3: 9 findings each on CDO and DO, causes still open** (recorded
+- [ ] **d8 after S8 gap 3: 9 findings each on CDO and DO, causes still open** (TLS-45:
+  `pending_writes` is `src/engine/l5/pending_writes.rs`; still may-commit only) (recorded
   2026-10-07; triage `g3-d8-triage.md` of the 28 pre-fix survivors). The real ones
   are small intended Commits (setup wizard Finish, send-code migration batches,
   `LogUsage`). The open false-positive causes are listed below.
@@ -148,7 +155,11 @@ sizings marked pre-arc).
   - **d8 is OPT-IN since 2026-10-07** (owner decision) for this reason. Wake: these
     causes fixed and a re-triage under 30% false positives.
 
-- [ ] **Constant-argument guards: what S8 gap 2 does not cover** (recorded 2026-10-07,
+- [ ] **Constant-argument guards: what S8 gap 2 does not cover** (TLS-45, checked
+  2026-11-13: conjuncts are DONE, `junction_guards`, `param_guard.rs:209`; Integer, Option
+  and Enum parameters prune through `literal_values.rs`, 5d41cd82; recursive SCCs get
+  per-root literal reach. Still open: `case P of` on a Boolean, data state. The d35 Group 2
+  case below needs a re-measure.) (recorded 2026-10-07,
   `src/engine/l4/param_guard.rs`). Each item keeps a fact that a literal argument
   makes impossible; none adds a false prune.
   - **Conjuncts.** Only a whole condition is a guard (`P`, `not P`, `P = false`).
@@ -180,7 +191,9 @@ sizings marked pre-arc).
   Since #96 the body pipeline (`ir_walk`'s `run_trigger`) also captures `Insert`'s
   literal, and the adapter decides `fires` once per trigger edge from it.
 
-- [ ] **Detector policy for dependency routes and multi-implementer sites** (recorded
+- [ ] **Detector policy for dependency routes and multi-implementer sites** (TLS-45:
+  `first_resolved_edge_per_callsite` is in `engine::l5::detector_context` (:2500); "decide
+  with S8" is a stale wake: S8 landed with no decision recorded) (recorded
   2026-10-06, engine-switch S3.6). Two detector decisions, both changing findings, kept
   out of the switch so its steps move resolution only:
   - A record operation on a dependency table whose trigger exists (44 routes on CDO, 46
@@ -202,14 +215,19 @@ sizings marked pre-arc).
   model (`Model::dependency_diagnostics`), and analyze builds its diagnostics through
   the same `analyzer_diagnostics_of_run` as every other command.
 
-- [ ] **B3 harness L3 comparisons** (recorded 2026-10-06, engine-switch S6.0). The
+- [x] **B3 harness L3 comparisons** — CLOSED 2026-11-13 (TLS-45): obsolete; `b3_diff` and
+  `implicit_trigger_edge_for_op` went with L3 (S9). Leftover: `SiteCensus` still has a
+  `duplicate_l3_span` counter (`program_calls.rs`). Original item: (recorded 2026-10-06, engine-switch S6.0). The
   adapter's receiver typing now comes from the program resolver (S6.0, done). What
   still reads L3 in the adapter is census-only: `implicit_trigger_edge_for_op` (the
   `adapter_trigger_edges_*` counters, one of which is in `SiteCensus::losses()`), plus
   `b3_diff`'s old-vs-new comparison itself. They are the switch's measuring apparatus
   and are deleted with L3 in S9.
 
-- [ ] **Event inventory follow-ups** (recorded 2026-10-06, engine-switch S4).
+- [ ] **Event inventory follow-ups** (recorded 2026-10-06, engine-switch S4). (TLS-45,
+  checked 2026-11-13: `isolated` IS set for dependency publishers now (`events.rs:662-668`);
+  L3's `build_event_graph` is gone; `program::model::events::EventEdge` carries `conditional`
+  and `mixed_readings`. Still true: the d38 bullet.)
   - **d45 with a dependency publisher** — owner decision, spec "Decisions (owner)" 4;
     implemented in S8.
   - **d38 on dependency events.** d38 (subscriber to an obsolete event) reads the
@@ -228,7 +246,9 @@ sizings marked pre-arc).
     has them; the detector edge does not (no consumer). Add when a detector needs
     manual-binding or skip-on-license conditions.
 
-- [ ] **B3 Phase A follow-ups** (recorded 2026-10-05 by the final fix wave; branch
+- [ ] **B3 Phase A follow-ups** (TLS-45, checked 2026-11-13: `calls_for(..).into_owned()`
+  and the `--l3-*` modes no longer exist; still open: `aldump` does not print
+  `abi_ingest_errors`) (recorded 2026-10-05 by the final fix wave; branch
   `feat/b3-phase-a`, `.superpowers/sdd/2026-10-04-b3-phase-a/final-review.md`).
   - **Move the other L3 consumers onto the program engine's calls.** DONE for the
     single-app consumers in engine-switch S6 (2026-10-06): prove, digest, fingerprint,
@@ -331,7 +351,13 @@ sizings marked pre-arc).
   A9' parallel diagnostics re-parse. Decision (a): substrate-skipping runs omit
   summarize cap-hit diagnostics (only permitted output change). Wave-1 outcome
   table: findings doc §7b
-- [ ] **Engine memory/speed Wave 2/3 (Track B)** — *consolidated 2026-07-31; the
+- [ ] **Engine memory/speed Wave 2/3 (Track B)** — (TLS-45, checked 2026-11-13: the
+  `role_scope_and_sort` comparator is fixed by TLS-27 (`registry.rs:841-885`, which
+  `finding.rs:988/1107` call); B3, single-substrate unification, is done (S6-S9) and the
+  "L3 load-bearing" sentence is obsolete; B1 has no sequencing with the `to_lowercase` census
+  (TLS-42 recommends no migration); mimalloc lives in `src/release_alloc.rs`; `snapshot.rs:154-265`
+  is now `src/snapshot/`; the "Current 8020 state" and the first lever list are superseded
+  by this item's later text.) *consolidated 2026-07-31; the
   per-wave narrative that used to live here (Wave-2a/2b/2c, the "8020 full-default
   DNF at 45.2 GB" measurements, the falsified 846-SCC trigger-edge perf hypothesis,
   and the falsified OUTPUT-BOUND attribution) is in
@@ -781,7 +807,9 @@ sizings marked pre-arc).
 - [x] **`salsa` derive-only dependency** — done in #221: the dependency and its
   23 `SalsaValue` derives in `l4` (left over after the R3b `incremental/`
   deletion, Task B1) were removed, byte-neutral.
-- [ ] **L-3 globals sharing is retained-only — the transient build-then-discard
+- [ ] (TLS-45, checked 2026-11-13: the mechanism is now `program/body/ir_walk.rs:3607`
+  `ir_variables` and `program/model/workspace.rs:2099/2190`; wake: the next model-assembly
+  memory pass, not an L3 pass.) **L-3 globals sharing is retained-only — the transient build-then-discard
   allocation cost survives** (`feat/l3-substrate-and-parked-items` Task 5 /
   lever L-3; `task-5-review.md` finding F1). `ir_variables`
   (`src/engine/l2/ir_walk.rs:2189`) still materializes a FRESH copy of every
@@ -857,7 +885,9 @@ sizings marked pre-arc).
   interner-BUILD scaffolding, never read after context build.
 
 
-- [ ] **`FindingConfidence` carries ids, not records (−78 MiB retained in d1).** The
+- [ ] **`FindingConfidence` carries ids, not records (−78 MiB retained in d1).** (TLS-45,
+  checked 2026-11-13: `UncertaintyTable` is deleted, so "keeping it alive" no longer
+  applies; a d1 confidence bucket would go in `ALSEM_RETAINED_CENSUS`.) The
   finding already holds the winner cohort's `Vec<UncertaintyId>`; carrying 4-byte ids and
   materialising `Evidence` at the consumer takes d1's `confidence` bucket from 115.0 MiB
   to ~37 MiB and lands its retained total at the ~110 MiB the scoping band actually
@@ -880,7 +910,9 @@ sizings marked pre-arc).
     arcs old.**
 
 - [ ] **Residual duplicate-id groups: 15 groups / 19 routines on BC Base App (0 on
-  DO) still share BOTH the internal and the stable routine id.** ⟨task-4-review.md
+  DO) still share BOTH the internal and the stable routine id.** (TLS-45, checked
+  2026-11-13: "0 on DO" holds for the workspace; the CDO cross-app model has 2 preproc-arm
+  groups in Base App `PageManagement`; `compute_routine_id` is in `program/body/scope.rs:161`.) ⟨task-4-review.md
   finding M-3, fix wave⟩ Promoted out of the CLOSED `compute_routine_id` entry
   below — a reader scanning this section for open work used to meet a closed item
   first, with the genuinely-open residual buried as one of its sub-paragraphs. The
@@ -1035,7 +1067,7 @@ sizings marked pre-arc).
   last sibling and the op-site lookup fell back to its declaration anchor). The
   d9 twin now anchors correctly on line 142 with 2 tables instead of the
   union's 5, which is precisely why d8's `>= 3` threshold stops being met.
-- [ ] **`d55-event-publish-in-loop`'s `rootCauseKey` omits the callsite, so
+- [ ] (TLS-45: the code is now `d55.rs:72/75`; no coord task owns it yet.) **`d55-event-publish-in-loop`'s `rootCauseKey` omits the callsite, so
   several publish sites in ONE loop share a fingerprint** — `d55.rs:73` builds
   `d55/{routine.id}/{loop_info.id}` while the finding `id` additionally carries
   `/cs{n}`. Measured on DO (2026-07-25, after T4 closed every id-collision
@@ -1051,7 +1083,9 @@ sizings marked pre-arc).
   d55 finding silently suppressed a second publish in the same loop, or the next
   deliberate fingerprint-moving change (piggyback — the cost is the same class as
   T4's 3 %).
-- [ ] **Preflight shared parse — RE-SIZED 2026-07-31 to ~54 ms; effectively dead.**
+- [x] **Preflight shared parse — RE-SIZED 2026-07-31 to ~54 ms; effectively dead.**
+  CLOSED 2026-11-13 (TLS-45): obsolete; L3 is gone, so `analyze` parses once through the
+  program context and there is no second parse to share.
   ⟨`docs/2026-07-31-preflight-census.md`⟩ The premise below is CONFIRMED (deps parse
   once, so only the primary app's parse is duplicated) but the sizing was three
   orders out. 8020 parses 8,020 files in 786.4 ms = **0.098 ms/file**, so DO's 551
@@ -1066,12 +1100,17 @@ sizings marked pre-arc).
   behavior-changing. Investigation: `.superpowers/sdd/shared-parse-investigation.md`.
   **Wake:** analyze latency becomes user-facing pain, dep-parse caching lands, or BOM
   handling gets unified anyway
-- [ ] **FreshCoverage ABI-error / missing-dep reporting** (+ serde-default-empty
+- [ ] **FreshCoverage ABI-error / missing-dep reporting** (TLS-45, checked 2026-11-13:
+  ABI-error and missing-dependency reporting exist, `dependency_ledger`, FW2, test at
+  `abi_ingest.rs:1765`; only the serde-default-empty exemption at `full.rs:3579` is open)
+  (+ serde-default-empty
   exemption hardening) — population-less on DO (0 ingest failures, 0 declared-but-
   missing; real ingest failures already surface as could-not-verify). **Wake:** the
   first real failing-ingest or missing-declared-dep population, or a SymbolReference
   emitter shape change
-- [ ] **Number-less object identity collision (engine-wide)** — `o.id.unwrap_or(0)`
+- [x] **Number-less object identity collision (engine-wide)** — CLOSED 2026-11-13 (TLS-45):
+  fixed by #83 (2.0.2): every id takes the object key (`ir_object_key`). Residual: an object
+  with an empty name, and a table whose number does not parse. Original item: `o.id.unwrap_or(0)`
   (`src/engine/l2/l2_workspace.rs:355/414/593`) gives every Interface/ControlAddIn in
   an app the id `{guid}/{type}/0`. Harness symptom fixed; harm latent (DO: 5
   interfaces share one id, zero shared routine names → no routine-id collapse
@@ -1082,10 +1121,13 @@ sizings marked pre-arc).
 ## Parked — call-graph roadmap (doctrine-deferred, population-less)
 
 - [ ] ProvenAbsent — wake: a real proven-absence population (MemberNotFound is 0)
-- [ ] Implicit conversions — wake: nonzero `ambiguousResolved` (currently 0)
+- [x] Implicit conversions — CLOSED 2026-11-13 (TLS-45): built
+  (`implicit_conversions_follow_the_compiler`, `arg_dispatch.rs`). `ambiguousResolved` is 0 for
+  CDO primary but up to 459 in dependency bodies (`program_resolve_harness`).
 - [ ] Full ParseStatus gate — wake: the first absence-claiming consumer
-- [ ] Protected `Variables[]` — wake: an extension routine consuming a base protected var
-- [ ] Preproc-symbol fidelity — wake: a real consumer
+- [x] Protected `Variables[]` — CLOSED 2026-11-13 (TLS-45): fixed by ENG-26 (an extension
+  reads its base object's protected vars); residual is ENG-63.
+- [ ] Preproc-symbol fidelity — wake: a real consumer (owned by ENG-53)
 - [ ] Sender param-TYPE drift analysis — wake: a version-drifted-closure corpus
 
 ## Product direction (post-1.0 — needs a brainstorm session, not a dispatch)
