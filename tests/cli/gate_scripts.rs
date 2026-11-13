@@ -275,7 +275,8 @@ fn speed_build_uses_the_gate_release_folder() {
 /// Mutations (2026-11-13): `plan_layout`'s container test dropped (host only)
 /// -> the busy container is called parallel at 2 threads; an unreadable
 /// container reported `unlimited` instead of `unknown` (fail open) -> "no
-/// memory.stat" is called parallel.
+/// memory.stat" is called parallel; `container_free_mib` without its numeric
+/// check -> `anon garbage` reads as 0 and is called parallel at 2 threads.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
@@ -363,6 +364,16 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
         got.starts_with("sequential:"),
         "a garbage memory.max: {got}"
     );
+    // A malformed or partial memory.stat (review r3, sol: awk reads garbage as 0).
+    std::fs::write(broken.join("memory.max"), format!("{}\n", 49_152 * MIB)).unwrap();
+    for stat in ["anon garbage\nshmem 0\nkernel 0\n", "anon 0\nkernel 0\n"] {
+        std::fs::write(broken.join("memory.stat"), stat).unwrap();
+        let got = unknown(&broken);
+        assert!(
+            got.starts_with("sequential:"),
+            "memory.stat {stat:?}: {got}"
+        );
+    }
     // Exactly at the need is enough; one MiB short is not.
     check(60_000, Some(49_152 - 43_496), false, two);
     check(60_000, Some(49_152 - 43_496 + 1), false, one);

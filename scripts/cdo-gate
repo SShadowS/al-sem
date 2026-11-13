@@ -110,9 +110,15 @@ container_free_mib() {
         return
     fi
     # What cannot be reclaimed, as the sampler counts it (`unreclaimable_bytes`).
-    used=$(awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" { n += $2; seen = 1 }
-                $1 == "slab_reclaimable" { n -= $2 }
-                END { if (seen) print n }' "$cgroup_dir/memory.stat" 2>/dev/null)
+    # Every counted field must be there and be a number; a malformed or partial
+    # file is unknown (review r3, sol: awk would read garbage as 0).
+    used=$(awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" || $1 == "slab_reclaimable" {
+                    if ($2 !~ /^[0-9]+$/) { bad = 1 }
+                    seen[$1] = 1
+                    n += ($1 == "slab_reclaimable" ? -$2 : $2)
+                }
+                END { if (!bad && seen["anon"] && seen["shmem"] && seen["kernel"]) print n }' \
+        "$cgroup_dir/memory.stat" 2>/dev/null)
     if [[ "$max" =~ ^[0-9]+$ && "$used" =~ ^-?[0-9]+$ ]]; then
         echo $(((max - used) >> 20))
     else
@@ -378,15 +384,22 @@ stamp() {
 
 # A phase: its command's output goes to `<name>.log`, each line stamped;
 # `<name>.status` holds the exit status and the wall seconds when it ends.
-# The status is the command's own (`PIPESTATUS[0]`), never the stamper's.
+# The status is the command's own (through `<name>.rc`), never the stamper's.
 run_phase() {
     local name="$1"
     shift
     local start=$SECONDS
     echo "cdo-gate: [$name] started"
     echo "$(date +%s) start $name" >> "$logs/phases.times"
-    "$@" 2>&1 | stamp > "$logs/$name.log"
-    local rc=${PIPESTATUS[0]}
+    # In the background, then `wait`: bash runs a trap only between commands,
+    # and `wait` is one it can interrupt, so a TERM sent to the gate's PID
+    # alone stops it at once instead of after the phase (review r3, sol). The
+    # command's own status goes through a file (`PIPESTATUS` is the foreground's).
+    { "$@" 2>&1; echo $? > "$logs/$name.rc"; } | stamp > "$logs/$name.log" &
+    wait $!
+    local rc
+    rc=$(cat "$logs/$name.rc" 2>/dev/null)
+    [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
     echo "$(date +%s) end $name" >> "$logs/phases.times"
     echo "$rc $((SECONDS - start))" > "$logs/$name.status"
     if [[ "$rc" -eq 0 ]]; then
