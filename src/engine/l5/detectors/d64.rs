@@ -48,6 +48,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d64-api-page-write-surface";
 
@@ -98,7 +99,7 @@ pub fn detect_d64(
         if !o
             .page_type
             .as_deref()
-            .is_some_and(|p| p.eq_ignore_ascii_case("api"))
+            .is_some_and(|p| p.eq_fold_identifier("api"))
         {
             continue;
         }

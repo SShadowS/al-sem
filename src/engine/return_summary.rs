@@ -9,6 +9,7 @@
 //! form). `project_r4f_return_summaries` converts that map to the
 //! golden-shaped stable projection.
 
+use al_syntax::IdentifierFoldExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -303,7 +304,7 @@ pub fn parse_commit_behavior(attrs: &[crate::program::attributes::AttributeInfo]
     }
     let conditional = attrs.iter().any(|a| {
         !a.in_every_build()
-            && a.name.eq_ignore_ascii_case("CommitBehavior")
+            && a.name.eq_fold_identifier("CommitBehavior")
             && commit_behavior_value(a) != "normal"
     });
     if conditional { "conditional" } else { "normal" }
@@ -325,7 +326,7 @@ pub fn commit_behavior_value(attr: &crate::program::attributes::AttributeInfo) -
     let Some(m) = member else {
         return "normal";
     };
-    match m.to_lowercase().as_str() {
+    match m.fold_identifier().as_str() {
         "ignore" => "ignore",
         "error" => "error",
         _ => "normal",
@@ -353,7 +354,7 @@ pub fn parse_has_error_behavior_collect(
     }
 
     member
-        .map(|m| m.to_lowercase() == "collect")
+        .map(|m| m.fold_identifier() == "collect")
         .unwrap_or(false)
 }
 

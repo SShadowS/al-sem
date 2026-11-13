@@ -27,6 +27,7 @@
 //! runs over the ACYCLIC SCC condensation; within a recursive SCC the BFS visits
 //! each member at most once.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -231,7 +232,7 @@ fn isolated_storage_op(method_lc: &str) -> Option<&'static str> {
 
 /// Parse a DataScope enum text → `StorageExtra.scope` (al-sem `parseDataScope`).
 fn parse_data_scope(text: &str) -> String {
-    let lower = text.to_lowercase();
+    let lower = text.fold_identifier();
     if lower.contains("::company") {
         "Company".to_string()
     } else if lower.contains("::user") {
@@ -248,7 +249,7 @@ use crate::program::body::capability::io::is_file_write_call;
 /// True when a declared type names a Page or Report (al-sem
 /// `ui-window-open.ts` `isPageOrReportType`).
 fn is_page_or_report_type(declared_type: &str) -> bool {
-    let lower = declared_type.to_lowercase();
+    let lower = declared_type.fold_identifier();
     lower == "page"
         || lower == "report"
         || lower.starts_with("page ")
@@ -336,7 +337,7 @@ fn classify_value_source(
                 .value
                 .clone()
                 .unwrap_or_else(|| info.text.clone())
-                .to_lowercase();
+                .fold_identifier();
             classify_identifier(&name, variables, 0)
         }
         "member_expression" => classify_member_expression(&info.text, variables),
@@ -420,11 +421,11 @@ fn classify_member_expression(text: &str, variables: &HashMap<String, VarInfo>) 
     };
     let receiver_raw = text[..dot_idx].trim();
     let field_raw = text[dot_idx + 1..].trim();
-    let receiver_lower = receiver_raw.to_lowercase();
+    let receiver_lower = receiver_raw.fold_identifier();
     let Some(sym) = variables.get(&receiver_lower) else {
         return ValueSource::Expression;
     };
-    let decl = sym.declared_type.to_lowercase();
+    let decl = sym.declared_type.fold_identifier();
     let is_record =
         decl.starts_with("record ") || decl == "record" || decl.starts_with("recordref");
     if !is_record {
@@ -589,7 +590,7 @@ pub(crate) fn direct_facts_for_routine(
     let mut variables: HashMap<String, VarInfo> = HashMap::new();
     for v in routine.variables.iter() {
         variables.insert(
-            v.name.to_lowercase(),
+            v.name.fold_identifier(),
             VarInfo {
                 is_parameter: v.is_parameter,
                 parameter_index: v.parameter_index.unwrap_or(0),
@@ -633,7 +634,7 @@ pub(crate) fn direct_facts_for_routine(
     // (extractor.ts:147). Used by http / file-blob / ui-window-open families.
     let receiver_type_of = |name: &str| -> String {
         variables
-            .get(&name.to_lowercase())
+            .get(&name.fold_identifier())
             .map(|v| v.declared_type.clone())
             .unwrap_or_else(|| "unknown".to_string())
     };
@@ -794,7 +795,11 @@ pub(crate) fn direct_facts_for_routine(
                 });
             }
             PCallee::Member { receiver, method } => {
-                let key = format!("{}|{}", receiver.to_lowercase(), method.to_lowercase());
+                let key = format!(
+                    "{}|{}",
+                    receiver.fold_identifier(),
+                    method.fold_identifier()
+                );
                 let (object_type, modal): (&str, Option<bool>) = match key.as_str() {
                     "page|runmodal" => ("Page", Some(true)),
                     "report|execute" => ("Report", None),
@@ -876,9 +881,9 @@ pub(crate) fn direct_facts_for_routine(
     for cs in &call_sites {
         let matches = match &cs.callee {
             PCallee::Member { receiver, method } => {
-                receiver.to_lowercase() == "session" && method.to_lowercase() == "logmessage"
+                receiver.fold_identifier() == "session" && method.fold_identifier() == "logmessage"
             }
-            PCallee::Bare { name } => name.to_lowercase() == "logmessage",
+            PCallee::Bare { name } => name.fold_identifier() == "logmessage",
             _ => false,
         };
         if !matches {
@@ -911,10 +916,10 @@ pub(crate) fn direct_facts_for_routine(
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        if receiver.to_lowercase() != "isolatedstorage" {
+        if receiver.fold_identifier() != "isolatedstorage" {
             continue;
         }
-        let Some(op) = isolated_storage_op(&method.to_lowercase()) else {
+        let Some(op) = isolated_storage_op(&method.fold_identifier()) else {
             continue;
         };
         let key_source = match cs.argument_infos.first() {
@@ -960,7 +965,7 @@ pub(crate) fn direct_facts_for_routine(
         let PCallee::Bare { name } = &cs.callee else {
             continue;
         };
-        if name.to_lowercase() != "hyperlink" {
+        if name.fold_identifier() != "hyperlink" {
             continue;
         }
         let url_source = match cs.argument_infos.first() {
@@ -992,7 +997,7 @@ pub(crate) fn direct_facts_for_routine(
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        if !is_file_write_call(&receiver_type_of(receiver), &method.to_lowercase()) {
+        if !is_file_write_call(&receiver_type_of(receiver), &method.fold_identifier()) {
             continue;
         }
         let arg_source = match cs.argument_infos.first() {
@@ -1063,7 +1068,7 @@ pub(crate) fn direct_facts_for_routine(
         let PCallee::Bare { name } = &cs.callee else {
             continue;
         };
-        let op = match name.to_lowercase().as_str() {
+        let op = match name.fold_identifier().as_str() {
             "confirm" => "ui-confirm",
             "message" => "ui-message",
             "error" => "ui-error",
@@ -1092,16 +1097,16 @@ pub(crate) fn direct_facts_for_routine(
     // a variable was missed, G15).
     for cs in &call_sites {
         let matched = match &cs.callee {
-            PCallee::Bare { name } => name.to_lowercase() == "strmenu",
+            PCallee::Bare { name } => name.fold_identifier() == "strmenu",
             PCallee::ObjectRun { object_kind, .. } => {
                 object_kind == "Page" || object_kind == "Report"
             }
             PCallee::Member { receiver, method } => {
-                let method = method.to_lowercase();
+                let method = method.fold_identifier();
                 if method != "runmodal" && method != "run" {
                     false
                 } else {
-                    let r = receiver.to_lowercase();
+                    let r = receiver.fold_identifier();
                     if r == "page" || r == "report" {
                         true
                     } else {
@@ -1164,7 +1169,7 @@ pub(crate) fn direct_facts_for_routine(
     if routine
         .attributes_parsed
         .iter()
-        .any(|a| a.name.eq_ignore_ascii_case("EventSubscriber"))
+        .any(|a| a.name.eq_fold_identifier("EventSubscriber"))
     {
         facts.push(CapabilityFact {
             subject: routine.id.clone(),
@@ -6664,7 +6669,7 @@ codeunit 13 "Dep Rec Sub"
             .routine_ix(&publisher)
             .map(|ix| bundle.db_effects(ix).map(|e| e.op.to_string()).collect())
             .unwrap_or_default();
-        if !ops.iter().any(|op| op.eq_ignore_ascii_case("modify")) {
+        if !ops.iter().any(|op| op.eq_fold_identifier("modify")) {
             failures.push(format!(
                 "(i) OnDepRec has no subscriber Modify row in the store: {ops:?}"
             ));
@@ -6981,7 +6986,7 @@ codeunit 13 "Dep Rec Sub"
             FieldList::Full => "full".to_string(),
             FieldList::Known(v) => format!("{v:?}"),
         };
-        let p = |e: EffectPresence| format!("{e:?}").to_lowercase();
+        let p = |e: EffectPresence| format!("{e:?}").fold_identifier();
         match key {
             "persistsCurrentRecord" => p(r.persists_current_record),
             "validatesParam" => p(r.validates_param),
@@ -7776,7 +7781,8 @@ codeunit 50111 "Cell Calls"
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         // 222: + `ws-grammar-v4-shapes` (TLS-41, 2026-11-13).
-        ("r0-corpus", 222),
+        // 223: + `ws-nordic-identifiers` (TLS-43, 2026-11-13).
+        ("r0-corpus", 223),
         // 64: + `write-order` (output validation r3 §7 R6, 2026-11-08).
         // 65: + `isolated-events/ws` (engine limits B3, 2026-11-09).
         // 66: + `up-parallel/ws` (TLS-21, 2026-11-12).

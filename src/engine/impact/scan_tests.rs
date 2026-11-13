@@ -203,3 +203,22 @@ fn body_starts_at_var_or_begin() {
     assert_eq!(body_start(&multi, 0, 3), Some(2));
     assert_eq!(body_start(&["procedure X();"], 0, 0), None);
 }
+
+/// TLS-43 r4 (Fable): a header name with `İ` (2 bytes, its identifier fold `i` 1
+/// byte) keeps its name. `routine_header` slices the raw line at a byte offset
+/// taken from the scanner's text, so the slice must stay on the ASCII fold and
+/// only the extracted name is folded.
+///
+/// Discrimination (2026-11-13): the raw line folded with `fold_identifier` before
+/// the slice (the r4 regression) fails it: in a debug build the offset arithmetic
+/// underflows (`attempt to subtract with overflow`); review r4 read the release
+/// result as the wrong name `e`. Restored, it passes.
+#[test]
+fn a_header_name_with_a_dotted_capital_i_is_read_whole() {
+    let got = labels("codeunit 50100 G\n{\n    procedure İndkøbTest()\n    begin\n    end;\n}\n");
+    assert!(
+        got.iter()
+            .any(|(line, k)| line.starts_with("procedure") && *k == r(Some("indkøbtest"))),
+        "{got:?}"
+    );
+}

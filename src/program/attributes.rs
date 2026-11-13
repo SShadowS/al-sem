@@ -15,6 +15,7 @@
 //! exact serde contract that makes the R2c attribute-shape vectors round-trip
 //! byte-for-byte against al-sem's serialized `attributesParsed`.
 
+use al_syntax::IdentifierFoldExt;
 use serde::{Deserialize, Serialize};
 
 /// One positional argument inside an attribute's argument list. Mirrors al-sem's
@@ -132,8 +133,8 @@ pub struct QualifiedArg {
 /// Case-insensitive lookup of the FIRST attribute matching `name`. Returns None
 /// when absent — call sites branch on that, never panic. Mirrors `findAttribute`.
 pub fn find_attribute<'a>(attrs: &'a [AttributeInfo], name: &str) -> Option<&'a AttributeInfo> {
-    let lc = name.to_lowercase();
-    attrs.iter().find(|a| a.name.to_lowercase() == lc)
+    let lc = name.fold_identifier();
+    attrs.iter().find(|a| a.name.fold_identifier() == lc)
 }
 
 /// True when at least one attribute matches `name` (case-insensitive).
@@ -160,7 +161,7 @@ pub fn bool_arg(attr: &AttributeInfo, index: usize) -> Option<bool> {
         return None;
     }
     let v = a.value.as_ref()?;
-    match v.to_lowercase().as_str() {
+    match v.fold_identifier().as_str() {
         "true" => Some(true),
         "false" => Some(false),
         _ => None,
@@ -218,7 +219,7 @@ pub fn parse_routine_attributes(attrs: &[AttributeInfo]) -> RoutineAttributes {
         let removed = match obsolete.args.get(2) {
             Some(state_arg) => {
                 state_arg.kind == "qualified_enum_value"
-                    && state_arg.member.as_deref().unwrap_or("").to_lowercase() == "removed"
+                    && state_arg.member.as_deref().unwrap_or("").fold_identifier() == "removed"
             }
             None => false,
         };

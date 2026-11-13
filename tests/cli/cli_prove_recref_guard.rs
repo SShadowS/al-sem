@@ -322,6 +322,29 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 
 #[test]
 fn a_recordref_number_guard_reads_the_table_the_root_put_in() {
+    recordref_guard_answers(SOURCE);
+}
+
+/// TLS-43: the same answers when the RecordRefs, the Variants and the alias
+/// carry non-ASCII capitals (`ÆRecRef`, `ØVariantRec`, `Ålias`,
+/// `ÉRecordFilter`). `recref_flow` and `literal_reach` look these names up in
+/// the L2 rows, which fold with `fold_identifier`; an ASCII-only fold on either
+/// side never matches them.
+///
+/// Discrimination (2026-11-13): `recref_flow::lc` back on `to_ascii_lowercase`
+/// fails this test; restored, it passes.
+#[test]
+fn a_recordref_number_guard_reads_nordic_names_alike() {
+    let nordic = SOURCE
+        .replace("RecRef", "ÆRecRef")
+        .replace("VariantRec", "ØVariantRec")
+        .replace(" Alias", " Ålias")
+        .replace("RecordFilter", "ÉRecordFilter");
+    assert_ne!(nordic, SOURCE, "precondition: the names were renamed");
+    recordref_guard_answers(&nordic);
+}
+
+fn recordref_guard_answers(source: &str) {
     let t = tempfile::tempdir().unwrap();
     let ws = t.path().join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
@@ -330,7 +353,7 @@ fn a_recordref_number_guard_reads_the_table_the_root_put_in() {
         r#"{"id":"34343434-0000-4000-8000-000000000034","name":"RG","publisher":"t","version":"1.0.0.0"}"#,
     )
     .unwrap();
-    std::fs::write(ws.join("src/a.al"), SOURCE).unwrap();
+    std::fs::write(ws.join("src/a.al"), source).unwrap();
     let inv = alsem(
         t.path(),
         &["fingerprint", "ws", "--inventory-only", "--format", "json"],

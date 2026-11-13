@@ -204,7 +204,7 @@ pub fn extract_source_facts(
                                 test_attribute: routine
                                     .attributes_parsed
                                     .iter()
-                                    .any(|a| a.name.to_lowercase() == "test"),
+                                    .any(|a| a.name.fold_identifier() == "test"),
                                 default_access: routine.access_modifier.is_none(),
                             },
                         )

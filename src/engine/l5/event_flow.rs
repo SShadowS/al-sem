@@ -44,6 +44,7 @@
 //! consumes one node from the budget BEFORE the first expand, exactly as al-sem
 //! decrements `nodeBudget` before calling `expand(root, 0)`.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::engine::l4::capability_cone::CapabilityFact;
@@ -64,11 +65,16 @@ use crate::program::model::workspace::{ModelObject, ModelRoutine};
 ///   - 10 chars: `chars[0..2]` match `"is"` (ci), `chars[2] != '\n'`, `chars[3..10]`
 ///     match `"handled"` (ci).
 ///
-/// Operates on `name.chars()` — NO whole-string `to_lowercase` — so multi-byte
-/// middle characters (`"is😀handled"`, `"isßhandled"`) and lowercase-expanding chars
-/// are handled faithfully.
+/// Operates on the chars of the name's identifier fold (1:1 per char, so the
+/// length rules hold; never a whole-string `to_lowercase`, which can expand a
+/// char), so multi-byte middle characters (`"is😀handled"`, `"isßhandled"`) are
+/// handled faithfully and `İsHandled` reads as `ishandled`.
 pub fn is_handled_re(name: &str) -> bool {
-    let chars: Vec<char> = name.chars().collect();
+    // TLS-43 review sol r3: the identifier fold first, so a raw `İsHandled`
+    // matches as its folded spelling (an assignment's name) already did. The
+    // fold is 1:1 per char, so the length rules below are unchanged.
+    let folded = name.fold_identifier();
+    let chars: Vec<char> = folded.chars().collect();
     let is_lit: [char; 2] = ['i', 's'];
     let handled_lit: [char; 7] = ['h', 'a', 'n', 'd', 'l', 'e', 'd'];
 
@@ -926,7 +932,7 @@ pub fn publisher_branch_facts(
         default_branch_facts: direct_facts,
         guarded_branch_facts: Vec::new(),
         unguarded_facts: Vec::new(),
-        guard_param_name: Some(guard_param.name.to_lowercase()),
+        guard_param_name: Some(guard_param.name.fold_identifier()),
     })
 }
 

@@ -514,7 +514,7 @@ fn apply_dep_operation_order(r: &mut ModelRoutine) -> Vec<DepScopeFrame> {
     let attr_names_lc: Vec<String> = r
         .attributes_parsed
         .iter()
-        .map(|a| a.name.to_lowercase())
+        .map(|a| al_syntax::fold_identifier(&a.name))
         .collect();
     apply_operation_order(&mut features, &attr_names_lc);
 

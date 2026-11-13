@@ -254,7 +254,7 @@ fn field_declaration_line(workspace: &std::path::Path, unit: &str, number: i64) 
         let t = l.trim_start();
         let Some(rest) = t
             .get(..5)
-            .filter(|h| h.eq_ignore_ascii_case("field"))
+            .filter(|h| h.eq_fold_identifier("field"))
             .map(|_| t[5..].trim_start())
         else {
             return false;
@@ -1007,11 +1007,11 @@ pub(crate) fn find_field<'m>(
         ));
     };
     let number: Option<i64> = field.trim().parse().ok();
-    let want = field.trim().to_lowercase();
+    let want = field.trim().fold_identifier();
     let Some(mf) = mt
         .fields
         .iter()
-        .find(|f| f.name.to_lowercase() == want)
+        .find(|f| f.name.fold_identifier() == want)
         .or_else(|| number.and_then(|n| mt.fields.iter().find(|f| f.field_number == n)))
     else {
         return Err((
@@ -1102,10 +1102,10 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
         .iter()
         .find(|r| {
             r.kind == "trigger"
-                && r.name.eq_ignore_ascii_case("OnValidate")
+                && r.name.eq_fold_identifier("OnValidate")
                 && r.enclosing_member
                     .as_deref()
-                    .is_some_and(|m| m.eq_ignore_ascii_case(&mf.name))
+                    .is_some_and(|m| m.eq_fold_identifier(&mf.name))
         })
         .map(|r| r.stable_routine_id.clone());
     Resolved {
@@ -1346,7 +1346,7 @@ fn run_object_targets<'m>(model: &'m Model, page_app: &str, raw: &str) -> Vec<&'
         .workspace
         .objects
         .iter()
-        .filter(|o| o.object_type.eq_ignore_ascii_case(ty))
+        .filter(|o| o.object_type.eq_fold_identifier(ty))
         .filter(|o| match number {
             Some(n) => o.object_number == n,
             None => o.name.fold_identifier() == name,
@@ -1370,7 +1370,7 @@ fn run_object_targets<'m>(model: &'m Model, page_app: &str, raw: &str) -> Vec<&'
 /// other collector; this list is stated, not derived.
 fn is_error_collector(ix: &Indexes<'_>, row: usize) -> bool {
     let (ty, obj) = ix.object_of(row);
-    let name = ix.row(row).name.to_ascii_lowercase();
+    let name = ix.row(row).name.fold_identifier();
     let obj = obj.fold_identifier();
     name.starts_with("log")
         && ((ty == "Codeunit" && obj == "error message management")
@@ -1589,7 +1589,7 @@ impl<'m> Indexes<'m> {
         };
         if !crate::program::impact_graph::reverse::run_reaches_trigger(
             kind,
-            &r.name.to_ascii_lowercase(),
+            &r.name.fold_identifier(),
             r.enclosing_member.is_some(),
         ) {
             return Vec::new();
@@ -1701,7 +1701,7 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
         .variables
         .iter()
         .filter(|v| v.scope.as_deref() == Some("global"))
-        .map(|v| v.name.to_ascii_lowercase())
+        .map(|v| v.name.fold_identifier())
         .collect();
     // The global as the assignment writes it (the model folds names).
     let mut set: BTreeMap<String, String> = BTreeMap::new();
@@ -1712,8 +1712,8 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
             .next()
             .unwrap_or("")
             .trim_matches('"');
-        if globals.contains(&head.to_ascii_lowercase()) {
-            set.entry(head.to_ascii_lowercase())
+        if globals.contains(&head.fold_identifier()) {
+            set.entry(head.fold_identifier())
                 .or_insert_with(|| head.to_string());
         }
     }
@@ -1723,7 +1723,7 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
         .objects
         .iter()
         .find(|o| o.id == r.object_id)
-        .map_or("object".to_string(), |o| o.object_type.to_ascii_lowercase());
+        .map_or("object".to_string(), |o| o.object_type.fold_identifier());
     let writes: Vec<String> = r
         .record_operations
         .iter()
@@ -1891,7 +1891,7 @@ fn direct_callees(
             // The method in its documented spelling (source may say `RUN`).
             let method = match &c.callee {
                 crate::program::body::features::PCallee::Member { method, .. } => {
-                    match method.to_ascii_lowercase().as_str() {
+                    match method.fold_identifier().as_str() {
                         "run" => "Run".to_string(),
                         "runmodal" => "RunModal".to_string(),
                         _ => method.clone(),
@@ -1996,7 +1996,7 @@ impl<'m> EffectEvidenceIndex<'m> {
         while let Some(i) = queue.pop_front() {
             let r = &routines[i];
             for c in &r.call_sites {
-                let t = c.callee_text.to_ascii_lowercase();
+                let t = c.callee_text.fold_identifier();
                 if t == "changecompany" || t.ends_with(".changecompany") {
                     sites.insert(format!(
                         "{}:{}",
@@ -3677,7 +3677,7 @@ impl RunBy {
                 keep_callers: false,
             });
         }
-        let name = r.name.to_ascii_lowercase();
+        let name = r.name.fold_identifier();
         let field_trigger = matches!(r.object_type.as_str(), "Table" | "TableExtension")
             && r.enclosing_member.is_some()
             && matches!(name.as_str(), "onvalidate" | "onlookup" | "onassistedit");
@@ -3891,7 +3891,7 @@ impl RunBy {
         sites.sort_by(|a, b| (&a.0, a.1, &a.2).cmp(&(&b.0, b.1, &b.2)));
         sites.dedup();
         // The pages where a user's operation runs this trigger.
-        let op = crate::program::impact_graph::project::trigger_op(&r.name.to_ascii_lowercase())
+        let op = crate::program::impact_graph::project::trigger_op(&r.name.fold_identifier())
             .map_or(0, crate::program::page_ui::op::of_index);
         let pages = Self::pages_on_table(model, table, op);
         let table_display = format!("\"{}\"", table.name.replace('"', "\"\""));
@@ -4005,7 +4005,7 @@ impl RunBy {
                 };
                 crate::program::impact_graph::reverse::run_reaches_trigger(
                     kind,
-                    &r.name.to_ascii_lowercase(),
+                    &r.name.fold_identifier(),
                     r.enclosing_member.is_some(),
                 )
             };
@@ -4738,8 +4738,8 @@ impl Card {
                     let is_handled = symbol.is_some_and(|s| {
                         s.parameters.iter().any(|p| {
                             p.is_var
-                                && (p.name.eq_ignore_ascii_case("IsHandled")
-                                    || p.name.eq_ignore_ascii_case("Handled"))
+                                && (p.name.eq_fold_identifier("IsHandled")
+                                    || p.name.eq_fold_identifier("Handled"))
                         })
                     });
                     let mut human = format!(

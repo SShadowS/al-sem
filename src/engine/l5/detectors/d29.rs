@@ -11,6 +11,7 @@
 //! event-subscriber only + bodyAvailable + !parseIncomplete; skip when there is no
 //! record-typed parameter. Within-detector sort by `compareStrings(a.id, b.id)`.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashSet;
 
 use crate::engine::l5::confidence::to_confidence;
@@ -34,7 +35,7 @@ const MUTATING_OPS: &[&str] = &["Modify", "ModifyAll", "Delete", "DeleteAll"];
 /// Mirrors al-sem `eventName` (reuses `find_attribute` / `string_arg`).
 fn event_name(attrs: &[AttributeInfo]) -> Option<String> {
     let attr = find_attribute(attrs, "EventSubscriber")?;
-    string_arg(attr, 2).map(|s| s.to_lowercase())
+    string_arg(attr, 2).map(|s| s.fold_identifier())
 }
 
 /// Hand-rolled faithful reproduction of al-sem's `MODIFY_EVENT_PATTERNS`
@@ -110,7 +111,7 @@ pub fn detect_d29(
             .parameters
             .iter()
             .filter(|p| p.is_record)
-            .map(|p| p.name.to_lowercase())
+            .map(|p| p.name.fold_identifier())
             .collect();
         if record_param_names.is_empty() {
             skipped_no_record_param += 1;
@@ -124,7 +125,7 @@ pub fn detect_d29(
             if !MUTATING_OPS.contains(&op.op.as_str()) {
                 continue;
             }
-            let var_key = op.record_variable_name.to_lowercase();
+            let var_key = op.record_variable_name.fold_identifier();
             if !record_param_names.contains(&var_key) {
                 continue;
             }

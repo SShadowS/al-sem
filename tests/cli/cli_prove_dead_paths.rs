@@ -152,6 +152,91 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 
 #[test]
 fn a_write_behind_a_literal_false_guard_is_not_a_write() {
+    dead_path_answers(SOURCE);
+}
+
+/// TLS-43: the same answers when the flag carries a non-ASCII capital
+/// (`ÆUseQueue`). The literal-value pass (`literal_values::fold`) and the cone's
+/// `param_guard` match the parameter's name against the L2 rows (guards,
+/// assignments, argument bindings), which fold with `fold_identifier`.
+///
+/// Discrimination (2026-11-13): `literal_values::fold` back on
+/// `to_ascii_lowercase` fails this test (`DocVarPassed` answers a wrong `no`);
+/// restored, it passes. **Limit:** `param_guard::frame_guards`' two compares
+/// back on the ASCII fold, alone, still pass: on these shapes the literal-value
+/// pass decides the same answers. Both broken together fail as above.
+#[test]
+fn a_write_behind_a_nordic_flag_is_read_alike() {
+    let nordic = SOURCE.replace("UseQueue", "ÆUseQueue");
+    assert_ne!(nordic, SOURCE, "precondition: the names were renamed");
+    dead_path_answers(&nordic);
+}
+
+/// TLS-43 review (sol r1): `prove throws-error --match` searches message
+/// TEXT, which is prose, not an identifier: it keeps Unicode's full
+/// lowercase, so a typed `ος` finds a message `ΟΣ` (whose word-final `Σ`
+/// lowercases to `ς`; the identifier fold would give `σ` and miss).
+///
+/// DISCRIMINATION (2026-11-13): `match_text_on` folding the message text and
+/// the needle with `fold_identifier` (TLS-43's earlier head) answers `no`
+/// here; restored, `yes`.
+#[test]
+fn a_message_match_lowercases_prose_not_identifiers() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"23232323-0000-4000-8000-000000000043","name":"G43","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/Greek.al"),
+        "codeunit 50430 \"G43 Greek\"\n{\n    procedure Fail()\n    begin\n        Error('ΟΣ');\n    end;\n\n    procedure FailLabel()\n    var\n        İletiErr: Label 'x';\n    begin\n        Error(İletiErr);\n    end;\n}\n",
+    )
+    .unwrap();
+    let inv = alsem(
+        t.path(),
+        &["fingerprint", "ws", "--inventory-only", "--format", "json"],
+    );
+    let id_of = |name: &str| -> String {
+        inv["payload"]["routineInventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["routineName"] == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is in the inventory"))
+            ["stableRoutineId"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let matched = |routine: &str, needle: &str| -> serde_json::Value {
+        alsem(
+            t.path(),
+            &[
+                "prove",
+                "ws",
+                &id_of(routine),
+                "throws-error",
+                "--match",
+                needle,
+                "--deterministic",
+            ],
+        )["payload"]["result"]
+            .clone()
+    };
+    let r = matched("Fail", "ος");
+    assert_eq!(r["answer"], "yes", "the message matches: {r}");
+    // The variable holding the message is an identifier: `İletiErr` folds to
+    // `iletierr`, so `ileti` finds it (its text 'x' cannot match). Fable r6
+    // P2. DISCRIMINATION (2026-11-13): the variable side back on
+    // `to_lowercase` (`i̇letierr`) answers `no` here; restored, `yes`.
+    let r = matched("FailLabel", "ileti");
+    assert_eq!(r["answer"], "yes", "the message variable matches: {r}");
+}
+
+fn dead_path_answers(source: &str) {
     let t = tempfile::tempdir().unwrap();
     let ws = t.path().join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
@@ -160,7 +245,7 @@ fn a_write_behind_a_literal_false_guard_is_not_a_write() {
         r#"{"id":"23232323-0000-4000-8000-000000000023","name":"G23","publisher":"t","version":"1.0.0.0"}"#,
     )
     .unwrap();
-    std::fs::write(ws.join("src/Shapes.al"), SOURCE).unwrap();
+    std::fs::write(ws.join("src/Shapes.al"), source).unwrap();
     let inv = alsem(
         t.path(),
         &["fingerprint", "ws", "--inventory-only", "--format", "json"],
@@ -211,7 +296,7 @@ fn a_write_behind_a_literal_false_guard_is_not_a_write() {
     // The evidence lists only paths that can run, never one through the dead
     // `RunReportRec(false, 0)` call; with the live path left unlisted (the
     // witness search took the short dead one), it says so (`viaPathsTruncated`).
-    let dead_line = SOURCE
+    let dead_line = source
         .lines()
         .position(|l| l.contains("// the dead call"))
         .expect("the dead call is in SOURCE");

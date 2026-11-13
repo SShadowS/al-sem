@@ -21,6 +21,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d10-self-modifying-loop";
 
@@ -71,7 +72,7 @@ pub fn detect_d10(
             let Some(loop_id) = loop_id else { continue };
             loop_driver
                 .entry(loop_id)
-                .or_insert_with(|| op.record_variable_name.to_lowercase());
+                .or_insert_with(|| op.record_variable_name.fold_identifier());
         }
 
         for op in &routine.record_operations {
@@ -84,7 +85,7 @@ pub fn detect_d10(
                 Some(d) => d.clone(),
                 None => continue,
             };
-            if op.record_variable_name.to_lowercase() != driver {
+            if op.record_variable_name.fold_identifier() != driver {
                 continue;
             }
 

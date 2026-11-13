@@ -106,7 +106,9 @@ pub fn detect_d41(
                 let ops_on_var: Vec<&ModelRecordOperation> = routine
                     .record_operations
                     .iter()
-                    .filter(|op| op.record_variable_name.to_lowercase() == source_name_lc)
+                    .filter(|op| {
+                        al_syntax::fold_identifier(&op.record_variable_name) == source_name_lc
+                    })
                     .collect();
 
                 // (1) Was a filter ACTIVE on R at the callsite? Net-effect scan

@@ -34,6 +34,7 @@
 //!   "no longer observed", not "removed", when the new side is incomplete
 //!   (§10.4, [`super::delta`]).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
@@ -371,9 +372,13 @@ fn message_key(
     if text.starts_with('\'') {
         return format!("text:{}", short_hash(text));
     }
-    let name = text.trim_matches('"').to_lowercase();
+    // The lookup folds as the L2 names do; the key keeps its own spelling
+    // (an identity: it must not move with the fold).
+    let raw = text.trim_matches('"');
+    let name = raw.to_lowercase();
     if r.variables.iter().any(|v| {
-        v.name.eq_ignore_ascii_case(&name) && v.declared_type.to_lowercase().starts_with("label")
+        al_syntax::eq_fold_identifier(&v.name, raw)
+            && v.declared_type.to_lowercase().starts_with("label")
     }) {
         return format!("label:{name}");
     }
@@ -504,7 +509,7 @@ fn own_keys(
                         .and_then(|id| r.operation_sites.iter().find(|o| o.id == id))
                         .and_then(|o| {
                             r.call_sites.iter().find(|c| {
-                                matches!(&c.callee, PCallee::Bare { name } if name.eq_ignore_ascii_case("error"))
+                                matches!(&c.callee, PCallee::Bare { name } if name.eq_fold_identifier("error"))
                                     && c.source_anchor.start_line == o.source_anchor.start_line
                                     && c.source_anchor.start_column == o.source_anchor.start_column
                             })
@@ -677,7 +682,7 @@ fn callers(names: &Names<'_>, r: &ModelRoutine) -> Callers {
             continue;
         };
         c.count += 1;
-        if from.object_type == "Page" && from.name.eq_ignore_ascii_case("OnAction") {
+        if from.object_type == "Page" && from.name.eq_fold_identifier("OnAction") {
             c.page_actions += 1;
         }
         if c.first.len() < 10 {

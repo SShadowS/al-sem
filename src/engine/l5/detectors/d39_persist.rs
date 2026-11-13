@@ -10,6 +10,7 @@
 //! [`MAX_HELPER_DEPTH`]; results are memoized per (routine, variable,
 //! remaining depth) for one detector run.
 
+use al_syntax::IdentifierFoldExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -45,7 +46,7 @@ fn settle(s: PathStates, mask: PathStates) -> PathStates {
 }
 
 fn names_var(name: &str, id: Option<&str>, var_lc: &str, var_id: Option<&str>) -> bool {
-    name.eq_ignore_ascii_case(var_lc)
+    name.eq_fold_identifier(var_lc)
         && match (id, var_id) {
             (Some(a), Some(b)) => a == b,
             _ => true,
@@ -72,7 +73,7 @@ fn whole_record_arg(b: &PCallArgumentBinding) -> bool {
 /// the clean proofs.
 fn record_args(cs: &PCallSite, var_lc: &str, var_id: Option<&str>) -> (bool, Vec<usize>) {
     let on_receiver = matches!(&cs.callee, PCallee::Member { receiver, .. }
-        if receiver.trim_matches('"').eq_ignore_ascii_case(var_lc));
+        if receiver.trim_matches('"').eq_fold_identifier(var_lc));
     let args = cs
         .argument_bindings
         .iter()
@@ -91,7 +92,7 @@ fn record_args(cs: &PCallSite, var_lc: &str, var_id: Option<&str>) -> (bool, Vec
 /// A bare call (`Proc()`, no receiver) while the record is the implicit `Rec`:
 /// in table code it may be a procedure of the same table, working on `Rec`.
 fn bare_on_rec(cs: &PCallSite, var_lc: &str) -> bool {
-    var_lc.eq_ignore_ascii_case("rec") && matches!(cs.callee, PCallee::Bare { .. })
+    var_lc.eq_fold_identifier("rec") && matches!(cs.callee, PCallee::Bare { .. })
 }
 
 /// A procedure that works on its table's implicit `Rec`.
@@ -108,7 +109,7 @@ fn is_table_procedure(callee: &ModelRoutine) -> bool {
 /// here: a call result or a member expression replaces the record just the same.
 fn record_reassigned(routine: &ModelRoutine, var_lc: &str, after: Option<&PAnchor>) -> bool {
     routine.var_assignments.iter().any(|a| {
-        a.lhs_name.eq_ignore_ascii_case(var_lc)
+        a.lhs_name.eq_fold_identifier(var_lc)
             && after.is_none_or(|x| before_anchor(x, &a.source_anchor))
     })
 }
@@ -362,11 +363,7 @@ impl<'c> Proofs<'c> {
     /// call that takes it provably persists or preserves it? Path-insensitive.
     /// Never for an event publisher: its subscribers are not read (#343 F5).
     fn helper_preserves(&self, routine: &ModelRoutine, var_lc: &str, depth: usize) -> bool {
-        let key = (
-            std::ptr::from_ref(routine),
-            var_lc.to_ascii_lowercase(),
-            depth,
-        );
+        let key = (std::ptr::from_ref(routine), var_lc.fold_identifier(), depth);
         if let Some(&v) = self.preserves.borrow().get(&key) {
             return v;
         }
@@ -391,11 +388,7 @@ impl<'c> Proofs<'c> {
     /// from entry to exit, with nothing reloading, initing, copying into or
     /// replacing it before the persist?
     fn helper_persists(&self, routine: &ModelRoutine, var_lc: &str, depth: usize) -> bool {
-        let key = (
-            std::ptr::from_ref(routine),
-            var_lc.to_ascii_lowercase(),
-            depth,
-        );
+        let key = (std::ptr::from_ref(routine), var_lc.fold_identifier(), depth);
         if let Some(&v) = self.persists.borrow().get(&key) {
             return v;
         }
@@ -465,11 +458,7 @@ impl<'c> Proofs<'c> {
     /// call that takes it keeps it clean? Path-insensitive. Never for an event
     /// publisher.
     fn helper_clean(&self, routine: &ModelRoutine, var_lc: &str, depth: usize) -> bool {
-        let key = (
-            std::ptr::from_ref(routine),
-            var_lc.to_ascii_lowercase(),
-            depth,
-        );
+        let key = (std::ptr::from_ref(routine), var_lc.fold_identifier(), depth);
         if let Some(&v) = self.clean.borrow().get(&key) {
             return v;
         }
@@ -480,7 +469,7 @@ impl<'c> Proofs<'c> {
                 // A copy counts as dirt here, though `CleanReturn` (path-sensitive,
                 // on the callee's own body) treats it as a reset: path-insensitively
                 // we cannot tell whether a Validate follows it.
-                !op.record_variable_name.eq_ignore_ascii_case(var_lc)
+                !op.record_variable_name.eq_fold_identifier(var_lc)
                     || !matches!(record_flow_role(&op.op), "validates" | "copiesInto")
             })
             && routine
@@ -688,7 +677,7 @@ impl PathQuestion for CleanReturn<'_, '_> {
             let Some(op) = self.proofs.op(r, op_id) else {
                 return s;
             };
-            if !op.record_variable_name.eq_ignore_ascii_case(self.var_lc) {
+            if !op.record_variable_name.eq_fold_identifier(self.var_lc) {
                 return s;
             }
             return match record_flow_role(&op.op) {

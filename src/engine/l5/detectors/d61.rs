@@ -19,6 +19,7 @@
 //! likely when the subscriber body has NO branching (unconditional claim),
 //! else possible.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use crate::engine::l5::confidence::to_confidence;
@@ -43,7 +44,7 @@ const CRITICAL_WRITE_OPS: &[&str] = &[
 ];
 
 fn is_ishandled_name(raw: &str) -> bool {
-    let n = raw.trim_matches('"').to_lowercase();
+    let n = raw.trim_matches('"').fold_identifier();
     n == "ishandled" || n == "handled"
 }
 
@@ -135,7 +136,7 @@ pub fn detect_d61(
         }
         let Some(p) = r.parameters.iter().find(|p| {
             p.is_var
-                && p.type_text.trim().eq_ignore_ascii_case("boolean")
+                && p.type_text.trim().eq_fold_identifier("boolean")
                 && is_ishandled_name(&p.name)
         }) else {
             continue;
@@ -165,7 +166,7 @@ pub fn detect_d61(
             is_ishandled_name(&a.lhs_name)
                 && a.rhs_literal_value
                     .as_deref()
-                    .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+                    .is_some_and(|v| v.eq_fold_identifier("true"))
         }) else {
             continue;
         };
@@ -213,7 +214,7 @@ pub fn detect_d61(
             let name_from_text = if name_from_binding.is_none() {
                 cs.argument_texts
                     .get(param_index as usize)
-                    .map(|t| t.trim().to_lowercase())
+                    .map(|t| t.trim().fold_identifier())
             } else {
                 None
             };

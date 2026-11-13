@@ -16,6 +16,7 @@
 
 use crate::program::body::features::{PCFNNode, PCallee};
 use crate::program::model::workspace::{Model, ModelRecordOperation, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 use std::collections::BTreeSet;
 
 /// One way the variable gets a table, at a source point.
@@ -46,9 +47,9 @@ fn origins(r: &ModelRoutine, v: &str) -> Vec<Origin> {
     let mut out: Vec<Origin> = Vec::new();
     for c in &r.call_sites {
         if let PCallee::Member { receiver, method } = &c.callee
-            && receiver.eq_ignore_ascii_case(v)
+            && receiver.eq_fold_identifier(v)
         {
-            let kind = match method.to_ascii_lowercase().as_str() {
+            let kind = match method.fold_identifier().as_str() {
                 "open" => Kind::Open,
                 "gettable" => Kind::GetTable,
                 _ => continue,
@@ -61,7 +62,7 @@ fn origins(r: &ModelRoutine, v: &str) -> Vec<Origin> {
         }
     }
     for a in &r.var_assignments {
-        if !a.lhs_name.eq_ignore_ascii_case(v) {
+        if !a.lhs_name.eq_fold_identifier(v) {
             continue;
         }
         let kind = match (&a.rhs_identifier, &a.rhs_member) {
@@ -69,7 +70,7 @@ fn origins(r: &ModelRoutine, v: &str) -> Vec<Origin> {
                 from: x.clone(),
                 duplicate: false,
             },
-            (None, Some((x, m))) if m.eq_ignore_ascii_case("duplicate") => Kind::Copy {
+            (None, Some((x, m))) if m.eq_fold_identifier("duplicate") => Kind::Copy {
                 from: x.clone(),
                 duplicate: true,
             },
@@ -266,15 +267,12 @@ fn reaching(r: &ModelRoutine, origins: &[Origin], site: (u32, u32)) -> BTreeSet<
 /// What a variable of `r` named `name` is: `"parameter"`, `"local"` or
 /// `"global"` (`None`: not declared, an implicit name).
 fn scope_of<'r>(r: &'r ModelRoutine, name: &str) -> Option<&'r str> {
-    if r.parameters
-        .iter()
-        .any(|p| p.name.eq_ignore_ascii_case(name))
-    {
+    if r.parameters.iter().any(|p| p.name.eq_fold_identifier(name)) {
         return Some("parameter");
     }
     r.variables
         .iter()
-        .find(|x| x.name.eq_ignore_ascii_case(name))
+        .find(|x| x.name.eq_fold_identifier(name))
         .and_then(|x| x.scope.as_deref())
 }
 
@@ -317,7 +315,7 @@ fn spelling(model: &Model, r: &ModelRoutine, x: &str) -> String {
         y.call_sites
             .iter()
             .find_map(|c| match &c.callee {
-                PCallee::Member { receiver, .. } if receiver.eq_ignore_ascii_case(x) => {
+                PCallee::Member { receiver, .. } if receiver.eq_fold_identifier(x) => {
                     Some(receiver.clone())
                 }
                 _ => None,
@@ -325,7 +323,7 @@ fn spelling(model: &Model, r: &ModelRoutine, x: &str) -> String {
             .or_else(|| {
                 y.record_operations
                     .iter()
-                    .find(|o| o.record_variable_name.eq_ignore_ascii_case(x))
+                    .find(|o| o.record_variable_name.eq_fold_identifier(x))
                     .map(|o| o.record_variable_name.clone())
             })
     };

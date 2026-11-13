@@ -863,7 +863,7 @@ fn derive_contracts(resolved: &Model) -> CborValue {
 }
 
 fn map_visibility(am: Option<&str>) -> String {
-    match am.map(|s| s.to_lowercase()).as_deref() {
+    match am.map(al_syntax::fold_identifier).as_deref() {
         Some("public") => "public",
         Some("internal") => "internal",
         Some("protected") => "protected",

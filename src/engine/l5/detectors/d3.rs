@@ -50,7 +50,7 @@ const WINDOW_CLOSING_OPS: &[&str] = &["Reset", "Copy", "TransferFields", "Init"]
 fn is_clear_call_on(cs: &PCallSite, var_key: &str) -> bool {
     matches!(&cs.callee, PCallee::Bare { name } if name.eq_fold_identifier("Clear"))
         && cs.argument_texts.len() == 1
-        && cs.argument_texts[0].trim().to_lowercase() == var_key
+        && cs.argument_texts[0].trim().fold_identifier() == var_key
 }
 
 /// `before(a, b)` — strictly before in source order (line then column). Mirrors
@@ -99,7 +99,7 @@ fn derive_load_states(routine: &ModelRoutine) -> Vec<LoadStateAtRetrieval<'_>> {
     let mut out: Vec<LoadStateAtRetrieval> = Vec::new();
 
     for op in ops {
-        let var_key = op.record_variable_name.to_lowercase();
+        let var_key = op.record_variable_name.fold_identifier();
         // current = state_by_var.get(varKey) ?? { kind: "none" }
         let current = state_by_var
             .get(&var_key)
@@ -194,7 +194,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 continue;
             }
 
-            let var_key = state.record_variable_name.to_lowercase();
+            let var_key = state.record_variable_name.fold_identifier();
             // d22-FN companion: the IMPLICIT `Rec` of a page/table trigger is
             // platform-loaded — the platform fetches the row before the trigger
             // runs, so SetLoadFields advice on it is moot. Skip (mirrors d11/d37).
@@ -204,7 +204,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             let rec_var = routine
                 .record_variables
                 .iter()
-                .find(|rv| rv.name.to_lowercase() == var_key);
+                .find(|rv| rv.name.fold_identifier() == var_key);
 
             // Temp records live in memory; SetLoadFields has no SQL benefit.
             // recVar?.tempState.kind === "known" && recVar.tempState.value === true
@@ -246,7 +246,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             let field_name_by_id: HashMap<&str, String> = table
                 .fields
                 .iter()
-                .map(|f| (f.id.as_str(), f.name.to_lowercase()))
+                .map(|f| (f.id.as_str(), f.name.fold_identifier()))
                 .collect();
 
             // G-12 refinement 1: the table's PRIMARY KEY (first key) fields are
@@ -262,7 +262,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 .fields
                 .iter()
                 .filter(|f| f.field_class == "FlowField")
-                .map(|f| f.name.to_lowercase())
+                .map(|f| f.name.fold_identifier())
                 .collect();
             // A field whose load is never d3's concern. Unresolved field names
             // are NOT excluded (suppression-direction: when unsure, keep firing).
@@ -288,7 +288,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             // `Init`) — or at a `Clear(<var>)` bare call, whichever comes first.
             let mut window_end: Option<&PAnchor> = None;
             for op in &routine.record_operations {
-                if op.record_variable_name.to_lowercase() == var_key
+                if op.record_variable_name.fold_identifier() == var_key
                     && WINDOW_CLOSING_OPS.contains(&op.op.as_str())
                     && before(retrieval_anchor, &op.source_anchor)
                     && window_end.is_none_or(|we| before(&op.source_anchor, we))
@@ -321,13 +321,13 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
 
             // --- same-routine field accesses in the window ---
             for fa in &routine.field_accesses {
-                if fa.record_variable_name.to_lowercase() != var_key {
+                if fa.record_variable_name.fold_identifier() != var_key {
                     continue;
                 }
                 if !in_window(&fa.source_anchor) {
                     continue;
                 }
-                let name_lc = fa.field_name.to_lowercase();
+                let name_lc = fa.field_name.fold_identifier();
                 // G-15(a): an access that is the TARGET of an assignment is a
                 // WRITE — it never needs the field loaded. Exact structural
                 // match: same start position AND same member name as a recorded
@@ -366,7 +366,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 let arg_index = cs
                     .argument_texts
                     .iter()
-                    .position(|a| a.trim().to_lowercase() == var_key);
+                    .position(|a| a.trim().fold_identifier() == var_key);
                 let arg_index = match arg_index {
                     Some(i) => i,
                     None => continue,
@@ -392,7 +392,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 if let Some(c) = callee
                     && (c.kind == "event-publisher"
                         || c.parameters.get(arg_index).is_some_and(|p| {
-                            let t = p.type_text.trim().to_ascii_lowercase();
+                            let t = p.type_text.trim().fold_identifier();
                             t == "variant" || t.starts_with("recordref")
                         }))
                 {
@@ -527,7 +527,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                     .fields
                     .iter()
                     .filter(|f| f.field_class == "Normal")
-                    .map(|f| f.name.to_lowercase())
+                    .map(|f| f.name.fold_identifier())
                     .filter(|n| !excluded_field(n))
                     .collect();
                 if !loadable.is_empty() && loadable.iter().all(|n| accessed_fields.contains(n)) {

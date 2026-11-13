@@ -360,9 +360,7 @@ fn value_enum(cx: &ClosedEnumCx, e: ExprId) -> Option<ObjectNodeId> {
             _ => None,
         },
         ExprKind::Call { function, args } => match &ir.expr(*function).kind {
-            ExprKind::Member { object, member, .. }
-                if member.eq_ignore_ascii_case("frominteger") =>
-            {
+            ExprKind::Member { object, member, .. } if member.eq_fold_identifier("frominteger") => {
                 enum_type_static(cx, *object)
             }
             ExprKind::Identifier(f) | ExprKind::QuotedIdentifier(f) => {
@@ -1265,6 +1263,13 @@ enum 50106 "Other Kind" implements "Other Strategy"
                 "",
                 "",
                 "        S := Enum::\"Demo Kind\".FromInteger(0);",
+            ),
+            // TLS-43 review sol r4: the member name takes the identifier fold.
+            (
+                "FromDottedInteger",
+                "",
+                "",
+                "        S := Enum::\"Demo Kind\".Fromİnteger(0);",
             ),
             ("FromOwnCall", "", "", "        S := PickKind();"),
         ];

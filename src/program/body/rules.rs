@@ -638,7 +638,7 @@ impl Walker<'_, '_> {
         let ExprKind::Member { object, member, .. } = &self.ir().expr(member_expr).kind else {
             return None;
         };
-        let method = unquote(member).to_lowercase();
+        let method = unquote(member).fold_identifier();
         if !method.starts_with("is") {
             return None;
         }

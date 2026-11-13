@@ -44,6 +44,7 @@ use crate::engine::l5::snapshot::SnapshotGraphEdge;
 use crate::program::body::features::{PCFNNode, PCallSite, PCallee, TableCase};
 use crate::program::model::workspace::ModelParameter;
 use crate::program::model::workspace::{Model, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -85,12 +86,12 @@ type InPlace = HashMap<String, Vec<((u32, u32), Part)>>;
 const MAX_ROUNDS: usize = 64;
 
 fn lc(s: &str) -> String {
-    s.trim().trim_matches('"').to_ascii_lowercase()
+    s.trim().trim_matches('"').fold_identifier()
 }
 
 fn is_tracked_type(t: &str) -> bool {
     let t = t.trim();
-    t.eq_ignore_ascii_case("recordref") || t.eq_ignore_ascii_case("variant")
+    t.eq_fold_identifier("recordref") || t.eq_fold_identifier("variant")
 }
 
 fn is_publisher(r: &ModelRoutine) -> bool {
@@ -344,7 +345,7 @@ impl<'a> RecRefFlow<'a> {
             .workspace
             .tables
             .iter()
-            .map(|t| (t.id.as_str(), Arc::from(t.name.to_lowercase())))
+            .map(|t| (t.id.as_str(), Arc::from(t.name.fold_identifier())))
             .collect();
         let single_instance = model
             .workspace
@@ -1254,7 +1255,7 @@ impl<'a> RecRefFlow<'a> {
             || !var
                 .declared_type
                 .trim()
-                .to_ascii_lowercase()
+                .fold_identifier()
                 .starts_with("codeunit")
         {
             return None;
@@ -1492,7 +1493,7 @@ fn in_place_part(r: &ModelRoutine, cs: &PCallSite, recv: &str) -> Option<Part> {
     let PCallee::Member { method, .. } = &cs.callee else {
         return None;
     };
-    Some(match method.to_ascii_lowercase().as_str() {
+    Some(match method.fold_identifier().as_str() {
         "gettable" => match cs.argument_texts.first() {
             Some(arg) => Part::Copy(lc(arg)),
             None => Part::Atoms(top()),
@@ -1524,7 +1525,7 @@ fn on_self(cs: &PCallSite) -> bool {
 fn writes_arguments(cs: &PCallSite) -> bool {
     match &cs.callee {
         PCallee::Member { method, .. } => {
-            let m = method.to_ascii_lowercase();
+            let m = method.fold_identifier();
             // `R.GetTable(X)` reads `X` (it binds `R`).
             (m.starts_with("get") && m != "gettable")
                 || m.starts_with("tryget")
@@ -1556,9 +1557,9 @@ fn is_platform_run_site(cs: &PCallSite) -> bool {
     let PCallee::Member { receiver, method } = &cs.callee else {
         return false;
     };
-    let method = method.to_ascii_lowercase();
+    let method = method.fold_identifier();
     let kind =
-        crate::program::resolve::dataset::keyword_run_kind(&receiver.to_ascii_lowercase(), &method);
+        crate::program::resolve::dataset::keyword_run_kind(&receiver.fold_identifier(), &method);
     match kind {
         Some(ObjectKind::Report) => {
             crate::program::resolve::dataset::is_report_output_method(&method)
@@ -1576,7 +1577,7 @@ fn keeps_unresolved(r: &ModelRoutine, cs: &PCallSite) -> bool {
         PCallee::Member { receiver, method } => {
             let x = lc(receiver);
             if let Some(v) = r.variables.iter().find(|v| lc(&v.name) == x) {
-                let t = v.declared_type.trim().to_ascii_lowercase();
+                let t = v.declared_type.trim().fold_identifier();
                 // An object variable's unresolved method could do anything.
                 return ![
                     "codeunit",
@@ -1598,9 +1599,9 @@ fn keeps_unresolved(r: &ModelRoutine, cs: &PCallSite) -> bool {
             // it reads its argument.
             if r.return_type
                 .as_deref()
-                .is_some_and(|t| t.trim().eq_ignore_ascii_case("recordref"))
+                .is_some_and(|t| t.trim().eq_fold_identifier("recordref"))
                 && matches!(
-                    method.to_ascii_lowercase().as_str(),
+                    method.fold_identifier().as_str(),
                     "gettable" | "settable" | "setview" | "setposition" | "copy"
                 )
             {
@@ -1608,7 +1609,7 @@ fn keeps_unresolved(r: &ModelRoutine, cs: &PCallSite) -> bool {
             }
             matches!(x.as_str(), "report" | "page" | "xmlport")
                 && matches!(
-                    method.to_ascii_lowercase().as_str(),
+                    method.fold_identifier().as_str(),
                     "run"
                         | "runmodal"
                         | "saveas"
@@ -2023,7 +2024,7 @@ fn cond_regions(r: &ModelRoutine, tracked: &HashMap<String, VarKind>) -> Vec<Con
 /// holds does (`R := Variant; R.Open(…)`).
 fn keeps_by_value(_callee: &ModelRoutine, f: &Facts, p: &ModelParameter) -> bool {
     !p.is_var
-        && p.type_text.trim().eq_ignore_ascii_case("variant")
+        && p.type_text.trim().eq_fold_identifier("variant")
         && !f.alias_shared.contains(&lc(&p.name))
 }
 

@@ -21,6 +21,7 @@
 //! `summary:` line prints it. Every total is a union by identity, never a sum
 //! of section counts (T-W2-1).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Value, json};
@@ -163,7 +164,7 @@ pub fn al_name(name: &str) -> std::borrow::Cow<'_, str> {
 /// or request page, else `control` (a page user-control event).
 #[must_use]
 pub fn infer_member_kind(object_type: &str, trigger: &str) -> &'static str {
-    let t = trigger.to_ascii_lowercase();
+    let t = trigger.fold_identifier();
     let ty = object_type.to_ascii_lowercase();
     if t == "onaction" {
         return "action";
@@ -377,7 +378,7 @@ fn graph_display_as(
                 .iter()
                 .filter(|t| t.table_number == number && t.app_guid.eq_ignore_ascii_case(&app))
                 .flat_map(|t| &t.fields)
-                .find(|f| f.name.eq_ignore_ascii_case(m))
+                .find(|f| f.name.eq_fold_identifier(m))
                 .map(|f| f.name.clone())
         });
         declared.unwrap_or_else(|| m.to_string())
@@ -457,13 +458,13 @@ impl<'m> RoutineNames<'m> {
         let mut displays: HashMap<String, Vec<(&'m str, &'m str)>> = HashMap::new();
         for (&id, &i) in &names.rows {
             let r = &model.workspace.routines[i];
-            let object = names.object_name_of(r).to_ascii_lowercase();
+            let object = names.object_name_of(r).fold_identifier();
             groups
                 .entry((
                     r.app_guid.to_ascii_lowercase(),
                     format!("{}/{object}", r.object_id),
-                    r.enclosing_member.as_ref().map(|m| m.to_ascii_lowercase()),
-                    r.name.to_ascii_lowercase(),
+                    r.enclosing_member.as_ref().map(|m| m.fold_identifier()),
+                    r.name.fold_identifier(),
                 ))
                 .or_default()
                 .push(id);
@@ -471,8 +472,11 @@ impl<'m> RoutineNames<'m> {
                 .entry(format!(
                     "{}|{object}|{}|{}",
                     r.object_type.to_ascii_lowercase(),
-                    r.enclosing_member.as_deref().unwrap_or("").to_lowercase(),
-                    r.name.to_ascii_lowercase()
+                    r.enclosing_member
+                        .as_deref()
+                        .unwrap_or("")
+                        .fold_identifier(),
+                    r.name.fold_identifier()
                 ))
                 .or_default()
                 .push((id, r.app_guid.as_str()));

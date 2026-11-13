@@ -21,6 +21,7 @@ use crate::engine::l5::finding::{
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::model::workspace::Model;
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d36-late-setloadfields";
 
@@ -56,7 +57,7 @@ pub fn detect_d36(
             .record_variables
             .iter()
             .filter(|rv| rv.is_parameter)
-            .map(|rv| rv.name.to_lowercase())
+            .map(|rv| rv.name.fold_identifier())
             .collect();
 
         for op in &routine.record_operations {
@@ -65,7 +66,7 @@ pub fn detect_d36(
             }
             candidates_considered += 1;
 
-            let var_key = op.record_variable_name.to_lowercase();
+            let var_key = op.record_variable_name.fold_identifier();
 
             // Skip temporary records.
             if super::is_known_temp(op) {
@@ -82,7 +83,7 @@ pub fn detect_d36(
             // Must have at least one prior load.
             let has_prior_load = routine.record_operations.iter().any(|other| {
                 LOAD_OPS.contains(&other.op.as_str())
-                    && other.record_variable_name.to_lowercase() == var_key
+                    && other.record_variable_name.fold_identifier() == var_key
                     && before_anchor(&other.source_anchor, &op.source_anchor)
             });
             if !has_prior_load {
@@ -94,7 +95,7 @@ pub fn detect_d36(
             // iteration — skip.
             let has_later_load = routine.record_operations.iter().any(|other| {
                 LOAD_OPS.contains(&other.op.as_str())
-                    && other.record_variable_name.to_lowercase() == var_key
+                    && other.record_variable_name.fold_identifier() == var_key
                     && before_anchor(&op.source_anchor, &other.source_anchor)
             });
             if has_later_load {

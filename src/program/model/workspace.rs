@@ -560,7 +560,7 @@ impl RoutineVariables {
     /// global table.
     ///
     /// Both name sets are already lowercased by the L2 projection
-    /// (`ir_variables`/`ir_object_globals` both apply `to_ascii_lowercase`), so the
+    /// (`ir_variables`/`ir_object_globals` both apply `fold_identifier`), so the
     /// shadow test is exact string equality — the same test the inlined
     /// `HashSet<String>` in `ir_variables` performs.
     pub fn new(own: Vec<ModelVariable>, globals: Arc<[ModelVariable]>) -> Self {
@@ -893,7 +893,7 @@ fn member_detail_of(
         .then(|| {
             o.fields
                 .iter()
-                .find(|f| f.name.eq_ignore_ascii_case(member))
+                .find(|f| f.name.eq_fold_identifier(member))
                 .and_then(|f| f.caption.first().cloned())
         })
         .flatten();
@@ -1094,7 +1094,7 @@ fn index_table_ir(
         .collect();
     let fields_by_name: std::collections::HashMap<String, String> = fields
         .iter()
-        .map(|f| (f.name.to_lowercase(), f.id.clone()))
+        .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
         .collect();
     let keys: Vec<ModelKey> = o
         .keys
@@ -1126,7 +1126,7 @@ fn index_table_ir(
         .properties
         .iter()
         .find(|p| p.name == "tabletype")
-        .map(|p| !p.conditional && p.value.trim().to_lowercase() == "temporary")
+        .map(|p| !p.conditional && p.value.trim().fold_identifier() == "temporary")
         .unwrap_or(false)
         || crate::program::body::ir_walk::ir_table_has_temp_contract_guard(ir_file, o);
     ModelTable {
@@ -1736,7 +1736,7 @@ fn project_ir(
                 .iter()
                 .any(|p| p.name == "sourcetabletemporary" && p.conditional)
         {
-            ir_prop("sourcetabletemporary").map(|v| v.trim().to_lowercase() == "true")
+            ir_prop("sourcetabletemporary").map(|v| v.trim().fold_identifier() == "true")
         } else {
             None
         };
@@ -1744,7 +1744,7 @@ fn project_ir(
         // (`Editable`/`InsertAllowed`/`ModifyAllowed`/`DeleteAllowed`, Page only) —
         // substrate for d57/d64. Same exact-"true" boolean convention as
         // `source_table_temporary` above.
-        let bool_prop = |name: &str| ir_prop(name).map(|v| v.trim().to_lowercase() == "true");
+        let bool_prop = |name: &str| ir_prop(name).map(|v| v.trim().fold_identifier() == "true");
         let single_instance = if object_type == "Codeunit" {
             bool_prop("singleinstance")
         } else {
@@ -1973,7 +1973,7 @@ fn project_ir(
                 let attr_names_lc: Vec<String> = attrs_json
                     .iter()
                     .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                    .map(|n| n.to_lowercase())
+                    .map(|n| n.fold_identifier())
                     .collect();
                 crate::program::body::control_context::apply_control_contexts(
                     &mut features,
@@ -1991,7 +1991,7 @@ fn project_ir(
                 .iter()
                 .map(|p| &p.name)
                 .chain(ir_routine.locals.iter().map(|v| &v.name))
-                .any(|n| n.eq_ignore_ascii_case("rec"));
+                .any(|n| n.eq_fold_identifier("rec"));
             let mut record_variables: Vec<ModelRecordVariable> = features
                 .record_variables
                 .iter()
@@ -2005,7 +2005,7 @@ fn project_ir(
                     temp_state: rv.temp_state.clone(),
                     scope: rv.scope.clone(),
                     is_receiver: rv.is_receiver,
-                    is_implicit_rec: !declares_rec && rv.name.eq_ignore_ascii_case("rec"),
+                    is_implicit_rec: !declares_rec && rv.name.eq_fold_identifier("rec"),
                 })
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
@@ -2025,10 +2025,10 @@ fn project_ir(
             if !object_global_record_vars.is_empty() {
                 let own_names: std::collections::HashSet<String> = record_variables
                     .iter()
-                    .map(|rv| rv.name.to_lowercase())
+                    .map(|rv| rv.name.fold_identifier())
                     .collect();
                 for g in &object_global_record_vars {
-                    let lc = g.name.to_lowercase();
+                    let lc = g.name.fold_identifier();
                     if own_names.contains(&lc) {
                         continue; // shadowed by the routine's own param/local
                     }
@@ -2182,7 +2182,7 @@ fn project_ir(
                     record_variables
                         .iter()
                         .filter(|rv| rv.scope.as_deref() == Some("global"))
-                        .map(|rv| (rv.name.to_lowercase(), rv))
+                        .map(|rv| (al_syntax::fold_identifier(&rv.name), rv))
                         .collect();
                 // Names whose INNERMOST declaration (params → locals → globals,
                 // first-wins in `features.variables`) is NOT the global —
@@ -2214,7 +2214,7 @@ fn project_ir(
                                     else {
                                         continue;
                                     };
-                                    let lc = text.trim().to_lowercase();
+                                    let lc = al_syntax::fold_identifier(text.trim());
                                     // Bare identifiers only — mirrors the L2 builder's
                                     // `arg_node.kind() == "identifier"` gate.
                                     if lc.is_empty()
@@ -2245,7 +2245,7 @@ fn project_ir(
                                 receiver, ..
                             } = &cs.callee
                         {
-                            let lc = receiver.trim().trim_matches('"').to_lowercase();
+                            let lc = al_syntax::fold_identifier(receiver.trim().trim_matches('"'));
                             if let Some(g) = global_rv_by_lc.get(&lc)
                                 && innermost_scope_by_lc.get(lc.as_str()).copied() == Some("global")
                             {
@@ -4398,7 +4398,7 @@ impl Model {
                     .record_variables
                     .iter()
                     .map(|v| PRecordVariable {
-                        name: v.name.to_lowercase(),
+                        name: v.name.fold_identifier(),
                         table_id: v.table_id.as_deref().map(to_stable_table_id),
                     })
                     .collect();
@@ -4417,7 +4417,7 @@ impl Model {
                     .map(|op| PRecordOperation {
                         operation_id: op.id.clone(),
                         op: op.op.clone(),
-                        record_variable_name: op.record_variable_name.to_lowercase(),
+                        record_variable_name: op.record_variable_name.fold_identifier(),
                         table_id: op.table_id.as_deref().map(to_stable_table_id),
                     })
                     .collect();
@@ -4466,10 +4466,10 @@ impl Model {
     /// Find a table by name (case-insensitive, LAST-wins — matching the symbol
     /// table the resolution queried).
     pub fn table_by_name(&self, name: &str) -> Option<TableView<'_>> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         let mut found = None;
         for t in &self.workspace.tables {
-            if t.name.to_lowercase() == want {
+            if t.name.fold_identifier() == want {
                 found = Some(t); // LAST-wins
             }
         }
@@ -4481,11 +4481,11 @@ impl RoutineView<'_> {
     /// Resolved StableTableId for the named record variable, or None if unresolved
     /// / absent.
     pub fn record_var_table_id(&self, name: &str) -> Option<String> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         self.routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == want)
+            .find(|v| v.name.fold_identifier() == want)
             .and_then(|v| v.table_id.as_deref().map(to_stable_table_id))
     }
 
@@ -4497,22 +4497,22 @@ impl RoutineView<'_> {
     /// variable, or None if absent / unset. Test-facing accessor for the Task 3
     /// global-promotion path.
     pub fn record_var_scope(&self, name: &str) -> Option<String> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         self.routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == want)
+            .find(|v| v.name.fold_identifier() == want)
             .and_then(|v| v.scope.clone())
     }
 
     /// The resolved `temp_state` Known value of the named record variable, or None
     /// if the var is absent or its temp_state is not `known`.
     pub fn record_var_temp_known(&self, name: &str) -> Option<bool> {
-        let want = name.to_lowercase();
+        let want = name.fold_identifier();
         self.routine
             .record_variables
             .iter()
-            .find(|v| v.name.to_lowercase() == want)
+            .find(|v| v.name.fold_identifier() == want)
             .and_then(|v| v.temp_state_known_value())
     }
 
@@ -4521,11 +4521,11 @@ impl RoutineView<'_> {
     /// the Task 3 member-var op temp_state backfill. Returns the FIRST matching op's
     /// state (walk order) — sufficient for the single-op-per-var test fixtures.
     pub fn first_record_op_temp_known(&self, var_name: &str) -> Option<bool> {
-        let want = var_name.to_lowercase();
+        let want = var_name.fold_identifier();
         self.routine
             .record_operations
             .iter()
-            .find(|op| op.record_variable_name.to_lowercase() == want)
+            .find(|op| op.record_variable_name.fold_identifier() == want)
             .and_then(|op| op.temp_state.as_ref())
             .and_then(|ts| if ts.kind == "known" { ts.value } else { None })
     }
@@ -4709,7 +4709,7 @@ codeunit 50816 "T5 F3 Dedup"
             .workspace
             .routines
             .iter()
-            .find(|r| r.name.eq_ignore_ascii_case("DoIt"))
+            .find(|r| r.name.eq_fold_identifier("DoIt"))
             .expect("fixture precondition: the DoIt procedure");
 
         let globals: Vec<&ModelVariable> = routine
@@ -4929,7 +4929,7 @@ codeunit 50816 "T5 F3 Dedup"
         let try_fn = |r: &ModelRoutine| {
             r.attributes_parsed
                 .iter()
-                .find(|a| a.name.eq_ignore_ascii_case("TryFunction"))
+                .find(|a| a.name.eq_fold_identifier("TryFunction"))
                 .map(|a| {
                     assert!(!a.conditional, "each row's own builds all have it");
                     a.another_declaration_lacks
@@ -4980,7 +4980,7 @@ codeunit 50816 "T5 F3 Dedup"
         let scope_of = |n: &str| {
             r.variables
                 .iter()
-                .find(|v| v.name.eq_ignore_ascii_case(n))
+                .find(|v| v.name.eq_fold_identifier(n))
                 .and_then(|v| v.scope.clone())
         };
         assert_eq!(scope_of("GlobalNames").as_deref(), Some("global"));
@@ -5039,7 +5039,7 @@ page 50813 "CP3 Wizard"
         let ids_named = |n: &str| -> Vec<String> {
             let mut v: Vec<String> = routines
                 .iter()
-                .filter(|r| r.name.eq_ignore_ascii_case(n))
+                .filter(|r| r.name.eq_fold_identifier(n))
                 .map(|r| r.id.clone())
                 .collect();
             v.sort();
@@ -5063,7 +5063,7 @@ page 50813 "CP3 Wizard"
         for name in ["OnValidate", "OnAction"] {
             let legacy: Vec<String> = routines
                 .iter()
-                .filter(|r| r.name.eq_ignore_ascii_case(name))
+                .filter(|r| r.name.eq_fold_identifier(name))
                 .map(|r| {
                     crate::engine::ids::encode_canonical_routine_key(
                         &crate::engine::ids::CanonicalRoutineKey {
@@ -5095,7 +5095,7 @@ page 50813 "CP3 Wizard"
         // The member NAME is what separates them — carried, unescaped, on the model.
         let mut members: Vec<String> = routines
             .iter()
-            .filter(|r| r.name.eq_ignore_ascii_case("OnValidate"))
+            .filter(|r| r.name.eq_fold_identifier("OnValidate"))
             .filter_map(|r| r.enclosing_member.clone())
             .collect();
         members.sort();
@@ -5112,7 +5112,7 @@ page 50813 "CP3 Wizard"
         assert!(
             routines
                 .iter()
-                .any(|r| r.name.eq_ignore_ascii_case("OnOpenPage") && r.enclosing_member.is_none()),
+                .any(|r| r.name.eq_fold_identifier("OnOpenPage") && r.enclosing_member.is_none()),
             "an object-level trigger carries no enclosing member (its id is unchanged)"
         );
     }
@@ -5169,7 +5169,7 @@ page 50815 "CP5 Wizard"
         let named = |n: &str| -> Vec<&ModelRoutine> {
             routines
                 .iter()
-                .filter(|r| r.name.eq_ignore_ascii_case(n))
+                .filter(|r| r.name.eq_fold_identifier(n))
                 .collect()
         };
 
@@ -5298,7 +5298,7 @@ page 50814 "CP4 Wizard"
             .workspace
             .routines
             .iter()
-            .filter(|r| r.name.eq_ignore_ascii_case("OnValidate"))
+            .filter(|r| r.name.eq_fold_identifier("OnValidate"))
             .collect();
         assert_eq!(l3.len(), 1, "fixture precondition: exactly one OnValidate");
         let l3_routine = l3[0];
@@ -5373,7 +5373,7 @@ page 50814 "CP4 Wizard"
             al_syntax::parse(src).objects[1]
                 .routines
                 .iter()
-                .find(|r| r.name.eq_ignore_ascii_case("OnValidate"))
+                .find(|r| r.name.eq_fold_identifier("OnValidate"))
                 .expect("IR must carry the OnValidate trigger"),
         );
         let raw_escaped_id = crate::program::body::scope::compute_routine_id(

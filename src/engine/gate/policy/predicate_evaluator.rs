@@ -11,6 +11,7 @@ use crate::engine::gate::policy::policy_types::{Predicate, PredicateOperator, Pr
 use crate::engine::gate::policy::predicate_fields::{
     FieldEvalContext, FieldScope, FieldValue, evaluate_field, get_field_def,
 };
+use al_syntax::IdentifierFoldExt;
 
 /// Kleene tristate. al-sem `Tristate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,13 +147,13 @@ fn actual_to_string(v: &FieldValue) -> String {
 /// non-ASCII UTF-16-vs-unicode-case edge is the tracked cross-cutting comparator
 /// item (shared with `compareStrings`), not a policy-specific divergence.
 pub fn glob_match(pattern: &str, value: &str) -> bool {
-    // ASCII-case-insensitivity is implemented by folding ASCII letters on BOTH sides
-    // (literal pattern chars + the value) rather than the regex `i` flag, because the
+    // Case-insensitivity is implemented by folding BOTH sides (the pattern in
+    // `compile_glob`, the value here) rather than the regex `i` flag, because the
     // regex needs `unicode(true)` for the `\x{2028}`/`\x{2029}` line-terminator class
-    // but we want ASCII-only folding (full-Unicode `case_insensitive` would add
-    // Kelvin/long-s folds JS-without-`u` does not). `to_ascii_lowercase` touches only
-    // A-Z, leaving every other codepoint (incl. the 4 line terminators) intact.
-    let folded_value = value.to_ascii_lowercase();
+    // and `case_insensitive` would add Kelvin/long-s folds. TLS-43: the fold is the
+    // AL identifier fold (`fold_identifier`), as every engine name compare uses; the
+    // al-sem ASCII-only parity is retired. It leaves the 4 line terminators intact.
+    let folded_value = value.fold_identifier();
     GLOB_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(re) = cache.get(pattern) {
@@ -171,15 +172,16 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Translate a glob pattern to an anchored `regex::Regex` (case folding is done by
-/// the caller via ASCII-lowercasing both sides, so literal chars are lowercased here
-/// and the regex itself is case-SENSITIVE).
+/// Translate a glob pattern to an anchored `regex::Regex` (case folding is done on
+/// both sides with `fold_identifier`, so the pattern is folded here and the regex
+/// itself is case-SENSITIVE).
 fn compile_glob(pattern: &str) -> regex::Regex {
     // `[^\n\r\u{2028}\u{2029}]` — JS `.`-without-`s` (excludes the 4 line terminators).
     const NON_LT: &str = "[^\\n\\r\\x{2028}\\x{2029}]";
     let mut re = String::with_capacity(pattern.len() + 4);
     re.push('^');
-    for c in pattern.chars() {
+    // TLS-43: the pattern is folded with the identifier fold, as the value is.
+    for c in pattern.fold_identifier().chars() {
         match c {
             '*' => {
                 re.push_str(NON_LT);
@@ -189,11 +191,9 @@ fn compile_glob(pattern: &str) -> regex::Regex {
             // Escape the regex metachars al-sem escapes: . + ^ $ { } ( ) | [ ] \
             '.' | '+' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\' => {
                 re.push('\\');
-                re.push(c.to_ascii_lowercase());
+                re.push(c);
             }
-            // Literal: ASCII-lowercase (the value is folded the same way) — this is
-            // the ASCII-CI implementation. Non-ASCII literals pass through verbatim.
-            other => re.push(other.to_ascii_lowercase()),
+            other => re.push(other),
         }
     }
     re.push('$');

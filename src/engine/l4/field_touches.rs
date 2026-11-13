@@ -316,7 +316,7 @@ fn call_method(cs: &PCallSite) -> Option<&str> {
 /// Is `name` a variable the routine declares with type `RecordRef`?
 fn is_record_ref_var(r: &ModelRoutine, name: &str) -> bool {
     r.variables.iter().any(|v| {
-        v.name.eq_fold_identifier(name) && v.declared_type.trim().eq_ignore_ascii_case("recordref")
+        v.name.eq_fold_identifier(name) && v.declared_type.trim().eq_fold_identifier("recordref")
     })
 }
 
@@ -336,7 +336,7 @@ fn record_ref_tables<'m>(
         .iter()
         .filter(|v| {
             v.scope.as_deref() == Some("local")
-                && v.declared_type.trim().eq_ignore_ascii_case("recordref")
+                && v.declared_type.trim().eq_fold_identifier("recordref")
         })
         .map(|v| v.name.as_str())
         .collect();
@@ -362,7 +362,7 @@ fn record_ref_tables<'m>(
                 }
                 continue;
             }
-            let method = call_method(cs).unwrap_or("").to_ascii_lowercase();
+            let method = call_method(cs).unwrap_or("").fold_identifier();
             let arg = cs.argument_texts.first().map(String::as_str);
             match method.as_str() {
                 "open" => agree(arg.and_then(|a| table_of_ref(a, by_number, by_name))),
@@ -568,7 +568,7 @@ pub fn field_touches<'m>(
                 }
                 continue;
             }
-            let Some((use_, at)) = field_method(&op.op.to_ascii_lowercase()) else {
+            let Some((use_, at)) = field_method(&op.op.fold_identifier()) else {
                 continue;
             };
             let args: Vec<&str> = if op.op == "ModifyAll" {
@@ -608,7 +608,7 @@ pub fn field_touches<'m>(
             let Some(method) = call_method(cs) else {
                 continue;
             };
-            let method_lc = method.to_ascii_lowercase();
+            let method_lc = method.fold_identifier();
             if let PCallee::Member { receiver, .. } = &cs.callee
                 && is_record_ref_var(r, receiver)
             {
@@ -803,7 +803,7 @@ pub fn census(model: &Model) -> serde_json::Value {
                         s.transfer_fields_source_table_resolved += 1;
                     }
                 }
-            } else if let Some((u, _)) = field_method(&op.op.to_ascii_lowercase()) {
+            } else if let Some((u, _)) = field_method(&op.op.fold_identifier()) {
                 *s.record_ops_by_field_kind.entry(u.as_str()).or_insert(0) += 1;
             }
         }
@@ -812,7 +812,7 @@ pub fn census(model: &Model) -> serde_json::Value {
             let Some(method) = call_method(cs) else {
                 continue;
             };
-            let m = method.to_ascii_lowercase();
+            let m = method.fold_identifier();
             if let PCallee::Member { receiver, .. } = &cs.callee
                 && is_record_ref_var(r, receiver)
             {

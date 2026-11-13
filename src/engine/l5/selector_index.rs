@@ -15,6 +15,7 @@
 //! (built from `snap.identities.stable_ids`, a deterministic `Vec`). Both call
 //! sites now share this ONE implementation so they cannot drift apart again.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::engine::l5::snapshot::SnapshotIdentityTable;
@@ -23,7 +24,7 @@ const ROUTINE_ID_SEPARATOR: char = '#';
 
 /// `normalizeDisplayKey` (indexes.ts) — lowercase, trim, collapse internal whitespace.
 pub(crate) fn normalize_display_key(s: &str) -> String {
-    let trimmed = s.trim().to_lowercase();
+    let trimmed = s.trim().fold_identifier();
     // Collapse runs of ASCII/Unicode whitespace into a single space (JS \s+).
     let mut out = String::with_capacity(trimmed.len());
     let mut prev_ws = false;
@@ -217,7 +218,7 @@ fn owner_part(part: &str) -> Option<OwnerPart> {
         return None;
     }
     let (word, rest) = part.split_once(char::is_whitespace).unwrap_or((part, ""));
-    let typed = OBJECT_TYPE_WORDS.contains(&word.to_lowercase().as_str());
+    let typed = OBJECT_TYPE_WORDS.contains(&word.fold_identifier().as_str());
     let name = if typed { rest } else { part };
     let key = |n: &str| match typed {
         true => normalize_display_key(&format!("{word} {n}")),
@@ -510,8 +511,8 @@ pub(crate) fn resolve_member_selector<'a>(
     let owner = owner_part(&m.owner)?;
     let mut out: Vec<String> = Vec::new();
     for r in rows {
-        if !r.routine.eq_ignore_ascii_case(&m.routine)
-            || !r.member.eq_ignore_ascii_case(&m.member)
+        if !r.routine.eq_fold_identifier(&m.routine)
+            || !r.member.eq_fold_identifier(&m.member)
             || m.kind.as_deref().is_some_and(|k| k != r.member_kind)
         {
             continue;
@@ -585,7 +586,7 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
 
 /// Whether `candidate` is near enough `asked` to be offered ([`NEAREST_RATIO`]).
 pub(crate) fn is_near(asked: &str, candidate: &str) -> Option<usize> {
-    let (a, c) = (asked.to_lowercase(), candidate.to_lowercase());
+    let (a, c) = (asked.fold_identifier(), candidate.fold_identifier());
     let d = edit_distance(&a, &c);
     let longest = a.chars().count().max(c.chars().count());
     (d as f64 <= NEAREST_RATIO * longest as f64).then_some(d)
@@ -648,14 +649,14 @@ pub(crate) fn selector_hints(
         .workspace
         .routines
         .iter()
-        .any(|r| names.is_primary(&r.stable_routine_id) && r.name.eq_ignore_ascii_case(&asked));
+        .any(|r| names.is_primary(&r.stable_routine_id) && r.name.eq_fold_identifier(&asked));
     if !primary_has {
         let mut dep: Vec<(String, String)> = model
             .workspace
             .routines
             .iter()
             .filter(|r| !names.is_primary(&r.stable_routine_id))
-            .filter(|r| r.name.eq_ignore_ascii_case(&asked))
+            .filter(|r| r.name.eq_fold_identifier(&asked))
             .filter(|r| seen.insert(r.stable_routine_id.as_str()))
             .map(|r| {
                 (
@@ -684,7 +685,7 @@ pub(crate) fn selector_hints(
         }
         let near = match &member_ask {
             Some((member, trigger)) => match r.enclosing_member.as_deref() {
-                Some(m) if r.name.eq_ignore_ascii_case(trigger) => is_near(member, m),
+                Some(m) if r.name.eq_fold_identifier(trigger) => is_near(member, m),
                 _ => None,
             },
             None => is_near(&asked, &r.name),
@@ -1099,14 +1100,14 @@ impl QualifiedSelector {
     /// Whether an object of `object_type` named `object_name` declaring a
     /// routine named `routine_name` is the one selected (case-insensitive).
     pub(crate) fn selects(&self, object_type: &str, object_name: &str, routine_name: &str) -> bool {
-        if routine_name.to_lowercase() != self.routine {
+        if routine_name.fold_identifier() != self.routine {
             return false;
         }
-        let name = object_name.to_lowercase();
+        let name = object_name.fold_identifier();
         let typed = self
             .type_word
             .as_deref()
-            .is_some_and(|w| w == object_type.to_lowercase() && name == self.object);
+            .is_some_and(|w| w == object_type.fold_identifier() && name == self.object);
         typed || name == self.whole
     }
 }
@@ -1126,13 +1127,13 @@ pub(crate) fn split_qualified(selector: &str) -> Option<QualifiedSelector> {
         return None;
     }
     let (word, rest) = owner.split_once(char::is_whitespace).unwrap_or((owner, ""));
-    let typed = OBJECT_TYPE_WORDS.contains(&word.to_lowercase().as_str()) && !rest.is_empty();
+    let typed = OBJECT_TYPE_WORDS.contains(&word.fold_identifier().as_str()) && !rest.is_empty();
     let name = if typed { rest } else { owner };
     Some(QualifiedSelector {
-        type_word: typed.then(|| word.to_lowercase()),
-        object: unquote(name).to_lowercase(),
-        whole: unquote(owner).to_lowercase(),
-        routine: routine.to_lowercase(),
+        type_word: typed.then(|| word.fold_identifier()),
+        object: unquote(name).fold_identifier(),
+        whole: unquote(owner).fold_identifier(),
+        routine: routine.fold_identifier(),
     })
 }
 
@@ -1234,13 +1235,16 @@ pub(crate) fn signature_matches(
         })
 }
 
-/// A parameter list's text as [`signature_matches`] compares it whole:
-/// lowercase, AL quotes and every whitespace dropped.
+/// A parameter list's text as [`signature_matches`] compares it whole: AL
+/// quotes and every whitespace dropped, then the identifier fold (the item
+/// matcher's; Unicode's per-char lowercase gave `İ` a combining dot, so a whole
+/// signature holding one never matched, TLS-43 review sol r3).
 fn fold_whole(s: &str) -> String {
-    s.chars()
+    let stripped: String = s
+        .chars()
         .filter(|c| *c != '"' && !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect()
+        .collect();
+    stripped.fold_identifier()
 }
 
 /// A routine's parameter types as a selector takes them: `(Integer, var
@@ -1698,6 +1702,30 @@ mod tests {
             "Codeunit X::Do(var Record \"CDO File\", option \" \",\"Attach as one file\",Merge)",
         );
         assert!(!signature_matches(&short.unwrap(), &params));
+    }
+
+    /// TLS-43 review sol r3: the whole-signature compare takes the identifier
+    /// fold, so a type holding `İ` and a comma (one parameter, which the item
+    /// split reads as two) selects by its `i` spelling.
+    ///
+    /// DISCRIMINATION (2026-11-13): `fold_whole` back on
+    /// the per-char Unicode lowercase (the old `flat_map`) fails here;
+    /// restored, passes.
+    #[test]
+    fn a_whole_signature_with_a_dotted_capital_i_selects() {
+        use crate::program::model::workspace::ModelParameter;
+        let params = vec![ModelParameter {
+            index: 0,
+            name: "P".into(),
+            type_text: "Option İ,Other".into(),
+            is_var: false,
+            is_record: false,
+            table_name: None,
+        }];
+        let (_, wanted) = split_signature("Codeunit X::F(Option i,Other)");
+        let wanted = wanted.unwrap();
+        assert_eq!(wanted.len(), 2, "precondition: the item split reads two");
+        assert!(signature_matches(&wanted, &params));
     }
 
     /// V3 §2.1: a member form keeps only the named owner, member, kind and

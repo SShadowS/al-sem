@@ -56,6 +56,7 @@ use crate::program::body::features::{
     FlowExpr, FlowFact, PCFNNode, PathHint, ValueFact, ValueLabel,
 };
 use crate::program::model::workspace::ModelRoutine;
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -97,10 +98,10 @@ pub(super) enum FDom {
 /// The domain of a variable of type `type_text`; `None` for a type the flow
 /// does not track.
 pub(super) fn flow_domain(type_text: &str) -> Option<FDom> {
-    if type_text.trim().eq_ignore_ascii_case("boolean") {
+    if type_text.trim().eq_fold_identifier("boolean") {
         return Some(FDom::Bool);
     }
-    if type_text.trim().eq_ignore_ascii_case("variant") {
+    if type_text.trim().eq_fold_identifier("variant") {
         return Some(FDom::Variant);
     }
     if let Some(i) = values::interface_name(type_text) {

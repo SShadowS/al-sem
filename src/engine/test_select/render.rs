@@ -12,6 +12,7 @@
 //!   is printed before the `run first` filter;
 //! - static reachability is not coverage, said once at the end.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
@@ -284,7 +285,7 @@ fn navigation_caveat(changed: &[Value], nav_tests: &[&Value]) -> String {
     let Some((object, name)) = one_target(changed) else {
         return generic;
     };
-    let field_step = match name.to_ascii_lowercase().as_str() {
+    let field_step = match name.fold_identifier().as_str() {
         "onvalidate" => Some("edits"),
         "onlookup" => Some("looks up"),
         "onassistedit" => Some("assist-edits"),

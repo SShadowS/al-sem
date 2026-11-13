@@ -17,6 +17,7 @@ use crate::engine::l5::finding::{
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
 use crate::program::body::features::PLoop;
 use crate::program::model::workspace::{Model, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 
 pub(crate) const DETECTOR: &str = "d5-set-based-opportunity";
 
@@ -68,7 +69,7 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             let Some(loop_id) = loop_id else { continue };
             loop_driver
                 .entry(loop_id)
-                .or_insert_with(|| op.record_variable_name.to_lowercase());
+                .or_insert_with(|| al_syntax::fold_identifier(&op.record_variable_name));
         }
 
         for loop_info in &routine.loops {
@@ -96,7 +97,9 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             // Must have exactly one Modify on the iterating record variable inside the loop.
             let modify_ops: Vec<_> = ops_in_loop
                 .iter()
-                .filter(|op| op.op == "Modify" && op.record_variable_name.to_lowercase() == driver)
+                .filter(|op| {
+                    op.op == "Modify" && op.record_variable_name.fold_identifier() == driver
+                })
                 .collect();
             if modify_ops.len() != 1 {
                 continue;
@@ -131,7 +134,7 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             let traversal_broken = ops_in_loop.iter().any(|op| {
                 op.id != modify.id
                     && op.id != advance_id
-                    && op.record_variable_name.to_lowercase() == driver
+                    && op.record_variable_name.fold_identifier() == driver
                     && whole_set_break(op, &loop_info.id).is_some()
             });
             if traversal_broken {
@@ -146,7 +149,7 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                     || op.op == "FindFirst"
                     || op.op == "FindLast"
                     || op.op == "Find")
-                    && op.record_variable_name.to_lowercase() == driver
+                    && op.record_variable_name.fold_identifier() == driver
                     && op.loop_stack.is_empty()
             });
 
@@ -154,7 +157,7 @@ pub fn detect_d5(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
             let record_var_display = routine
                 .record_operations
                 .iter()
-                .find(|op| op.record_variable_name.to_lowercase() == driver)
+                .find(|op| op.record_variable_name.fold_identifier() == driver)
                 .map(|op| op.record_variable_name.clone())
                 .unwrap_or_else(|| driver.clone());
 

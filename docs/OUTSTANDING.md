@@ -725,8 +725,10 @@ throughout (deleted in engine-switch S9); the items below note where the code li
   today. Migrate to `eq_fold_identifier`/`fold_identifier` layer-by-layer for
   consistency (low priority; advisory engine only)
 
-- [ ] **The L2 builder folds identifiers with `to_ascii_lowercase`; later layers compare with
-  `to_lowercase`** (from TLS-42's census). `src/program/body/ir_walk.rs` folds
+- [x] **The L2 builder folds identifiers with `to_ascii_lowercase`; later layers compare with
+  `to_lowercase`** — FIXED 2026-11-13 (TLS-43): one identifier fold (`fold_identifier`) on
+  both sides, witnessed by `ws-nordic-identifiers` (see CHANGELOG). Original item:
+  (from TLS-42's census). `src/program/body/ir_walk.rs` folds
   `source_variable_name`, `condition_references`, `identifier_references`, variable names,
   `var_assignments` and `exhausting_advance` with `to_ascii_lowercase`. About 30 sites in
   L5, the model and the impact graph compare them with `to_lowercase` values. The two differ
