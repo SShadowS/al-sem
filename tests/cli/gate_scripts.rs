@@ -315,6 +315,7 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", case.join("meminfo"))
             .env("CDO_GATE_CGROUP", &case)
+            .env("CDO_GATE_LAYOUT", "parallel")
             .env_remove("CDO_GATE_SERIAL");
         if serial {
             cmd.env("CDO_GATE_SERIAL", "1");
@@ -353,6 +354,7 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", &meminfo)
             .env("CDO_GATE_CGROUP", dir)
+            .env("CDO_GATE_LAYOUT", "parallel")
             .env_remove("CDO_GATE_SERIAL")
             .output()
             .expect("spawn bash scripts/cdo-gate --layout");
@@ -836,6 +838,7 @@ fn cdo_gate_pins_lane_two_by_core_type() {
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
             .env("CDO_GATE_CGROUP", dir.path())
+            .env("CDO_GATE_LAYOUT", "parallel")
             .env("CDO_GATE_PROC_STATUS", sys.join("status"))
             .env("CDO_GATE_SYS_CPU", sys)
             .env_remove("CDO_GATE_SERIAL")
@@ -1001,6 +1004,43 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
     let (code, text) = run("5", "LIST_FAILS");
     assert_ne!(code, Some(0), "a failed listing must fail: {text}");
     assert!(text.contains("could not list"), "{text}");
+}
+
+/// TLS-36: serial is the default, even with every byte of memory free; the
+/// parallel layout only when `CDO_GATE_LAYOUT=parallel` asks. Measured on
+/// server1 on one tree back to back: serial 875 s, parallel 1,131 s.
+///
+/// Mutation (2026-11-13): `plan_layout` without its `CDO_GATE_LAYOUT` check
+/// -> plenty of memory gives "parallel:" and the assert fails.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_is_serial_unless_parallel_is_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("meminfo"), "MemAvailable: 94371840 kB\n").unwrap();
+    std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
+    let layout = |asked: Option<&str>| {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
+            .env("CDO_GATE_CGROUP", dir.path())
+            .env_remove("CDO_GATE_SERIAL")
+            .env_remove("CDO_GATE_LAYOUT");
+        if let Some(a) = asked {
+            cmd.env("CDO_GATE_LAYOUT", a);
+        }
+        let out = cmd.output().expect("spawn bash scripts/cdo-gate --layout");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let got = layout(None);
+    assert!(
+        got.starts_with("sequential:") && got.contains("the default"),
+        "{got}"
+    );
+    let got = layout(Some("parallel"));
+    assert!(got.starts_with("parallel:"), "{got}");
+    let got = layout(Some("Parallel")); // only the exact word asks
+    assert!(got.starts_with("sequential:"), "{got}");
 }
 
 /// A warm build folder written by hand: one dependency, plus the two folders

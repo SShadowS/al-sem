@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed (TLS-36: cdo-gate's parallel layout gives the impact phase its CPUs, and lib_cdo runs its longest tests first)
+### Changed (TLS-36: cdo-gate runs serial by default; the parallel layout is opt-in, pinned, and lib_cdo runs its longest tests first)
 
+- **Serial is the default again.** A serial and a parallel gate on the same tree (`d234c4a6`,
+  server1): serial 875 s (impact 359, harness 42, lsp 7, l4 18, lib_cdo 274, peak 28.8 GB),
+  parallel 1,131 s (impact 510, lane 2 915 beside it, peak 27.0 GB). Lane 2 beside the impact
+  phase slows both more than the overlap saves. `CDO_GATE_LAYOUT=parallel` asks for the parallel
+  layout (still only when the memory check passes); `CDO_GATE_SERIAL=1` still wins over it.
+  Test: `gate_scripts::cdo_gate_is_serial_unless_parallel_is_asked`, with a discrimination proof.
 - **Lane 2 is pinned to a few CPUs beside the impact phase, and `lib_cdo` starts with its longest
   tests.** TLS-32's first parallel gate fit easily in memory but saved no time: lane 2's tests ran
   2.3-3.3× their time alone and the impact phase took 472 s against ~350. Each lib CDO test runs
@@ -34,8 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     CPU mask), `gate_scripts::cdo_gate_runs_every_lane_two_command_pinned` and
     `gate_scripts::lib_cdo_fails_when_a_long_test_is_not_found_by_name`, each with a
     discrimination proof.
-  - **Measurement:** a serial and a parallel gate back to back on a quiet host decide whether the
-    parallel layout stays the default; see the note.
+  - **Measurement:** see the note `docs/superpowers/notes/2026-11-13-lib-cdo-census.md` (TLS-36
+    A/B); the result is the serial default above.
 
 ### Changed (TLS-32: cdo-gate runs lane 2 beside the impact phase when the host has the memory)
 

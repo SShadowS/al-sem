@@ -125,6 +125,28 @@ totals, other agents included, so adding two phases' peaks over-counts a little.
   Until then the parallel layout costs nothing in memory (21.9 GiB headroom) and gains little in
   time on a loaded host.
 
+## TLS-36: the A/B, and serial as the default
+
+TLS-36 did fixes 1 and 2 above: lane 2 pinned to the efficiency cores (12-19 on server1) and
+`lib_cdo`'s five longest tests first. Then three gates measured the layouts:
+
+| gate | layout | impact | lane 2 | lib_cdo | whole gate | peak |
+|---|---|---:|---:|---:|---:|---:|
+| TLS-34 landing (host load ~380) | parallel, 2 threads, no pin | 507 s | | 477 s | ~1,299 s | 27.1 GB |
+| A on `d234c4a6` | serial | 359 s | 341 s after it (harness 42, lsp 7, l4 18, lib 274) | 274 s (long 214, rest 59) | **875 s** | 28.8 GB |
+| B on `d234c4a6` | parallel, pinned, longest first | 510 s | 915 s beside it (harness 133, lsp 33, l4 52, lib 697) | 697 s | 1,131 s | 27.0 GB |
+
+`output_cdo` took 175 s in A.
+
+- Serial was 256 s faster on the same tree. Even pinned to the efficiency cores, lane 2 ran
+  2.5-4.7× slower beside the impact phase, and the impact phase still lost ~150 s. The pin
+  keeps them off each other's cores, so the contention is elsewhere (likely memory bandwidth and
+  the host's other load; not measured).
+- The peak barely moves (28.8 against 27.0 GB), so memory gives no reason to prefer parallel.
+- **Decision (orchestrator, 2026-11-13):** serial is the default. `CDO_GATE_LAYOUT=parallel`
+  keeps the parallel layout, with the pin and the memory check, for a host where it pays.
+  Longest-first stays in both layouts: it costs nothing serial.
+
 ## TLS-33 follow-up: the 60 s left in speed_build
 
 In TLS-33's landing gate (`20261113-075414-720626`), `speed_build` took 60 s, of which the

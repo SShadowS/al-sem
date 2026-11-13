@@ -28,10 +28,13 @@
 #
 # ⟨2026-11-09, engine limits wave 1⟩ How it runs: every test target is built
 # ONCE (`cargo test --no-run`), then the phases. ⟨TLS-32, 2026-11-13⟩ The
-# layout now: `output_cdo` alone; then the impact phase (`output_cdo_impact`)
-# with lane 2 (program_resolve_harness, lsp, l4_summary_differential, then the
-# lib's CDO tests, one after another) beside it when the host has the memory,
-# else after it; `CDO_GATE_SERIAL=1` runs every phase in a row. See
+# layout now: `output_cdo` alone; then the impact phase (`output_cdo_impact`);
+# then lane 2 (program_resolve_harness, lsp, l4_summary_differential, then the
+# lib's CDO tests, one after another). ⟨TLS-36⟩ That serial order is the
+# default: on server1 it took 875 s against 1,131 s with lane 2 beside the
+# impact phase. `CDO_GATE_LAYOUT=parallel` asks for lane 2 beside it (taken
+# only when the host has the memory); `CDO_GATE_SERIAL=1` runs every phase in
+# a row and wins over it. See
 # `plan_layout`; `--layout` prints the layout this host would take now. (The
 # history below describes the older two-lane layout, `output_cdo` beside lane 2,
 # which TLS-23 retired for memory.)
@@ -204,6 +207,15 @@ lane2_cpus() {
 plan_layout() {
     if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
         layout_line="serial: every phase one after another (CDO_GATE_SERIAL=1)"
+        return
+    fi
+    # ⟨TLS-36, 2026-11-13⟩ Serial by default; the parallel layout only when
+    # asked. Measured on server1, one tree, both gates back to back: serial
+    # 875 s, parallel 1,131 s. Lane 2 on the 8 efficiency cores ran 2.5-3x its
+    # serial time, and the impact phase still went 359 -> 510 s (note
+    # `2026-11-13-lib-cdo-census.md`).
+    if [[ "${CDO_GATE_LAYOUT:-}" != parallel ]]; then
+        layout_line="sequential: lane 2 after the impact phase (the default; CDO_GATE_LAYOUT=parallel asks for lane 2 beside it)"
         return
     fi
     local avail free t need
