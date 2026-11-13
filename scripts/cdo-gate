@@ -27,10 +27,14 @@
 # beside the test build).
 #
 # ⟨2026-11-09, engine limits wave 1⟩ How it runs: every test target is built
-# ONCE (`cargo test --no-run`), then the phases run in two lanes at once:
-#   lane 1: cli output_cdo (the longest phase);
-#   lane 2: program_resolve_harness, lsp, l4_summary_differential, then the
-#           lib's CDO tests, one after another.
+# ONCE (`cargo test --no-run`), then the phases. ⟨TLS-32, 2026-11-13⟩ The
+# layout now: `output_cdo` alone; then the impact phase (`output_cdo_impact`)
+# with lane 2 (program_resolve_harness, lsp, l4_summary_differential, then the
+# lib's CDO tests, one after another) beside it when the host has the memory,
+# else after it; `CDO_GATE_SERIAL=1` runs every phase in a row. See
+# `plan_layout`; `--layout` prints the layout this host would take now. (The
+# history below describes the older two-lane layout, `output_cdo` beside lane 2,
+# which TLS-23 retired for memory.)
 # Each phase writes its own log (the folder is printed at the start and the
 # end); the summary names each phase's result, wall time and test counts, and
 # prints the failures of a failed phase. Any failed phase (or a failed build)
@@ -62,9 +66,91 @@ ws_arg=""
 summary_dir=""
 speed_skipped=""
 product_paths_only=0
+layout_only=0
+
+# ⟨TLS-32, orchestrator 2026-11-13⟩ The test phases' layout. `output_cdo` runs
+# alone, then the impact phase. Lane 2 (harness, lsp, l4, lib_cdo) runs BESIDE
+# the impact phase when the memory allows it, else after it; `CDO_GATE_SERIAL=1`
+# runs every phase one after another, as before. The summary names the layout.
+#
+# The gate's own memory (its process tree's RSS, `memory.timeline`'s third
+# column; 12 gates, 2026-11-12/13): the impact phase at most 16,076 MiB.
+# lib_cdo's tests alone (TLS-32's census, `cdo` profile, one test per process):
+# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB, every other one
+# at most 4,552. So lib_cdo is at most ~18,700 at 1 thread and ~23,300 at 2;
+# the harness, lsp and l4 (≤ ~8,400 own) run before it, one at a time.
+#
+# Beside the impact phase, the most threads (2, then 1) whose need fits both
+# bounds, read once when the section starts (after `output_cdo`, whose memory
+# is then freed, and before either part allocates):
+#   need = impact's own worst + lib_cdo's own worst at that count + 4 GiB;
+#   - the container (`memory.max` minus what cannot be reclaimed now, which
+#     counts every agent in it): the owner's 4 GiB headroom rule;
+#   - the host (MemAvailable): the gate starts at >= 35 GB, sized for a serial
+#     gate, and must not push the host into swap.
+# Neither fits: lane 2 after the impact phase. Review r1 (sol and Opus): the
+# host alone said `parallel` while the container had ~42.7 GB free.
+impact_own_mib=16100
+lib_own_mib=(0 18700 23300)
+headroom_mib=4096
+lib_threads=4
+lane2_beside=0
+cgroup_dir="${CDO_GATE_CGROUP:-/sys/fs/cgroup}"
+host_available_mib() {
+    awk '/^MemAvailable:/ { print int($2 / 1024) }' "${CDO_GATE_MEMINFO:-/proc/meminfo}"
+}
+# The container's free memory now, in MiB; `unlimited` when its `memory.max`
+# says `max`; `unknown` when either file cannot be read or parsed. Unknown
+# counts as no room (review r2, sol: it must not fail open).
+container_free_mib() {
+    local max used
+    max=$(cat "$cgroup_dir/memory.max" 2>/dev/null)
+    if [[ "$max" == max ]]; then
+        echo unlimited
+        return
+    fi
+    # What cannot be reclaimed, as the sampler counts it (`unreclaimable_bytes`).
+    # Every counted field must be there and be a number; a malformed or partial
+    # file is unknown (review r3, sol: awk would read garbage as 0).
+    used=$(awk '$1 == "anon" || $1 == "shmem" || $1 == "kernel" || $1 == "slab_reclaimable" {
+                    if ($2 !~ /^[0-9]+$/) { bad = 1 }
+                    seen[$1] = 1
+                    n += ($1 == "slab_reclaimable" ? -$2 : $2)
+                }
+                END { if (!bad && seen["anon"] && seen["shmem"] && seen["kernel"]) print n }' \
+        "$cgroup_dir/memory.stat" 2>/dev/null)
+    if [[ "$max" =~ ^[0-9]+$ && "$used" =~ ^-?[0-9]+$ ]]; then
+        echo $(((max - used) >> 20))
+    else
+        echo unknown
+    fi
+}
+# Decide the layout: sets `layout_line`, `lane2_beside` and `lib_threads`.
+plan_layout() {
+    if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
+        layout_line="serial: every phase one after another (CDO_GATE_SERIAL=1)"
+        return
+    fi
+    local avail free t need
+    avail=$(host_available_mib)
+    free=$(container_free_mib)
+    for t in 2 1; do
+        need=$((impact_own_mib + lib_own_mib[t] + headroom_mib))
+        if [[ "$avail" =~ ^[0-9]+$ ]] && ((avail >= need)) &&
+            { [[ "$free" == unlimited ]] || { [[ "$free" =~ ^[0-9]+$ ]] && ((free >= need)); }; }; then
+            lane2_beside=1
+            lib_threads=$t
+            layout_line="parallel: lane 2 beside the impact phase, lib_cdo at $t thread(s) (need $need MiB; host MemAvailable $avail, container free $free)"
+            return
+        fi
+    done
+    need=$((impact_own_mib + lib_own_mib[1] + headroom_mib))
+    layout_line="sequential: lane 2 after the impact phase (host MemAvailable ${avail:-unknown}, container free $free; 1 thread beside it needs $need MiB)"
+}
 usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
     echo "       scripts/cdo-gate --summary=<run folder>   (a past run's summary, from its logs)" >&2
+    echo "       scripts/cdo-gate --layout   (the test phases' layout this host would take now)" >&2
 }
 
 loud_no_speed() {
@@ -149,6 +235,8 @@ summarize() {
         [[ "$word" == ok ]] || { status=1; bad+=("$name"); }
         printf 'cdo-gate:   %-26s %-20s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
     done
+    # ⟨TLS-32⟩ The layout the test phases took.
+    [[ -f "$logs/layout" ]] && echo "cdo-gate:   layout: $(cat "$logs/layout")"
     # ⟨TLS-19⟩ The container's peak unreclaimable memory during the test lanes,
     # and the OOM counters the run added (a report, not a verdict).
     if [[ -f "$logs/memory.unreclaimable" ]]; then
@@ -195,6 +283,7 @@ for arg in "$@"; do
         --no-speed) speed=0 ;;
         --summary=*) summary_dir="${arg#--summary=}" ;;
         --product-paths) product_paths_only=1 ;;
+        --layout) layout_only=1 ;;
         -*)
             echo "cdo-gate: error: unknown option: $arg" >&2
             usage
@@ -215,6 +304,14 @@ done
 # ⟨TLS-20⟩ `--product-paths`: the rule alone, for its test (paths on stdin).
 if [[ "$product_paths_only" == 1 ]]; then
     product_paths
+    exit 0
+fi
+
+# ⟨TLS-32⟩ `--layout`: the test phases' layout a gate would take on this host
+# now (for an operator, and for its test), then exit.
+if [[ "$layout_only" == 1 ]]; then
+    plan_layout
+    echo "$layout_line"
     exit 0
 fi
 
@@ -272,6 +369,45 @@ mkdir -p "$logs_root" || exit 1
 find "$logs_root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
 logs="$logs_root/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$logs" || exit 1
+
+gate_pid=$$
+# A Ctrl-C or kill stops the gate's own processes and the gate itself, from the
+# first phase on: the speed build (in a process group of its own), the test
+# build, the speed timing, the test phases and the background lane, the memory
+# sampler. The trap is cleared first so it cannot re-enter, then every
+# descendant of this script gets TERM, then the gate exits instead of going on
+# to the next phase (review r1, sol and Opus). Installed before any phase, and
+# never replaced (review r4, sol). Not `kill 0`: that signals the whole process
+# group, which can hold the caller when the gate was not started in a group of
+# its own (review r2, sol). `run_phase` waits on each phase in the background,
+# so a TERM to the gate's PID alone runs this at once (review r3, sol).
+gate_descendants() {
+    ps -e -o pid=,ppid= | awk -v root="$gate_pid" '
+        { parent[$1] = $2 }
+        END {
+            for (p in parent) {
+                q = parent[p]
+                while (q != root && (q in parent) && q != parent[q]) q = parent[q]
+                if (q == root) print p
+            }
+        }'
+}
+stop_gate() {
+    trap - INT TERM
+    # Listed first, then signalled: a `| xargs kill` pipeline would list (and
+    # kill) its own processes too.
+    local pids pass
+    # Twice: a process started between the first listing and its signal (cargo
+    # starting the next test binary) is caught by the second (review r3, Opus).
+    for pass in 1 2; do
+        pids=$(gate_descendants)
+        # shellcheck disable=SC2086
+        [[ -n "$pids" ]] && kill -TERM $pids 2>/dev/null
+        [[ "$pass" == 1 ]] && sleep 0.5
+    done
+    exit 130
+}
+trap stop_gate INT TERM
 echo "cdo-gate: logs in $logs"
 # ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
 : > "$logs/split-impact"
@@ -287,15 +423,22 @@ stamp() {
 
 # A phase: its command's output goes to `<name>.log`, each line stamped;
 # `<name>.status` holds the exit status and the wall seconds when it ends.
-# The status is the command's own (`PIPESTATUS[0]`), never the stamper's.
+# The status is the command's own (through `<name>.rc`), never the stamper's.
 run_phase() {
     local name="$1"
     shift
     local start=$SECONDS
     echo "cdo-gate: [$name] started"
     echo "$(date +%s) start $name" >> "$logs/phases.times"
-    "$@" 2>&1 | stamp > "$logs/$name.log"
-    local rc=${PIPESTATUS[0]}
+    # In the background, then `wait`: bash runs a trap only between commands,
+    # and `wait` is one it can interrupt, so a TERM sent to the gate's PID
+    # alone stops it at once instead of after the phase (review r3, sol). The
+    # command's own status goes through a file (`PIPESTATUS` is the foreground's).
+    { "$@" 2>&1; echo $? > "$logs/$name.rc"; } | stamp > "$logs/$name.log" &
+    wait $!
+    local rc
+    rc=$(cat "$logs/$name.rc" 2>/dev/null)
+    [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
     echo "$(date +%s) end $name" >> "$logs/phases.times"
     echo "$rc $((SECONDS - start))" > "$logs/$name.status"
     if [[ "$rc" -eq 0 ]]; then
@@ -340,8 +483,8 @@ else
     speed_build=$!
     set +m
     stop_speed_build() { kill -- -"$speed_build" 2>/dev/null; }
-    # Its own group does not get the terminal's Ctrl-C: pass it on.
-    trap 'stop_speed_build; exit 130' INT TERM
+    # Its own group does not get the terminal's Ctrl-C: `stop_gate` (installed
+    # above) reaches it as a descendant.
 fi
 if ! run_phase build cargo test "${profile[@]}" --no-run \
     --test program_resolve_harness --test lsp --test l4_summary_differential \
@@ -398,6 +541,8 @@ phase_output_cdo() {
 # headroom, slower than the 1,170 s the phases took one after another). A lane
 # staged to fit the memory would have saved little more. Serial again; the
 # memory sampler stays (note `2026-11-11-cdo-gate-time.md`, "TLS-19/TLS-23").
+# ⟨TLS-32, 2026-11-13⟩ It runs after `output_cdo`, with lane 2 beside it when
+# the memory allows (`plan_layout`), else alone with lane 2 after it.
 phase_output_cdo_impact() {
     run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
 }
@@ -439,13 +584,14 @@ phase_l4() {
 # test outside that filter cannot hide: the shared gate (`crate::cdo::
 # cdo_ws_or_enforce`) panics in the task gate for any test the filter misses,
 # and `cdo_ws_is_read_only_through_the_gate` refuses a test that reads CDO_WS
-# around it. 4 threads: the CDO tests each build their own model (largest
-# alone ~4.2 GB), and this phase runs beside output_cdo; measured alone, cdo
-# profile, each test by itself (nextest -j 1): the longest 137 s
-# (`cdo_crossing_census`), 594 s summed.
+# around it. Threads: 4 when it runs alone; 2 or 1 beside the impact phase
+# (`plan_layout`, TLS-32). The CDO tests each build their own model; measured
+# alone (TLS-32's census, 2026-11-13, cdo profile, one test per process):
+# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB and 105 s, every
+# other test at most 4,552 MiB, 507 s summed (note `2026-11-13-lib-cdo-census.md`).
 phase_lib() {
     run_phase lib_cdo "${lane2_nice[@]}" \
-        cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads=4
+        cargo test "${profile[@]}" -p al-sem --lib cdo -- --test-threads="$lib_threads"
 }
 
 lane2() {
@@ -455,10 +601,12 @@ lane2() {
     phase_lib
 }
 
-# ⟨2026-11-09⟩ Lane 2 runs at a lower CPU priority (`nice -n 10`): the gate's
-# length is output_cdo's, whose impact ratchets run one-shot `alsem impact`
-# calls of 4-7 minutes that use only ~3 cores each. Starved at the start
-# (every other test busy) they ran longest; lane 2 now takes what they leave.
+# ⟨2026-11-09⟩ Lane 2 runs at a lower CPU priority (`nice -n 10`): beside it
+# runs the gate's longest phase, the impact ratchets' one-shot `alsem impact`
+# calls (minutes each, ~3 cores each). Starved at the start (every other test
+# busy) they ran longest; lane 2 takes what they leave. (Beside `output_cdo`
+# until TLS-23; beside the impact phase since TLS-32. Run after it, the nice
+# costs nothing.)
 lane2_nice=(nice -n 10)
 # ⟨TLS-19⟩ The container's memory while the test lanes run, against its
 # `memory.max`, in the summary. Not `memory.current`: it counts page cache,
@@ -504,22 +652,33 @@ memory_sampler() {
         sleep 2
     done
 }
-gate_pid=$$
-# A Ctrl-C or kill stops the background lanes too.
-trap 'kill 0' INT TERM
 memory_sampler &
 sampler=$!
+# ⟨TLS-32⟩ The layout (`plan_layout`), decided when the parallel section would
+# start: after `output_cdo`, whose memory is then freed.
 if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
     lane2_nice=()
     lane2
     phase_output_cdo
+    plan_layout
+    echo "$layout_line" > "$logs/layout"
+    phase_output_cdo_impact
 else
-    phase_output_cdo &
-    lane1=$!
-    lane2
-    wait "$lane1"
+    phase_output_cdo
+    plan_layout
+    echo "$layout_line" > "$logs/layout"
+    if ((lane2_beside)); then
+        lane2 &
+        lane2_pid=$!
+        phase_output_cdo_impact
+        wait "$lane2_pid"
+    else
+        lib_threads=4
+        phase_output_cdo_impact
+        lane2
+    fi
 fi
-phase_output_cdo_impact
+echo "cdo-gate: layout: $(cat "$logs/layout")"
 kill "$sampler" 2>/dev/null
 cp /sys/fs/cgroup/memory.events "$logs/memory.events.end" 2>/dev/null
 
