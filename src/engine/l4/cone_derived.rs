@@ -128,6 +128,11 @@ pub const TOUCHES_FILE: u8 = 1 << 3;
 /// when [`fact_sets_physical_table_bit`] holds. d2's own pruning bit; d1 keeps
 /// [`TOUCHES_TABLE`] (its temporary terminals are deliberate).
 pub const TOUCHES_PHYSICAL_TABLE: u8 = 1 << 4;
+/// ENG-24: a reachable `LockTable` ([`op_may_leave_write_pending`]).
+pub const MAY_PENDING_LOCK: u8 = 1 << 5;
+/// ENG-24: a reachable write, not known temporary, whose table does not
+/// resolve ([`op_may_leave_write_pending`]).
+pub const MAY_PENDING_UNRESOLVED_WRITE: u8 = 1 << 6;
 
 /// `op == "insert"`.
 pub const OP_INSERT: u8 = 1 << 0;
@@ -140,6 +145,22 @@ pub const OP_DELETE: u8 = 1 << 2;
 /// (al-sem `TABLE_WRITE_OPS = {insert, modify, delete}`; identical to d44's
 /// `is_write_op`). The ONE definition of "is this a table write" — `capability_query`
 /// and the fold both route through it.
+/// ENG-24: the ONE rule for "this operation may leave a write pending" (an
+/// open write transaction a checked `Codeunit.Run` after it errors on), read
+/// by the trap search (`LiteralReach`'s pending writes), d50's transaction
+/// spans (`pending_writes`) and this fold's [`MAY_PENDING_LOCK`] /
+/// [`MAY_PENDING_UNRESOLVED_WRITE`] bits. `op` is the folded operation family:
+/// an `insert`, `modify` or `delete` that is not known temporary, whatever its
+/// table (a RecordRef's, or one that does not resolve), and every `lock`
+/// (ENG-22, measured: `LockTable` then a read opens a write transaction).
+pub fn op_may_leave_write_pending(op: &str, known_temp: bool) -> bool {
+    match op {
+        "insert" | "modify" | "delete" => !known_temp,
+        "lock" => true,
+        _ => false,
+    }
+}
+
 pub fn write_op_bit(op: &str) -> Option<u8> {
     match op {
         "insert" => Some(OP_INSERT),
@@ -903,6 +924,15 @@ impl Scratch {
                 // Before the unresolved-id return, like TOUCHES_TABLE.
                 if physical_table_bit(is_temp, f.op) {
                     self.flags |= TOUCHES_PHYSICAL_TABLE;
+                }
+                // ENG-24: the pending-write rule's cases with no physical
+                // table to name.
+                if op_may_leave_write_pending(f.op, is_temp) {
+                    if f.op == "lock" {
+                        self.flags |= MAY_PENDING_LOCK;
+                    } else if f.resource_id.is_none() {
+                        self.flags |= MAY_PENDING_UNRESOLVED_WRITE;
+                    }
                 }
                 let Some(rid) = f.resource_id.as_deref() else {
                     return;

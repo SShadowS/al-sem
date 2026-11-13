@@ -118,6 +118,10 @@ pub struct TransactionSpan {
     /// [`super::pending_writes`]): what this transaction leaves half-written.
     /// SORTED. `writes_tables` above is everything the span can reach.
     pub pending_physical_tables: Vec<String>,
+    /// ENG-24: what else may leave a write pending at the Commit or checked
+    /// run, as labels (`pending_writes::PENDING_*`): a `LockTable`, a write
+    /// whose table does not resolve. SORTED.
+    pub pending_other: Vec<String>,
     /// The events published before the Commit. SORTED.
     pub pending_events: Vec<String>,
     /// Each span member other than the Commit routine -> how many physical
@@ -638,10 +642,37 @@ fn span_template<'c>(
                 let p = pending_of(row, &before, &own, inputs.pending);
                 member.tables.extend(p.tables);
                 member.events.extend(p.events);
+                member.other.extend(p.other);
+            }
+            // ENG-24: a member that reaches the span through an event dispatch
+            // (a site-less edge) raises an event whose OTHER subscribers run in
+            // an order not known: one whose cone may write may run first.
+            if unsited {
+                for &(site, to) in inputs.fwd.get(rid.as_str()).map_or(&[][..], Vec::as_slice) {
+                    if site.is_some() || visited.contains(to) {
+                        continue;
+                    }
+                    let id = inputs
+                        .summaries
+                        .get(to)
+                        .map_or(to, |s| s.routine_id.as_str());
+                    if crate::engine::l5::pending_writes::cone_may_leave_write_pending(
+                        inputs.cone_derived,
+                        id,
+                    ) {
+                        let name = inputs.routine_by_id.get(to).map_or(to, |s| s.name.as_str());
+                        member
+                            .other
+                            .insert(crate::engine::l5::pending_writes::pending_sibling(
+                                name, &r.name,
+                            ));
+                    }
+                }
             }
             pending_by_routine.insert(rid.clone(), member.tables.len());
             pending_others.tables.extend(member.tables);
             pending_others.events.extend(member.events);
+            pending_others.other.extend(member.other);
         }
         cache.insert(
             key.clone(),
@@ -680,6 +711,7 @@ pub fn compute_transaction_spans(
     summaries: &HashMap<String, FullRoutineSummary>,
     cone_derived: &ConeDerivedStore,
     typed: &[crate::engine::l4::combined_graph::TypedEdge],
+    unknown_sites: Option<&HashSet<&str>>,
 ) -> Vec<TransactionSpan> {
     let mut spans: Vec<TransactionSpan> = Vec::new();
 
@@ -761,6 +793,7 @@ pub fn compute_transaction_spans(
         cone_derived,
         collided: &collided,
         clean: Some(&clean),
+        unknown: unknown_sites,
     };
     let inputs = SpanInputs {
         commits_by_routine: &commits_by_routine,
@@ -778,8 +811,15 @@ pub fn compute_transaction_spans(
                       seed: &ModelRoutine,
                       at: &str,
                       before: &Before|
-     -> (Vec<String>, Vec<String>, bool) {
+     -> (Vec<String>, Vec<String>, Vec<String>, bool) {
         let own = pending_of(seed, before, &[at], &pending);
+        let other: BTreeSet<String> = t
+            .pending_others
+            .other
+            .iter()
+            .cloned()
+            .chain(own.other)
+            .collect();
         let coverage_complete = t.others_coverage_complete
             && member_coverage_complete(&seed.id, Some(seed), Some(before), &inputs);
         let tables: BTreeSet<String> = t
@@ -799,6 +839,7 @@ pub fn compute_transaction_spans(
         (
             tables.into_iter().collect(),
             events.into_iter().collect(),
+            other.into_iter().collect(),
             coverage_complete,
         )
     };
@@ -831,7 +872,7 @@ pub fn compute_transaction_spans(
                 &mut template_cache,
                 &mut scratch,
             );
-            let (pending_physical_tables, pending_events, coverage_complete) =
+            let (pending_physical_tables, pending_events, pending_other, coverage_complete) =
                 pending_at(t, seed, commit_operation_id, &before);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
@@ -850,6 +891,7 @@ pub fn compute_transaction_spans(
                 span_roots: t.span_roots.clone(),
                 coverage_complete,
                 pending_physical_tables,
+                pending_other,
                 pending_events,
                 pending_physical_by_routine: t.pending_by_routine.clone(),
             });
@@ -881,7 +923,7 @@ pub fn compute_transaction_spans(
                 &mut template_cache,
                 &mut scratch,
             );
-            let (pending_physical_tables, pending_events, coverage_complete) =
+            let (pending_physical_tables, pending_events, pending_other, coverage_complete) =
                 pending_at(t, r, &cs.id, &before);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
@@ -902,6 +944,7 @@ pub fn compute_transaction_spans(
                 span_roots: t.span_roots.clone(),
                 coverage_complete,
                 pending_physical_tables,
+                pending_other,
                 pending_events,
                 pending_physical_by_routine: t.pending_by_routine.clone(),
             });
@@ -974,6 +1017,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1007,6 +1051,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
 
         let inner_span = spans
@@ -1061,6 +1106,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
 
         let inner_span = spans
@@ -1088,6 +1134,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         assert!(!spans[0].coverage_complete);
@@ -1114,6 +1161,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert!(!spans[0].coverage_complete);
     }
@@ -1198,6 +1246,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(pending_at_seed(&spans, "root/cs1"), vec!["t/M", "t/X"]);
     }
@@ -1253,6 +1302,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &typed,
+            None,
         );
         assert_eq!(pending_at_seed(&spans, "root3/cs1"), vec!["t/T"]);
     }
@@ -1305,6 +1355,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(pending_at_seed(&spans, "root2/cs1"), vec!["t/W"]);
     }
@@ -1328,6 +1379,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         let span = &spans[0];
@@ -1358,6 +1410,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert!(spans.is_empty());
     }
@@ -1376,6 +1429,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert!(spans.is_empty());
     }
@@ -1400,6 +1454,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].routines_in_span, spans[1].routines_in_span);
@@ -1466,6 +1521,7 @@ mod tests {
             &summaries,
             &cone_store_of(&summaries),
             &[],
+            None,
         );
         assert_eq!(spans.len(), 1);
         assert_eq!(

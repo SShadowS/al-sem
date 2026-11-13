@@ -61,7 +61,9 @@ pub fn detect_d50(
             continue;
         };
         candidates_considered += 1;
-        if span.pending_physical_tables.is_empty() {
+        // ENG-24: a write with no physical table to name (a LockTable, a write
+        // whose table does not resolve) is pending too.
+        if span.pending_physical_tables.is_empty() && span.pending_other.is_empty() {
             skipped_clean += 1;
             continue;
         }
@@ -104,6 +106,7 @@ pub fn detect_d50(
                     .get(t.as_str())
                     .map_or(t.as_str(), |m| m.name.as_str())
             })
+            .chain(span.pending_other.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(", ");
         let mut evidence_path = Vec::new();
@@ -226,6 +229,7 @@ mod tests {
             span_roots: vec![seed.to_string()],
             coverage_complete: true,
             pending_physical_tables: pending.iter().map(|s| s.to_string()).collect(),
+            pending_other: vec![],
             pending_events: vec![],
             pending_physical_by_routine: Default::default(),
         }
