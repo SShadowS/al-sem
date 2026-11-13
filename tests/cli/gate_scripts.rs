@@ -540,7 +540,9 @@ impl Throwaway {
         std::fs::create_dir_all(t.path("bin-fail")).unwrap();
         std::fs::write(
             t.path("bin-ok/cargo"),
-            "#!/bin/sh\nmkdir -p \"$CARGO_TARGET_DIR/release-fast\" && printf built > \"$CARGO_TARGET_DIR/release-fast/alsem\"\n",
+            // `EDIT_DURING_BUILD`: a file the "build" changes (the sources
+            // moving under a build).
+            "#!/bin/sh\n[ -n \"$EDIT_DURING_BUILD\" ] && echo edit >> \"$EDIT_DURING_BUILD\"\nmkdir -p \"$CARGO_TARGET_DIR/release-fast\" && printf built > \"$CARGO_TARGET_DIR/release-fast/alsem\"\n",
         )
         .unwrap();
         std::fs::write(t.path("bin-fail/cargo"), "#!/bin/sh\nexit 1\n").unwrap();
@@ -555,22 +557,11 @@ impl Throwaway {
         self.dir.path().join(rel)
     }
 
+    /// Through `crate::git::run` (scratch git: no hook variable, no system or
+    /// user config, a fixed identity), as every test-made repo must (review
+    /// r1, Opus; `tests/common/git.rs`).
     fn git(&self, repo: &str, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(self.path(repo))
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}: {out:?}");
+        let out = crate::git::run(&self.path(repo), args);
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 
@@ -664,7 +655,10 @@ impl Throwaway {
 /// `--untracked-files=no` -> the untracked `scanner.c` keeps one; `build_key`
 /// without its absolute-path check -> the relative grammar path keeps one
 /// (the run's folder is the throwaway's, so git finds that clone);
-/// `CFLAGS` out of `BUILD_ENV_EXACT` -> the C-flags case keeps one.
+/// `CFLAGS` out of `BUILD_ENV_EXACT` -> the C-flags case keeps one; the key
+/// after the build not compared (`key = key_before`) -> the edited-during-build
+/// case keeps one; `record_tree_binary` not catching `OSError` -> the unwritable
+/// cache exits 1 (a speed failure) and `build_keeps`' exit assert fails.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar() {
@@ -729,6 +723,22 @@ fn speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar() {
         !t.build_keeps(&cache("relative"), &[("TREE_SITTER_AL_PATH", "grammar")]),
         "a relative grammar path kept a binary"
     );
+    // Another toolchain than the tree's pin (review r1, Opus).
+    assert!(!t.build_keeps(&cache("toolchain"), &[("RUSTUP_TOOLCHAIN", "nightly")]));
+    // The sources changed during the build: the key after is not the key before.
+    let a = t.path("repo/a.txt");
+    assert!(
+        !t.build_keeps(
+            &cache("during"),
+            &[("EDIT_DURING_BUILD", a.to_str().unwrap())]
+        ),
+        "a build whose sources changed under it kept a binary"
+    );
+    t.git("repo", &["checkout", "-q", "--", "a.txt"]);
+    // A cache that cannot be written only skips the keeping: the speed check
+    // still exits 0 (`build_keeps` asserts it; review r1, Opus).
+    std::fs::write(t.path("not-a-folder"), "x").unwrap();
+    assert!(!t.build_keeps(&t.path("not-a-folder"), &[]));
     // Clean again: keeps.
     assert!(
         t.build_keeps(&cache("again"), &[]),

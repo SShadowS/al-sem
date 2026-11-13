@@ -232,7 +232,10 @@ BUILD_ENV_EXACT = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPP
                    # `HOST_` prefix would also catch `HOSTNAME`.
                    "HOST_CC", "HOST_CXX", "HOST_CFLAGS", "HOST_CXXFLAGS", "HOST_AR",
                    "TARGET_CC", "TARGET_CXX", "TARGET_CFLAGS", "TARGET_CXXFLAGS", "TARGET_AR",
-                   "CRATE_CC_NO_DEFAULTS")
+                   "CRATE_CC_NO_DEFAULTS",
+                   # Review r1, Opus: another compiler than the tree's pin, incremental
+                   # code in release-fast, a value the root build.rs bakes into the binary.
+                   "RUSTUP_TOOLCHAIN", "CARGO_INCREMENTAL", "AL_CH_TELEMETRY_CONNECTION_STRING")
 BUILD_ENV_PREFIXES = ("CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_", "CFLAGS_",
                       "CXXFLAGS_", "CC_", "CXX_", "AR_", "CARGO_ENCODED_RUSTFLAGS")
 # Where and how fast a build runs, not what it compiles.
@@ -306,17 +309,33 @@ def record_tree_binary(repo, built, key_before):
     this snapshot, so no other cdo-speed builds there in between (review r2-r3, sol).
     Limit: ci-steps' own build and perf-bounds also use `<target>/gate-release`
     without that lock; a landing runs `ci-steps all` to its end before `cdo-gate`
-    starts, so they do not overlap there."""
+    starts, so they do not overlap there.
+
+    Keeping is an optimization: with no key it does nothing, and a file error only
+    logs. It never fails the speed check, whose exit 1 means "slower" (review r1,
+    Opus)."""
+    if key_before is None:
+        log("the work tree has changes, a modified grammar or build overrides: its "
+            "binary is not kept for a later base")
+        return
+    try:
+        _keep_tree_binary(repo, built, key_before)
+    except OSError as e:
+        log(f"the working tree's binary was not kept (it only saves a later build): {e}")
+
+
+def _keep_tree_binary(repo, built, key_before):
     root = cache_root()
     trees = os.path.join(root, "trees")
     os.makedirs(trees, exist_ok=True)
-    snapshot = os.path.join(trees, f".incoming-{os.getpid()}")
+    # A unique name (review r1, Opus); a leftover of a killed run is pruned below.
+    fd, snapshot = tempfile.mkstemp(dir=trees, prefix=".incoming-")
+    os.close(fd)
     shutil.copy2(built, snapshot)
     key = working_tree_key(repo)
-    if key is None or key != key_before:
+    if key != key_before:
         os.remove(snapshot)
-        log("the work tree has changes, a modified grammar or build overrides (or changed "
-            "during the build): its binary is not kept for a later base")
+        log("the sources changed during the build: its binary is not kept for a later base")
         return
     dst = os.path.join(trees, key, "alsem")
     with open(os.path.join(root, "lock"), "w") as lock:
@@ -324,7 +343,11 @@ def record_tree_binary(repo, built, key_before):
         cutoff = time.time() - TREE_ENTRY_DAYS * 86400
         for name in os.listdir(trees):
             path = os.path.join(trees, name)
-            if not name.startswith(".") and os.path.getmtime(path) < cutoff:
+            if name.startswith(".incoming-"):
+                # Another run's snapshot in flight is minutes old at most.
+                if path != snapshot and os.path.getmtime(path) < time.time() - 86400:
+                    os.remove(path)
+            elif os.path.getmtime(path) < cutoff:
                 shutil.rmtree(path, ignore_errors=True)
         if os.path.exists(dst):
             os.remove(snapshot)
@@ -379,9 +402,8 @@ def cached_binary(repo, rev, logf):
         if not env.get("TREE_SITTER_AL_PATH"):
             # The archive has no grammar clone; the checkout's own is the one
             # this repository builds against.
-            env["TREE_SITTER_AL_PATH"] = os.path.normpath(os.path.join(
-                git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-                "..", "tree-sitter-al"))
+            # The same clone `build_key` reads for the seeding key (review r1, Opus).
+            env["TREE_SITTER_AL_PATH"] = grammar_dir(repo, archive=True)
         t0 = time.monotonic()
         rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem"],
                             cwd=src, env=env, stdout=logf, stderr=subprocess.STDOUT).returncode
