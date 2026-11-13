@@ -194,7 +194,7 @@ pub(crate) const FIELD_REF_TABLE_UNKNOWN: &str =
 pub fn calc_formula_table(formula: &str) -> Option<String> {
     let s = formula.trim().trim_start_matches('-').trim_start();
     let open = s.find('(')?;
-    let kind = s[..open].trim().to_ascii_lowercase();
+    let kind = s[..open].trim().fold_identifier();
     let names_field = match kind.as_str() {
         "exist" | "count" => false,
         "sum" | "average" | "min" | "max" | "lookup" => true,
@@ -335,7 +335,7 @@ fn field_sel(arg: &str) -> FieldSel {
     if a.ends_with(')') {
         // A bare `FieldNo(F)` on the implicit record.
         if let Some(head) = a.get(..8)
-            && head.eq_ignore_ascii_case("fieldno(")
+            && head.eq_fold_identifier("fieldno(")
         {
             return field_sel(&a[8..a.len() - 1]);
         }
@@ -464,10 +464,7 @@ impl<'a> Tables<'a> {
             return;
         };
         let field = match sel {
-            FieldSel::Name(name) => host
-                .fields
-                .iter()
-                .find(|f| f.name.eq_ignore_ascii_case(name)),
+            FieldSel::Name(name) => host.fields.iter().find(|f| f.name.eq_fold_identifier(name)),
             FieldSel::Number(n) => host.fields.iter().find(|f| f.field_number == *n),
             FieldSel::Unknown => None,
         };
@@ -558,7 +555,7 @@ fn receiver_key(raw: &str) -> String {
 fn through_this(raw: &str) -> bool {
     raw.trim_start()
         .get(..5)
-        .is_some_and(|p| p.eq_ignore_ascii_case("this."))
+        .is_some_and(|p| p.eq_fold_identifier("this."))
 }
 
 /// One routine's `SetAutoCalcFields` calls: (record key, field argument,
@@ -571,11 +568,11 @@ fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
     for cs in &routine.call_sites {
         let (key, this) = match &cs.callee {
             PCallee::Member { receiver, method }
-                if method.eq_ignore_ascii_case("setautocalcfields") =>
+                if method.eq_fold_identifier("setautocalcfields") =>
             {
                 (receiver_key(receiver), through_this(receiver))
             }
-            PCallee::Bare { name } if name.eq_ignore_ascii_case("setautocalcfields") => {
+            PCallee::Bare { name } if name.eq_fold_identifier("setautocalcfields") => {
                 match &cs.implicit_receiver {
                     Some(r) => (receiver_key(r), false),
                     None => continue,
@@ -753,7 +750,7 @@ fn is_field_ref(routine: &ModelRoutine, receiver: &str) -> bool {
         .variables
         .iter()
         .find(|v| var_key(&v.name) == key)
-        .is_some_and(|v| v.declared_type.trim().eq_ignore_ascii_case("fieldref"))
+        .is_some_and(|v| v.declared_type.trim().eq_fold_identifier("fieldref"))
 }
 
 fn within(inner: &PAnchor, outer: &PAnchor) -> bool {
@@ -808,7 +805,7 @@ fn field_ref_sources(routine: &ModelRoutine, receiver: &str) -> Option<Vec<(Stri
         let PCallee::Member { receiver, method } = &cs.callee else {
             return None;
         };
-        let sel = match method.to_ascii_lowercase().as_str() {
+        let sel = match method.fold_identifier().as_str() {
             "field" => cs
                 .argument_texts
                 .first()
@@ -832,7 +829,7 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        let op = match method.to_ascii_lowercase().as_str() {
+        let op = match method.fold_identifier().as_str() {
             "calcfield" => "CalcFields",
             "setfilter" => "SetFilter",
             "setrange" => "SetRange",

@@ -373,7 +373,8 @@ fn message_key(
     }
     let name = text.trim_matches('"').to_lowercase();
     if r.variables.iter().any(|v| {
-        v.name.eq_ignore_ascii_case(&name) && v.declared_type.to_lowercase().starts_with("label")
+        al_syntax::eq_fold_identifier(&v.name, &name)
+            && v.declared_type.to_lowercase().starts_with("label")
     }) {
         return format!("label:{name}");
     }

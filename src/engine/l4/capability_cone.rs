@@ -27,6 +27,7 @@
 //! runs over the ACYCLIC SCC condensation; within a recursive SCC the BFS visits
 //! each member at most once.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -1164,7 +1165,7 @@ pub(crate) fn direct_facts_for_routine(
     if routine
         .attributes_parsed
         .iter()
-        .any(|a| a.name.eq_ignore_ascii_case("EventSubscriber"))
+        .any(|a| a.name.eq_fold_identifier("EventSubscriber"))
     {
         facts.push(CapabilityFact {
             subject: routine.id.clone(),
@@ -5062,7 +5063,7 @@ impl R3a5CrossAppBase {
     pub(crate) fn loaded_app_names(&self) -> HashMap<String, String> {
         self.dependency_apps
             .iter()
-            .map(|a| (a.guid.to_ascii_lowercase(), a.name.clone()))
+            .map(|a| (a.guid.fold_identifier(), a.name.clone()))
             .collect()
     }
 
@@ -6664,7 +6665,7 @@ codeunit 13 "Dep Rec Sub"
             .routine_ix(&publisher)
             .map(|ix| bundle.db_effects(ix).map(|e| e.op.to_string()).collect())
             .unwrap_or_default();
-        if !ops.iter().any(|op| op.eq_ignore_ascii_case("modify")) {
+        if !ops.iter().any(|op| op.eq_fold_identifier("modify")) {
             failures.push(format!(
                 "(i) OnDepRec has no subscriber Modify row in the store: {ops:?}"
             ));

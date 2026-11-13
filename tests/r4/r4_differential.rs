@@ -1876,14 +1876,22 @@ fn differential_r4_findings_match_goldens() {
 /// Discrimination (2026-11-13): `ir_walk.rs`'s four `identifier_ref_set` inserts
 /// back on `to_ascii_lowercase` fails at "used Ændring" (one insert alone does
 /// not: `Ændring` in `exit(Ændring + 1)` is recorded by another); the argument
-/// binding's `source_variable_name` back on it fails at "Ørder loaded by var".
-/// Restored, it passes.
+/// binding's `source_variable_name` back on it fails at "Ørder loaded by var";
+/// `d39_persist::record_reassigned` back on `eq_ignore_ascii_case` (review r1,
+/// Fable: the L2 `lhs_name` is folded, the parameter name raw) fails at
+/// "GemAndet reassigns Ørd"; the backfill's `global_rv_by_lc` key back on
+/// `to_ascii_lowercase` fails at "Ålcust is the object global" (`unknown`).
+/// Restored, each passes.
 #[test]
 fn nordic_identifiers_meet_one_fold() {
     let p = run_rust(
         "ws-nordic-identifiers",
         "ws-nordic-identifiers",
-        &["d19-unused-parameter", "d11-modify-without-get"],
+        &[
+            "d19-unused-parameter",
+            "d11-modify-without-get",
+            "d39-record-left-dirty-across-chain",
+        ],
     );
     let texts: Vec<String> = p
         .findings
@@ -1909,4 +1917,43 @@ fn nordic_identifiers_meet_one_fold() {
         !fired("d11-modify-without-get", "ModifyAfterHent"),
         "Ørder loaded by var: {all}"
     );
+    // d39 (`d39_persist`): a helper that reassigns its parameter before
+    // `Modify` persists another record, so the caller is flagged; one that
+    // modifies the caller's record persists it.
+    assert!(
+        fired(
+            "d39-record-left-dirty-across-chain",
+            "ValidatesThenGemAndet"
+        ),
+        "GemAndet reassigns Ørd: {all}"
+    );
+    assert!(
+        !fired(
+            "d39-record-left-dirty-across-chain",
+            "ValidatesThenGemSamme"
+        ),
+        "control: GemSamme persists it: {all}"
+    );
+
+    // The global record-variable backfill (`workspace.rs`): `HentØrder(Ålcust)`
+    // passes the object global, so its binding is `global`.
+    let ws = corpus_dir().join("ws-nordic-identifiers");
+    let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
+        false,
+        al_sem::engine::l5::registry::assembly_needs(&registered_detectors()),
+    )
+    .expect("the fixture builds a model");
+    let passes = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "PassesGlobal")
+        .expect("precondition: PassesGlobal is in the model");
+    let kinds: Vec<&str> = passes
+        .call_sites
+        .iter()
+        .flat_map(|c| c.argument_bindings.iter().map(|b| b.source_kind.as_str()))
+        .collect();
+    assert_eq!(kinds, ["global"], "Ålcust is the object global");
 }

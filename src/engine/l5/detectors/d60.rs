@@ -13,6 +13,7 @@
 //! One finding per (routine, loop, var) — first op wins. Severity: medium.
 //! Confidence: likely.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::l5::confidence::to_confidence;
@@ -88,9 +89,9 @@ pub fn detect_d60(
     // was "any row of the id", see d57 for the fallback note).
     let is_lifecycle = |o: &ModelObject| {
         o.object_type == "Codeunit"
-            && o.object_subtype.as_deref().is_some_and(|s| {
-                s.eq_ignore_ascii_case("Upgrade") || s.eq_ignore_ascii_case("Install")
-            })
+            && o.object_subtype
+                .as_deref()
+                .is_some_and(|s| s.eq_fold_identifier("Upgrade") || s.eq_fold_identifier("Install"))
     };
     if !ws.objects.iter().any(is_lifecycle) {
         let stats = DetectorStats::new(DETECTOR, 0, 0);

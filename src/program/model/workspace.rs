@@ -560,7 +560,7 @@ impl RoutineVariables {
     /// global table.
     ///
     /// Both name sets are already lowercased by the L2 projection
-    /// (`ir_variables`/`ir_object_globals` both apply `to_ascii_lowercase`), so the
+    /// (`ir_variables`/`ir_object_globals` both apply `fold_identifier`), so the
     /// shadow test is exact string equality — the same test the inlined
     /// `HashSet<String>` in `ir_variables` performs.
     pub fn new(own: Vec<ModelVariable>, globals: Arc<[ModelVariable]>) -> Self {
@@ -893,7 +893,7 @@ fn member_detail_of(
         .then(|| {
             o.fields
                 .iter()
-                .find(|f| f.name.eq_ignore_ascii_case(member))
+                .find(|f| f.name.eq_fold_identifier(member))
                 .and_then(|f| f.caption.first().cloned())
         })
         .flatten();
@@ -1991,7 +1991,7 @@ fn project_ir(
                 .iter()
                 .map(|p| &p.name)
                 .chain(ir_routine.locals.iter().map(|v| &v.name))
-                .any(|n| n.eq_ignore_ascii_case("rec"));
+                .any(|n| n.eq_fold_identifier("rec"));
             let mut record_variables: Vec<ModelRecordVariable> = features
                 .record_variables
                 .iter()
@@ -2005,7 +2005,7 @@ fn project_ir(
                     temp_state: rv.temp_state.clone(),
                     scope: rv.scope.clone(),
                     is_receiver: rv.is_receiver,
-                    is_implicit_rec: !declares_rec && rv.name.eq_ignore_ascii_case("rec"),
+                    is_implicit_rec: !declares_rec && rv.name.eq_fold_identifier("rec"),
                 })
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
@@ -4709,7 +4709,7 @@ codeunit 50816 "T5 F3 Dedup"
             .workspace
             .routines
             .iter()
-            .find(|r| r.name.eq_ignore_ascii_case("DoIt"))
+            .find(|r| r.name.eq_fold_identifier("DoIt"))
             .expect("fixture precondition: the DoIt procedure");
 
         let globals: Vec<&ModelVariable> = routine
@@ -4929,7 +4929,7 @@ codeunit 50816 "T5 F3 Dedup"
         let try_fn = |r: &ModelRoutine| {
             r.attributes_parsed
                 .iter()
-                .find(|a| a.name.eq_ignore_ascii_case("TryFunction"))
+                .find(|a| a.name.eq_fold_identifier("TryFunction"))
                 .map(|a| {
                     assert!(!a.conditional, "each row's own builds all have it");
                     a.another_declaration_lacks
@@ -4980,7 +4980,7 @@ codeunit 50816 "T5 F3 Dedup"
         let scope_of = |n: &str| {
             r.variables
                 .iter()
-                .find(|v| v.name.eq_ignore_ascii_case(n))
+                .find(|v| v.name.eq_fold_identifier(n))
                 .and_then(|v| v.scope.clone())
         };
         assert_eq!(scope_of("GlobalNames").as_deref(), Some("global"));
@@ -5039,7 +5039,7 @@ page 50813 "CP3 Wizard"
         let ids_named = |n: &str| -> Vec<String> {
             let mut v: Vec<String> = routines
                 .iter()
-                .filter(|r| r.name.eq_ignore_ascii_case(n))
+                .filter(|r| r.name.eq_fold_identifier(n))
                 .map(|r| r.id.clone())
                 .collect();
             v.sort();
@@ -5063,7 +5063,7 @@ page 50813 "CP3 Wizard"
         for name in ["OnValidate", "OnAction"] {
             let legacy: Vec<String> = routines
                 .iter()
-                .filter(|r| r.name.eq_ignore_ascii_case(name))
+                .filter(|r| r.name.eq_fold_identifier(name))
                 .map(|r| {
                     crate::engine::ids::encode_canonical_routine_key(
                         &crate::engine::ids::CanonicalRoutineKey {
@@ -5095,7 +5095,7 @@ page 50813 "CP3 Wizard"
         // The member NAME is what separates them — carried, unescaped, on the model.
         let mut members: Vec<String> = routines
             .iter()
-            .filter(|r| r.name.eq_ignore_ascii_case("OnValidate"))
+            .filter(|r| r.name.eq_fold_identifier("OnValidate"))
             .filter_map(|r| r.enclosing_member.clone())
             .collect();
         members.sort();
@@ -5112,7 +5112,7 @@ page 50813 "CP3 Wizard"
         assert!(
             routines
                 .iter()
-                .any(|r| r.name.eq_ignore_ascii_case("OnOpenPage") && r.enclosing_member.is_none()),
+                .any(|r| r.name.eq_fold_identifier("OnOpenPage") && r.enclosing_member.is_none()),
             "an object-level trigger carries no enclosing member (its id is unchanged)"
         );
     }
@@ -5169,7 +5169,7 @@ page 50815 "CP5 Wizard"
         let named = |n: &str| -> Vec<&ModelRoutine> {
             routines
                 .iter()
-                .filter(|r| r.name.eq_ignore_ascii_case(n))
+                .filter(|r| r.name.eq_fold_identifier(n))
                 .collect()
         };
 
@@ -5298,7 +5298,7 @@ page 50814 "CP4 Wizard"
             .workspace
             .routines
             .iter()
-            .filter(|r| r.name.eq_ignore_ascii_case("OnValidate"))
+            .filter(|r| r.name.eq_fold_identifier("OnValidate"))
             .collect();
         assert_eq!(l3.len(), 1, "fixture precondition: exactly one OnValidate");
         let l3_routine = l3[0];
@@ -5373,7 +5373,7 @@ page 50814 "CP4 Wizard"
             al_syntax::parse(src).objects[1]
                 .routines
                 .iter()
-                .find(|r| r.name.eq_ignore_ascii_case("OnValidate"))
+                .find(|r| r.name.eq_fold_identifier("OnValidate"))
                 .expect("IR must carry the OnValidate trigger"),
         );
         let raw_escaped_id = crate::program::body::scope::compute_routine_id(

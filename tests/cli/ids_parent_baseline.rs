@@ -52,7 +52,8 @@
 //! Re-minted 2026-11-13 (TLS-43) to add `r0-corpus/ws-nordic-identifiers`: its two
 //! control findings (d19 on `LeavesUbrugt`, d11 on `ModifyUnloaded`) and stable ids.
 //! The mint on `14fad659` with TLS-43's fold fix left every other fixture's record
-//! byte-identical.
+//! byte-identical. Re-minted again after TLS-43's review r1 grew the fixture (d39
+//! cases, the `Ålcust` global): only that fixture's entry moved.
 //!
 //! A recorded string is a stable id and nothing else (`stable_id_re`), so the
 //! record cannot move for the reason the migration legitimately moves other

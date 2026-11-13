@@ -4,6 +4,9 @@
 // must fire, so the fixture shows the detector ran.
 codeunit 50430 "Nordic Names"
 {
+    var
+        Ålcust: Record "Nordic Order";
+
     // d19: `Ændring` is used, so it is not an unused parameter.
     procedure UsesÆndring(Ændring: Integer): Integer
     begin
@@ -38,6 +41,53 @@ codeunit 50430 "Nordic Names"
     local procedure HentØrder(var Østed: Record "Nordic Order")
     begin
         Østed.Get('X');
+    end;
+
+    // d39: `GemAndet` reassigns its parameter before Modify, so the caller's
+    // dirty record is never persisted (the helper does not persist it).
+    procedure ValidatesThenGemAndet()
+    var
+        Ørder: Record "Nordic Order";
+    begin
+        Ørder.Get('X');
+        SætBeløb(Ørder);
+        GemAndet(Ørder);
+    end;
+
+    // d39 control: `GemSamme` persists the caller's record.
+    procedure ValidatesThenGemSamme()
+    var
+        Ørder: Record "Nordic Order";
+    begin
+        Ørder.Get('X');
+        SætBeløb(Ørder);
+        GemSamme(Ørder);
+    end;
+
+    local procedure SætBeløb(var Ørd: Record "Nordic Order")
+    begin
+        Ørd.Validate(Beløb, 1);
+        exit;
+    end;
+
+    local procedure GemAndet(var Ørd: Record "Nordic Order")
+    var
+        Andet: Record "Nordic Order";
+    begin
+        Ørd := Andet;
+        Ørd.Modify();
+    end;
+
+    local procedure GemSamme(var Ørd: Record "Nordic Order")
+    begin
+        Ørd.Modify();
+    end;
+
+    // The global record-variable backfill: `Ålcust` is an object global, so
+    // the argument binding of `HentØrder(Ålcust)` is `global`.
+    procedure PassesGlobal()
+    begin
+        HentØrder(Ålcust);
     end;
 }
 

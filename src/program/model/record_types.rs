@@ -44,7 +44,7 @@ fn op_variable_lc(raw: &str) -> String {
     // An object global through `this` (`this.X`): the global `X` (ENG-12).
     let raw = raw.trim();
     let raw = match raw.get(..5) {
-        Some(p) if p.eq_ignore_ascii_case("this.") => &raw[5..],
+        Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
         _ => raw,
     };
     strip_quotes(raw.trim())
@@ -464,7 +464,7 @@ pub fn resolve_routine_record_types(
             .variables
             .iter()
             .filter(|v| {
-                v.declared_type.trim().eq_ignore_ascii_case("recordref")
+                v.declared_type.trim().eq_fold_identifier("recordref")
                     && !v.is_parameter
                     && v.scope.as_deref() == Some("local")
             })
@@ -495,7 +495,7 @@ pub fn resolve_routine_record_types(
                             let temp = cs
                                 .argument_texts
                                 .get(1)
-                                .is_some_and(|t| t.trim().eq_ignore_ascii_case("true"));
+                                .is_some_and(|t| t.trim().eq_fold_identifier("true"));
                             if !temp {
                                 return false;
                             }
@@ -619,13 +619,13 @@ pub fn resolve_routine_record_types(
             routine
                 .record_variables
                 .iter()
-                .any(|v| !v.is_implicit_rec && v.name.eq_ignore_ascii_case(name))
+                .any(|v| !v.is_implicit_rec && v.name.eq_fold_identifier(name))
         };
         let (rec_declared, xrec_declared) = (declared("rec"), declared("xrec"));
         for op in routine.record_operations.iter_mut() {
             let name = &op.record_variable_name;
-            if (name.eq_ignore_ascii_case("rec") && !rec_declared)
-                || (name.eq_ignore_ascii_case("xrec") && !xrec_declared)
+            if (name.eq_fold_identifier("rec") && !rec_declared)
+                || (name.eq_fold_identifier("xrec") && !xrec_declared)
             {
                 op.temp_state = Some(crate::program::body::scope::ts_known(true));
             }

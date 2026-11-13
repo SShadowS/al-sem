@@ -15,6 +15,7 @@ use super::super::features::PCallee;
 use super::super::features::PRoutine;
 use super::super::features::{FixedLocal, PCallSite, PExpressionInfo};
 use super::{CapabilityExtra, CapabilityFact, CoverageReason, EventExtra, ExtractionContext};
+use al_syntax::IdentifierFoldExt;
 
 // ─── UI primitives ───────────────────────────────────────────────────────────
 
@@ -133,18 +134,18 @@ pub(crate) fn ui_dialog_call(
 ) -> Option<&'static str> {
     let is_file_dialog = |name: &str| {
         matches!(
-            name.to_ascii_lowercase().as_str(),
+            name.fold_identifier().as_str(),
             "uploadintostream" | "downloadfromstream" | "upload" | "download"
         )
     };
     match callee {
         PCallee::Bare { name } if is_file_dialog(name) => Some("ui-file-dialog"),
         PCallee::Member { receiver, method } => {
-            let r = receiver.to_ascii_lowercase();
-            let declared = receiver_type_of(&r).to_ascii_lowercase();
+            let r = receiver.fold_identifier();
+            let declared = receiver_type_of(&r).fold_identifier();
             if is_file_dialog(method) && (r == "file" || declared == "file") {
                 Some("ui-file-dialog")
-            } else if (method.eq_ignore_ascii_case("open") || method.eq_ignore_ascii_case("update"))
+            } else if (method.eq_fold_identifier("open") || method.eq_fold_identifier("update"))
                 && declared == "dialog"
             {
                 Some("ui-progress")
@@ -193,7 +194,7 @@ pub fn extract_events(
     let has_subscriber = routine.attributes_parsed.iter().any(|a| {
         a.get("name")
             .and_then(|n| n.as_str())
-            .map(|n| n.eq_ignore_ascii_case("EventSubscriber"))
+            .map(|n| n.eq_fold_identifier("EventSubscriber"))
             .unwrap_or(false)
     });
 
@@ -284,29 +285,25 @@ pub(crate) fn implicit_error_call(
 ) -> Option<&'static str> {
     let in_statement_position = cs.in_statement_position;
     match &cs.callee {
-        PCallee::Bare { name }
-            if in_statement_position && name.eq_ignore_ascii_case("evaluate") =>
-        {
+        PCallee::Bare { name } if in_statement_position && name.eq_fold_identifier("evaluate") => {
             (!evaluate_cannot_fail(&cs.argument_infos, var_facts)).then_some("Evaluate")
         }
         PCallee::Member { receiver, method }
-            if in_statement_position && method.eq_ignore_ascii_case("readfrom") && {
-                let t = receiver_type_of(&receiver.to_ascii_lowercase()).to_ascii_lowercase();
+            if in_statement_position && method.eq_fold_identifier("readfrom") && {
+                let t = receiver_type_of(&receiver.fold_identifier()).fold_identifier();
                 t.starts_with("json") || t.starts_with("xml")
             } =>
         {
             Some("ReadFrom")
         }
-        PCallee::Member { receiver, method } if method.eq_ignore_ascii_case("fielderror") => {
-            let r = receiver.to_ascii_lowercase();
+        PCallee::Member { receiver, method } if method.eq_fold_identifier("fielderror") => {
+            let r = receiver.fold_identifier();
             let is_record = r == "rec"
                 || r == "xrec"
-                || receiver_type_of(&r)
-                    .to_ascii_lowercase()
-                    .starts_with("record");
+                || receiver_type_of(&r).fold_identifier().starts_with("record");
             is_record.then_some("FieldError")
         }
-        PCallee::Bare { name } if name.eq_ignore_ascii_case("fielderror") => Some("FieldError"),
+        PCallee::Bare { name } if name.eq_fold_identifier("fielderror") => Some("FieldError"),
         // ENG-08: an XmlPort start that may fail (an import, or a direction
         // the XmlPort refuses) whose result does not catch it (`Import`'s and
         // `Export`'s optional Boolean discarded; `Run` has none).
@@ -333,7 +330,7 @@ pub(crate) fn agreed_var_facts<'v>(
 ) -> Option<(String, Option<String>)> {
     let mut found = None;
     for (n, ty, fixed) in vars {
-        if !n.eq_ignore_ascii_case(name) {
+        if !n.eq_fold_identifier(name) {
             continue;
         }
         if found.is_some() {
@@ -372,7 +369,7 @@ pub(crate) fn evaluate_cannot_fail(args: &[PExpressionInfo], var_facts: &VarFact
     let Some(text) = text else {
         return false;
     };
-    match target_type.to_ascii_lowercase().as_str() {
+    match target_type.fold_identifier().as_str() {
         "guid" => is_braced_guid(&text),
         "integer" => is_plain_integer(&text),
         _ => false,

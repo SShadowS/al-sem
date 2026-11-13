@@ -624,7 +624,7 @@ impl CoverageGraph {
                 for name in r
                     .attributes_parsed
                     .iter()
-                    .filter(|a| a.name.eq_ignore_ascii_case("HandlerFunctions"))
+                    .filter(|a| a.name.eq_fold_identifier("HandlerFunctions"))
                     .filter_map(|a| string_arg(a, 0))
                     .flat_map(|list| handler_names(&list))
                 {
@@ -642,10 +642,10 @@ impl CoverageGraph {
                 }
             }
             let test_codeunit = declaring.of(r).is_some_and(|o| {
-                o.object_type.eq_ignore_ascii_case("codeunit")
+                o.object_type.eq_fold_identifier("codeunit")
                     && o.object_subtype
                         .as_deref()
-                        .is_some_and(|s| s.eq_ignore_ascii_case("test"))
+                        .is_some_and(|s| s.eq_fold_identifier("test"))
             });
             if test_codeunit {
                 g.test_code.insert(id.to_string());

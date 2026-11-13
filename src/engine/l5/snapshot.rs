@@ -36,6 +36,7 @@
 //! - M9: the edge-id present-only predicate is exact (`Option::is_some`; an empty
 //!   string IS kept).
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use serde::Serialize;
@@ -1838,7 +1839,7 @@ pub(crate) fn source_less_apps(
 ) -> std::collections::HashSet<String> {
     apps.iter()
         .filter(|a| !a.has_source)
-        .map(|a| a.guid.to_ascii_lowercase())
+        .map(|a| a.guid.fold_identifier())
         .collect()
 }
 
@@ -2261,7 +2262,7 @@ pub(crate) fn boundary_rule(model: &Model, app_names: &HashMap<String, String>) 
         if model.routine_role(r) != Role::Dependency {
             continue;
         }
-        let guid = r.app_guid.to_ascii_lowercase();
+        let guid = r.app_guid.fold_identifier();
         let name = names.entry(guid).or_insert_with_key(|g| {
             // A dependency row's app is one the build loaded, so it is named;
             // the guid stands in only if the loaded-apps list lacks it.
@@ -3776,7 +3777,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<Snapshot
     // body-less row gets the `body-unavailable` gap below.
     let source_less = |guid: &str| {
         base.source_less_apps
-            .is_none_or(|s| s.contains(&guid.to_ascii_lowercase()))
+            .is_none_or(|s| s.contains(&guid.fold_identifier()))
     };
     let mut opaque_apps: BTreeSet<String> = BTreeSet::new();
     for r in base.ws_routines {

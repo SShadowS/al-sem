@@ -559,7 +559,7 @@ impl CrossRulesIndex {
             let try_function = callee
                 .attributes_parsed
                 .iter()
-                .any(|a| a.name.eq_ignore_ascii_case("TryFunction"));
+                .any(|a| a.name.eq_fold_identifier("TryFunction"));
             if try_function && cs.result_consumed == Some(true) {
                 // A used TryFunction result catches the error.
                 continue;
@@ -749,7 +749,7 @@ impl<'m> CrossRules<'m> {
         let c = self.row(caller);
         if let Some(p) = c.parameters.iter().find(|p| fold(&p.name) == name)
             && !p.is_var
-            && p.type_text.trim().eq_ignore_ascii_case("variant")
+            && p.type_text.trim().eq_fold_identifier("variant")
         {
             return if self.variant_usable(caller, p.index) {
                 VariantAcross::Forwarded(p.index)
@@ -780,7 +780,7 @@ impl<'m> CrossRules<'m> {
         let Some(p) = r.parameters.iter().find(|p| p.index == index) else {
             return false;
         };
-        if p.is_var || !p.type_text.trim().eq_ignore_ascii_case("variant") {
+        if p.is_var || !p.type_text.trim().eq_fold_identifier("variant") {
             return false;
         }
         let fold = |s: &str| al_syntax::fold_identifier(s.trim().trim_matches('"'));
@@ -806,10 +806,10 @@ impl<'m> CrossRules<'m> {
                         }),
                         _ => match &cs.callee {
                             crate::program::body::features::PCallee::Member { method, .. } => {
-                                method.eq_ignore_ascii_case("gettable")
+                                method.eq_fold_identifier("gettable")
                             }
                             crate::program::body::features::PCallee::Bare { name } => {
-                                name.eq_ignore_ascii_case("format")
+                                name.eq_fold_identifier("format")
                             }
                             _ => false,
                         },
@@ -1284,7 +1284,7 @@ impl<'m> CrossRules<'m> {
         let table_name = table.name.fold_identifier();
         let base = match field {
             Some(_) => "validate".to_string(),
-            None => op.to_ascii_lowercase(),
+            None => op.fold_identifier(),
         };
         let names = [
             format!("on{base}"),
@@ -1299,7 +1299,7 @@ impl<'m> CrossRules<'m> {
         for o in &self.model.workspace.objects {
             let is_table = o.object_type == "Table"
                 && o.object_number == table.table_number
-                && o.app_guid.eq_ignore_ascii_case(&table.app_guid);
+                && o.app_guid.eq_fold_identifier(&table.app_guid);
             let extends = o.object_type == "TableExtension"
                 && o.extends_target_name
                     .as_deref()
@@ -1315,7 +1315,7 @@ impl<'m> CrossRules<'m> {
             .filter(|&i| {
                 let r = self.row(i);
                 r.kind == "trigger"
-                    && names.contains(&r.name.to_ascii_lowercase())
+                    && names.contains(&r.name.fold_identifier())
                     && r.enclosing_member
                         .as_deref()
                         .map(|m| m.trim_matches('"').fold_identifier())
@@ -1399,7 +1399,7 @@ impl<'m> CrossRules<'m> {
             }
             let sites = self.ix.site_targets.get(&row);
             for op in &r.record_operations {
-                let name = op.op.to_ascii_lowercase();
+                let name = op.op.fold_identifier();
                 if !matches!(name.as_str(), "insert" | "modify" | "delete" | "deleteall") {
                     continue;
                 }
@@ -1473,7 +1473,7 @@ fn own_writes(r: &ModelRoutine) -> Vec<&PAnchor> {
         r.record_operations
             .iter()
             .filter(|op| {
-                WRITE_OPS.contains(&op.op.to_ascii_lowercase().as_str())
+                WRITE_OPS.contains(&op.op.fold_identifier().as_str())
                     && !temp_state_suppresses(op.temp_state.as_ref())
                     && !temp_var(&op.record_variable_name)
             })

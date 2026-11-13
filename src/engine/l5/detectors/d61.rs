@@ -19,6 +19,7 @@
 //! likely when the subscriber body has NO branching (unconditional claim),
 //! else possible.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use crate::engine::l5::confidence::to_confidence;
@@ -135,7 +136,7 @@ pub fn detect_d61(
         }
         let Some(p) = r.parameters.iter().find(|p| {
             p.is_var
-                && p.type_text.trim().eq_ignore_ascii_case("boolean")
+                && p.type_text.trim().eq_fold_identifier("boolean")
                 && is_ishandled_name(&p.name)
         }) else {
             continue;
@@ -165,7 +166,7 @@ pub fn detect_d61(
             is_ishandled_name(&a.lhs_name)
                 && a.rhs_literal_value
                     .as_deref()
-                    .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+                    .is_some_and(|v| v.eq_fold_identifier("true"))
         }) else {
             continue;
         };

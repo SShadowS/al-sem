@@ -17,6 +17,7 @@
 //!   - The internal `RoutineId` is ASCII slash-form, so `<` ordering on the
 //!     `String` matches al-sem's `a < b` on its `RoutineId` string.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::program::model::declaring::DeclaringObjects;
@@ -283,7 +284,7 @@ pub(crate) fn root_kind_mask(shape: &RootShape<'_>) -> u16 {
     // plain procedure that happens to be called OnRun is not a root.
     if shape.routine_kind == "trigger"
         && shape.object_type == "Codeunit"
-        && shape.routine_name.eq_ignore_ascii_case("OnRun")
+        && shape.routine_name.eq_fold_identifier("OnRun")
     {
         set |= bit("onrun-codeunit");
     }
@@ -298,7 +299,7 @@ pub(crate) fn root_kind_mask(shape: &RootShape<'_>) -> u16 {
     // of such a codeunit is not an entry; it runs when a trigger calls it.
     if shape.object_type == "Codeunit" && shape.routine_kind == "trigger" {
         let subtype = shape.object_subtype.map(str::to_lowercase);
-        let name = shape.routine_name.to_ascii_lowercase();
+        let name = shape.routine_name.fold_identifier();
         if subtype.as_deref() == Some("install") && INSTALL_TRIGGERS.contains(&name.as_str()) {
             set |= bit("install-codeunit");
         }

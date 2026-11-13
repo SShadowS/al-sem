@@ -594,15 +594,15 @@ pub(crate) fn is_platform_loaded_trigger_rec(
     match routine.object_type.as_str() {
         "Page" | "PageExtension" => PAGE_TRIGGERS_REC_LOADED
             .iter()
-            .any(|t| routine.name.eq_ignore_ascii_case(t)),
+            .any(|t| routine.name.eq_fold_identifier(t)),
         // A `trigger OnValidate` in a table object is always a FIELD trigger;
         // the table-LEVEL triggers (OnInsert/OnModify/OnDelete/OnRename) run
         // with `Rec` platform-loaded too (class B).
         "Table" | "TableExtension" => {
-            routine.name.eq_ignore_ascii_case("OnValidate")
+            routine.name.eq_fold_identifier("OnValidate")
                 || TABLE_TRIGGERS_REC_AUTO_PERSIST
                     .iter()
-                    .any(|t| routine.name.eq_ignore_ascii_case(t))
+                    .any(|t| routine.name.eq_fold_identifier(t))
         }
         _ => false,
     }
@@ -675,7 +675,7 @@ pub(crate) fn implicit_rec_persisted_by_owner(
     symbols: &SymbolTable,
 ) -> bool {
     let is_trigger = routine.kind == "trigger";
-    let named = |names: &[&str]| names.iter().any(|t| routine.name.eq_ignore_ascii_case(t));
+    let named = |names: &[&str]| names.iter().any(|t| routine.name.eq_fold_identifier(t));
     match routine.object_type.as_str() {
         "Table" | "TableExtension" => table_rec_persisted_by_owner(routine),
         "Page" | "PageExtension" => {
@@ -695,7 +695,7 @@ pub(crate) fn table_rec_persisted_by_owner(routine: &ModelRoutine) -> bool {
     routine.kind != "trigger"
         || !TABLEEXT_TRIGGERS_AFTER_WRITE
             .iter()
-            .any(|t| routine.name.eq_ignore_ascii_case(t))
+            .any(|t| routine.name.eq_fold_identifier(t))
 }
 
 /// #299: is `record_variable_name` the implicit receiver `Rec` of a Table /

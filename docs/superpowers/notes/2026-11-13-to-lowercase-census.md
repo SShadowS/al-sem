@@ -125,6 +125,14 @@ Norwegian, Swedish, German or French identifiers.
 
 ## Method and limits
 
+- **This census is not complete, so do not treat it as a full map of the folds.** It classified only
+  `to_lowercase()` sites. It did not classify ASCII-only compares: `eq_ignore_ascii_case` and
+  local `to_ascii_lowercase` helpers such as `recref_flow::lc`, `field_guard`'s `lc` and
+  `literal_reach`'s `lc`. TLS-43 changed the L2 builder's fold on this census's advice, and
+  its review r1 (Fable) found those ASCII readers broken by it for non-ASCII names; TLS-43
+  then swept every reader of the fields the L2 change touched. Any later fold change must
+  include both forms of compare in its search.
+
 - Classification is by three agents (sonnet, read-only) reading each site in context, with
   the categories fixed in advance. Their claims for the findings above were checked in the
   source. The other rows are their reading and may hold a few misbuckets between `ident-self`

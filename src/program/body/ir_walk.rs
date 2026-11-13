@@ -272,7 +272,7 @@ fn is_record_ref_ty(ty: Option<&str>) -> bool {
     ty.is_some_and(|t| {
         crate::record_ops::receiver_type_of(t)
             .trim()
-            .eq_ignore_ascii_case("recordref")
+            .eq_fold_identifier("recordref")
     })
 }
 
@@ -337,8 +337,8 @@ fn shadows_implicit_rec(
         .iter()
         .map(|p| &p.name)
         .chain(routine.locals.iter().map(|v| &v.name))
-        .any(|n| n.eq_ignore_ascii_case(name))
-        || (own_record_rec && o.globals.iter().any(|v| v.name.eq_ignore_ascii_case(name)))
+        .any(|n| n.eq_fold_identifier(name))
+        || (own_record_rec && o.globals.iter().any(|v| v.name.eq_fold_identifier(name)))
 }
 
 /// [`has_implicit_rec`] with the page's `SourceTable` read from `o` itself, the
@@ -651,7 +651,7 @@ impl<'a> SpineCtx<'a> {
                 let obj = self.file.ir.expr(*object);
                 if obj.origin.kind_text == "keyword_identifier"
                     && let Some(okind) = object_run_kind(self.raw(&obj.origin))
-                    && member.eq_ignore_ascii_case("run")
+                    && member.eq_fold_identifier("run")
                 {
                     return (self.object_run_callee(okind, args), callee_text);
                 }
@@ -889,7 +889,7 @@ impl<'a> SpineCtx<'a> {
         let ExprKind::Member { object, member, .. } = &self.file.ir.expr(*function).kind else {
             return None;
         };
-        if !member.eq_ignore_ascii_case("next") {
+        if !member.eq_fold_identifier("next") {
             return None;
         }
         match &self.file.ir.expr(*object).kind {
@@ -1006,11 +1006,11 @@ impl<'a> SpineCtx<'a> {
                     return None;
                 };
                 match &self.file.ir.expr(*function).kind {
-                    Identifier(m) if m.eq_ignore_ascii_case("error") => Some("error"),
+                    Identifier(m) if m.eq_fold_identifier("error") => Some("error"),
                     Member { object, member, .. } => {
                         let obj_is = matches!(&self.file.ir.expr(*object).kind,
-                            Identifier(o) | QuotedIdentifier(o) if o.eq_ignore_ascii_case("currreport"));
-                        if obj_is && member.eq_ignore_ascii_case("quit") {
+                            Identifier(o) | QuotedIdentifier(o) if o.eq_fold_identifier("currreport"));
+                        if obj_is && member.eq_fold_identifier("quit") {
                             Some("currreport-quit")
                         } else {
                             None
@@ -1444,7 +1444,7 @@ impl<'a> SpineCtx<'a> {
                 // allocate nothing.
                 let implicit_receiver = match &callee {
                     PCallee::Bare { name }
-                        if name.eq_ignore_ascii_case("setautocalcfields")
+                        if name.eq_fold_identifier("setautocalcfields")
                             && !self
                                 .scope
                                 .object_procedure_names
@@ -1953,7 +1953,7 @@ impl<'a> IrCfn<'a> {
         let Member { object, member, .. } = &self.ir().expr(member_expr).kind else {
             return None;
         };
-        let method = member.trim().trim_matches('"').to_lowercase();
+        let method = member.trim().trim_matches('"').fold_identifier();
         if !crate::engine::l5::literal_reach::values::VARIANT_TESTS.contains(&method.as_str()) {
             return None;
         }
@@ -2052,7 +2052,7 @@ impl<'a> IrCfn<'a> {
 
     fn is_error_fn(&self, function: ExprId) -> bool {
         use ExprKind::*;
-        matches!(&self.ir().expr(function).kind, Identifier(m) | QuotedIdentifier(m) if m.eq_ignore_ascii_case("error"))
+        matches!(&self.ir().expr(function).kind, Identifier(m) | QuotedIdentifier(m) if m.eq_fold_identifier("error"))
     }
 
     fn harvest_receiver(&self, function: ExprId, out: &mut Vec<PCFNNode>) {
@@ -2232,7 +2232,7 @@ impl<'a> IrCfn<'a> {
         let Member { object, member, .. } = &self.ir().expr(*function).kind else {
             return None;
         };
-        if !member.eq_ignore_ascii_case("fieldexist") {
+        if !member.eq_fold_identifier("fieldexist") {
             return None;
         }
         let receiver = match &self.ir().expr(*object).kind {
@@ -2312,7 +2312,7 @@ impl<'a> IrCfn<'a> {
             _ => e,
         };
         match &self.ir().expr(member).kind {
-            Member { object, member, .. } if member.eq_ignore_ascii_case("number") => {
+            Member { object, member, .. } if member.eq_fold_identifier("number") => {
                 match &self.ir().expr(*object).kind {
                     Identifier(n) | QuotedIdentifier(n) => Some(n.fold_identifier()),
                     _ => None,
@@ -2329,7 +2329,7 @@ impl<'a> IrCfn<'a> {
             return None;
         };
         let (kw, name) = text.split_once("::")?;
-        if !kw.trim().eq_ignore_ascii_case("database") {
+        if !kw.trim().eq_fold_identifier("database") {
             return None;
         }
         let name = name.trim();
@@ -2337,7 +2337,7 @@ impl<'a> IrCfn<'a> {
             return None;
         }
         let logical = super::scope::unescape_al_identifier(&strip_quote_chars(name));
-        Some(logical.to_lowercase())
+        Some(logical.fold_identifier())
     }
 
     /// r3 E1: the name of a bare identifier (quoted or not, through
@@ -2349,14 +2349,14 @@ impl<'a> IrCfn<'a> {
         }
         let x = self.ir().expr(e);
         match &x.kind {
-            Identifier(n) if x.origin.kind_text == "identifier" => Some(n.to_lowercase()),
+            Identifier(n) if x.origin.kind_text == "identifier" => Some(n.fold_identifier()),
             QuotedIdentifier(n) => {
                 let t = n.trim();
                 let inner = t
                     .strip_prefix('"')
                     .and_then(|s| s.strip_suffix('"'))
                     .unwrap_or(t);
-                Some(inner.replace("\"\"", "\"").to_lowercase())
+                Some(inner.replace("\"\"", "\"").fold_identifier())
             }
             _ => None,
         }
@@ -3248,7 +3248,7 @@ pub fn ir_record_variables(
             && !routine
                 .return_name
                 .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case("rec"));
+                .is_some_and(|n| n.eq_fold_identifier("rec"));
         out.push(PRecordVariable {
             id: format!("{}/rv/rec", routine_id),
             name: "Rec".to_string(),
@@ -3270,7 +3270,7 @@ pub fn ir_record_variables(
         ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
     ) {
         for (di_name, di_table) in &o.dataitems {
-            if out.iter().any(|v| v.name.eq_ignore_ascii_case(di_name)) {
+            if out.iter().any(|v| v.name.eq_fold_identifier(di_name)) {
                 continue;
             }
             out.push(PRecordVariable {
@@ -3283,7 +3283,7 @@ pub fn ir_record_variables(
                 temp_state: ts_known(
                     o.temporary_dataitems
                         .iter()
-                        .any(|t| t.eq_ignore_ascii_case(di_name)),
+                        .any(|t| t.eq_fold_identifier(di_name)),
                 ),
                 is_parameter: false,
                 parameter_index: None,
@@ -3357,7 +3357,7 @@ fn ir_istemporary_receiver(file: &AlFile, eid: ExprId) -> Option<String> {
     if !member
         .trim()
         .trim_matches('"')
-        .eq_ignore_ascii_case("istemporary")
+        .eq_fold_identifier("istemporary")
     {
         return None;
     }
@@ -3436,7 +3436,7 @@ fn ir_is_temporary_error_guard(file: &AlFile, sid: al_syntax::ir::StmtId) -> Opt
         return None;
     };
     match &file.ir.expr(*function).kind {
-        ExprKind::Identifier(n) if n.eq_ignore_ascii_case("error") => Some(receiver),
+        ExprKind::Identifier(n) if n.eq_fold_identifier("error") => Some(receiver),
         _ => None,
     }
 }
@@ -3552,7 +3552,7 @@ fn ir_first_assignment_in_stmt(
             // (#14).
             if !compound
                 && matches!(&file.ir.expr(*target).kind,
-                ExprKind::Identifier(x) if x.eq_ignore_ascii_case(var_lc))
+                ExprKind::Identifier(x) if x.eq_fold_identifier(var_lc))
             {
                 return Some(*value);
             }
@@ -3652,13 +3652,13 @@ pub fn ir_variables(
         let declared_once = routine
             .locals
             .iter()
-            .filter(|o| o.name.eq_ignore_ascii_case(&lc))
+            .filter(|o| o.name.eq_fold_identifier(&lc))
             .count()
             == 1
             && !file.objects[object_idx]
                 .globals
                 .iter()
-                .any(|g| g.name.eq_ignore_ascii_case(&lc));
+                .any(|g| g.name.eq_fold_identifier(&lc));
         let fixed_local = declared_once.then(|| super::features::FixedLocal {
             constant: super::features::label_constant_of(v.label.as_ref()),
         });

@@ -1849,18 +1849,18 @@
       "sha256": "32b1962944a3574a7c5517f63606a26ef7e2b99561194873a72fbc794aa8ed94"
     },
     "r0/ws-nordic-identifiers cross": {
-      "any": 8,
-      "direct": 6,
-      "inherited": 2,
-      "routines": 5,
-      "sha256": "cff90ca7bc47ab1c5d96965602fe79071543581b48efe64308f0998de597de09"
+      "any": 22,
+      "direct": 14,
+      "inherited": 8,
+      "routines": 11,
+      "sha256": "14aaffb151d793ec8fa25fd0450e14548fa178033aa92acfdd43bceb29929775"
     },
     "r0/ws-nordic-identifiers single": {
-      "any": 8,
-      "direct": 6,
-      "inherited": 2,
-      "routines": 5,
-      "sha256": "cff90ca7bc47ab1c5d96965602fe79071543581b48efe64308f0998de597de09"
+      "any": 22,
+      "direct": 14,
+      "inherited": 8,
+      "routines": 11,
+      "sha256": "14aaffb151d793ec8fa25fd0450e14548fa178033aa92acfdd43bceb29929775"
     },
     "r0/ws-object-name-shape cross": {
       "any": 0,

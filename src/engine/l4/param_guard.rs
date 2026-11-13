@@ -26,6 +26,7 @@
 //! `PCFNNode::junction_guards`), and from the early exit `if <guard> then
 //! exit;`, which guards the statements that follow it in the same block.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::HashMap;
 
 use crate::program::body::features::{JunctionGuards, PCFNNode, PCallSite, PConditionGuard};
@@ -75,16 +76,14 @@ pub(crate) fn frame_guards(
 ) -> Option<FrameGuards> {
     let mut usable: Vec<(String, u32)> = Vec::new();
     for p in &r.parameters {
-        if p.is_var || !p.type_text.trim().eq_ignore_ascii_case("boolean") {
+        if p.is_var || !p.type_text.trim().eq_fold_identifier("boolean") {
             continue;
         }
         let name = p.name.trim().trim_matches('"');
-        if r.var_assignments.iter().any(|a| {
-            a.lhs_name
-                .trim()
-                .trim_matches('"')
-                .eq_ignore_ascii_case(name)
-        }) {
+        if r.var_assignments
+            .iter()
+            .any(|a| a.lhs_name.trim().trim_matches('"').eq_fold_identifier(name))
+        {
             continue;
         }
         let passed_unsafely = r.call_sites.iter().any(|cs| {
@@ -97,7 +96,7 @@ pub(crate) fn frame_guards(
         if passed_unsafely {
             continue;
         }
-        usable.push((name.to_ascii_lowercase(), p.index));
+        usable.push((name.fold_identifier(), p.index));
     }
     if usable.is_empty() {
         return None;
@@ -155,8 +154,8 @@ pub(crate) fn frame_guards_over<'a>(
                 .iter()
                 .find(|c| c.id == cs_id)
                 .map(|c| match &c.callee {
-                    PCallee::Bare { name } => name.to_ascii_lowercase(),
-                    PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                    PCallee::Bare { name } => name.fold_identifier(),
+                    PCallee::Member { method, .. } => method.fold_identifier(),
                     _ => String::new(),
                 })
                 .unwrap_or_default();
@@ -310,7 +309,7 @@ pub(crate) fn across_edge(
         let text = cs
             .argument_texts
             .get(i as usize)
-            .map(|t| t.trim().to_ascii_lowercase());
+            .map(|t| t.trim().fold_identifier());
         match text.as_deref() {
             Some("true") | Some("false") => {
                 if (text.as_deref() == Some("true")) != v {

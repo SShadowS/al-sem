@@ -3,6 +3,7 @@
 //! name which rows: the filter keeps rows through it and the closure check
 //! verifies the result through it.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
@@ -565,7 +566,7 @@ impl Referenced {
                     self.callsites.insert(value);
                 }
                 App => {
-                    self.apps.insert(value.to_ascii_lowercase());
+                    self.apps.insert(value.fold_identifier());
                 }
                 Edge => {
                     self.edges.insert(value);
@@ -938,14 +939,14 @@ pub fn closure_violations(
     }
     let mut model_apps: HashSet<String> = HashSet::new();
     if let Some(p) = &resolved.primary_app {
-        model_apps.insert(p.app_guid.to_ascii_lowercase());
+        model_apps.insert(p.app_guid.fold_identifier());
     }
     if let SnapshotUniverse::CrossApp(u) = universe {
         model_apps.extend(
             u.base
                 .dependency_apps
                 .iter()
-                .map(|a| a.guid.to_ascii_lowercase()),
+                .map(|a| a.guid.fold_identifier()),
         );
     }
     // `EXTERNAL_IDENTITY_SHAPES` (spec §4.4): the literal "unknown", or an id
@@ -957,7 +958,7 @@ pub fn closure_violations(
         v == "unknown"
             || (v.len() > root.len()
                 && is_bare_guid(root)
-                && !model_apps.contains(&root.to_ascii_lowercase())
+                && !model_apps.contains(&root.fold_identifier())
                 && !routine_to_stable.contains_key(v))
     };
 
@@ -978,7 +979,7 @@ pub fn closure_violations(
                         .is_some_and(|k| identities.contains(k.as_str()))
                         || external_identity(&value)
                 }
-                App => apps.contains(&value.to_ascii_lowercase()),
+                App => apps.contains(&value.fold_identifier()),
                 Operation => operations.contains(value.as_str()),
                 Callsite => {
                     callsites.contains(value.as_str())

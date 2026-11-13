@@ -152,6 +152,27 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 
 #[test]
 fn a_write_behind_a_literal_false_guard_is_not_a_write() {
+    dead_path_answers(SOURCE);
+}
+
+/// TLS-43: the same answers when the flag carries a non-ASCII capital
+/// (`ÆUseQueue`). The literal-value pass (`literal_values::fold`) and the cone's
+/// `param_guard` match the parameter's name against the L2 rows (guards,
+/// assignments, argument bindings), which fold with `fold_identifier`.
+///
+/// Discrimination (2026-11-13): `literal_values::fold` back on
+/// `to_ascii_lowercase` fails this test (`DocVarPassed` answers a wrong `no`);
+/// restored, it passes. **Limit:** `param_guard::frame_guards`' two compares
+/// back on the ASCII fold, alone, still pass: on these shapes the literal-value
+/// pass decides the same answers. Both broken together fail as above.
+#[test]
+fn a_write_behind_a_nordic_flag_is_read_alike() {
+    let nordic = SOURCE.replace("UseQueue", "ÆUseQueue");
+    assert_ne!(nordic, SOURCE, "precondition: the names were renamed");
+    dead_path_answers(&nordic);
+}
+
+fn dead_path_answers(source: &str) {
     let t = tempfile::tempdir().unwrap();
     let ws = t.path().join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
@@ -160,7 +181,7 @@ fn a_write_behind_a_literal_false_guard_is_not_a_write() {
         r#"{"id":"23232323-0000-4000-8000-000000000023","name":"G23","publisher":"t","version":"1.0.0.0"}"#,
     )
     .unwrap();
-    std::fs::write(ws.join("src/Shapes.al"), SOURCE).unwrap();
+    std::fs::write(ws.join("src/Shapes.al"), source).unwrap();
     let inv = alsem(
         t.path(),
         &["fingerprint", "ws", "--inventory-only", "--format", "json"],
@@ -211,7 +232,7 @@ fn a_write_behind_a_literal_false_guard_is_not_a_write() {
     // The evidence lists only paths that can run, never one through the dead
     // `RunReportRec(false, 0)` call; with the live path left unlisted (the
     // witness search took the short dead one), it says so (`viaPathsTruncated`).
-    let dead_line = SOURCE
+    let dead_line = source
         .lines()
         .position(|l| l.contains("// the dead call"))
         .expect("the dead call is in SOURCE");

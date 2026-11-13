@@ -63,6 +63,7 @@ use crate::engine::l5::terminal_facts::TerminalFacts;
 use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, is_try_function};
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
+use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -902,7 +903,7 @@ struct TableFrame {
 fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     use crate::program::body::features::PCallee;
     let tree = r.statement_tree.as_ref()?;
-    let lc = |s: &str| s.trim().trim_matches('"').to_ascii_lowercase();
+    let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
     // R (folded) -> the parameter index its one GetTable reads.
     let mut bound: HashMap<String, u32> = HashMap::new();
     // R (folded) -> the call sites that pass R or its P on.
@@ -910,7 +911,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     for v in r.variables.iter().filter(|v| {
         !v.is_parameter
             && v.scope.as_deref() == Some("local")
-            && v.declared_type.trim().eq_ignore_ascii_case("recordref")
+            && v.declared_type.trim().eq_fold_identifier("recordref")
     }) {
         let r_lc = lc(&v.name);
         if r.var_assignments.iter().any(|a| lc(&a.lhs_name) == r_lc) {
@@ -929,7 +930,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
             if lc(receiver) != r_lc {
                 continue;
             }
-            match method.to_ascii_lowercase().as_str() {
+            match method.fold_identifier().as_str() {
                 "gettable" => {
                     let p = cs.argument_texts.first().map(|a| lc(a)).and_then(|a| {
                         r.parameters
@@ -965,7 +966,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         };
         let name = lc(&param.name);
         if param.is_var
-            || !param.type_text.trim().eq_ignore_ascii_case("variant")
+            || !param.type_text.trim().eq_fold_identifier("variant")
             || r.var_assignments.iter().any(|a| lc(&a.lhs_name) == name)
         {
             return false;
@@ -974,7 +975,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         for cs in &r.call_sites {
             let passes = cs.argument_texts.iter().any(|a| lc(a) == name);
             let is_gettable = matches!(&cs.callee, PCallee::Member { method, .. }
-                if method.eq_ignore_ascii_case("gettable"));
+                if method.eq_fold_identifier("gettable"));
             if passes && !is_gettable {
                 e.insert(cs.id.clone());
             }
@@ -1116,8 +1117,8 @@ fn value_passes_by_value(
                 .iter()
                 .find(|c| c.id == cs_id)
                 .map(|c| match &c.callee {
-                    PCallee::Bare { name } => name.to_ascii_lowercase(),
-                    PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                    PCallee::Bare { name } => name.fold_identifier(),
+                    PCallee::Member { method, .. } => method.fold_identifier(),
                     _ => String::new(),
                 })
                 .unwrap_or_default();
@@ -1198,8 +1199,8 @@ fn build_flow<'a>(
                     .iter()
                     .find(|c| c.id == cs)
                     .map(|c| match &c.callee {
-                        PCallee::Bare { name } => name.to_ascii_lowercase(),
-                        PCallee::Member { method, .. } => method.to_ascii_lowercase(),
+                        PCallee::Bare { name } => name.fold_identifier(),
+                        PCallee::Member { method, .. } => method.fold_identifier(),
                         _ => String::new(),
                     })
                     .unwrap_or_default();
@@ -1442,7 +1443,7 @@ fn edge_trap(
                 || matches!(e, SnapshotGraphEdge::ObjectRunResolved { .. })
                 || callee.is_some_and(|c| {
                     is_try_function(c)
-                        || (c.kind == "trigger" && c.name.eq_ignore_ascii_case("OnRun"))
+                        || (c.kind == "trigger" && c.name.eq_fold_identifier("OnRun"))
                 });
             if !may {
                 return None;
@@ -2606,7 +2607,7 @@ impl<'a> LiteralReach<'a> {
             let text = cs
                 .argument_texts
                 .get(j as usize)
-                .map(|t| t.trim().to_ascii_lowercase());
+                .map(|t| t.trim().fold_identifier());
             let v = match text.as_deref() {
                 Some("true") => Some(true),
                 Some("false") => Some(false),
@@ -2625,13 +2626,13 @@ impl<'a> LiteralReach<'a> {
             let arg = cs
                 .argument_texts
                 .get(j as usize)
-                .map(|a| a.trim().trim_matches('"').to_ascii_lowercase());
+                .map(|a| a.trim().trim_matches('"').fold_identifier());
             // A record variable of the caller with a known table (the implicit
             // `Rec` included), else the caller's own known table parameter.
             let own = arg.as_deref().and_then(|a| {
                 r.record_variables
                     .iter()
-                    .find(|v| v.name.to_ascii_lowercase() == a)
+                    .find(|v| v.name.fold_identifier() == a)
                     .and_then(|v| v.table_id.as_deref())
                     .and_then(|id| self.table_names.get(id))
                     .map(|t| TSet::from([Arc::clone(t)]))
@@ -2686,11 +2687,7 @@ impl<'a> LiteralReach<'a> {
         for (j, d) in fb.map_or(&[][..], Vec::as_slice) {
             let raw = flow_arg(*j)
                 .or_else(|| {
-                    let text = cs
-                        .argument_texts
-                        .get(*j as usize)?
-                        .trim()
-                        .to_ascii_lowercase();
+                    let text = cs.argument_texts.get(*j as usize)?.trim().fold_identifier();
                     match text.as_str() {
                         "true" => Some(Arc::from([values::Val::Bool(true)])),
                         "false" => Some(Arc::from([values::Val::Bool(false)])),
@@ -3246,7 +3243,7 @@ impl<'a> LiteralReach<'a> {
                 // No body (a symbol-only dependency routine, a `[TryFunction]`
                 // among them): unknown code. Interface methods dispatch to
                 // their implementations, which carry their own facts.
-                if !row.body_available && !row.object_type.eq_ignore_ascii_case("Interface") {
+                if !row.body_available && !row.object_type.eq_fold_identifier("Interface") {
                     seeds.insert(id);
                 }
                 for op in row

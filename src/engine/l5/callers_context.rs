@@ -89,6 +89,7 @@
 //! `assumeNoDependents`, which is its own flag, not `closedWorld`), a walk
 //! limit, and a caller whose body facts are not in the model.
 
+use al_syntax::IdentifierFoldExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::engine::l4::cone_derived::ConeDerivedStore;
@@ -319,7 +320,7 @@ fn own_write_site(r: &ModelRoutine, table: &str, op: &str) -> Option<(String, u3
     r.record_operations
         .iter()
         .filter(|o| o.table_id.as_deref() == Some(table))
-        .filter(|o| o.op.eq_ignore_ascii_case(op))
+        .filter(|o| o.op.eq_fold_identifier(op))
         .filter(|o| !crate::program::body::features::temp_state_suppresses(o.temp_state.as_ref()))
         .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column))
         .map(|o| {
@@ -388,7 +389,7 @@ impl<'a> Index<'a> {
             cx.cone_derived
                 .physical_table_write_ops_of(&r.id)
                 .get(table)
-                .is_some_and(|ops| ops.iter().any(|o| o.eq_ignore_ascii_case(op)))
+                .is_some_and(|ops| ops.iter().any(|o| o.eq_fold_identifier(op)))
         };
         let mut seen: HashSet<NodeIx> = HashSet::new();
         let mut queue: std::collections::VecDeque<NodeIx> = std::collections::VecDeque::new();
@@ -525,7 +526,7 @@ impl<'a> Index<'a> {
                 .model
                 .primary_app
                 .as_ref()
-                .is_some_and(|p| p.app_guid.eq_ignore_ascii_case(&t.app_guid));
+                .is_some_and(|p| p.app_guid.eq_fold_identifier(&t.app_guid));
             return format_object("Table", &t.name, (!own).then_some(t.table_number));
         }
         match self.objects.get(id) {
@@ -753,7 +754,7 @@ fn literal_or_none(text: Option<&String>, failure: bool) -> bool {
     if let Ok(n) = t.parse::<i64>() {
         return n > 0 || (failure && n == 0);
     }
-    t.to_ascii_lowercase().starts_with("codeunit::")
+    t.fold_identifier().starts_with("codeunit::")
 }
 
 /// The background starts whose codeunit is not a literal (`<callee> at
@@ -808,7 +809,7 @@ fn gui_shape(text: &str) -> Option<bool> {
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect::<String>()
-        .to_ascii_lowercase();
+        .fold_identifier();
     let strip = |s: &str| -> String {
         let mut s = s.to_string();
         while s.starts_with('(') && s.ends_with(')') && s.len() >= 2 {
@@ -831,7 +832,7 @@ fn gui_shape(text: &str) -> Option<bool> {
     }
     // A conjunction holding GuiAllowed: every conjunct runs. Split on the
     // spaced keyword of the original text.
-    let lower = text.to_ascii_lowercase();
+    let lower = text.fold_identifier();
     if !lower.contains(" or ") && lower.contains(" and ") {
         let parts: Vec<&str> = lower.split(" and ").collect();
         if parts.iter().any(|p| is_gui(&p.replace(' ', ""))) {
@@ -846,7 +847,7 @@ fn gui_shape(text: &str) -> Option<bool> {
 pub(crate) fn classify_gui(guards: &[crate::engine::resident::guards::Guard]) -> GuiGuard {
     let mut out = GuiGuard::None;
     for gd in guards {
-        if !gd.text.to_ascii_lowercase().contains("guiallowed") {
+        if !gd.text.fold_identifier().contains("guiallowed") {
             continue;
         }
         let shape = gui_shape(&gd.text);
@@ -1210,7 +1211,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
             let op_name = op
                 .map(|i| RECORD_OPS[i as usize])
                 .unwrap_or(ro.op.as_str())
-                .to_ascii_lowercase();
+                .fold_identifier();
             if ["insert", "modify", "delete", "rename"].contains(&op_name.as_str()) {
                 let ts = ro.temp_state.as_ref();
                 let temp = crate::program::body::features::temp_state_suppresses(ts);
@@ -1295,7 +1296,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                         "modifyall",
                         "deleteall",
                     ]
-                    .contains(&o.op.to_ascii_lowercase().as_str())
+                    .contains(&o.op.fold_identifier().as_str())
                         && !crate::program::body::features::temp_state_suppresses(
                             o.temp_state.as_ref(),
                         )
@@ -1376,7 +1377,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
         let st = g.sites()[site as usize];
         let display = self.ix.display(g, c);
         let collect =
-            attr_member(r, "ErrorBehavior").is_some_and(|m| m.eq_ignore_ascii_case("collect"));
+            attr_member(r, "ErrorBehavior").is_some_and(|m| m.eq_fold_identifier("collect"));
         if collect {
             self.witness(
                 "collectible",
@@ -1542,9 +1543,9 @@ impl<'a, 'c> Visitor<'a, 'c> {
         let mentions = r
             .identifier_references
             .iter()
-            .any(|i| i.eq_ignore_ascii_case("guiallowed"))
+            .any(|i| i.eq_fold_identifier("guiallowed"))
             || r.call_sites.iter().any(
-                |cs| matches!(&cs.callee, PCallee::Bare { name } if name.eq_ignore_ascii_case("guiallowed")),
+                |cs| matches!(&cs.callee, PCallee::Bare { name } if name.eq_fold_identifier("guiallowed")),
             );
         if !mentions {
             return SiteEval::default();
