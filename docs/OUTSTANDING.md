@@ -62,6 +62,13 @@ sizings marked pre-arc).
   filter crashes the resident engine; `#if` arms are flattened; isolated events and
   `CommitBehavior` are ignored in error and commit answers). It also has a proposed order in
   waves 0–8.
+  **Audited 2026-11-13 (TLS-44, master `14fad659`,
+  `docs/superpowers/notes/2026-11-13-engine-limits-audit.md`):** waves 0–2 are done. B1–B10
+  are fixed; B8's query `scope:` line and `.gitignore` are still open. L14, L35 and L36 are
+  fixed, and L28 is mostly fixed (ENG-22). The rest of waves 3–8 (L1–L6, L9–L13, L15,
+  L17–L19, L21–L22, L24–L27, L29–L34) is open and has no coord task. The open ENG tasks
+  13–29 all still hold; ENG-14 and ENG-20 need a re-scope, and ENG-15/16 and ENG-19/21 pair
+  up.
 
 - [ ] **False-positive causes exposed by S8.6** (recorded 2026-10-07; triage
   `s86-triage.md`, 43 new CDO/DO findings, all newly followed edges real).
