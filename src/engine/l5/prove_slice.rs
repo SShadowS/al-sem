@@ -698,15 +698,19 @@ enum One {
 }
 
 fn match_text_on(needle: &str, site: &SliceSite) -> One {
-    let n = needle.fold_identifier();
+    // Message text is prose, so it keeps Unicode's full lowercase on both sides
+    // (a word-final `Σ` lowercases to `ς`, as a typed `ος` does; the identifier
+    // fold gives `σ`). The variable holding it is an identifier (TLS-43 sol r1).
+    let n_text = needle.to_lowercase();
+    let n_ident = needle.fold_identifier();
     match &site.message {
         Some(MessageText::Known {
             text, var, partial, ..
         }) => {
-            if text.fold_identifier().contains(&n)
+            if text.to_lowercase().contains(&n_text)
                 || var
                     .as_ref()
-                    .is_some_and(|v| v.fold_identifier().contains(&n))
+                    .is_some_and(|v| v.fold_identifier().contains(&n_ident))
             {
                 One::Yes {
                     by_kind_word: false,
@@ -726,7 +730,7 @@ fn match_text_on(needle: &str, site: &SliceSite) -> One {
             if site.effect_type == "ERROR_IMPLICIT"
                 && word
                     .as_deref()
-                    .is_some_and(|w| !w.is_empty() && (n.contains(w) || w.contains(&n)))
+                    .is_some_and(|w| !w.is_empty() && (n_text.contains(w) || w.contains(&n_text)))
             {
                 One::Yes { by_kind_word: true }
             } else {

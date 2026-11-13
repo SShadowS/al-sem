@@ -172,6 +172,58 @@ fn a_write_behind_a_nordic_flag_is_read_alike() {
     dead_path_answers(&nordic);
 }
 
+/// TLS-43 review (sol r1): `prove throws-error --match` searches message
+/// TEXT, which is prose, not an identifier: it keeps Unicode's full
+/// lowercase, so a typed `ος` finds a message `ΟΣ` (whose word-final `Σ`
+/// lowercases to `ς`; the identifier fold would give `σ` and miss).
+///
+/// DISCRIMINATION (2026-11-13): `match_text_on` folding the message text and
+/// the needle with `fold_identifier` (TLS-43's earlier head) answers `no`
+/// here; restored, `yes`.
+#[test]
+fn a_message_match_lowercases_prose_not_identifiers() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"23232323-0000-4000-8000-000000000043","name":"G43","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/Greek.al"),
+        "codeunit 50430 \"G43 Greek\"\n{\n    procedure Fail()\n    begin\n        Error('ΟΣ');\n    end;\n}\n",
+    )
+    .unwrap();
+    let inv = alsem(
+        t.path(),
+        &["fingerprint", "ws", "--inventory-only", "--format", "json"],
+    );
+    let id = inv["payload"]["routineInventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["routineName"] == "Fail")
+        .expect("precondition: Fail is in the inventory")["stableRoutineId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = alsem(
+        t.path(),
+        &[
+            "prove",
+            "ws",
+            &id,
+            "throws-error",
+            "--match",
+            "ος",
+            "--deterministic",
+        ],
+    )["payload"]["result"]
+        .clone();
+    assert_eq!(r["answer"], "yes", "the message matches: {r}");
+}
+
 fn dead_path_answers(source: &str) {
     let t = tempfile::tempdir().unwrap();
     let ws = t.path().join("ws");

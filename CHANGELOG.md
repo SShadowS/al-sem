@@ -166,6 +166,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     name `e` in release). Both strings are back on the ASCII fold and only the extracted name
     folds. Witness: `impact::scan::tests::a_header_name_with_a_dotted_capital_i_is_read_whole`
     (break: the raw line folded before the slice).
+  - **Review sol r1** found two more:
+    - The sweep had folded `prove --match`'s message TEXT with the identifier fold. Message
+      text is prose, so it is back on Unicode's full lowercase, as on master: a typed `ος`
+      finds `ΟΣ`, whose word-final `Σ` lowercases to `ς`, where the identifier fold gives `σ`.
+      Only the variable holding the message takes the identifier fold. Witness
+      `cli_prove_dead_paths::a_message_match_lowercases_prose_not_identifiers` (break: the
+      text folded with `fold_identifier`).
+    - The guard missed `eq_ignore_ascii_case` passed as a function
+      (`str::eq_ignore_ascii_case`). It now counts the `str::`, `char::`, `u8::` and `[u8]>::`
+      path forms; a planted `const` of that form in d19 fails it.
   - Every changed compare gives the same result as the old one on ASCII input, so no existing
     golden moved: only the Nordic fixture's lines did.
   - Tests, each with a discrimination proof (the break named, then reverted):

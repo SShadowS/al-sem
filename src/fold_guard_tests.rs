@@ -7,14 +7,17 @@
 //!
 //! Discrimination (2026-11-13): one added `.to_lowercase()` in
 //! `src/engine/l5/detectors/d19.rs` fails it, naming the file and both counts;
-//! removed, it passes.
+//! removed, it passes. Review sol r1: a `const _: fn(&str, &str) -> bool =
+//! str::eq_ignore_ascii_case;` there fails it too ("1 calls, not on the
+//! allowlist"); removed, it passes.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The method forms, and the path forms passed as a function
-/// (`.map(str::to_lowercase)`; review r4, Fable).
-const CALLS: [&str; 7] = [
+/// (`.map(str::to_lowercase)`; review r4, Fable; `let same =
+/// str::eq_ignore_ascii_case;`, review sol r1).
+const CALLS: [&str; 11] = [
     ".to_lowercase()",
     ".to_ascii_lowercase()",
     "eq_ignore_ascii_case(",
@@ -22,6 +25,10 @@ const CALLS: [&str; 7] = [
     "str::to_ascii_lowercase",
     "char::to_lowercase",
     "char::to_ascii_lowercase",
+    "str::eq_ignore_ascii_case",
+    "char::eq_ignore_ascii_case",
+    "u8::eq_ignore_ascii_case",
+    "[u8]>::eq_ignore_ascii_case",
 ];
 
 fn count_in(dir: &Path, root: &Path, out: &mut BTreeMap<String, usize>) {
