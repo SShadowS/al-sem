@@ -35,7 +35,7 @@
 //!
 //! Severity: medium. Confidence: likely.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
@@ -47,6 +47,7 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::PAnchor;
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d56-clone-before-write-in-loop";
@@ -65,6 +66,8 @@ pub fn detect_d56(
     let mut skipped_no_write_back = 0u64;
     let mut skipped_source_not_cursor = 0u64;
     let mut skipped_source_temp = 0u64;
+    let mut skipped_target_temp = 0u64;
+    let mut skipped_same_write = 0u64;
     let mut skipped_key_remapped_clone = 0u64;
 
     for routine in &ws.routines {
@@ -97,6 +100,8 @@ pub fn detect_d56(
             })
             .collect();
 
+        // ENG-27: the finding kept per write op, and the copy it names.
+        let mut per_write: HashMap<&str, (usize, PAnchor)> = HashMap::new();
         for asg in &routine.var_assignments {
             let Some(rhs_lc) = asg.rhs_identifier.as_deref() else {
                 continue;
@@ -149,6 +154,15 @@ pub fn detect_d56(
                 .any(|rv| rv.name.to_lowercase() == rhs_lc && is_known_temp_var(rv));
             if src_is_temp {
                 skipped_source_temp += 1;
+                continue;
+            }
+            // ENG-27: nor a temporary TARGET. Copying the cursor into a temp
+            // buffer and writing the buffer is the remedy, not the problem, and
+            // the write is no SQL round-trip (a `SourceTableTemporary` page's
+            // `Rec`, a `temporary` local). The write op carries the temp state
+            // (the model forces the page's implicit `Rec` ops to known-temp).
+            if crate::program::body::features::temp_state_suppresses(write.temp_state.as_ref()) {
+                skipped_target_temp += 1;
                 continue;
             }
 
@@ -253,7 +267,22 @@ pub fn detect_d56(
                 loose_subject: None,
             };
             finding.fingerprint = Some(fp_index.fingerprint_of(&finding));
-            findings.push(finding);
+            // ENG-27: one finding per write. Two copies before one write
+            // (`Rec := Src; … Rec := Src; Rec.Modify()`) gave the same id twice;
+            // the copy nearest the write is the one it writes, so it wins.
+            let next = findings.len();
+            let (at, kept) = per_write
+                .entry(write.id.as_str())
+                .or_insert_with(|| (next, asg.source_anchor.clone()));
+            if *at == next {
+                findings.push(finding);
+            } else {
+                skipped_same_write += 1;
+                if before_anchor(kept, &asg.source_anchor) {
+                    findings[*at] = finding;
+                    *kept = asg.source_anchor.clone();
+                }
+            }
         }
     }
 
@@ -263,6 +292,8 @@ pub fn detect_d56(
     stats.add_skip("noWriteBack", skipped_no_write_back);
     stats.add_skip("sourceNotCursor", skipped_source_not_cursor);
     stats.add_skip("sourceTemp", skipped_source_temp);
+    stats.add_skip("targetTemp", skipped_target_temp);
+    stats.add_skip("sameWrite", skipped_same_write);
     stats.add_skip("keyRemappedClone", skipped_key_remapped_clone);
     Ok(DetectorOutput::no_diag(findings, stats))
 }
