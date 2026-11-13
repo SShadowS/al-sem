@@ -47,9 +47,75 @@ use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
+use crate::program::body::features::{PAnchor, PCFNNode};
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d56-clone-before-write-in-loop";
+
+/// A source range `(start_line, start_col, end_line, end_col)` holds `a`'s start.
+fn range_holds(r: (u32, u32, u32, u32), a: &PAnchor) -> bool {
+    let p = (a.start_line, a.start_column);
+    (r.0, r.1) <= p && p <= (r.2, r.3)
+}
+
+/// ENG-27: every `if` / `case` around `a` in the statement tree, with the
+/// branch that holds it (`if`: 0 then, 1 else; `case`: the branch's index;
+/// `None` when no branch holds it, e.g. the condition, or a range is missing).
+fn branch_path(
+    nodes: &[PCFNNode],
+    a: &PAnchor,
+    out: &mut Vec<((u32, u32, u32, u32), Option<usize>)>,
+) {
+    let held = |list: &Option<Vec<PCFNNode>>| {
+        list.iter()
+            .flatten()
+            .any(|n| n.source_range.is_some_and(|r| range_holds(r, a)))
+    };
+    for n in nodes {
+        if (n.kind == "if" || n.kind == "case")
+            && let Some(r) = n.source_range
+            && range_holds(r, a)
+        {
+            let branch = if n.kind == "if" {
+                if held(&n.children) {
+                    Some(0)
+                } else if held(&n.else_children) {
+                    Some(1)
+                } else {
+                    None
+                }
+            } else {
+                n.children
+                    .iter()
+                    .flatten()
+                    .position(|b| b.source_range.is_some_and(|br| range_holds(br, a)))
+            };
+            out.push((r, branch));
+        }
+        for list in [&n.children, &n.else_children] {
+            branch_path(list.as_deref().unwrap_or(&[]), a, out);
+        }
+    }
+}
+
+/// ENG-27: `other` runs on every path that reaches `write` from where both
+/// start: each `if` / `case` branch around `other` is a branch around `write`
+/// too. Anything less, or unknown, is conditional: then `other` overwrites
+/// nothing, and the earlier copy's finding stands.
+fn unconditional_before(
+    routine: &crate::program::model::workspace::ModelRoutine,
+    other: &PAnchor,
+    write: &PAnchor,
+) -> bool {
+    let Some(tree) = routine.statement_tree.as_deref() else {
+        return false;
+    };
+    let (mut o, mut w) = (Vec::new(), Vec::new());
+    branch_path(std::slice::from_ref(tree), other, &mut o);
+    branch_path(std::slice::from_ref(tree), write, &mut w);
+    o.iter()
+        .all(|(r, b)| b.is_some() && w.iter().any(|(wr, wb)| wr == r && wb == b))
+}
 
 const CURSOR_OPS: &[&str] = &["FindSet", "Find", "FindFirst", "Next"];
 const WRITE_BACK_OPS: &[&str] = &["Modify", "Delete"];
@@ -143,6 +209,9 @@ pub fn detect_d56(
             // the write: an inner loop's copy before an OUTER write cannot pair
             // with it (letting it overwrite would leave no finding), while one
             // before an INNER write does, and then it is the copy that counts.
+            // And only one that runs whenever the write does (no `if` / `case`
+            // branch around it that the write is outside of): `if X then Copy :=
+            // Temp;` leaves the cursor copy on the path where X is false.
             let overwritten = routine.var_assignments.iter().any(|other| {
                 !other.lhs_is_member
                     && other.lhs_name == asg.lhs_name
@@ -150,6 +219,7 @@ pub fn detect_d56(
                     && before_anchor(&other.source_anchor, &write.source_anchor)
                     && innermost(&other.source_anchor)
                         .is_some_and(|l| write.loop_stack.iter().any(|id| id == &l.id))
+                    && unconditional_before(routine, &other.source_anchor, &write.source_anchor)
             });
             if overwritten {
                 skipped_overwritten += 1;

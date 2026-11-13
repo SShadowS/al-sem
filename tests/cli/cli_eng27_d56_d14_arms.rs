@@ -89,6 +89,23 @@ codeunit 52805 "E27 Overwrite"
                 Copy.Modify();
             until Src.Next() = 0;
     end;
+
+    // The same inside one branch: the temp copy runs whenever the write does.
+    procedure SameBranch()
+    var
+        Src: Record "E27 Row";
+        TempBuf: Record "E27 Row" temporary;
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                if Src.K > 0 then begin
+                    Copy := Src;
+                    Copy := TempBuf;
+                    Copy.Modify();
+                end;
+            until Src.Next() = 0;
+    end;
 }
 table 52806 "E27 Other"
 {
@@ -112,6 +129,23 @@ codeunit 52807 "E27 Not Overwritten"
             repeat
                 Copy := Src;
                 Other.Copy := 1;
+                Copy.Modify();
+            until Src.Next() = 0;
+    end;
+
+    // A copy only in a BRANCH is no overwrite: when K <= 0 the write writes
+    // the cursor copy.
+    procedure Conditional()
+    var
+        Src: Record "E27 Row";
+        TempBuf: Record "E27 Row" temporary;
+        Copy: Record "E27 Row";
+    begin
+        if Src.FindSet() then
+            repeat
+                Copy := Src;
+                if Src.K > 0 then
+                    Copy := TempBuf;
                 Copy.Modify();
             until Src.Next() = 0;
     end;
@@ -228,7 +262,9 @@ fn of<'a>(fs: &'a [serde_json::Value], detector: &str, object: &str) -> Vec<&'a 
 /// gone). Round 2: count a field write as an overwrite -> `FieldNamed` is
 /// lost; count an inner loop's copy -> `Nested` is lost. Round 3: count only
 /// copies in the copy's own innermost loop -> `NestedWrite` reports twice.
-/// Each fails; restored, it passes.
+/// Round 4: drop `unconditional_before` from the overwrite check ->
+/// `Conditional` is lost; make every copy conditional -> `SameBranch` ("E27
+/// Overwrite") reports. Each fails; restored, it passes.
 #[test]
 fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
     let fs = findings(SOURCE);
@@ -241,7 +277,11 @@ fn d56_skips_a_temporary_target_and_reports_one_finding_per_write() {
         .map(|f| f["primaryLocation"]["routineName"].as_str().unwrap())
         .collect();
     names.sort_unstable();
-    assert_eq!(names, ["FieldNamed", "Nested", "NestedWrite"], "{kept:#?}");
+    assert_eq!(
+        names,
+        ["Conditional", "FieldNamed", "Nested", "NestedWrite"],
+        "{kept:#?}"
+    );
     let real = of(&fs, "d56-clone-before-write-in-loop", "E27 Real Page");
     assert_eq!(real.len(), 1, "{real:#?}");
     // The evidence's first step is the copy; only SARIF prints it.
