@@ -49,17 +49,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     master>` (TLS-18), which built that commit's release-fast `alsem` from a `git archive` copy:
     ~4 min of CPU per landing. A gate starting right after a landing waited for that build on the
     cache lock: 60 s of TLS-33's landing gate.
-  - **Now:** when `cdo-speed` builds the working tree (the gate's `speed_build`) on a clean work
-    tree, it keeps that binary in its cache under the tree's hash (`trees/<tree>/alsem`).
-    `cached_binary` (which `--warm` and every gate's base use) seeds a commit's entry from it when
-    there is no entry for the commit yet. A landing's merge commit has exactly the tree its gate
-    tested, so the warm step finds it and builds nothing.
+  - **Now:** when `cdo-speed` builds the working tree (the gate's `speed_build`), it keeps that
+    binary in its cache under the source tree's hash plus the grammar clone's commit
+    (`trees/<tree>-g<grammar>/alsem`). `cached_binary` (which `--warm` and every gate's base use)
+    seeds a commit's entry from it when there is no entry for the commit yet. A landing's merge
+    commit has exactly the tree its gate tested, so the warm step finds it and builds nothing.
+  - **Only an exact build is kept:** a clean work tree (no tracked change, no untracked file
+    outside .gitignore), checked before and after the build; an unmodified grammar clone (it is
+    unpinned and outside git); no `RUSTFLAGS` or `CARGO_PROFILE_*` overrides. The binary is copied
+    into the cache before waiting for the lock (review r1, sol).
+  - **Test isolation:** every `cdo-speed` run in the tests uses a temporary `ALSEM_SPEED_CACHE`,
+    so none can write a stub into the real cache. A guard test
+    (`gate_scripts::speed_tests_never_use_the_real_cache`) checks it.
   - **Fallback:** a commit with no kept tree builds as before. Entries older than 7 days are
     removed.
   - **Bytes:** a seeded binary differs in bytes from an archive build (the build folder's path is
     embedded), not in what it runs.
   - **Tests:** `gate_scripts::speed_warm_seeds_a_commit_from_its_trees_gate_binary` and
-    `gate_scripts::speed_build_keeps_a_clean_trees_binary`, each with a discrimination proof.
+    `gate_scripts::speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar`, in a throwaway
+    checkout with its own grammar clone, each with discrimination proofs.
 
 ### Changed (TLS-33: the speed check reuses ci-steps' optimized build)
 
