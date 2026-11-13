@@ -54,10 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`trees/<tree>-g<grammar>/alsem`). `cached_binary` (which `--warm` and every gate's base use)
     seeds a commit's entry from it when there is no entry for the commit yet. A landing's merge
     commit has exactly the tree its gate tested, so the warm step finds it and builds nothing.
-  - **Only an exact build is kept:** a clean work tree (no tracked change, no untracked file
-    outside .gitignore), checked before and after the build; an unmodified grammar clone (it is
-    unpinned and outside git); no `RUSTFLAGS` or `CARGO_PROFILE_*` overrides. The binary is copied
-    into the cache before waiting for the lock (review r1, sol).
+  - **Only an exact build is kept:**
+    - a clean work tree (no tracked change, no untracked file outside .gitignore), checked
+      before and after the build;
+    - a grammar clone given by an absolute path, with no change and no untracked file (an added
+      `scanner.c` is compiled);
+    - no build overrides: Rust or C flags, compilers or wrappers, `CARGO_PROFILE_*` /
+      `CARGO_BUILD_*` / `CARGO_TARGET_*` settings (the target folder and job count excepted), or
+      a Cargo config in a folder above the repo.
+  - **The binary is snapshotted** into the cache as soon as cargo returns (review r1-r2, sol).
+    Stated limit: another build into `<target>/gate-release` that finishes in that instant would
+    be kept. Only ci-steps uses that folder, and it finishes before cdo-gate starts.
   - **Test isolation:** every `cdo-speed` run in the tests uses a temporary `ALSEM_SPEED_CACHE`,
     so none can write a stub into the real cache. A guard test
     (`gate_scripts::speed_tests_never_use_the_real_cache`) checks it.

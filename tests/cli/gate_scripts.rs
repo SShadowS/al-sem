@@ -597,12 +597,18 @@ impl Throwaway {
     ) -> (Option<i32>, String) {
         let stub = self.path(if ok { "bin-ok" } else { "bin-fail" });
         let mut cmd = std::process::Command::new("python3");
+        // A clean environment: an inherited build override (RUSTFLAGS, a
+        // profile override, CFLAGS) would make every key `None` (review r2, sol).
         cmd.arg(self.path("repo/scripts/cdo-speed"))
             .args(args)
+            // From the throwaway folder: a relative `TREE_SITTER_AL_PATH` of
+            // `grammar` then names a real clone for git (not for the build).
+            .current_dir(self.dir.path())
+            .env_clear()
+            .env("HOME", self.path("home"))
             .env("ALSEM_SPEED_CACHE", cache)
             .env("CARGO_TARGET_DIR", self.path("target"))
             .env("TREE_SITTER_AL_PATH", self.path("grammar"))
-            .env_remove("RUSTFLAGS")
             .env(
                 "PATH",
                 format!(
@@ -653,8 +659,12 @@ impl Throwaway {
 /// only when nothing else went into it: a clean work tree, an unmodified
 /// grammar clone, no Rust flags. Each case in a throwaway checkout.
 ///
-/// Mutation (2026-11-13): `working_tree_key` without its status check -> the
-/// tracked change keeps a binary.
+/// Mutations (2026-11-13): `working_tree_key` without its status check -> the
+/// tracked change keeps a binary; the grammar's status with
+/// `--untracked-files=no` -> the untracked `scanner.c` keeps one; `build_key`
+/// without its absolute-path check -> the relative grammar path keeps one
+/// (the run's folder is the throwaway's, so git finds that clone);
+/// `CFLAGS` out of `BUILD_ENV_EXACT` -> the C-flags case keeps one.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar() {
@@ -695,6 +705,27 @@ fn speed_build_keeps_a_binary_only_for_a_clean_tree_and_grammar() {
         &cache("profile"),
         &[("CARGO_PROFILE_RELEASE_FAST_LTO", "off")]
     ));
+    // C flags (the grammar's parser is C), a target's Rust flags (review r2, sol).
+    assert!(!t.build_keeps(&cache("cflags"), &[("CFLAGS", "-O0")]));
+    assert!(!t.build_keeps(
+        &cache("target-flags"),
+        &[(
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+            "-Copt-level=0"
+        )]
+    ));
+    // An untracked file in the grammar clone (an added scanner.c is compiled).
+    std::fs::write(t.path("grammar/scanner.c"), "int x;\n").unwrap();
+    assert!(
+        !t.build_keeps(&cache("grammar-untracked"), &[]),
+        "an untracked grammar file kept a binary"
+    );
+    std::fs::remove_file(t.path("grammar/scanner.c")).unwrap();
+    // A relative grammar path (git and the build would resolve it differently).
+    assert!(
+        !t.build_keeps(&cache("relative"), &[("TREE_SITTER_AL_PATH", "grammar")]),
+        "a relative grammar path kept a binary"
+    );
     // Clean again: keeps.
     assert!(
         t.build_keeps(&cache("again"), &[]),

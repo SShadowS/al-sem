@@ -223,21 +223,53 @@ def grammar_dir(repo, archive):
     return os.path.join(repo, "tree-sitter-al")
 
 
-def build_key(tree, grammar):
+# Environment that changes what a build compiles, beyond the sources and the
+# grammar: any of these set means no key (review r1-r2, sol).
+BUILD_ENV_EXACT = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER",
+                   "RUSTC_WORKSPACE_WRAPPER", "CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS",
+                   "LDFLAGS", "AR")
+BUILD_ENV_PREFIXES = ("CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_", "CFLAGS_",
+                      "CXXFLAGS_", "CC_", "CXX_", "AR_", "CARGO_ENCODED_RUSTFLAGS")
+# Where and how fast a build runs, not what it compiles.
+BUILD_ENV_HARMLESS = ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_JOBS")
+
+
+def build_overrides(repo):
+    """What, besides the sources and the grammar, could change a build here: build
+    environment, or a Cargo config file in a folder above the repo (the repo's own
+    `.cargo` is in its tree; the user's `$CARGO_HOME` applies to every build alike).
+    Empty when there is none."""
+    found = [k for k in os.environ if os.environ[k] and k not in BUILD_ENV_HARMLESS and (
+        k in BUILD_ENV_EXACT or k.startswith(BUILD_ENV_PREFIXES))]
+    cargo_home = os.path.realpath(os.environ.get("CARGO_HOME")
+                                  or os.path.join(os.path.expanduser("~"), ".cargo"))
+    d = os.path.dirname(os.path.realpath(repo))
+    while True:
+        for name in ("config", "config.toml"):
+            p = os.path.join(d, ".cargo", name)
+            if os.path.exists(p) and os.path.realpath(os.path.dirname(p)) != cargo_home:
+                found.append(p)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return found
+        d = parent
+
+
+def build_key(repo, tree, grammar):
     """⟨TLS-34⟩ What a kept binary is keyed by: the source tree and the grammar
     clone's commit (the grammar is an unpinned clone outside git, review r1, sol).
-    `None` when the build's inputs are not those two alone: a grammar clone with
-    local changes or no commit, or Rust flags or profile overrides in the
-    environment (no binary is kept or seeded then)."""
-    if any(os.environ.get(k) for k in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
-                                        "CARGO_BUILD_RUSTFLAGS")) or any(
-            k.startswith("CARGO_PROFILE_") for k in os.environ):
+    `None` when the build's inputs are not those two alone: a grammar clone given
+    by a relative path (git and the build would resolve it from different folders),
+    with local changes or untracked files (an added `scanner.c` is compiled), or
+    with no commit; or build overrides (`build_overrides`). No binary is kept or
+    seeded then."""
+    if not os.path.isabs(grammar) or build_overrides(repo):
         return None
     try:
         rev = subprocess.run(["git", "-C", grammar, "rev-parse", "HEAD"], capture_output=True,
                              text=True, check=True).stdout.strip()
         dirty = subprocess.run(["git", "-C", grammar, "status", "--porcelain",
-                                "--untracked-files=no"], capture_output=True, text=True,
+                                "--untracked-files=normal"], capture_output=True, text=True,
                                check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -250,7 +282,8 @@ def working_tree_key(repo):
     `None` otherwise."""
     if git(repo, "status", "--porcelain", "--untracked-files=normal"):
         return None
-    return build_key(git(repo, "rev-parse", "HEAD^{tree}"), grammar_dir(repo, archive=False))
+    return build_key(repo, git(repo, "rev-parse", "HEAD^{tree}"),
+                     grammar_dir(repo, archive=False))
 
 
 def record_tree_binary(repo, built, key_before):
@@ -261,17 +294,24 @@ def record_tree_binary(repo, built, key_before):
     copied into the cache before waiting for the cache lock (a later build into
     the same folder cannot swap it; review r1, sol). It differs in bytes from an
     archive build (the build folder's path is embedded), not in what it runs.
-    Entries older than TREE_ENTRY_DAYS go (a branch that never lands)."""
-    key = working_tree_key(repo)
-    if key is None or key != key_before:
-        log("the work tree has changes, a modified grammar or build overrides (or changed "
-            "during the build): its binary is not kept for a later base")
-        return
+    Entries older than TREE_ENTRY_DAYS go (a branch that never lands).
+
+    The binary is snapshotted first, as soon as cargo returns, before any check.
+    Limit (review r2, sol): another cargo build into `<target>/gate-release` that
+    finishes in the moment between this build's end and that copy would be kept
+    under this tree's key. Only ci-steps' build and perf-bounds use that folder, and
+    a landing runs `ci-steps all` to its end before `cdo-gate` starts."""
     root = cache_root()
     trees = os.path.join(root, "trees")
     os.makedirs(trees, exist_ok=True)
     snapshot = os.path.join(trees, f".incoming-{os.getpid()}")
     shutil.copy2(built, snapshot)
+    key = working_tree_key(repo)
+    if key is None or key != key_before:
+        os.remove(snapshot)
+        log("the work tree has changes, a modified grammar or build overrides (or changed "
+            "during the build): its binary is not kept for a later base")
+        return
     dst = os.path.join(trees, key, "alsem")
     with open(os.path.join(root, "lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -304,7 +344,7 @@ def cached_binary(repo, rev, logf):
         # ⟨TLS-34⟩ A gate that timed this commit's exact tree left its binary
         # (`record_tree_binary`): a landing's merge commit has the tree its gate
         # tested, so the warm step after a landing builds nothing.
-        key = build_key(git(repo, "rev-parse", "--verify", f"{sha}^{{tree}}"),
+        key = build_key(repo, git(repo, "rev-parse", "--verify", f"{sha}^{{tree}}"),
                         grammar_dir(repo, archive=True))
         seeded = key and os.path.join(root, "trees", key, "alsem")
         if seeded and os.path.exists(seeded):
