@@ -143,9 +143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - d33 reports the DeleteAll after `Reset` on `İndkøb` (break: the `Reset` compare back
         on `to_lowercase`);
       - the global backfill types `Ålcust` as `global` (break: the `global_rv_by_lc` key).
-    - `param_guard::tests::a_nordic_flag_is_a_guard_until_it_is_assigned` calls
-      `frame_guards` directly, so the literal-value pass cannot mask it (breaks: the
-      assignment compare; the usable name).
+    - `param_guard::tests::a_nordic_flag_is_a_guard_until_it_is_assigned` pins
+      `frame_guards` directly (breaks: the assignment compare; the usable name). **Limit:**
+      that pins the helper, not its use. In prove the literal-value pass masks
+      `param_guard` (breaking its compares alone still passes the CLI tests), so the call
+      site is unpinned.
     - `cli_prove_recref_guard::a_recordref_number_guard_reads_nordic_names_alike`: the
       RecordRef guard answers are unchanged with `ÆRecRef`, `ØVariantRec`, `Ålias`,
       `ÉRecordFilter` (break: `recref_flow::lc`).
