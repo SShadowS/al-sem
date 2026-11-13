@@ -11,7 +11,7 @@ debug build, 2026-11-12. Workspace: table 52700 "E25 Row" (`OnModify` commits) a
 | NotEmpty | `exit(not R.IsEmpty)` | same | no | yes |
 | ArrFind | `if Recs[1].FindFirst then;` | same | no | yes |
 | WithFind | `with R do if FindFirst then;` | same | no | yes |
-| ModifyValue | `exit(R.Modify)` | may-commit | no | yes (`OnModify` commits) |
+| ModifyValue | `exit(R.Modify)` | may-commit | no | yes: RunTrigger defaults to false, so `OnModify` does not run, but the table's `OnAfterModifyEvent` subscriber ("E25 Listener") commits |
 | StmtFind (control) | `R.FindFirst;` (statement) | touches | yes | yes |
 | WhileNext (control) | `if R.FindSet() then repeat until R.Next = 0;` | touches | yes (from `FindSet()`) | yes |
 | FieldCount (control) | `exit(F.Count)`, `Count` a FIELD of "E25 Fieldy" | touches "E25 Fieldy" | no | no (a field read) |
