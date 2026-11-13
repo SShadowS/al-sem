@@ -40,9 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LogAutoSendFailure`, both resting only on unknown code in dependencies: a chained interface
   call the resolver leaves open (`Provider.GetCache().GetSubscription` in Continia Core, whose
   one implementation only reads: ENG-64) and a telemetry logger registered at run time. Both
-  are false in practice, so d50 stays opt-in. Left: a callee with no row, which the trap search
-  counts as unknown code, is not counted here; the digest and explain still name physical tables
-  only; a `LockTable` on a temporary record counts (an over-approximation). Tests:
+  are false in practice, so d50 stays opt-in. A callee with no row counts as unknown code, as in
+  the trap search, and a codeunit variable's checked `Run()` with no `OnRun` edge (a symbol-only
+  dependency's) is a checked run in both readers, not unknown code (review round 1, gpt-6.1-sol).
+  Left: the digest and explain still name physical tables only; a `LockTable` on a temporary record counts (an over-approximation). Tests:
   `tests/cli/cli_eng24_pending_writes.rs` (one break on the shared rule fails both d50's test
   and the trap search's). Probe: `docs/superpowers/notes/2026-11-13-eng24-d50-pending-probe.md`.
 

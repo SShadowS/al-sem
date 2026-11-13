@@ -67,7 +67,9 @@ pub(crate) fn is_unknown_code_call(
     has_edge: bool,
     builtin: bool,
 ) -> bool {
-    !has_edge && !builtin && !is_checked_run(cs, None)
+    // `cs.checked_run`: the resolver's decision, which also covers a codeunit
+    // variable's `Ok := C.Run()` with no `OnRun` row (sol round 1).
+    !has_edge && !builtin && !cs.checked_run && !is_checked_run(cs, None)
 }
 
 /// ENG-24: the routines that may reach unknown code, `seeds` and every caller
@@ -114,6 +116,11 @@ impl<'a> UnknownCode<'a> {
             for &(site, to) in outs {
                 if !is_run_edge(from, site, to, routines) {
                     callers.entry(to).or_default().push(from);
+                }
+                // A callee with no row: its code is not known, as the trap
+                // search seeds it (sol round 1).
+                if !routines.contains_key(to) {
+                    seeds.insert(to);
                 }
             }
         }

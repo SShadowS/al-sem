@@ -689,3 +689,154 @@ fn the_digest_says_may_have_writes_for_order_unknown_tables() {
     assert!(own.iter().any(|c| c == "span-has-known-writes"), "{own:?}");
     assert!(!own.iter().any(|c| c.starts_with("span-may")), "{own:?}");
 }
+
+/// Review round 1 (gpt-6.1-sol): checked runs that are no unknown code.
+const ROUND3: &str = r#"
+codeunit 53020 "E24 EmptyCu"
+{
+    procedure Foo()
+    begin
+    end;
+}
+codeunit 53021 "E24 Worker3"
+{
+    trigger OnRun()
+    begin
+    end;
+}
+codeunit 53022 "E24 MissingRunner"
+{
+    trigger OnRun()
+    var
+        Missing: Codeunit "E24 Not Loaded";
+    begin
+        Missing.DoIt();
+    end;
+}
+codeunit 53023 "E24 Ops3"
+{
+    procedure VarRunNoOnRun()
+    var
+        E: Codeunit "E24 EmptyCu";
+    begin
+        if E.Run() then;
+        if Codeunit.Run(Codeunit::"E24 Worker3") then;
+    end;
+
+    procedure VarRunSymbolOnly()
+    var
+        S: Codeunit "E24 Sym Cu";
+    begin
+        if S.Run() then;
+        if Codeunit.Run(Codeunit::"E24 Worker3") then;
+    end;
+
+    local procedure IsolatedUnknownHelper()
+    begin
+        if Codeunit.Run(Codeunit::"E24 MissingRunner") then;
+    end;
+
+    procedure ViaIsolatedUnknown()
+    begin
+        IsolatedUnknownHelper();
+        if Codeunit.Run(Codeunit::"E24 Worker3") then;
+    end;
+}
+"#;
+
+/// ROUND3 in a workspace whose `"E24 Sym Cu"` comes from a dependency loaded
+/// from symbols only (its `OnRun` is not listed: no edge reaches it).
+fn round3_workspace() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e24e24e0-0000-4000-8000-0000000000ab","name":"E24 R3","publisher":"t","version":"1.0.0.0","dependencies":[{"id":"22222222-0000-0000-0000-0000000000e2","name":"E24 Sym","publisher":"t","version":"1.0.0.0"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(t.path().join("src/a.al"), ROUND3).unwrap();
+    let symbols = r#"{"RuntimeVersion":"13.0","AppId":"22222222-0000-0000-0000-0000000000e2","Name":"E24 Sym","Publisher":"t","Version":"1.0.0.0","Codeunits":[{"Id":70970,"Name":"E24 Sym Cu","Methods":[{"Name":"Foo","Parameters":[]}]}]}"#;
+    crate::symbol_app::write_symbol_app(
+        &t.path().join(".alpackages/t_E24 Sym_1.0.0.0.app"),
+        "22222222-0000-0000-0000-0000000000e2",
+        "E24 Sym",
+        "1.0.0.0",
+        symbols,
+    );
+    t
+}
+
+/// `alsem <args…> <ws> …` with `--format json`, parsed.
+fn run_json(ws: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    let mut all: Vec<&str> = vec![args[0], ws.to_str().unwrap()];
+    all.extend_from_slice(&args[1..]);
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(&all)
+        .args(["--format", "json"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
+}
+
+/// A codeunit variable's checked `Run()` (no `OnRun` declared, or one of a
+/// symbol-only dependency, whose run reaches no edge) is a checked run, not
+/// unknown code; unknown code reachable only through a helper's checked run
+/// ends with that run. None leaves a write pending at the next checked run,
+/// for d50 and the trap search alike.
+/// Breaks (2026-11-13): drop `!cs.checked_run` from `is_unknown_code_call` ->
+/// `VarRunSymbolOnly` gets a d50 finding ("unknown code at S.Run"; the local
+/// `VarRunNoOnRun` stays clean either way, its run resolves); drop the
+/// `!is_run_edge` filter in `UnknownCode::build` -> `ViaIsolatedUnknown` gets
+/// one ("unknown code behind IsolatedUnknownHelper"). Each fails; restored, it
+/// passes.
+#[test]
+fn checked_runs_end_unknown_code() {
+    let t = round3_workspace();
+    let v = run_json(
+        t.path(),
+        &[
+            "analyze",
+            "--detector",
+            D50,
+            "--deterministic",
+            "--scope",
+            "all",
+        ],
+    );
+    let fs: Vec<(String, String)> = v["payload"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["primaryLocation"]["routineName"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                f["rootCause"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    for routine in ["VarRunNoOnRun", "VarRunSymbolOnly", "ViaIsolatedUnknown"] {
+        assert!(cause(&fs, routine).is_none(), "{routine}: {fs:?}");
+        let p = run_json(
+            t.path(),
+            &[
+                "prove",
+                &format!("Codeunit \"E24 Ops3\"::{routine}"),
+                "throws-error",
+            ],
+        );
+        let escapes = p["payload"]["result"]["evidence"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|e| {
+                e["trap"]["kind"] == "checked-run-pending-write"
+                    && e["trap"]["verdict"] == "escapes-if-write-pending"
+            });
+        assert!(!escapes, "{routine}: {p}");
+    }
+}

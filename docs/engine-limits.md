@@ -481,8 +481,10 @@ callers' question reads (`commit_scope::declared`).
   d9 over its two-table gate, and appear only in the text ("possibly also pending (order
   unknown)"). The trap search changed on purpose: a dynamic checked `Codeunit.Run(Id)` is no
   longer unknown code (CDO's one site, `CDO Legacy eDoc Dispatcher.RunExportEDocCodeunit`, moves
-  no `prove` answer). Left: a callee with no row, which
-  the trap search counts as unknown code, has no counterpart here; each reader seeds the closure
+  no `prove` answer). Review round 1 (gpt-6.1-sol): a callee with no row counts as unknown code
+  here too, as in the trap search (`UnknownCode::build` seeds it), and a codeunit variable's
+  checked `Run()` the resolver decided (`PCallSite::checked_run`; no `OnRun` row, or a symbol-only
+  dependency's) is no unknown code in either reader. Left: each reader seeds the closure
   from its own inputs (the trap search from its guarded out-edges); a `LockTable` on a temporary
   record counts as pending in both readers (an over-approximation the shared rule keeps); the
   digest's pending line and explain's pending report still name physical tables only (explain

@@ -1390,6 +1390,52 @@ mod tests {
         assert_eq!(pending_at_seed(&spans, "root/cs1"), vec!["t/M", "t/X"]);
     }
 
+    /// ENG-24 (sol round 1): a resolved callee with no row (`ghost`: an edge,
+    /// but no model routine) is code not known, as the trap search seeds it:
+    /// pending at the checked run after it. Stated by hand: the graph holds
+    /// `ghost`, the routines do not.
+    /// Break (2026-11-13): drop the absent-row seed in `UnknownCode::build` ->
+    /// no label. Fails; restored, it passes.
+    #[test]
+    fn a_callee_with_no_row_is_unknown_code() {
+        let mut root = routine("rootg", "procedure");
+        root.call_sites
+            .push(crate::engine::l5::test_support::call_site(
+                "rootg/cs0",
+                "Ghost",
+                vec![],
+            ));
+        root.call_sites
+            .push(object_run_call_site("rootg/cs1", "Codeunit", Some(true)));
+        let routines = vec![root];
+        let graph = graph_from_edges(&["rootg", "ghost"], &[edge("rootg", "ghost", "rootg/cs0")]);
+        let reverse = build_reverse_call_graph(&graph);
+        let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
+        summaries.insert(
+            "rootg".to_string(),
+            summary("rootg", vec![], vec![], Some(coverage("complete"))),
+        );
+        let unknown: HashSet<&str> = HashSet::new();
+        let spans = compute_transaction_spans(
+            &routines,
+            &BTreeSet::new(),
+            &reverse,
+            &summaries,
+            &cone_store_of(&summaries),
+            &[],
+            Some(&unknown),
+        );
+        let other = &spans
+            .iter()
+            .find(|s| s.seed_callsite_id.as_deref() == Some("rootg/cs1"))
+            .expect("the checked run's span")
+            .pending_other;
+        assert!(
+            other.iter().any(|o| o == "unknown code behind Ghost"),
+            "{other:?}"
+        );
+    }
+
     /// ENG-22 review round 4: a helper whose cone follows an edge its forward
     /// sites lack (`h3 → u3`, a typed edge only) is not walked: `u3` writes
     /// `t/T`, which the run's target `w3` writes too, so the residue (by table)
