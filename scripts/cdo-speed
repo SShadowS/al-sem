@@ -207,6 +207,157 @@ def cache_root():
         os.path.expanduser("~"), ".cache", "al-sem", "cdo-speed")
 
 
+TREE_ENTRY_DAYS = 7
+
+
+def grammar_dir(repo, archive):
+    """The grammar clone a build uses: `TREE_SITTER_AL_PATH` when set; else the
+    working tree's own `tree-sitter-al` (al-syntax's build.rs fallback) or, for an
+    archive build (`cached_binary`), the main checkout's."""
+    if os.environ.get("TREE_SITTER_AL_PATH"):
+        return os.environ["TREE_SITTER_AL_PATH"]
+    if archive:
+        return os.path.normpath(os.path.join(
+            git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            "..", "tree-sitter-al"))
+    return os.path.join(repo, "tree-sitter-al")
+
+
+# Environment that changes what a build compiles, beyond the sources and the
+# grammar: any of these set means no key (review r1-r2, sol).
+BUILD_ENV_EXACT = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER",
+                   "RUSTC_WORKSPACE_WRAPPER", "CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS",
+                   "LDFLAGS", "AR",
+                   # cc-rs's host and target spellings (review r3, sol); by name, as a
+                   # `HOST_` prefix would also catch `HOSTNAME`.
+                   "HOST_CC", "HOST_CXX", "HOST_CFLAGS", "HOST_CXXFLAGS", "HOST_AR",
+                   "TARGET_CC", "TARGET_CXX", "TARGET_CFLAGS", "TARGET_CXXFLAGS", "TARGET_AR",
+                   "CRATE_CC_NO_DEFAULTS",
+                   # Review r1, Opus: another compiler than the tree's pin, incremental
+                   # code in release-fast, a value the root build.rs bakes into the binary.
+                   "RUSTUP_TOOLCHAIN", "CARGO_INCREMENTAL", "AL_CH_TELEMETRY_CONNECTION_STRING")
+BUILD_ENV_PREFIXES = ("CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_", "CFLAGS_",
+                      "CXXFLAGS_", "CC_", "CXX_", "AR_", "CARGO_ENCODED_RUSTFLAGS")
+# Where and how fast a build runs, not what it compiles.
+BUILD_ENV_HARMLESS = ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_JOBS")
+
+
+def build_overrides(repo):
+    """What, besides the sources and the grammar, could change a build here: build
+    environment, or a Cargo config file in a folder above the repo (the repo's own
+    `.cargo` is in its tree; the user's `$CARGO_HOME` applies to every build alike).
+    Empty when there is none."""
+    found = [k for k in os.environ if os.environ[k] and k not in BUILD_ENV_HARMLESS and (
+        k in BUILD_ENV_EXACT or k.startswith(BUILD_ENV_PREFIXES))]
+    cargo_home = os.path.realpath(os.environ.get("CARGO_HOME")
+                                  or os.path.join(os.path.expanduser("~"), ".cargo"))
+    d = os.path.dirname(os.path.realpath(repo))
+    while True:
+        for name in ("config", "config.toml"):
+            p = os.path.join(d, ".cargo", name)
+            if os.path.exists(p) and os.path.realpath(os.path.dirname(p)) != cargo_home:
+                found.append(p)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return found
+        d = parent
+
+
+def build_key(repo, tree, grammar):
+    """⟨TLS-34⟩ What a kept binary is keyed by: the source tree and the grammar
+    clone's commit (the grammar is an unpinned clone outside git, review r1, sol).
+    `None` when the build's inputs are not those two alone: a grammar clone given
+    by a relative path (git and the build would resolve it from different folders),
+    with local changes or untracked files (an added `scanner.c` is compiled), or
+    with no commit; or build overrides (`build_overrides`). No binary is kept or
+    seeded then."""
+    if not os.path.isabs(grammar) or build_overrides(repo):
+        return None
+    try:
+        rev = subprocess.run(["git", "-C", grammar, "rev-parse", "HEAD"], capture_output=True,
+                             text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "-C", grammar, "status", "--porcelain",
+                                "--untracked-files=normal"], capture_output=True, text=True,
+                               check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return None if dirty or not rev else f"{tree}-g{rev[:12]}"
+
+
+def working_tree_key(repo):
+    """The build key of the working tree when it is clean (no tracked change and
+    no untracked file outside .gitignore, as ci-steps' gate-pass record asks);
+    `None` otherwise."""
+    if git(repo, "status", "--porcelain", "--untracked-files=normal"):
+        return None
+    return build_key(repo, git(repo, "rev-parse", "HEAD^{tree}"),
+                     grammar_dir(repo, archive=False))
+
+
+def record_tree_binary(repo, built, key_before):
+    """⟨TLS-34⟩ Keep the working tree's release-fast binary in the cache under its
+    build key, so `cached_binary` can seed a commit with that tree (and grammar)
+    instead of building it. Only when the key taken before the build is the key
+    after it (the sources did not change around the build), and the binary is
+    copied into the cache before waiting for the cache lock (a later build into
+    the same folder cannot swap it; review r1, sol). It differs in bytes from an
+    archive build (the build folder's path is embedded), not in what it runs.
+    Entries older than TREE_ENTRY_DAYS go (a branch that never lands).
+
+    The binary is snapshotted first, as soon as cargo returns, before any check, and
+    the caller holds `.cdo-speed-build.lock` in that folder from the first key through
+    this snapshot, so no other cdo-speed builds there in between (review r2-r3, sol).
+    Limit: ci-steps' own build and perf-bounds also use `<target>/gate-release`
+    without that lock; a landing runs `ci-steps all` to its end before `cdo-gate`
+    starts, so they do not overlap there.
+
+    Keeping is an optimization: with no key it does nothing, and a file error only
+    logs. It never fails the speed check, whose exit 1 means "slower" (review r1,
+    Opus)."""
+    if key_before is None:
+        log("the work tree has changes, a modified grammar or build overrides: its "
+            "binary is not kept for a later base")
+        return
+    try:
+        _keep_tree_binary(repo, built, key_before)
+    except (OSError, subprocess.CalledProcessError) as e:
+        log(f"the working tree's binary was not kept (it only saves a later build): {e}")
+
+
+def _keep_tree_binary(repo, built, key_before):
+    root = cache_root()
+    trees = os.path.join(root, "trees")
+    os.makedirs(trees, exist_ok=True)
+    # A unique name (review r1, Opus); a leftover of a killed run is pruned below.
+    fd, snapshot = tempfile.mkstemp(dir=trees, prefix=".incoming-")
+    os.close(fd)
+    shutil.copy2(built, snapshot)
+    key = working_tree_key(repo)
+    if key != key_before:
+        os.remove(snapshot)
+        log("the sources changed during the build: its binary is not kept for a later base")
+        return
+    dst = os.path.join(trees, key, "alsem")
+    with open(os.path.join(root, "lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        cutoff = time.time() - TREE_ENTRY_DAYS * 86400
+        for name in os.listdir(trees):
+            path = os.path.join(trees, name)
+            if name.startswith(".incoming-"):
+                # Another run's snapshot in flight is minutes old at most.
+                if path != snapshot and os.path.getmtime(path) < time.time() - 86400:
+                    os.remove(path)
+            elif os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        if os.path.exists(dst):
+            os.remove(snapshot)
+        else:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            os.replace(snapshot, dst)
+    log(f"kept the working tree's binary for {key[:10]}…{key[-13:]} (a later base of that "
+        f"tree and grammar builds nothing)")
+
+
 def cached_binary(repo, rev, logf):
     """The release-fast alsem of commit `rev`, built once per commit and cached."""
     sha = git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}")
@@ -218,6 +369,20 @@ def cached_binary(repo, rev, logf):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if os.path.exists(exe):
             log(f"{rev} = {sha[:10]}: cached binary {exe}")
+            return exe, sha
+        # ⟨TLS-34⟩ A gate that timed this commit's exact tree left its binary
+        # (`record_tree_binary`): a landing's merge commit has the tree its gate
+        # tested, so the warm step after a landing builds nothing.
+        key = build_key(repo, git(repo, "rev-parse", "--verify", f"{sha}^{{tree}}"),
+                        grammar_dir(repo, archive=True))
+        seeded = key and os.path.join(root, "trees", key, "alsem")
+        if seeded and os.path.exists(seeded):
+            os.makedirs(os.path.dirname(exe), exist_ok=True)
+            tmp = exe + ".tmp"
+            shutil.copy2(seeded, tmp)
+            os.replace(tmp, exe)
+            log(f"{rev} = {sha[:10]}: seeded from a gate's build of its tree ({key[:10]}…) "
+                f"(no build) at {exe}")
             return exe, sha
         src = os.path.join(root, "build", "src")
         log(f"{rev} = {sha[:10]}: building (once per commit) in {src}")
@@ -237,9 +402,8 @@ def cached_binary(repo, rev, logf):
         if not env.get("TREE_SITTER_AL_PATH"):
             # The archive has no grammar clone; the checkout's own is the one
             # this repository builds against.
-            env["TREE_SITTER_AL_PATH"] = os.path.normpath(os.path.join(
-                git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-                "..", "tree-sitter-al"))
+            # The same clone `build_key` reads for the seeding key (review r1, Opus).
+            env["TREE_SITTER_AL_PATH"] = grammar_dir(repo, archive=True)
         t0 = time.monotonic()
         rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem"],
                             cwd=src, env=env, stdout=logf, stderr=subprocess.STDOUT).returncode
@@ -539,15 +703,26 @@ def main():
             head_exe, head_sha = cached_binary(repo, args.head, logf)
             head_label = head_sha[:10]
         else:
-            built = (os.path.join(gate_release_dir(repo), "release-fast", "alsem")
-                     if args.no_build else build_working_tree(repo, logf))
-            if not os.path.exists(built):
-                log(f"no binary at {built}")
-                return 2
-            # A copy: a later build into the target folder cannot swap it mid-run.
-            head_exe = os.path.join(outdir, "head-alsem")
-            if not args.build_only:
-                shutil.copy2(built, head_exe)
+            # TLS-34: the sources' key before the build, checked again after it.
+            # One cdo-speed at a time builds into this folder, snapshots what it
+            # built and copies its timed head (review r3-r4, sol: two concurrent
+            # runs could swap the binary between one's build and its copies).
+            os.makedirs(gate_release_dir(repo), exist_ok=True)
+            with open(os.path.join(gate_release_dir(repo), ".cdo-speed-build.lock"),
+                      "w") as build_lock:
+                fcntl.flock(build_lock, fcntl.LOCK_EX)
+                key_before = None if args.no_build else working_tree_key(repo)
+                built = (os.path.join(gate_release_dir(repo), "release-fast", "alsem")
+                         if args.no_build else build_working_tree(repo, logf))
+                if not os.path.exists(built):
+                    log(f"no binary at {built}")
+                    return 2
+                if not args.no_build:
+                    record_tree_binary(repo, built, key_before)
+                # A copy: a later build into the target folder cannot swap it mid-run.
+                head_exe = os.path.join(outdir, "head-alsem")
+                if not args.build_only:
+                    shutil.copy2(built, head_exe)
             dirty = git(repo, "status", "--porcelain", "--untracked-files=no")
             head_label = git(repo, "rev-parse", "--short=10", "HEAD") + (" + edits" if dirty else "")
     t_built = time.monotonic()

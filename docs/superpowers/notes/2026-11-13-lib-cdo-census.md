@@ -87,7 +87,43 @@ totals, other agents included, so adding two phases' peaks over-counts a little.
 - Risk to watch: in TLS-23's attempt the impact tests slowed under contention (1,047 s against
   428 s alone, beside a 4-thread lib_cdo). Here lane 2 runs niced, with lib_cdo at 2 threads.
   The landing gate's impact time shows whether that holds.
-- Measured: (the first landing gate in the parallel layout; to fill in.)
+- Measured, the first landing gate in the parallel layout (TLS-32's own,
+  `cdo-gate-logs/20261113-091217-3487276`, 2026-11-13; host load ~195 at the speed phase's start):
+  - layout: parallel, lib_cdo at 2 threads (need 43,496 MiB; host MemAvailable 49,455, container
+    free 47,507);
+  - memory: peak 27,275 MiB, headroom 21.9 GiB, no OOM. The memory estimate was very cautious;
+  - time: no gain.
+    - The impact phase took 472 s (~350 serial).
+    - Lane 2 took 598 s: harness 86 (~40-45 serial), lsp 14, l4 29, lib_cdo 469 (234 at 4 threads
+      serial).
+    - The parallel section took ~598 s against ~650 serial, and the whole gate 1,163 s.
+- Why, from the lib_cdo log (each test's time in this gate, against the census alone):
+
+  | test | gate | alone | ratio | beside impact |
+  |---|---:|---:|---:|---|
+  | `relation_equals_the_legacy_base_on_cdo` | 57 s | 24 s | 2.4× | yes |
+  | `derived_only_matches_raw_fold_on_cdo` | 299 s | 101 s | 3.0× | mostly |
+  | `parallel_solve_equals_the_serial_walk_on_cdo` | 95 s | 42 s | 2.3× | yes |
+  | `parallel_direct_facts_equal_serial_on_cdo` | 76 s | 23 s | 3.3× | yes |
+  | `cdo_i369_no_path_rows_and_fact_ids` | 86 s | 55 s | 1.6× | partly |
+  | `cdo_crossing_census` | 129 s | 108 s | 1.2× | barely |
+  | `retained_emission_equals_a_composition_on_cdo` | 127 s | 105 s | 1.2× | no (impact had ended) |
+
+  - The slowdown is CPU contention between the two parts, on top of the outside load. The tests
+    that ran beside the impact phase took 2.3-3.3× their time alone; those after it ran near it.
+  - "2 threads" is not 2 cores. Each test runs parallel code inside (rayon pools: the model
+    build, TLS-29's walk, the parallel solve, the parallel direct facts), so lane 2 competes for
+    every core, and the impact phase slows too (472 s against ~350).
+  - The packing also hurt. libtest starts tests in name order, so the longest,
+    `retained_emission` (105 s alone), started last, after the impact phase had ended.
+- What could make it pay (not done; for the orchestrator):
+  1. Cap lane 2's own parallelism when it runs beside the impact phase (`RAYON_NUM_THREADS` for
+     its phases), so the impact phase keeps most cores. Lane 2 has ~350 s of room.
+  2. Start the long lib tests first (nextest supports ordering; libtest does not).
+  3. Measure again on a quieter host. Load ~195 on 22 cores makes this gate's times mostly noise
+     for both layouts.
+  Until then the parallel layout costs nothing in memory (21.9 GiB headroom) and gains little in
+  time on a loaded host.
 
 ## TLS-33 follow-up: the 60 s left in speed_build
 
