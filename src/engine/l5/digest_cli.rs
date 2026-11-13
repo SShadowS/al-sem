@@ -7706,6 +7706,7 @@ mod tests {
             span_roots: vec!["r".to_string()],
             coverage_complete: true,
             pending_physical_tables: pending.iter().map(|s| s.to_string()).collect(),
+            pending_order_unknown_tables: vec![],
             pending_other: vec![],
             pending_events: vec![],
             pending_physical_by_routine: Default::default(),

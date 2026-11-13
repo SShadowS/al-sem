@@ -58,15 +58,73 @@ pub(crate) type ForwardSites<'a> = HashMap<&'a str, Vec<(Option<&'a str>, &'a st
 pub(crate) use crate::engine::l4::cone_derived::op_may_leave_write_pending;
 
 /// ENG-24: the pending rule's other case, unknown code: a call site that no
-/// resolved edge leaves (`sited`) and the resolver did not classify as a
-/// platform method (`builtin`). Read by the trap search's pending writes and
-/// by this walk ([`unknown_code_sites`]).
-pub(crate) fn is_unknown_code_site(
-    site: &str,
-    sited: &HashSet<&str>,
-    builtin: &HashSet<&str>,
+/// resolved edge leaves (`has_edge`), that the resolver did not classify as a
+/// platform method (`builtin`), and that is not a checked run (a dynamic
+/// `Codeunit.Run(Id)`: its writes end with the run, astra round 1). Read by
+/// the trap search's pending writes and by this walk ([`unknown_code_sites`]).
+pub(crate) fn is_unknown_code_call(
+    cs: &crate::program::body::features::PCallSite,
+    has_edge: bool,
+    builtin: bool,
 ) -> bool {
-    !sited.contains(site) && !builtin.contains(site)
+    !has_edge && !builtin && !is_checked_run(cs, None)
+}
+
+/// ENG-24: the routines that may reach unknown code, `seeds` and every caller
+/// of one except through a checked run (its writes end with the run).
+/// `callers(x)` gives `x`'s callers over the edges that are not checked runs.
+/// The one closure the trap search's pending writes and this walk use.
+pub(crate) fn reach_back<'a, I>(
+    seeds: HashSet<&'a str>,
+    callers: impl Fn(&'a str) -> I,
+) -> HashSet<&'a str>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut out = seeds.clone();
+    let mut q: Vec<&'a str> = seeds.into_iter().collect();
+    while let Some(x) = q.pop() {
+        for p in callers(x) {
+            if out.insert(p) {
+                q.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// ENG-24: the unknown code the walk reads: the call sites ([`unknown_code_sites`])
+/// and the routines that may reach one ([`reach_back`]).
+#[derive(Default)]
+pub(crate) struct UnknownCode<'a> {
+    pub sites: HashSet<&'a str>,
+    pub reach: HashSet<&'a str>,
+}
+
+impl<'a> UnknownCode<'a> {
+    /// `sites`, and the routines over `fwd` that may reach one of them.
+    pub(crate) fn build(
+        sites: HashSet<&'a str>,
+        fwd: &ForwardSites<'a>,
+        routines: &HashMap<&'a str, &'a ModelRoutine>,
+    ) -> Self {
+        let mut seeds: HashSet<&'a str> = HashSet::new();
+        let mut callers: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        for (&from, outs) in fwd {
+            for &(site, to) in outs {
+                if !is_run_edge(from, site, to, routines) {
+                    callers.entry(to).or_default().push(from);
+                }
+            }
+        }
+        for (&id, r) in routines {
+            if r.call_sites.iter().any(|c| sites.contains(c.id.as_str())) {
+                seeds.insert(id);
+            }
+        }
+        let reach = reach_back(seeds, |x| callers.get(x).into_iter().flatten().copied());
+        UnknownCode { sites, reach }
+    }
 }
 
 /// ENG-24: the model's unknown-code call sites ([`is_unknown_code_site`] over
@@ -88,8 +146,14 @@ pub(crate) fn unknown_code_sites<'a>(
     routines
         .iter()
         .flat_map(|r| r.call_sites.iter())
+        .filter(|c| {
+            is_unknown_code_call(
+                c,
+                sited.contains(c.id.as_str()),
+                builtin.contains(c.id.as_str()),
+            )
+        })
         .map(|c| c.id.as_str())
-        .filter(|c| is_unknown_code_site(c, &sited, &builtin))
         .collect()
 }
 
@@ -109,12 +173,32 @@ pub(crate) fn pending_sibling(subscriber: &str, event: &str) -> String {
     format!("{PENDING_SIBLING_PREFIX}{subscriber} of event {event} (order unknown)")
 }
 
-/// ENG-24: whether routine `id`'s cone may leave a write pending: a physical
-/// write, a `LockTable` or a write whose table does not resolve.
-pub(crate) fn cone_may_leave_write_pending(cd: &ConeDerivedStore, id: &str) -> bool {
-    use crate::engine::l4::cone_derived::{MAY_PENDING_LOCK, MAY_PENDING_UNRESOLVED_WRITE};
-    cd.physical_write_ids_of(id).next().is_some()
-        || cd.flags_of(id) & (MAY_PENDING_LOCK | MAY_PENDING_UNRESOLVED_WRITE) != 0
+/// ENG-24: the label of code the same record operation runs before the span
+/// member it leads to (the table's trigger, an OnBefore event's subscriber).
+pub(crate) fn pending_runs_first(what: &str, name: &str, event: &str) -> String {
+    format!("possibly pending: {what} {name} of {event}, which runs first")
+}
+
+/// ENG-24: what a sibling subscriber `id` may leave pending when it returns:
+/// its cone without its checked runs ([`RunCleanCones`], astra round 1), and
+/// whether it may at all (that, or unknown code it may reach).
+pub(crate) fn sibling_pending<'a>(id: &'a str, cx: &PendingCtx<'a>) -> (Pending, bool) {
+    let p = match cx.clean.and_then(|c| c.of(id, cx)) {
+        Some(p) => (*p).clone(),
+        None => {
+            let mut e = Effects::default();
+            e.add_cone(id, cx);
+            Pending {
+                tables: e.tables.into_iter().map(str::to_string).collect(),
+                events: e.events.into_iter().map(str::to_string).collect(),
+                other: e.other.into_iter().map(str::to_string).collect(),
+            }
+        }
+    };
+    let may = !p.tables.is_empty()
+        || !p.other.is_empty()
+        || cx.unknown.is_some_and(|u| u.reach.contains(id));
+    (p, may)
 }
 
 pub(crate) fn forward_sites(reverse: &ReverseCallGraph) -> ForwardSites<'_> {
@@ -179,9 +263,8 @@ pub(crate) struct PendingCtx<'a> {
     /// The callees' cones without their checked runs; `None` counts each
     /// callee's whole cone (a caller that holds one routine's sites only).
     pub clean: Option<&'a RunCleanCones<'a>>,
-    /// ENG-24: the model's unknown-code call sites ([`unknown_code_sites`]);
-    /// `None` counts none.
-    pub unknown: Option<&'a HashSet<&'a str>>,
+    /// ENG-24: the model's unknown code ([`UnknownCode`]); `None` counts none.
+    pub unknown: Option<&'a UnknownCode<'a>>,
 }
 
 /// ENG-22: the writes and events a called routine leaves pending, with every
@@ -679,8 +762,26 @@ pub(crate) fn pending_of(
     targets: &[&str],
     cx: &PendingCtx<'_>,
 ) -> Pending {
+    pending_of_written(r, before, targets, &BTreeSet::new(), cx)
+}
+
+/// [`pending_of`], where the record operations at `written` (targets) have
+/// written before the span member they lead to runs (an OnAfter table event's
+/// subscriber): their own writes count, their callees still do not.
+pub(crate) fn pending_of_written(
+    r: &ModelRoutine,
+    before: &Before,
+    targets: &[&str],
+    written: &BTreeSet<&str>,
+    cx: &PendingCtx<'_>,
+) -> Pending {
     let targets: BTreeSet<&str> = targets.iter().copied().collect();
-    effects(r, &before.sites, &targets, cx)
+    effects(r, &before.sites, &targets, written, cx)
+}
+
+/// ENG-24: the label of unknown code reached through a call, by its text.
+pub(crate) fn pending_unknown_code_behind(callee_text: &str) -> String {
+    format!("unknown code behind {callee_text}")
 }
 
 /// The effects of `sites` in `r`: its own physical writes and published events
@@ -693,6 +794,7 @@ fn effects(
     r: &ModelRoutine,
     sites: &BTreeSet<String>,
     targets: &BTreeSet<&str>,
+    written: &BTreeSet<&str>,
     cx: &PendingCtx<'_>,
 ) -> Pending {
     let PendingCtx {
@@ -706,12 +808,24 @@ fn effects(
     } = *cx;
     let mut out = Pending::default();
     // ENG-24: unknown code before the target (a call no edge resolves): it may
-    // write. Only this routine's own sites; unknown code deeper in a callee's
-    // cone is not tracked (no cone fact records it).
+    // write. A call into a routine that may reach unknown code (not through a
+    // checked run) is labeled by its own text.
     if let Some(unknown) = unknown {
         for cs in &r.call_sites {
-            if sites.contains(&cs.id) && unknown.contains(cs.id.as_str()) {
+            if sites.contains(&cs.id) && unknown.sites.contains(cs.id.as_str()) {
                 out.other.insert(pending_unknown_code(&cs.callee_text));
+            }
+        }
+        for &(site, to) in fwd.get(r.id.as_str()).map_or(&[][..], Vec::as_slice) {
+            let Some(cs) = site
+                .filter(|s| sites.contains(*s))
+                .and_then(|s| r.call_sites.iter().find(|c| c.id == s))
+            else {
+                continue;
+            };
+            if unknown.reach.contains(to) && !is_checked_run(cs, routines.get(to).copied()) {
+                out.other
+                    .insert(pending_unknown_code_behind(&cs.callee_text));
             }
         }
     }
@@ -740,9 +854,13 @@ fn effects(
             }
             // A fact with no site is the routine's own, at its entry (a
             // publisher's `publish`): before any target.
-            // A target that is not ALSO before itself (a loop) adds its event only.
-            let at_target = at.is_some_and(|w| !sites.contains(w) && targets.contains(w.as_str()));
-            if at.is_some_and(|w| !sites.contains(w)) && !at_target {
+            // A target that is not ALSO before itself (a loop) adds its event
+            // only, unless its operation has written by then (`written`).
+            let at_target = at.is_some_and(|w| {
+                !sites.contains(w) && targets.contains(w.as_str()) && !written.contains(w.as_str())
+            });
+            if at.is_some_and(|w| !sites.contains(w) && !written.contains(w.as_str())) && !at_target
+            {
                 continue;
             }
             // ENG-24: the shared rule's cases with no physical table to name:

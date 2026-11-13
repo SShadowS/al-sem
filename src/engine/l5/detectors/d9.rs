@@ -78,7 +78,14 @@ pub fn detect_d9(
 
         // tableDesc: "writes {n} known table(s)" if n>0 else ("writes tables (effect scope unknown)"
         // if !coverage_complete else "writes tables").
-        let table_desc = if table_count > 0 {
+        let unordered = span.pending_order_unknown_tables.len();
+        let table_desc = if table_count > 0 && unordered > 0 {
+            // ENG-24: tables only another event subscriber (or a trigger) writes.
+            format!(
+                "writes {table_count} known table(s) before it ({unordered} of them only in \
+                 another event subscriber or trigger, which may run before it: order unknown)"
+            )
+        } else if table_count > 0 {
             format!("writes {table_count} known table(s) before it")
         } else if !span.coverage_complete {
             "writes tables (effect scope unknown)".to_string()
