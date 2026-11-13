@@ -1,5 +1,5 @@
 {
-  "mintedAt": "044f7137; d50 fixtures re-minted for ENG-22 (d50 changed meaning, owner q-20261112T025612-62a3ca62)",
+  "mintedAt": "044f7137; d50 fixtures re-minted for ENG-22 (d50 changed meaning, owner q-20261112T025612-62a3ca62); ws-grammar-v4-shapes added at dc0608a6 for TLS-41 (no other fixture moved)",
   "fixtures": {
     "fixtures/analyze-json": {
       "findings": [
@@ -2227,6 +2227,16 @@
         "55555555-ca11-0000-0000-0000000ca115:Table:50450#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
       ],
       "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"358aa7cff87f1052\",\n    \"62540ceec56dfcfc\",\n    \"6a222ca44952614d\",\n    \"71b8313c8080e734\",\n    \"75eb93864cdc8ae0\",\n    \"789c0851dbdfe61c\",\n    \"8148d7f1256e1546\",\n    \"d3e08e102a86795c\",\n    \"f65a9b7db5b38bf7\"\n  ]\n}\n"
+    },
+    "r0-corpus/ws-grammar-v4-shapes": {
+      "findings": [],
+      "stableIds": [
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b41:Codeunit:50410#4ec1c7ce43bc85c04ddf7c3475f6cd0b0a8c0631217a8a4594fd1d7733aaed79",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b41:Codeunit:50410#5252113155bb58f4c7ad03f998dd5fc73285c71fe0e95399acdab0e08a1c0aa6",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b41:Codeunit:50410#9a15652805db72c7a2963284b872dffea49de8c3b212c1f043131d6cfb569fe7",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b41:Codeunit:50410#ac0a74e107a056322335e20fd3486b0a8cbed6617f9fb2f14fdbefaabf907a23",
+        "4a7e0b1c-9d2f-4e3a-8b5c-0f1e2d3c4b41:Codeunit:50410#f8835bfd0c0d3ffd1c689ac0d7766c39c98028f52ebfd3fc2bb510744830ce3d"
+      ]
     },
     "r0-corpus/ws-implicit-trigger": {
       "findings": [

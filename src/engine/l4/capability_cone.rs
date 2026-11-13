@@ -7775,7 +7775,8 @@ codeunit 50111 "Cell Calls"
     /// a new fixture changes this one list (`exec_relation`'s parity test reads
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
-        ("r0-corpus", 221),
+        // 222: + `ws-grammar-v4-shapes` (TLS-41, 2026-11-13).
+        ("r0-corpus", 222),
         // 64: + `write-order` (output validation r3 §7 R6, 2026-11-08).
         // 65: + `isolated-events/ws` (engine limits B3, 2026-11-09).
         // 66: + `up-parallel/ws` (TLS-21, 2026-11-12).

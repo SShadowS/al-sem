@@ -645,6 +645,11 @@ ws-friend-app-internal/c1_directionality_reverse_stays_unknown/DirBCaller.al::0:
 ws-friend-app-internal/c1_directionality_reverse_stays_unknown/DirBTarget.al::0::SecretB	8f9525ccb7395f4c
 ws-friend-app-internal/d1_same_app_internal_unaffected/SameAppCaller.al::0::Trigger	b892528ff35dff38
 ws-friend-app-internal/d1_same_app_internal_unaffected/SameAppTarget.al::0::DoWork	d09dd6005ebceb4a
+ws-grammar-v4-shapes/src/Shapes.Codeunit.al::0::DanglingElse	1ca220e6a45ab25e
+ws-grammar-v4-shapes/src/Shapes.Codeunit.al::0::Precedence	365fa2d4c294e6a2
+ws-grammar-v4-shapes/src/Shapes.Codeunit.al::0::Ranges	27c3b5249b79e356
+ws-grammar-v4-shapes/src/Shapes.Codeunit.al::0::OnInner	eff5b8a8590158cd
+ws-grammar-v4-shapes/src/Shapes.Codeunit.al::0::OnInnerElse	f8d3a82cc1f4d6d2
 ws-implicit-trigger/src/order.al::0::OnValidate	3b6cc32922854247
 ws-implicit-trigger/src/processor.al::0::ProcessLines	2c08a34863598fcd
 ws-implicit-trigger/src/processor.al::0::ValidateQuantity	ae54d429b651aed7

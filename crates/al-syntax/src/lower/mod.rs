@@ -4562,6 +4562,9 @@ pub(crate) fn origin_of(n: RawNode) -> Origin {
 }
 
 #[cfg(test)]
+mod grammar_v4_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::ir::{ExprKind, Literal, StmtKind};
     use crate::parse;
