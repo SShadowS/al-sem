@@ -17,10 +17,10 @@ use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{Access, ObjectNode, ObjectRef, RoutineNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    AbiRoutineKey, Condition, DispatchShape, EdgeKind, EvidenceKind, OpenBound, RouteTarget,
+    AbiRoutineKey, Condition, DispatchShape, EdgeKind, EvidenceKind, OpenBound, Route, RouteTarget,
 };
 use crate::program::resolve::event::PublisherKind;
-use crate::program::resolve::full::ObligationId;
+use crate::program::resolve::full::{FieldRefValidate, ObligationId};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolved::EdgeView;
 use crate::snapshot::TrustTier;
@@ -507,23 +507,32 @@ impl<'a> Builder<'a> {
             // model's cone already follows (`program_calls`'s dataset
             // operations), so a test that imports into a table is selected for
             // a change to that table's trigger or to a table-event subscriber.
+            // ENG-12 / ENG-06: so does a record operation the site facts carry
+            // instead of the edge (a call result's, `GetRef().Modify(true)`; a
+            // FieldRef's `Validate`), its trigger rule already applied.
             if let ObligationId::CallSite { .. } = ce.obligation_id
-                && let Some(run) = inp
-                    .edges
-                    .site_facts
-                    .get(&ce.obligation_id)
-                    .and_then(|f| f.dataset_run.as_ref())
+                && let Some(facts) = inp.edges.site_facts.get(&ce.obligation_id)
             {
-                for eff in &run.effects {
-                    let routes = eff
-                        .triggers
+                let mut ops: Vec<(&[Route], &[Route], Conf)> = Vec::new();
+                for eff in facts.dataset_run.iter().flat_map(|run| &run.effects) {
+                    ops.push((&eff.triggers, &eff.table_events, Conf::OverApprox));
+                }
+                if let Some(cr) = &facts.call_result_record {
+                    ops.push((&cr.triggers, &cr.table_events, Conf::Resolved));
+                }
+                if let Some(FieldRefValidate::Decided {
+                    triggers,
+                    table_events,
+                    ..
+                }) = &facts.field_ref_validate
+                {
+                    ops.push((triggers, table_events, Conf::Resolved));
+                }
+                for (triggers, table_events, conf) in ops {
+                    let routes = triggers
                         .iter()
                         .map(|r| (Kind::Trigger, "implicitTrigger", r))
-                        .chain(
-                            eff.table_events
-                                .iter()
-                                .map(|r| (Kind::Event, "tableEvent", r)),
-                        );
+                        .chain(table_events.iter().map(|r| (Kind::Event, "tableEvent", r)));
                     for (kind, via, r) in routes {
                         let to = match &r.target {
                             RouteTarget::Routine(rid) => Key::Routine(rid.clone()),
@@ -546,17 +555,10 @@ impl<'a> Builder<'a> {
                             }
                             RouteTarget::Builtin(_) | RouteTarget::Unresolved => continue,
                         };
-                        // Whether the platform's own insert runs `OnInsert` is
-                        // not documented (the operation's `Maybe` trigger edge).
-                        self.add(
-                            from.clone(),
-                            to,
-                            kind,
-                            Conf::OverApprox,
-                            via,
-                            line,
-                            BTreeSet::new(),
-                        );
+                        // A dataset run's: whether the platform's own insert
+                        // runs `OnInsert` is not documented (the operation's
+                        // `Maybe` trigger edge), so OverApprox.
+                        self.add(from.clone(), to, kind, conf, via, line, BTreeSet::new());
                     }
                 }
             }
@@ -2927,5 +2929,51 @@ pub(crate) mod tests {
         );
         let o = w.project(a);
         assert_eq!(o.edge("Dep.R", "h:any").2, "unresolved");
+    }
+
+    /// ENG-12: a record operation on a call result (`GetRef().Modify(true)`)
+    /// carries its trigger and table-event routes in the site facts only (the
+    /// edge routes nowhere); the export runs the trigger and raises the event,
+    /// so a test reaching it is selected for a change to either. Hand-stated:
+    /// the site's edge has no route, its facts hold a `CallResultRecord`.
+    ///
+    /// DISCRIMINATION (2026-11-13): skipping the `call_result_record` push in
+    /// `Projector`'s fact-op loop fails "the call result runs the trigger".
+    #[test]
+    fn a_call_result_record_op_runs_its_trigger_and_raises_its_table_event() {
+        use crate::program::resolve::full::CallResultRecord;
+        let mut w = World::default();
+        let a = w.app("W");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let table = w.obj(a, ObjectKind::Table, 50, "T", TrustTier::Workspace);
+        let on_modify = w.trigger(&table, "OnModify");
+        let event = w.rtn_with(&table, "OnAfterModifyEvent", |r| {
+            r.publisher_kind = Some(PublisherKind::Platform)
+        });
+        let p = w.rtn(&cu, "P");
+        let site = w.edge(&p, EdgeKind::Call, DispatchShape::Multicast, vec![], 1);
+        w.site_facts.insert(
+            site,
+            SiteFacts {
+                call_result_record: Some(CallResultRecord {
+                    op: "Modify",
+                    table: table.clone(),
+                    triggers: vec![src(&on_modify)],
+                    table_events: vec![src(&event)],
+                }),
+                ..Default::default()
+            },
+        );
+        let o = w.project(a);
+        assert_eq!(
+            o.edge("Cu.P", "T.OnModify"),
+            ("Trigger", "Resolved", "implicitTrigger"),
+            "the call result runs the trigger"
+        );
+        assert_eq!(
+            o.edge("Cu.P", "T.OnAfterModifyEvent"),
+            ("Event", "Resolved", "tableEvent"),
+            "the call result raises the table event"
+        );
     }
 }

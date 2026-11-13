@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Recs[1]` are one receiver; `query effects` lists `GetBySystemId` as a read. A record
   operation written without parentheses in expression position (`if R.FindFirst then`, about 96
   sites in CDO) is still not seen: task ENG-25.
+- Review round 3: a call result's `CalcFields(F)` reads its FlowFields' source tables and its
+  `ModifyAll(F, …)` writes field `F` (`explain --field`); cross-app demand follows the triggers and
+  table events a call result's record operation (and a FieldRef's `Validate`) raises, so a
+  dependency trigger reached only that way is loaded, and `alsem graph` exports them (Resolved
+  `implicitTrigger`/`tableEvent` edges), so test selection reaches a trigger through them; `Recs[ 1 ].SetAutoCalcFields(F)` is spelled
+  as its retrieval's receiver, and an array element's FlowField setup is shared only as its array
+  variable is (another routine's local array no longer supplies it).
 
 ### Fixed (ENG-10: a database write inside a used try call is refused on premises, engine limits L23 item 6)
 

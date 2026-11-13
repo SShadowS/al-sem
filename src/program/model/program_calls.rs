@@ -601,7 +601,12 @@ fn attach_program_calls_with(
     }
     // B6: the platform's dataset operations join their call site's row, after
     // the operations written in code (no site key: the site keys end above).
-    for (ri, ops) in dataset_ops.ops {
+    for (ri, mut ops) in dataset_ops.ops {
+        // ENG-12: a call result's `CalcFields` joins after the FlowField pass.
+        crate::program::model::flow_fields::attach_calc_fields_reads(
+            &rows.workspace.tables,
+            &mut ops,
+        );
         rows.workspace.routines[ri].record_operations.extend(ops);
     }
     for (ri, ci) in dataset_ops.may_fail_sites {
@@ -1096,7 +1101,7 @@ fn cross_app_assemble_from(
         crate::program::resolve::demand::cross_app_demand(
             ctx.primary_app_ref,
             ctx.graph(),
-            body.all_edges(),
+            body.edge_view(),
         )
     };
     let assembled = {
@@ -3191,18 +3196,24 @@ impl<'a> Converter<'a> {
                 value: None,
                 parameter_index: None,
             }),
-            // `Validate(Field, …)`: its field, as written.
-            field_arguments: (cr.op == "Validate")
-                .then(|| cs.argument_texts.first().cloned())
-                .flatten()
-                .map(|f| vec![f]),
+            // `Validate(Field, …)`: its field, as written; `CalcFields(F1, …)`:
+            // every field (their FlowField reads are attached with the op,
+            // `flow_fields::attach_calc_fields_reads`).
+            field_arguments: match cr.op {
+                "Validate" => cs.argument_texts.first().cloned().map(|f| vec![f]),
+                "CalcFields" => Some(cs.argument_texts.clone()),
+                _ => None,
+            },
             source_anchor: cs.source_anchor.clone(),
             loop_stack: cs.loop_stack.clone(),
             field_argument_infos: None,
             in_until_condition: false,
             in_statement_position: cs.in_statement_position,
             run_trigger: None,
-            modify_all_field: None,
+            // `ModifyAll(Field, …)`: the field it writes, as written.
+            modify_all_field: (cr.op == "ModifyAll")
+                .then(|| cs.argument_texts.first().cloned())
+                .flatten(),
             transfer_fields_source: None,
             receiver_is_record_ref: false,
             flow_field_reads: Vec::new(),

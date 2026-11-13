@@ -78,6 +78,14 @@ codeunit 52601 "E12 Ops"
     begin
         GetPlain().Modify(true);
     end;
+    procedure GetRefModifyAll()
+    begin
+        GetRef().ModifyAll(V, 1);
+    end;
+    procedure GetRefCalc()
+    begin
+        GetRef().CalcFields(Cnt);
+    end;
     local procedure GetPlain(): Record "E12 Plain"
     var
         P: Record "E12 Plain";
@@ -240,6 +248,9 @@ codeunit 52604 "E12 More"
     begin
         exit(R);
     end;
+}
+codeunit 52607 "E12 Spaced Flow"
+{
     procedure SpacedFlow()
     var
         Recs: array[2] of Record "E12 Row";
@@ -247,6 +258,9 @@ codeunit 52604 "E12 More"
         Recs[1].SetAutoCalcFields(Cnt);
         if Recs[ 1 ].FindFirst() then;
     end;
+}
+codeunit 52608 "E12 Spaced Setup"
+{
     procedure SpacedSetup()
     var
         Recs: array[2] of Record "E12 Row";
@@ -254,12 +268,30 @@ codeunit 52604 "E12 More"
         Recs[ 1 ].SetAutoCalcFields(Cnt);
         if Recs[1].FindFirst() then;
     end;
+}
+codeunit 52609 "E12 Spaced Both"
+{
     procedure SpacedBoth()
     var
         Recs: array[2] of Record "E12 Row";
     begin
         Recs[ 1 ].SetAutoCalcFields(Cnt);
         if Recs[ 1 ].FindFirst() then;
+    end;
+}
+codeunit 52610 "E12 Local Setup"
+{
+    procedure Setup()
+    var
+        Recs: array[2] of Record "E12 Row";
+    begin
+        Recs[1].SetAutoCalcFields(Cnt);
+    end;
+    procedure Retrieve()
+    var
+        Recs: array[2] of Record "E12 Row";
+    begin
+        if Recs[1].FindFirst() then;
     end;
 }
 "#;
@@ -410,8 +442,6 @@ fn answer(args: &[&str]) -> String {
 /// - a global array and an array parameter are records through elements;
 /// - a temporary array's element is temporary;
 /// - a read on a known table's call result reads it (a record operation);
-/// - `Recs[ 1 ]` is the element `Recs[1]` set its FlowField up on, so its
-///   retrieval reads the FlowField's source table;
 /// - an object global through `this` is a record operation with the global's
 ///   own temp state (ENG-12 gate).
 ///
@@ -419,9 +449,7 @@ fn answer(args: &[&str]) -> String {
 /// `Shadow` answers `no`; `receiver_variable` without its `Index` arm ->
 /// `GlobalArr` and `ArrParam` answer `no`; skip the temporary element in
 /// pass 2b -> `TempArr` counts 0 temporary touches; `touches_table` false in
-/// the member-path step -> `GetRefRead` answers `no`; `receiver_key_text`
-/// returning its input -> `SpacedFlow` answers `no` for "E12 Plain";
-/// `record_ops::is_this` false -> `ThisTemp` counts 0 temporary touches (the
+/// the member-path step -> `GetRefRead` answers `no`; `record_ops::is_this` false -> `ThisTemp` counts 0 temporary touches (the
 /// call-result path still answers `ThisRead`/`ThisModifyTrue`, with an
 /// unknown temp state). Review round 3: keep the quotes of `this."X"` ->
 /// `ThisQuotedTemp` counts 0 temporary touches; let `this_receivers` keep a
@@ -502,13 +530,65 @@ fn the_review_shapes() {
     // A read on a known table's call result is a record operation of its own.
     let a = tc("GetRefRead", "E12 Row");
     assert!(a.starts_with("answer: down: yes"), "GetRefRead: {a}");
-    // Round 2 (astra): either side spaced, or both. The setup side already
-    // matches without normalizing `flow_fields::var_key` (a break normalizing
-    // it changed nothing, 2026-11-12), so these pin the behaviour only.
-    for r in ["SpacedFlow", "SpacedSetup", "SpacedBoth"] {
-        let a = tc(r, "E12 Plain");
-        assert!(a.starts_with("answer: down: yes"), "{r}: {a}");
+}
+
+/// The `answer:` line of `query touches --table <table> --from <from> --direction down`.
+fn touches(ws: &str, table: &str, from: &str) -> String {
+    answer(&[
+        "query",
+        "touches",
+        "--table",
+        table,
+        "--from",
+        from,
+        "--direction",
+        "down",
+        ws,
+    ])
+}
+
+/// Rounds 2 and 3 (astra): `Recs[ 1 ]` is the element `Recs[1]`, on either
+/// side of a FlowField's setup, so the retrieval reads the FlowField's source
+/// table. Each shape in its own codeunit: a setup in another routine of the
+/// same object once supplied the missing key (a local array's element was
+/// shared as an undeclared name, the implicit `Rec`); it is the routine's own
+/// local, shared with no other routine (`Retrieve`).
+/// Breaks (2026-11-12): `flow_fields::var_key` without `receiver_key_text`
+/// -> `SpacedSetup` and `SpacedBoth` answer `no`; `Sharing::scopes` looking
+/// the whole key up again (not its array variable) -> `Retrieve` answers
+/// `yes`. Each fails; restored, it passes.
+#[test]
+fn a_spaced_element_is_the_element_its_flow_field_was_set_up_on() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    for (from, want) in [
+        ("\"E12 Spaced Flow\".SpacedFlow", "answer: down: yes"),
+        ("\"E12 Spaced Setup\".SpacedSetup", "answer: down: yes"),
+        ("\"E12 Spaced Both\".SpacedBoth", "answer: down: yes"),
+        // Another routine's local array: its setup is not this one's.
+        ("\"E12 Local Setup\".Retrieve", "answer: down: no"),
+    ] {
+        let a = touches(ws, "E12 Plain", from);
+        assert!(a.starts_with(want), "{from}: {a}");
     }
+}
+
+/// Round 3 (astra): a call result's `CalcFields` reads its FlowFields'
+/// source tables, and its `ModifyAll` writes its field.
+/// Breaks (2026-11-12): no `CalcFields` field arguments in
+/// `program_calls::call_result_operation` -> `GetRefCalc` answers `no` for
+/// "E12 Plain"; `modify_all_field: None` there -> `GetRefModifyAll` is not a
+/// writer of `V`. Each fails; restored, it passes.
+#[test]
+fn a_call_result_calc_fields_reads_and_modify_all_writes_its_field() {
+    let t = workspace();
+    let ws = t.path().to_str().unwrap();
+    let a = touches(ws, "E12 Plain", "\"E12 Ops\".GetRefCalc");
+    assert!(a.starts_with("answer: down: yes"), "GetRefCalc: {a}");
+    let h = run(&[
+        "explain", "--table", "E12 Row", "--field", "V", "--format", "json", ws,
+    ]);
+    assert!(h.contains("GetRefModifyAll"), "{h}");
 }
 
 /// ENG-12 gate (`dependency_body_unknown_ceiling_on_cdo`): no site here is an

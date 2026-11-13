@@ -540,8 +540,11 @@ fn is_retrieval(op: &str) -> bool {
     )
 }
 
+/// A record key, spelled as a retrieval's receiver is
+/// (`record_ops::receiver_key_text`: `Recs[ 1 ]` is `Recs[1]`, `this.G` is `G`),
+/// unquoted and folded.
 fn var_key(raw: &str) -> String {
-    strip_quotes(raw.trim())
+    strip_quotes(crate::record_ops::receiver_key_text(raw).trim())
         .replace("\"\"", "\"")
         .to_lowercase()
 }
@@ -614,7 +617,9 @@ impl<'a> Sharing<'a> {
                 None => vec![format!("id:{}|{key}", routine.object_id)],
             }
         };
-        match routine.variables.iter().find(|v| var_key(&v.name) == key) {
+        // An array element (`recs[1]`) is shared as its array variable is.
+        let base = strip_quotes(key.split('[').next().unwrap_or(key));
+        match routine.variables.iter().find(|v| var_key(&v.name) == base) {
             Some(v) if v.scope.as_deref() == Some("global") => {
                 let mut s = vec![format!("obj:{}|{key}", routine.object_id)];
                 if own.is_some_and(|(_, base)| *base) {
@@ -970,6 +975,23 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
         }
         routine.record_operations = ops;
         routine.field_ref_operations = field_ref_operations(routine, &tables);
+    }
+}
+
+/// ENG-12: [`attach_flow_field_reads`]'s `CalcFields` rule for operations
+/// appended after it ran (a call result's, `GetRef().CalcFields(F)`).
+pub fn attach_calc_fields_reads(tables: &[ModelTable], ops: &mut [ModelRecordOperation]) {
+    let mut index = None;
+    for op in ops.iter_mut().filter(|op| op.op == "CalcFields") {
+        let Some(table_id) = op.table_id.as_deref() else {
+            continue;
+        };
+        let index = index.get_or_insert_with(|| Tables::new(tables));
+        let mut reads = Vec::new();
+        for arg in op.field_arguments.iter().flatten() {
+            index.reads_of(table_id, arg, true, &mut reads);
+        }
+        op.flow_field_reads = reads;
     }
 }
 
