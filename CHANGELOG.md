@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "activity pin: never seen while the call ran"; restored, the six `mcp_server::faults` tests
   passed 5 runs out of 5.
 
+### Changed (TLS-40: cdo-gate's lib_cdo starts `retained_emission` at t = 0)
+
+- **lib_cdo's longest test no longer waits for a free slot.** libtest starts `--exact` names in
+  name order, so `retained_emission_equals_a_composition_on_cdo` (~130 s in the gate) started
+  only when `parallel_solve` (~74 s) ended. The long run was those two in a row: 204 s in TLS-36's
+  landing gate (TLS-37's census, `docs/superpowers/notes/2026-11-13-cdo-gate-build-census.md`).
+  At 2 or more threads, `retained_emission` now runs alone in its own invocation, beside the other
+  four long tests at one thread fewer. As many tests run at once as before, so memory use is the
+  same. At 1 thread it is one run, as before. Either run failing fails the phase, and every long
+  test must still be reported by name.
+  - **Test:** `gate_scripts::lib_cdo_fails_when_a_long_test_is_not_found_by_name` now covers the
+    split. It checks that the two runs meet (each waits for the other to start), the thread
+    counts, a long test missing from either run, and a failing lead run. Discrimination: the
+    lead run not sent to the background fails at "side by side"; the other four at
+    `$lib_threads` fails at the thread count; ignoring the lead run's exit status fails at "a
+    failing lead run must fail lib_cdo".
+  - **Measured:** an A/B of lib_cdo's wall time on CDO (to fill in).
+
 ### Changed (TLS-36: cdo-gate runs serial by default; the parallel layout is opt-in, pinned, and lib_cdo runs its longest tests first)
 
 - **Serial is the default again.** A serial and a parallel gate on the same tree (`d234c4a6`,

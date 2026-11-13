@@ -719,13 +719,36 @@ lib_tests() {
         echo "cdo-gate: lib_cdo: these tests would run in neither of lib_cdo's runs (a long test's name is part of theirs): $orphans; rename them or update lib_long_tests"
         return 1
     fi
-    "${lane2_nice[@]}" "${lane2_pin[@]}" \
-        cargo test "${profile[@]}" -p al-sem --lib -- --exact "${lib_long_tests[@]}" \
-        --test-threads="$lib_threads" 2>&1 | tee "$logs/lib_cdo.long"
-    first=${PIPESTATUS[0]}
+    # ⟨TLS-40⟩ libtest starts the --exact names in name order too, so
+    # `retained_emission` (the first entry, the longest) waited for the first free
+    # slot: the run was `parallel_solve` then `retained_emission`, 204 s in
+    # TLS-36's landing gate. With 2 or more threads it now runs alone in its own
+    # invocation from t = 0, beside the other four at one thread fewer: the same
+    # number of tests at once, so the same memory. At 1 thread one run, as before.
+    rm -f "$logs/lib_cdo.lead"
+    if ((lib_threads >= 2)); then
+        "${lane2_nice[@]}" "${lane2_pin[@]}" \
+            cargo test "${profile[@]}" -p al-sem --lib -- --exact "${lib_long_tests[0]}" \
+            --test-threads=1 >"$logs/lib_cdo.lead" 2>&1 &
+        local lead_pid=$! lead
+        "${lane2_nice[@]}" "${lane2_pin[@]}" \
+            cargo test "${profile[@]}" -p al-sem --lib -- --exact "${lib_long_tests[@]:1}" \
+            --test-threads=$((lib_threads - 1)) >"$logs/lib_cdo.long" 2>&1
+        first=$?
+        wait "$lead_pid"
+        lead=$?
+        ((lead == 0)) || first=1
+        cat "$logs/lib_cdo.lead" "$logs/lib_cdo.long"
+    else
+        "${lane2_nice[@]}" "${lane2_pin[@]}" \
+            cargo test "${profile[@]}" -p al-sem --lib -- --exact "${lib_long_tests[@]}" \
+            --test-threads="$lib_threads" 2>&1 | tee "$logs/lib_cdo.long"
+        first=${PIPESTATUS[0]}
+    fi
     local seen
-    seen=$(grep -oE 'test result: [A-Za-z]+\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored' \
-        "$logs/lib_cdo.long" | awk '{ n += $4 + $6 + $8 } END { print n + 0 }')
+    seen=$(cat "$logs/lib_cdo.long" "$logs/lib_cdo.lead" 2>/dev/null |
+        grep -oE 'test result: [A-Za-z]+\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored' |
+        awk '{ n += $4 + $6 + $8 } END { print n + 0 }')
     if [[ "$seen" -ne "${#lib_long_tests[@]}" ]]; then
         echo "cdo-gate: lib_cdo: the long-test run found $seen of ${#lib_long_tests[@]} tests by name (exit $first): a renamed long test (update lib_long_tests in scripts/cdo-gate), or the run died before its result line"
         first=1

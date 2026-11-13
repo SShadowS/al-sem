@@ -907,7 +907,8 @@ fn cdo_gate_runs_every_lane_two_command_pinned() {
         ("phase_harness() {", 1),
         ("phase_lsp() {", 1),
         ("phase_l4() {", 1),
-        ("lib_tests() {", 2),
+        // TLS-40: the long run is two runs at 2+ threads, one at 1, then the rest.
+        ("lib_tests() {", 4),
     ] {
         let b = body(f);
         // A `--list` (lib_tests' listing of the phase's tests) runs no test.
@@ -951,7 +952,17 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
          echo 'snapshot::snapshot::tests::builds_snapshot_over_cdo_workspace: test'\n\
          [ -n \"$SIBLING\" ] && echo 'engine::l5::digest::wave2_index_tests::cdo_crossing_census_v2: test'\n\
          exit 0\nfi\n\
-         if echo \"$*\" | grep -q -- --exact; then n=${LONG_FOUND:-5}; else n=12; fi\n\
+         if echo \"$*\" | grep -q -- --exact; then\n\
+         echo \"$*\" >> \"$CALLS\"\n\
+         n=$(printf '%s\\n' \"$@\" | grep -c '::')\n\
+         [ -n \"$MISSING\" ] && echo \"$*\" | grep -q -- \"$MISSING\" && n=$((n - 1))\n\
+         if echo \"$*\" | grep -q retained_emission; then me=lead; them=rest; else me=rest; them=lead; fi\n\
+         touch \"$CALLS.$me\"\n\
+         if [ -n \"$MEET\" ]; then i=0; while [ ! -e \"$CALLS.$them\" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done\n\
+         [ -e \"$CALLS.$them\" ] && echo met >> \"$CALLS.met\"; fi\n\
+         if [ -n \"$LEAD_FAILS\" ] && [ $me = lead ]; then\n\
+         echo \"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3300 filtered out; finished in 1.00s\"; exit 101; fi\n\
+         else n=12; fi\n\
          echo \"test result: ok. $n passed; 0 failed; 0 ignored; 0 measured; 3300 filtered out; finished in 1.00s\"\n",
     )
     .unwrap();
@@ -960,21 +971,32 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
         std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    // `extra`: "", "SIBLING" (the listing names a sibling) or "LIST_FAILS".
-    let run = |found: &str, extra: &str| {
+    let n = std::cell::Cell::new(0);
+    // `threads`: lib_threads. `missing`: a long test the stub does not find.
+    // `extra`: "", "SIBLING" (the listing names a sibling), "LIST_FAILS" or
+    // "MEET" (each long run waits up to 5 s for the other to start).
+    // Returns the exit code, stdout, each `--exact` run's arguments and how
+    // many runs saw the other one running.
+    let run = |threads: u32, missing: &str, extra: &str| {
+        n.set(n.get() + 1);
+        let calls = dir.path().join(format!("calls-{}", n.get()));
         let out = std::process::Command::new("bash")
             .arg("-c")
             .arg(concat!(
-                "logs=\"$1\"; profile=(); lane2_nice=(); lane2_pin=(); lib_threads=2; ",
+                "logs=\"$1\"; profile=(); lane2_nice=(); lane2_pin=(); lib_threads=$3; ",
                 "source <(sed -n '/^lib_long_tests=(/,/^)/p; /^lib_tests()/,/^}/p' \"$2\"); ",
                 "lib_tests"
             ))
             .arg("bash")
             .arg(dir.path())
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
-            .env("LONG_FOUND", found)
+            .arg(threads.to_string())
+            .env("CALLS", &calls)
+            .env("MISSING", missing)
+            .env("MEET", if extra == "MEET" { "1" } else { "" })
             .env("SIBLING", if extra == "SIBLING" { "1" } else { "" })
             .env("LIST_FAILS", if extra == "LIST_FAILS" { "1" } else { "" })
+            .env("LEAD_FAILS", if extra == "LEAD_FAILS" { "1" } else { "" })
             .env(
                 "PATH",
                 format!(
@@ -985,25 +1007,83 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
             )
             .output()
             .expect("spawn bash");
+        let read = |p: std::path::PathBuf| std::fs::read_to_string(p).unwrap_or_default();
+        let met = read(calls.with_extension("met")).lines().count();
         (
             out.status.code(),
             String::from_utf8_lossy(&out.stdout).into_owned(),
+            read(calls),
+            met,
         )
     };
-    let (code, text) = run("5", "");
-    assert_eq!(code, Some(0), "precondition, all five found: {text}");
-    let (code, text) = run("4", "");
-    assert_ne!(code, Some(0), "4 of 5 long tests found must fail: {text}");
-    assert!(text.contains("found 4 of 5"), "{text}");
+    for threads in [1, 4] {
+        let (code, text, ..) = run(threads, "", "");
+        assert_eq!(
+            code,
+            Some(0),
+            "precondition, all five found ({threads}): {text}"
+        );
+        // Not found in the run of the other four, and in retained_emission's own.
+        for missing in ["cdo_crossing_census", "retained_emission"] {
+            let (code, text, ..) = run(threads, missing, "");
+            assert_ne!(
+                code,
+                Some(0),
+                "4 of 5 long tests found must fail ({threads}, {missing}): {text}"
+            );
+            assert!(text.contains("found 4 of 5"), "{text}");
+        }
+    }
     // A sibling added beside a long test (review r2, sol): the long run still
     // finds 5, but the second run's substring --skip would drop the sibling.
-    let (code, text) = run("5", "SIBLING");
+    let (code, text, ..) = run(2, "", "SIBLING");
     assert_ne!(code, Some(0), "a test in neither run must fail: {text}");
     assert!(text.contains("cdo_crossing_census_v2"), "{text}");
     // A listing that fails says nothing about siblings (review r3, sol).
-    let (code, text) = run("5", "LIST_FAILS");
+    let (code, text, ..) = run(2, "", "LIST_FAILS");
     assert_ne!(code, Some(0), "a failed listing must fail: {text}");
     assert!(text.contains("could not list"), "{text}");
+
+    // TLS-40: at 2+ threads `retained_emission` runs alone from t = 0, beside
+    // the other four at one thread fewer; at 1 thread, one run of all five.
+    // Mutations (2026-11-13): the lead run not sent to the background (`&`
+    // dropped) -> the two runs never meet, and "side by side" fails; the
+    // other four at `$lib_threads` -> "--test-threads=3" fails.
+    let lead = "--exact engine::resident::revision::tests::retained_emission_equals_a_composition_on_cdo --test-threads=1";
+    let (code, text, calls, met) = run(4, "", "MEET");
+    assert_eq!(code, Some(0), "{text}");
+    let runs: Vec<&str> = calls.lines().collect();
+    assert_eq!(runs.len(), 2, "two long runs: {calls}");
+    assert!(runs.iter().any(|r| r.ends_with(lead)), "{calls}");
+    let rest = runs.iter().find(|r| !r.ends_with(lead)).unwrap();
+    assert!(rest.ends_with("--test-threads=3"), "{calls}");
+    assert!(!rest.contains("retained_emission"), "{calls}");
+    assert_eq!(
+        rest.split_whitespace().filter(|a| a.contains("::")).count(),
+        4,
+        "the other four: {calls}"
+    );
+    assert_eq!(met, 2, "the two long runs side by side: {calls}");
+    // Its own failure fails the phase (it still reports its one test).
+    // Mutation (2026-11-13): `((lead == 0)) || first=1` dropped -> the phase
+    // passes and this fails.
+    let (code, text, ..) = run(4, "", "LEAD_FAILS");
+    assert_ne!(
+        code,
+        Some(0),
+        "a failing lead run must fail lib_cdo: {text}"
+    );
+    let (code, text, calls, _) = run(1, "", "");
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "one long run at 1 thread: {calls}"
+    );
+    assert!(
+        calls.contains("retained_emission") && calls.trim_end().ends_with("--test-threads=1"),
+        "{calls}"
+    );
 }
 
 /// TLS-36: serial is the default, even with every byte of memory free; the
