@@ -51,7 +51,7 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
   in every touches answer from a routine. `query effects`' `summary.scope` reads
   `whole-cone` in the no-dependency case. `query touches` and `query effects` share one "enters
   dependency code" check, the union of the two they had. That union was not probed on real code
-  (see CHANGELOG TLS-49), and is pinned by a hand-stated test. Pinned by
+  (see CHANGELOG TLS-49); its rule is pinned by a hand-stated test, its wiring is not. Pinned by
   `query_scope_is_one_fact_in_both_formats` (the query corpus and the output fixture's cone
   entering a dependency) and, for a cone not read, by `digest_db_effects_carry_query_effects_temp_state`.
   Left: touches' `down.absence.index` and the workspace-wide `index`/`note` tokens still say

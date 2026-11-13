@@ -347,7 +347,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a probe first; none was run. The union was taken because explain's own "none reached"
   rule reads the same two counts, and a crossing with no known target counts there with no
   routine visited (`routine_rollup.rs`). Whether real code shows that shape is not measured.
-  Pinned by the hand-stated `the_cone_enters_dependency_code_on_any_dependency_count`.
+  The rule (`cone_enters`) is pinned by the hand-stated
+  `the_cone_enters_dependency_code_on_any_dependency_count`; its wiring is not (no fixture
+  produces the shape).
 - **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
   scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
   when no test app is found.
