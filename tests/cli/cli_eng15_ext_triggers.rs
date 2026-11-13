@@ -160,6 +160,21 @@ fn sym_workspace() -> tempfile::TempDir {
             R.Modify(false);
     end;
 }
+table 53211 "E16 Local T"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 53212 "E16 Local Subs"
+{
+    // Another table's modify-event subscriber: a modify op on ANY table may
+    // reach one of its family, which must not open `ModifySymNoTrigger`.
+    [EventSubscriber(ObjectType::Table, Database::"E16 Local T", 'OnAfterModifyEvent', '', false, false)]
+    local procedure OnLocalModify(var Rec: Record "E16 Local T"; var xRec: Record "E16 Local T"; RunTrigger: Boolean)
+    begin
+        Commit();
+    end;
+}
 "#,
     )
     .unwrap();
@@ -177,13 +192,15 @@ fn sym_workspace() -> tempfile::TempDir {
 /// ENG-16: a trigger-firing operation on a known table loaded from symbols only
 /// may run triggers the engine cannot see: `unknown`, with the gap named, not
 /// `no`. `Modify(false)` runs no trigger: still `no`.
+/// The workspace also subscribes to ANOTHER table's `OnAfterModifyEvent`, so a
+/// family-wide open bound would wrongly open `ModifySymNoTrigger`.
 /// Breaks (2026-11-13): drop the `table_code_not_loaded` check in
 /// `full.rs`'s record-operation path -> `ModifySym` answers `no` (as master
-/// 3dbf23ed did); let `OpenFamilies::may_run` open a `RecordEvents` bound on
-/// a code-not-loaded table -> `ModifySymNoTrigger` answers `unknown`. Each
-/// fails; restored, it passes. (A RunTrigger condition in `full.rs` itself
-/// was redundant with that bound: breaking it stayed green, so it was
-/// removed.)
+/// 3dbf23ed did); drop its `rule.run_trigger != Some(false)` condition ->
+/// `ModifySymNoTrigger` answers `unknown` (the `RecordEvents` bound opens on
+/// the other table's subscriber). Each fails; restored, it passes. (Fable
+/// round 2: without that subscriber the second break stayed green, a test
+/// defect, now fixed.)
 #[test]
 fn a_trigger_op_on_a_symbol_only_table_is_unknown() {
     let t = sym_workspace();

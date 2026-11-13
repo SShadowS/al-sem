@@ -1545,10 +1545,13 @@ fn resolve_call_site_obligation(
                 });
                 // ENG-16: a known table whose code is loaded from symbols only
                 // has triggers the engine cannot see: a trigger-firing op on it
-                // is open, as on a table not loaded. A RunTrigger-false op gets
-                // the `RecordEvents` bound, which opens only for a loaded
-                // table-event subscriber (`OpenFamilies::may_run`).
+                // is open, as on a table not loaded. A RunTrigger-false op runs
+                // no trigger, and its table events are this known table's,
+                // resolved exactly below: no gap (an open `RecordEvents` bound
+                // would open on ANY table's subscriber of the family, Fable
+                // round 2).
                 if let Some(op) = record_trigger_op(&op_lc)
+                    && rule.run_trigger != Some(false)
                     && table_code_not_loaded(table_node, graph, index)
                 {
                     facts_out.open.push(OpenBound::record(op, &rule));
