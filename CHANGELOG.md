@@ -273,6 +273,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     length prefixes without the path fail at "rename".
   - Found by TLS-45's stale-claim pass (OUTSTANDING Track B, now marked fixed).
 
+### Changed (TLS-48: engine limits B8, the last two small-output items)
+
+- **`query effects` no longer claims a dependency depth when no dependency code is entered.**
+  Its `scope:` line (the human header) now reads "reads, locks, validate, writes: the whole
+  cone, no dependency code entered" (with "not searched: calls not resolved" when some are),
+  matching the `reads:`/`locks:` absence lines, instead of "one dependency routine deep, not
+  exhaustive beyond". A cone that enters dependency code prints the old text. The `--format
+  json` header's `scope` is unchanged (ENG-40 rewrites it). Goldens moved:
+  `d8.onafterpostsalesdoc` and `r2a-record-types.declaredvars` human outputs, and the CDO
+  `UpdateLastUpload` query-effects golden.
+- **Test-app auto-discovery skips folders git ignores** (`.gitignore`, `.git/info/exclude`,
+  the user's excludes file), unless the folder holds the workspace; below such a folder nothing
+  is skipped as ignored. When git cannot answer, every folder is read, as before. Pinned by
+  `discovery_skips_folders_git_ignores`, with discrimination proofs.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
