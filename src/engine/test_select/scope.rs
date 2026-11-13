@@ -586,6 +586,7 @@ fn root_is_ignored(root: &Path) -> bool {
         .arg("-C")
         .arg(root)
         .args(["check-ignore", "-q", "."])
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
