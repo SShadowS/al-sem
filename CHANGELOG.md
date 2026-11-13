@@ -25,7 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On CDO (`bc3ccb18`, base `7315f56d`): no finding moves at either scope (CDO declares no
   protected record; its 15 extension uses of a Base Application protected name are all shadowed by
   locals). Left: detectors that look for an earlier load of the receiver (d11, d21) cannot see one
-  made in another routine. No cache version moves: the on-disk dependency artifacts are pruned,
+  made in another routine; `with Other do exit(IsEmpty)` over a protected record is not bound to
+  it (one file cannot see the base's variables) and answers `unknown`, never `no` (the cross-file
+  fix is task ENG-63).
+- Review round 2 (astra): a `SetRange`/`SetFilter` on a protected record (and on a function's
+  returned record, ENG-12) is an operation, so a FlowField filter reads its source table; the
+  declaration's `temporary` is read as its trailing modifier only (`Record "A temporary B"` is
+  not temporary); a table whose `TableType = Temporary` makes the operation temporary. No cache version moves: the on-disk dependency artifacts are pruned,
   never read into the model. Tests: `tests/cli/cli_eng26_protected_var_record_ops.rs`.
 
 ### Changed (TLS-36: cdo-gate runs serial by default; the parallel layout is opt-in, pinned, and lib_cdo runs its longest tests first)

@@ -1081,7 +1081,11 @@ fn resolve_call_site_obligation(
                     .and_then(|id| crate::record_ops::receiver_variable(&file.ir, id))
                     .filter(|v| !v.starts_with("this."))
                     .and_then(|v| inherited_protected_type(&v, obj_node, graph, index));
-                if (trigger_op.is_some() || crate::record_ops::touches_table(&method_lc))
+                // ENG-26 (review): a filter too, whose FlowField reads its
+                // source table (`Other.SetRange(Total, 1)`).
+                if (trigger_op.is_some()
+                    || crate::record_ops::touches_table(&method_lc)
+                    || matches!(method_lc.as_str(), "setrange" | "setfilter"))
                     && matches!(recv, ReceiverType::Record { .. } | ReceiverType::RecordRef)
                     // Not a variable (`X`, `X[i]`): those are record operations.
                     // A `this.X` that reaches here is one a same-named local
@@ -1133,9 +1137,12 @@ fn resolve_call_site_obligation(
                                 table: table_node.id.clone(),
                                 // A protected var's declaration says whether it
                                 // is temporary; a call's result does not.
+                                // The trailing modifier only, never a word of a
+                                // quoted table name (`Record "A temporary B"`).
                                 temporary: inherited.as_deref().map(|ty| {
-                                    ty.split_whitespace()
-                                        .any(|w| w.eq_ignore_ascii_case("temporary"))
+                                    crate::program::resolve::receiver::strip_trailing_temporary(ty)
+                                        .len()
+                                        != ty.trim_end().len()
                                 }),
                                 triggers,
                                 table_events:
@@ -1797,8 +1804,27 @@ pub(crate) fn resolve_file_obligations(
                     // loaded: kept, so its open or unresolved route answers
                     // `unknown`, never `no`.
                     || (facts.inherited_protected && facts.call_result_record.is_none());
+                // ENG-26 (review): a bare name inside a `with` whose receiver
+                // this file does not resolve (a known record's frame makes a
+                // record operation instead), in an extension whose base has
+                // protected vars: the receiver may be one (`with Other do
+                // exit(IsEmpty)`), which one file cannot see. Kept unresolved,
+                // so the answer is `unknown`, never `no` (the cross-file fix is
+                // its own task, ENG-63).
+                let with_inherited = site.parenless
+                    && matches!(site.shape, CalleeShape::Bare { .. })
+                    && matches!(
+                        site.with_state,
+                        crate::program::resolve::extract::WithState::InsideWith
+                    )
+                    && obj_node_opt.is_some_and(|o| {
+                        crate::program::resolve::receiver::extension_base_object(o, graph, index)
+                            .flatten()
+                            .is_some_and(|base| !base.protected_vars.is_empty())
+                    });
                 if site.parenless
                     && !parenless_record_op
+                    && !with_inherited
                     && (kind != EdgeKind::Call
                         || routes.is_empty()
                         || !routes.iter().all(|r| {
@@ -1810,6 +1836,19 @@ pub(crate) fn resolve_file_obligations(
                 {
                     continue;
                 }
+                // The `with` case above: whatever the bare name resolves to on
+                // its own, its receiver is not known here, so the site is one
+                // unresolved call (an `unknown`, never a decided `no`).
+                let (kind, shape, completeness, routes) = if with_inherited {
+                    (
+                        EdgeKind::Call,
+                        DispatchShape::Exact,
+                        completeness_for_shape(DispatchShape::Exact),
+                        vec![unknown_route(UnknownReason::UntrackedReceiver)],
+                    )
+                } else {
+                    (kind, shape, completeness, routes)
+                };
                 if site.parenless {
                     parenless.push(site.expr);
                 }

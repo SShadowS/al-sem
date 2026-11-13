@@ -26,6 +26,36 @@ table 52905 "E26 Quiet"
     }
     keys { key(PK; K) { } }
 }
+table 52920 "E26 Flow"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+        field(2; Total; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("E26 Target");
+        }
+    }
+    keys { key(PK; K) { } }
+}
+table 52921 "E26 A temporary B"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+}
+table 52922 "E26 Buffer"
+{
+    TableType = Temporary;
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+    keys { key(PK; K) { } }
+}
 table 52901 "E26 Base"
 {
     fields
@@ -37,6 +67,9 @@ table 52901 "E26 Base"
         Other: Record "E26 Target";
         TempOther: Record "E26 Target" temporary;
         RefOther: RecordRef;
+        FlowOther: Record "E26 Flow";
+        Odd: Record "E26 A temporary B";
+        Buf: Record "E26 Buffer";
 }
 tableextension 52902 "E26 Ext" extends "E26 Base"
 {
@@ -59,6 +92,24 @@ tableextension 52902 "E26 Ext" extends "E26 Base"
     procedure BareRefRead(): Boolean
     begin
         exit(RefOther.IsEmpty);
+    end;
+    // Review round 2 (astra).
+    procedure FilterFlow()
+    begin
+        FlowOther.SetRange(Total, 1);
+    end;
+    procedure WriteOdd()
+    begin
+        Odd.Modify();
+    end;
+    procedure WriteBuf()
+    begin
+        Buf.Modify();
+    end;
+    procedure WithRead(): Boolean
+    begin
+        with Other do
+            exit(IsEmpty);
     end;
     // A local of the same name shadows the protected var.
     procedure ShadowedWrite()
@@ -165,6 +216,12 @@ fn touches(ws: &str, table: &str, from: &str) -> String {
 /// `call_result_operation` -> `WriteOther` and `WriteTemp` read "possibly
 /// persistent"; drop the `inherited_protected` arm of the parens-less filter
 /// -> `BareRefRead` answers `no`. Each fails; restored, it passes.
+/// Review round 2 (astra). Breaks: drop `setrange`/`setfilter` from the
+/// call-result gate -> `FilterFlow` answers `no`; read `temporary` as any word
+/// of the type text -> `WriteOdd` reads temporary; drop the table-level
+/// `TableType = Temporary` check on appended operations -> `WriteBuf` reads
+/// persistent; drop the `with_inherited` rule -> `WithRead` answers `no`. Each
+/// fails; restored, it passes.
 #[test]
 fn a_base_objects_protected_record_is_a_record_operation() {
     let t = workspace(SOURCE, "");
@@ -198,6 +255,18 @@ fn a_base_objects_protected_record_is_a_record_operation() {
     // A protected RecordRef, read without parentheses: open, so `unknown`.
     let a = touches(ws, "E26 Target", "\"E26 Ext\".BareRefRead");
     assert!(a.starts_with("answer: down: unknown"), "BareRefRead: {a}");
+    // Review round 2 (astra): a FlowField filter reads its source table; a
+    // table named with the word "temporary" is not temporary; a table whose
+    // `TableType = Temporary` is; a `with` over a protected record is
+    // `unknown`, never `no`.
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".FilterFlow");
+    assert!(a.starts_with("answer: down: yes"), "FilterFlow: {a}");
+    let a = touches(ws, "E26 A temporary B", "\"E26 Ext\".WriteOdd");
+    assert!(a.contains("1 on a persistent record"), "WriteOdd: {a}");
+    let a = touches(ws, "E26 Buffer", "\"E26 Ext\".WriteBuf");
+    assert!(a.contains("1 on temporary records"), "WriteBuf: {a}");
+    let a = touches(ws, "E26 Target", "\"E26 Ext\".WithRead");
+    assert!(a.starts_with("answer: down: unknown"), "WithRead: {a}");
     let a = answer(&[
         "prove",
         ws,
