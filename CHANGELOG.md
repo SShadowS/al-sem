@@ -86,6 +86,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[TryFunction]` procedures may write (the PDF service's token cache is CDO bug #80680, guarded
   by a token warm-up the engine cannot see).
 
+### Changed (TLS-29: the capability-cone walk runs SCCs in parallel)
+
+- **`alsem analyze` walks the capability cones on 8 threads, with the same output.** The walk
+  visits the SCCs (groups of routines that call each other) callees first. A one-shot
+  composition with no cone store and no raw member now runs it on a ready queue
+  (`src/engine/l4/cone_walk_par.rs`):
+  - an SCC starts when every SCC it calls is done, lowest index first;
+  - each task builds its cones and its members' derived rows from its callees' shared cones;
+  - a cone is freed when its last reader is done;
+  - results merge during the walk in SCC order;
+  - the derived fold's interner is filled before the walk and only read during it.
+
+  It uses `default_reach_workers()`. The resident engine and the compositions with raw members
+  (`digest`, `impact`, `prove`) keep the serial loop. `ALSEM_CONES_CENSUS=1` now also prints the
+  walk's schedule (levels, critical path, peak live cone entries), and
+  `ALSEM_CONES_SCHEDULE_FILE` dumps it for offline simulation. Measured on CDO (2026-11-13,
+  release-fast, `analyze --scope all`, 3 runs each, under outside load):
+  - the `cone.walk` span: 7,236 → 1,153 ms;
+  - wall (median): 25.1 → 21.2 s;
+  - CPU (median): 123.5 → 129.6 s;
+  - peak (median): 3,230 → 3,223 MiB;
+  - outputs byte-identical; `digest` and `impact` unchanged within noise, outputs byte-identical.
+
+  Note: `docs/superpowers/notes/2026-11-13-parallel-cone-walk.md`.
+
 ### Changed (TLS-28: one-shot `alsem impact` builds the program once less)
 
 - **`alsem impact` reuses the call graph between its parts, with the same output.** The

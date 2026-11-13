@@ -264,6 +264,16 @@ impl WitnessScope {
     pub fn is_none(&self) -> bool {
         matches!(self, WitnessScope::None)
     }
+
+    /// True when no member gets raw: [`WitnessScope::None`] or `Subjects` of
+    /// an empty set (TLS-29: the walks that may run in parallel).
+    pub fn names_none(&self) -> bool {
+        match self {
+            WitnessScope::None => true,
+            WitnessScope::All => false,
+            WitnessScope::Subjects(s) => s.is_empty(),
+        }
+    }
 }
 
 /// What a cone composition PRODUCES: the derived rows (for every member, when
@@ -387,8 +397,10 @@ impl ResBitset {
 }
 
 /// Workspace-global, lossless `String → u32` interner for cone resource ids.
-/// Serial (the cone walk is serial). Interning ORDER is irrelevant to any output:
-/// every query resolves to `String` and sorts by the resolved string.
+/// The serial cone walk interns as it folds; the parallel walk (TLS-29) fills
+/// it before the walk and only looks ids up ([`Lookup`]). Interning ORDER is
+/// irrelevant to any output: every query resolves to `String` and sorts by the
+/// resolved string.
 /// (A resident fold's builder starts from a clone of the previous fold's
 /// interner, so the rows it copies keep their ids:
 /// [`ConeDerivedBuilder::continuing`].)
@@ -410,6 +422,11 @@ impl ResInterner {
         self.strings.push(s.to_string());
         self.by_str.insert(s.to_string(), id);
         id
+    }
+
+    /// `s`'s id, when it is interned.
+    pub fn get(&self, s: &str) -> Option<ResId> {
+        self.by_str.get(s).copied()
     }
 
     /// The exact original string for `id`.
@@ -494,6 +511,44 @@ fn window<'p, T>(pool: &'p [T], r: &Range<u32>) -> &'p [T] {
 }
 
 impl ConeDerivedStore {
+    /// Append `row` (a [`RowFolder`]'s routine, already frozen) as
+    /// `routine_id`'s row, in the layout `finish_routine` gives (TLS-29: the
+    /// parallel walk's merge, in SCC order).
+    pub(crate) fn push_row(&mut self, routine_id: String, row: &FoldedRow) {
+        let push = |pool: &mut Vec<ResId>, ids: &[ResId]| {
+            let start = pool.len() as u32;
+            pool.extend_from_slice(ids);
+            start..pool.len() as u32
+        };
+        let table_writes_all = push(&mut self.writes_all_pool, &row.writes_all);
+        let start = self.phys_writes_pool.len() as u32;
+        self.phys_writes_pool.extend_from_slice(&row.phys_writes);
+        let physical_table_writes = start..self.phys_writes_pool.len() as u32;
+        let physical_table_reads = push(&mut self.phys_reads_pool, &row.phys_reads);
+        let event_publishes = push(&mut self.events_pool, &row.events);
+        self.rows.insert(
+            routine_id,
+            ConeDerivedRow {
+                flags: row.flags,
+                table_writes_all,
+                physical_table_writes,
+                physical_table_reads,
+                event_publishes,
+            },
+        );
+    }
+
+    /// A builder that continues this store, with `interner` as its interner
+    /// (TLS-29: the parallel walk's, filled before the walk; the store's own
+    /// is empty there).
+    pub(crate) fn into_builder(mut self, interner: ResInterner) -> ConeDerivedBuilder {
+        self.interner = interner;
+        ConeDerivedBuilder {
+            store: self,
+            ..ConeDerivedBuilder::default()
+        }
+    }
+
     /// This routine's row, or the empty row when it has none.
     pub fn row(&self, routine_id: &str) -> &ConeDerivedRow {
         self.rows.get(routine_id).unwrap_or(&EMPTY_ROW)
@@ -777,6 +832,40 @@ pub struct ConeDerivedBuilder {
     set: Scratch,
 }
 
+/// How the fold turns a resource id into a [`ResId`]: the serial walk interns
+/// (`ResInterner`), the parallel walk looks up in an interner filled before
+/// the walk ([`Lookup`]).
+pub(crate) trait Intern {
+    fn res_id(&mut self, s: &str) -> ResId;
+}
+
+impl Intern for ResInterner {
+    fn res_id(&mut self, s: &str) -> ResId {
+        self.intern(s)
+    }
+}
+
+/// A read-only interner filled before the walk (TLS-29): every resource id
+/// the walk folds is there, so a miss is an invariant break.
+#[derive(Clone, Copy)]
+pub(crate) struct Lookup<'i>(pub(crate) &'i ResInterner);
+
+impl Intern for Lookup<'_> {
+    fn res_id(&mut self, s: &str) -> ResId {
+        self.0
+            .get(s)
+            .unwrap_or_else(|| panic!("cone walk: resource id {s:?} was not pre-interned"))
+    }
+}
+
+/// What a cone walk folds into, the serial builder or a parallel task's
+/// [`RowFolder`]: the three operations the per-member derived half uses.
+pub(crate) trait DerivedFold {
+    fn fold_fact(&mut self, f: &CapabilityFact);
+    fn fold_set<'f>(&mut self, facts: impl IntoIterator<Item = &'f CapabilityFact>) -> FoldedRow;
+    fn fold_row(&mut self, row: &FoldedRow);
+}
+
 /// Unfrozen fold output: presence flags plus the four id buffers.
 #[derive(Debug, Default)]
 struct Scratch {
@@ -797,8 +886,9 @@ impl Scratch {
     }
 
     /// What ONE fact contributes: the one classifier behind
-    /// [`ConeDerivedBuilder::fold_fact`] and [`ConeDerivedBuilder::fold_set`].
-    fn add(&mut self, interner: &mut ResInterner, f: &CapabilityFact) {
+    /// [`ConeDerivedBuilder::fold_fact`] and [`ConeDerivedBuilder::fold_set`]
+    /// (and [`RowFolder`]'s, which looks ids up instead of interning).
+    fn add(&mut self, interner: &mut impl Intern, f: &CapabilityFact) {
         // The fold's domain condition (#160 step 7b spec, Words): the key
         // writes `None` and `Some("")` alike, but this fold tells them apart,
         // so F would not be a function of the key. Checked on every fold.
@@ -818,13 +908,13 @@ impl Scratch {
                     return;
                 };
                 if let Some(bit) = write_op_bit(f.op) {
-                    let id = interner.intern(rid);
+                    let id = interner.res_id(rid);
                     self.writes_all.push(id);
                     if !is_temp {
                         self.phys_writes.push((id, bit));
                     }
                 } else if f.op == "read" && !is_temp {
-                    let id = interner.intern(rid);
+                    let id = interner.res_id(rid);
                     self.phys_reads.push(id);
                 }
             }
@@ -842,7 +932,7 @@ impl Scratch {
                 if f.op == "publish"
                     && let Some(rid) = f.resource_id.as_deref()
                 {
-                    let id = interner.intern(rid);
+                    let id = interner.res_id(rid);
                     self.events.push(id);
                 }
             }
@@ -856,6 +946,97 @@ impl Scratch {
                 }
             }
         }
+    }
+}
+
+impl Scratch {
+    /// This scratch frozen into a [`FoldedRow`] (sorted, deduped, masks
+    /// OR-merged).
+    fn folded(&mut self) -> FoldedRow {
+        let ids = |scratch: &mut Vec<ResId>| {
+            let mut v = Vec::new();
+            freeze_ids(scratch, &mut v);
+            v.into_boxed_slice()
+        };
+        let mut phys_writes = Vec::new();
+        freeze_masked(&mut self.phys_writes, &mut phys_writes);
+        FoldedRow {
+            flags: self.flags,
+            writes_all: ids(&mut self.writes_all),
+            phys_writes: phys_writes.into_boxed_slice(),
+            phys_reads: ids(&mut self.phys_reads),
+            events: ids(&mut self.events),
+        }
+    }
+
+    /// OR `row` into this scratch.
+    fn or_row(&mut self, row: &FoldedRow) {
+        self.flags |= row.flags;
+        self.writes_all.extend_from_slice(&row.writes_all);
+        self.phys_writes.extend_from_slice(&row.phys_writes);
+        self.phys_reads.extend_from_slice(&row.phys_reads);
+        self.events.extend_from_slice(&row.events);
+    }
+}
+
+/// A parallel cone task's fold (TLS-29): [`ConeDerivedBuilder`]'s protocol
+/// over its own two scratches, looking ids up in the pre-filled interner, and
+/// freezing each routine into a [`FoldedRow`] the walk's merge appends to the
+/// pools ([`ConeDerivedStore::push_row`]) in SCC order.
+pub(crate) struct RowFolder<'i> {
+    interner: Lookup<'i>,
+    cur: Scratch,
+    set: Scratch,
+}
+
+impl<'i> RowFolder<'i> {
+    pub(crate) fn new(interner: &'i ResInterner) -> RowFolder<'i> {
+        RowFolder {
+            interner: Lookup(interner),
+            cur: Scratch::default(),
+            set: Scratch::default(),
+        }
+    }
+
+    pub(crate) fn begin_routine(&mut self) {
+        self.cur.clear();
+    }
+
+    /// The routine in progress, frozen.
+    pub(crate) fn finish_routine(&mut self) -> FoldedRow {
+        self.cur.folded()
+    }
+}
+
+impl DerivedFold for RowFolder<'_> {
+    fn fold_fact(&mut self, f: &CapabilityFact) {
+        self.cur.add(&mut self.interner, f);
+    }
+
+    fn fold_set<'f>(&mut self, facts: impl IntoIterator<Item = &'f CapabilityFact>) -> FoldedRow {
+        self.set.clear();
+        for f in facts {
+            self.set.add(&mut self.interner, f);
+        }
+        self.set.folded()
+    }
+
+    fn fold_row(&mut self, row: &FoldedRow) {
+        self.cur.or_row(row);
+    }
+}
+
+impl DerivedFold for ConeDerivedBuilder {
+    fn fold_fact(&mut self, f: &CapabilityFact) {
+        ConeDerivedBuilder::fold_fact(self, f);
+    }
+
+    fn fold_set<'f>(&mut self, facts: impl IntoIterator<Item = &'f CapabilityFact>) -> FoldedRow {
+        ConeDerivedBuilder::fold_set(self, facts)
+    }
+
+    fn fold_row(&mut self, row: &FoldedRow) {
+        ConeDerivedBuilder::fold_row(self, row);
     }
 }
 
@@ -956,31 +1137,12 @@ impl ConeDerivedBuilder {
         for f in facts {
             self.set.add(&mut self.store.interner, f);
         }
-        let s = &mut self.set;
-        let ids = |scratch: &mut Vec<ResId>| {
-            let mut v = Vec::new();
-            freeze_ids(scratch, &mut v);
-            v.into_boxed_slice()
-        };
-        let mut phys_writes = Vec::new();
-        freeze_masked(&mut s.phys_writes, &mut phys_writes);
-        FoldedRow {
-            flags: s.flags,
-            writes_all: ids(&mut s.writes_all),
-            phys_writes: phys_writes.into_boxed_slice(),
-            phys_reads: ids(&mut s.phys_reads),
-            events: ids(&mut s.events),
-        }
+        self.set.folded()
     }
 
     /// OR a [`FoldedRow`] of this builder into the routine in progress.
     pub(crate) fn fold_row(&mut self, row: &FoldedRow) {
-        let c = &mut self.cur;
-        c.flags |= row.flags;
-        c.writes_all.extend_from_slice(&row.writes_all);
-        c.phys_writes.extend_from_slice(&row.phys_writes);
-        c.phys_reads.extend_from_slice(&row.phys_reads);
-        c.events.extend_from_slice(&row.events);
+        self.cur.or_row(row);
     }
 
     /// Freeze the routine in progress into the pools and record its row.

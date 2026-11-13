@@ -507,6 +507,7 @@ fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
             derived: true,
             raw: WitnessScope::All,
         },
+        1,
     );
     assert!(
         all.contains_key(&inner),

@@ -4319,6 +4319,7 @@ mod step6_tree_tests {
                     derived: false,
                     raw: WitnessScope::All,
                 },
+                1,
             );
             let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
             let tree = compose_tree(
@@ -4654,6 +4655,7 @@ mod step6_tree_tests {
                 derived: true,
                 raw: WitnessScope::All,
             },
+            1,
         );
         let id = |name: &str| -> (String, String) {
             let r = m
