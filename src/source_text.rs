@@ -58,6 +58,91 @@ pub struct AlFile {
     pub abs_path: PathBuf,
 }
 
+/// A path as a lossless key (TLS-30: the resident manifest's keys). A path
+/// whose text is UTF-8 is its text, so every such key is what it was. Any
+/// other path is a NUL followed by the hex of its raw bytes (Unix bytes;
+/// Windows UTF-16 units, little-endian). No file name holds a NUL, so the two
+/// forms never meet, and two names that differ only in non-UTF-8 bytes
+/// (`b"\xff.al"`, `b"\xfe.al"`, both `\u{fffd}.al` lossily) get two keys.
+#[must_use]
+pub fn path_key(p: &Path) -> String {
+    p.to_str()
+        .map_or_else(|| raw_key(&os_bytes(p.as_os_str())), str::to_string)
+}
+
+/// [`path_key`] of a walk's relative path: `rel_posix` (lossy,
+/// `/`-separated) when the file's last components are UTF-8, else the raw
+/// bytes of those components joined by `/`. A lossy spelling keeps the
+/// component count (no lost byte becomes a `/`), so the last
+/// `rel_posix.split('/').count()` components of `abs` are the relative path.
+#[must_use]
+pub fn rel_key(rel_posix: &str, abs: &Path) -> String {
+    let parts: Vec<&OsStr> = abs.components().map(|c| c.as_os_str()).collect();
+    let tail = &parts[parts.len().saturating_sub(rel_posix.split('/').count())..];
+    if tail.iter().all(|c| c.to_str().is_some()) {
+        return rel_posix.to_string();
+    }
+    // Joined as one OS string, so the separator is encoded like the names
+    // (one byte on Unix, one UTF-16 unit on Windows: review r1, sol and Opus).
+    let mut joined = std::ffi::OsString::new();
+    for (i, c) in tail.iter().enumerate() {
+        if i > 0 {
+            joined.push("/");
+        }
+        joined.push(c);
+    }
+    raw_key(&os_bytes(&joined))
+}
+
+/// A [`path_key`] / [`rel_key`] back as a path, for messages and path tests:
+/// the text as is, or the raw bytes again.
+#[must_use]
+pub fn key_path(key: &str) -> PathBuf {
+    let Some(hex) = key.strip_prefix('\u{0}') else {
+        return PathBuf::from(key);
+    };
+    let raw: Vec<u8> = (0..hex.len() / 2)
+        .filter_map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok())
+        .collect();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(raw))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        let wide: Vec<u16> = raw
+            .chunks(2)
+            .map(|b| u16::from_le_bytes([b[0], *b.get(1).unwrap_or(&0)]))
+            .collect();
+        PathBuf::from(std::ffi::OsString::from_wide(&wide))
+    }
+}
+
+fn raw_key(raw: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(1 + 2 * raw.len());
+    s.push('\u{0}');
+    for b in raw {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+fn os_bytes(s: &OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        s.as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        s.encode_wide().flat_map(u16::to_le_bytes).collect()
+    }
+}
+
 /// Every workspace `.al` file under `root`, sorted by `rel_posix`.
 ///
 /// A walk error (an unreadable folder, a link loop) fails the walk: a
@@ -186,5 +271,30 @@ mod tests {
         // Only a LEADING BOM is dropped; plain UTF-8 passes through unchanged.
         assert_eq!(decode_al_source("a\u{FEFF}æ".as_bytes()), "a\u{FEFF}æ");
         assert_eq!(decode_al_source(b""), "");
+    }
+
+    /// TLS-30: a UTF-8 path's key is its text (keys did not move); a
+    /// non-UTF-8 one is lossless and comes back as the same path; two names
+    /// that read alike lossily get two keys.
+    #[cfg(unix)]
+    #[test]
+    fn path_keys_are_lossless() {
+        use super::{key_path, path_key, rel_key};
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let utf8 = Path::new("/w/ws/src/A \u{fffd}.al");
+        assert_eq!(path_key(utf8), utf8.to_str().unwrap());
+        assert_eq!(rel_key("src/A \u{fffd}.al", utf8), "src/A \u{fffd}.al");
+        let ff = Path::new(OsStr::from_bytes(b"/w/ws/src/\xff.al"));
+        let fe = Path::new(OsStr::from_bytes(b"/w/ws/src/\xfe.al"));
+        assert_ne!(path_key(ff), path_key(fe));
+        assert_eq!(key_path(&path_key(ff)), ff);
+        let (rf, re) = (
+            rel_key("src/\u{fffd}.al", ff),
+            rel_key("src/\u{fffd}.al", fe),
+        );
+        assert_ne!(rf, re);
+        assert_eq!(key_path(&rf), Path::new(OsStr::from_bytes(b"src/\xff.al")));
     }
 }

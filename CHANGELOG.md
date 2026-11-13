@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-30: the resident input manifest keys files by their raw path bytes)
+
+- **Two file names that differ only in non-UTF-8 bytes no longer share one manifest key.** The
+  resident engine's input manifest (`src/engine/resident/manifest.rs`) keyed every file by its
+  lossy path. Its `al:`, `src:` and `pkg:` keys and the walk and package lists were affected. So
+  `b"\xff.al"` and `b"\xfe.al"` (both `\u{fffd}.al`) shared one key, and the stamp held only the
+  later file's identity. An edit to the earlier file left the stamp unchanged. The freshness
+  check could then serve a revision built from the old bytes, and TLS-28's graph reuse in
+  one-shot `impact` could too.
+  - **The fix:** keys now come from `source_text::path_key` / `rel_key`. A UTF-8 path keeps its
+    text, so no existing key or descriptor moves. Any other path becomes a NUL followed by the hex
+    of its raw bytes (no file name holds a NUL).
+  - **Readers:** `consumed` and `observe` build the same keys. The descriptor round trip carries
+    them as they are. `changes` turns them back into paths (`key_path`) for its messages, still
+    spelled lossily.
+  - **The stopgap goes:** TLS-28's rule that a read with any U+FFFD key takes no part in impact's
+    graph reuse is removed.
+  - **Tests:** `manifest_tests::non_utf8_twin_names_keep_two_keys` covers workspace and
+    source-dependency twins: agreement, the round trip, an edit to the first twin moving the
+    stamp. `sited_cache_tests::lossy_twin_names_keep_their_identities` checks reuse and an edit
+    that misses. Each has a discrimination proof (the lossy key put back).
+  - **Injected package roots:** `inj:pkg-roots` are keyed the same way, and `injected()` gives
+    them back as the same paths, so a freshness check observes the folder that was read.
+  - **Still lossy:** `inj:sources` (a test universe's injected source folders). The engine
+    resolves such a folder from its lossy spelling (`source_deps::walk_with`), so a non-UTF-8 one
+    cannot be read in the first place. Outside the manifest, the engine's own `ws:` unit ids and
+    source-dependency content hash still use the lossy `rel_posix`.
+  - **Messages:** freshness's unreadable-input reasons spell a key's encoded path lossily
+    (`manifest::key_text`).
+  - **Windows:** a non-UTF-8 relative path is encoded as one OS string, so its `/` separators are
+    UTF-16 units like its names.
+
 ### Fixed (TLS-25: `cdo-speed --rounds` above 5 is refused up front)
 
 - **`scripts/cdo-speed --rounds N` with N above 5 crashed after minutes of timing.** There are 5
