@@ -323,6 +323,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule (`resolve::edge::trigger_family`); `docs/al-compiler-callgraph-holes.md` A11 is now
   "Better".
 
+### Changed (TLS-49: one scope fact for the human and JSON query headers)
+
+- **`query effects` and `query touches` now state the same scope in `--format json` as in the
+  human header, in every case.** The body's scope lines are the one home. The JSON header
+  (`payload.result.scope.scope`) joins them with the dependencies clause, as the human header
+  does. What moved in JSON:
+  - a routine-scoped `query touches` now states its real scope ("dependency code: none
+    reached", or the full-cone text when the cone enters dependency code). Before, it said "per
+    operation, one routine into dependency code" whatever the answer;
+  - workspace-wide, `up`-only and failed answers, which state no depth in human form, now state
+    none in JSON either ("dependencies: N apps" only);
+  - the effects header carries the literal-arguments sentence the human one has;
+  - `query effects`' `payload.summary.scope` is `whole-cone` when the cone enters no
+    dependency code (was `operations-one-routine-deep; …`).
+- **`query effects` and `query touches` decide "the cone enters dependency code" with one
+  check**, the union of the two they had: effects now also counts a dependency entry point or
+  crossing site, and touches a cut-short search. Both sides say less, never more.
+- **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
+  scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
+  when no test app is found.
+- Pinned by `query_scope_is_one_fact_in_both_formats` (the whole query corpus, human against
+  JSON), `query_effects_whole_cone_with_an_unresolved_call_says_not_searched` (the "not
+  searched" variant, now with a fixture) and `discovery_skips_folders_git_ignores`, each with a
+  discrimination proof. Goldens moved: 25 query and batch JSON goldens, plus `ignoredByGit` in
+  the impact `diff.json` and the tests `universe.post.json`. No human golden moved.
+
 ### Changed (TLS-48: engine limits B8, the last two small-output items)
 
 - **`query effects` no longer claims a dependency depth when no dependency code is entered.**
