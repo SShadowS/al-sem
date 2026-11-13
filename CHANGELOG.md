@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-32: cdo-gate runs lane 2 beside the impact phase when the host has the memory)
+
+- **`scripts/cdo-gate`'s test phases can overlap again, within the memory rules.**
+  - **Why they stopped:** since TLS-23 the landing gate ran every phase in a row
+    (`CDO_GATE_SERIAL=1`), because `lib_cdo` (~30 GB at 4 threads) beside `output_cdo` (~27 GB)
+    broke the owner's 4 GiB headroom rule.
+  - **The census:** TLS-32 timed each lib CDO test alone (`cdo` profile, one thread). One test,
+    `retained_emission_equals_a_composition_on_cdo`, peaks at 18,628 MiB; the others at most at
+    4,552 MiB; together 507 s.
+  - **The new layout:**
+    - `output_cdo` runs alone;
+    - then the impact phase, with lane 2 (harness, lsp, l4, then `lib_cdo` at 2 threads) beside
+      it;
+    - the worst estimate over 12 gates is ~40,700 of 49,152 MiB in the container;
+    - lane 2 (~320 s) fits inside the impact phase (~348 s), so about 300 s should come off each
+      gate's test phases (818 s).
+  - **The host check:** the parallel layout is taken only when the host's MemAvailable, read
+    after `output_cdo`, covers the impact phase's worst, lane 2's worst and 4 GiB (44,996 MiB;
+    `CDO_GATE_PARALLEL_NEED_MIB` overrides it). Otherwise lane 2 runs after the impact phase.
+  - **Kept:** `CDO_GATE_SERIAL=1` still runs every phase in a row.
+  - **Reporting:** the summary names the layout taken, and `cdo-gate --layout` prints the one this
+    host would take now.
+  - **Test:** `gate_scripts::cdo_gate_runs_lane_two_beside_impact_only_with_the_memory`, with a
+    discrimination proof.
+  - **To take it:** the landing gate must run without `CDO_GATE_SERIAL=1`.
+
 ### Changed (TLS-33: the speed check reuses ci-steps' optimized build)
 
 - **`cdo-gate`'s speed phase no longer rebuilds `al-sem` on the gate's critical path.**

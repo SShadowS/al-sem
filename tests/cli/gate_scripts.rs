@@ -262,6 +262,60 @@ fn speed_build_uses_the_gate_release_folder() {
     );
 }
 
+/// TLS-32: the test phases' layout (`cdo-gate --layout`, the decision the gate
+/// makes after `output_cdo`). Lane 2 runs beside the impact phase only when the
+/// host's MemAvailable covers the parallel need (`CDO_GATE_PARALLEL_NEED_MIB`,
+/// set here); below it lane 2 runs after; `CDO_GATE_SERIAL=1` wins over both.
+/// The host is a hand-written meminfo (`CDO_GATE_MEMINFO`).
+///
+/// Mutation (2026-11-13): `choose_layout`'s `avail >= need` flipped to `<=` ->
+/// the 60 GiB host is called sequential and the 10 GiB one parallel.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = |available_kib: u64, serial: bool| {
+        let meminfo = dir.path().join(format!("meminfo-{available_kib}"));
+        std::fs::write(
+            &meminfo,
+            format!("MemTotal: 98000000 kB\nMemAvailable: {available_kib} kB\n"),
+        )
+        .unwrap();
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", &meminfo)
+            .env("CDO_GATE_PARALLEL_NEED_MIB", "45000")
+            .env_remove("CDO_GATE_SERIAL");
+        if serial {
+            cmd.env("CDO_GATE_SERIAL", "1");
+        }
+        let out = cmd.output().expect("spawn bash scripts/cdo-gate --layout");
+        assert_eq!(out.status.code(), Some(0));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let plenty = 60 * 1024 * 1024; // 60 GiB, in KiB
+    let short = 10 * 1024 * 1024;
+    assert!(
+        layout(plenty, false).starts_with("parallel:"),
+        "{}",
+        layout(plenty, false)
+    );
+    assert!(
+        layout(short, false).starts_with("sequential:"),
+        "{}",
+        layout(short, false)
+    );
+    assert!(
+        layout(plenty, true).starts_with("serial:"),
+        "{}",
+        layout(plenty, true)
+    );
+    // Exactly at the need is enough; one MiB short is not.
+    assert!(layout(45000 * 1024, false).starts_with("parallel:"));
+    assert!(layout(44999 * 1024, false).starts_with("sequential:"));
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
