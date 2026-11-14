@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-53: `alsem tests` expands every changed routine)
+
+- `alsem tests` gave only the first 128 changed routines a walk of their own (output
+  validation r3 L4). Past that, a routine's test counts, `reachesAll` entries, relation class
+  and nearest test came from the one multi-source walk's labels, which name only each test's
+  nearest routine; on CDO with 690 changed routines, 562 had no nearest test at all. The
+  selected test list was complete either way, and stays the same. Now every changed routine is
+  expanded, so its per-routine answer is exact unless its own walk stops at the walk's state
+  budget (2,000,000 states). That stop is now reported: `reachesComplete` turns `false`, the
+  answer's limits say a walk stopped at its state budget (analysis partial), and its tests are
+  never called "navigation only"; the internal `tests-select` part names such routines in a new
+  `reachCut` field. (A routine past the old limit used a cheaper status walk,
+  so on a huge cone it can now read `analysis-incomplete` where it read `reached`; on CDO's
+  690-routine run every status stayed the same: 516 with a modeled path, 174 without.)
+- Cost, measured on CDO (`release-fast`, `alsem tests --file …`, the select phase via
+  `ALSEM_SELECT_TIMING`, median of 3 after one warm-up; load average 13-20 from other work, so
+  indicative): 156 routines 1,031 → 1,078 ms, 363 routines 1,251 → 1,904 ms, 690 routines
+  1,944 → 3,659 ms (about 5 ms per routine past 128); peak RSS 3.30-3.37 GB before and after at
+  every size; the whole command 33.6 → 35.6 s at 690 routines (the universe build dominates).
+  Nothing bounds the cost any more: it grows linearly with the routines changed and is not
+  measured past 690.
+- **Output (tests JSON, schema 3 and the `tests-select` part):** the released fields stay.
+  `notExpanded` is always empty, and `reachLimit` is the number of changed routines asked
+  about (every one gets a walk when it maps to the graph; it was the constant 128).
+  `reachesComplete` is `false` only when a routine's own walk stopped at its budget. Readers that
+  act on `notExpanded` simply never see an entry.
+
 ### Changed (TLS-52: a `RunRequestPage` no longer selects the tests of the whole report)
 
 - `alsem graph` and `alsem impact` sent `Report.RunRequestPage` to the report's object node,

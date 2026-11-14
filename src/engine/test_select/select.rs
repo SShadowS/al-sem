@@ -51,11 +51,12 @@
 //! # Every changed routine a test reaches (round-3 c21)
 //!
 //! A test's `reaches` (the multi-source walk's label) is the root of its
-//! shortest path only. The first [`REACH_LIMIT`] roots each have a walk of
-//! their own, so `reachesAll` lists every such root a test reaches, each with
-//! its tier, hops and relation (`reachesComplete: true`); the roots past the
-//! limit are named (`notExpanded`) and only their label counts
-//! (`reachesComplete: false`). A root's `nearest` test is relation-aware: the
+//! shortest path only. Every root has a walk of its own (TLS-53; the r3 L4
+//! limit of 128 is gone, see [`select_mapped`]), so `reachesAll` lists every
+//! root a test reaches, each with its tier, hops and relation; the released
+//! `notExpanded` (always empty) and `reachLimit` (the number of roots) stay,
+//! and `reachesComplete` is `false` only when a root's own walk stopped at
+//! its state budget (named in `reachCut`). A root's `nearest` test is relation-aware: the
 //! first code test in (tier, hops) order, else the first UI-navigation one
 //! (`nearestRelation`).
 //!
@@ -94,22 +95,6 @@ pub const VERSION: u32 = 1;
 /// The most dependency entry nodes whose cones the sameness check measures
 /// per root; with more, the check is not made (and says so).
 const SAMENESS_ENTRIES: usize = 16;
-
-/// Up to this many changed roots, each root's tests come from a walk of its
-/// own (exact per root); the roots after the first [`REACH_LIMIT`] take
-/// their tests from the multi-source walk's nearest-root labels (one walk; a
-/// root's tests that are nearer another root are counted under that root),
-/// and are named as not expanded (`notExpanded`, `reachesComplete: false`).
-///
-/// Output validation r3 L4: measured on CDO (2026-11-08, warm,
-/// `release-fast`, the select phase alone via `ALSEM_SELECT_TIMING`, median
-/// of 3 after one warm-up, roots from `CDOEMail`, `CDOEMailTemplateManagement`
-/// and `CDOEMailHandler`): 32 roots 830 ms, 64 roots 568 ms, 128 roots
-/// 1,083 ms on a shared, loaded machine; before the walks ran in parallel
-/// ([`WALK_THREADS`]) and each dependency entry's cone was measured once per
-/// call, 32 roots took 2,116 ms, 64 4,466 ms and 128 7,275 ms. 128 is the
-/// largest measured size under 2 s.
-pub const REACH_LIMIT: usize = 128;
 
 /// The per-root walk's consumer bits ([`WalkState::ext`]): the path took a
 /// UI-navigation step (a page the path opens), and a candidate one (a page
@@ -449,9 +434,6 @@ fn first_dependency_node(g: &SitedGraph, path: &[NodeIx]) -> Option<NodeIx> {
         .copied()
 }
 
-/// One of a root's tests: (node, tier, hops, its best state).
-type RootTest = (NodeIx, Tier, u32, WalkState);
-
 /// A test's reach of a root: its relation class and (tier, hops) in it.
 type ReachClass = (Class, Tier, u32);
 
@@ -472,6 +454,9 @@ struct RootWalk {
     alt: Vec<Option<(Class, Tier, u32)>>,
     /// A cap fired, or a selection-relevant hidden channel is in the cone.
     incomplete: bool,
+    /// TLS-53: the walk stopped at its state budget, so `mine` may miss tests
+    /// (and code paths) of this root: its reach inventory is incomplete.
+    limited: bool,
     /// Per through-dependency test of `mine`, in order: the first dependency
     /// node of its path.
     via: Vec<Option<NodeIx>>,
@@ -488,9 +473,11 @@ impl RootWalk {
         nodes: &[NodeIx],
         nav_nodes: &std::sync::Arc<Vec<bool>>,
         wanted: &HashSet<NodeIx>,
+        state_budget: usize,
     ) -> RootWalk {
         let opts = WalkOptions {
             assume_no_dependents: true,
+            state_budget,
             ..Default::default()
         };
         let mut own = Sel::with_classes(g, nav_nodes);
@@ -554,6 +541,7 @@ impl RootWalk {
             .collect();
         RootWalk {
             incomplete: own.limited || own.relevant_hidden(g),
+            limited: own.limited,
             mine,
             rel,
             alt,
@@ -763,7 +751,36 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
 
 /// [`select`] once each root's nodes are known (`mapped[i]` for
 /// `args.roots[i]`; a hand-built graph's tests state them directly).
+///
+/// Every root's tests come from a walk of its own, run in parallel
+/// ([`WALK_THREADS`]): exact per root, where the multi-source walk's labels
+/// name only each test's nearest root. Output validation r3 L4 capped these
+/// walks at 128 roots and filled the rest from the labels; TLS-53 removed the
+/// cap. Measured on CDO (2026-11-14, `release-fast`, `alsem tests --file …`,
+/// the select phase via `ALSEM_SELECT_TIMING`, median of 3 after one warm-up,
+/// load average 13-20 from other work, so indicative): 156 roots 1,031 ms
+/// with the cap and 1,078 ms without, 363 roots 1,251 and 1,904 ms, 690
+/// roots 1,944 and 3,659 ms; peak RSS 3.30-3.37 GB on both sides at every
+/// size; the whole command 33.6 s and 35.6 s at 690 roots. The selected tests
+/// were the same; past the 128th root the capped answer had no per-root
+/// nearest test (562 of 690 at 690 roots).
 fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) -> Value {
+    select_mapped_with(
+        g,
+        args,
+        mapped,
+        crate::program::impact_graph::reverse::DEFAULT_STATE_BUDGET,
+    )
+}
+
+/// [`select_mapped`] with each per-root walk's state budget (a test sets a
+/// small one to reach the budget stop).
+fn select_mapped_with(
+    g: &SitedGraph,
+    args: &SelectArgs<'_>,
+    mapped: &[Vec<NodeIx>],
+    root_budget: usize,
+) -> Value {
     let primary = g.primary_app();
     let tests_loaded = (0..g.node_count() as u32)
         .filter(|&n| g.flags(n) & flag::TEST != 0 && g.node_app(n) == Some(primary))
@@ -792,11 +809,6 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
         .collect();
     let key = |n: NodeIx| (object_number(g, n).unwrap_or(i64::MAX), display(g, n));
     tests.sort_by_cached_key(|a| (a.1, a.2, key(a.0)));
-    // Per root: the tests labelled with it.
-    let mut per_root: Vec<Vec<usize>> = vec![Vec::new(); args.roots.len()];
-    for (j, t) in tests.iter().enumerate() {
-        per_root[t.4].push(j);
-    }
     // Hidden nodes in the resolved part of the cone.
     let resolved_hidden: Vec<(NodeIx, &'static str)> = sel
         .hidden
@@ -831,15 +843,15 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
         })
         .map(|t| t.0)
         .collect();
-    // Output validation r3 L4: the first `REACH_LIMIT` roots each get a walk
-    // of their own, run in parallel (each walk is independent and only its
-    // summary outlives it); the others are not expanded (their tests come
-    // from the labels) and are named.
+    // Every root gets a walk of its own, run in parallel (each walk is
+    // independent and only its summary outlives it). TLS-53 removed the
+    // r3 L4 limit of 128 such walks ([`select_mapped`]'s doc has the cost).
     let mut walks: Vec<Option<RootWalk>> = {
         use rayon::prelude::*;
-        let expanded = args.roots.len().min(REACH_LIMIT);
+        let expanded = args.roots.len();
         let one = |i: usize| {
-            (!mapped[i].is_empty()).then(|| RootWalk::of(g, &mapped[i], &nav_nodes, &nav_printed))
+            (!mapped[i].is_empty())
+                .then(|| RootWalk::of(g, &mapped[i], &nav_nodes, &nav_printed, root_budget))
         };
         let threads = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
@@ -851,10 +863,8 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
             _ => (0..expanded).map(one).collect(),
         }
     };
-    let mut not_expanded: Vec<&String> = Vec::new();
     // Per test: every root it reaches, (root index, tier, hops, relation
-    // class), from the per-root walks (exact: code when any path is code) or
-    // the labels (the root of its shortest path only).
+    // class), from the per-root walks (exact: code when any path is code).
     // Round-4 c28: with a code reach, the best UI-navigation reach of the
     // same root too (a code path may lie outside the tier the answer picks).
     type Reach = (usize, Tier, u32, Class, Option<ReachClass>);
@@ -863,6 +873,11 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
     // path to any changed routine (tier, hops, nodes; the first root wins a
     // tie).
     let mut code_path: HashMap<NodeIx, (Tier, u32, Vec<NodeIx>)> = HashMap::new();
+    // TLS-53: the roots whose own walk stopped at its state budget (their
+    // reach inventory, and so `reachesComplete`, is incomplete).
+    let mut reach_cut: Vec<&String> = Vec::new();
+    // A label reach's relation class, from its one path (a per-root walk a
+    // cap stopped may miss its label root; see `tests_out`).
     let label_class = |path: &[NodeIx], nav: &mut HashMap<NodeIx, bool>| -> Class {
         if path_relation(g, path, nav) == crate::engine::vocab::RELATION_CODE {
             Class::Code
@@ -886,40 +901,27 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
         }
         r["display"] = json!(display(g, mapped[i][0]));
         r["nodes"] = json!(mapped[i].len());
-        // The root's own tests: from its own walk within the first
-        // `REACH_LIMIT` roots (the multi-source walk labels a state with its
-        // NEAREST root, so a root's tests nearer another root would be
-        // counted there), else from the labels.
-        let mut own_walk: Option<RootWalk> = walks.get_mut(i).and_then(Option::take);
-        for (n, t, h, p) in own_walk
-            .as_mut()
-            .map(|w| std::mem::take(&mut w.code_paths))
-            .unwrap_or_default()
-        {
+        // The root's own tests, from its own walk (the multi-source walk
+        // labels a state with its NEAREST root only, so a root's tests nearer
+        // another root would be counted there).
+        let mut own = walks[i].take().expect("a mapped root has a walk");
+        for (n, t, h, p) in std::mem::take(&mut own.code_paths) {
             if code_path.get(&n).is_none_or(|b| (t, h) < (b.0, b.1)) {
                 code_path.insert(n, (t, h, p));
             }
         }
-        if i >= REACH_LIMIT {
-            not_expanded.push(id);
+        let RootWalk {
+            mine,
+            rel,
+            alt,
+            incomplete,
+            limited,
+            via: firsts,
+            ..
+        } = own;
+        if limited {
+            reach_cut.push(id);
         }
-        let (mine, rel, alt): (Vec<RootTest>, Vec<ReachClass>, Vec<Option<ReachClass>>) =
-            match &own_walk {
-                Some(w) => (w.mine.clone(), w.rel.clone(), w.alt.clone()),
-                // Each label test's relation class, from its one path.
-                None => {
-                    let mine: Vec<RootTest> = per_root[i]
-                        .iter()
-                        .map(|&j| (tests[j].0, tests[j].1, tests[j].2, tests[j].3))
-                        .collect();
-                    let rel = mine
-                        .iter()
-                        .map(|x| (label_class(&sel.path(x.3), &mut nav), x.1, x.2))
-                        .collect();
-                    let alt = vec![None; mine.len()];
-                    (mine, rel, alt)
-                }
-            };
         for ((x, r), a) in mine.iter().zip(&rel).zip(&alt) {
             reach_all
                 .entry(x.0)
@@ -929,32 +931,10 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
         let count = |t: Tier| mine.iter().filter(|x| x.1 == t).count();
         let status = if !mine.is_empty() {
             "reached"
-        } else if let Some(own) = &own_walk {
-            if own.incomplete {
-                "analysis-incomplete"
-            } else {
-                "no-known-path"
-            }
+        } else if incomplete {
+            "analysis-incomplete"
         } else {
-            // A status walk of its own: the multi-source walk labels states
-            // with the nearest root only.
-            let mut own = Sel::new(g, true);
-            let found = std::rc::Rc::clone(&own.found_test);
-            let stop = move || found.get();
-            let o = WalkOptions {
-                cancel: Some(&stop),
-                ..opts
-            };
-            let mut s2 = WalkScratch::default();
-            walk_multi(g, &mapped[i], &o, &mut s2, &mut own);
-            let relevant_hidden = own.relevant_hidden(g);
-            if own.found_test.get() {
-                "reached"
-            } else if own.limited || stats.limited || relevant_hidden {
-                "analysis-incomplete"
-            } else {
-                "no-known-path"
-            }
+            "no-known-path"
         };
         r["status"] = json!(status);
         r["tests"] = json!({"local": count(Tier::Local),
@@ -983,13 +963,6 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
             .collect();
         if !thr.is_empty() {
             let mut via: BTreeMap<NodeIx, usize> = BTreeMap::new();
-            let firsts: Vec<Option<NodeIx>> = match &own_walk {
-                Some(w) => w.via.clone(),
-                None => thr
-                    .iter()
-                    .map(|t| first_dependency_node(g, &sel.path(t.3)))
-                    .collect(),
-            };
             for d in firsts.into_iter().flatten() {
                 *via.entry(d).or_default() += 1;
             }
@@ -1122,6 +1095,13 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
             row
         })
         .collect();
+    let mut limits: Vec<&str> = Vec::new();
+    if stats.limited {
+        limits.push("the walk's state budget or cancellation stopped it");
+    }
+    if !reach_cut.is_empty() {
+        limits.push("a changed routine's own walk stopped at its state budget (reachCut)");
+    }
     json!({
         "schema": SCHEMA,
         "version": VERSION,
@@ -1132,19 +1112,23 @@ fn select_mapped(g: &SitedGraph, args: &SelectArgs<'_>, mapped: &[Vec<NodeIx>]) 
         "testsLoaded": tests_loaded,
         "roots": roots_out,
         "tests": tests_out,
-        "reachesComplete": not_expanded.is_empty(),
-        // Output validation r3 L4: the per-root walk's limit and the roots
-        // past it (their reach sets come from the labels: incomplete, never
-        // "no modeled path").
-        "reachLimit": REACH_LIMIT,
-        "notExpanded": not_expanded,
+        // Output validation r3 L4's per-root walk limit is gone (TLS-53):
+        // every changed routine is expanded, so `notExpanded` is empty and
+        // `reachLimit` is how many were asked about (each one that maps to
+        // the graph gets a walk). A reach inventory is
+        // still incomplete where a routine's own walk stopped at its state
+        // budget: `reachesComplete` says so, and `reachCut` names them.
+        "reachesComplete": reach_cut.is_empty(),
+        "reachLimit": args.roots.len(),
+        "notExpanded": [],
+        "reachCut": &reach_cut,
         "byTier": {"local": by_tier(Tier::Local), "throughDependency": by_tier(Tier::ThroughDependency),
                    "onlyOpen": by_tier(Tier::OnlyOpen)},
         "universalHub": sel.universal,
         "hidden": hidden,
         "unresolvedTestCalls": unresolved.len(),
         "missingDependencies": missing,
-        "limits": if stats.limited { vec!["the walk's state budget or cancellation stopped it"] } else { vec![] },
+        "limits": limits,
         "probes": args.probes.iter().map(|p| probe(g, p, &opts)).collect::<Vec<_>>(),
     })
 }
@@ -1788,52 +1772,73 @@ mod tests {
         )
     }
 
-    /// Output validation r3 L4, at the limit: every changed routine has a
-    /// walk of its own, so the one test's reach set lists all of them and
-    /// nothing is named as not expanded.
+    /// TLS-53: past r3 L4's old limit of 128, every changed routine still has
+    /// a walk of its own: the one test's reach set lists all of them, the
+    /// last routine (whose label is another root) has its own nearest test,
+    /// and the released fields say the reach is complete (`reachLimit` is
+    /// the number of routines, `notExpanded` empty).
+    ///
+    /// DISCRIMINATION (2026-11-14): capping the per-root walks at 128 again
+    /// (`expanded = args.roots.len().min(128)`) fails: the 129th root has no
+    /// walk (an out-of-bounds panic at `walks[i]`).
     #[test]
-    fn at_the_reach_limit_every_routine_is_expanded() {
-        let v = select_many(REACH_LIMIT);
+    fn every_changed_routine_is_expanded_past_the_old_limit() {
+        let n = 129;
+        let v = select_many(n);
         assert_eq!(v["reachesComplete"], true, "{}", v["notExpanded"]);
         assert_eq!(v["notExpanded"], json!([]));
-        assert_eq!(v["reachLimit"], REACH_LIMIT);
-        assert_eq!(
-            v["tests"][0]["reachesAll"].as_array().unwrap().len(),
-            REACH_LIMIT
-        );
-    }
-
-    /// Output validation r3 L4, at the limit plus one: the last routine is
-    /// named as not expanded and the reach set is incomplete, yet its status
-    /// is `reached` (a test reaches it), never "no modeled path".
-    ///
-    /// DISCRIMINATION (2026-11-08): (1) expanding every root again (`expand`
-    /// set `true`) fails "the last routine is not expanded"; (2) reporting a
-    /// not-expanded root with no label test as `no-known-path` (the status
-    /// walk's `found_test` check dropped) fails "reached, not no modeled
-    /// path".
-    #[test]
-    fn past_the_reach_limit_the_rest_are_named_not_expanded() {
-        let v = select_many(REACH_LIMIT + 1);
-        let last = format!("r{REACH_LIMIT}");
-        assert_eq!(v["reachesComplete"], false, "{}", v["notExpanded"]);
-        assert_eq!(
-            v["notExpanded"],
-            json!([last]),
-            "the last routine is not expanded"
-        );
-        let root = &v["roots"][REACH_LIMIT];
+        assert_eq!(v["reachLimit"], n);
+        assert_eq!(v["tests"][0]["reachesAll"].as_array().unwrap().len(), n);
+        let last = format!("r{}", n - 1);
+        let root = &v["roots"][n - 1];
         assert_eq!(root["stableId"], json!(last));
         // Precondition: the test's label is another root, so the last one has
         // no label test of its own.
         assert_ne!(v["tests"][0]["reaches"], json!(last), "{:#}", v["tests"][0]);
-        assert_eq!(
-            root["status"], "reached",
-            "reached, not no modeled path: {root:#}"
+        assert_eq!(root["status"], "reached", "{root:#}");
+        assert!(
+            root["nearest"].is_string(),
+            "its own nearest test: {root:#}"
         );
+    }
+
+    /// TLS-53 (sol round 1): with no routine left unexpanded, a reach
+    /// inventory is still incomplete where a routine's own walk stops at its
+    /// state budget. `reachesComplete` says so, `reachCut` names the routines,
+    /// and `limits` carries the stop (so the render calls the part
+    /// walk-limited and never says "navigation only" for its tests).
+    ///
+    /// DISCRIMINATION (2026-11-14): `reachesComplete` back to a constant
+    /// `true` fails "a budget-cut walk makes the reach incomplete".
+    #[test]
+    fn a_budget_cut_root_walk_makes_the_reach_incomplete() {
+        let (g, roots, mapped) = many_roots(3);
+        let args = SelectArgs {
+            roots: &roots,
+            universe_key: "u",
+            test_app_id: "t",
+            production_app_id: "A-guid",
+            production_stamp: None,
+            declared: &[],
+            probes: &[],
+        };
+        let full = select_mapped(&g, &args, &mapped);
+        assert_eq!(full["reachesComplete"], true, "precondition: {full:#}");
+        assert_eq!(full["reachCut"], json!([]));
+        let v = select_mapped_with(&g, &args, &mapped, 1);
         assert_eq!(
-            v["tests"][0]["reachesAll"].as_array().unwrap().len(),
-            REACH_LIMIT
+            v["reachesComplete"], false,
+            "a budget-cut walk makes the reach incomplete: {v:#}"
+        );
+        assert_eq!(v["reachCut"], json!(roots), "{v:#}");
+        assert_eq!(v["notExpanded"], json!([]));
+        assert!(
+            v["limits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|l| l.as_str().unwrap().contains("reachCut")),
+            "{v:#}"
         );
     }
 }

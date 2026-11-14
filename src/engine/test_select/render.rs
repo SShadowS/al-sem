@@ -92,7 +92,13 @@ const REACH_PARTIAL: &str = "_reachPartial";
 /// the reach is named as incomplete (`not_expanded` changed routines past the
 /// limit), never "only".
 fn navigation_words(nav_tests: &[&Value], not_expanded: usize) -> String {
-    if nav_tests.iter().any(|t| t[REACH_PARTIAL] == json!(true)) {
+    if nav_tests.iter().any(|t| t[REACH_PARTIAL] == json!(true)) && not_expanded == 0 {
+        // TLS-53: no routine is left unexpanded any more; a reach is
+        // incomplete where a routine's own walk stopped at its state budget.
+        " by UI navigation on the reaches computed (reach incomplete: a changed routine's \
+         walk stopped at its state budget, so a code path may reach it)"
+            .to_string()
+    } else if nav_tests.iter().any(|t| t[REACH_PARTIAL] == json!(true)) {
         format!(
             " by UI navigation on the reaches computed (reach incomplete: {} not expanded, \
              which a code path may reach)",
@@ -2801,6 +2807,36 @@ mod tests {
         assert!(
             human.contains("first [local, code] 5 hops (first: Both)"),
             "a code path first: {human}"
+        );
+    }
+
+    /// TLS-53: with no routine left unexpanded, a part whose reach inventory
+    /// is incomplete because a routine's own walk stopped at its state budget
+    /// (`reachesComplete: false`, `notExpanded` empty, `reachCut`) is still
+    /// never "navigation only", and the words name the budget, not a count of
+    /// unexpanded routines.
+    ///
+    /// DISCRIMINATION (2026-11-14): `navigation_words` without its
+    /// `not_expanded == 0` arm fails "names the budget" (it says "0 changed
+    /// routines not expanded").
+    #[test]
+    fn a_budget_cut_reach_inventory_is_never_navigation_only() {
+        let (roots, mut parts) = b1_parts(true);
+        if let Ok(Value::Object(m)) = &mut parts[0].result {
+            m.insert("notExpanded".into(), json!([]));
+            m.insert("reachCut".into(), json!(["r1"]));
+        }
+        let human = render_v(&roots, &parts, 3, false).text;
+        assert!(
+            !human.contains("navigation only"),
+            "never navigation only: {human}"
+        );
+        assert!(
+            human.contains(
+                "by UI navigation on the reaches computed (reach incomplete: a changed \
+                 routine's walk stopped at its state budget, so a code path may reach it)"
+            ),
+            "names the budget: {human}"
         );
     }
 
