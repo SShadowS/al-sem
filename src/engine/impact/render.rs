@@ -2058,15 +2058,11 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                 })
                 .collect();
             // §R2.4 landing change 6: a changed routine that is an entry
-            // says so (its kind first among its own).
-            if let Some(k) = up["rootEntryKinds"]
-                .as_array()
-                .and_then(|a| a.first())
-                .and_then(Value::as_str)
-            {
+            // says so (TLS-55: its kind word, `vocab::entry_word`).
+            if let Some(w) = up["rootEntryWord"].as_str() {
                 out.push(format!(
                     "      the changed routine is {} (an entry itself)",
-                    with_article(crate::engine::vocab::entry_key(k).0)
+                    with_article(w)
                 ));
             }
             out.push(if u(c, "count") == 0 {

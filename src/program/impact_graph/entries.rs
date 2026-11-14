@@ -56,29 +56,13 @@ pub const NOTE_UNNAMED_ACTIONS: u8 = 1;
 /// merged with its `OnRun` (§R2.4 landing change 1).
 pub const NOTE_BACKGROUND_WITHOUT_ON_RUN: u8 = 2;
 
-/// Whether entry node `n` is a codeunit's `OnRun` (object level), or an
-/// object node a run starts (a background target): what makes a job-queue or
-/// web-service entry's kind word "codeunit OnRun" (TLS-55,
-/// `vocab::entry_kind_of`).
-#[must_use]
-pub fn is_onrun_entry(g: &SitedGraph, n: NodeIx) -> bool {
-    match g.nodes.get(n as usize) {
-        Some(Key::Routine(r)) => {
-            r.object.kind == al_syntax::ir::ObjectKind::Codeunit
-                && r.enclosing_member_lc.is_none()
-                && r.name_lc.as_str() == "onrun"
-        }
-        Some(Key::Object(_) | Key::Start(..)) => true,
-        _ => false,
-    }
-}
-
 impl EntryInventory {
-    /// The kind word of entry `e` (TLS-55): its first kind's, told apart by
-    /// whether its witness is an `OnRun` ([`is_onrun_entry`]).
+    /// The kind word of entry `e` (TLS-55, `vocab::entry_word`): its first
+    /// source kind's word, else `procedure` (a routine only roots.config
+    /// names).
     #[must_use]
-    pub fn word(&self, g: &SitedGraph, e: u32) -> &'static str {
-        crate::engine::vocab::entry_kind_of(self.kind(e), is_onrun_entry(g, self.witness(e)))
+    pub fn word(&self, e: u32) -> &'static str {
+        crate::engine::vocab::entry_word(self.kinds(e))
     }
 }
 
@@ -288,13 +272,12 @@ impl EntryInventory {
     /// `keep` accepts, in the kinds' order.
     pub fn by_kind(
         &self,
-        g: &SitedGraph,
         keep: impl Fn(u32) -> bool,
     ) -> BTreeMap<(EntryKind, &'static str), usize> {
         let mut out: BTreeMap<(EntryKind, &'static str), usize> = BTreeMap::new();
         for e in 0..self.len() as u32 {
             if keep(e) {
-                *out.entry((self.kind(e), self.word(g, e))).or_default() += 1;
+                *out.entry((self.kind(e), self.word(e))).or_default() += 1;
             }
         }
         out

@@ -473,16 +473,22 @@ fn impact_applies_the_roots_config_overlay() {
     );
 }
 
-/// TLS-55: a configured job-queue entry is a "codeunit OnRun" only when it
-/// is one (`vocab::entry_kind_of`, the one home of the word). `RunJob` is a
-/// plain procedure, `T54 Runner`'s `OnRun` a real one; both are configured
-/// job-queue entries and both write before calling `Post`. Impact's entries
-/// by kind and explain's pending-writes line both tell them apart.
+/// TLS-55: a configured (job-queue, web-service) entry is named by its
+/// routine's own source kind, else `procedure` (`vocab::entry_word`, the one
+/// home): `RunJob` is a plain procedure, `T54 Runner`'s `OnRun` a real one,
+/// `T54 Card`'s `OnOpenPage` a page trigger configured as a web service. All
+/// three write before calling `Post`. Every reader tells them apart:
+/// impact's entries by kind, program entries by kind, nearest entry and
+/// "the changed routine is …" line; explain's pending-writes counts; prove's
+/// non-interactive witness lines.
 ///
-/// DISCRIMINATION (2026-11-14): `entry_kind_of` ignoring `onrun` (always
-/// `entry_kind(k)`) fails "impact tells the procedure apart" (both read
-/// `codeunit OnRun 2`); explain's visitor passing `onrun = true` fails
-/// "explain tells the procedure apart".
+/// DISCRIMINATION (2026-11-14): `entry_word` taking the first kind even when
+/// config-only fails "impact tells the procedure apart" (`procedure 2`, no
+/// `codeunit OnRun`); `entry_kind` mapping the config-only kinds back to
+/// `codeunit OnRun` fails "explain tells the procedure apart"; prove's
+/// witness line using the context key's word (`entry_key`) fails "prove
+/// names RunJob a procedure" (at the Runner line); the render reading
+/// `rootEntryKinds` again fails "the changed OnRun is a codeunit OnRun".
 #[test]
 fn a_configured_procedure_entry_is_no_codeunit_onrun() {
     let t = tempfile::tempdir().unwrap();
@@ -503,6 +509,9 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
          Log.Insert();\n        Core.Post();\n    end;\n}\n\n\
          codeunit 50542 \"T54 Runner\"\n{\n    trigger OnRun()\n    var\n        \
          Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Log.Insert();\n        Core.Post();\n    end;\n}\n\n\
+         page 50544 \"T54 Card\"\n{\n    trigger OnOpenPage()\n    var\n        \
+         Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
          Log.Insert();\n        Core.Post();\n    end;\n}\n",
     )
     .unwrap();
@@ -512,7 +521,9 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
             {"id": "run-job", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50541",
                                          "routineName": "RunJob"}, "kinds": ["job-queue-entrypoint"]},
             {"id": "runner", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50542",
-                                        "routineName": "OnRun"}, "kinds": ["job-queue-entrypoint"]}]}"#,
+                                        "routineName": "OnRun"}, "kinds": ["job-queue-entrypoint"]},
+            {"id": "card", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Page/50544",
+                                      "routineName": "OnOpenPage"}, "kinds": ["web-service-exposed"]}]}"#,
     )
     .unwrap();
     let v = json(
@@ -521,10 +532,34 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
         None,
     );
     let up = &v["roots"][0]["up"];
+    let words = serde_json::json!({"codeunit OnRun": 1, "page trigger": 1, "procedure": 1});
     assert_eq!(
-        up["entriesByKind"]["code"],
-        serde_json::json!({"codeunit OnRun": 1, "procedure": 1}),
+        up["entriesByKind"]["code"], words,
         "impact tells the procedure apart: {up:#}"
+    );
+    assert_eq!(up["programEntriesByKind"], words, "{up:#}");
+    assert_eq!(up["nearest"]["code"]["entry"], "procedure", "{up:#}");
+    let (human, err, code) = impact(
+        ws,
+        &["--routine", "Codeunit \"T54 Jobs\"::RunJob", "--no-tests"],
+        None,
+    );
+    assert_eq!(code, 0, "{human}{err}");
+    assert!(
+        human.contains("the changed routine is a procedure (an entry itself)"),
+        "the changed routine is a procedure: {human}"
+    );
+    // A configured real OnRun: its first key is the config's job-queue one,
+    // yet it is a codeunit OnRun.
+    let (human, err, code) = impact(
+        ws,
+        &["--routine", "Codeunit \"T54 Runner\"::OnRun", "--no-tests"],
+        None,
+    );
+    assert_eq!(code, 0, "{human}{err}");
+    assert!(
+        human.contains("the changed routine is a codeunit OnRun (an entry itself)"),
+        "the changed OnRun is a codeunit OnRun: {human}"
     );
     let firsts: Vec<(String, String)> = up["firstByKind"]["code"]
         .as_array()
@@ -556,11 +591,35 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
         .env("RUST_LOG", "off")
         .output()
         .unwrap();
+    assert!(out.status.success(), "{out:?}");
     let human = String::from_utf8_lossy(&out.stdout);
     assert!(
-        human.contains("(codeunit OnRun 1, procedures 1)"),
+        human.contains("(codeunit OnRun 1, page triggers 1, procedures 1)"),
         "explain tells the procedure apart: {human}"
     );
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["prove"])
+        .arg(ws)
+        .args([
+            "Codeunit \"T54 Core\"::Post",
+            "callers-may-run-noninteractive",
+            "--format",
+            "human",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let human = String::from_utf8_lossy(&out.stdout);
+    for line in [
+        "[local] procedure [context: background session or task (job queue)]: Codeunit \"T54 Jobs\"::RunJob",
+        "[local] codeunit OnRun [context: background session or task (job queue)]: Codeunit \"T54 Runner\"::OnRun",
+        "[local] page trigger [context: web service]: Page \"T54 Card\"::OnOpenPage",
+    ] {
+        assert!(
+            human.contains(line),
+            "prove names RunJob a procedure: {line}\n{human}"
+        );
+    }
 }
 
 /// Round-2 n09: "raised by" is the events that raise the routine itself; a

@@ -918,7 +918,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         // Per kind and word, the nearest entry (class order, then arrival).
         let mut firsts: BTreeMap<(EntryKind, &str), (u32, Witness)> = BTreeMap::new();
         for &&(e, w) in &mine {
-            let k = (inv.kind(e), inv.word(g, e));
+            let k = (inv.kind(e), inv.word(e));
             *kinds.entry(k).or_default() += 1;
             let ctx: BTreeSet<&str> = inv.kinds(e).filter_map(vocab::entry_context).collect();
             for c in ctx {
@@ -981,7 +981,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         let w = match entry {
             Some((e, w)) => {
                 let mut v = witness_json(g, &w);
-                v["entry"] = json!(inv.word(g, e));
+                v["entry"] = json!(inv.word(e));
                 if let Some(a) = inv.action(e) {
                     v["action"] = json!(a);
                 }
@@ -1004,7 +1004,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     let program_by_kind: Vec<(&str, usize)> = {
         let mut words: Vec<(&str, usize)> = Vec::new();
         // The same set as `programEntries`: the changed routines left out.
-        for ((_, w), n) in inv.by_kind(g, |e| !up.shared.changed.contains(&e)) {
+        for ((_, w), n) in inv.by_kind(|e| !up.shared.changed.contains(&e)) {
             match words.iter_mut().find(|(x, _)| *x == w) {
                 Some(x) => x.1 += n,
                 None => words.push((w, n)),
@@ -1160,6 +1160,10 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
     let entry_total: usize = up.entries.values().map(Firsts::count).sum();
     let mut out = json!({
         "rootEntryKinds": up.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+        // TLS-55: the changed routine's own kind word (`vocab::entry_word`),
+        // when it is an entry itself.
+        "rootEntryWord": (!up.root_entry.is_empty())
+            .then(|| crate::engine::vocab::entry_word(up.root_entry.iter().copied())),
         "rootUserOrJob": up.root_entry.iter().any(|k| user_or_job(*k)),
         "hubs": hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
         // §R2.4 landing change 5: one program total, the canonical count

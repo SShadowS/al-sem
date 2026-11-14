@@ -10,13 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (TLS-55: a configured job-queue or web-service procedure is no "codeunit OnRun")
 
 - The entry-kind words (output validation §8.1) called every job-queue and web-service entry
-  "codeunit OnRun". Such an entry comes from `roots.config.json`, which may name any procedure
-  (`internal procedure RunJob()`), so impact's `entriesByKind`, `firstByKind`, `nearest.entry`
-  and `programEntriesByKind`, and explain's callers-context counts (`codeunit OnRun 2`), named a
-  plain procedure an `OnRun`. Now such an entry's kind word is `procedure` unless its routine is
-  a codeunit's `OnRun` (which keeps "codeunit OnRun"); its context still says job queue or web
-  service. One home: `vocab::entry_kind_of`, read by impact and explain alike. Became visible
-  with TLS-54, which brought configured entries into impact.
+  "codeunit OnRun". Those two kinds come only from `roots.config.json`, which may name any
+  routine (`internal procedure RunJob()`, a page's `OnOpenPage`): they say how a run starts, not
+  what the routine is. Now an entry's kind word is its routine's own source kind (a configured
+  `OnRun` stays "codeunit OnRun", a configured page trigger "page trigger"), and `procedure`
+  when the config is its only kind. Its context still says job queue or web service. One home:
+  `vocab::entry_word` (and `vocab::entry_kind` for a lone config kind), read by every reader:
+  impact's `entriesByKind`, `firstByKind`, `nearest.entry`, `programEntriesByKind` and its "the
+  changed routine is …" line; explain's callers-context counts (`codeunit OnRun 2` became
+  `codeunit OnRun 1, procedures 1`); prove's non-interactive witness lines
+  (`[local] procedure [context: background session or task (job queue)]: …`).
+- JSON: `procedure` is a new value among impact's entry-kind keys and `firstByKind[].kind` /
+  `nearest.entry` (impact only shows configured entries since TLS-54, unreleased); each root's
+  `up` gains `rootEntryWord` (the changed routine's own word, `null` when it is no entry), beside
+  `rootEntryKinds`. Explain's and prove's JSON keep their legacy keys
+  (`job-queue-entrypoint`); only their human words change.
 
 ### Changed (TLS-54: `alsem impact` applies the `roots.config.json` overlay)
 

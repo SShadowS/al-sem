@@ -50,6 +50,12 @@ pub const RELATION_NAVIGATION: &str = "UI navigation";
 /// (`api-page`, `web-service-exposed`, `job-queue-entrypoint`,
 /// `background-start`); each of those is the kind of routine it starts
 /// (`codeunit OnRun`, `page trigger`) plus a context ([`entry_context`]).
+///
+/// TLS-55: `job-queue-entrypoint` and `web-service-exposed` come only from
+/// `roots.config.json` ([`is_config_only`]), which may name any procedure
+/// (`internal procedure RunJob()`): such a kind says how a run starts, not
+/// what routine it is, so alone it is a `procedure`. An entry's word is
+/// [`entry_word`], where any source kind of the routine wins.
 #[must_use]
 pub fn entry_kind(k: EntryKind) -> &'static str {
     match k {
@@ -60,27 +66,38 @@ pub fn entry_kind(k: EntryKind) -> &'static str {
         EntryKind::EventSubscriber => "event subscriber",
         EntryKind::InstallCodeunit => "install trigger",
         EntryKind::UpgradeCodeunit => "upgrade trigger",
-        EntryKind::OnrunCodeunit
-        | EntryKind::BackgroundStart
-        | EntryKind::JobQueueEntrypoint
-        | EntryKind::WebServiceExposed => "codeunit OnRun",
+        EntryKind::OnrunCodeunit | EntryKind::BackgroundStart => "codeunit OnRun",
+        EntryKind::JobQueueEntrypoint | EntryKind::WebServiceExposed => "procedure",
         EntryKind::TestProcedure => "test procedure",
     }
 }
 
-/// [`entry_kind`] for one entry, given whether its routine is a codeunit's
-/// `OnRun` (or the run's object node, [`crate::program::impact_graph::entries::is_onrun_entry`]).
-/// TLS-55: a job-queue or web-service entry comes from `roots.config.json`,
-/// which may name any procedure (`internal procedure RunJob()`), so it is a
-/// `procedure` unless it really is an `OnRun`; its context still says job
-/// queue or web service ([`entry_context`]). The one home of the word for
-/// impact and explain alike.
+/// A kind only `roots.config.json` supplies (`root_classification`'s two
+/// overlay-only kinds): it tells the context, not the routine.
 #[must_use]
-pub fn entry_kind_of(k: EntryKind, onrun: bool) -> &'static str {
-    match k {
-        EntryKind::JobQueueEntrypoint | EntryKind::WebServiceExposed if !onrun => "procedure",
-        _ => entry_kind(k),
+pub fn is_config_only(k: EntryKind) -> bool {
+    matches!(
+        k,
+        EntryKind::JobQueueEntrypoint | EntryKind::WebServiceExposed
+    )
+}
+
+/// The kind word of an entry with `kinds` (in [`EntryKind::ALL`] order),
+/// TLS-55's one home: its first source kind's word (a configured `OnRun`
+/// keeps `codeunit OnRun`, a configured page trigger `page trigger`), else
+/// `procedure` (a routine only the config names).
+#[must_use]
+pub fn entry_word(kinds: impl IntoIterator<Item = EntryKind>) -> &'static str {
+    let mut config = false;
+    for k in kinds {
+        if is_config_only(k) {
+            config = true;
+        } else {
+            return entry_kind(k);
+        }
     }
+    debug_assert!(config, "an entry has a kind");
+    "procedure"
 }
 
 /// The plural of an entry kind, for a count line (`page actions 3`).
@@ -400,7 +417,6 @@ mod tests {
         ];
         for k in EntryKind::ALL {
             new.push(entry_kind(k).into());
-            new.push(entry_kind_of(k, false).into());
             new.extend(entry_context(k).map(str::to_string));
         }
         for k in [
