@@ -232,10 +232,12 @@ fn rel_posix(root: &Path, p: &Path) -> Option<String> {
 
 /// What the updater saw of a file right before it last read it (#221,
 /// "Stamps"): a stamp only ever vouches for text the updater itself read.
+/// The shared rule (TLS-57, `crate::file_stamp`: length, mtime, and ctime
+/// when recorded) plus, on Unix, the file's identity (device, inode), so a
+/// file replaced by another is never trusted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileStamp {
-    len: u64,
-    modified: Option<std::time::SystemTime>,
+    stamp: crate::file_stamp::FileStamp,
     #[cfg(unix)]
     id: (u64, u64),
 }
@@ -245,11 +247,20 @@ impl FileStamp {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         FileStamp {
-            len: m.len(),
-            modified: m.modified().ok(),
+            stamp: crate::file_stamp::FileStamp::of(m),
             #[cfg(unix)]
             id: (m.dev(), m.ino()),
         }
+    }
+
+    /// Whether `now` is the file this stamp saw (the text read then may be
+    /// trusted): the shared stamp rule, and the same identity.
+    fn same_file(&self, now: &FileStamp) -> bool {
+        #[cfg(unix)]
+        if self.id != now.id {
+            return false;
+        }
+        self.stamp.same_file(&now.stamp)
     }
 }
 
@@ -652,7 +663,7 @@ impl Updater {
             Some(staged) => *staged,
             None => self.stamps.get(vp).copied(),
         };
-        if !own && known.is_some() && recorded == Some(stamp) {
+        if !own && known.is_some() && recorded.is_some_and(|r| r.same_file(&stamp)) {
             return true;
         }
         #[cfg(test)]
@@ -3396,6 +3407,68 @@ mod tests {
         let snap = got.as_ref().map_or(&base, |(s, _)| s);
         assert_eq!(&*snap.parsed["src/Alpha.al"].text, ALPHA_EDITED, "T13(e)");
         assert_same_as_fresh(snap, dir.path(), "T13(e)");
+    }
+
+    /// TLS-57: T13(e) with a rewrite that keeps the file's length and mtime
+    /// (a folder event, no event of its own). The stamp's ctime moved, so
+    /// the file is read again and its new text published.
+    ///
+    /// DISCRIMINATION (2026-11-14): the updater's stamp without ctime
+    /// (`FileStamp::of` taking `stamp.without_ctime()`) fails "the rewrite is
+    /// read".
+    #[cfg(unix)]
+    #[test]
+    fn t13f_stamped_file_rewritten_keeping_size_and_mtime_is_reread() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = src_fixture();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let src = dir.path().join("src");
+        let warm = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src.clone())]);
+        assert!(
+            warm.is_none(),
+            "precondition: the warm-up event plans nothing"
+        );
+        let alpha = src.join("Alpha.al");
+        let before = std::fs::metadata(&alpha).unwrap();
+        let text = std::fs::read_to_string(&alpha).unwrap();
+        assert_eq!(text.matches("DoWork").count(), 1, "precondition: edit");
+        let edited = text.replace("DoWork", "DoWerk");
+        let ctime = |m: &std::fs::Metadata| (m.ctime(), m.ctime_nsec());
+        let mut after = std::fs::metadata(&alpha).unwrap();
+        for _ in 0..200 {
+            std::fs::write(&alpha, &edited).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&alpha)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            after = std::fs::metadata(&alpha).unwrap();
+            if ctime(&after) != ctime(&before) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_ne!(ctime(&after), ctime(&before), "precondition: ctime moved");
+        assert_eq!(
+            (after.len(), after.modified().unwrap()),
+            (before.len(), before.modified().unwrap()),
+            "precondition: length and mtime kept"
+        );
+        // The identity check would catch a replaced file before ctime does.
+        assert_eq!(
+            (after.dev(), after.ino()),
+            (before.dev(), before.ino()),
+            "precondition: the same file (rewritten in place)"
+        );
+        let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src)]);
+        let snap = got.as_ref().map_or(&base, |(s, _)| s);
+        assert_eq!(
+            &*snap.parsed["src/Alpha.al"].text, edited,
+            "the rewrite is read"
+        );
+        assert_same_as_fresh(snap, dir.path(), "T13(f)");
     }
 
     /// The folder is replaced after the build's read and before the updater
