@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   makes every such site a `run` route itself, so the edge comes out as `via: "run"`;
   the rule found nothing left to add (0 `declaredRunnable` edges on the pinned CDO
   workspace among 58,489 edges, and none on a fixture with all 20 dispatching
-  builtins on typed locals, parameters, globals and arrays). No output changes.
-  `declaredRunnable` now means only a `TestPage`/`TestRequestPage` variable a test
-  routine declares, and such an edge never carries a `line`. `alsem impact up`
+  builtins on typed locals, parameters, globals and arrays). No output changes for
+  code that compiles; an ill-typed call such as `PageVar.Run(1, 2)` on a page with no
+  `Run` procedure loses the edge. `declaredRunnable` now means only a
+  `TestPage`/`TestRequestPage` variable a routine (or, for a global, its object)
+  declares, and such an edge never carries a `line`. `alsem impact up`
   classifies every `declaredRunnable` edge as a rule edge. A new test pins that each of
   the 20 builtins on a typed receiver is a `run` site.
 

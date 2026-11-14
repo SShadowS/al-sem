@@ -324,8 +324,8 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    object whose globals declared `Page "Sales Invoice"` ran that page, so `Document
    Errors Mgt.`'s empty `OnRun` "ran" Page 43 because the codeunit calls
    `GlobalSalesInvoicePage.RunBackgroundCheck()`. **Consumer note (bc-dev-mcp):** no
-   schema change; the export has fewer `declaredRunnable` edges, each one now
-   witnessed by a site. Codeunit variables are excluded: the engine already models
+   schema change; the export has fewer `declaredRunnable` edges (from 2026-11-06 to
+   TLS-51 each was witnessed by a site; now each is a test page declaration). Codeunit variables are excluded: the engine already models
    `CuVar.Run()` precisely, and codeunit variables mostly serve procedure calls.
 3. **Test handlers.** A routine with `[HandlerFunctions('A,B')]` gets an `Event` edge
    (`OverApprox`, `via: "testHandler"`) to each named handler in the same codeunit

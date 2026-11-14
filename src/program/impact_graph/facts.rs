@@ -44,8 +44,8 @@ pub struct RoutineFacts {
     /// catalog builtins (`OpenEdit`, a field's `SetValue`, an action's
     /// `Invoke`), so the declaration stands for the run. A `Page`, `Report`,
     /// `XmlPort` or `Query` variable is not here: its run is a site (a typed
-    /// `.Run()`/`.RunModal()` is an engine run edge, `SaveAsPdf`/`Open`/… a
-    /// dispatching builtin on its receiver), and a routine that only declares
+    /// `.Run()`/`.RunModal()`, `SaveAsPdf`, `Open` or any other dispatching
+    /// builtin on it is an engine `run` edge), and a routine that only declares
     /// one and calls its procedures runs nothing.
     pub test_pages: Vec<RunTarget>,
     /// What the routine exits on first thing, as a table-event subscriber
