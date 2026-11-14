@@ -490,7 +490,8 @@ fn lower_object(
         while let Some(c) = stack.pop() {
             if c.kind() == RawKind::RequestpageSection {
                 pages.push(c);
-            } else if is_preproc_wrapper(c) {
+            } else if is_preproc_wrapper(c) || c.kind() == RawKind::PreprocSplitVarSectionTail {
+                // Fable r8: a split var-section tail can hold a request page too.
                 stack.extend(c.named_children());
             }
         }

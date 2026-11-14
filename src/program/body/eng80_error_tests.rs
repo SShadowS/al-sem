@@ -941,6 +941,27 @@ fn eng80_request_page_scope_is_not_read() {
     local procedure Next() begin end;
 }
 
+report 50376 "Eng80 RP Split Tail"
+{
+    dataset { dataitem(D; Integer) { } }
+    var
+        Msg: Text;
+#if X
+        H: Text;
+    requestpage
+    {
+        var
+            Msg: ErrorInfo;
+
+        trigger OnClosePage() begin Error(Msg); Next(); end;
+    }
+#else
+        H: Integer;
+#endif
+
+    local procedure Next() begin end;
+}
+
 report 50377 "Eng80 RP Plain"
 {
     dataset { dataitem(D; Integer) { } }
@@ -964,6 +985,12 @@ report 50377 "Eng80 RP Plain"
         "OnOpenPage: may raise"
     );
     assert!(has_may_raise(&m, "OnOpenPage"), "OnOpenPage: may raise");
+    // Fable r8: a request page inside a split var-section tail.
+    assert!(
+        !next_dead(&m, "OnClosePage", "Next"),
+        "OnClosePage: may raise"
+    );
+    assert!(has_may_raise(&m, "OnClosePage"), "OnClosePage: may raise");
     assert!(
         next_dead(&m, "OnQueryClosePage", "Next"),
         "control: no request-page var section"
