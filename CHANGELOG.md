@@ -117,9 +117,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its `IsHandled := true` as "may set" (its no-branch fast path said "must set"). It also reads
   `has_branching: true`, which RecordRef temp-state derivation, `event_flow` and d61 took as a
   straight-line proof when `false`.
-- On CDO (`bc3ccb18`, against master `7bea0684`): findings at both scopes, the `alsem fingerprint`
-  output (byte-identical) and the call-graph histogram (0 unknown edges) do not move; none of these
-  shapes occur there.
+- On CDO (`bc3ccb18`, against master `988ee04f`): findings at both scopes, the `alsem fingerprint`
+  output (byte-identical) and the call-graph histogram (0 unknown edges) do not move. Of 34,205
+  routines with a body (5,479 in the workspace), 7 are untrusted, all in dependencies and all for a
+  statement the lowerer could not lower (6 in Base Application, among them `Sales-Post::PostSalesLine`;
+  1 in System Application); none in the workspace, none parse-incomplete
+  (`eng14_cdo_untrusted_census`).
 - Goldens: only the r0 corpus's intentional parse error (`CSR Broken::Incomplete`) moves, in the
   r1a L2 golden and the l2 snapshot: its call loses `top-level` and its dominance claim. The impact
   cache schema goes 13 → 14. Schema 14 also covers ENG-19's summary change (`Report.RunRequestPage`
