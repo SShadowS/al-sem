@@ -596,6 +596,21 @@ codeunit 50397 "Eng80 Both Arms"
     local procedure Next() begin end;
 }
 
+codeunit 50398 "Eng80 Split Name"
+{
+    procedure SplitName() begin Error('x'); Next(); end;
+
+#if X
+    local procedure Error(Msg: Text)
+#else
+    local procedure Fail(Msg: Text)
+#endif
+    begin
+    end;
+
+    local procedure Next() begin end;
+}
+
 codeunit 50394 "Eng80 Cond Or"
 {
     procedure CondOr() begin Error('x'); Next(); end;
@@ -656,6 +671,8 @@ codeunit 50393 "Eng80 Twice"
         "CondOr",
         "TwoArms",
         "ElifNoElse",
+        // Review r4: a split header whose name differs by arm (`Error` only under X).
+        "SplitName",
     ] {
         assert!(!next_dead(&m, name, "Next"), "{name}: Next live");
         assert!(
