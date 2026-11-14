@@ -119,14 +119,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its `IsHandled := true` as "may set" (its no-branch fast path said "must set"). It also reads
   `has_branching: true`, which RecordRef temp-state derivation, `event_flow` and d61 took as a
   straight-line proof when `false`.
-- On CDO (`bc3ccb18`, against master `988ee04f`): findings at both scopes, the `alsem fingerprint`
-  output (byte-identical) and the call-graph histogram (0 unknown edges) do not move. Of 34,205
-  routines with a body (5,479 in the workspace), 7 are untrusted, all in dependencies and all for a
-  statement the lowerer could not lower (6 in Base Application, among them `Sales-Post::PostSalesLine`;
-  1 in System Application); none in the workspace, none parse-incomplete
-  (`eng14_cdo_untrusted_census`). All 7 are one family this change fails closed on purpose: a `#if`
-  arm that adds an `if C then` (or `if C then … else`) head in front of a statement every build
-  runs. A precise reading that invents no guard is ENG-77.
+- On CDO (`bc3ccb18`, against master `492b1864`): findings at both scopes and the call-graph
+  histogram (0 unknown edges) do not move. Of 34,205 routines with a body (5,479 in the workspace),
+  11 are untrusted, none parse-incomplete (`eng14_cdo_untrusted_census`):
+  - 7 (6 in Base Application, among them `Sales-Post::PostSalesLine`; 1 in System Application) are
+    one family: a `#if` arm that adds an `if C then` (or `if C then … else`) head in front of a
+    statement every build runs. A precise reading that invents no guard is ENG-77;
+  - 4 have a `#if` group among a `case`'s branches: 3 in Base Application and 1 in the workspace,
+    `CDO E-Mail::SetSendingMethodAndFromAddress` (a split case header: one label goes to different
+    branches per build). That routine's 8 call sites lose their control contexts and order in the
+    `alsem fingerprint` output (its old reading had no false claim: a precision loss, nothing else
+    in that output moves). A precise reading is ENG-79.
 - Left (pre-existing, not closed here): a `#if` inside a condition (`if #if X Flag #else not Flag
   #endif then exit;`) is still read from its first arm, so every build gets that arm's guard
   (ENG-78).
