@@ -125,6 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`eng14_cdo_untrusted_census`). All 7 are one family this change fails closed on purpose: a `#if`
   arm that adds an `if C then` (or `if C then … else`) head in front of a statement every build
   runs. A precise reading that invents no guard is ENG-77.
+- Left (pre-existing, not closed here): a `#if` inside a condition (`if #if X Flag #else not Flag
+  #endif then exit;`) is still read from its first arm, so every build gets that arm's guard
+  (ENG-78).
 - Goldens: only the r0 corpus's intentional parse error (`CSR Broken::Incomplete`) moves, in the
   r1a L2 golden and the l2 snapshot: its call loses `top-level` and its dominance claim. The impact
   cache schema goes 13 → 14. Schema 14 also covers ENG-19's summary change (`Report.RunRequestPage`
