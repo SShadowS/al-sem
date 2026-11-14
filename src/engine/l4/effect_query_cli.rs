@@ -788,13 +788,19 @@ fn enters_dependency_code(
     let Some(b) = cone else {
         return true;
     };
-    let t = &b.entry.unresolved_traversal;
     cone_enters(
-        t.dependency_routines,
-        t.truncated,
+        b.entry.unresolved_traversal.dependency_routines,
         b.rollup.totals.entry_points,
         b.rollup.totals.crossing_sites,
     ) || effects.iter().any(|e| in_dependency(e.operation_id))
+}
+
+/// Whether the cone's search was cut short (its depth or routine limit),
+/// a fact of its own (TLS-49 review sol r1): it makes the whole-cone search
+/// not exhaustive; it does not mean dependency code was entered. `false` when
+/// no cone was read (the depth clause already says that answer is limited).
+fn cone_cut_short(cone: Option<&Beyond<'_>>) -> bool {
+    cone.is_some_and(|b| b.entry.unresolved_traversal.truncated)
 }
 
 /// TLS-49: the depth the per-operation touches index stands on, from the same
@@ -813,17 +819,13 @@ fn index_depth(enters_dependency: bool) -> (&'static str, &'static str) {
 }
 
 /// [`enters_dependency_code`]'s rule over a read cone: any visited
-/// dependency routine, a cut-short search, or a dependency entry point or
-/// crossing site in the rollup. Not probed on a real shape (TLS-49): the
-/// last two can be counted with no routine visited (a crossing with no known
-/// target), as explain's own "none reached" rule allows for.
-fn cone_enters(
-    dependency_routines: usize,
-    truncated: bool,
-    entry_points: usize,
-    crossing_sites: usize,
-) -> bool {
-    dependency_routines > 0 || truncated || entry_points > 0 || crossing_sites > 0
+/// dependency routine, or a dependency entry point or crossing site in the
+/// rollup. Not probed on a real shape (TLS-49): the last two can be counted
+/// with no routine visited (a crossing with no known target), as explain's own
+/// "none reached" rule allows for. A cut-short search is not entry
+/// ([`cone_cut_short`]).
+fn cone_enters(dependency_routines: usize, entry_points: usize, crossing_sites: usize) -> bool {
+    dependency_routines > 0 || entry_points > 0 || crossing_sites > 0
 }
 
 /// Step 1b (astra top 5): how the root's cone, after the literal pass,
@@ -3123,10 +3125,12 @@ fn render_query_touches_body(
             push_scope(
                 &mut human,
                 &mut lines,
-                match (&beyond, enters) {
-                    (Some(_), true) => TOUCHES_SCOPE_CONE,
-                    (Some(_), false) => "dependency code: none reached",
-                    (None, _) => TOUCHES_SCOPE,
+                match (&beyond, enters, cone_cut_short(beyond.as_ref())) {
+                    (Some(_), true, _) => TOUCHES_SCOPE_CONE,
+                    // TLS-49 review sol r1: cut short is not "entered".
+                    (Some(_), false, true) => "dependency code: none reached (search cut short)",
+                    (Some(_), false, false) => "dependency code: none reached",
+                    (None, _, _) => TOUCHES_SCOPE,
                 },
             );
             payload.insert("result".into(), json!({"scope": {SCOPE_LINES: lines}}));
@@ -5445,6 +5449,8 @@ fn render_query_effects_body(
     });
     // TLS-49: the summary's scope token states the same fact as the scope line.
     summary["scope"] = scope_value(beyond.is_some(), enters_dependency).into();
+    // TLS-49 review sol r1: a search cut short is its own fact (not "entered").
+    let cut_short = cone_cut_short(beyond.as_ref());
     let family_scope = |what: &str| {
         if enters_dependency {
             json!({
@@ -5454,16 +5460,23 @@ fn render_query_effects_body(
                 "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
             })
         } else {
-            let blocked = call_not_resolved + open_world > 0;
+            let mut reasons = Vec::new();
+            if call_not_resolved + open_world > 0 {
+                reasons.push(format!("calls not resolved and open-world interface dispatches may reach {what} the cone does not list"));
+            }
+            if cut_short {
+                reasons.push(format!("the cone search was cut short at its limit, so {what} deeper in the cone are not listed"));
+            }
+            let mut blockers = json!({"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world});
+            // Only when it happened, so no existing answer gains a key.
+            if cut_short {
+                blockers["searchCutShort"] = 1.into();
+            }
             json!({
                 "depth": "wholeCone",
-                "inventory": if blocked { "notExhaustive" } else { "exhaustive" },
-                "reasons": if blocked {
-                    json!([format!("calls not resolved and open-world interface dispatches may reach {what} the cone does not list")])
-                } else {
-                    json!([])
-                },
-                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
+                "inventory": if reasons.is_empty() { "exhaustive" } else { "notExhaustive" },
+                "reasons": reasons,
+                "blockers": blockers,
             })
         }
     };
@@ -5583,14 +5596,18 @@ fn render_query_effects_body(
         .collect();
     // Engine limits B8: a cone that enters no dependency code was searched
     // whole; only the calls it could not follow are left out.
-    let whole_cone_search = crate::engine::vocab::none_observed(
-        "the whole cone",
-        if call_not_resolved + open_world > 0 {
-            "calls not resolved"
-        } else {
-            ""
-        },
-    );
+    // What a whole-cone search did not reach: one text for the absence lines
+    // and the scope line (TLS-49: a cut-short search is named here, not as
+    // dependency entry).
+    let not_searched = [
+        (call_not_resolved + open_world > 0).then_some("calls not resolved"),
+        cut_short.then_some("beyond the cone's search limit"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    let whole_cone_search = crate::engine::vocab::none_observed("the whole cone", &not_searched);
     let write_search = if !enters_dependency {
         whole_cone_search.clone()
     } else if beyond.is_some() {
@@ -5692,10 +5709,10 @@ fn render_query_effects_body(
             "reads, locks, validate, writes: the whole cone, no dependency code entered{}; \
              operations and routes the literal arguments rule out are listed and marked \
              (explain and prove drop them)",
-            if call_not_resolved + open_world > 0 {
-                " (not searched: calls not resolved)"
+            if not_searched.is_empty() {
+                String::new()
             } else {
-                ""
+                format!(" (not searched: {not_searched})")
             }
         )
     } else if beyond.is_some() {
@@ -7119,19 +7136,19 @@ mod tests {
     use crate::program::model::workspace::{ModelDeclarationOnlyRoutine, ModelObject, ModelTable};
 
     /// TLS-49 (d): one "enters dependency code" rule for query effects and
-    /// query touches, the union of the two they had. Hand-stated: nothing
-    /// counted reads as not entered; each input alone reads as entered.
+    /// query touches. Hand-stated: nothing counted reads as not entered; each
+    /// dependency count alone reads as entered. A cut-short search is not an
+    /// input (review sol r1; `cone_cut_short`, pinned by
+    /// `query_cut_short_without_dependency_says_so` in the cli tests).
     ///
     /// DISCRIMINATION (2026-11-13): dropping the `crossing_sites` term fails
-    /// at "a crossing site alone"; dropping `truncated` fails at "cut short";
-    /// restored, passes.
+    /// at "a crossing site alone"; restored, passes.
     #[test]
     fn the_cone_enters_dependency_code_on_any_dependency_count() {
-        assert!(!cone_enters(0, false, 0, 0), "nothing counted");
-        assert!(cone_enters(1, false, 0, 0), "a routine visited");
-        assert!(cone_enters(0, true, 0, 0), "cut short");
-        assert!(cone_enters(0, false, 1, 0), "an entry point alone");
-        assert!(cone_enters(0, false, 0, 1), "a crossing site alone");
+        assert!(!cone_enters(0, 0, 0), "nothing counted");
+        assert!(cone_enters(1, 0, 0), "a routine visited");
+        assert!(cone_enters(0, 1, 0), "an entry point alone");
+        assert!(cone_enters(0, 0, 1), "a crossing site alone");
     }
 
     fn site(op: &str, line: u32, key: Option<&'static str>) -> TableSite {

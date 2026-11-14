@@ -339,17 +339,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     enters no dependency code (was `operations-one-routine-deep; …`). `QUERY_SCHEMA_VERSION`
     is unchanged; the schema 4 and 5 mappings pass the new value through.
 - **`query effects` and `query touches` decide "the cone enters dependency code" with one
-  check**, the union of the two they had: effects now also counts a dependency entry point or
-  crossing site, and touches a cut-short search. In effects that moves the families' depth
-  and limits, `summary.scopes` and the absence lines to the one-routine-deep wording, never
-  the reverse. In touches, a cut-short cone with no dependency routine visited now reads
-  "dependency code: full cone for physical writes, …" instead of "none reached". The task asked
-  for a probe first; none was run. The union was taken because explain's own "none reached"
-  rule reads the same two counts, and a crossing with no known target counts there with no
-  routine visited (`routine_rollup.rs`). Whether real code shows that shape is not measured.
-  The rule (`cone_enters`) is pinned by the hand-stated
-  `the_cone_enters_dependency_code_on_any_dependency_count`; its wiring is not (no fixture
-  produces the shape).
+  check** (`cone_enters`): a visited dependency routine, a dependency entry point or a
+  crossing site. Effects now also counts the last two, as touches did. In effects that moves
+  the families' depth and limits, `summary.scopes` and the absence lines to the
+  one-routine-deep wording, never the reverse. The task asked for a probe first; none was run.
+  The two counts were taken because explain's own "none reached" rule reads them, and a
+  crossing with no known target counts there with no routine visited (`routine_rollup.rs`).
+  Whether real code shows that shape is not measured. The rule is pinned by the hand-stated
+  `the_cone_enters_dependency_code_on_any_dependency_count`; its wiring for those two counts is
+  not (no fixture produces the shape).
+- **A cone search cut short at its limit is its own fact, not dependency entry** (review sol
+  r1). Effects used to count it as entry. In effects, a cut-short cone that enters no
+  dependency keeps the whole-cone scope and says "(not searched: beyond the cone's search
+  limit)". Its families become `notExhaustive`, with a reason and the blocker
+  `searchCutShort: 1`; that key is present only when it happened. The header then reads
+  "analysis partial". In touches it reads "dependency code: none reached (search cut short)".
+  Pinned by `query_cut_short_without_dependency_says_so`, a 70-routine workspace chain past
+  the 64-hop limit, in both formats, with a discrimination proof. A cone that enters
+  dependency code and is also cut short is unchanged; its depth already says it is not
+  exhaustive.
 - **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
   scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
   when no test app is found.

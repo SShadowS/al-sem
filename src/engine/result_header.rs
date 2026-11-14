@@ -103,11 +103,19 @@ impl Analysis {
     #[must_use]
     pub fn of_families(families: &Value) -> Analysis {
         let n = |b: &Value, k: &str| b.get(k).and_then(Value::as_u64).unwrap_or(0);
-        let mut groups: Vec<((u64, u64), Vec<&str>)> = Vec::new();
+        // (calls not resolved, open-world dispatches, search cut short).
+        type Blockers = (u64, u64, u64);
+        let mut groups: Vec<(Blockers, Vec<&str>)> = Vec::new();
         for (name, fam) in families.as_object().into_iter().flatten() {
             let b = &fam["blockers"];
-            let key = (n(b, "callNotResolved"), n(b, "interfaceDispatchOpenWorld"));
-            if key == (0, 0) {
+            // TLS-49: a cone search cut short (its depth or routine limit)
+            // leaves the whole-cone answer not exhaustive too.
+            let key = (
+                n(b, "callNotResolved"),
+                n(b, "interfaceDispatchOpenWorld"),
+                n(b, "searchCutShort"),
+            );
+            if key == (0, 0, 0) {
                 continue;
             }
             match groups.iter_mut().find(|(k, _)| *k == key) {
@@ -121,7 +129,7 @@ impl Analysis {
         Analysis::Partial(
             groups
                 .into_iter()
-                .map(|((calls, open), names)| {
+                .map(|((calls, open, cut), names)| {
                     let mut what = Vec::new();
                     if calls > 0 {
                         what.push(format!(
@@ -134,6 +142,9 @@ impl Analysis {
                             "{open} interface {} open world",
                             if open == 1 { "dispatch" } else { "dispatches" }
                         ));
+                    }
+                    if cut > 0 {
+                        what.push("the cone search was cut short at its limit".to_string());
                     }
                     format!("{}: {}", names.join(", "), what.join(", "))
                 })

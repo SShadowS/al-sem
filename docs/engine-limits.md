@@ -50,8 +50,10 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
   own: in an answer whose cone was not read, in a failed answer, in workspace-wide touches, and
   in every touches answer from a routine. `query effects`' `summary.scope` reads
   `whole-cone` in the no-dependency case. `query touches` and `query effects` share one "enters
-  dependency code" check, the union of the two they had. That union was not probed on real code
-  (see CHANGELOG TLS-49); its rule is pinned by a hand-stated test, its wiring is not. Pinned by
+  dependency code" check (a visited dependency routine, entry point or crossing site). It was
+  not probed on real code (see CHANGELOG TLS-49); its rule is pinned by a hand-stated test, its
+  wiring is not. A cone search cut short at its limit is its own fact, not entry: the whole-cone
+  answer says "not searched: beyond the cone's search limit" (`query_cut_short_without_dependency_says_so`). Pinned by
   `query_scope_is_one_fact_in_both_formats` (the query corpus and the output fixture's cone
   entering a dependency) and, for a cone not read, by `digest_db_effects_carry_query_effects_temp_state`.
   Touches' `down.absence.index` token and the depth phrase of the human miss line come from the

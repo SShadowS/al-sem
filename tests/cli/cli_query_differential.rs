@@ -1522,3 +1522,71 @@ fn query_touches_miss_index_states_the_scope_fact() {
         "{human}"
     );
 }
+
+/// TLS-49 review sol r1: a cone search cut short at its limit is its own
+/// fact, not "dependency code entered". A workspace-only call chain longer
+/// than the cone's depth limit (64): effects keeps the whole-cone scope and
+/// says what it did not search; touches says none reached, cut short; neither
+/// claims a dependency depth, and both formats agree.
+///
+/// DISCRIMINATION (2026-11-13): `cone_enters` counting `truncated` again (the
+/// union before this fix) gives the dependency-depth wording here; restored,
+/// passes.
+#[test]
+fn query_cut_short_without_dependency_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"aaaa1111-0000-0000-0000-0000000000bb","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50500,"to":50599}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let mut al = String::from(
+        "table 50500 \"Q Deep\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50501 \"Q Chain\"\n{\n",
+    );
+    for i in 0..70 {
+        al.push_str(&format!(
+            "    procedure P{i}()\n    begin\n        P{}();\n    end;\n\n",
+            i + 1
+        ));
+    }
+    al.push_str(
+        "    procedure P70()\n    var\n        R: Record \"Q Deep\";\n    begin\n        R.Insert();\n    end;\n}\n",
+    );
+    std::fs::write(dir.path().join("src/All.al"), al).unwrap();
+    let ws = dir.path().to_string_lossy().to_string();
+
+    let effects = ["query", "effects", &ws, "--routine", "Q Chain.P0"];
+    let (h, j) = scope_both_ways(&effects);
+    assert_eq!(h.as_deref(), Some(j.as_str()), "effects headers differ");
+    assert!(
+        j.starts_with(
+            "reads, locks, validate, writes: the whole cone, no dependency code entered (not \
+             searched: beyond the cone's search limit);"
+        ),
+        "{j}"
+    );
+    let (json, _) = run_alsem(&effects, "json");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let reads = &v["payload"]["result"]["scope"]["families"]["reads"];
+    assert_eq!(reads["blockers"]["searchCutShort"], 1, "{reads}");
+    assert_eq!(reads["inventory"], "notExhaustive", "{reads}");
+
+    let touches = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "Q Deep",
+        "--from",
+        "Q Chain.P0",
+        "--direction",
+        "down",
+    ];
+    let (h, j) = scope_both_ways(&touches);
+    assert_eq!(h.as_deref(), Some(j.as_str()), "touches headers differ");
+    assert!(
+        j.starts_with("dependency code: none reached (search cut short);"),
+        "{j}"
+    );
+}
