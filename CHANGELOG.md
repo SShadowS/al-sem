@@ -122,7 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routines with a body (5,479 in the workspace), 7 are untrusted, all in dependencies and all for a
   statement the lowerer could not lower (6 in Base Application, among them `Sales-Post::PostSalesLine`;
   1 in System Application); none in the workspace, none parse-incomplete
-  (`eng14_cdo_untrusted_census`).
+  (`eng14_cdo_untrusted_census`). All 7 are one family this change fails closed on purpose: a `#if`
+  arm that adds an `if C then` (or `if C then … else`) head in front of a statement every build
+  runs. A precise reading that invents no guard is ENG-77.
 - Goldens: only the r0 corpus's intentional parse error (`CSR Broken::Incomplete`) moves, in the
   r1a L2 golden and the l2 snapshot: its call loses `top-level` and its dominance claim. The impact
   cache schema goes 13 → 14. Schema 14 also covers ENG-19's summary change (`Report.RunRequestPage`
