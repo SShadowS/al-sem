@@ -21,8 +21,9 @@
 # same name, or the branch moving meanwhile, changes nothing) and pushes that
 # exact merge commit. ⟨TLS-59⟩ scripts/land also sets MERGE_EXPECT_MASTER and
 # MERGE_EXPECT_SOURCE (the master and the landing commit its gates saw): then it
-# refuses unless master and the branch are exactly those, and unless the merged
-# tree is the gated landing tree.
+# refuses unless master and the branch are exactly those, and unless the merge
+# gives the gated landing tree (checked before master moves; master then only
+# fast-forwards to the merge commit).
 #
 # Usage: scripts/merge-and-push <branch>
 # Exit: 0 pushed; 1 refused or failed (the message says which step).
@@ -59,6 +60,21 @@ fi
 before=$(git rev-parse HEAD)
 if git merge-base --is-ancestor "$src" master; then
     echo "merge-and-push: '$branch' is already in master; nothing to merge"
+    merged=$before
+elif [ -n "${MERGE_EXPECT_MASTER:-}" ]; then
+    # ⟨TLS-59⟩ The landing branch was built on the expected master, so the merge
+    # must give exactly its tree (anything else was never gated). Checked before
+    # master is touched; the merge commit is then made from the known parents and
+    # master only fast-forwards to it, so a writer that moved master meanwhile
+    # makes this refuse instead of losing its commit.
+    gated_tree=$(git rev-parse "$src^{tree}") || die "cannot read the tree of '$branch'"
+    merge_tree=$(git merge-tree --write-tree "$before" "$src" 2>/dev/null | head -n 1)
+    [ "$merge_tree" = "$gated_tree" ] \
+        || die "merging '$branch' into master is not the gated tree (not built on ${before:0:8}?); nothing merged"
+    merged=$(git commit-tree "$gated_tree" -p "$before" -p "$src" -m "Merge branch '$branch'" \
+        -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>") || die "cannot make the merge commit"
+    git merge --ff-only --quiet "$merged" \
+        || die "master moved while merging '$branch'; nothing merged: land again"
 else
     if ! git merge --no-ff --quiet "$src" -m "Merge branch '$branch'
 
@@ -66,14 +82,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; then
         git merge --abort 2>/dev/null
         die "merging '$branch' conflicts; aborted, master unchanged at ${before:0:8}"
     fi
-fi
-merged=$(git rev-parse HEAD) || die "cannot read the merge"
-# ⟨TLS-59⟩ The landing branch was built on the expected master, so the merge
-# must give exactly its tree: anything else was never gated.
-if [ -n "${MERGE_EXPECT_MASTER:-}" ] \
-    && [ "$(git rev-parse "$merged^{tree}")" != "$(git rev-parse "$src^{tree}")" ]; then
-    git reset --quiet --hard "$before"
-    die "the merged tree is not the gated tree of '$branch' (not built on ${before:0:8}?); master reset to ${before:0:8}, nothing pushed"
+    merged=$(git rev-parse HEAD) || die "cannot read the merge"
 fi
 
 tree=$(git rev-parse 'HEAD^{tree}') || die "cannot read the merged tree"
