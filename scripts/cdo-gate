@@ -10,6 +10,18 @@
 # Usage:
 #   scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>
 #   CDO_WS=/path/to/workspace scripts/cdo-gate
+#   scripts/cdo-gate --only harness,l4[,lsp,lib,output] [--dry-run] [<workspace>]
+#
+# ⟨TLS-58⟩ `--only <phases>`: a PRE-SUBMIT subset, not a landing gate. It runs
+# only the named test phases (harness = program_resolve_harness, lsp, l4 =
+# l4_summary_differential, lib = lib_cdo, output = output_cdo), one after
+# another, with the same ENFORCE_CDO_WS=1, the same `cdo` build (of those
+# targets only), the same memory sampler and the same summary; it never runs
+# the speed check or the impact ratchets (`output_cdo_impact`), and its verdict
+# line says SUBSET. Four landing gates in three days failed on a CDO test the
+# lane never ran (ENG-09, 12, 15, 19); `--only harness,l4` is the usual check
+# before `coord submit`. `--dry-run` prints what it would build and run, then
+# exits (no workspace needed). An unknown phase name stops it (exit 2).
 #
 # A positional argument takes precedence over the CDO_WS env var when both
 # are given. `CDO_GATE_SERIAL=1` runs the phases one after another (for a
@@ -70,6 +82,11 @@ summary_dir=""
 speed_skipped=""
 product_paths_only=0
 layout_only=0
+# ⟨TLS-58⟩ `--only`: the comma list as given, the phases it names, and
+# `--dry-run`.
+only=""
+only_phases=()
+dry_run=0
 
 # ⟨TLS-32, orchestrator 2026-11-13⟩ The test phases' layout. `output_cdo` runs
 # alone, then the impact phase. Lane 2 (harness, lsp, l4, lib_cdo) runs BESIDE
@@ -241,6 +258,29 @@ usage() {
     echo "usage: scripts/cdo-gate [--no-speed] <path-to-cdo-workspace>   (or: CDO_WS=<path> scripts/cdo-gate)" >&2
     echo "       scripts/cdo-gate --summary=<run folder>   (a past run's summary, from its logs)" >&2
     echo "       scripts/cdo-gate --layout   (the test phases' layout this host would take now)" >&2
+    echo "       scripts/cdo-gate --only harness,l4[,lsp,lib,output] [--dry-run] [<workspace>]   (a pre-submit SUBSET: those phases only; no speed, no impact)" >&2
+}
+
+# ⟨TLS-58⟩ `--only`'s phase names: the short name, the phase (its status and
+# log name, as the summary reads them) and its build target(s).
+only_phase_of() {
+    case "$1" in
+        harness) echo program_resolve_harness ;;
+        lsp) echo lsp ;;
+        l4) echo l4_summary_differential ;;
+        lib) echo lib_cdo ;;
+        output) echo output_cdo ;;
+        *) return 1 ;;
+    esac
+}
+only_build_of() {
+    case "$1" in
+        program_resolve_harness) echo "--test program_resolve_harness" ;;
+        lsp) echo "--test lsp" ;;
+        l4_summary_differential) echo "--test l4_summary_differential" ;;
+        lib_cdo) echo "-p al-sem --lib" ;;
+        output_cdo) echo "--test cli" ;;
+    esac
 }
 
 loud_no_speed() {
@@ -299,6 +339,13 @@ summarize() {
     # `output_cdo` held them); in a run that did, a missing status fails as any.
     [[ -f "$logs/split-impact" ]] && phases+=(output_cdo_impact)
     [[ "$speed" -eq 1 ]] && phases=(speed "${phases[@]}")
+    # ⟨TLS-58⟩ A `--only` run lists its phases: those, and only those, count
+    # (a missing status among them still fails).
+    local subset=""
+    if [[ -f "$logs/only" ]]; then
+        subset=$(head -n 1 "$logs/only")
+        read -r -a phases < <(tail -n +2 "$logs/only" | paste -sd ' ' -)
+    fi
     local status=0 name rc secs word counts passed bad=()
     echo "cdo-gate: summary (wall seconds; logs in $logs)"
     for name in "${phases[@]}"; do
@@ -344,7 +391,7 @@ summarize() {
             $1 == "max" || $1 == "oom" || $1 == "oom_kill" { printf "%s%s +%d", sep, $1, $2 - s[$1]; sep = ", " }' \
             "$logs/memory.events.start" "$logs/memory.events.end")"
     fi
-    [[ "$speed" -eq 0 ]] && loud_no_speed
+    [[ "$speed" -eq 0 && -z "$subset" ]] && loud_no_speed
 
     if [[ "$status" -ne 0 ]]; then
         for name in "${bad[@]}"; do
@@ -355,7 +402,9 @@ summarize() {
                 tail -n 60 "$logs/$name.log" 2>/dev/null
             fi
         done
-        echo "cdo-gate: FAIL"
+        [[ -n "$subset" ]] && echo "cdo-gate: FAIL (SUBSET --only $subset)" || echo "cdo-gate: FAIL"
+    elif [[ -n "$subset" ]]; then
+        echo "cdo-gate: PASS (SUBSET --only $subset: not a landing gate; speed, the impact ratchets and the other phases did not run)"
     elif [[ -n "$speed_skipped" ]]; then
         echo "cdo-gate: PASS (behaviour only: speed skipped, $speed_skipped)"
     elif [[ "$speed" -eq 0 ]]; then
@@ -368,12 +417,31 @@ summarize() {
 
 # `--no-speed` in any position; anything else unknown stops the gate (a flag it
 # silently ignored would run a different gate than the caller asked for).
-for arg in "$@"; do
+args=("$@")
+i=0
+while ((i < ${#args[@]})); do
+    arg="${args[i]}"
+    i=$((i + 1))
     case "$arg" in
         --no-speed) speed=0 ;;
         --summary=*) summary_dir="${arg#--summary=}" ;;
         --product-paths) product_paths_only=1 ;;
         --layout) layout_only=1 ;;
+        --dry-run) dry_run=1 ;;
+        --only=*) only="${arg#--only=}" ;;
+        --only)
+            if ((i >= ${#args[@]})); then
+                echo "cdo-gate: error: --only needs a phase list (harness,l4,lsp,lib,output)" >&2
+                usage
+                exit 2
+            fi
+            only="${args[i]}"
+            i=$((i + 1))
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
         -*)
             echo "cdo-gate: error: unknown option: $arg" >&2
             usage
@@ -390,6 +458,46 @@ for arg in "$@"; do
     esac
 done
 [[ "${CDO_GATE_NO_SPEED:-}" == "1" ]] && speed=0
+
+# ⟨TLS-58⟩ `--only`: every name must be a phase (a typo would run a smaller
+# check than the caller asked for), each once; `--dry-run` only with it.
+if [[ -n "$only" ]]; then
+    IFS=',' read -r -a only_names <<< "$only"
+    for name in "${only_names[@]}"; do
+        if ! phase=$(only_phase_of "$name"); then
+            echo "cdo-gate: error: --only: unknown phase '$name' (phases: harness, lsp, l4, lib, output; the speed check and the impact ratchets run only in the full gate)" >&2
+            exit 2
+        fi
+        for seen in "${only_phases[@]}"; do
+            if [[ "$seen" == "$phase" ]]; then
+                echo "cdo-gate: error: --only: '$name' given twice" >&2
+                exit 2
+            fi
+        done
+        only_phases+=("$phase")
+    done
+    if [[ ${#only_phases[@]} -eq 0 ]]; then
+        echo "cdo-gate: error: --only: no phase named" >&2
+        exit 2
+    fi
+    speed=0
+elif [[ "$dry_run" == 1 ]]; then
+    echo "cdo-gate: error: --dry-run goes with --only" >&2
+    usage
+    exit 2
+fi
+only_build=()
+for phase in "${only_phases[@]}"; do
+    read -r -a targets <<< "$(only_build_of "$phase")"
+    only_build+=("${targets[@]}")
+done
+if [[ "$dry_run" == 1 ]]; then
+    echo "cdo-gate: SUBSET --only $only (dry run: nothing built or run)"
+    echo "cdo-gate:   build: cargo test --profile cdo --no-run ${only_build[*]}"
+    echo "cdo-gate:   phases, one after another: ${only_phases[*]}"
+    echo "cdo-gate:   not run: speed, output_cdo_impact and every phase not named"
+    exit 0
+fi
 
 # ⟨TLS-20⟩ `--product-paths`: the rule alone, for its test (paths on stdin).
 if [[ "$product_paths_only" == 1 ]]; then
@@ -499,8 +607,14 @@ stop_gate() {
 }
 trap stop_gate INT TERM
 echo "cdo-gate: logs in $logs"
-# ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
-: > "$logs/split-impact"
+if [[ -n "$only" ]]; then
+    # ⟨TLS-58⟩ The subset's phases, for `summarize` (also on a later
+    # `--summary=` of this run): the list as given, then one phase a line.
+    { echo "$only"; printf '%s\n' "${only_phases[@]}"; } > "$logs/only"
+else
+    # ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
+    : > "$logs/split-impact"
+fi
 
 # Each output line prefixed with the gate's clock (seconds since it started),
 # so a log shows when each test ended.
@@ -554,7 +668,9 @@ if [[ "$speed" -eq 1 ]]; then
         echo "$speed_skipped" > "$logs/speed-skipped"
     fi
 fi
-if [[ "$speed" -eq 0 ]]; then
+if [[ -n "$only" ]]; then
+    echo "cdo-gate: SUBSET --only $only: ${only_phases[*]} only (no speed, no impact ratchets): a pre-submit check, not a landing gate"
+elif [[ "$speed" -eq 0 ]]; then
     loud_no_speed
 else
     # The speed phase's two release-fast binaries (the working tree's, and the
@@ -576,9 +692,10 @@ else
     # Its own group does not get the terminal's Ctrl-C: `stop_gate` (installed
     # above) reaches it as a descendant.
 fi
-if ! run_phase build cargo test "${profile[@]}" --no-run \
-    --test program_resolve_harness --test lsp --test l4_summary_differential \
-    --test cli -p al-sem --lib; then
+build_targets=(--test program_resolve_harness --test lsp --test l4_summary_differential
+    --test cli -p al-sem --lib)
+[[ -n "$only" ]] && build_targets=("${only_build[@]}")
+if ! run_phase build cargo test "${profile[@]}" --no-run "${build_targets[@]}"; then
     tail -n 60 "$logs/build.log"
     echo "cdo-gate: FAIL (the build; full log: $logs/build.log)"
     [[ "$speed" -eq 1 ]] && stop_speed_build
@@ -810,7 +927,22 @@ memory_sampler &
 sampler=$!
 # ⟨TLS-32⟩ The layout (`plan_layout`), decided when the parallel section would
 # start: after `output_cdo`, whose memory is then freed.
-if [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
+if [[ -n "$only" ]]; then
+    # ⟨TLS-58⟩ The subset: its phases one after another, each as the full
+    # gate runs it alone (no nice, no pin, lib_cdo at 4 threads).
+    lane2_nice=()
+    lib_threads=4
+    echo "subset (--only $only): ${only_phases[*]}, one after another" > "$logs/layout"
+    for phase in "${only_phases[@]}"; do
+        case "$phase" in
+            program_resolve_harness) phase_harness ;;
+            lsp) phase_lsp ;;
+            l4_summary_differential) phase_l4 ;;
+            lib_cdo) phase_lib ;;
+            output_cdo) phase_output_cdo ;;
+        esac
+    done
+elif [[ "${CDO_GATE_SERIAL:-}" == "1" ]]; then
     lane2_nice=()
     lane2
     phase_output_cdo
