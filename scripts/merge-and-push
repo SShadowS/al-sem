@@ -48,17 +48,21 @@ git fetch --quiet origin master || die "git fetch origin master failed"
 git switch --quiet master || die "cannot switch to master"
 git merge-base --is-ancestor origin/master master \
     || die "local master is not a fast-forward of origin/master; resolve that by hand"
+# Master is read once; every check below and the merge use this commit.
+before=$(git rev-parse HEAD) || die "cannot read master"
 # ⟨TLS-59⟩ scripts/land gated <branch> as built on one exact master and says
 # which; a master that moved since would merge into a tree no gate saw.
-if [ -n "${MERGE_EXPECT_MASTER:-}" ] && [ "$(git rev-parse master)" != "$MERGE_EXPECT_MASTER" ]; then
-    die "master is at $(git rev-parse --short master), not ${MERGE_EXPECT_MASTER:0:8} as the gates expected; nothing merged: land again"
+if [ -n "${MERGE_EXPECT_MASTER:-}" ] && [ "$before" != "$MERGE_EXPECT_MASTER" ]; then
+    die "master is at ${before:0:8}, not ${MERGE_EXPECT_MASTER:0:8} as the gates expected; nothing merged: land again"
 fi
 if [ -n "${MERGE_EXPECT_SOURCE:-}" ] && [ "$src" != "$MERGE_EXPECT_SOURCE" ]; then
     die "'$branch' is at ${src:0:8}, not ${MERGE_EXPECT_SOURCE:0:8} as the gates expected; nothing merged: land again"
 fi
 
-before=$(git rev-parse HEAD)
-if git merge-base --is-ancestor "$src" master; then
+if git merge-base --is-ancestor "$src" "$before"; then
+    # A landing commit the gates just built is never in the master they expected.
+    [ -z "${MERGE_EXPECT_MASTER:-}" ] \
+        || die "'$branch' (${src:0:8}) is already in master ${before:0:8}, which the gates did not expect; nothing merged"
     echo "merge-and-push: '$branch' is already in master; nothing to merge"
     merged=$before
 elif [ -n "${MERGE_EXPECT_MASTER:-}" ]; then

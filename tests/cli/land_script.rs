@@ -676,4 +676,12 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
     assert_eq!(pushed, rev(&r.main, "master"));
     assert_eq!(rev(&r.main, "master^1"), m2);
     assert_eq!(rev(&r.main, "master^2"), src2, "the branch, not the tag");
+
+    // Told what land's gates saw, a source already in master is no landing to
+    // push (sol r4: that path skipped the tree check).
+    let m3 = rev(&r.main, "master");
+    let (code, text) = push("landing/tls58-2", &m3, &src2);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("which the gates did not expect"), "{text}");
+    assert_eq!(rev(&r.main, "master"), m3);
 }

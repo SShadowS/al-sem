@@ -94,7 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and moves master with `merge --ff-only`, which refuses if master moved meanwhile.
   Without it, merge-and-push merges as before. Mutation: the up-front tree check
   dropped -> a branch not built on master is merged and pushed. The fast-forward
-  refusal needs a real race and has no test.
+  refusal needs a real race and has no test. Review r4 (sol): master is read once,
+  and every check and the merge use that commit; with `MERGE_EXPECT_MASTER`, a
+  source already in master is refused (that path skipped the tree check). Mutation:
+  the refusal dropped -> it reports "nothing to merge" and pushes.
 - Checked on real history (a shared scratch clone, its master set back): `--dry-run`
   of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
   equal the real landing's. Replaying b4 and b3 in full with the CHANGELOG
