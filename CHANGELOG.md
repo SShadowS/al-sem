@@ -243,6 +243,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate's names are gone. Each guard has a discrimination proof.
 - Found on the way (not fixed here): a CR-only source file with a `#if` parses as one error and loses
   its objects (GRM-03).
+- Also closed in review (sol, Fable): a user `procedure Error` counts as the binding only when it
+  exists in every build of the call (a lone `#if` copy, an undecided `#if X or Y` condition kept
+  whole, collapsed copies that miss a build); a declaration or signature that varies by `#if` proves
+  nothing unless every arm declares the name and an `#else` exists (inside a `var` section, around
+  whole sections, split section tails, conditional name lists; a wrapper whose arm holds the routine
+  itself does not count, so obsolete `#if not CLEANxx` procedures keep their proofs); table scopes
+  read their extensions (`table_code_not_loaded`); a request page's `var` section fails its
+  routines' proofs closed.
+- On CDO (`bc3ccb18`, against master `630dd171`): `primary` findings 2308 → 2308, every fingerprint
+  kept; `all` 32580 → 32579, one d20 gone: `CTS-CDN Net. Profile Selector::GetReceiverRegistrationCache`
+  (a dependency), whose `Error(ErrorInfo); exit(false); //If the error was collected and not thrown,
+  exit here.` the author wrote for exactly the collectible case. `cdo-gate --only harness,l4,output`
+  passes (211 / 25 / 22 tests). The untrusted-routine census holds at 9 / 1 / 1 (its ratchet fails
+  when pinned to 8).
 
 ### Changed (TLS-55: a configured job-queue or web-service procedure is no "codeunit OnRun")
 
