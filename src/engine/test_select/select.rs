@@ -54,8 +54,9 @@
 //! shortest path only. Every root has a walk of its own (TLS-53; the r3 L4
 //! limit of 128 is gone, see [`select_mapped`]), so `reachesAll` lists every
 //! root a test reaches, each with its tier, hops and relation; the released
-//! `reachesComplete` (always `true`), `notExpanded` (always empty) and
-//! `reachLimit` (the number of roots) stay. A root's `nearest` test is relation-aware: the
+//! `notExpanded` (always empty) and `reachLimit` (the number of roots) stay,
+//! and `reachesComplete` is `false` only when a root's own walk stopped at
+//! its state budget (named in `reachCut`). A root's `nearest` test is relation-aware: the
 //! first code test in (tier, hops) order, else the first UI-navigation one
 //! (`nearestRelation`).
 //!
@@ -1113,7 +1114,8 @@ fn select_mapped_with(
         "tests": tests_out,
         // Output validation r3 L4's per-root walk limit is gone (TLS-53):
         // every changed routine is expanded, so `notExpanded` is empty and
-        // `reachLimit` is how many were (all of them). A reach inventory is
+        // `reachLimit` is how many were asked about (each one that maps to
+        // the graph gets a walk). A reach inventory is
         // still incomplete where a routine's own walk stopped at its state
         // budget: `reachesComplete` says so, and `reachCut` names them.
         "reachesComplete": reach_cut.is_empty(),
