@@ -104,7 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a `#if` chain in a one-statement slot (then, else, loop, `with`, `case` branch) that is not one
     statement in every build makes its arms' statements "may run" and the enclosing statement list
     unordered (so `Bar` after `if C then #if not X Foo(); #endif` no longer dominates the success
-    return).
+    return); this holds in a split body's arms and tail too;
+  - a `case` `else` inside a `#if` arm (`case I of 1: R.Get(); #if X else R.Get(); #endif end;`) was
+    an unconditional `else`, so the case read as exhaustive (every path loads `R`); its statements
+    are now "may run", and an `else` from another arm is merged, not dropped.
 - **An untrusted routine has no control tree.** A parse-incomplete routine, or one holding a
   statement the lowerer could not lower (the depth budget, an unmodelled wrapper), may have lost an
   `exit`. It keeps no statement tree and no unreachable entries, so no dead mark, d20, dominance,

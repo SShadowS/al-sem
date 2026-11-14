@@ -11,7 +11,12 @@ use crate::program::body::features::PCallSite;
 use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
-const SOURCE: &str = r#"codeunit 50340 "Eng14 Split"
+const SOURCE: &str = r#"table 50340 "Eng14 T"
+{
+    fields { field(1; "No."; Integer) { } }
+}
+
+codeunit 50340 "Eng14 Split"
 {
     // A1: a split procedure body. Under not-X the body is `begin Call5(); end`: Call5 live.
     procedure SplitBodyExit()
@@ -200,6 +205,36 @@ const SOURCE: &str = r#"codeunit 50340 "Eng14 Split"
         Bar();
     end;
 
+    // A5 (review): a broken slot in a split body's shared tail. In the build that takes no
+    // arm Bar is the then-body: Bar does not dominate the success return.
+    procedure SplitBodySlot(C: Boolean)
+#if X
+    begin
+#else
+    begin
+#endif
+        if C then
+#if not A
+            Foo();
+#endif
+        Bar();
+    end;
+
+    // A4 (review): an `else` that exists in one build only. With X unset the case falls
+    // through when I <> 1, so R may reach Modify without a Get.
+    procedure CaseCondElse(var R: Record "Eng14 T"; I: Integer)
+    begin
+        case I of
+            1:
+                R.Get();
+#if X
+            else
+                R.Get();
+#endif
+        end;
+        R.Modify();
+    end;
+
     // Control for the dominance helper: Bar runs on every success path.
     procedure Plain()
     begin
@@ -362,6 +397,33 @@ fn eng14_a5_slots() {
     assert!(
         !dominates(&m, "SlotNoArm", "Bar"),
         "SlotNoArm: in the build with no arm Bar is the then-body"
+    );
+    assert!(
+        !dominates(&m, "SplitBodySlot", "Bar"),
+        "SplitBodySlot: a broken slot in a split body's tail reaches the tail's list"
+    );
+}
+
+#[test]
+fn eng14_a4_a_conditional_case_else_may_not_run() {
+    // `cfg_walker` reads a `case` with an `else` branch (`is_case_else`) as exhaustive: no
+    // path skips every branch. An `else` in one `#if` arm only must not make it so.
+    let m = model();
+    let owned = crate::engine::l5::detector_context::build_detector_context(
+        &m,
+        crate::engine::l5::registry::substrate::ALL,
+    );
+    let ctx = owned.ctx();
+    let id = &routine(&m, "CaseCondElse").id;
+    let role = ctx
+        .parameter_roles_by_routine
+        .get(id)
+        .and_then(|v| v.iter().find(|r| r.parameter_index == 0))
+        .expect("a role for R");
+    assert_ne!(
+        format!("{:?}", role.requires_loaded_at_entry),
+        "No",
+        "CaseCondElse: with X unset the case has no else, so R may reach Modify unloaded"
     );
 }
 
