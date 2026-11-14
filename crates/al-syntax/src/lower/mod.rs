@@ -2429,6 +2429,13 @@ impl Run {
 /// Record the symbol values that make preprocessor condition `cond` equal `value`,
 /// where they follow (`A and B` true: both true; `A or B` false: both false).
 /// Symbols match by exact text, as alc's do (see `al_syntax::ir::PreprocSymbols`).
+///
+/// A condition that decides no symbol (`A or B` true, `A and B` false, anything else) is
+/// recorded whole, as an entry named by its parenthesized text (whitespace collapsed),
+/// so a context is never empty while the code sits under a condition (ENG-80 review r2:
+/// an empty context reads as "every build"). Such an entry contradicts only the same text
+/// with the other value (its own `#else`), never a symbol, so it adds no false
+/// contradiction; a text that differs only in spelling is simply not matched.
 fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(String, bool)>) {
     let kids = structural_children(cond);
     match cond.kind() {
@@ -2449,7 +2456,10 @@ fn assume_preproc(cond: RawNode, value: bool, source: &str, out: &mut Vec<(Strin
             kids.into_iter()
                 .for_each(|k| assume_preproc(k, false, source, out));
         }
-        _ => {}
+        _ => {
+            let text = cond.text(source).split_whitespace().collect::<Vec<_>>();
+            out.push((format!("({})", text.join(" ")), value));
+        }
     }
 }
 
@@ -6686,7 +6696,13 @@ codeunit 50104 T
         let ctx_of = |i: usize| routines[i].preproc_context.clone();
         assert_eq!(routines.len(), 7);
         assert_eq!(ctx_of(0), s(&[("A", true), ("B", true)]));
-        assert_eq!(ctx_of(1), Vec::new(), "`A and B` false decides neither");
+        // ENG-80 review r2: decides neither symbol, so the condition is kept whole (an empty
+        // context would read as "every build").
+        assert_eq!(
+            ctx_of(1),
+            s(&[("(A and B)", false)]),
+            "`A and B` false decides neither symbol: kept whole"
+        );
         assert_eq!(ctx_of(2), s(&[("CLEAN27", false)]));
         assert_eq!(ctx_of(3), s(&[("CLEAN27", true)]));
         assert_eq!(ctx_of(4), Vec::new());
@@ -6696,7 +6712,7 @@ codeunit 50104 T
                 .to_vec()
         };
         assert_eq!(at(0, "InObj"), s(&[("A", true), ("B", true)]));
-        assert_eq!(at(1, "InObjElse"), Vec::new());
+        assert_eq!(at(1, "InObjElse"), s(&[("(A and B)", false)]));
         assert_eq!(
             at(2, "InFeature"),
             s(&[("CLEAN27", false), ("FEATURE", true)])

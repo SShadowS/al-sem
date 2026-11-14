@@ -559,6 +559,24 @@ table 50391 "Eng80 Cond T"
 #endif
 }
 
+codeunit 50394 "Eng80 Cond Or"
+{
+    procedure CondOr() begin Error('x'); Next(); end;
+
+    procedure SameArmOr()
+    begin
+#if X or Y
+        Error('x');
+        Next();
+#endif
+    end;
+
+#if X or Y
+    local procedure Error(Msg: Text) begin end;
+#endif
+    local procedure Next() begin end;
+}
+
 tableextension 50392 "Eng80 Cond TabExt" extends "Eng80 Cond T"
 {
     procedure CondBase() begin Error('x'); Next(); end;
@@ -587,7 +605,7 @@ codeunit 50393 "Eng80 Twice"
         &[("Cond.al".to_string(), src.to_string())],
         "e8000000-0000-4000-8000-000000000083",
     );
-    for name in ["CondOwn", "CondBase", "CondInner"] {
+    for name in ["CondOwn", "CondBase", "CondInner", "CondOr"] {
         assert!(!next_dead(&m, name, "Next"), "{name}: Next live");
         assert!(
             has_may_raise(&m, name),
@@ -612,6 +630,10 @@ codeunit 50393 "Eng80 Twice"
     );
     assert!(!next_dead(&m, "SameArm", "Next"), "SameArm: Next live");
     assert!(!has_may_raise(&m, "SameArm"), "SameArm: a plain call");
+    // Review r2: a condition that decides no symbol (`X or Y`) is kept whole, so the call in
+    // the same arm still binds the procedure, and one outside it may raise (CondOr above).
+    assert!(!next_dead(&m, "SameArmOr", "Next"), "SameArmOr: Next live");
+    assert!(!has_may_raise(&m, "SameArmOr"), "SameArmOr: a plain call");
     // The X copy of `Twice` calls its own `Error` and goes on; the other copy may terminate.
     let twice: Vec<_> = m
         .workspace

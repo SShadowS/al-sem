@@ -69,8 +69,10 @@ id_type!(BlockId);
 /// Code inside `#if X` / `#else` / `#elif` branches, and a routine that exists only
 /// under such a branch, compiles only in builds where its conditions hold. The
 /// lowerer records the symbols those conditions decide (a condition true; every
-/// earlier arm's false; `A and B` true decides both, `A or B` false decides both,
-/// anything else decides nothing). Symbols are case-sensitive: alc 18.0.41.45789
+/// earlier arm's false; `A and B` true decides both, `A or B` false decides both).
+/// A condition that decides no symbol is recorded whole, named by its parenthesized
+/// text (`("(A or B)", true)`), so code under any condition never has an empty context
+/// (empty means "every build"). Symbols are case-sensitive: alc 18.0.41.45789
 /// with `CLEAN27` defined activates `#if CLEAN27` and not `#if clean27`.
 pub type PreprocSymbols = Vec<(String, bool)>;
 
