@@ -793,3 +793,199 @@ fn an_action_with_a_trigger_and_a_run_object_counts_once() {
         "{all:#}"
     );
 }
+
+/// TLS-52: `Report.RunRequestPage` runs `OnInitReport` and the request page
+/// only (`resolver::start_runs_trigger`, L20), so its run goes to the
+/// report's start node, whose lifecycle leaves out `OnPreReport`, the data
+/// items and `OnPostReport` (an extension's too). Impact from those triggers
+/// reaches the `Run` caller and neither `RunRequestPage` caller (variable and
+/// keyword forms); from `OnInitReport` and the request page it reaches all
+/// three. A report whose triggers a `RunRequestPage` all runs gets no start
+/// node: the run goes to its object node.
+///
+/// DISCRIMINATION (2026-11-14): sending every run to the object node
+/// (`Builder::run_key` ignoring the site's start) fails "50110.onprereport is
+/// not reached from ViaRequestPage"; so does a start node whose lifecycle
+/// keeps every trigger (`Builder::lifecycle` not filtering); treating every
+/// start as partial (`run_key` skipping `start_is_partial`) fails "a full
+/// start is the object node"; filtering by `start_runs_trigger` alone, which
+/// rejects every member-level trigger (`Builder::starts_trigger` without its
+/// run-list check), fails "50110.onlookup is reached from every caller" (a
+/// request page field's `OnLookup`, which the user may start).
+#[test]
+fn a_request_page_run_reaches_only_the_triggers_it_runs() {
+    let t = one_file_workspace(
+        r#"
+report 50110 "T52 Rep"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(Item; Integer)
+        {
+            trigger OnAfterGetRecord()
+            begin
+            end;
+        }
+    }
+    requestpage
+    {
+        layout
+        {
+            area(Content)
+            {
+                field(PickFilter; PickFilter)
+                {
+                    trigger OnLookup(var Text: Text): Boolean
+                    begin
+                    end;
+                }
+            }
+        }
+
+        trigger OnOpenPage()
+        begin
+        end;
+    }
+
+    var
+        PickFilter: Text;
+
+    trigger OnInitReport()
+    begin
+    end;
+
+    trigger OnPreReport()
+    begin
+    end;
+
+    trigger OnPostReport()
+    begin
+    end;
+}
+reportextension 50111 "T52 Ext" extends "T52 Rep"
+{
+    trigger OnPreReport()
+    begin
+    end;
+}
+report 50112 "T52 InitOnly"
+{
+    ProcessingOnly = true;
+
+    trigger OnInitReport()
+    begin
+    end;
+}
+codeunit 50113 "T52 Ops"
+{
+    procedure ViaRequestPage()
+    var
+        Rep: Report "T52 Rep";
+    begin
+        Rep.RunRequestPage();
+    end;
+
+    procedure ViaKeyword()
+    begin
+        Report.RunRequestPage(Report::"T52 Rep");
+    end;
+
+    procedure ViaRun()
+    var
+        Rep: Report "T52 Rep";
+    begin
+        Rep.Run();
+    end;
+
+    procedure ViaInitOnly()
+    var
+        Rep: Report "T52 InitOnly";
+    begin
+        Rep.RunRequestPage();
+    end;
+}
+"#,
+    );
+    let ws = t.path().join("ws");
+    let inputs = Arc::new(crate::program::inputs::WorkspaceInputs::read(
+        &ws,
+        &Default::default(),
+    ));
+    let program = crate::program::resolved::ResolvedProgram::build(
+        &inputs,
+        crate::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("program");
+    let g = crate::program::impact_graph::sited_from_program(&program, &|| false)
+        .expect("not cancelled");
+    let trigger = |object: i64, name_lc: &str, member: Option<&str>| -> NodeIx {
+        let ns: Vec<NodeIx> = g
+            .routines_named(name_lc)
+            .into_iter()
+            .filter(|&n| match &g.nodes[n as usize] {
+                crate::program::impact_graph::project::Key::Routine(r) => {
+                    r.object.key == crate::program::node::ObjKey::Id(object)
+                        && r.enclosing_member_lc.as_deref() == member
+                }
+                _ => false,
+            })
+            .collect();
+        assert_eq!(ns.len(), 1, "{object}.{name_lc}: one trigger");
+        ns[0]
+    };
+    let callers = ["viarequestpage", "viakeyword", "viarun"].map(|c| named(&g, c));
+    let reached_from = |root: NodeIx| -> [bool; 3] {
+        let shared = Shared::new(&g, &[root].into_iter().collect());
+        let up = walk_up(&g, &[root], &shared);
+        callers.map(|c| up.best.contains_key(&c))
+    };
+    for (object, name, member) in [
+        (50110, "onprereport", None),
+        (50110, "onpostreport", None),
+        (50110, "onaftergetrecord", Some("item")),
+        (50111, "onprereport", None),
+    ] {
+        let [rrp, kw, run] = reached_from(trigger(object, name, member));
+        assert!(run, "{object}.{name} is reached from ViaRun");
+        assert!(!rrp, "{object}.{name} is not reached from ViaRequestPage");
+        assert!(!kw, "{object}.{name} is not reached from ViaKeyword");
+    }
+    for (object, name, member) in [
+        (50110, "oninitreport", None),
+        (50110, "onopenpage", None),
+        // A request page field's: the user may start it on the shown page.
+        (50110, "onlookup", Some("pickfilter")),
+    ] {
+        assert_eq!(
+            reached_from(trigger(object, name, member)),
+            [true; 3],
+            "{object}.{name} is reached from every caller"
+        );
+    }
+    // Where each caller's run sites (one per route) go.
+    use crate::program::impact_graph::project::Key;
+    let runs_all = |caller: &str, want: &dyn Fn(&Key) -> bool| -> bool {
+        let from = named(&g, caller);
+        let to: Vec<&Key> = g
+            .sites()
+            .iter()
+            .filter(|s| s.from == from && s.via() == "run")
+            .map(|s| &g.nodes[s.to as usize])
+            .collect();
+        !to.is_empty() && to.into_iter().all(want)
+    };
+    let start = |k: &Key| matches!(k, Key::Start(_, m) if &**m == "runrequestpage");
+    let object = |k: &Key| matches!(k, Key::Object(_));
+    for caller in ["viarequestpage", "viakeyword"] {
+        assert!(runs_all(caller, &start), "{caller} runs the start node");
+    }
+    assert!(
+        runs_all("viarun", &object),
+        "a full start is the object node"
+    );
+    assert!(
+        runs_all("viainitonly", &object),
+        "a start that runs every trigger is the object node"
+    );
+}

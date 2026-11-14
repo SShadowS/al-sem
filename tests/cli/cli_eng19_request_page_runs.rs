@@ -308,6 +308,76 @@ fn a_declared_run_request_page_does_not_hide_the_builtin() {
 /// ignores `UseRequestPage = false` -> `ViaRunNoPageProperty` answers
 /// `unknown`; it ignores a literal `RequestWindow` -> `ViaRunQuietNoPage`
 /// answers `unknown`. Each fails; restored, it passes.
+/// TLS-52, on the wire: `alsem graph` sends a `RunRequestPage` (keyword and
+/// variable form) to an `ObjectStart` node of the report (`start:
+/// "runrequestpage"`), whose `Trigger` edges reach the request page's
+/// `OnOpenPage` and not `OnPreReport`; a full run (`Run`) still goes to the
+/// object node. The sited graph's own exclusions are pinned (with their
+/// discrimination) by `impact::up`'s
+/// `a_request_page_run_reaches_only_the_triggers_it_runs`.
+/// Break (2026-11-14): the node row's kind back to `"Object"` -> "one
+/// ObjectStart node" fails. Restored, it passes.
+#[test]
+fn the_graph_sends_a_request_page_run_to_a_start_node() {
+    let t = workspace();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["graph", "."])
+        .current_dir(t.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let nodes = || lines.iter().filter(|v| v["t"] == "node").map(|v| &v["v"]);
+    let edges = || lines.iter().filter(|v| v["t"] == "edge").map(|v| &v["v"]);
+    let id_of = |pred: &dyn Fn(&serde_json::Value) -> bool| -> Vec<String> {
+        nodes()
+            .filter(|n| pred(n))
+            .map(|n| n["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let starts = id_of(&|n| n["kind"] == "ObjectStart" && n["objectName"] == "E19 Rep");
+    assert_eq!(starts.len(), 1, "one ObjectStart node: {starts:?}");
+    let start = &starts[0];
+    let start_node = nodes().find(|n| n["id"] == start.as_str()).unwrap();
+    assert_eq!(start_node["start"], "runrequestpage");
+    assert_eq!(start_node["objectType"], "Report");
+    let object = id_of(&|n| n["kind"] == "Object" && n["objectName"] == "E19 Rep");
+    assert_eq!(object.len(), 1, "the report's object node stays");
+    let routine = |object: &str, member: &str| -> String {
+        let ids = id_of(&|n| n["objectName"] == object && n["memberName"] == member);
+        assert_eq!(ids.len(), 1, "{object}.{member}: {ids:?}");
+        ids[0].clone()
+    };
+    let has = |caller: &str, callee: &str, kind: &str| {
+        edges().any(|e| e["caller"] == caller && e["callee"] == callee && e["kind"] == kind)
+    };
+    for via in ["ViaRunRequestPage", "ViaRunRequestPageVar"] {
+        let from = routine("E19 Ops", via);
+        assert!(has(&from, start, "Run"), "{via} runs the start node");
+        assert!(
+            !has(&from, &object[0], "Run"),
+            "{via} does not run the object"
+        );
+    }
+    assert!(has(start, &routine("E19 Rep", "OnOpenPage"), "Trigger"));
+    assert!(!has(start, &routine("E19 Rep", "OnPreReport"), "Trigger"));
+    // `E19 Quiet` is only ever run in full (`Run`, `Execute`).
+    assert!(
+        id_of(&|n| n["kind"] == "ObjectStart" && n["objectName"] == "E19 Quiet").is_empty(),
+        "a full run makes no start node"
+    );
+}
+
 #[test]
 fn a_cancellable_request_page_makes_on_pre_report_conditional() {
     let t = workspace();

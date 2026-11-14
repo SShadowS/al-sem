@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-52: a `RunRequestPage` no longer selects the tests of the whole report)
+
+- `alsem graph` and `alsem impact` sent `Report.RunRequestPage` to the report's object node,
+  whose lifecycle reaches every trigger, so a change to `OnPreReport`, a data item or
+  `OnPostReport` selected the tests behind each `RunRequestPage` caller, although that start
+  runs only `OnInitReport` and the request page (ENG-19, engine limits L20). Such a run now
+  goes to a **start node** of the report, whose lifecycle keeps only the triggers the start
+  runs (`resolver::start_runs_trigger`, still the one home of the subset). Keyword and
+  variable forms both; a report extension's triggers too. A run-time report id still goes to
+  the run hub and over-selects (L20).
+- **`al-sem.callgraph` export (additive, version stays 1):** a new node kind
+  `ObjectStart` with the object's fields plus `start` (the folded method,
+  `"runrequestpage"`), id prefix `s:`. A partial start's `Run` edge points at it (kind,
+  `via`, confidence, `line` and conditions unchanged); a full start still points at the
+  `Object` node. Readers treat an unknown node kind as a node that only carries the walk
+  (spec §4.2), so bc-dev-mcp needs no change (checked at `bd6543be`) and gets the narrower
+  selection.
+
 ### Changed (TLS-51: `alsem graph`'s `declaredRunnable` is only a test page declaration)
 
 - `alsem graph` no longer adds a `declaredRunnable` edge for a call site that runs an

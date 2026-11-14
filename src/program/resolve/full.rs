@@ -250,6 +250,13 @@ pub struct SiteFacts {
     /// report's `OnPreReport`/`OnPostReport` may not run (the model's
     /// `TriggerFires::Maybe`).
     pub request_page_may_cancel: bool,
+    /// TLS-52: the start method (folded) of a call that starts an object (a
+    /// keyword run, or a variable form that may start it), as its routes'
+    /// trigger subset was cut by
+    /// ([`crate::program::resolve::resolver::retain_started_triggers`]). The
+    /// call graph sends a start that runs only part of an object to a start
+    /// node (`impact_graph::project`). `None` for any other call.
+    pub start_method: Option<String>,
     /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
     /// validates ([`field_ref_validate`]). `None` for any other call.
     pub field_ref_validate: Option<FieldRefValidate>,
@@ -1280,6 +1287,10 @@ fn resolve_call_site_obligation(
                         );
                     facts_out.dataset_run =
                         member_dataset_run(*kind, &method_lc, target, facts_out.starts_object);
+                    if facts_out.starts_object == crate::program::resolve::dataset::ObjectStart::Yes
+                    {
+                        facts_out.start_method = Some(method_lc.clone());
+                    }
                     // ENG-21: `Rep.Run()`/`Rep.RunModal()` may show the request
                     // page (a variable's `UseRequestPage(false)` is not read:
                     // the page may show, the safe side).
@@ -1483,6 +1494,7 @@ fn resolve_call_site_obligation(
                 );
                 // ENG-19: `Report.RunRequestPage(…)` runs its request page only.
                 crate::program::resolve::resolver::retain_started_triggers(&mut routes, &method_lc);
+                facts_out.start_method = Some(method_lc.clone());
                 // ENG-21: a request page shown may be cancelled before
                 // `OnPreReport`; the second argument is `RequestWindow`.
                 if okind == ObjectKind::Report

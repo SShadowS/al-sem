@@ -175,6 +175,10 @@ pub struct Node {
     pub hub_arg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub universal: Option<bool>,
+    /// TLS-52: on an `ObjectStart` node, the start method it stands for
+    /// (folded, `runrequestpage`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
 }
 
 /// One place a routine is declared at (`Node::other_declarations`).
@@ -561,6 +565,10 @@ pub(crate) fn key_id_with(key: &Key, app: &dyn Fn(AppRef) -> (String, String)) -
             let p = object_parts(app, o);
             hash_id("o:", &[&p[0], &p[1], &p[2], &p[3]])
         }
+        Key::Start(o, m) => {
+            let p = object_parts(app, o);
+            hash_id("s:", &[&p[0], &p[1], &p[2], &p[3], m])
+        }
         Key::Routine(r) => {
             let p = object_parts(app, &r.object);
             let member = r.enclosing_member_lc.as_deref().unwrap_or("");
@@ -661,6 +669,7 @@ pub(crate) fn render_node(
         hub: None,
         hub_arg: None,
         universal: None,
+        start: None,
     };
     let object_fields = |o: &ObjectNodeId, n: &mut Node| {
         let obj = graph
@@ -688,6 +697,15 @@ pub(crate) fn render_node(
         Key::Object(o) => {
             let mut n = Node {
                 kind: "Object",
+                ..blank
+            };
+            object_fields(o, &mut n);
+            n
+        }
+        Key::Start(o, m) => {
+            let mut n = Node {
+                kind: "ObjectStart",
+                start: Some(m.to_string()),
                 ..blank
             };
             object_fields(o, &mut n);

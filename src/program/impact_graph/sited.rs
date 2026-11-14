@@ -380,9 +380,7 @@ impl SitedGraph {
     /// name in the graph.
     #[must_use]
     pub fn object_node_name(&self, ix: u32) -> Option<(&'static str, &str, Option<i64>, bool)> {
-        let Key::Object(o) = self.nodes.get(ix as usize)? else {
-            return None;
-        };
+        let o = self.nodes.get(ix as usize)?.object()?;
         let name = self.object_names.get(o)?;
         Some((
             crate::program::graphify_export::object_kind_str(o.kind),
@@ -592,6 +590,7 @@ impl SitedGraph {
                 None => format!("{}::{}", object(&r.object), r.name_lc),
             },
             Key::Object(o) => object(o),
+            Key::Start(o, m) => format!("{} ({m})", object(o)),
             Key::Hub(_) => self.node_id(ix),
         }
     }
@@ -601,7 +600,7 @@ impl SitedGraph {
     pub fn node_app(&self, ix: u32) -> Option<AppRef> {
         match &self.nodes[ix as usize] {
             Key::Routine(r) => Some(r.object.app),
-            Key::Object(o) => Some(o.app),
+            Key::Object(o) | Key::Start(o, _) => Some(o.app),
             Key::Hub(Hub::Callbacks(a)) => Some(*a),
             Key::Hub(_) => None,
         }
@@ -673,13 +672,11 @@ impl SitedGraph {
         }
     }
 
-    /// The object an object node stands for (`None` for a routine or a hub).
+    /// The object an object node, or a start node of it (TLS-52), stands for
+    /// (`None` for a routine or a hub).
     #[must_use]
     pub fn object_node(&self, ix: u32) -> Option<crate::program::node::ObjectNodeId> {
-        match self.nodes.get(ix as usize)? {
-            Key::Object(o) => Some(o.clone()),
-            _ => None,
-        }
+        self.nodes.get(ix as usize)?.object().cloned()
     }
 
     /// The routine nodes whose (folded) name is `name_lc`.
@@ -747,6 +744,7 @@ impl SitedGraph {
                         + object_key_heap(&r.object)
                 }
                 Key::Object(o) => object_key_heap(o),
+                Key::Start(o, m) => object_key_heap(o) + m.len(),
                 Key::Hub(Hub::Name { name_lc, .. }) => name_lc.len(),
                 Key::Hub(_) => 0,
             })
@@ -941,7 +939,7 @@ impl SitedBuilder {
             // V3 §2.2: the declared names, for every routine and object node.
             let named = match k {
                 Key::Routine(r) => Some(&r.object),
-                Key::Object(o) => Some(o),
+                Key::Object(o) | Key::Start(o, _) => Some(o),
                 Key::Hub(_) => None,
             };
             if let Some(o) = named
@@ -957,7 +955,7 @@ impl SitedBuilder {
                         *f |= flag::UNIVERSAL;
                     }
                 }
-                Key::Object(o) => {
+                Key::Object(o) | Key::Start(o, _) => {
                     if local_apps.contains(&o.app) {
                         *f |= flag::LOCAL;
                         if let Some(x) = obj_of(o) {
@@ -1191,7 +1189,7 @@ impl SitedBuilder {
         for k in &self.nodes {
             let app = match k {
                 Key::Routine(r) => Some(r.object.app),
-                Key::Object(o) => Some(o.app),
+                Key::Object(o) | Key::Start(o, _) => Some(o.app),
                 Key::Hub(Hub::Callbacks(a)) => Some(*a),
                 Key::Hub(_) => None,
             };
