@@ -232,7 +232,11 @@ landing="landing/$name"
 n=2
 # Taken when ANY ref resolves to the name: merge-and-push merges it unqualified,
 # and a tag `landing/<name>` would win over the branch.
-while G rev-parse -q --verify "$landing^{commit}" >/dev/null; do
+taken() { # a ref by that name, or under it (`landing/x/y` blocks `landing/x`)
+    G rev-parse -q --verify "$1^{commit}" >/dev/null \
+        || [[ -n "$(G for-each-ref --count=1 "refs/heads/$1/" "refs/tags/$1/")" ]]
+}
+while taken "$landing"; do
     landing="landing/$name-$n"
     n=$((n + 1))
 done
@@ -330,6 +334,10 @@ merge_failed() { # back to a clean, detached master, then stop
     G merge --abort >/dev/null 2>&1 || true
     G switch --quiet --force --detach "$master" >/dev/null 2>&1 || true
     verdict merge 1 "$start"
+    # Only the last instants (after `git branch`) can leave the branch: say so.
+    if G rev-parse -q --verify "refs/heads/$landing" >/dev/null; then
+        die "$1; $landing was made (the worktree is back on master)"
+    fi
     die "$1; no landing branch was made"
 }
 trap 'merge_failed "interrupted"' INT TERM
@@ -361,13 +369,12 @@ for ((i = 0; i < ${#branches[@]}; i++)); do
         || merge_failed "committing the '$b' merge failed (see $run/merge.log)"
     echo "land:   ${ids[i]}: merged (CHANGELOG.md: both sides' entries kept)"
 done
-trap - INT TERM
-landed=$(G rev-parse HEAD)
+landed=$(G rev-parse HEAD) || merge_failed "cannot read the merged commit"
 # The branch only now, with no hook in between (`switch -c` runs post-checkout
-# after it made the branch): a refusal above leaves no branch.
-G branch "$landing" "$landed" >>"$run/merge.log" 2>&1 \
-    || { verdict merge 1 "$start"; die "cannot create $landing; the worktree is on the merged commit ${landed:0:8}"; }
-G symbolic-ref HEAD "refs/heads/$landing"
+# after it made the branch); the cleanup stays armed until the worktree is on it.
+G branch "$landing" "$landed" >>"$run/merge.log" 2>&1 || merge_failed "cannot create $landing"
+G symbolic-ref HEAD "refs/heads/$landing" || merge_failed "cannot put the worktree on $landing"
+trap - INT TERM
 verdict merge 0 "$start"
 
 # recheck <after>: the gated tree is still the one merge-and-push would land.
@@ -446,7 +453,7 @@ mark push start
 rc=0
 # MERGE_EXPECT_MASTER: merge-and-push refuses if master moved after the last
 # recheck (it would merge into a tree no gate saw).
-(cd "$main" && MERGE_EXPECT_MASTER="$master" scripts/merge-and-push "$landing") \
+(cd "$main" && MERGE_EXPECT_MASTER="$master" MERGE_EXPECT_SOURCE="$landed" scripts/merge-and-push "$landing") \
     >"$run/push.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict push "$rc" "$start"
 ((rc == 0)) || die "FAIL at push: see $run/push.log"

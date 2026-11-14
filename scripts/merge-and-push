@@ -17,8 +17,12 @@
 #     is the usual case after the branch gate when master has not moved.
 # Then `git push origin master` (a plain fast-forward; never --force).
 #
-# With MERGE_EXPECT_MASTER=<sha> (scripts/land sets it), it refuses unless
-# local master is exactly that commit.
+# It merges the branch's commit (refs/heads/<branch>, read once: a tag of the
+# same name, or the branch moving meanwhile, changes nothing) and pushes that
+# exact merge commit. ⟨TLS-59⟩ scripts/land also sets MERGE_EXPECT_MASTER and
+# MERGE_EXPECT_SOURCE (the master and the landing commit its gates saw): then it
+# refuses unless master and the branch are exactly those, and unless the merged
+# tree is the gated landing tree.
 #
 # Usage: scripts/merge-and-push <branch>
 # Exit: 0 pushed; 1 refused or failed (the message says which step).
@@ -36,7 +40,7 @@ branch=$1
 root=$(git rev-parse --show-toplevel) || die "not in a git checkout"
 cd "$root" || die "cannot enter $root"
 
-git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null || die "no local branch '$branch'"
+src=$(git rev-parse --verify --quiet "refs/heads/$branch^{commit}") || die "no local branch '$branch'"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "the work tree has uncommitted changes"
 
 git fetch --quiet origin master || die "git fetch origin master failed"
@@ -48,17 +52,28 @@ git merge-base --is-ancestor origin/master master \
 if [ -n "${MERGE_EXPECT_MASTER:-}" ] && [ "$(git rev-parse master)" != "$MERGE_EXPECT_MASTER" ]; then
     die "master is at $(git rev-parse --short master), not ${MERGE_EXPECT_MASTER:0:8} as the gates expected; nothing merged: land again"
 fi
+if [ -n "${MERGE_EXPECT_SOURCE:-}" ] && [ "$src" != "$MERGE_EXPECT_SOURCE" ]; then
+    die "'$branch' is at ${src:0:8}, not ${MERGE_EXPECT_SOURCE:0:8} as the gates expected; nothing merged: land again"
+fi
 
 before=$(git rev-parse HEAD)
-if git merge-base --is-ancestor "$branch" master; then
+if git merge-base --is-ancestor "$src" master; then
     echo "merge-and-push: '$branch' is already in master; nothing to merge"
 else
-    if ! git merge --no-ff --quiet "$branch" -m "Merge branch '$branch'
+    if ! git merge --no-ff --quiet "$src" -m "Merge branch '$branch'
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; then
         git merge --abort 2>/dev/null
         die "merging '$branch' conflicts; aborted, master unchanged at ${before:0:8}"
     fi
+fi
+merged=$(git rev-parse HEAD) || die "cannot read the merge"
+# ⟨TLS-59⟩ The landing branch was built on the expected master, so the merge
+# must give exactly its tree: anything else was never gated.
+if [ -n "${MERGE_EXPECT_MASTER:-}" ] \
+    && [ "$(git rev-parse "$merged^{tree}")" != "$(git rev-parse "$src^{tree}")" ]; then
+    git reset --quiet --hard "$before"
+    die "the merged tree is not the gated tree of '$branch' (not built on ${before:0:8}?); master reset to ${before:0:8}, nothing pushed"
 fi
 
 tree=$(git rev-parse 'HEAD^{tree}') || die "cannot read the merged tree"
@@ -75,8 +90,10 @@ else
     fi
 fi
 
-git push origin master || die "git push origin master failed; master is merged locally at $(git rev-parse --short HEAD)"
-echo "merge-and-push: pushed master at $(git rev-parse --short HEAD)"
+# The exact merge commit, not whatever master is by now: a merge another process
+# made meanwhile is not published by this push.
+git push origin "$merged:refs/heads/master" || die "git push origin master failed; master is merged locally at ${merged:0:8}"
+echo "merge-and-push: pushed master at ${merged:0:8}"
 
 # ⟨TLS-18⟩ The next branch's gate times its tree against this master (the merge
 # base): build master's speed-check binary now, in the background, so that gate
@@ -85,7 +102,7 @@ echo "merge-and-push: pushed master at $(git rev-parse --short HEAD)"
 # profile and grammar). Linux only, like the speed check; a failure here only
 # means the next gate builds it itself, as before.
 if [ "$(uname -s)" = Linux ] && command -v python3 >/dev/null; then
-    head=$(git rev-parse HEAD)
+    head=$merged
     warm_log=$(mktemp -t cdo-speed-warm.XXXXXX.log)
     setsid nohup nice -n 10 python3 scripts/cdo-speed --warm "$head" >"$warm_log" 2>&1 </dev/null &
     echo "merge-and-push: building the speed check's base for ${head:0:8} in the background (log: $warm_log)"

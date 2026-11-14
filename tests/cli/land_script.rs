@@ -298,7 +298,7 @@ fn land_gates_in_order_and_pushes_only_on_request() {
     let master = r.git(&r.main, &["rev-parse", "master"]);
     r.reset_calls();
     let hook = format!(
-        "echo \"expect $MERGE_EXPECT_MASTER\" >> \"$STUB_LOG\"; \
+        "echo \"expect $MERGE_EXPECT_MASTER $MERGE_EXPECT_SOURCE\" >> \"$STUB_LOG\"; \
          sleep 600 >/dev/null 2>&1 & echo $! > '{}'",
         holder.0.display()
     );
@@ -313,7 +313,10 @@ fn land_gates_in_order_and_pushes_only_on_request() {
             "ci-steps all".to_string(),
             "cdo-gate /cdo-ws".to_string(),
             "merge-and-push landing/tls59-2".to_string(),
-            format!("expect {master}"),
+            format!(
+                "expect {master} {}",
+                r.git(&r.main, &["rev-parse", "landing/tls59-2"])
+            ),
         ]
     );
     let (code, text) = r.land(&["tools/tls-58-x"], &[]);
@@ -422,6 +425,12 @@ fn land_pushes_only_the_tree_its_gates_saw() {
     let (code, text) = r.land(&["tools/tls-58-x"], &[]);
     assert_eq!(code, Some(0), "{text}");
     assert_eq!(r.landing_branches(), ["landing/tls58-2"]);
+    // A branch under the name (`landing/foo/child`) blocks `landing/foo` too
+    // (sol r2): it is skipped, not tried and failed after the merges.
+    git::run(&r.main, &["branch", "landing/foo/child", "master"]);
+    let (code, text) = r.land(&["--name", "foo", "tools/tls-59-x"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("landing branch: landing/foo-2"), "{text}");
 }
 
 /// Every refusal leaves nothing behind. A conflict outside CHANGELOG.md: the
@@ -557,15 +566,20 @@ fn land_refuses_and_leaves_nothing_behind() {
     );
 }
 
-/// The real `scripts/merge-and-push`, with a bare origin: given
-/// `MERGE_EXPECT_MASTER` (scripts/land's master), it refuses when local master
-/// moved after the gates (sol r1: between land's last recheck and the merge),
-/// merging and pushing nothing; with the right master it merges and pushes.
+/// The real `scripts/merge-and-push`, with a bare origin and the landing
+/// branch `scripts/land` built (stub gates). Told what the gates saw
+/// (`MERGE_EXPECT_MASTER`, `MERGE_EXPECT_SOURCE`), it merges and pushes
+/// nothing when the branch is another commit, when the merge would not give
+/// the gated tree (a branch not built on master), or when master moved after
+/// the gates (sol r1, r2). With all of them right it merges the branch's
+/// commit, not a same-named tag (sol r2), and
+/// pushes that merge.
 ///
-/// Mutation: drop the MERGE_EXPECT_MASTER check -> the moved master is merged
-/// and pushed.
+/// Mutations: drop the source check, the tree check or the master check ->
+/// that case merges or pushes; merge the bare name again -> the tag wins and
+/// nothing is merged.
 #[test]
-fn merge_and_push_refuses_a_master_the_gates_did_not_see() {
+fn merge_and_push_lands_only_what_the_gates_saw() {
     let r = repo();
     let origin = r.root.join("origin.git");
     git::run(
@@ -583,16 +597,15 @@ fn merge_and_push_refuses_a_master_the_gates_did_not_see() {
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     git::run(&r.main, &["fetch", "-q", "origin"]);
-    let gated = r.git(&r.main, &["rev-parse", "master"]);
     let tmp = r.root.join("tmp");
     std::fs::create_dir_all(&tmp).unwrap();
-    let push = |expect: &str| {
+    let push = |branch: &str, master: &str, source: &str| {
         let mut cmd = std::process::Command::new("bash");
         cmd.arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/scripts/merge-and-push"
         ))
-        .arg("tools/tls-58-x")
+        .arg(branch)
         .current_dir(&r.main);
         for v in al_sem::git_env::LOCAL_ENV_VARS {
             cmd.env_remove(v);
@@ -606,7 +619,8 @@ fn merge_and_push_refuses_a_master_the_gates_did_not_see() {
             .env("GIT_COMMITTER_EMAIL", "t@t")
             .env("STUB_LOG", r.root.join("calls"))
             .env("TMPDIR", &tmp)
-            .env("MERGE_EXPECT_MASTER", expect)
+            .env("MERGE_EXPECT_MASTER", master)
+            .env("MERGE_EXPECT_SOURCE", source)
             .output()
             .unwrap();
         let text = format!(
@@ -616,21 +630,50 @@ fn merge_and_push_refuses_a_master_the_gates_did_not_see() {
         );
         (out.status.code(), text)
     };
-    // A side commit lands on master after the gates saw `gated`.
-    git::run(&r.main, &["commit", "-q", "--allow-empty", "-m", "side"]);
-    let moved = r.git(&r.main, &["rev-parse", "master"]);
-    let (code, text) = push(&gated);
-    assert_eq!(code, Some(1), "{text}");
+    let rev = |dir: &Path, what: &str| r.git(dir, &["rev-parse", what]);
+
+    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let m1 = rev(&r.main, "master");
+    let src = rev(&r.main, "landing/tls58");
+    let refused = |what: &str, code: Option<i32>, text: &str| {
+        assert_eq!(code, Some(1), "{what}: {text}");
+        assert_eq!(rev(&r.main, "master"), m1, "{what}: master unchanged");
+        assert_eq!(rev(&origin, "master"), m1, "{what}: nothing pushed");
+    };
+    let other = rev(&r.main, "tools/tls-59-x");
+    let (code, text) = push("landing/tls58", &m1, &other);
+    refused("another source", code, &text);
     assert!(
         text.contains("as the gates expected; nothing merged"),
         "{text}"
     );
-    assert_eq!(r.git(&r.main, &["rev-parse", "master"]), moved);
-    assert_eq!(r.git(&origin, &["rev-parse", "master"]), gated);
+    let unbuilt = rev(&r.main, "tools/tls-58-x");
+    let (code, text) = push("tools/tls-58-x", &m1, &unbuilt);
+    refused("not built on master", code, &text);
+    assert!(text.contains("is not the gated tree"), "{text}");
 
-    let (code, text) = push(&moved);
+    // A side commit lands on master after the gates saw m1.
+    git::run(&r.main, &["commit", "-q", "--allow-empty", "-m", "side"]);
+    let m2 = rev(&r.main, "master");
+    let (code, text) = push("landing/tls58", &m1, &src);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("master is at"), "{text}");
+    assert_eq!(rev(&r.main, "master"), m2);
+    assert_eq!(rev(&origin, "master"), m1);
+
+    // Landed again on m2; then a tag named like the branch appears (made after
+    // land chose the name: merge-and-push's `fetch origin master` brings no
+    // tags, checked by hand 2026-11-14, so it would come from elsewhere). A
+    // bare name would resolve to the tag, which git prefers over the branch.
+    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
     assert_eq!(code, Some(0), "{text}");
-    let pushed = r.git(&origin, &["rev-parse", "master"]);
-    assert_eq!(pushed, r.git(&r.main, &["rev-parse", "master"]));
-    assert_eq!(r.git(&r.main, &["rev-parse", "master^1"]), moved);
+    let src2 = rev(&r.main, "landing/tls58-2");
+    git::run(&r.main, &["tag", "landing/tls58-2", &m1]);
+    let (code, text) = push("landing/tls58-2", &m2, &src2);
+    assert_eq!(code, Some(0), "{text}");
+    let pushed = rev(&origin, "master");
+    assert_eq!(pushed, rev(&r.main, "master"));
+    assert_eq!(rev(&r.main, "master^1"), m2);
+    assert_eq!(rev(&r.main, "master^2"), src2, "the branch, not the tag");
 }

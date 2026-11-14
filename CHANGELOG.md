@@ -74,6 +74,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     step's trap is gone (`switch -c` ran a post-checkout hook after making it).
   - Mutations, each failing a test: the CDO_WS check, the any-ref name check, the
     leading-zero check, the dry run's resolved tree, merge-and-push's master check.
+  Review r2 (sol):
+  - `scripts/merge-and-push` reads `refs/heads/<branch>` once and merges that
+    commit (before, the bare name: a tag of the same name won over the branch, and
+    the branch could move between the check and the merge); with
+    `MERGE_EXPECT_SOURCE` (land: the landing commit its gates saw) it refuses another
+    commit, and with `MERGE_EXPECT_MASTER` it refuses when the merged tree is not the
+    gated landing tree; it pushes that exact merge commit
+    (`git push origin <merge>:refs/heads/master`), never a master another process
+    moved meanwhile. Checked by hand: its `fetch origin master` brings no tags.
+  - land's merge-step cleanup stays armed until the worktree is on the new branch,
+    and a name with a ref under it (`landing/x/y` blocks `landing/x`) counts as
+    taken.
+  - Mutations, each failing a test: the source check, the tree check, the bare name
+    in merge-and-push, the refs-under-the-name check.
 - Checked on real history (a shared scratch clone, its master set back): `--dry-run`
   of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
   equal the real landing's. Replaying b4 and b3 in full with the CHANGELOG
