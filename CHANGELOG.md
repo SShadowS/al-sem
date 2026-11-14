@@ -112,6 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   speed failure): a failed step now prints that step's own FAIL and `error:` lines
   (at most 8) under land's `[step] FAILED` line, so the reader need not open its log
   (e.g. `land:   | cdo-gate:   speed ... FAIL ...`).
+- Mutations for the r2 round, each failing a test: single quotes not lexed, `$(...)`
+  matching that ignores quotes, a heredoc delimiter cut at `-`, `watch` and `env -S`
+  not read (each alone), the mem-wait's process check restored (the queued-gate
+  test now catches it), the probe reading any failure as held (via the PATH `flock`),
+  land not printing a failed step's lines.
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
