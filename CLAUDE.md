@@ -55,6 +55,12 @@ scripts/check-goldens          # Run ALL byte-compared golden families at once (
 scripts/ci-steps task          # The per-task gate (see Test tiers below)
 scripts/ci-steps task-affected # `task` with only the tests the changed paths reach (agent inner loop)
 cargo bench -p al-sem-benches --bench lsp_pipeline  # Benches are their own package (benches/Cargo.toml)
+scripts/land [--push] [--dry-run] <branch>...  # The landing chain (TLS-59): merge the lane branches
+                               # (in order) into landing/<ids> in the gate worktree (a CHANGELOG conflict of
+                               # additions keeps both sides, any other conflict stops), `ci-steps all`, wait
+                               # for 35 GB free, `cdo-gate`, a recheck that master and the worktree did not
+                               # move, then `merge-and-push` only with --push. Logs and verdicts under
+                               # /work/.al-sem/land/; timings in flow-timings.jsonl
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
                                # needs `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times
