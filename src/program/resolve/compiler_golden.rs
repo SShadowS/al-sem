@@ -422,19 +422,21 @@ fn first_line_disagreements(
         .collect()
 }
 
-/// The verdict for a program-only pair, or `None`.
-/// [`Verdict::ValidateTrigger`]'s rule: `target` is a field-level trigger of the
-/// validate family, and every site of the pair names that field
-/// (`site_fields`, one per program edge; `None` when the site names none).
-fn validate_trigger_explains(target: &RoutineNodeId, site_fields: &[Option<String>]) -> bool {
-    let Some(member) = target.enclosing_member_lc.as_deref() else {
-        return false;
-    };
-    crate::program::resolve::edge::trigger_family(&target.name_lc) == Some("validate")
-        && !site_fields.is_empty()
-        && site_fields.iter().all(|f| f.as_deref() == Some(member))
+/// [`Verdict::ValidateTrigger`]'s rule over `routes`: every route of the pair
+/// into its target, each with the field its own site names (`None` when it
+/// names none). Every route must be a field-level trigger of the validate
+/// family of exactly its site's field.
+fn validate_trigger_explains(routes: &[(&RoutineNodeId, Option<String>)]) -> bool {
+    !routes.is_empty()
+        && routes.iter().all(|(t, field)| {
+            crate::program::resolve::edge::trigger_family(&t.name_lc) == Some("validate")
+                && t.enclosing_member_lc
+                    .as_deref()
+                    .is_some_and(|m| field.as_deref() == Some(m))
+        })
 }
 
+/// The verdict for a program-only pair, or `None`.
 fn classify_program_only(
     class: EdgeClass,
     pair: &ProgramPair,
@@ -451,19 +453,6 @@ fn classify_program_only(
             .unwrap_or_default()
     };
     let all_sites = |p: &dyn Fn(&SiteFacts) -> bool| pair.edges.iter().all(|&i| p(&facts(i)));
-    // The pair's target as a program routine id.
-    let target_id = || -> Option<&RoutineNodeId> {
-        pair.edges.iter().find_map(|&i| {
-            report.edges[i]
-                .edge
-                .routes
-                .iter()
-                .find_map(|r| match &r.target {
-                    RouteTarget::Routine(id) if target_of_node(id, apps) == pair.target => Some(id),
-                    _ => None,
-                })
-        })
-    };
     match class {
         EdgeClass::Run => Some(Verdict::ObjectRun),
         EdgeClass::Trigger => {
@@ -484,9 +473,22 @@ fn classify_program_only(
                         _ => None,
                     })
             };
-            let site_fields: Vec<Option<String>> =
-                pair.edges.iter().map(|&i| site_field(&facts(i))).collect();
-            if target_id().is_some_and(|t| validate_trigger_explains(t, &site_fields)) {
+            // Every route of the pair into its (field-erased) target, each
+            // with its OWN site's field (sol round 4): one pair can hold
+            // `Validate(A)` and `Validate(B)`, or a wrong route beside a right
+            // one.
+            let mut routes: Vec<(&RoutineNodeId, Option<String>)> = Vec::new();
+            for &i in &pair.edges {
+                let field = site_field(&facts(i));
+                for r in &report.edges[i].edge.routes {
+                    if let RouteTarget::Routine(id) = &r.target
+                        && target_of_node(id, apps) == pair.target
+                    {
+                        routes.push((id, field.clone()));
+                    }
+                }
+            }
+            if validate_trigger_explains(&routes) {
                 Some(Verdict::ValidateTrigger)
             } else if all_sites(&|f| f.unqualified_record_op) {
                 Some(Verdict::UnqualifiedRecordOp)
