@@ -359,7 +359,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   short)", and a miss past the cut is `unknown` with the reason `search-cut-short`, no longer
   "no (every candidate decided)". Pinned by `query_cut_short_without_dependency_says_so`, a
   70-routine workspace chain past the 64-hop limit, in both formats, with one discrimination
-  proof per rule (four).
+  proof per rule (five).
+- **Fixed with it: a touches miss answered `unknown` now reads "analysis partial" in JSON too.**
+  The JSON header looked for `down.answer`, which no answer carries; the verdict lives at
+  `down.absence.answer`. So every `unknown` miss, including those on calls not resolved, said
+  "complete" in JSON while the human header said "partial" (review sol r3). No corpus golden
+  has such a miss.
 - **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
   scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
   when no test app is found.

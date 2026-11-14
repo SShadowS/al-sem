@@ -1534,7 +1534,9 @@ fn query_touches_miss_index_states_the_scope_fact() {
 ///   gives the dependency-depth wording;
 /// - `of_families` not reading `searchCutShort` leaves `analysis: complete`;
 /// - `beyondDependencyCalls` without its cut-short reason stays `exhaustive`;
-/// - `absence_reasons` without `search-cut-short` answers the miss `no`.
+/// - `absence_reasons` without `search-cut-short` answers the miss `no`;
+/// - `query_scope_json` reading `/down/answer` (never written; sol r3) leaves
+///   the miss's JSON `analysis: complete`.
 #[test]
 fn query_cut_short_without_dependency_says_so() {
     let dir = tempfile::tempdir().unwrap();
@@ -1624,6 +1626,12 @@ fn query_cut_short_without_dependency_says_so() {
     let m: serde_json::Value = serde_json::from_str(&json).unwrap();
     let absence = &m["payload"]["down"]["absence"];
     assert_eq!(absence["answer"], "unknown", "{absence}");
+    // sol r3: the JSON header agrees with the human one on a partial miss.
+    assert_eq!(
+        m["payload"]["result"]["scope"]["analysis"], "partial",
+        "{}",
+        m["payload"]["result"]["scope"]
+    );
     assert!(
         absence["reasons"]
             .as_array()
@@ -1633,6 +1641,7 @@ fn query_cut_short_without_dependency_says_so() {
     let (human, _) = run_alsem(&miss, "human");
     assert!(
         !human.contains("every candidate decided")
+            && human.contains("analysis partial")
             && human.contains(
                 "the cone search was cut short at its limit; code past it was not checked"
             ),

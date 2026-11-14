@@ -1864,7 +1864,14 @@ fn query_scope_json(payload: &Value, deps: &LoadedDependencies) -> Value {
     let mut h = Header::new("query", String::new(), !deps.cross_app);
     if failed {
         h.analysis = Analysis::NotAnalyzed("the input did not resolve".to_string());
-    } else if payload.pointer("/down/answer").and_then(Value::as_str) == Some("unknown") {
+    } else if payload
+        .pointer("/down/absence/answer")
+        .and_then(Value::as_str)
+        == Some("unknown")
+    {
+        // TLS-49 review sol r3: the miss's verdict lives at `down.absence`;
+        // `/down/answer` was never written, so the JSON said "complete" where
+        // the human header (reading "down: unknown") said "partial".
         h.analysis = Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
     } else if payload.get("unreadableEventSubscribers").is_some() {
         h.analysis = Analysis::Partial(vec![
