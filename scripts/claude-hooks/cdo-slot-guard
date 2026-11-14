@@ -68,9 +68,11 @@ WRAPPERS = {
 SHELLS = {"bash", "sh", "dash", "zsh"}
 PYTHONS = {"python", "python3"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# `<<WORD` / `<<-'WORD'`, not a here-string `<<<`.
-HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+# `<<WORD` / `<<-'WORD'` at the scanner's position (a here-string `<<<` is
+# excluded by the scanner).
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# A substitution in an unquoted heredoc body (no quoting applies there).
+BODY_SUBSTITUTION = re.compile(r"(?<!\\)\$\(([^()]*)\)|(?<!\\)`([^`]*)`")
 
 
 def allow(why):
@@ -78,17 +80,99 @@ def allow(why):
     sys.exit(0)
 
 
-def strip_heredocs(line):
-    """Drop heredoc bodies: text a command reads, not commands."""
-    out, ends = [], []
-    for row in line.split("\n"):
-        if ends:
-            if row.strip() == ends[0]:
-                ends.pop(0)
+def scan(line):
+    """Read a command line the way the shell does, before tokenizing it.
+
+    Returns (code, substitutions): `code` is the line without comments (a `#`
+    that starts a word outside quotes, up to the end of its line), without
+    heredoc bodies and without backslash-newlines; `substitutions` is the
+    text of every `$(...)` and `` `...` `` the shell would run: outside single
+    quotes and unescaped, and in the body of a heredoc whose delimiter is not
+    quoted.
+    """
+    code, subs, pending = [], [], []
+    i, n = 0, len(line)
+    single = double = False
+    while i < n:
+        c = line[i]
+        if single:
+            code.append(c)
+            single = c != "'"
+            i += 1
             continue
-        out.append(row)
-        ends.extend(m.group(2) for m in HEREDOC.finditer(row))
-    return "\n".join(out)
+        if c == "\\" and i + 1 < n:
+            if line[i + 1] == "\n":  # a continuation joins the lines
+                i += 2
+                continue
+            code.append(line[i : i + 2])
+            i += 2
+            continue
+        if c == "'" and not double:
+            single = True
+            code.append(c)
+            i += 1
+            continue
+        if c == '"':
+            double = not double
+            code.append(c)
+            i += 1
+            continue
+        if line.startswith("$(", i) and not line.startswith("$((", i):
+            j, depth = i + 2, 1
+            while j < n and depth:
+                depth += {"(": 1, ")": -1}.get(line[j], 0)
+                j += 1
+            subs.append(line[i + 2 : j - 1] if depth == 0 else line[i + 2 :])
+            code.append(line[i:j])
+            i = j
+            continue
+        if c == "`":
+            j = line.find("`", i + 1)
+            j = n if j < 0 else j
+            subs.append(line[i + 1 : j])
+            code.append(line[i : j + 1])
+            i = j + 1
+            continue
+        if double:
+            code.append(c)
+            i += 1
+            continue
+        if c == "#" and (not code or code[-1][-1:] in " \t\n;&|()"):
+            while i < n and line[i] != "\n":
+                i += 1
+            continue
+        if line.startswith("<<<", i):  # a here-string: no body follows
+            code.append("<<<")
+            i += 3
+            continue
+        if line.startswith("<<", i):
+            m = HEREDOC.match(line, i)
+            if m:
+                pending.append((m.group(2), bool(m.group(1))))
+                code.append(m.group(0))
+                i = m.end()
+                continue
+        if c == "\n" and pending:
+            code.append(c)
+            i += 1
+            for delim, quoted in pending:
+                body = []
+                while i < n:
+                    end = line.find("\n", i)
+                    end = n if end < 0 else end
+                    row = line[i:end]
+                    i = end + 1
+                    if row.strip() == delim:
+                        break
+                    body.append(row)
+                if not quoted:
+                    for m in BODY_SUBSTITUTION.finditer("\n".join(body)):
+                        subs.append(m.group(1) if m.group(1) is not None else m.group(2))
+            pending = []
+            continue
+        code.append(c)
+        i += 1
+    return "".join(code), subs
 
 
 def tokens(line):
@@ -96,26 +180,19 @@ def tokens(line):
     lex = shlex.shlex(line, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
-    # A `#` inside a word (`$#`, `${#a}`, `a#b`) is no comment: comments are
-    # dropped in `segments`, only where a word starts with `#`.
-    lex.commenters = ""
+    lex.commenters = ""  # `scan` already dropped the comments
     try:
         return list(lex)
     except ValueError:  # unbalanced quotes: read it word by word
         return re.findall(r"[;&|()\n]+|[^\s;&|()]+", line)
 
 
-def segments(line):
+def segments(code):
     seg = []
-    # A backslash-newline joins two lines into one command, as the shell does.
-    toks = tokens(strip_heredocs(line).replace("\\\n", ""))
+    toks = tokens(code)
     i = 0
     while i < len(toks):
         t = toks[i]
-        if t.startswith("#"):  # a comment: the rest of this line
-            while i < len(toks) and toks[i] != "\n":
-                i += 1
-            continue
         if t in SEPARATORS or (t and set(t) <= set(";&|()\n")) or (
             t and set(t) <= set(";&|()\n<>") and ("(" in t or ")" in t)
         ):  # `<(cmd)` / `>(cmd)` run cmd like `(cmd)` does
@@ -222,13 +299,13 @@ def script_guarded(path, args):
 
 def guarded_line(line):
     """The first guarded command of a command line, or None."""
-    for seg in segments(line):
-        if guarded_segment(seg, line):
+    code, subs = scan(line)
+    for seg in segments(code):
+        if guarded_segment(seg, code):
             return " ".join(seg)
-    # A command substitution runs too, quoted or not (`"$(cargo test)"`,
-    # `` x=`cargo test` ``); read from the raw text, heredoc bodies aside.
-    for m in SUBSTITUTION.finditer(strip_heredocs(line)):
-        inner = m.group(1) if m.group(1) is not None else m.group(2)
+    # A command substitution runs too (`"$(cargo test)"`, `` x=`cargo t` ``,
+    # one in an unquoted heredoc body), but not one in single quotes.
+    for inner in subs:
         hit = guarded_line(inner)
         if hit:
             return hit

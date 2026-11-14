@@ -552,6 +552,54 @@ fn land_holds_the_cdo_slot_from_start_to_end() {
     assert_eq!((code, text.trim()), (Some(0), "free"));
 }
 
+/// Review r1 (sol): land needs the slot to itself, and only the slot decides
+/// who gates. A slot its own session already holds by hand (which it would
+/// share) is refused before anything changes: two lands could otherwise run
+/// on one worktree. A cdo-gate process seen while land waits for memory (one
+/// queued behind this very landing) no longer holds land up.
+///
+/// Mutations: land accepting a shared hold (exit 4) -> the run goes on; the
+/// mem-wait's process check restored -> the run gives up at mem-wait.
+#[test]
+fn land_needs_the_slot_to_itself_and_waits_only_for_memory() {
+    let r = repo();
+    let (code, text) = r.slot("land-test", &["acquire", "tools", "by hand"]);
+    assert_eq!(code, Some(0), "{text}");
+    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("land needs it to itself"), "{text}");
+    assert!(r.calls().is_empty() && r.landing_branches().is_empty());
+    assert_eq!(r.slot("land-test", &["release"]).0, Some(0));
+
+    // A process whose command line is `bash <dir>/scripts/cdo-gate`.
+    let fake = r.root.join("other/scripts");
+    std::fs::create_dir_all(&fake).unwrap();
+    // `exec`: one process, which the guard below ends (no orphaned `sleep`).
+    std::fs::write(fake.join("cdo-gate"), "exec sleep 60\n").unwrap();
+    struct Owned(std::process::Child);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _gate = Owned(
+        std::process::Command::new("bash")
+            .arg(fake.join("cdo-gate"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let (code, text) = r.land(
+        &["tools/tls-58-x"],
+        &[("LAND_MEM_MIN_GB", "1"), ("LAND_MEM_TIMEOUT_S", "0")],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(r.calls(), ["ci-steps all", "cdo-gate /cdo-ws"]);
+}
+
 /// Every refusal leaves nothing behind. A conflict outside CHANGELOG.md: the
 /// dry run predicts it (exit 1) and moves no ref, HEAD or file; the real run
 /// stops with the conflicting path, makes no landing branch, leaves the

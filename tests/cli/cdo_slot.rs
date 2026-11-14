@@ -191,8 +191,10 @@ fn cdo_slot_frees_itself() {
     let (code, text) = s.run("A", &["acquire", "tools", "b", "--bind", &pid], &[]);
     assert_eq!(code, Some(0), "{text}");
     bound.kill().unwrap();
+    // Not reaped yet: a zombie is a dead process (review r1, sol).
+    let freed = s.wait_free();
     bound.wait().unwrap();
-    assert!(s.wait_free(), "the bound slot outlived its process");
+    assert!(freed, "the bound slot outlived its process (a zombie)");
 
     for (cmd, rc) in [("true", 0), ("false", 1)] {
         let (code, text) = s.run("A", &["run", "tools", "r", "--", cmd], &[]);
@@ -291,6 +293,11 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "rustup run nightly cargo test",
         "watch -n 5 cargo check",
         "scripts/agentflow run --name ci -- true",
+        // Review r1 (sol): a quoted `#` is no comment; an unquoted heredoc's
+        // body runs its substitutions; `'<<EOF'` in quotes starts no heredoc.
+        "rg '# TODO' src && cargo test",
+        "cat <<EOF\n$(cargo test)\nEOF",
+        "echo '<<EOF'; cargo test",
     ];
     let free = [
         "grep -n x scripts/cdo-gate",
@@ -310,6 +317,10 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "bash scripts/ci-steps fmt",
         "# cargo test later",
         "cat > notes.md <<'EOF'\ncargo test --test cli\nEOF",
+        // Review r1 (sol): single quotes and a quoted heredoc run nothing.
+        "git commit -m 'document $(cargo test)'",
+        "printf '%s\\n' '$(cargo test)'",
+        "cat <<'EOF'\n$(cargo test)\nEOF",
     ];
     for c in guarded.iter().chain(&free) {
         assert_eq!(s.guard("B", c).0, Some(0), "slot free: {c}");
@@ -335,6 +346,20 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     assert_eq!(s.guard_raw(other_tool).0, Some(0));
     let no_session = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
     assert_eq!(s.guard_raw(no_session).0, Some(0), "it cannot tell: allow");
+    // A lock the probe cannot open is no holder: allow (review r1, sol).
+    // Mutation: any probe failure read as held -> refused.
+    let broken = Slot::new();
+    std::fs::create_dir_all(broken.dir()).unwrap();
+    std::fs::write(broken.dir().join("lock"), "").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        broken.dir().join("lock"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let (code, text) = broken.guard("B", "cargo test");
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("(allowed)"), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 
     // A's own BOUND hold (its land or cdo-gate): A's commands still pass, B's

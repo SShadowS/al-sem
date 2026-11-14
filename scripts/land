@@ -24,10 +24,8 @@
 #             (the worktree is then on a clean, detached master).
 #   ci        `bash scripts/ci-steps all` (stops here on a failure: cdo-gate
 #             never runs after a red ci).
-#   mem-wait  MemAvailable >= 35 GB and no other cdo-gate running (polls 15 s,
-#             gives up after 30 min). "Running" is a `bash [<dir>/]scripts/cdo-gate`
-#             command line in this container; `bash -x ...` or a gate started
-#             from inside scripts/ is not seen.
+#   mem-wait  MemAvailable >= 35 GB (polls 15 s, gives up after 30 min); no
+#             other gate can run meanwhile, since land holds the CDO slot.
 #   cdo       `bash scripts/cdo-gate <CDO_WS>`.
 #   recheck   (after ci and after cdo) the worktree is still on the landing
 #             commit the gates ran on, clean, `landing/<name>` still points
@@ -201,7 +199,10 @@ if ((!dry_run)); then
     CDO_SLOT_MEM_MIN_GB=0 bash "$slot" "${slot_args[@]}" 7>&- 8>&- || rc=$?
     case "$rc" in
         0) trap 'bash "$slot" release >/dev/null 2>&1 || true' EXIT ;;
-        4) ;; # the caller's own hold (a script that took it first)
+        # A shared hold (the caller's token, or its session holding by hand)
+        # would let two lands run on one worktree at once: land needs the slot
+        # to itself (review r1, sol).
+        4) die "the CDO slot is already held by this caller; land needs it to itself: release it first (scripts/cdo-slot release)" ;;
         *) die "the CDO slot was not taken (scripts/cdo-slot status)" ;;
     esac
 fi
@@ -434,15 +435,15 @@ if ((mem_min_gb > 0)); then
     deadline=$((SECONDS + mem_timeout))
     while :; do
         avail_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
-        # A running gate is `bash <path>/cdo-gate ...` (its shebang), not any
-        # command line that merely mentions it.
-        other=$(pgrep -f '^(/usr)?(/bin/)?bash [^ ]*scripts/cdo-gate( |$)' || true)
-        if ((avail_kb >= mem_min_gb * 1048576)) && [[ -z "$other" ]]; then
-            echo "MemAvailable $((avail_kb >> 20)) GB, no other cdo-gate" >"$run/mem-wait.log"
+        # No other gate can run: land holds the CDO slot, and cdo-gate takes it
+        # (a gate queued behind this landing is no reason to wait: it waits for
+        # us, review r1, sol).
+        if ((avail_kb >= mem_min_gb * 1048576)); then
+            echo "MemAvailable $((avail_kb >> 20)) GB" >"$run/mem-wait.log"
             break
         fi
         if ((SECONDS >= deadline)); then
-            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb), other cdo-gate: ${other:-none}" >"$run/mem-wait.log"
+            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >"$run/mem-wait.log"
             rc=1
             break
         fi

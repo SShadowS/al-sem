@@ -80,6 +80,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is gone for more than 5 s reads "held by an unknown holder", so the hook refuses
   and the message says how to find it. Left as is: an unbound session hold with no
   Claude PID is never stale (real sessions set both).
+- Review r1 (sol), all taken:
+  - land refuses a hold it would share (its caller's token, or its session holding
+    by hand): it needs the slot to itself, so two lands never run on one worktree.
+  - land's mem-wait no longer waits for "no other cdo-gate": the slot already
+    serializes gates, and a cdo-gate queued behind the landing deadlocked it.
+  - A bound process counts as alive only while it is no zombie and has the start
+    time recorded at acquire (a reused PID is not it); the holder's watch and the
+    STALE check both use this.
+  - The lock probe reads only a timeout (`flock -E 75`) as held; any other failure
+    stops `status` with exit 5, and the hook allows.
+  - The hook reads the line with one quote-aware scanner: a comment is a `#`
+    starting a word outside quotes (`rg '# TODO' && cargo test` is caught); a heredoc
+    starts only outside quotes; an unquoted heredoc's body still runs its
+    substitutions (caught), a quoted one's does not; `$(...)` and backticks inside
+    single quotes run nothing (a commit message `'... $(cargo test)'` passes).
+  - Mutations, each failing a test: the zombie check in the holder's watch, the probe
+    reading any failure as held, land accepting a shared hold, the mem-wait's process
+    check restored, single quotes not tracked, heredoc-body substitutions dropped.
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 

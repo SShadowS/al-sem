@@ -61,17 +61,43 @@ poll="${CDO_SLOT_POLL_S:-15}"
 me_session="${CLAUDE_CODE_SESSION_ID:-}"
 me_pid="${CLAUDE_PID:-}"
 me_token="${CDO_SLOT_TOKEN:-}"
-bind=""
+bind="" bind_start=""
+command -v flock >/dev/null || die "flock is needed"
 
 # field <name>: one field of the status file ("" when absent).
 field() { { sed -n "s/^$1=//p" "$status_file" 2>/dev/null || true; } | head -n 1; }
-alive() { [[ "$1" =~ ^[1-9][0-9]*$ ]] && kill -0 "$1" 2>/dev/null; }
+# proc_fields <pid>: its /proc stat fields from the state on (state = $1,
+# start time = $20); nothing when it is gone.
+proc_fields() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null || true; }
+# alive <pid> [start]: running (a zombie is not) and, with a start time, still
+# the same process (not a reused PID).
+alive() {
+    [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+    local f
+    read -r -a f <<<"$(proc_fields "$1")"
+    [[ ${#f[@]} -gt 19 && "${f[0]}" != Z ]] || return 1
+    [[ -z "${2:-}" || "${f[19]}" == "$2" ]]
+}
+proc_start() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[19]:-}"; }
 # A Claude PID counts only while it is still a claude process (PID reuse).
 claude_alive() { alive "$1" && grep -q claude "/proc/$1/comm" "/proc/$1/cmdline" 2>/dev/null; }
-# The lock is held by somebody (not by this process: it never keeps it).
-# (A short wait, not -n: another prober or a starting holder has it for an
-# instant, and that must not read as a held slot.)
-lock_held() { [[ -e "$lock" ]] && ! flock -w 0.1 "$lock" true 2>/dev/null; }
+# lock_held: somebody holds the lock (not this process: it never keeps it).
+# A short wait, not -n: another prober or a starting holder has it for an
+# instant. Only a timeout (exit 75) means held; any other failure of the probe
+# stops with exit 5 (the hook then allows: a broken probe is no holder).
+lock_held() {
+    [[ -e "$lock" ]] || return 1
+    local rc=0
+    flock -E 75 -w 0.1 "$lock" true 2>/dev/null || rc=$?
+    case "$rc" in
+        0) return 1 ;;
+        75) return 0 ;;
+        *)
+            echo "cdo-slot: cannot probe the lock $lock (flock exit $rc)" >&2
+            exit 5
+            ;;
+    esac
+}
 # is_holder <pid>: that process is a holder of THIS slot (its environment says so).
 is_holder() {
     alive "$1" && tr '\0' '\n' <"/proc/$1/environ" 2>/dev/null | grep -qxF "CS_LOCK=$lock"
@@ -112,7 +138,7 @@ state() {
     if [[ -n "$me_token" && "$token" == "$me_token" ]] \
         || [[ -n "$me_session" && "$session" == "$me_session" && -z "$bound" ]]; then
         st=mine
-    elif [[ -n "$pid" ]] && ! claude_alive "$pid" && ! alive "$bound"; then
+    elif [[ -n "$pid" ]] && ! claude_alive "$pid" && ! alive "$bound" "$(field bound_start)"; then
         st=stale
     else
         st=held
@@ -161,7 +187,8 @@ end_holder() {
 try_take() {
     local ready="$dir/ready.$$" n
     rm -f "$ready"
-    CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_SESSION="$me_session" CS_PID="$me_pid" \
+    CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_BIND_START="$bind_start" \
+        CS_SESSION="$me_session" CS_PID="$me_pid" \
         CS_LOCK="$lock" CS_META="$meta" CS_STATUS="$status_file" CS_READY="$ready" \
         setsid bash -c '
             # Keep no descriptor of the caller (a pipe it waits on, a lock).
@@ -181,6 +208,7 @@ try_take() {
                 printf "session=%s\n" "$CS_SESSION"
                 printf "claude_pid=%s\n" "$CS_PID"
                 printf "bound=%s\n" "$CS_BIND"
+                printf "bound_start=%s\n" "$CS_BIND_START"
                 printf "holder_pid=%s\n" "$$"
                 printf "token=%s\n" "$CS_TOKEN"
             } >"$tmp" && mv "$tmp" "$CS_STATUS" || exit 71
@@ -189,7 +217,11 @@ try_take() {
             if [ -n "$CS_BIND" ]; then
                 # Bound: the hold ends with the process it was taken for, even
                 # when that process is killed outright (no trap runs).
-                while kill -0 "$CS_BIND" 2>/dev/null; do sleep 2 9>&-; done
+                # Running, not a zombie, and the same process (its start time).
+                while f=$(sed "s/.*) //" "/proc/$CS_BIND/stat" 2>/dev/null) \
+                    && set -- $f && [ "$1" != Z ] && [ "${20}" = "$CS_BIND_START" ]; do
+                    sleep 2 9>&-
+                done
                 exec 8>"$CS_META" && flock -x 8
                 grep -qx "holder_pid=$$" "$CS_STATUS" 2>/dev/null && rm -f "$CS_STATUS"
                 exit 0
@@ -249,7 +281,7 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
             echo "cdo-slot: waiting: $why"
             last=$SECONDS
         fi
-        if [[ -n "$bind" ]] && ! alive "$bind"; then
+        if [[ -n "$bind" ]] && ! alive "$bind" "$bind_start"; then
             die "the process to bind ($bind) ended while waiting: $why"
         fi
         if [[ -n "$timeout" ]] && ((SECONDS - start >= timeout)); then
@@ -294,6 +326,7 @@ case "$cmd" in
                 --bind)
                     [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] && alive "$2" || { echo "cdo-slot: --bind needs a live PID" >&2; exit 2; }
                     bind=$2
+                    bind_start=$(proc_start "$2")
                     shift
                     ;;
                 --timeout)
@@ -322,6 +355,7 @@ case "$cmd" in
         export CDO_SLOT_TOKEN=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
         me_token=$CDO_SLOT_TOKEN
         bind=$$
+        bind_start=$(proc_start "$$")
         rc=0
         acquire "$owner" "$reason" 1 "$timeout" || rc=$?
         case "$rc" in
