@@ -12,7 +12,8 @@
 //!
 //! **The check.** [`Manifest::check_against`] the descriptor's manifest:
 //! stat-cached (`hashing: cached`, a file is read only when its length or
-//! modification time moved), or every file hashed with `verify`. Each check
+//! a timestamp moved: mtime, and ctime where the platform gives one), or
+//! every file hashed with `verify`. Each check
 //! has a deadline (5 s cached, 30 s verify); one that does not finish, or
 //! that meets an input it cannot read, is `complete: false` with the reason
 //! and never `fresh`.
@@ -92,17 +93,22 @@ fn unix_ms(t: SystemTime) -> u64 {
 }
 
 /// What a stat-trusting check cannot see (TLS-56): on Unix a rewrite moves
-/// ctime, which the stat key holds, so only unsaved editor buffers are left;
-/// where the platform's std gives no ctime (Windows), a rewrite that keeps a
-/// file's size and modification time is missed too.
+/// ctime, which the stat key holds, unless it lands within one timestamp
+/// tick of the last check or the file system keeps no real change time;
+/// where the platform's std gives no ctime (Windows), any rewrite that keeps
+/// a file's size and modification time is missed. Unsaved editor buffers are
+/// never inputs.
 #[cfg(unix)]
-const STAT_RESIDUAL: &str = "unsaved editor buffers are not inputs";
+const STAT_RESIDUAL: &str = "a same-size rewrite within one file-system timestamp tick of the last \
+                             check, or on a file system without a real change time (FAT, some \
+                             network mounts), is seen only with freshness: verify; unsaved editor \
+                             buffers are not inputs";
 #[cfg(not(unix))]
 const STAT_RESIDUAL: &str = "a rewrite that keeps a file's size and modification time is seen only \
                              with freshness: verify; unsaved editor buffers are not inputs";
 /// [`STAT_RESIDUAL`] in the status answer's words (`verify: true`).
 #[cfg(unix)]
-const STAT_RESIDUAL_STATUS: &str = "unsaved editor buffers are not inputs";
+const STAT_RESIDUAL_STATUS: &str = "a same-size rewrite within one file-system timestamp tick of the last check, or on a file system without a real change time (FAT, some network mounts), is seen only with verify: true; unsaved editor buffers are not inputs";
 #[cfg(not(unix))]
 const STAT_RESIDUAL_STATUS: &str = "a rewrite that keeps size and modification time is seen only with verify: true; unsaved editor buffers are not inputs";
 
@@ -529,7 +535,7 @@ pub fn headline(e: &EngineState<'_>) -> String {
         None => "the failed build".to_string(),
     };
     // Output validation V2 (§4.5, F22): the headline says how hard it
-    // checked: every input hashed, or size and modification time only.
+    // checked: every input hashed, or size and timestamps only.
     let verdict = if check["fresh"] == json!(true) {
         if check["strength"] == json!("hashed") {
             format!(

@@ -1179,10 +1179,11 @@ fn status_checks_the_disk_against_the_published_revision() {
 /// the built revision and report whether it is stale": no hash of every
 /// input) fails at "verify rebuilds"; restored, it passes.
 ///
-/// TLS-56: only where the platform gives no change time (Windows); on Unix
-/// the rewrite moves ctime and `fresh` sees it
-/// (`fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server`).
-#[cfg(not(unix))]
+/// TLS-56: on Unix such a rewrite moves ctime and `fresh` sees it
+/// (`fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server`), so
+/// here the engine child keys its check on size and mtime alone, as on a
+/// platform without ctime (test hook `stat-without-ctime`), on every
+/// platform.
 #[test]
 fn a_stale_verify_rebuilds_as_its_description_says() {
     let r = s_tools_freshness_description();
@@ -1194,7 +1195,7 @@ fn a_stale_verify_rebuilds_as_its_description_says() {
 
     let dir = ws_explain_copy();
     let ws = std::fs::canonicalize(dir.path()).unwrap();
-    let mut s = Server::ready(&ws, None);
+    let mut s = Server::ready(&ws, Some("stat-without-ctime"));
     let q = json!({"routine": "Archive", "format": "json"});
     let env = envelope(&s.call(1, "alsem_query_effects", q.clone()));
     assert_eq!(env["revision"]["generation"], 1, "{env}");
@@ -1233,14 +1234,15 @@ fn a_stale_verify_rebuilds_as_its_description_says() {
     // `fresh`. DISCRIMINATION (2026-11-09): `answer_freshness` serving
     // `fresh` for a stat check (the old header) fails here; restored,
     // passes.
+    assert_eq!(env["freshness"]["requested"], "fresh", "{env}");
     assert_eq!(
-        env["freshness"],
-        json!({
-            "requested": "fresh",
-            "served": "fresh-by-size-and-time",
-            "residual": "a rewrite that keeps a file's size and modification time is seen only \
-                         with freshness: verify; unsaved editor buffers are not inputs",
-        }),
+        env["freshness"]["served"], "fresh-by-size-and-time",
+        "{env}"
+    );
+    assert!(
+        env["freshness"]["residual"]
+            .as_str()
+            .is_some_and(|r| r.contains("seen only with freshness: verify")),
         "the header names the residual: {env}"
     );
     let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
@@ -1299,16 +1301,28 @@ fn fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server() {
         1,
         "precondition: the edit applies"
     );
-    // ctime can tick coarsely: land the rewrite on a later tick.
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    std::fs::write(&post, text.replace(old, new)).unwrap();
-    std::fs::File::options()
-        .write(true)
-        .open(&post)
-        .unwrap()
-        .set_modified(before.modified().unwrap())
-        .unwrap();
-    let after = std::fs::metadata(&post).unwrap();
+    // ctime moves to the file system's current timestamp tick: rewrite (mtime
+    // restored) until it has moved (a rewrite in the same tick is the stated
+    // residual).
+    use std::os::unix::fs::MetadataExt;
+    let ctime = |m: &std::fs::Metadata| (m.ctime(), m.ctime_nsec());
+    let edited = text.replace(old, new);
+    let mut after = std::fs::metadata(&post).unwrap();
+    for _ in 0..200 {
+        std::fs::write(&post, &edited).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&post)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+        after = std::fs::metadata(&post).unwrap();
+        if ctime(&after) != ctime(&before) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_ne!(ctime(&after), ctime(&before), "precondition: ctime moved");
     assert_eq!(
         (after.len(), after.modified().unwrap()),
         (before.len(), before.modified().unwrap()),
@@ -1321,7 +1335,10 @@ fn fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server() {
         json!({
             "requested": "fresh",
             "served": "fresh-by-size-and-time",
-            "residual": "unsaved editor buffers are not inputs",
+            "residual": "a same-size rewrite within one file-system timestamp tick of the last \
+                         check, or on a file system without a real change time (FAT, some \
+                         network mounts), is seen only with freshness: verify; unsaved editor \
+                         buffers are not inputs",
         }),
         "{env}"
     );

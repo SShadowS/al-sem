@@ -400,7 +400,11 @@ answers `{"did": "already-fresh", "universe": …}`, `{"did": "rebuilt", "univer
 revision and report whether it is stale" (`tools.rs:170`), but `pin(Verify)` hashes every input
 and **rebuilds** when stale (`session.rs:384-421`). New text: "verify: like fresh, but hashes
 every input instead of trusting size and modification time; rebuilds first when anything
-changed." Its contract test pins the behavior it describes.
+changed." Its contract test pins the behavior it describes. **Changed 2026-11-14 (TLS-56):** the
+cached check also keys on ctime where the platform gives one, so the texts say "size and
+timestamps", and the `residual` (below and in the answer header) is per platform: on Unix only a
+same-size rewrite within one timestamp tick of the last check, or on a file system without a real
+change time, is missed.
 
 ### 2.4 Honesty rules
 

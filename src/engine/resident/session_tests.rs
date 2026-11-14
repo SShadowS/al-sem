@@ -132,6 +132,57 @@ fn latest_built_answers_stale_and_refreshes_in_the_background() {
     assert_eq!(warm(&now), cold(ws));
 }
 
+/// TLS-56: a metadata-only change (a chmod) moves ctime, so the next fresh
+/// check hashes the file again and finds the same content (the same
+/// revision answers); it keeps the new stats, so the check after it hashes
+/// nothing (not every later check, until a rebuild).
+///
+/// DISCRIMINATION (2026-11-14): skipping the adopt on a fresh hit (`pin`'s
+/// `adopt_stats` block) fails "the next check hashes nothing".
+#[cfg(unix)]
+#[test]
+fn a_metadata_only_change_is_hashed_once() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let p = ws.join("Caller.al");
+    let s = session(ws);
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    let r1 = Arc::clone(revision(&first));
+    let _ = s.pin(Freshness::Fresh, &never).unwrap();
+    assert_eq!(
+        s.stats().last_check_hashed,
+        Some(0),
+        "precondition: an unchanged disk hashes nothing"
+    );
+    let before = std::fs::metadata(&p).unwrap();
+    let ctime = |m: &std::fs::Metadata| (m.ctime(), m.ctime_nsec());
+    let mode = before.permissions().mode();
+    let mut flip = mode ^ 0o004;
+    for _ in 0..200 {
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(flip)).unwrap();
+        if ctime(&std::fs::metadata(&p).unwrap()) != ctime(&before) {
+            break;
+        }
+        flip ^= 0o004;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_ne!(
+        ctime(&std::fs::metadata(&p).unwrap()),
+        ctime(&before),
+        "precondition: ctime moved"
+    );
+    let again = s.pin(Freshness::Fresh, &never).unwrap();
+    assert!(Arc::ptr_eq(revision(&again), &r1), "the same revision");
+    assert_eq!(s.stats().last_check_hashed, Some(1), "hashed again once");
+    let _ = s.pin(Freshness::Fresh, &never).unwrap();
+    assert_eq!(
+        s.stats().last_check_hashed,
+        Some(0),
+        "the next check hashes nothing"
+    );
+}
+
 /// TLS-56: a rewrite that keeps length and mtime moves ctime, so `fresh`
 /// sees it: the next pin is a new revision, equal to a cold build, with no
 /// `verify` and no change notification.
@@ -148,19 +199,32 @@ fn fresh_sees_a_rewrite_that_keeps_size_and_mtime() {
     let s = session(ws);
     let first = s.pin(Freshness::Fresh, &never).unwrap();
     let r1 = Arc::clone(revision(&first));
+    use std::os::unix::fs::MetadataExt;
     let before = std::fs::metadata(&p).unwrap();
     let (len, mtime) = (before.len(), before.modified().unwrap());
-    // ctime has a clock tick of resolution on some file systems: make sure
-    // the rewrite lands on a later one.
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    edit(ws, "Compute(5)", "Compute(9)");
-    std::fs::File::options()
-        .write(true)
-        .open(&p)
-        .unwrap()
-        .set_modified(mtime)
-        .unwrap();
-    let after = std::fs::metadata(&p).unwrap();
+    let ctime = |m: &std::fs::Metadata| (m.ctime(), m.ctime_nsec());
+    let text = std::fs::read_to_string(&p).unwrap();
+    assert_eq!(text.matches("Compute(5)").count(), 1, "precondition: edit");
+    let new = text.replace("Compute(5)", "Compute(9)");
+    // ctime moves to the file system's current timestamp tick: rewrite
+    // (with mtime restored) until it has moved (the stated residual is a
+    // rewrite within the same tick).
+    let mut after = std::fs::metadata(&p).unwrap();
+    for _ in 0..200 {
+        std::fs::write(&p, &new).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        after = std::fs::metadata(&p).unwrap();
+        if ctime(&after) != ctime(&before) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_ne!(ctime(&after), ctime(&before), "precondition: ctime moved");
     assert_eq!(
         (after.len(), after.modified().unwrap()),
         (len, mtime),
@@ -174,18 +238,23 @@ fn fresh_sees_a_rewrite_that_keeps_size_and_mtime() {
     assert_eq!(warm(&now), cold(ws));
 }
 
-/// A rewrite that keeps length and mtime where the platform gives no ctime
-/// (Windows): `fresh` misses it (the stated residual, §5.3); `verify`
-/// hashes every input and refreshes; a change notification on the path
-/// makes `fresh` re-hash it too. (On Unix ctime moves, so `fresh` sees it:
-/// `fresh_sees_a_rewrite_that_keeps_size_and_mtime`.)
-#[cfg(not(unix))]
+/// A rewrite that keeps length and mtime where the check has no ctime (a
+/// platform without one, Windows; here forced on every platform with
+/// `without_stat_ctime`, TLS-56): `fresh` misses it (the stated residual,
+/// §5.3); `verify` hashes every input and refreshes; a change notification
+/// on the path makes `fresh` re-hash it too.
+///
+/// DISCRIMINATION (2026-11-14): `Freshness::Verify` mapped to
+/// `Hashing::Cached` in `pin` fails "verify sees it"; the dirty set ignored
+/// in `observe`'s cached reuse (`!dirty.contains(path)` dropped) fails "the
+/// notification is seen".
 #[test]
 fn verify_and_notify_changed_see_a_rewrite_that_keeps_its_stat() {
     let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
     let ws = dir.path();
     let p = ws.join("Caller.al");
-    let s = session(ws);
+    let s =
+        Arc::new(ResidentSession::new(ws.to_path_buf(), false, "test".into()).without_stat_ctime());
     let first = s.pin(Freshness::Fresh, &never).unwrap();
     let r1 = Arc::clone(revision(&first));
     let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();

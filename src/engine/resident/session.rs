@@ -175,6 +175,9 @@ pub struct SessionStats {
     pub last_build_started_unix_ms: Option<u64>,
     /// The last freshness check's wall time, in microseconds.
     pub last_check_us: Option<u64>,
+    /// TLS-56: how many files the last freshness check read and hashed (the
+    /// others reused a hash their unchanged stat keyed).
+    pub last_check_hashed: Option<usize>,
     /// Revisions published with a sited graph, and the last one's build
     /// time and resident bytes (agent-tasks design §1.2 M0-1).
     pub sited_builds: u64,
@@ -224,6 +227,9 @@ pub struct ResidentSession {
     budget: Option<Arc<Budget>>,
     /// `--low-mem` ([`Self::with_low_mem`]).
     low_mem: bool,
+    /// TLS-56: key the freshness check on length and mtime alone, as on a
+    /// platform with no ctime ([`Self::without_stat_ctime`]; tests only).
+    stat_without_ctime: bool,
     /// Whether each build makes the sited graph ([`Self::with_sited`],
     /// [`Self::builds_sited`]).
     sited: std::sync::atomic::AtomicBool,
@@ -259,12 +265,26 @@ impl ResidentSession {
             hook: None,
             budget: None,
             low_mem: false,
+            stat_without_ctime: false,
             sited: std::sync::atomic::AtomicBool::new(false),
             graph_only: false,
             injected: crate::program::inputs::Injected::default(),
             universe_label: None,
             needs: Mutex::new(REVISION_NEEDS),
         }
+    }
+
+    /// TLS-56: the session's freshness check keys files on length and mtime
+    /// alone ([`Manifest::forget_ctime`] on every manifest it publishes), as
+    /// on a platform with no ctime: a test can then make a rewrite `fresh`
+    /// misses, to pin what `verify` and a change notification do. The engine
+    /// child sets it only from the test hook `stat-without-ctime` (debug and
+    /// `engine-test-hooks` builds).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn without_stat_ctime(mut self) -> ResidentSession {
+        self.stat_without_ctime = true;
+        self
     }
 
     /// The session building its models with `needs` (a smaller model than
@@ -659,10 +679,35 @@ impl ResidentSession {
             };
             let observed =
                 Manifest::observe_scoped(&self.workspace, &self.injected, self.single_app, hashing);
-            lock(&self.stats).last_check_us = Some(start.elapsed().as_micros() as u64);
+            {
+                let mut st = lock(&self.stats);
+                st.last_check_us = Some(start.elapsed().as_micros() as u64);
+                st.last_check_hashed = Some(observed.hashed().len());
+            }
             if observed == p.manifest {
                 lock(&self.stats).fresh_hits += 1;
                 self.clear_dirty(&dirty);
+                // TLS-56: a check that hashed a file again (its stat moved,
+                // its content did not: a chmod moves ctime) keeps the new
+                // stats, so the next check reuses the hash. Only if no build
+                // published since this pin read `current`.
+                if !observed.hashed().is_empty() {
+                    let mut cur = lock(&self.current);
+                    if let Some(c) = cur.as_ref()
+                        && Arc::ptr_eq(c, p)
+                    {
+                        let mut manifest = c.manifest.clone();
+                        manifest.adopt_stats(&observed);
+                        if self.stat_without_ctime {
+                            manifest.forget_ctime();
+                        }
+                        *cur = Some(Arc::new(Published {
+                            built: c.built.clone(),
+                            manifest,
+                            needs: c.needs,
+                        }));
+                    }
+                }
                 return Ok(Pinned {
                     built: p.built.clone(),
                     stale: false,
@@ -1061,6 +1106,10 @@ impl ResidentSession {
                 s.last_build_class = Some(class);
                 s.last_build_ms = Some(start.elapsed().as_millis() as u64);
                 s.last_build_started_unix_ms = Some(started_unix_ms);
+            }
+            let mut m_after = m_after;
+            if self.stat_without_ctime {
+                m_after.forget_ctime();
             }
             *lock(&self.current) = Some(Arc::new(Published {
                 built: built.clone(),
