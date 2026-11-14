@@ -1397,8 +1397,19 @@ impl Walker<'_, '_> {
         ) {
             Some(ScopeTier::Parameter) => NameRef::Parameter(param.and_then(|p| p.ty.as_deref())),
             Some(ScopeTier::ReturnValue) => NameRef::ReturnValue(r.return_type.as_deref()),
+            // A declaration under a `#if` exists only in some builds (ENG-80, sol review).
             Some(ScopeTier::Local) => {
-                if locals.len() == 1 && globals.is_empty() && locals_complete {
+                if locals.len() == 1
+                    && globals.is_empty()
+                    && locals_complete
+                    && self
+                        .cx
+                        .file
+                        .ir
+                        .var_wrappers(&locals[0].origin)
+                        .next()
+                        .is_none()
+                {
                     NameRef::Proven(locals[0])
                 } else {
                     NameRef::Candidates(locals.into_iter().chain(globals).collect())
@@ -1407,7 +1418,17 @@ impl Walker<'_, '_> {
             // ENG-80: a global proves its text only when no level that could
             // declare the name in another build was read in part.
             Some(ScopeTier::Global) => {
-                if globals.len() == 1 && locals_complete && globals_complete {
+                if globals.len() == 1
+                    && locals_complete
+                    && globals_complete
+                    && self
+                        .cx
+                        .file
+                        .ir
+                        .var_wrappers(&globals[0].origin)
+                        .next()
+                        .is_none()
+                {
                     NameRef::Proven(globals[0])
                 } else {
                     NameRef::Candidates(globals)

@@ -206,6 +206,161 @@ codeunit 50389 "Eng80 Nested Globals"
     local procedure Next() begin end;
 }
 
+// sol review: a declaration that exists only in some builds proves nothing. The global
+// `Msg` is an ErrorInfo; a Text local or parameter shadows it only in the X build.
+codeunit 50379 "Eng80 Cond Decls"
+{
+    var
+        Msg: ErrorInfo;
+#if X
+        CondG: Text;
+#endif
+#if X
+    var
+        CondS: Text;
+#endif
+
+    procedure CondLocal()
+    var
+#if X
+        Msg: Text;
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure ShadowText()
+    var
+        Msg: Text;
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure CondGlobal() begin Error(CondG); Next(); end;
+
+    // Every build declares `Msg` Text-family: the `#if`/`#else` covers (terminates).
+    procedure CondLocalBoth()
+    var
+#if X
+        Msg: Text;
+#else
+        Msg: Label 'x';
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    // Fable r5: a `#if` around a whole `var` section (may raise), and its covering control.
+    procedure SectionWrap()
+#if X
+    var
+        Msg: Text;
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure SectionWrapBoth()
+#if X
+    var
+        Msg: Text;
+#else
+    var
+        Msg: Label 'x';
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    // Fable r5: two declarations in one arm of the outer wrapper and none in its `#else`:
+    // an arm count would call it covered; without X `Msg` is the ErrorInfo global.
+    procedure NestedFalseCover()
+#if X
+    var
+#if Y
+        Msg: Text;
+#else
+        Msg: Label 'x';
+#endif
+#else
+    var
+        Other: Integer;
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    // Fable r5: a conditional name in a name list.
+    procedure NameList()
+    var
+        A,
+#if X
+        Msg,
+#endif
+        C: Text;
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure CondGlobalSection() begin Error(CondS); Next(); end;
+
+    // No `#else`: a build with neither X nor Y sees the ErrorInfo global (may raise).
+    procedure CondLocalNoElse()
+    var
+#if X
+        Msg: Text;
+#elif Y
+        Msg: Text;
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure CondParam(
+#if X
+        Msg: Text
+#else
+        Msg: ErrorInfo
+#endif
+    )
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure CondReturn()
+#if X
+    Msg: Text
+#else
+    Msg: ErrorInfo
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    procedure CondReturnType() Msg:
+#if X
+    Text
+#else
+    ErrorInfo
+#endif
+    begin
+        Error(Msg);
+        Next();
+    end;
+
+    local procedure Next() begin end;
+}
+
 // C1 / B6: an own `procedure Error` runs and returns.
 codeunit 50382 "Eng80 Own Error"
 {
@@ -348,6 +503,11 @@ fn eng80_b1_text_forms_terminate() {
         "TextConcat",
         "TextQuoted",
         "TextGlobalPlain",
+        // Controls for the sol rows: an unconditional Text local shadowing an ErrorInfo
+        // global, and a conditional one whose `#if`/`#else` covers every build.
+        "ShadowText",
+        "CondLocalBoth",
+        "SectionWrapBoth",
     ];
     let bad = mismatches(&m, &names, true);
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -397,6 +557,17 @@ fn eng80_b3_declarations_that_prove_nothing() {
         "SplitArmLocal",
         "Undeclared",
         "NestedGlobal",
+        // sol review: a declaration or signature that varies by build.
+        "CondLocal",
+        "CondLocalNoElse",
+        "SectionWrap",
+        "NestedFalseCover",
+        "NameList",
+        "CondGlobalSection",
+        "CondGlobal",
+        "CondParam",
+        "CondReturn",
+        "CondReturnType",
     ];
     let bad = mismatches(&m, &names, false);
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));

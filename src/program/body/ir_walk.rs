@@ -2957,34 +2957,48 @@ impl TextProof<'_> {
             return false;
         }
         let r = self.routine;
+        let ir = &self.file.ir;
         let globals = self
             .file
             .objects
             .get(self.object_idx)
             .map_or(&[][..], |o| &o.globals[..]);
-        let levels: [(Vec<Option<&str>>, bool); 4] = [
+        // The signature the lowerer read is one arm's when it varies by `#if` (sol review).
+        let signature_complete = r.body.is_some_and(|b| ir.signature_complete(b));
+        // Each level: the matching declarations (type, exists only in some builds), and
+        // whether the lowerer read the level in full.
+        // (type, start byte, every `#if` wrapper holding it).
+        type Decl<'a> = (Option<&'a str>, usize, Vec<&'a al_syntax::ir::VarWrapper>);
+        fn var<'a>(ir: &'a al_syntax::ir::Ir, v: &'a al_syntax::ir::VarDecl) -> Decl<'a> {
+            (
+                v.ty.as_deref(),
+                v.origin.byte.start,
+                ir.var_wrappers(&v.origin).collect(),
+            )
+        }
+        let levels: [(Vec<Decl<'_>>, bool); 4] = [
             (
                 r.params
                     .iter()
                     .filter(|p| p.name.eq_fold_identifier(name))
-                    .map(|p| p.ty.as_deref())
+                    .map(|p| (p.ty.as_deref(), p.origin.byte.start, Vec::new()))
                     .collect(),
-                true,
+                signature_complete,
             ),
             (
                 r.return_name
                     .as_deref()
                     .filter(|n| n.eq_fold_identifier(name))
-                    .map(|_| r.return_type.as_deref())
+                    .map(|_| (r.return_type.as_deref(), 0, Vec::new()))
                     .into_iter()
                     .collect(),
-                true,
+                signature_complete,
             ),
             (
                 r.locals
                     .iter()
                     .filter(|v| v.name.eq_fold_identifier(name))
-                    .map(|v| v.ty.as_deref())
+                    .map(|v| var(ir, v))
                     .collect(),
                 self.locals_complete,
             ),
@@ -2992,7 +3006,7 @@ impl TextProof<'_> {
                 globals
                     .iter()
                     .filter(|v| v.name.eq_fold_identifier(name))
-                    .map(|v| v.ty.as_deref())
+                    .map(|v| var(ir, v))
                     .collect(),
                 self.locals_complete && self.globals_complete,
             ),
@@ -3002,7 +3016,17 @@ impl TextProof<'_> {
                 return false;
             }
             if !decls.is_empty() {
-                return decls.into_iter().all(|t| t.is_some_and(is_text_type));
+                // A declaration under a `#if` is absent in the builds of the other arms,
+                // where the name means an outer one (or a parens-less call). It counts only
+                // when its wrapper has an `#else` and every arm declares the name (sol
+                // review): `#if CLEAN25 E: Label 'new'; #else E: Label 'old'; #endif`.
+                // Every wrapper holding a declaration must have an arm-by-arm cover: an
+                // `#else`, and a declaration of the name in each arm (Fable r5: an arm
+                // count alone can be met by two declarations in one arm).
+                let starts: Vec<usize> = decls.iter().map(|d| d.1).collect();
+                return decls.iter().all(|(t, _, wrappers)| {
+                    t.is_some_and(is_text_type) && wrappers.iter().all(|w| w.covered_by(&starts))
+                });
             }
         }
         false

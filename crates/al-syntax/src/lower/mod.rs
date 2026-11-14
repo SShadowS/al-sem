@@ -56,7 +56,10 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     let mut ir = Ir::new();
     let mut issues = Vec::new();
     let mut objects = Vec::new();
+    // No range from another file (an unwinding lowering) may reach this one.
+    CONDITIONAL_VARS.with(|v| v.borrow_mut().clear());
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
+    ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
     let comments = collect_comments(root, source);
     attach_docs(&mut objects, &comments, source);
     // The arenas are push-built; a parse can live as long as a resident
@@ -477,6 +480,7 @@ fn lower_object(
             ir.mark_globals_incomplete(b);
         }
     }
+    ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
     let mut run_objects = Vec::new();
     collect_run_objects(node, source, &mut run_objects);
 
@@ -1961,6 +1965,37 @@ fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
 
 /// Collect object-level var declarations, descending preproc wrappers (both
 /// branches) but NOT routines/sections-with-their-own-scope.
+/// ENG-80 (sol and Fable reviews): record `node`, a `#if` group holding variable
+/// declarations, with each arm's byte range (from its directive's end to the next
+/// directive's start) and whether it has an `#else` ([`crate::ir::VarWrapper`]).
+fn record_var_wrapper(node: RawNode) {
+    let directives: Vec<RawNode> = node
+        .named_children()
+        .into_iter()
+        .filter(|c| {
+            matches!(
+                c.kind(),
+                RawKind::PreprocIf
+                    | RawKind::PreprocElif
+                    | RawKind::PreprocElse
+                    | RawKind::PreprocEndif
+            )
+        })
+        .collect();
+    let arms = directives
+        .windows(2)
+        .map(|w| w[0].byte_range().end..w[1].byte_range().start)
+        .collect();
+    let has_else = directives.iter().any(|d| d.kind() == RawKind::PreprocElse);
+    CONDITIONAL_VARS.with(|v| {
+        v.borrow_mut().push(crate::ir::VarWrapper {
+            byte: node.byte_range(),
+            arms,
+            has_else,
+        })
+    });
+}
+
 fn collect_globals(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     match node.kind() {
         RawKind::VarSection => extract_var_section(node, source, out),
@@ -1970,11 +2005,15 @@ fn collect_globals(node: RawNode, source: &str, out: &mut Vec<VarDecl>) {
         // arm's continued declarations are a `variables` field (a `var_body`). Its
         // procedures are ordinary children, found by `collect_routines`.
         RawKind::PreprocSplitVarSectionTail => {
+            record_var_wrapper(node);
             for body in node.children_by_field(FieldName::Variables) {
                 extract_var_body(body, source, out);
             }
         }
         _ if is_preproc_wrapper(node) => {
+            // A `#if` around whole sections: each one's declarations exist only in
+            // its arm's builds.
+            record_var_wrapper(node);
             for c in node.named_children() {
                 collect_globals(c, source, out);
             }
@@ -2141,6 +2180,11 @@ thread_local! {
     /// before collecting their declarations and read it after
     /// ([`al_syntax::ir::Ir::locals_complete`], `globals_complete`).
     static VARS_INCOMPLETE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// ENG-80 (sol review): the byte ranges of the `#if` wrappers `extract_var_body`
+    /// flattened, drained into the IR by the routine and object lowering
+    /// ([`al_syntax::ir::Ir::var_wrapper`]).
+    static CONDITIONAL_VARS: std::cell::RefCell<Vec<crate::ir::VarWrapper>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Lower `children` as one statement list (a `statement_block` or a `code_block`
@@ -2881,6 +2925,18 @@ fn lower_routine<'t>(
             items
         })
         .unwrap_or_default();
+    // ENG-80 (sol review): the signature read is one arm's; another build may give a
+    // parameter or the named return another type, or none.
+    let signature_varies = node.named_children().into_iter().any(|c| {
+        matches!(
+            c.kind(),
+            RawKind::PreprocConditionalReturn | RawKind::PreprocConditionalReturnType
+        ) && in_arm(c)
+    }) || arm_field(FieldName::Parameters).is_some_and(|pl| {
+        structural_children(pl)
+            .into_iter()
+            .any(|c| c.kind() == RawKind::PreprocConditionalParameters)
+    });
 
     // `interface_procedure` (receiver-closure plan, Task 1): its return-type spec
     // lives on a nested, NAMED `interface_procedure_suffix` child (grammar:
@@ -2988,6 +3044,10 @@ fn lower_routine<'t>(
     });
     if locals_incomplete && let Some(b) = body {
         ir.mark_locals_incomplete(b);
+    }
+    ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
+    if signature_varies && let Some(b) = body {
+        ir.mark_signature_varies(b);
     }
 
     RoutineDecl {
@@ -3238,6 +3298,7 @@ fn extract_var_body(body: RawNode, source: &str, out: &mut Vec<VarDecl>) {
         match decl.kind() {
             RawKind::VariableDeclaration => extract_var_decl(decl, source, out),
             _ if is_preproc_wrapper(decl) => {
+                record_var_wrapper(decl);
                 for c in decl.named_children() {
                     if c.kind() == RawKind::VariableDeclaration {
                         // shallow: flatten preproc-wrapped declarations (both branches)
@@ -3263,6 +3324,22 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     let label = label_value(decl, ty.as_deref(), source);
     let mut names = Vec::new();
     var_decl_names(decl, &mut names);
+    // ENG-80 (Fable r5): a name inside a `#if` of the name list exists only in some
+    // builds, and every name shares the declaration's origin, so the whole declaration
+    // gets a wrapper that never covers (its names prove nothing).
+    if decl
+        .named_children()
+        .iter()
+        .any(|c| c.kind() == RawKind::PreprocConditionalVarNames)
+    {
+        CONDITIONAL_VARS.with(|v| {
+            v.borrow_mut().push(crate::ir::VarWrapper {
+                byte: decl.byte_range(),
+                arms: Vec::new(),
+                has_else: false,
+            })
+        });
+    }
     for nm in names {
         out.push(VarDecl {
             name: ident_text(nm, source),

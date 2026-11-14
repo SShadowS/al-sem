@@ -95,6 +95,31 @@ pub fn exact_size<T>(v: &mut Vec<T>) {
     }
 }
 
+/// One `#if` wrapper around variable declarations ([`Ir::var_wrappers`]): inside a `var`
+/// section, around whole sections, a split section tail, or a conditional name list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VarWrapper {
+    pub byte: Range<usize>,
+    /// Each arm's byte range (between its directive and the next). Empty for a wrapper no
+    /// arm-by-arm reading applies to (a conditional name list): never covering.
+    pub arms: Vec<Range<usize>>,
+    /// Whether one arm is an `#else`, so the arms cover every build.
+    pub has_else: bool,
+}
+
+impl VarWrapper {
+    /// Whether every build declares a name here: an `#else` arm, and every arm holds one of
+    /// the declarations starting at `starts`.
+    pub fn covered_by(&self, starts: &[usize]) -> bool {
+        self.has_else
+            && !self.arms.is_empty()
+            && self
+                .arms
+                .iter()
+                .all(|a| starts.iter().any(|s| a.contains(s)))
+    }
+}
+
 /// Push-only arena holding the `Expr`/`Stmt`/`Block` pools an `AlFile` references.
 #[derive(Default)]
 pub struct Ir {
@@ -115,6 +140,13 @@ pub struct Ir {
     /// split body's arm `var` sections; a `var` `#if` nested deeper than one level).
     locals_incomplete: Vec<u32>,
     globals_incomplete: Vec<u32>,
+    /// ENG-80 (sol review): the `#if` wrappers whose declarations a `var` section lists
+    /// (every arm flattened), as [`VarWrapper`]s: a declaration inside one exists only in
+    /// the builds of its arm.
+    conditional_vars: Vec<VarWrapper>,
+    /// ENG-80 (sol review): routine bodies (by block id) whose signature (parameters or
+    /// return clause) varies by `#if`; the lowerer read one arm of it.
+    signature_varies: Vec<u32>,
 }
 
 impl Ir {
@@ -152,6 +184,28 @@ impl Ir {
 
     pub(crate) fn mark_globals_incomplete(&mut self, body: BlockId) {
         self.globals_incomplete.push(body.0);
+    }
+
+    /// Every `#if` wrapper that holds the variable declared at `origin` (it then exists only
+    /// in the builds of its arms, ENG-80).
+    pub fn var_wrappers<'a>(&'a self, origin: &'a Origin) -> impl Iterator<Item = &'a VarWrapper> {
+        self.conditional_vars
+            .iter()
+            .filter(|w| w.byte.contains(&origin.byte.start))
+    }
+
+    pub(crate) fn mark_conditional_vars(&mut self, wrappers: Vec<VarWrapper>) {
+        self.conditional_vars.extend(wrappers);
+    }
+
+    /// Whether the signature (parameters, return clause) of the routine with body `body` is
+    /// the same in every build. When not, the lowerer read one arm (ENG-80).
+    pub fn signature_complete(&self, body: BlockId) -> bool {
+        !self.signature_varies.contains(&body.0)
+    }
+
+    pub(crate) fn mark_signature_varies(&mut self, body: BlockId) {
+        self.signature_varies.push(body.0);
     }
 
     /// Drop the arenas' spare capacity (a finished lowering adds nothing).
