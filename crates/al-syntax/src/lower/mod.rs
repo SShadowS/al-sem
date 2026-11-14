@@ -2128,17 +2128,10 @@ thread_local! {
     /// one file on one thread, and `with_build_context` restores it on exit.
     static BUILD_CONTEXT: std::cell::RefCell<Vec<(String, bool)>> =
         const { std::cell::RefCell::new(Vec::new()) };
-    /// ENG-14 (§4.2 S): a one-statement slot below the statement list being lowered
-    /// holds a `#if` chain that is not one statement in every build. Set by
-    /// `lower_branch`, consumed by the nearest enclosing statement list
-    /// ([`lower_statement_list`]), which then becomes an unordered run: in the
-    /// broken build its next statement is the slot's body.
-    static BROKEN_SLOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lower `children` as one statement list (a `statement_block` or a `code_block`
-/// body). If a one-statement slot below it is broken (`BROKEN_SLOT`), every item of
-/// the list is an unordered run.
+/// body).
 fn lower_statement_list<'t>(
     children: impl IntoIterator<Item = RawNode<'t>>,
     ir: &mut Ir,
@@ -2146,15 +2139,26 @@ fn lower_statement_list<'t>(
     source: &str,
     depth: u32,
 ) -> Vec<BlockItem> {
-    let outer = BROKEN_SLOT.with(|b| b.replace(false));
     let mut items = Vec::new();
     for child in children {
         lower_block_child(child, ir, issues, source, &mut items, depth);
     }
-    if BROKEN_SLOT.with(|b| b.replace(outer)) {
-        items = unordered_run(items, ir);
-    }
     items
+}
+
+/// ENG-14 (spec §8.1): a shape whose `#if` arm boundaries the lowerer cannot keep
+/// (a broken one-statement slot, a split closing, a cond-only head, a `preproc_*`
+/// leftover) cannot be read as control flow at all: arranging its statements in any
+/// order invents a dead mark or a guard some build does not have (`if Flag then #if
+/// X exit; Commit(); #endif`: under X, `Commit` runs whatever `Flag` is). The items
+/// keep their call sites; this `Unknown` statement next to them makes the routine
+/// untrusted (no control tree, so no mark, guard or dominance from it).
+fn push_untrusted_marker(origin: &Origin, ir: &mut Ir, items: &mut Vec<BlockItem>) {
+    let s = ir.add_stmt(Stmt {
+        kind: StmtKind::Unknown,
+        origin: origin.clone(),
+    });
+    items.push(BlockItem::Stmt(s));
 }
 
 /// The current build context (`BUILD_CONTEXT`).
@@ -3018,6 +3022,11 @@ fn lower_preproc_split_routine_body(
         .iter()
         .map(|b| b.id())
         .collect();
+    let conditions: Vec<usize> = wrapper
+        .children_by_field(FieldName::Condition)
+        .iter()
+        .map(|c| c.id())
+        .collect();
     let (directives, contents) = chain_parts(wrapper);
     let (shape, falls) = chain_shape(&directives, source, &in_syms(&build_context()));
     let mut falls = falls.into_iter();
@@ -3030,8 +3039,6 @@ fn lower_preproc_split_routine_body(
         let mut lowered = Vec::new();
         if live {
             with_build_context(&syms, ir, |ir| {
-                // Each body is a statement list of its own, so a broken slot in it
-                // (§4.2 S) makes that list an unordered run.
                 for body in children.iter().filter(|b| bodies.contains(&b.id())) {
                     lowered.extend(lower_statement_list(
                         body.named_children(),
@@ -3040,6 +3047,26 @@ fn lower_preproc_split_routine_body(
                         source,
                         depth,
                     ));
+                }
+                // The guard's condition (`if <cond> then`, flat in the arm) runs in
+                // this build; its then-branch is the tail's first statement, read in
+                // the unordered tail below. An empty-then `If` keeps the condition's
+                // calls as sites (they were dropped before ENG-14).
+                for c in children.iter().filter(|c| conditions.contains(&c.id())) {
+                    let cond = lower_expr(*c, ir, issues, source, depth + 1);
+                    let then_block = ir.add_block(Block {
+                        items: Vec::new(),
+                        origin: origin_of(*c),
+                    });
+                    let s = ir.add_stmt(Stmt {
+                        kind: StmtKind::If {
+                            cond,
+                            then_block,
+                            else_block: None,
+                        },
+                        origin: origin_of(*c),
+                    });
+                    lowered.push(BlockItem::Stmt(s));
                 }
             });
         }
@@ -3420,10 +3447,10 @@ fn lower_code_block(
             }
             lower_block_child(c, ir, issues, source, &mut items, depth);
         }
-        // ENG-14 (§4.2 B): the closing's arm can hold `end else begin …` flat, so
-        // an else-arm statement lands after the then-arm's own `exit`. Nothing in
-        // this block may end anything else in it.
-        items = unordered_run(items, ir);
+        // ENG-14 (§8.1): the closing's arm can hold `end else begin …` flat, so an
+        // else-arm statement lands in the then-block, after its `exit` and under its
+        // condition. The arm boundaries are lost: fail closed.
+        push_untrusted_marker(&origin_of(split_end), ir, &mut items);
     }
     ir.add_block(Block {
         items,
@@ -3446,24 +3473,13 @@ fn lower_branch(
         _ => {
             let mut items = Vec::new();
             lower_block_child(node, ir, issues, source, &mut items, depth);
-            // ENG-14 (§4.2 S): a `#if` chain in a one-statement slot is well formed
-            // only when every build puts exactly one statement there. Otherwise the
-            // arms' statements are may-run items (`[exit, Foo]` kills nothing) and
-            // the nearest enclosing statement list becomes an unordered run.
+            // ENG-14 (§8.1): a `#if` chain in a one-statement slot is well formed only
+            // when every build puts exactly one statement there. Otherwise, in some
+            // build the slot's body is another statement (an arm's second statement
+            // runs after the `if`, whatever its condition; with no arm, the next
+            // statement is the body): fail closed.
             if is_preproc_wrapper(node) && !slot_well_formed(&items, ir) {
-                let flat = items
-                    .into_iter()
-                    .flat_map(|item| match item {
-                        BlockItem::Preproc(g) => g
-                            .branches
-                            .iter()
-                            .flat_map(|b| ir.take_block_items(*b))
-                            .collect(),
-                        stmt => vec![stmt],
-                    })
-                    .collect();
-                items = unordered_run(flat, ir);
-                BROKEN_SLOT.with(|b| b.set(true));
+                push_untrusted_marker(&origin_of(node), ir, &mut items);
             }
             ir.add_block(Block {
                 items,
@@ -4013,8 +4029,9 @@ fn lower_unmodelled_stmt(
         }
         // Union read: every arm's statements sit in the then-block, so each call
         // keeps its site even though the arm structure is not preserved. ENG-14
-        // (§4.2 B): as an unordered run, so one arm's `exit` kills nothing.
-        let items = unordered_run(items, ir);
+        // (§8.1): they sit under the first build's condition, and one arm's `exit`
+        // would kill another's code: fail closed.
+        push_untrusted_marker(origin, ir, &mut items);
         let then_block = ir.add_block(Block {
             items,
             origin: origin.clone(),
@@ -4065,20 +4082,20 @@ fn lower_unmodelled_stmt(
         lower_block_child(c, ir, issues, source, &mut items, depth);
     }
 
-    // ENG-14 (§4.2 B): the leftover statements lost their arm boundaries, so they
-    // are an unordered run, the reconstructed `If` included. A shape with two heads
-    // (`#if A if C then … else #else if D then … else #endif …`) always lands here:
-    // only the first head's fields are consumed, so the second head's condition and
-    // branch are leftover items.
+    // ENG-14 (§8.1): a `#if` shape here lost its arm boundaries. The reconstructed
+    // `If` puts a statement under a condition some build does not have
+    // (`#if X if C then #endif Stmt`: without X, `Stmt` runs whatever `C` is), and the
+    // leftovers sit in one sequence across builds: fail closed. Any other node
+    // reaching here (a `statement_block` after a comment in a case `else`, CDO's
+    // `CDOLogAttachment::DeleteAttachment`) is a real sequence.
     match (reconstructed_if, items.is_empty()) {
-        (Some(if_kind), true) => if_kind,
-        (Some(if_kind), false) => {
+        (Some(if_kind), _) => {
             let if_id = ir.add_stmt(Stmt {
                 kind: if_kind,
                 origin: origin.clone(),
             });
             items.push(BlockItem::Stmt(if_id));
-            let items = unordered_run(items, ir);
+            push_untrusted_marker(origin, ir, &mut items);
             StmtKind::Block(ir.add_block(Block {
                 items,
                 origin: origin.clone(),
@@ -4086,11 +4103,8 @@ fn lower_unmodelled_stmt(
         }
         (None, true) => StmtKind::Unknown,
         (None, false) => {
-            // Only a `#if` shape lost arm boundaries. Any other node reaching here
-            // (a `statement_block` after a comment in a case `else`, CDO's
-            // `CDOLogAttachment::DeleteAttachment`) is a real sequence.
             if node.kind_str().starts_with("preproc_") {
-                items = unordered_run(items, ir);
+                push_untrusted_marker(origin, ir, &mut items);
             }
             StmtKind::Block(ir.add_block(Block {
                 items,
@@ -5026,7 +5040,24 @@ query 50004 Q
                         && member_is_quantity(*lhs)
                     {
                         split_if += 1;
-                        assert_eq!(af.ir.block(*then_block).items.len(), 2, "Foo and Bar");
+                        // Foo and Bar, plus ENG-14's untrusted marker (the arm
+                        // boundaries of this cond-only head are lost).
+                        let items = &af.ir.block(*then_block).items;
+                        let calls = items
+                            .iter()
+                            .filter(|i| {
+                                matches!(i, crate::ir::BlockItem::Stmt(s)
+                                if matches!(af.ir.stmt(*s).kind, StmtKind::Call(_)))
+                            })
+                            .count();
+                        let unknowns = items
+                            .iter()
+                            .filter(|i| {
+                                matches!(i, crate::ir::BlockItem::Stmt(s)
+                                if matches!(af.ir.stmt(*s).kind, StmtKind::Unknown))
+                            })
+                            .count();
+                        assert_eq!((calls, unknowns), (2, 1), "Foo and Bar, and the marker");
                     }
                 }
                 _ => {}

@@ -220,6 +220,76 @@ codeunit 50340 "Eng14 Split"
         Bar();
     end;
 
+    // A5: a `with` slot and an `asserterror` slot holding a multi-statement arm.
+    procedure SlotWith(var R: Record "Eng14 T")
+    begin
+        with R do
+#if X
+            Init();
+            Foo();
+#endif
+        Bar();
+    end;
+
+    procedure SlotAssertError()
+    begin
+        asserterror
+#if X
+            Error('a');
+            Foo();
+#endif
+        Bar();
+    end;
+
+    // A5 (sol): a broken slot inside a statement `#if` arm. Under A without B the `exit`
+    // is the then-body, so Bar runs when C is false.
+    procedure ArmSlot(C: Boolean)
+    begin
+#if A
+        if C then
+#if B
+            Foo();
+#endif
+        exit;
+        Bar();
+#endif
+    end;
+
+    // A5 (sol): the slot's second statement runs whatever Flag is, under X.
+    procedure GuardCommit(Flag: Boolean)
+    begin
+        if Flag then
+#if X
+            exit;
+            Commit();
+#endif
+        Work();
+    end;
+
+    // A5: a well-formed slot (one statement in every build) keeps its tree.
+    procedure SlotWellFormed(C: Boolean)
+    begin
+        if C then
+#if X
+            Foo();
+#else
+            Work();
+#endif
+        Bar();
+    end;
+
+    // I2: a call in the split body's guard condition.
+    procedure SplitBodyGuardCall()
+#if X
+    begin
+        if Check() then
+#else
+    begin
+#endif
+        exit;
+        Call7();
+    end;
+
     // A4 (review): an `else` that exists in one build only. With X unset the case falls
     // through when I <> 1, so R may reach Modify without a Get.
     procedure CaseCondElse(var R: Record "Eng14 T"; I: Integer)
@@ -267,6 +337,7 @@ codeunit 50340 "Eng14 Split"
     local procedure Foo() begin end;
     local procedure Bar() begin end;
     local procedure Work() begin end;
+    local procedure Check(): Boolean begin end;
 }
 "#;
 
@@ -366,32 +437,46 @@ fn eng14_a2_split_body_guard() {
     assert_live(&m, "SplitBodyGuard", "Call7");
 }
 
-#[test]
-fn eng14_a3_split_closing() {
-    let m = model();
-    assert_live(&m, "SplitClosing", "Call8b");
-}
-
-#[test]
-fn eng14_a4_unordered_runs() {
-    let m = model();
-    assert_live(&m, "CondOnlyHead", "Foo");
-    assert_live(&m, "TwoHeads", "Bar");
-    // A non-`#if` node on the recovery path is not an unordered run.
+/// A routine whose `#if` arm boundaries were lost fails closed (spec §8.1): no control tree,
+/// so no dead mark, d20, guard or dominance comes from it. Its calls keep their sites.
+fn assert_untrusted(m: &Model, name: &str) {
+    let r = routine(m, name);
+    assert!(r.body_available, "{name}: the body is there");
     assert!(
-        is_dead(site(&m, "ElseComment", "Work")),
-        "ElseComment: the exit in the else kills Work in every build"
+        r.statement_tree.is_none(),
+        "{name}: arm boundaries lost, so no control tree"
     );
-    for cs in routine(&m, "SplitCaseEnd").call_sites.iter() {
+    assert!(r.unreachable_statements.is_empty(), "{name}: no d20");
+    assert!(r.has_branching, "{name}: never read as straight-line");
+    assert!(
+        !r.call_sites.is_empty(),
+        "{name}: its calls keep their sites"
+    );
+    for cs in &r.call_sites {
         assert!(
             !is_dead(cs),
-            "SplitCaseEnd: {} is not unreachable",
+            "{name}: {} is not unreachable",
             cs.callee_text
         );
     }
+}
+
+#[test]
+fn eng14_a3_split_closing() {
+    let m = model();
+    assert_untrusted(&m, "SplitClosing");
+}
+
+#[test]
+fn eng14_a4_lost_arm_boundaries() {
+    let m = model();
+    for name in ["CondOnlyHead", "TwoHeads", "SplitCaseEnd"] {
+        assert_untrusted(&m, name);
+    }
+    // A non-`#if` node on the recovery path is a real sequence, not a lost shape.
     assert!(
-        d20_lines(&m, "SplitCaseEnd").is_empty(),
-        "SplitCaseEnd: no d20"
+        is_dead(site(&m, "ElseComment", "Work")),
+        "ElseComment: the exit in the else kills Work in every build"
     );
 }
 
@@ -406,21 +491,38 @@ fn eng14_a5_slots() {
         "SlotLoop",
         "SlotCaseBranch",
         "SlotNested",
+        "SlotNoArm",
+        "SplitBodySlot",
+        "SlotWith",
+        "SlotAssertError",
+        "ArmSlot",
     ] {
-        assert_live(&m, name, "Foo");
-        assert!(
-            !dominates(&m, name, "Bar"),
-            "{name}: Bar is skipped in a build, so it does not dominate the success return"
-        );
+        assert_untrusted(&m, name);
     }
+    // A well-formed slot (one statement in every build) stays precise: the tree is kept.
     assert!(
-        !dominates(&m, "SlotNoArm", "Bar"),
-        "SlotNoArm: in the build with no arm Bar is the then-body"
+        routine(&m, "SlotWellFormed").statement_tree.is_some(),
+        "SlotWellFormed: one statement per build keeps the tree"
     );
+}
+
+/// sol's part-1 review: `if Flag then #if X exit; Commit(); #endif`. Under X, `Commit`
+/// runs whatever `Flag` is, so no guard may put it behind `Flag = true`.
+#[test]
+fn eng14_a5_a_broken_slot_invents_no_guard() {
+    let m = model();
+    let r = routine(&m, "GuardCommit");
     assert!(
-        !dominates(&m, "SplitBodySlot", "Bar"),
-        "SplitBodySlot: a broken slot in a split body's tail reaches the tail's list"
+        crate::engine::l4::param_guard::frame_guards(r, |_, _| true).is_none(),
+        "GuardCommit: no guard frame from a slot whose arm boundaries are lost"
     );
+}
+
+/// I2 (Fable's part-1 review): a call in a split body's guard condition has a call site.
+#[test]
+fn eng14_a2_a_guard_condition_calls_have_sites() {
+    let m = model();
+    let _ = site(&m, "SplitBodyGuardCall", "Check");
 }
 
 #[test]
@@ -485,6 +587,15 @@ fn untrusted_source() -> String {
         Error('x');
     end;
 
+    // No branch in its source: only the untrusted rule makes it read as branching.
+    procedure Straight()
+    var
+        X: Integer;
+    begin
+        X := (1 + );
+        Foo();
+    end;
+
     local procedure Foo() begin end;
     local procedure Bar() begin end;
 }}
@@ -525,4 +636,10 @@ fn eng14_a6_untrusted_routines_claim_nothing() {
             "{name}: no parameter guard frame"
         );
     }
+    // Fable (part-1 review): `has_branching: false` is a straight-line proof for
+    // record_types, event_flow and d61; an untrusted body never gives it.
+    assert!(
+        routine(&m, "Straight").has_branching,
+        "Straight: an untrusted routine is never read as straight-line"
+    );
 }

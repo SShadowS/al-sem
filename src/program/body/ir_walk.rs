@@ -2968,7 +2968,9 @@ pub fn routine_features_partial(
 
     IrPartialFeatures {
         statement_tree,
-        has_branching: spine.has_branching,
+        // An untrusted body may have lost a branch; readers take `false` as a
+        // straight-line proof (record_types' RecordRef temp state, event_flow, d61).
+        has_branching: spine.has_branching || untrusted,
         nesting_depth,
         loops: spine.loops,
         field_accesses: spine.field_accesses,

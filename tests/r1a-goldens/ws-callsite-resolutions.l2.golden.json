@@ -466,7 +466,7 @@
         "fieldAccesses": [],
         "recordVariables": [],
         "nestingDepth": 0,
-        "hasBranching": false,
+        "hasBranching": true,
         "unreachableStatements": [],
         "identifierReferences": [],
         "variables": [],

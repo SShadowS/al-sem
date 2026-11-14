@@ -14,6 +14,7 @@ control contexts on master `a4072928`, and what it does with no tree. Read from 
 | `param_guard::frame_guards` (param_guard.rs:98-115) | a frame with `alias_error_ops`'s requirements | untrusted: no frame (`None`) |
 | `pending_writes` (pending_writes.rs:659) | `all = true` (whole body) but `committed` starts true for non-empty targets | to settle in Task 2 against the code after line 662: "a Commit runs before every target" must not hold without a tree |
 | d43 `classify_setter` (d43.rs:320-333) | `is_assignment_nested_in_tree(None)` false and `exit_before(None)` false → `MustSetTrue` | untrusted: `MaySetTrue` |
+| `has_branching: false` readers (Fable, part-1 review): `record_types.rs:363` (RecordRef temp `Known(true)`), `event_flow.rs:918-923` (`exact`), d61 `:257` (`unconditional`), d43's fast path | the flag comes from the spine walk, not the tree | an untrusted routine reads `has_branching: true` (`ir_walk`) |
 
 **Safe** (no tree, no claim):
 

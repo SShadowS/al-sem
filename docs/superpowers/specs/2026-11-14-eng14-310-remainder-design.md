@@ -333,6 +333,25 @@ Two landings, one branch each:
 
 ## 8.1 As built (part 1), where it differs from the text above
 
+- **§4.2 S and B: where arm boundaries are lost, the routine is untrusted (fail closed).** The code
+  review of part 1 (sol) showed that an unordered run removes false DEAD marks but keeps false GUARDS:
+  in `if Flag then #if X exit; Commit(); #endif Work();` the slot's statements stay inside `if Flag`,
+  though under X `Commit` runs whatever `Flag` is, so `param_guard` records `Flag = true` and a caller
+  passing `false` prunes the commit. A split closing's else-arm statements (in the then-block) and a
+  cond-only head's statements (under the first build's condition) have the same defect. A broken slot
+  inside a statement `#if` arm was also not consumed by the arm. So a broken slot, a split closing, a
+  cond-only head and a `preproc_*` leftover now push a `StmtKind::Unknown` marker next to their lowered
+  items: the routine is untrusted (§4.2 D), its calls keep their sites, and no mark, guard or dominance
+  comes from its tree. This replaces S's enclosing-list rewrite and B's runs on those paths. Kept precise,
+  because no false guard can arise there: statement groups (B2), split-body arms (A), a guarded split
+  body's tail (an unordered top-level run), and a `case` `else` inside a `#if` arm (may-run statements in
+  a real else). On CDO none of the failing-closed shapes occur (run 2: everything identical).
+- **`has_branching`.** An untrusted routine reads `has_branching: true`: `record_types` (RecordRef
+  temp state), `event_flow` (`exact`) and d61 (`unconditional`) treat `false` as a straight-line proof
+  (Fable, part-1 review).
+- **The split-body guard's condition** is lowered (`If { cond, then: empty }` in its arm), so a call in it
+  has a site; before, it was dropped (pre-existing).
+
 - **§4.2 C moved to part 2.** Taint and completeness are read only by §4.1's `Error` rule; adding the IR
   fields in part 1 would land fields nothing reads (mantra 13). Part 2 adds them with their first reader.
 - **§4.2 D, the trigger.** "Untrusted" is `parse_incomplete`, or a body that holds a `StmtKind::Unknown`

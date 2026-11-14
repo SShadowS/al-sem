@@ -96,15 +96,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marked `Foo` unreachable (under X the code is `if C then exit; Foo();`), a split procedure body's
   `#if X begin exit; #else begin #endif Call5();` marked `Call5` dead, and a split closing, a
   cond-only head split, a two-head split if-else and a split `case` closing did the same; d20 reported
-  each. Now (spec `docs/superpowers/specs/2026-11-14-eng14-310-remainder-design.md` §4.2):
+  each. Now (spec `docs/superpowers/specs/2026-11-14-eng14-310-remainder-design.md` §4.2, §8.1):
   - a split body's arms are a group of alternatives and its shared tail follows them; the tail is
-    unordered when a live arm ends with an `if <cond> then` guard;
-  - where arm boundaries are lost (split closings, cond-only heads, the lowerer's leftovers), each
-    statement is its own "may run" item, so an `exit` in it ends nothing else;
-  - a `#if` chain in a one-statement slot (then, else, loop, `with`, `case` branch) that is not one
-    statement in every build makes its arms' statements "may run" and the enclosing statement list
-    unordered (so `Bar` after `if C then #if not X Foo(); #endif` no longer dominates the success
-    return); this holds in a split body's arms and tail too;
+    unordered when a live arm ends with an `if <cond> then` guard, and that guard's condition is
+    lowered, so a call in it has a call site (it was dropped);
+  - where arm boundaries are lost (a broken one-statement slot in then, else, loop, `with`,
+    `asserterror` or `case` branch position; a split closing; a cond-only head; a two-head split
+    if-else; a split `case` closing), the routine is untrusted (below): its calls keep their sites,
+    and no mark, guard or dominance comes from it. Arranging the statements in some order is not
+    enough: in `if Flag then #if X exit; Commit(); #endif` the `Commit` runs under X whatever `Flag`
+    is, so a guard `Flag = true` would let a caller passing `false` prune a real commit;
   - a `case` `else` inside a `#if` arm (`case I of 1: R.Get(); #if X else R.Get(); #endif end;`) was
     an unconditional `else`, so the case read as exhaustive (every path loads `R`); its statements
     are now "may run", and an `else` from another arm is merged, not dropped.
@@ -113,7 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `exit`. It keeps no statement tree and no unreachable entries, so no dead mark, d20, dominance,
   `all_paths_error` or literal pruning comes from it. `cfg_walker` gives it Unknown path facts (its
   straight-line fallback claimed `dirty_at_exit: No`), `param_guard` no guard frame, and d43 reads
-  its `IsHandled := true` as "may set" (its no-branch fast path said "must set").
+  its `IsHandled := true` as "may set" (its no-branch fast path said "must set"). It also reads
+  `has_branching: true`, which RecordRef temp-state derivation, `event_flow` and d61 took as a
+  straight-line proof when `false`.
+- On CDO (`bc3ccb18`, against master `7bea0684`): findings at both scopes, the `alsem fingerprint`
+  output (byte-identical) and the call-graph histogram (0 unknown edges) do not move; none of these
+  shapes occur there.
 - Goldens: only the r0 corpus's intentional parse error (`CSR Broken::Incomplete`) moves, in the
   r1a L2 golden and the l2 snapshot: its call loses `top-level` and its dominance claim. The impact
   cache schema goes 13 → 14. Schema 14 also covers ENG-19's summary change (`Report.RunRequestPage`
