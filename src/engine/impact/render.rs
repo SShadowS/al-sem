@@ -719,14 +719,8 @@ fn kind_lines(up: &Value, key: &str, indent: &str) -> Vec<String> {
         let o = m.as_object()?;
         // Print order: the entry kinds' (a user or a job first), not the
         // JSON object's alphabetical one.
-        let rank = |k: &str| {
-            crate::program::impact_graph::reverse::EntryKind::ALL
-                .iter()
-                .position(|x| crate::engine::vocab::entry_kind(*x) == k)
-                .unwrap_or(usize::MAX)
-        };
         let mut rows: Vec<(&String, &Value)> = o.iter().collect();
-        rows.sort_by_key(|(k, _)| rank(k));
+        rows.sort_by_key(|(k, _)| crate::engine::vocab::entry_word_rank(k));
         (!o.is_empty()).then(|| {
             rows.iter()
                 .map(|(k, n)| {
@@ -2058,15 +2052,11 @@ fn root_block(r: &Value, opts: RenderOpts, hubs: bool) -> Vec<String> {
                 })
                 .collect();
             // §R2.4 landing change 6: a changed routine that is an entry
-            // says so (its kind first among its own).
-            if let Some(k) = up["rootEntryKinds"]
-                .as_array()
-                .and_then(|a| a.first())
-                .and_then(Value::as_str)
-            {
+            // says so (TLS-55: its kind word, `vocab::entry_word`).
+            if let Some(w) = up["rootEntryWord"].as_str() {
                 out.push(format!(
                     "      the changed routine is {} (an entry itself)",
-                    with_article(crate::engine::vocab::entry_key(k).0)
+                    with_article(w)
                 ));
             }
             out.push(if u(c, "count") == 0 {

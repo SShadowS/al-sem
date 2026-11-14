@@ -473,6 +473,179 @@ fn impact_applies_the_roots_config_overlay() {
     );
 }
 
+/// TLS-55: a configured (job-queue, web-service) entry is named by its
+/// routine's own source kind, else `procedure` (`vocab::entry_word`, the one
+/// home): `RunJob` is a plain procedure, `T54 Runner`'s `OnRun` a real one,
+/// `T54 Card`'s `OnOpenPage` a page trigger configured as a web service. All
+/// three write before calling `Post`. Every reader tells them apart:
+/// impact's entries by kind, program entries by kind, nearest entry and
+/// "the changed routine is …" line; explain's pending-writes counts; prove's
+/// non-interactive witness lines.
+///
+/// DISCRIMINATION (2026-11-14): `entry_word` taking the first kind even when
+/// config-only fails "impact tells the procedure apart" (`procedure 2`, no
+/// `codeunit OnRun`); `entry_kind` mapping the config-only kinds back to
+/// `codeunit OnRun` fails "explain tells the procedure apart"; prove's
+/// witness line using the context key's word (`entry_key`) fails "prove
+/// names the configured OnRun a codeunit OnRun"; the render reading
+/// `rootEntryKinds` again fails "the changed OnRun is a codeunit OnRun";
+/// keying `firstByKind` by (first kind, word) again fails "one first per
+/// word" (the configured page trigger kept beside the nearer plain one).
+#[test]
+fn a_configured_procedure_entry_is_no_codeunit_onrun() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id": "54545454-0000-4000-8000-000000000054", "name": "T54", "publisher": "probe",
+            "version": "1.0.0.0", "runtime": "13.0", "idRanges": [{"from": 50540, "to": 50549}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/Jobs.al"),
+        "table 50543 \"T54 Log\"\n{\n    fields\n    {\n        field(1; \"No.\"; Integer) { }\n    }\n}\n\n\
+         codeunit 50540 \"T54 Core\"\n{\n    internal procedure Post()\n    begin\n    end;\n}\n\n\
+         codeunit 50541 \"T54 Jobs\"\n{\n    internal procedure RunJob()\n    var\n        \
+         Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Log.Insert();\n        Core.Post();\n    end;\n}\n\n\
+         codeunit 50542 \"T54 Runner\"\n{\n    trigger OnRun()\n    var\n        \
+         Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Log.Insert();\n        Core.Post();\n    end;\n}\n\n\
+         page 50544 \"T54 Card\"\n{\n    trigger OnOpenPage()\n    var\n        \
+         Log: Record \"T54 Log\";\n    begin\n        \
+         Log.Insert();\n        Helper();\n    end;\n\n    \
+         local procedure Helper()\n    var\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Core.Post();\n    end;\n}\n\n\
+         page 50545 \"T54 Near\"\n{\n    trigger OnOpenPage()\n    var\n        \
+         Core: Codeunit \"T54 Core\";\n    begin\n        Core.Post();\n    end;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("roots.config.json"),
+        r#"{"version": 1, "roots": [
+            {"id": "run-job", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50541",
+                                         "routineName": "RunJob"}, "kinds": ["job-queue-entrypoint"]},
+            {"id": "runner", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50542",
+                                        "routineName": "OnRun"}, "kinds": ["job-queue-entrypoint"]},
+            {"id": "card", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Page/50544",
+                                      "routineName": "OnOpenPage"}, "kinds": ["web-service-exposed"]}]}"#,
+    )
+    .unwrap();
+    let v = json(
+        ws,
+        &["--routine", "Codeunit \"T54 Core\"::Post", "--no-tests"],
+        None,
+    );
+    let up = &v["roots"][0]["up"];
+    let words = serde_json::json!({"codeunit OnRun": 1, "page trigger": 2, "procedure": 1});
+    assert_eq!(
+        up["entriesByKind"]["code"], words,
+        "impact tells the procedure apart: {up:#}"
+    );
+    assert_eq!(up["programEntriesByKind"], words, "{up:#}");
+    assert_eq!(up["nearest"]["code"]["entry"], "procedure", "{up:#}");
+    let (human, err, code) = impact(
+        ws,
+        &["--routine", "Codeunit \"T54 Jobs\"::RunJob", "--no-tests"],
+        None,
+    );
+    assert_eq!(code, 0, "{human}{err}");
+    assert!(
+        human.contains("the changed routine is a procedure (an entry itself)"),
+        "the changed routine is a procedure: {human}"
+    );
+    // A configured real OnRun: its first key is the config's job-queue one,
+    // yet it is a codeunit OnRun.
+    let (human, err, code) = impact(
+        ws,
+        &["--routine", "Codeunit \"T54 Runner\"::OnRun", "--no-tests"],
+        None,
+    );
+    assert_eq!(code, 0, "{human}{err}");
+    assert!(
+        human.contains("the changed routine is a codeunit OnRun (an entry itself)"),
+        "the changed OnRun is a codeunit OnRun: {human}"
+    );
+    let firsts: Vec<(String, String)> = up["firstByKind"]["code"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["kind"].as_str().unwrap().to_string(),
+                f["display"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        firsts.contains(&("procedure".into(), "Codeunit \"T54 Jobs\"::RunJob".into()))
+            && firsts.contains(&(
+                "codeunit OnRun".into(),
+                "Codeunit \"T54 Runner\"::OnRun".into()
+            )),
+        "{firsts:?}"
+    );
+    // One row per word, its nearest entry (sol r2): the plain page trigger
+    // at 1 hop, not the configured one at 2 (whose first kind,
+    // `web-service-exposed`, sorts earlier).
+    assert_eq!(firsts.len(), 3, "one first per word: {firsts:?}");
+    assert!(
+        firsts.contains(&(
+            "page trigger".into(),
+            "Page \"T54 Near\"::OnOpenPage".into()
+        )),
+        "the nearest page trigger: {firsts:?}"
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["explain"])
+        .arg(ws)
+        .args([
+            "--callers-context",
+            "--routine",
+            "Codeunit \"T54 Core\"::Post",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let human = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        human.contains("(codeunit OnRun 1, page triggers 1, procedures 1)"),
+        "explain tells the procedure apart: {human}"
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["prove"])
+        .arg(ws)
+        .args([
+            "Codeunit \"T54 Core\"::Post",
+            "callers-may-run-noninteractive",
+            "--format",
+            "human",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let human = String::from_utf8_lossy(&out.stdout);
+    for (what, line) in [
+        (
+            "prove names RunJob a procedure",
+            "[local] procedure [context: background session or task (job queue)]: Codeunit \"T54 Jobs\"::RunJob",
+        ),
+        (
+            "prove names the configured OnRun a codeunit OnRun",
+            "[local] codeunit OnRun [context: background session or task (job queue)]: Codeunit \"T54 Runner\"::OnRun",
+        ),
+        (
+            "prove names the configured page trigger a page trigger",
+            "[local] page trigger [context: web service]: Page \"T54 Card\"::OnOpenPage",
+        ),
+    ] {
+        assert!(human.contains(line), "{what}: {line}\n{human}");
+    }
+}
+
 /// Round-2 n09: "raised by" is the events that raise the routine itself; a
 /// publisher anywhere among the ancestors is counted apart, under its own
 /// words. `OnItemModified` subscribes to `TU Item`'s `OnAfterModifyEvent`

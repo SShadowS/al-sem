@@ -56,6 +56,16 @@ pub const NOTE_UNNAMED_ACTIONS: u8 = 1;
 /// merged with its `OnRun` (§R2.4 landing change 1).
 pub const NOTE_BACKGROUND_WITHOUT_ON_RUN: u8 = 2;
 
+impl EntryInventory {
+    /// The kind word of entry `e` (TLS-55, `vocab::entry_word`): its first
+    /// source kind's word, else `procedure` (a routine only roots.config
+    /// names).
+    #[must_use]
+    pub fn word(&self, e: u32) -> &'static str {
+        crate::engine::vocab::entry_word(self.kinds(e))
+    }
+}
+
 /// The bit of `k` in an entry's kind mask.
 fn kind_bit(k: EntryKind) -> u16 {
     1 << EntryKind::ALL
@@ -258,12 +268,15 @@ impl EntryInventory {
         self.action[e as usize].as_deref()
     }
 
-    /// The count per kind over the entries `keep` accepts.
-    pub fn by_kind(&self, keep: impl Fn(u32) -> bool) -> BTreeMap<EntryKind, usize> {
-        let mut out: BTreeMap<EntryKind, usize> = BTreeMap::new();
+    /// The count per kind word ([`Self::word`]) over the entries `keep`
+    /// accepts, keyed by the word's print rank (`vocab::entry_word_rank`).
+    pub fn by_kind(&self, keep: impl Fn(u32) -> bool) -> BTreeMap<(usize, &'static str), usize> {
+        let mut out: BTreeMap<(usize, &'static str), usize> = BTreeMap::new();
         for e in 0..self.len() as u32 {
             if keep(e) {
-                *out.entry(self.kind(e)).or_default() += 1;
+                let w = self.word(e);
+                *out.entry((crate::engine::vocab::entry_word_rank(w), w))
+                    .or_default() += 1;
             }
         }
         out

@@ -177,6 +177,9 @@ pub struct Witness {
     pub line: Option<u32>,
     /// The entry kind, for a non-interactive entry.
     pub entry: Option<&'static str>,
+    /// TLS-55: that entry's own kind word (`vocab::entry_word`), which the
+    /// human line prints (`entry` is the context's legacy key).
+    pub entry_word: Option<&'static str>,
     pub hops: u32,
     pub tier: Tier,
     /// From the witness's caller down to R: each routine with the site it
@@ -1049,6 +1052,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
             file: at.as_ref().map(|a| a.0.clone()),
             line: at.map(|a| a.1),
             entry: None,
+            entry_word: None,
             hops,
             tier,
             path,
@@ -1738,6 +1742,9 @@ impl ConeVisitor for Visitor<'_, '_> {
         use crate::engine::vocab;
         let pending = s.ext & PENDING != 0;
         let open = s.tier == Tier::OnlyOpen;
+        // TLS-55: the entry's own kind word (`vocab::entry_word`), for a
+        // witness line that names the entry by its context key.
+        let word = vocab::entry_word(kinds.iter().copied());
         for k in kinds {
             match self.q {
                 CallersQuestion::PendingWrites => {
@@ -1780,7 +1787,7 @@ impl ConeVisitor for Visitor<'_, '_> {
                             self.entry_words.entry((open, c)).or_default().insert(n);
                         }
                         let d = self.ix.display(self.cx.g, n);
-                        self.entry_witness(s, k.as_str(), d);
+                        self.entry_witness(s, k.as_str(), word, d);
                     }
                     _ => {}
                 },
@@ -1885,7 +1892,13 @@ impl Visitor<'_, '_> {
         true
     }
 
-    fn entry_witness(&mut self, s: WalkState, kind: &'static str, display: String) {
+    fn entry_witness(
+        &mut self,
+        s: WalkState,
+        kind: &'static str,
+        word: &'static str,
+        display: String,
+    ) {
         let key = (s.node, u32::MAX, kind);
         if !self.witness_keys.insert(key) {
             return;
@@ -1950,6 +1963,7 @@ impl Visitor<'_, '_> {
             file: place.as_ref().map(|p| p.0.clone()),
             line: place.map(|p| p.1),
             entry: Some(kind),
+            entry_word: Some(word),
             hops: self.hops.get(&s).copied().unwrap_or(0),
             tier: s.tier,
             path: self.path_of(s),
@@ -2198,6 +2212,9 @@ fn entry_kind_rank(word: &str) -> usize {
         "table trigger",
         "event subscriber",
         "codeunit OnRun",
+        // TLS-55: a routine only roots.config names as a job-queue or
+        // web-service entry (`vocab::entry_word`); any source kind wins.
+        "procedure",
         "public procedure",
     ]
     .iter()
@@ -2887,6 +2904,8 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
         match (w.entry, &w.words) {
             (Some(k), Some(words)) => {
                 let (kind, ctx) = crate::engine::vocab::entry_key(k);
+                // TLS-55: the entry's own word, not its context key's.
+                let kind = w.entry_word.unwrap_or(kind);
                 let ctx = ctx.map(|c| format!(" [context: {c}]")).unwrap_or_default();
                 format!("    [{tier}] {kind}{ctx}: {words} ({hops})")
             }
