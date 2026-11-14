@@ -917,3 +917,55 @@ codeunit 50393 "Eng80 Twice"
         "Twice: the X copy's Next is live"
     );
 }
+
+/// sol r2: a request page is a declaration scope between a routine's locals and the report's
+/// globals, and its `var` sections are not read. A request-page trigger's name proves nothing
+/// past its locals there (`Msg` may be the request page's ErrorInfo): may raise. Control: a
+/// request page with no `var` section reads the report's Text global (terminates).
+#[test]
+fn eng80_request_page_scope_is_not_read() {
+    let src = r#"report 50378 "Eng80 RP Var"
+{
+    dataset { dataitem(D; Integer) { } }
+    requestpage
+    {
+        var
+            Msg: ErrorInfo;
+
+        trigger OnOpenPage() begin Error(Msg); Next(); end;
+    }
+
+    var
+        Msg: Text;
+
+    local procedure Next() begin end;
+}
+
+report 50377 "Eng80 RP Plain"
+{
+    dataset { dataitem(D; Integer) { } }
+    requestpage
+    {
+        trigger OnQueryClosePage(CloseAction: Action): Boolean begin Error(Msg); Next(); end;
+    }
+
+    var
+        Msg: Text;
+
+    local procedure Next() begin end;
+}
+"#;
+    let m = assemble_and_resolve_inline_program_default(
+        &[("RP.al".to_string(), src.to_string())],
+        "e8000000-0000-4000-8000-000000000085",
+    );
+    assert!(
+        !next_dead(&m, "OnOpenPage", "Next"),
+        "OnOpenPage: may raise"
+    );
+    assert!(has_may_raise(&m, "OnOpenPage"), "OnOpenPage: may raise");
+    assert!(
+        next_dead(&m, "OnQueryClosePage", "Next"),
+        "control: no request-page var section"
+    );
+}

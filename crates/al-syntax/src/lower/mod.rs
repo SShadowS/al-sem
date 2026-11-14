@@ -480,6 +480,34 @@ fn lower_object(
             ir.mark_globals_incomplete(b);
         }
     }
+    // ENG-80 (sol r2): a request page (report, XMLport) is a declaration scope of its own
+    // between a routine's locals and the object's globals, and its `var` sections are not
+    // read. Its routines' names then prove nothing past their locals.
+    if let Some(body) = node.field(FieldName::Body) {
+        // Every request page, a `#if` around it included.
+        let mut pages = Vec::new();
+        let mut stack = body.named_children();
+        while let Some(c) = stack.pop() {
+            if c.kind() == RawKind::RequestpageSection {
+                pages.push(c);
+            } else if is_preproc_wrapper(c) {
+                stack.extend(c.named_children());
+            }
+        }
+        for rp in pages
+            .into_iter()
+            .filter(|c| contains_kind(*c, RawKind::VarSection))
+        {
+            let range = rp.byte_range();
+            for b in routines
+                .iter()
+                .filter(|r| range.contains(&r.origin.byte.start))
+                .filter_map(|r| r.body)
+            {
+                ir.mark_globals_incomplete(b);
+            }
+        }
+    }
     ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
     let mut run_objects = Vec::new();
     collect_run_objects(node, source, &mut run_objects);
