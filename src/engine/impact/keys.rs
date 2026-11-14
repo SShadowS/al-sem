@@ -75,7 +75,11 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// pending at it.
 /// 13 (ENG-10): a try call whose value is used raises an error when a
 /// database write inside it is refused.
-pub const SUMMARY_SCHEMA: u32 = 13;
+/// 14 (ENG-14 part 1): a `#if` slot or split shape no longer marks code dead
+/// that another build runs, and an untrusted routine (a parse error, or a
+/// statement the lowerer could not lower) has no unreachable sites at all, so
+/// keys that drop unreachable sites may hold more facts.
+pub const SUMMARY_SCHEMA: u32 = 14;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

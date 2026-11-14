@@ -314,6 +314,11 @@ fn classify_subscriber(
     if sets.is_empty() {
         return SetterClassification::NoSetTrue;
     }
+    // ENG-14 (§4.2 D): a body with no control tree is untrusted (it may have lost a
+    // branch or an `exit`), so no setter is proven to run.
+    if r.body_available && r.statement_tree.is_none() {
+        return SetterClassification::MaySetTrue;
+    }
     // hasBranching == false trivially means top-level → mustSetTrue (fast-path).
     if !r.has_branching {
         return SetterClassification::MustSetTrue;
@@ -624,4 +629,35 @@ pub fn detect_d43(
     let mut stats = DetectorStats::new(DETECTOR, candidates, emitted);
     stats.add_skip("other", skipped_no_guard + skipped_no_setter);
     Ok(DetectorOutput::no_diag(findings, stats))
+}
+
+#[cfg(test)]
+mod eng14_tests {
+    use super::*;
+
+    /// ENG-14 (§4.2 D, A6): a subscriber whose body has no control tree is untrusted
+    /// (the assembly drops the tree of a parse-incomplete routine or one with a
+    /// statement the lowerer could not lower), so its `IsHandled := true` is not proven
+    /// to run. Precondition stated by hand: `body_available`, no tree, and
+    /// `has_branching: false`, which the fast path read as "top-level, must set".
+    /// Break: drop the untrusted check (the fast path answers `MustSetTrue`).
+    #[test]
+    fn an_untrusted_subscriber_only_may_set_is_handled() {
+        let mut r = crate::engine::l5::test_support::routine("sub", "procedure");
+        assert!(r.body_available && r.statement_tree.is_none() && !r.has_branching);
+        r.var_assignments
+            .push(crate::program::body::features::PVarAssignment {
+                lhs_name: "IsHandled".to_string(),
+                rhs_literal_value: Some("true".to_string()),
+                source_anchor: crate::engine::l5::test_support::dummy_anchor(),
+                rhs_identifier: None,
+                rhs_member: None,
+                lhs_is_member: false,
+            });
+        let by_id: HashMap<&str, &ModelRoutine> = HashMap::from([("sub", &r)]);
+        assert_eq!(
+            classify_subscriber("sub", &by_id),
+            SetterClassification::MaySetTrue
+        );
+    }
 }

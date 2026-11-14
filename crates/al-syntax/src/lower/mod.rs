@@ -2130,6 +2130,37 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Lower `children` as one statement list (a `statement_block` or a `code_block`
+/// body).
+fn lower_statement_list<'t>(
+    children: impl IntoIterator<Item = RawNode<'t>>,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    depth: u32,
+) -> Vec<BlockItem> {
+    let mut items = Vec::new();
+    for child in children {
+        lower_block_child(child, ir, issues, source, &mut items, depth);
+    }
+    items
+}
+
+/// ENG-14 (spec §8.1): a shape whose `#if` arm boundaries the lowerer cannot keep
+/// (a broken one-statement slot, a split closing, a cond-only head, a `preproc_*`
+/// leftover) cannot be read as control flow at all: arranging its statements in any
+/// order invents a dead mark or a guard some build does not have (`if Flag then #if
+/// X exit; Commit(); #endif`: under X, `Commit` runs whatever `Flag` is). The items
+/// keep their call sites; this `Unknown` statement next to them makes the routine
+/// untrusted (no control tree, so no mark, guard or dominance from it).
+fn push_untrusted_marker(origin: &Origin, ir: &mut Ir, items: &mut Vec<BlockItem>) {
+    let s = ir.add_stmt(Stmt {
+        kind: StmtKind::Unknown,
+        origin: origin.clone(),
+    });
+    items.push(BlockItem::Stmt(s));
+}
+
 /// The current build context (`BUILD_CONTEXT`).
 fn build_context() -> Vec<(String, bool)> {
     BUILD_CONTEXT.with(|s| s.borrow().clone())
@@ -2980,28 +3011,164 @@ fn lower_preproc_split_routine_body(
 ) -> BlockId {
     push_unlowered_issue(wrapper, "routine body", issues);
     let mut items = Vec::new();
-    // Each arm's body under its own branch's symbols (`preproc_branches`); a
-    // shared tail after `#endif` under none.
+    // ENG-14 (§4.2 A): the arms before `#endif` are ALTERNATIVES, one group per
+    // chain (one arm every build takes is spliced, as for a statement `#if`); the
+    // shared tail after `#endif` follows as a real sequence. A split procedure
+    // body's `#if` arm may end with a flat `if <cond> then` guard (grammar
+    // `_pspb_if_branch`): in that build the tail's first statement is the guard's
+    // then-branch, so when such an arm is live the tail is an unordered run.
     let bodies: Vec<usize> = wrapper
         .children_by_field(FieldName::Body)
         .iter()
         .map(|b| b.id())
         .collect();
-    for (syms, live, branch) in preproc_branches(wrapper, source, &build_context()) {
+    let conditions: Vec<usize> = wrapper
+        .children_by_field(FieldName::Condition)
+        .iter()
+        .map(|c| c.id())
+        .collect();
+    let (directives, contents) = chain_parts(wrapper);
+    let (shape, falls) = chain_shape(&directives, source, &in_syms(&build_context()));
+    let mut falls = falls.into_iter();
+    let wrapper_end = (wrapper.byte_range().end, wrapper.end_position());
+    let mut arms: Vec<(Vec<BlockItem>, Origin)> = Vec::new();
+    let mut open: Option<RawNode> = None;
+    let mut guard_live = false;
+    for (k, ((syms, live), children)) in shape.into_iter().zip(contents).enumerate() {
+        let opener = k.checked_sub(1).map(|i| directives[i]);
+        let mut lowered = Vec::new();
         if live {
             with_build_context(&syms, ir, |ir| {
-                for body in branch.into_iter().filter(|b| bodies.contains(&b.id())) {
-                    for child in body.named_children() {
-                        lower_block_child(child, ir, issues, source, &mut items, depth);
-                    }
+                for body in children.iter().filter(|b| bodies.contains(&b.id())) {
+                    lowered.extend(lower_statement_list(
+                        body.named_children(),
+                        ir,
+                        issues,
+                        source,
+                        depth,
+                    ));
+                }
+                // The guard's condition (`if <cond> then`, flat in the arm) runs in
+                // this build; its then-branch is the tail's first statement, read in
+                // the unordered tail below. An empty-then `If` keeps the condition's
+                // calls as sites (they were dropped before ENG-14).
+                for c in children.iter().filter(|c| conditions.contains(&c.id())) {
+                    let cond = lower_expr(*c, ir, issues, source, depth + 1);
+                    let then_block = ir.add_block(Block {
+                        items: Vec::new(),
+                        origin: origin_of(*c),
+                    });
+                    let s = ir.add_stmt(Stmt {
+                        kind: StmtKind::If {
+                            cond,
+                            then_block,
+                            else_block: None,
+                        },
+                        origin: origin_of(*c),
+                    });
+                    lowered.push(BlockItem::Stmt(s));
                 }
             });
         }
+        match opener.map(RawNode::kind) {
+            Some(RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse) => {
+                let d = opener.expect("an opener");
+                open.get_or_insert(d);
+                if live {
+                    guard_live |= children.iter().any(|c| c.kind() == RawKind::IfKeyword);
+                    let arm_end = directives
+                        .get(k)
+                        .map_or(wrapper_end, |n| (n.byte_range().start, n.start_position()));
+                    arms.push((lowered, span_origin(d, arm_end)));
+                }
+            }
+            _ => {
+                if let Some(d) = opener {
+                    // `#endif`: one fall-through flag per `#endif`, in order.
+                    let falls_through = falls.next().is_none_or(|f| f.is_some());
+                    if let Some(o) = open.take() {
+                        let end = (d.byte_range().end, d.end_position());
+                        emit_arm_group(
+                            std::mem::take(&mut arms),
+                            falls_through,
+                            span_origin(o, end),
+                            ir,
+                            &mut items,
+                        );
+                    }
+                }
+                if guard_live {
+                    lowered = unordered_run(lowered, ir);
+                }
+                items.extend(lowered);
+            }
+        }
+    }
+    if let Some(o) = open.take() {
+        emit_arm_group(arms, true, span_origin(o, wrapper_end), ir, &mut items);
     }
     ir.add_block(Block {
         items,
         origin: origin_of(wrapper),
     })
+}
+
+/// The live arms of one `#if` chain as ONE [`PreprocGroup`] (engine limits B2): a
+/// build compiles at most one arm. One arm every build takes (`!falls_through`) is
+/// spliced in place; no live arm adds nothing.
+fn emit_arm_group(
+    arms: Vec<(Vec<BlockItem>, Origin)>,
+    falls_through: bool,
+    origin: Origin,
+    ir: &mut Ir,
+    items: &mut Vec<BlockItem>,
+) {
+    if arms.len() == 1 && !falls_through {
+        items.extend(arms.into_iter().next().expect("one arm").0);
+        return;
+    }
+    if arms.is_empty() {
+        return;
+    }
+    let branches = arms
+        .into_iter()
+        .map(|(arm_items, origin)| {
+            ir.add_block(Block {
+                items: arm_items,
+                origin,
+            })
+        })
+        .collect();
+    items.push(BlockItem::Preproc(PreprocGroup {
+        branches,
+        falls_through,
+        origin,
+    }));
+}
+
+/// ENG-14 (§4.2 B): an UNORDERED run. Where the lowerer cannot keep a shape's arm
+/// boundaries, each item becomes its own one-branch group that may fall through:
+/// it may or may not run, and an `exit` or `Error` in it ends nothing outside
+/// itself. Real dead code inside the run stays live (a false negative only).
+fn unordered_run(items: Vec<BlockItem>, ir: &mut Ir) -> Vec<BlockItem> {
+    items
+        .into_iter()
+        .map(|item| {
+            let origin = match &item {
+                BlockItem::Stmt(s) => ir.stmt(*s).origin.clone(),
+                BlockItem::Preproc(g) => g.origin.clone(),
+            };
+            let branch = ir.add_block(Block {
+                items: vec![item],
+                origin: origin.clone(),
+            });
+            BlockItem::Preproc(PreprocGroup {
+                branches: vec![branch],
+                falls_through: true,
+                origin,
+            })
+        })
+        .collect()
 }
 
 fn lower_param(node: RawNode, source: &str) -> Param {
@@ -3260,12 +3427,10 @@ fn lower_code_block(
     source: &str,
     depth: u32,
 ) -> BlockId {
-    let mut items = Vec::new();
-    if let Some(body) = cb.field(FieldName::Body) {
-        for child in body.named_children() {
-            lower_block_child(child, ir, issues, source, &mut items, depth);
-        }
-    }
+    let mut items = match cb.field(FieldName::Body) {
+        Some(body) => lower_statement_list(body.named_children(), ir, issues, source, depth),
+        None => Vec::new(),
+    };
     if let Some(split_end) = cb.named_children().into_iter().find(|c| {
         matches!(
             c.kind(),
@@ -3282,6 +3447,10 @@ fn lower_code_block(
             }
             lower_block_child(c, ir, issues, source, &mut items, depth);
         }
+        // ENG-14 (§8.1): the closing's arm can hold `end else begin …` flat, so an
+        // else-arm statement lands in the then-block, after its `exit` and under its
+        // condition. The arm boundaries are lost: fail closed.
+        push_untrusted_marker(&origin_of(split_end), ir, &mut items);
     }
     ir.add_block(Block {
         items,
@@ -3304,11 +3473,35 @@ fn lower_branch(
         _ => {
             let mut items = Vec::new();
             lower_block_child(node, ir, issues, source, &mut items, depth);
+            // ENG-14 (§8.1): a `#if` chain in a one-statement slot is well formed only
+            // when every build puts exactly one statement there. Otherwise, in some
+            // build the slot's body is another statement (an arm's second statement
+            // runs after the `if`, whatever its condition; with no arm, the next
+            // statement is the body): fail closed.
+            if is_preproc_wrapper(node) && !slot_well_formed(&items, ir) {
+                push_untrusted_marker(&origin_of(node), ir, &mut items);
+            }
             ir.add_block(Block {
                 items,
                 origin: origin_of(node),
             })
         }
+    }
+}
+
+/// Whether the items a slot's `#if` chain lowered to put exactly one statement in
+/// the slot in every build: one spliced statement, or a group that cannot fall
+/// through whose every arm is one statement.
+fn slot_well_formed(items: &[BlockItem], ir: &Ir) -> bool {
+    match items {
+        [BlockItem::Stmt(_)] => true,
+        [BlockItem::Preproc(g)] => {
+            !g.falls_through
+                && g.branches
+                    .iter()
+                    .all(|b| matches!(ir.block(*b).items.as_slice(), [BlockItem::Stmt(_)]))
+        }
+        _ => false,
     }
 }
 
@@ -3320,10 +3513,7 @@ fn lower_stmt_seq(
     source: &str,
     depth: u32,
 ) -> BlockId {
-    let mut items = Vec::new();
-    for child in container.named_children() {
-        lower_block_child(child, ir, issues, source, &mut items, depth);
-    }
+    let items = lower_statement_list(container.named_children(), ir, issues, source, depth);
     ir.add_block(Block { items, origin })
 }
 
@@ -3838,7 +4028,10 @@ fn lower_unmodelled_stmt(
             lower_block_child(ch, ir, issues, source, &mut items, depth);
         }
         // Union read: every arm's statements sit in the then-block, so each call
-        // keeps its site even though the arm structure is not preserved.
+        // keeps its site even though the arm structure is not preserved. ENG-14
+        // (§8.1): they sit under the first build's condition, and one arm's `exit`
+        // would kill another's code: fail closed.
+        push_untrusted_marker(origin, ir, &mut items);
         let then_block = ir.add_block(Block {
             items,
             origin: origin.clone(),
@@ -3889,24 +4082,35 @@ fn lower_unmodelled_stmt(
         lower_block_child(c, ir, issues, source, &mut items, depth);
     }
 
+    // ENG-14 (§8.1): a `#if` shape here lost its arm boundaries. The reconstructed
+    // `If` puts a statement under a condition some build does not have
+    // (`#if X if C then #endif Stmt`: without X, `Stmt` runs whatever `C` is), and the
+    // leftovers sit in one sequence across builds: fail closed. Any other node
+    // reaching here (a `statement_block` after a comment in a case `else`, CDO's
+    // `CDOLogAttachment::DeleteAttachment`) is a real sequence.
     match (reconstructed_if, items.is_empty()) {
-        (Some(if_kind), true) => if_kind,
-        (Some(if_kind), false) => {
+        (Some(if_kind), _) => {
             let if_id = ir.add_stmt(Stmt {
                 kind: if_kind,
                 origin: origin.clone(),
             });
             items.push(BlockItem::Stmt(if_id));
+            push_untrusted_marker(origin, ir, &mut items);
             StmtKind::Block(ir.add_block(Block {
                 items,
                 origin: origin.clone(),
             }))
         }
         (None, true) => StmtKind::Unknown,
-        (None, false) => StmtKind::Block(ir.add_block(Block {
-            items,
-            origin: origin.clone(),
-        })),
+        (None, false) => {
+            if node.kind_str().starts_with("preproc_") {
+                push_untrusted_marker(origin, ir, &mut items);
+            }
+            StmtKind::Block(ir.add_block(Block {
+                items,
+                origin: origin.clone(),
+            }))
+        }
     }
 }
 
@@ -3933,8 +4137,65 @@ fn lower_case_body(
             &mut else_block,
             depth,
         );
+        // ENG-14 (spec §8.1): a `#if` group among the branches makes the branch set,
+        // and so the labels an `else` excludes, vary by build: fail closed.
+        // A branch's labels may vary by build too (`#if X 1, #endif 2: …` is a `case_branch`
+        // holding a `preproc_split_case_branch`): any `preproc_*` child of a branch other
+        // than its body (a statement `#if` there is read as alternatives) counts.
+        let varies = |c: &RawNode| {
+            matches!(
+                c.kind(),
+                RawKind::PreprocConditionalCase
+                    | RawKind::PreprocSplitCaseExtended
+                    | RawKind::PreprocSplitOpenStatement
+            ) || (c.kind() == RawKind::CaseBranch && {
+                let body = c.field(FieldName::Body).map(|b| b.id());
+                c.named_children()
+                    .into_iter()
+                    .any(|k| Some(k.id()) != body && holds_preproc(k))
+            })
+        };
+        if let Some(group) = body.named_children().into_iter().find(varies) {
+            push_untrusted_case_branch(&origin_of(group), ir, &mut branches);
+        }
+    }
+    // The header too: `case #if X I #else J #endif of`, or one nested in it (`case (#if X
+    // I #else J #endif) of`), is read from one arm, so the labels would be matched
+    // against another build's scrutinee.
+    let body_id = case_node.field(FieldName::Body).map(|b| b.id());
+    if let Some(header) = case_node
+        .named_children()
+        .into_iter()
+        .find(|c| Some(c.id()) != body_id && holds_preproc(*c))
+    {
+        push_untrusted_case_branch(&origin_of(header), ir, &mut branches);
     }
     (branches, else_block)
+}
+
+/// Whether `node` is, or holds anywhere below it, a preprocessor node that makes the
+/// code vary by build (a `preproc_*` kind). Iterative, so a pathologically deep
+/// expression cannot overflow the stack. The grammar's extras `#region`, `#endregion`,
+/// `#define` and `#undef`, and a pragma-only wrapper, attach almost anywhere (inside a
+/// `case_branch`, between its label and `:`) and vary nothing: they do not count.
+fn holds_preproc(node: RawNode) -> bool {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind_str().starts_with("preproc_")
+            && !matches!(
+                n.kind(),
+                RawKind::PreprocRegion
+                    | RawKind::PreprocEndregion
+                    | RawKind::PreprocDefine
+                    | RawKind::PreprocUndef
+                    | RawKind::PreprocPragmaOnly
+            )
+        {
+            return true;
+        }
+        stack.extend(n.named_children());
+    }
+    false
 }
 
 /// Recursive worker for [`lower_case_body`] (H-7, Tier-1.4 preproc plan): walks one
@@ -3963,6 +4224,24 @@ fn collect_case_branches(
     );
 }
 
+/// ENG-14 (spec §8.1): a pattern-less branch whose body is the untrusted marker. A case
+/// whose branch set varies by build cannot be read as one case: its labels union across
+/// builds and its `else` is a real else, so `0: …; #if X 1: …; #else else Commit();
+/// #endif` would require `I ∉ {0, 1}` for a commit that runs, without X, for `I = 1`.
+fn push_untrusted_case_branch(origin: &Origin, ir: &mut Ir, branches: &mut Vec<CaseBranch>) {
+    let mut items = Vec::new();
+    push_untrusted_marker(origin, ir, &mut items);
+    let body = ir.add_block(Block {
+        items,
+        origin: origin.clone(),
+    });
+    branches.push(CaseBranch {
+        patterns: Vec::new(),
+        body,
+        origin: origin.clone(),
+    });
+}
+
 /// [`collect_case_branches`] over a list of children (one `#if` arm's, or a
 /// whole `case_body`'s).
 fn collect_case_branches_in(
@@ -3987,6 +4266,8 @@ fn collect_case_branches_in(
                 ),
                 origin: origin_of(*first),
             });
+            // ENG-14: the dropped branches may hold an `exit`; fail closed.
+            push_untrusted_case_branch(&origin_of(*first), ir, branches);
         }
         return;
     }
@@ -3994,8 +4275,18 @@ fn collect_case_branches_in(
         match child.kind() {
             RawKind::CaseBranch => push_case_branch(child, ir, issues, source, branches, depth),
             RawKind::CaseElseBranch => {
+                let block = lower_case_else_branch(child, ir, issues, source, depth);
                 if else_block.is_none() {
-                    *else_block = Some(lower_case_else_branch(child, ir, issues, source, depth));
+                    *else_block = Some(block);
+                } else {
+                    // ENG-14 (sol): a second `else` comes from another `#if` arm (only
+                    // there can two exist); its calls keep their sites as a pattern-less
+                    // branch. The case holds a `#if` group, so its routine is untrusted.
+                    branches.push(CaseBranch {
+                        patterns: Vec::new(),
+                        body: block,
+                        origin: origin_of(child),
+                    });
                 }
             }
             // `#if`-conditional case content: every arm's `case_branch`/`case_else_branch`
@@ -4810,7 +5101,24 @@ query 50004 Q
                         && member_is_quantity(*lhs)
                     {
                         split_if += 1;
-                        assert_eq!(af.ir.block(*then_block).items.len(), 2, "Foo and Bar");
+                        // Foo and Bar, plus ENG-14's untrusted marker (the arm
+                        // boundaries of this cond-only head are lost).
+                        let items = &af.ir.block(*then_block).items;
+                        let calls = items
+                            .iter()
+                            .filter(|i| {
+                                matches!(i, crate::ir::BlockItem::Stmt(s)
+                                if matches!(af.ir.stmt(*s).kind, StmtKind::Call(_)))
+                            })
+                            .count();
+                        let unknowns = items
+                            .iter()
+                            .filter(|i| {
+                                matches!(i, crate::ir::BlockItem::Stmt(s)
+                                if matches!(af.ir.stmt(*s).kind, StmtKind::Unknown))
+                            })
+                            .count();
+                        assert_eq!((calls, unknowns), (2, 1), "Foo and Bar, and the marker");
                     }
                 }
                 _ => {}
@@ -6467,11 +6775,14 @@ codeunit 50102 T
 "#;
         let af = parse(src);
         let (branches, _else) = first_case(&af);
+        // ENG-14: a `#if` group among the branches adds a pattern-less marker branch (the
+        // routine fails closed); the real branches are the ones with patterns.
         assert_eq!(
-            branches.len(),
+            branches.iter().filter(|b| !b.patterns.is_empty()).count(),
             2,
             "both the conditional branch and the plain branch must be present"
         );
+        assert_eq!(branches.len(), 3, "and the ENG-14 marker branch");
     }
 
     /// H-7: `preproc_split_case_branch` — the grammar's `case_branch` alternative
@@ -6500,7 +6811,12 @@ codeunit 50103 T
 "#;
         let af = parse(src);
         let (branches, _else) = first_case(&af);
-        assert_eq!(branches.len(), 2);
+        // ENG-14: labels that vary by build add a pattern-less marker branch (last).
+        assert_eq!(
+            branches.iter().filter(|b| !b.patterns.is_empty()).count(),
+            2
+        );
+        assert_eq!(branches.len(), 3, "and the ENG-14 marker branch");
         assert!(
             !branches[0].patterns.is_empty(),
             "the split branch's patterns must not be empty"
@@ -6546,7 +6862,13 @@ codeunit 50105 T
 "#;
         let af = parse(src);
         let (branches, else_block) = first_case(&af);
-        assert_eq!(branches.len(), 4, "1, 5, 6 and the shared 2");
+        // ENG-14: plus a pattern-less marker branch (a `#if` group among the branches).
+        assert_eq!(
+            branches.iter().filter(|b| !b.patterns.is_empty()).count(),
+            4,
+            "1, 5, 6 and the shared 2"
+        );
+        assert_eq!(branches.len(), 5, "and the ENG-14 marker branch");
         assert!(else_block.is_none());
         for name in ["DoOne", "DoFive", "DoSix", "DoTwo"] {
             assert!(
