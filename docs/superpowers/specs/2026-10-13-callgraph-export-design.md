@@ -304,7 +304,7 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    not walk it (`alsem tests` refuses the site). **Consumer note (bc-dev-mcp):** a
    test-selection walk over the export should skip `clientEvent` edges too; one that
    treats it as any edge selects exactly what it selected before.
-2. **Declared test pages, and typed runnable receivers.** A routine that declares a
+2. **Declared test pages** (until TLS-51 also typed runnable receivers). A routine that declares a
    parameter or local of type `TestPage` or `TestRequestPage` X (or whose object
    declares such a global) gets a `Run` edge (`OverApprox`,
    `via: "declaredRunnable"`) to X's object node; a `TestRequestPage` maps to its
@@ -325,7 +325,8 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    Errors Mgt.`'s empty `OnRun` "ran" Page 43 because the codeunit calls
    `GlobalSalesInvoicePage.RunBackgroundCheck()`. **Consumer note (bc-dev-mcp):** no
    schema change; the export has fewer `declaredRunnable` edges (from 2026-11-06 to
-   TLS-51 each was witnessed by a site; now each is a test page declaration). Codeunit variables are excluded: the engine already models
+   TLS-51 call-site edges were possible beside the declaration ones; now each is a
+   test page declaration). Codeunit variables are excluded: the engine already models
    `CuVar.Run()` precisely, and codeunit variables mostly serve procedure calls.
 3. **Test handlers.** A routine with `[HandlerFunctions('A,B')]` gets an `Event` edge
    (`OverApprox`, `via: "testHandler"`) to each named handler in the same codeunit

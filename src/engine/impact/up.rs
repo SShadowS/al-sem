@@ -85,8 +85,8 @@ pub mod bit {
     /// opens, its tables' triggers), or an action's `RunObject`.
     pub const NAV: u8 = 1;
     /// The path takes a rule edge: a routine or object declaring a
-    /// `TestPage`/`TestRequestPage` variable (`declaredRunnable` with no call
-    /// site), or a page's lifecycle into a record trigger the page declares
+    /// `TestPage`/`TestRequestPage` variable (`declaredRunnable`, which has
+    /// no call site), or a page's lifecycle into a record trigger the page declares
     /// non-editable while code may make it editable at runtime
     /// ([`SitedGraph::is_ui_candidate`]). Its relation is not established.
     pub const RULE: u8 = 2;
@@ -106,8 +106,8 @@ pub mod bit {
 ///   builtin on a typed receiver is a `run` site since ENG-19: TLS-51 removed
 ///   the call-site `declaredRunnable` rule it had);
 /// - [`bit::NAV`]: every other lifecycle site, and an action-run site;
-/// - [`bit::RULE`]: `declaredRunnable` with no call site (a `TestPage`
-///   declaration), and (with [`bit::NAV`]) a candidate page-lifecycle site
+/// - [`bit::RULE`]: `declaredRunnable` (a `TestPage` declaration, never a
+///   call site), and (with [`bit::NAV`]) a candidate page-lifecycle site
 ///   ([`SitedGraph::is_ui_candidate`], [`crate::program::page_ui`]);
 /// - an `Open` site sets nothing: the walk's tier says "over a hub";
 /// - [`bit::CONFIGURED`], beside the row's own: a `configuredDispatch` site.
@@ -126,7 +126,10 @@ pub fn site_bits(g: &SitedGraph, s: SiteIx) -> u8 {
         }
         // Every `declaredRunnable` site is a `TestPage`/`TestRequestPage`
         // declaration (no call site) since TLS-51.
-        Boundary::Run if st.via() == "declaredRunnable" => bit::RULE,
+        Boundary::Run if st.via() == "declaredRunnable" => {
+            debug_assert!(st.anchor.is_none(), "a declaredRunnable call site");
+            bit::RULE
+        }
         Boundary::Sync
         | Boundary::Run
         | Boundary::Background
