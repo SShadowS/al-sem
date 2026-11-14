@@ -559,6 +559,43 @@ table 50391 "Eng80 Cond T"
 #endif
 }
 
+codeunit 50395 "Eng80 Two Arms"
+{
+    procedure TwoArms() begin Error('x'); Next(); end;
+
+#if X
+    local procedure Error(Msg: Text) begin end;
+#endif
+#if Y
+    local procedure Error(Msg: Text) begin end;
+#endif
+    local procedure Next() begin end;
+}
+
+codeunit 50396 "Eng80 Elif"
+{
+    procedure ElifNoElse() begin Error('x'); Next(); end;
+
+#if X
+    local procedure Error(Msg: Text) begin end;
+#elif Y
+    local procedure Error(Msg: Text) begin end;
+#endif
+    local procedure Next() begin end;
+}
+
+codeunit 50397 "Eng80 Both Arms"
+{
+    procedure BothArms() begin Error('x'); Next(); end;
+
+#if X
+    local procedure Error(Msg: Text) begin end;
+#else
+    local procedure Error(Msg: Text) begin end;
+#endif
+    local procedure Next() begin end;
+}
+
 codeunit 50394 "Eng80 Cond Or"
 {
     procedure CondOr() begin Error('x'); Next(); end;
@@ -605,7 +642,21 @@ codeunit 50393 "Eng80 Twice"
         &[("Cond.al".to_string(), src.to_string())],
         "e8000000-0000-4000-8000-000000000083",
     );
-    for name in ["CondOwn", "CondBase", "CondInner", "CondOr"] {
+    // Review r3: the same procedure in two arms that do not cover every build (two `#if`s, or
+    // `#if`/`#elif` with no `#else`) must not read as present everywhere; `#if`/`#else` does.
+    assert!(!next_dead(&m, "BothArms", "Next"), "BothArms: Next live");
+    assert!(
+        !has_may_raise(&m, "BothArms"),
+        "BothArms: present in every build, a plain call"
+    );
+    for name in [
+        "CondOwn",
+        "CondBase",
+        "CondInner",
+        "CondOr",
+        "TwoArms",
+        "ElifNoElse",
+    ] {
         assert!(!next_dead(&m, name, "Next"), "{name}: Next live");
         assert!(
             has_may_raise(&m, name),
