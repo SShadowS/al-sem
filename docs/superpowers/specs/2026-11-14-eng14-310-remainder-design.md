@@ -418,6 +418,24 @@ Two landings, one branch each:
   return value, locals, globals), and every declaration there must be Text-family; reaching a level the
   lowerer did not read in full proves nothing. (A first version required every declaration at every
   level to be Text, which an ErrorInfo global shadowed by a Text named return refuted: G11u's control.)
+- **A user binding must exist in every build (review F1).** `resolve_in_object` narrows candidates by
+  build only when two or more remain, so a lone `#if X local procedure Error` is bound from a call
+  outside the arm. `BareVerdict::of` therefore gives `User` only when some copy of the target routine
+  carries no build condition the call site's own context lacks; otherwise `Unknown` (may raise). The
+  same holds for the inner Text calls (`StrSubstNo` …). The mirror (a call only in builds where the
+  procedure is absent) also reads `Unknown`: safe, a precision limit (engine limits L38).
+- **Table scopes read their extensions (review F2).** The implicit-`Rec` table, and a table extension's
+  base, count as searched only when neither the table nor any extension of it is symbol-only
+  (`full::table_code_not_loaded`, ENG-16's rule): a symbol-only extension's symbols may not list a
+  `procedure Error`.
+- **Guards with no discriminating fixture (redundant for every modelled shape, kept as defence):** the
+  extension-base clears of `scope_complete` (a page or report extension's implicit `Rec` is its base's
+  table, and ABI pages carry no `SourceTable`, so the out-of-closure clear already fires; a table
+  extension's implicit `Rec` is its base table), the inner-call taint check (an `#if` inside an inner
+  call taints the outer `Error` through the subtree scan), and the quote-character check in the Text
+  proof (a quoted name matches only a quoted declaration).
+- **`aldump --l2` warns** on stderr when the program build fails and every bare `Error` falls back to
+  "may raise" (review F4); a test pins that the program's path keys equal the discovered paths.
 - **C3** holds by construction (§8.1's reasoning; the schema goes 14 → 15).
 - **Parens-less guard in `proves_text`.** No fixture can name a variable and a parens-less call alike
   (a local or global sharing a procedure's name shadows it), so the guard has no discrimination proof;
