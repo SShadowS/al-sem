@@ -197,9 +197,16 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
         &["--only", "speed"],
         &["--only", "l4,l4"],
         &["--only"],
+        // An empty list must not fall through to the full gate (review r1).
+        &["--only="],
+        &["--only", ""],
+        &["--only", "harness", "--only", "l4"],
     ] {
         let (code, text) = run(bad);
         assert_eq!(code, Some(2), "{bad:?} refused: {text}");
+        // Refused by `--only`'s own check, not by a later one (no workspace
+        // also exits 2, after a fall-through to the full gate).
+        assert!(text.contains("cdo-gate: error: --only"), "{bad:?}: {text}");
     }
     let folder = |with_only: bool| {
         let dir = tempfile::tempdir().unwrap();
@@ -238,6 +245,99 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
         !text.contains("SPEED AND MEMORY WERE NOT CHECKED"),
         "{text}"
     );
+    // An empty or cut-off list judges nothing, so it never passes (review r1).
+    for cut in ["", "harness,l4\n"] {
+        std::fs::write(subset.path().join("only"), cut).unwrap();
+        let (code, text) = run(&[&format!("--summary={}", subset.path().display())]);
+        assert_eq!(code, Some(1), "only file {cut:?}: {text}");
+        assert!(text.contains("cdo-gate: FAIL (SUBSET"), "{text}");
+    }
+    // `--help` goes to stdout, so `cdo-gate --help | less` shows it.
+    let help = std::process::Command::new("bash")
+        .args([gate, "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&help.stdout).contains("--only harness,l4"),
+        "{help:?}"
+    );
+}
+
+/// TLS-58 review r1: a real `--only harness,l4` run, with a stub `cargo`
+/// that logs each call. It builds just those two targets, runs just those two
+/// phases (with `ENFORCE_CDO_WS=1`), never the speed check or the impact
+/// ratchets, writes `only` (not `split-impact`), and its verdict is SUBSET.
+///
+/// Mutation: drop `speed=0` from the `--only` branch -> the speed phase runs
+/// and the run is no longer the subset it claims.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let calls = stub.path().join("calls");
+    std::fs::write(
+        stub.path().join("cargo"),
+        format!(
+            "#!/bin/sh\necho \"ENFORCE=$ENFORCE_CDO_WS $*\" >> '{}'\n\
+             echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        stub.path().join("cargo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .args(["--only", "harness,l4"])
+        .arg(ws.path())
+        .env("PATH", path)
+        .env("CARGO_TARGET_DIR", target.path())
+        .env_remove("CDO_WS")
+        .env_remove("CDO_GATE_SERIAL")
+        .env_remove("CDO_GATE_LAYOUT")
+        .env_remove("CDO_GATE_NO_SPEED")
+        .output()
+        .expect("spawn bash scripts/cdo-gate");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(
+        text.contains("cdo-gate: PASS (SUBSET --only harness,l4: not a landing gate"),
+        "{text}"
+    );
+    let calls = std::fs::read_to_string(&calls).unwrap();
+    let lines: Vec<&str> = calls.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "ENFORCE=1 test --profile cdo --no-run --test program_resolve_harness --test l4_summary_differential",
+            "ENFORCE=1 test --profile cdo --test program_resolve_harness -- --test-threads=4",
+            "ENFORCE=1 test --profile cdo --test l4_summary_differential",
+        ],
+        "{text}"
+    );
+    let runs: Vec<_> = std::fs::read_dir(target.path().join("cdo-gate-logs"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].join("only").is_file());
+    assert!(!runs[0].join("split-impact").exists());
+    assert!(!runs[0].join("speed.status").exists());
 }
 
 /// TLS-18: `cdo-speed --warm REV` (what `merge-and-push` runs after a landing)

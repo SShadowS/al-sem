@@ -85,6 +85,7 @@ layout_only=0
 # ⟨TLS-58⟩ `--only`: the comma list as given, the phases it names, and
 # `--dry-run`.
 only=""
+only_given=0
 only_phases=()
 dry_run=0
 
@@ -341,12 +342,18 @@ summarize() {
     [[ "$speed" -eq 1 ]] && phases=(speed "${phases[@]}")
     # ⟨TLS-58⟩ A `--only` run lists its phases: those, and only those, count
     # (a missing status among them still fails).
-    local subset=""
+    local subset="" status=0
     if [[ -f "$logs/only" ]]; then
         subset=$(head -n 1 "$logs/only")
         read -r -a phases < <(tail -n +2 "$logs/only" | paste -sd ' ' -)
+        # An empty or cut-off list judges nothing: never a PASS.
+        if [[ -z "$subset" || ${#phases[@]} -eq 0 ]]; then
+            echo "cdo-gate: $logs/only is empty or cut off: no phase to judge" >&2
+            subset="${subset:-?}"
+            status=1
+        fi
     fi
-    local status=0 name rc secs word counts passed bad=()
+    local name rc secs word counts passed bad=()
     echo "cdo-gate: summary (wall seconds; logs in $logs)"
     for name in "${phases[@]}"; do
         if [[ -f "$logs/$name.status" ]]; then
@@ -428,18 +435,26 @@ while ((i < ${#args[@]})); do
         --product-paths) product_paths_only=1 ;;
         --layout) layout_only=1 ;;
         --dry-run) dry_run=1 ;;
-        --only=*) only="${arg#--only=}" ;;
-        --only)
-            if ((i >= ${#args[@]})); then
+        --only=* | --only)
+            # A second `--only` would silently drop the first list.
+            if [[ "$only_given" == 1 ]]; then
+                echo "cdo-gate: error: --only given twice (name every phase in one comma list)" >&2
+                exit 2
+            fi
+            only_given=1
+            if [[ "$arg" == --only=* ]]; then
+                only="${arg#--only=}"
+            elif ((i >= ${#args[@]})); then
                 echo "cdo-gate: error: --only needs a phase list (harness,l4,lsp,lib,output)" >&2
                 usage
                 exit 2
+            else
+                only="${args[i]}"
+                i=$((i + 1))
             fi
-            only="${args[i]}"
-            i=$((i + 1))
             ;;
         -h | --help)
-            usage
+            usage 2>&1
             exit 0
             ;;
         -*)
@@ -461,7 +476,12 @@ done
 
 # ⟨TLS-58⟩ `--only`: every name must be a phase (a typo would run a smaller
 # check than the caller asked for), each once; `--dry-run` only with it.
-if [[ -n "$only" ]]; then
+if [[ "$only_given" == 1 ]]; then
+    # An empty list (`--only=`, `--only "$UNSET"`) must not run the full gate.
+    if [[ -z "$only" ]]; then
+        echo "cdo-gate: error: --only: no phase named (phases: harness, lsp, l4, lib, output)" >&2
+        exit 2
+    fi
     IFS=',' read -r -a only_names <<< "$only"
     for name in "${only_names[@]}"; do
         if ! phase=$(only_phase_of "$name"); then
@@ -476,10 +496,6 @@ if [[ -n "$only" ]]; then
         done
         only_phases+=("$phase")
     done
-    if [[ ${#only_phases[@]} -eq 0 ]]; then
-        echo "cdo-gate: error: --only: no phase named" >&2
-        exit 2
-    fi
     speed=0
 elif [[ "$dry_run" == 1 ]]; then
     echo "cdo-gate: error: --dry-run goes with --only" >&2
@@ -610,7 +626,10 @@ echo "cdo-gate: logs in $logs"
 if [[ -n "$only" ]]; then
     # ⟨TLS-58⟩ The subset's phases, for `summarize` (also on a later
     # `--summary=` of this run): the list as given, then one phase a line.
-    { echo "$only"; printf '%s\n' "${only_phases[@]}"; } > "$logs/only"
+    if ! { echo "$only" && printf '%s\n' "${only_phases[@]}"; } > "$logs/only"; then
+        echo "cdo-gate: error: cannot write $logs/only" >&2
+        exit 1
+    fi
 else
     # ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
     : > "$logs/split-impact"

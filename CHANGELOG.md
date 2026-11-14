@@ -16,11 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ENFORCE_CDO_WS=1`, the memory sampler and the per-phase logs. Its summary judges
   only the phases it ran (the run folder's `only` file) and says `SUBSET`, never a
   plain PASS, so it cannot be mistaken for the landing gate.
-- An unknown phase (`impact`, `speed`, a typo), a repeated one or an empty list stops
-  it with exit 2. `--dry-run` (with `--only`) prints the build and the phases without
-  running anything and without a workspace.
-- Test: `gate_scripts::cdo_gate_only_runs_and_judges_just_its_subset` (mutation:
-  `summarize` ignoring the `only` file fails it with the full gate's phases missing).
+- An unknown phase (`impact`, `speed`, a typo), a repeated phase, an empty list
+  (`--only=`, `--only ""`) or a second `--only` stops it with exit 2, so a mistyped
+  subset never runs the full gate or a smaller check than asked for. `--dry-run`
+  (with `--only`) prints the build and the phases without running anything and
+  without a workspace. `--help` now prints to stdout.
+- A run folder whose `only` file is empty or cut off FAILs its summary (it judges no
+  phase), and a failed write of that file stops the run.
+- Measured on CDO (2026-11-14, kraken server1, `cdo` profile): `--only harness,l4`
+  took 213 s wall (build of the two targets 141 s, `program_resolve_harness` 51 s,
+  `l4_summary_differential` 20 s), peak 18.4 GB container memory, 8.1 GB the gate's
+  own processes; verdict `PASS (SUBSET --only harness,l4 ...)`.
+- Tests: `gate_scripts::cdo_gate_only_runs_and_judges_just_its_subset` (dry run,
+  refusals, subset summary) and `cdo_gate_only_run_builds_and_runs_just_its_phases`
+  (a real run with a stub `cargo`: the build line, the two phase commands with
+  `ENFORCE_CDO_WS=1`, no speed, no impact). Mutations, each failing a test: `summarize`
+  ignoring the `only` file; no check of an empty `only` file; dropping `speed=0`;
+  an empty `--only` value read as "not given".
   CLAUDE.md's Test tiers gains the row "2b. Pre-submit CDO subset".
 
 ### Fixed (TLS-57: the LSP updater and test selection's scan cache see a rewrite that keeps size and mtime)
