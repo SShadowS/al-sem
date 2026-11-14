@@ -28,10 +28,13 @@
 //! `M_before` and `M_after` are observations of the disk
 //! ([`Manifest::observe`]), which re-run the same discovery the reader runs
 //! and hash what they find. An observation may reuse the previous
-//! observation's hash for a file whose length and modification time are
-//! unchanged (the per-request freshness check, 1-2 ms on CDO); `verify`
-//! hashes everything. Stated residual (§5.3): a rewrite that keeps length
-//! and mtime, with no change notification, is missed until `verify`.
+//! observation's hash for a file whose length, modification time and (TLS-56)
+//! status-change time are unchanged (the per-request freshness check, 1-2 ms
+//! on CDO); `verify` hashes everything. A rewrite can keep length and mtime
+//! but not ctime, so it is seen. Stated residual (§5.3): where the platform's
+//! std gives no ctime (Windows), a rewrite that keeps length and mtime, with
+//! no change notification, is missed until `verify`; unsaved editor text is
+//! never an input.
 //!
 //! The package-discovery probes that found nothing (an absent ancestor
 //! `.alpackages`, the `.git` probes) are not listed one by one: their
@@ -66,12 +69,17 @@ impl Ident {
     }
 }
 
-/// A file's length and modification time when it was observed: the cache
-/// key of its hash, never part of its identity.
+/// A file's length, modification time and (TLS-56) status-change time when
+/// it was observed: the cache key of its hash, never part of its identity.
+/// A rewrite can keep length and mtime (`File::set_modified`, `touch -r`)
+/// but not ctime, which no user call sets: any write moves it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stat {
     len: u64,
     mtime: Option<SystemTime>,
+    /// Nanoseconds since the Unix epoch; `None` where the platform's std
+    /// gives none (Windows: the stated residual stays there).
+    ctime_ns: Option<i128>,
 }
 
 fn stat(path: &Path) -> Option<Stat> {
@@ -79,7 +87,19 @@ fn stat(path: &Path) -> Option<Stat> {
     Some(Stat {
         len: m.len(),
         mtime: m.modified().ok(),
+        ctime_ns: ctime_ns(&m),
     })
+}
+
+#[cfg(unix)]
+fn ctime_ns(m: &std::fs::Metadata) -> Option<i128> {
+    use std::os::unix::fs::MetadataExt;
+    Some(i128::from(m.ctime()) * 1_000_000_000 + i128::from(m.ctime_nsec()))
+}
+
+#[cfg(not(unix))]
+fn ctime_ns(_: &std::fs::Metadata) -> Option<i128> {
+    None
 }
 
 /// One manifest (see the module doc).
@@ -278,6 +298,11 @@ pub struct ManifestEntry {
     pub stat_len: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stat_mtime_ns: Option<u128>,
+    /// TLS-56: the stat's status-change time (nanoseconds since the Unix
+    /// epoch), where the platform gives one. A descriptor written before it
+    /// has none, so its files are hashed again once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stat_ctime_ns: Option<i128>,
 }
 
 impl Manifest {
@@ -295,6 +320,7 @@ impl Manifest {
                     list: None,
                     stat_len: None,
                     stat_mtime_ns: None,
+                    stat_ctime_ns: None,
                 };
                 match id {
                     Ident::Absent => e.kind = "absent".into(),
@@ -323,6 +349,7 @@ impl Manifest {
                             .ok()
                             .map(|d| d.as_nanos())
                     });
+                    e.stat_ctime_ns = s.ctime_ns;
                 }
                 e
             })
@@ -359,7 +386,14 @@ impl Manifest {
                             (ns % 1_000_000_000) as u32,
                         )
                 });
-                m.stats.insert(e.key.clone(), Stat { len, mtime });
+                m.stats.insert(
+                    e.key.clone(),
+                    Stat {
+                        len,
+                        mtime,
+                        ctime_ns: e.stat_ctime_ns,
+                    },
+                );
             }
         }
         Ok(m)

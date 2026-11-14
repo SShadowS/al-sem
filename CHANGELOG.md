@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-56: the resident engine sees a rewrite that keeps a file's size and mtime)
+
+- The context server (`alsem mcp`) and the LSP's engine child reused a file's previous hash when
+  its size and modification time were unchanged, so a rewrite that kept both (`touch -r`,
+  `File::set_modified`, some sync tools) was answered from the old revision until a
+  `freshness: verify` ask (engine limits L26). The check now also keys on the file's
+  status-change time (ctime), which no user call can set, so such a rewrite is seen by a plain
+  `fresh` ask on Unix. Still missed until `verify` (stated in the answer's residual): a same-size
+  rewrite within one file-system timestamp tick of the last check, a rewrite on a file system
+  without a real change time (FAT, some network mounts), and on Windows, where Rust's std gives
+  no change time, any rewrite that keeps size and mtime.
+- A metadata-only change (chmod, chown, `rsync -a`) moves ctime too: the file is hashed again
+  once, and a fresh check that finds the same content keeps the new stats, so it is not hashed
+  again on every later check.
+- Changed (wording): the MCP answer header's and status answer's `residual` name the cases above
+  per platform; `served` keeps its value `fresh-by-size-and-time`. The freshness tool
+  description, the status tool and the status headline say "size and timestamps" for what a
+  `fresh` check trusts. A persisted input descriptor gains an optional `statCtimeNs`; one written
+  before it is checked by size and mtime alone until the next rebuild.
+
 ### Changed (TLS-55: a configured job-queue or web-service procedure is no "codeunit OnRun")
 
 - The entry-kind words (output validation §8.1) called every job-queue and web-service entry

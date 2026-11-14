@@ -302,7 +302,8 @@ fn a_composite_answer_says_how_fresh_its_parts_were() {
     assert!(
         env["freshness"]["residual"]
             .as_str()
-            .is_some_and(|r| r.contains("seen only with freshness: verify")),
+            // TLS-56: the rewrite clause is Windows-only now (no ctime).
+            .is_some_and(|r| r.contains("unsaved editor buffers are not inputs")),
         "{env}"
     );
     let core = ws.join("src/Core.al");

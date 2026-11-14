@@ -132,9 +132,54 @@ fn latest_built_answers_stale_and_refreshes_in_the_background() {
     assert_eq!(warm(&now), cold(ws));
 }
 
-/// A rewrite that keeps length and mtime: `fresh` misses it (the stated
-/// residual, §5.3); `verify` hashes every input and refreshes; a change
-/// notification on the path makes `fresh` re-hash it too.
+/// TLS-56: a rewrite that keeps length and mtime moves ctime, so `fresh`
+/// sees it: the next pin is a new revision, equal to a cold build, with no
+/// `verify` and no change notification.
+///
+/// DISCRIMINATION (2026-11-14): `ctime_ns` returning `None` (the stat key
+/// back to length and mtime) fails "fresh sees a rewrite that keeps size and
+/// mtime".
+#[cfg(unix)]
+#[test]
+fn fresh_sees_a_rewrite_that_keeps_size_and_mtime() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let p = ws.join("Caller.al");
+    let s = session(ws);
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    let r1 = Arc::clone(revision(&first));
+    let before = std::fs::metadata(&p).unwrap();
+    let (len, mtime) = (before.len(), before.modified().unwrap());
+    // ctime has a clock tick of resolution on some file systems: make sure
+    // the rewrite lands on a later one.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    edit(ws, "Compute(5)", "Compute(9)");
+    std::fs::File::options()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+    let after = std::fs::metadata(&p).unwrap();
+    assert_eq!(
+        (after.len(), after.modified().unwrap()),
+        (len, mtime),
+        "precondition: the rewrite keeps size and mtime"
+    );
+    let now = s.pin(Freshness::Fresh, &never).unwrap();
+    assert!(
+        !Arc::ptr_eq(revision(&now), &r1),
+        "fresh sees a rewrite that keeps size and mtime"
+    );
+    assert_eq!(warm(&now), cold(ws));
+}
+
+/// A rewrite that keeps length and mtime where the platform gives no ctime
+/// (Windows): `fresh` misses it (the stated residual, §5.3); `verify`
+/// hashes every input and refreshes; a change notification on the path
+/// makes `fresh` re-hash it too. (On Unix ctime moves, so `fresh` sees it:
+/// `fresh_sees_a_rewrite_that_keeps_size_and_mtime`.)
+#[cfg(not(unix))]
 #[test]
 fn verify_and_notify_changed_see_a_rewrite_that_keeps_its_stat() {
     let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
