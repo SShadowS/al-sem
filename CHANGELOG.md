@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares, and such an edge never carries a `line`. `alsem impact up`
   classifies every `declaredRunnable` edge as a rule edge. A new test pins that each of
   the 20 builtins on a typed receiver is a `run` site, and another that those 20 are
-  every object-running entry in the dispatching-builtin catalog.
+  every entry in the dispatching-builtin catalog that runs a page, report, XmlPort or
+  query.
 
 ### Fixed (ENG-24: d50 misses a write the trap search counts)
 
