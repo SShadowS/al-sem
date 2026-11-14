@@ -56,6 +56,32 @@ pub const NOTE_UNNAMED_ACTIONS: u8 = 1;
 /// merged with its `OnRun` (§R2.4 landing change 1).
 pub const NOTE_BACKGROUND_WITHOUT_ON_RUN: u8 = 2;
 
+/// Whether entry node `n` is a codeunit's `OnRun` (object level), or an
+/// object node a run starts (a background target): what makes a job-queue or
+/// web-service entry's kind word "codeunit OnRun" (TLS-55,
+/// `vocab::entry_kind_of`).
+#[must_use]
+pub fn is_onrun_entry(g: &SitedGraph, n: NodeIx) -> bool {
+    match g.nodes.get(n as usize) {
+        Some(Key::Routine(r)) => {
+            r.object.kind == al_syntax::ir::ObjectKind::Codeunit
+                && r.enclosing_member_lc.is_none()
+                && r.name_lc.as_str() == "onrun"
+        }
+        Some(Key::Object(_) | Key::Start(..)) => true,
+        _ => false,
+    }
+}
+
+impl EntryInventory {
+    /// The kind word of entry `e` (TLS-55): its first kind's, told apart by
+    /// whether its witness is an `OnRun` ([`is_onrun_entry`]).
+    #[must_use]
+    pub fn word(&self, g: &SitedGraph, e: u32) -> &'static str {
+        crate::engine::vocab::entry_kind_of(self.kind(e), is_onrun_entry(g, self.witness(e)))
+    }
+}
+
 /// The bit of `k` in an entry's kind mask.
 fn kind_bit(k: EntryKind) -> u16 {
     1 << EntryKind::ALL
@@ -258,12 +284,17 @@ impl EntryInventory {
         self.action[e as usize].as_deref()
     }
 
-    /// The count per kind over the entries `keep` accepts.
-    pub fn by_kind(&self, keep: impl Fn(u32) -> bool) -> BTreeMap<EntryKind, usize> {
-        let mut out: BTreeMap<EntryKind, usize> = BTreeMap::new();
+    /// The count per kind and its word ([`Self::word`]) over the entries
+    /// `keep` accepts, in the kinds' order.
+    pub fn by_kind(
+        &self,
+        g: &SitedGraph,
+        keep: impl Fn(u32) -> bool,
+    ) -> BTreeMap<(EntryKind, &'static str), usize> {
+        let mut out: BTreeMap<(EntryKind, &'static str), usize> = BTreeMap::new();
         for e in 0..self.len() as u32 {
             if keep(e) {
-                *out.entry(self.kind(e)).or_default() += 1;
+                *out.entry((self.kind(e), self.word(g, e))).or_default() += 1;
             }
         }
         out

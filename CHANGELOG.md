@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-55: a configured job-queue or web-service procedure is no "codeunit OnRun")
+
+- The entry-kind words (output validation §8.1) called every job-queue and web-service entry
+  "codeunit OnRun". Such an entry comes from `roots.config.json`, which may name any procedure
+  (`internal procedure RunJob()`), so impact's `entriesByKind`, `firstByKind`, `nearest.entry`
+  and `programEntriesByKind`, and explain's callers-context counts (`codeunit OnRun 2`), named a
+  plain procedure an `OnRun`. Now such an entry's kind word is `procedure` unless its routine is
+  a codeunit's `OnRun` (which keeps "codeunit OnRun"); its context still says job queue or web
+  service. One home: `vocab::entry_kind_of`, read by impact and explain alike. Became visible
+  with TLS-54, which brought configured entries into impact.
+
 ### Changed (TLS-54: `alsem impact` applies the `roots.config.json` overlay)
 
 - `alsem impact` ignored `roots.config.json`, so a routine the config names as an entry point

@@ -473,6 +473,96 @@ fn impact_applies_the_roots_config_overlay() {
     );
 }
 
+/// TLS-55: a configured job-queue entry is a "codeunit OnRun" only when it
+/// is one (`vocab::entry_kind_of`, the one home of the word). `RunJob` is a
+/// plain procedure, `T54 Runner`'s `OnRun` a real one; both are configured
+/// job-queue entries and both write before calling `Post`. Impact's entries
+/// by kind and explain's pending-writes line both tell them apart.
+///
+/// DISCRIMINATION (2026-11-14): `entry_kind_of` ignoring `onrun` (always
+/// `entry_kind(k)`) fails "impact tells the procedure apart" (both read
+/// `codeunit OnRun 2`); explain's visitor passing `onrun = true` fails
+/// "explain tells the procedure apart".
+#[test]
+fn a_configured_procedure_entry_is_no_codeunit_onrun() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id": "54545454-0000-4000-8000-000000000054", "name": "T54", "publisher": "probe",
+            "version": "1.0.0.0", "runtime": "13.0", "idRanges": [{"from": 50540, "to": 50549}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/Jobs.al"),
+        "table 50543 \"T54 Log\"\n{\n    fields\n    {\n        field(1; \"No.\"; Integer) { }\n    }\n}\n\n\
+         codeunit 50540 \"T54 Core\"\n{\n    internal procedure Post()\n    begin\n    end;\n}\n\n\
+         codeunit 50541 \"T54 Jobs\"\n{\n    internal procedure RunJob()\n    var\n        \
+         Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Log.Insert();\n        Core.Post();\n    end;\n}\n\n\
+         codeunit 50542 \"T54 Runner\"\n{\n    trigger OnRun()\n    var\n        \
+         Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Log.Insert();\n        Core.Post();\n    end;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("roots.config.json"),
+        r#"{"version": 1, "roots": [
+            {"id": "run-job", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50541",
+                                         "routineName": "RunJob"}, "kinds": ["job-queue-entrypoint"]},
+            {"id": "runner", "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50542",
+                                        "routineName": "OnRun"}, "kinds": ["job-queue-entrypoint"]}]}"#,
+    )
+    .unwrap();
+    let v = json(
+        ws,
+        &["--routine", "Codeunit \"T54 Core\"::Post", "--no-tests"],
+        None,
+    );
+    let up = &v["roots"][0]["up"];
+    assert_eq!(
+        up["entriesByKind"]["code"],
+        serde_json::json!({"codeunit OnRun": 1, "procedure": 1}),
+        "impact tells the procedure apart: {up:#}"
+    );
+    let firsts: Vec<(String, String)> = up["firstByKind"]["code"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["kind"].as_str().unwrap().to_string(),
+                f["display"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        firsts.contains(&("procedure".into(), "Codeunit \"T54 Jobs\"::RunJob".into()))
+            && firsts.contains(&(
+                "codeunit OnRun".into(),
+                "Codeunit \"T54 Runner\"::OnRun".into()
+            )),
+        "{firsts:?}"
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["explain"])
+        .arg(ws)
+        .args([
+            "--callers-context",
+            "--routine",
+            "Codeunit \"T54 Core\"::Post",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let human = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        human.contains("(codeunit OnRun 1, procedures 1)"),
+        "explain tells the procedure apart: {human}"
+    );
+}
+
 /// Round-2 n09: "raised by" is the events that raise the routine itself; a
 /// publisher anywhere among the ancestors is counted apart, under its own
 /// words. `OnItemModified` subscribes to `TU Item`'s `OnAfterModifyEvent`

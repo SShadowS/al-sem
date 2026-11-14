@@ -1738,13 +1738,16 @@ impl ConeVisitor for Visitor<'_, '_> {
         use crate::engine::vocab;
         let pending = s.ext & PENDING != 0;
         let open = s.tier == Tier::OnlyOpen;
+        // TLS-55: the kind word as impact says it (a configured job-queue
+        // procedure is no `codeunit OnRun`).
+        let onrun = crate::program::impact_graph::entries::is_onrun_entry(self.cx.g, n);
         for k in kinds {
             match self.q {
                 CallersQuestion::PendingWrites => {
                     if pending {
                         self.entries.entry(k.as_str()).or_default().insert(n);
                         self.entry_words
-                            .entry((open, vocab::entry_kind(*k)))
+                            .entry((open, vocab::entry_kind_of(*k, onrun)))
                             .or_default()
                             .insert(n);
                     }
@@ -1752,7 +1755,7 @@ impl ConeVisitor for Visitor<'_, '_> {
                 CallersQuestion::InterceptErrors => {
                     self.entries.entry(k.as_str()).or_default().insert(n);
                     self.entry_words
-                        .entry((open, vocab::entry_kind(*k)))
+                        .entry((open, vocab::entry_kind_of(*k, onrun)))
                         .or_default()
                         .insert(n);
                     // F79: the nearest route an error takes to an entry
@@ -2198,6 +2201,9 @@ fn entry_kind_rank(word: &str) -> usize {
         "table trigger",
         "event subscriber",
         "codeunit OnRun",
+        // TLS-55: a configured job-queue or web-service routine that is no
+        // `OnRun` (`vocab::entry_kind_of`).
+        "procedure",
         "public procedure",
     ]
     .iter()

@@ -911,12 +911,14 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
             .iter()
             .filter(|(_, w)| classes.contains(&w.population()))
             .collect();
-        let mut kinds: BTreeMap<EntryKind, usize> = BTreeMap::new();
+        // Per (kind, its word for this entry: TLS-55, a configured job-queue
+        // procedure is no `codeunit OnRun`), in print order.
+        let mut kinds: BTreeMap<(EntryKind, &str), usize> = BTreeMap::new();
         let mut contexts: BTreeMap<&str, usize> = BTreeMap::new();
-        // Per kind, the nearest entry (class order, then arrival).
-        let mut firsts: BTreeMap<EntryKind, (u32, Witness)> = BTreeMap::new();
+        // Per kind and word, the nearest entry (class order, then arrival).
+        let mut firsts: BTreeMap<(EntryKind, &str), (u32, Witness)> = BTreeMap::new();
         for &&(e, w) in &mine {
-            let k = inv.kind(e);
+            let k = (inv.kind(e), inv.word(g, e));
             *kinds.entry(k).or_default() += 1;
             let ctx: BTreeSet<&str> = inv.kinds(e).filter_map(vocab::entry_context).collect();
             for c in ctx {
@@ -930,8 +932,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         // Kinds by their §8.1 words, merged (`page trigger` holds the API
         // pages' triggers too), in print order.
         let mut words: Vec<(&str, usize)> = Vec::new();
-        for (k, n) in &kinds {
-            let w = vocab::entry_kind(*k);
+        for (&(_, w), n) in &kinds {
             match words.iter_mut().find(|(x, _)| *x == w) {
                 Some(x) => x.1 += n,
                 None => words.push((w, *n)),
@@ -958,8 +959,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         share.insert(key.into(), share_json(mine.len(), program));
         let mut printed: Vec<&str> = Vec::new();
         let mut list: Vec<Value> = Vec::new();
-        for (k, (e, w)) in &firsts {
-            let word = vocab::entry_kind(*k);
+        for (&(_, word), (e, w)) in &firsts {
             if printed.contains(&word) {
                 continue;
             }
@@ -981,7 +981,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         let w = match entry {
             Some((e, w)) => {
                 let mut v = witness_json(g, &w);
-                v["entry"] = json!(vocab::entry_kind(inv.kind(e)));
+                v["entry"] = json!(inv.word(g, e));
                 if let Some(a) = inv.action(e) {
                     v["action"] = json!(a);
                 }
@@ -1004,8 +1004,7 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     let program_by_kind: Vec<(&str, usize)> = {
         let mut words: Vec<(&str, usize)> = Vec::new();
         // The same set as `programEntries`: the changed routines left out.
-        for (k, n) in inv.by_kind(|e| !up.shared.changed.contains(&e)) {
-            let w = vocab::entry_kind(k);
+        for ((_, w), n) in inv.by_kind(g, |e| !up.shared.changed.contains(&e)) {
             match words.iter_mut().find(|(x, _)| *x == w) {
                 Some(x) => x.1 += n,
                 None => words.push((w, n)),

@@ -68,6 +68,21 @@ pub fn entry_kind(k: EntryKind) -> &'static str {
     }
 }
 
+/// [`entry_kind`] for one entry, given whether its routine is a codeunit's
+/// `OnRun` (or the run's object node, [`crate::program::impact_graph::entries::is_onrun_entry`]).
+/// TLS-55: a job-queue or web-service entry comes from `roots.config.json`,
+/// which may name any procedure (`internal procedure RunJob()`), so it is a
+/// `procedure` unless it really is an `OnRun`; its context still says job
+/// queue or web service ([`entry_context`]). The one home of the word for
+/// impact and explain alike.
+#[must_use]
+pub fn entry_kind_of(k: EntryKind, onrun: bool) -> &'static str {
+    match k {
+        EntryKind::JobQueueEntrypoint | EntryKind::WebServiceExposed if !onrun => "procedure",
+        _ => entry_kind(k),
+    }
+}
+
 /// The plural of an entry kind, for a count line (`page actions 3`).
 #[must_use]
 pub fn entry_kind_plural(kind: &str) -> String {
@@ -385,6 +400,7 @@ mod tests {
         ];
         for k in EntryKind::ALL {
             new.push(entry_kind(k).into());
+            new.push(entry_kind_of(k, false).into());
             new.extend(entry_context(k).map(str::to_string));
         }
         for k in [
