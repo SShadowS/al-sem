@@ -70,6 +70,22 @@ pub(crate) enum Key {
     Routine(RoutineNodeId),
     Object(ObjectNodeId),
     Hub(Hub),
+    /// TLS-52: a start of an object that runs only part of it (`Report.
+    /// RunRequestPage`): the object and the folded start method. Its lifecycle
+    /// is the object's, its triggers cut by `resolver::start_runs_trigger`
+    /// ([`Builder::lifecycle`]); every reader that asks "is this an object
+    /// node?" counts it as one.
+    Start(ObjectNodeId, Box<str>),
+}
+
+impl Key {
+    /// The object an object or start node stands for.
+    pub(crate) fn object(&self) -> Option<&ObjectNodeId> {
+        match self {
+            Key::Object(o) | Key::Start(o, _) => Some(o),
+            Key::Routine(_) | Key::Hub(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -188,6 +204,11 @@ struct Builder<'a> {
     /// collapsed edges: hub expansion, `hiddenCallers`).
     edges: HashMap<(u32, u32, Kind), Collapsed>,
     objects: BTreeSet<ObjectNodeId>,
+    /// TLS-52: the start nodes an edge names (`Key::Start`).
+    starts: BTreeSet<(ObjectNodeId, Box<str>)>,
+    /// TLS-52: the start method of the call site whose routes are being added
+    /// (set around one edge in [`Self::engine_edges`]; `None` otherwise).
+    site_start: Option<&'a str>,
     /// Polled every [`CANCEL_EVERY`] sites; once it says stop, no site is
     /// added and the build is reported cancelled.
     cancel: &'a dyn Fn() -> bool,
@@ -251,6 +272,8 @@ impl<'a> Builder<'a> {
             sited: SitedBuilder::new(g),
             edges: HashMap::new(),
             objects: BTreeSet::new(),
+            starts: BTreeSet::new(),
+            site_start: None,
             cancel,
             cancelled: false,
             added: 0,
@@ -287,11 +310,16 @@ impl<'a> Builder<'a> {
             self.cancelled = true;
             return;
         }
-        if let Key::Object(o) = &to {
-            self.objects.insert(o.clone());
-        }
-        if let Key::Object(o) = &from {
-            self.objects.insert(o.clone());
+        for k in [&from, &to] {
+            match k {
+                Key::Object(o) => {
+                    self.objects.insert(o.clone());
+                }
+                Key::Start(o, m) => {
+                    self.starts.insert((o.clone(), m.clone()));
+                }
+                Key::Routine(_) | Key::Hub(_) => {}
+            }
         }
         let boundary = match (via, kind, &to) {
             (_, _, Key::Hub(Hub::Record(op) | Hub::RecordEvents(op))) => Boundary::TriggerOf {
@@ -366,6 +394,41 @@ impl<'a> Builder<'a> {
             .unwrap_or_else(|| oid.clone())
     }
 
+    /// The node a run of `oid` goes to: the start node when the site's start
+    /// method ([`Self::site_start`]) runs only part of the object, else the
+    /// object node ([`Self::run_object`]).
+    fn run_key(&self, oid: &ObjectNodeId) -> Key {
+        let base = self.run_object(oid);
+        match self.site_start {
+            Some(m) if self.start_is_partial(&base, m) => Key::Start(base, m.into()),
+            _ => Key::Object(base),
+        }
+    }
+
+    /// Whether start method `method_lc` leaves out a trigger of `oid` or of an
+    /// extension of it ([`Self::starts_trigger`]). A symbol-only object lists
+    /// no triggers, so no start is partial.
+    fn start_is_partial(&self, oid: &ObjectNodeId, method_lc: &str) -> bool {
+        self.triggers_with_extensions(oid)
+            .iter()
+            .any(|t| !Self::starts_trigger(t, method_lc))
+    }
+
+    /// Whether a start node of `method_lc` keeps lifecycle edge `t`: a trigger
+    /// the run runs (`reverse::run_reaches_trigger`, the run list) only when
+    /// the start runs it (`resolver::start_runs_trigger`); any other trigger
+    /// (a request page field's `OnLookup`, a user starts it) is kept, as the
+    /// start still shows what it is on.
+    fn starts_trigger(t: &RoutineNode, method_lc: &str) -> bool {
+        let (kind, name, member) = (
+            t.id.object.kind,
+            t.id.name_lc.as_str(),
+            t.id.enclosing_member_lc.is_some(),
+        );
+        !super::reverse::run_reaches_trigger(kind, name, member)
+            || crate::program::resolve::resolver::start_runs_trigger(kind, method_lc, name, member)
+    }
+
     fn abi_object(&self, key: &AbiRoutineKey) -> Option<ObjectNodeId> {
         let kind = object_kind_from_lc(&key.object_type)?;
         Some(ObjectNodeId {
@@ -391,6 +454,14 @@ impl<'a> Builder<'a> {
                     end_col: e.site.span.end.col,
                 }),
                 ObligationId::Publisher(_) => None,
+            };
+            self.site_start = match ce.obligation_id {
+                ObligationId::CallSite { .. } => inp
+                    .edges
+                    .site_facts
+                    .get(&ce.obligation_id)
+                    .and_then(|f| f.start_method.as_deref()),
+                _ => None,
             };
             let mut unknown = false;
             for r in e.may_reachable_routes() {
@@ -433,7 +504,10 @@ impl<'a> Builder<'a> {
                                 EdgeKind::BackgroundStart => (Kind::Run, "backgroundStart"),
                                 EdgeKind::TableEvent => (Kind::Event, "tableEvent"),
                             };
-                            let to = Key::Object(self.run_object(&oid));
+                            let to = match e.kind {
+                                EdgeKind::Run | EdgeKind::Call => self.run_key(&oid),
+                                _ => Key::Object(self.run_object(&oid)),
+                            };
                             self.add(
                                 from.clone(),
                                 to,
@@ -455,7 +529,7 @@ impl<'a> Builder<'a> {
                     .get(&ce.obligation_id)
                     .and_then(|f| f.run_target.as_ref())
             {
-                let to = Key::Object(self.run_object(t));
+                let to = self.run_key(t);
                 self.add(
                     from.clone(),
                     to,
@@ -600,6 +674,7 @@ impl<'a> Builder<'a> {
                 );
             }
         }
+        self.site_start = None;
     }
 
     /// The [`Site::guard`] bits of the route to `rid` of the edge `ob`
@@ -657,7 +732,7 @@ impl<'a> Builder<'a> {
         };
         match kind {
             EdgeKind::Run => {
-                let to = Key::Object(self.run_object(&rid.object));
+                let to = self.run_key(&rid.object);
                 self.add(
                     from.clone(),
                     to,
@@ -671,7 +746,7 @@ impl<'a> Builder<'a> {
             EdgeKind::Call if to_trigger => {
                 // A typed-variable run (`Cu.Run()`, `PageVar.RunModal()`): no
                 // other call reaches a trigger (`resolve_in_object`).
-                let to = Key::Object(self.run_object(&rid.object));
+                let to = self.run_key(&rid.object);
                 self.add(
                     from.clone(),
                     to,
@@ -802,15 +877,25 @@ impl<'a> Builder<'a> {
             .collect()
     }
 
-    /// Rule 1 (lifecycle) for one object node.
-    fn lifecycle(&mut self, oid: &ObjectNodeId) {
-        let from = Key::Object(oid.clone());
+    /// Rule 1 (lifecycle) for one object node, or (TLS-52) for its start node
+    /// of `start`: the same edges, less the run's triggers that start does not
+    /// run ([`Self::starts_trigger`]). The rest of the lifecycle (UI triggers,
+    /// pages it opens, platform events, the callbacks hub) is kept: it can
+    /// only over-select.
+    fn lifecycle(&mut self, oid: &ObjectNodeId, start: Option<&str>) {
+        let from = match start {
+            Some(m) => Key::Start(oid.clone(), m.into()),
+            None => Key::Object(oid.clone()),
+        };
         let Some(obj) = self.obj_by_id.get(oid).copied() else {
             return;
         };
         let entry = entry_trigger(oid.kind);
         let addin_controls = self.usercontrol_names(oid);
         for t in self.triggers_with_extensions(oid) {
+            if start.is_some_and(|m| !Self::starts_trigger(t, m)) {
+                continue;
+            }
             let conf = if t.id.object == *oid
                 && t.id.enclosing_member_lc.is_none()
                 && t.id.name_lc.as_str() == entry
@@ -1342,14 +1427,21 @@ fn build<'a>(
         b.objects.insert(o.id.clone());
     }
     let mut done: BTreeSet<ObjectNodeId> = BTreeSet::new();
+    let mut starts_done: BTreeSet<(ObjectNodeId, Box<str>)> = BTreeSet::new();
     loop {
         let todo: Vec<ObjectNodeId> = b.objects.difference(&done).cloned().collect();
-        if todo.is_empty() {
+        let starts: Vec<(ObjectNodeId, Box<str>)> =
+            b.starts.difference(&starts_done).cloned().collect();
+        if todo.is_empty() && starts.is_empty() {
             break;
         }
         for o in todo {
-            b.lifecycle(&o);
+            b.lifecycle(&o, None);
             done.insert(o);
+        }
+        for (o, m) in starts {
+            b.lifecycle(&o, Some(&m));
+            starts_done.insert((o, m));
         }
     }
     b.hub_expansions();

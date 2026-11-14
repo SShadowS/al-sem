@@ -37,8 +37,10 @@
 //!   call. A test found only through `Open` edges is a weaker selection.
 //!
 //! Nodes (`kind`): `Method` and `Trigger` (routines), `Object` (a runnable object:
-//! a run reaches all of its triggers), `Hub` (a bounded stand-in for the targets of
-//! open call sites: `name` = any procedure with that name and parameter count,
+//! a run reaches all of its triggers), `ObjectStart` (TLS-52: a start that runs
+//! only part of an object, `start` = the folded method, e.g. `runrequestpage`; its
+//! lifecycle drops the run's triggers that start does not run), `Hub` (a bounded
+//! stand-in for the targets of open call sites: `name` = any procedure with that name and parameter count,
 //! `run` = any object of a kind, `record` = any trigger of a record operation,
 //! `callbacks` = everything a symbol-only app can call back into, `any`).
 //!
@@ -46,8 +48,9 @@
 //! - `Direct` `call` — a call; `Interface` `interface` — interface dispatch;
 //!   `Event` `eventFlow` — publisher -> subscriber; `Trigger` `implicitTrigger` —
 //!   record operation -> table trigger; `Run` `run` — a run of an object, to the
-//!   object node (never straight to a trigger);
-//! - `Trigger` `lifecycle` — object node -> its triggers, its extensions'
+//!   object node, or its start node for a partial start (never straight to a
+//!   trigger);
+//! - `Trigger` `lifecycle` — object (or start) node -> its triggers, its extensions'
 //!   triggers, a page's parts, source-table triggers and platform events, the
 //!   objects its actions open, an XmlPort's table triggers;
 //! - `Trigger` `clientEvent` — a page's object node -> the event triggers of
@@ -70,7 +73,7 @@
 //! `OverApprox` (may run: a candidate set, a condition, a rule above), `Open`.
 //!
 //! Identity: node `id`s are opaque and stable for the same input and engine
-//! version (`r:`/`o:` + a 96-bit hash, `h:` readable). Join changed code by
+//! version (`r:`/`o:`/`s:` + a 96-bit hash, `h:` readable). Join changed code by
 //! location: a workspace node's `sourcePath` (relative to its app's source root,
 //! `/`-separated) and `line`..`endLine` (1-based; `line` is the `procedure`/
 //! `trigger` keyword or access modifier row, attributes excluded).
@@ -175,6 +178,10 @@ pub struct Node {
     pub hub_arg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub universal: Option<bool>,
+    /// TLS-52: on an `ObjectStart` node, the start method it stands for
+    /// (folded, `runrequestpage`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
 }
 
 /// One place a routine is declared at (`Node::other_declarations`).
@@ -561,6 +568,10 @@ pub(crate) fn key_id_with(key: &Key, app: &dyn Fn(AppRef) -> (String, String)) -
             let p = object_parts(app, o);
             hash_id("o:", &[&p[0], &p[1], &p[2], &p[3]])
         }
+        Key::Start(o, m) => {
+            let p = object_parts(app, o);
+            hash_id("s:", &[&p[0], &p[1], &p[2], &p[3], m])
+        }
         Key::Routine(r) => {
             let p = object_parts(app, &r.object);
             let member = r.enclosing_member_lc.as_deref().unwrap_or("");
@@ -661,6 +672,7 @@ pub(crate) fn render_node(
         hub: None,
         hub_arg: None,
         universal: None,
+        start: None,
     };
     let object_fields = |o: &ObjectNodeId, n: &mut Node| {
         let obj = graph
@@ -688,6 +700,15 @@ pub(crate) fn render_node(
         Key::Object(o) => {
             let mut n = Node {
                 kind: "Object",
+                ..blank
+            };
+            object_fields(o, &mut n);
+            n
+        }
+        Key::Start(o, m) => {
+            let mut n = Node {
+                kind: "ObjectStart",
+                start: Some(m.to_string()),
                 ..blank
             };
             object_fields(o, &mut n);

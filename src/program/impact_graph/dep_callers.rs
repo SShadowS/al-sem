@@ -317,7 +317,9 @@ fn witness(
         };
         // A run (or a record trigger through an object node) enters the
         // object; its lifecycle step enters the trigger the run runs.
-        if matches!(g.nodes.get(to as usize), Some(Key::Object(_)))
+        if g.nodes
+            .get(to as usize)
+            .is_some_and(|k| k.object().is_some())
             && let Some(&(next, _, trigger)) = chain.get(i + 1)
         {
             configured = configured.or_else(|| g.configured_arm(next).cloned());

@@ -107,7 +107,7 @@ impl Graph {
         let n = &self.nodes[id];
         match n["kind"].as_str() {
             Some("Hub") => id.to_string(),
-            Some("Object") => n["objectName"].as_str().unwrap().to_string(),
+            Some("Object" | "ObjectStart") => n["objectName"].as_str().unwrap().to_string(),
             _ => format!(
                 "{}.{}",
                 n["objectName"].as_str().unwrap(),
