@@ -2128,6 +2128,33 @@ thread_local! {
     /// one file on one thread, and `with_build_context` restores it on exit.
     static BUILD_CONTEXT: std::cell::RefCell<Vec<(String, bool)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// ENG-14 (§4.2 S): a one-statement slot below the statement list being lowered
+    /// holds a `#if` chain that is not one statement in every build. Set by
+    /// `lower_branch`, consumed by the nearest enclosing statement list
+    /// ([`lower_statement_list`]), which then becomes an unordered run: in the
+    /// broken build its next statement is the slot's body.
+    static BROKEN_SLOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Lower `children` as one statement list (a `statement_block` or a `code_block`
+/// body). If a one-statement slot below it is broken (`BROKEN_SLOT`), every item of
+/// the list is an unordered run.
+fn lower_statement_list<'t>(
+    children: impl IntoIterator<Item = RawNode<'t>>,
+    ir: &mut Ir,
+    issues: &mut Vec<SyntaxIssue>,
+    source: &str,
+    depth: u32,
+) -> Vec<BlockItem> {
+    let outer = BROKEN_SLOT.with(|b| b.replace(false));
+    let mut items = Vec::new();
+    for child in children {
+        lower_block_child(child, ir, issues, source, &mut items, depth);
+    }
+    if BROKEN_SLOT.with(|b| b.replace(outer)) {
+        items = unordered_run(items, ir);
+    }
+    items
 }
 
 /// The current build context (`BUILD_CONTEXT`).
@@ -2980,28 +3007,135 @@ fn lower_preproc_split_routine_body(
 ) -> BlockId {
     push_unlowered_issue(wrapper, "routine body", issues);
     let mut items = Vec::new();
-    // Each arm's body under its own branch's symbols (`preproc_branches`); a
-    // shared tail after `#endif` under none.
+    // ENG-14 (§4.2 A): the arms before `#endif` are ALTERNATIVES, one group per
+    // chain (one arm every build takes is spliced, as for a statement `#if`); the
+    // shared tail after `#endif` follows as a real sequence. A split procedure
+    // body's `#if` arm may end with a flat `if <cond> then` guard (grammar
+    // `_pspb_if_branch`): in that build the tail's first statement is the guard's
+    // then-branch, so when such an arm is live the tail is an unordered run.
     let bodies: Vec<usize> = wrapper
         .children_by_field(FieldName::Body)
         .iter()
         .map(|b| b.id())
         .collect();
-    for (syms, live, branch) in preproc_branches(wrapper, source, &build_context()) {
+    let (directives, contents) = chain_parts(wrapper);
+    let (shape, falls) = chain_shape(&directives, source, &in_syms(&build_context()));
+    let mut falls = falls.into_iter();
+    let wrapper_end = (wrapper.byte_range().end, wrapper.end_position());
+    let mut arms: Vec<(Vec<BlockItem>, Origin)> = Vec::new();
+    let mut open: Option<RawNode> = None;
+    let mut guard_live = false;
+    for (k, ((syms, live), children)) in shape.into_iter().zip(contents).enumerate() {
+        let opener = k.checked_sub(1).map(|i| directives[i]);
+        let mut lowered = Vec::new();
         if live {
             with_build_context(&syms, ir, |ir| {
-                for body in branch.into_iter().filter(|b| bodies.contains(&b.id())) {
+                for body in children.iter().filter(|b| bodies.contains(&b.id())) {
                     for child in body.named_children() {
-                        lower_block_child(child, ir, issues, source, &mut items, depth);
+                        lower_block_child(child, ir, issues, source, &mut lowered, depth);
                     }
                 }
             });
         }
+        match opener.map(RawNode::kind) {
+            Some(RawKind::PreprocIf | RawKind::PreprocElif | RawKind::PreprocElse) => {
+                let d = opener.expect("an opener");
+                open.get_or_insert(d);
+                if live {
+                    guard_live |= children.iter().any(|c| c.kind() == RawKind::IfKeyword);
+                    let arm_end = directives
+                        .get(k)
+                        .map_or(wrapper_end, |n| (n.byte_range().start, n.start_position()));
+                    arms.push((lowered, span_origin(d, arm_end)));
+                }
+            }
+            _ => {
+                if let Some(d) = opener {
+                    // `#endif`: one fall-through flag per `#endif`, in order.
+                    let falls_through = falls.next().is_none_or(|f| f.is_some());
+                    if let Some(o) = open.take() {
+                        let end = (d.byte_range().end, d.end_position());
+                        emit_arm_group(
+                            std::mem::take(&mut arms),
+                            falls_through,
+                            span_origin(o, end),
+                            ir,
+                            &mut items,
+                        );
+                    }
+                }
+                if guard_live {
+                    lowered = unordered_run(lowered, ir);
+                }
+                items.extend(lowered);
+            }
+        }
+    }
+    if let Some(o) = open.take() {
+        emit_arm_group(arms, true, span_origin(o, wrapper_end), ir, &mut items);
     }
     ir.add_block(Block {
         items,
         origin: origin_of(wrapper),
     })
+}
+
+/// The live arms of one `#if` chain as ONE [`PreprocGroup`] (engine limits B2): a
+/// build compiles at most one arm. One arm every build takes (`!falls_through`) is
+/// spliced in place; no live arm adds nothing.
+fn emit_arm_group(
+    arms: Vec<(Vec<BlockItem>, Origin)>,
+    falls_through: bool,
+    origin: Origin,
+    ir: &mut Ir,
+    items: &mut Vec<BlockItem>,
+) {
+    if arms.len() == 1 && !falls_through {
+        items.extend(arms.into_iter().next().expect("one arm").0);
+        return;
+    }
+    if arms.is_empty() {
+        return;
+    }
+    let branches = arms
+        .into_iter()
+        .map(|(arm_items, origin)| {
+            ir.add_block(Block {
+                items: arm_items,
+                origin,
+            })
+        })
+        .collect();
+    items.push(BlockItem::Preproc(PreprocGroup {
+        branches,
+        falls_through,
+        origin,
+    }));
+}
+
+/// ENG-14 (§4.2 B): an UNORDERED run. Where the lowerer cannot keep a shape's arm
+/// boundaries, each item becomes its own one-branch group that may fall through:
+/// it may or may not run, and an `exit` or `Error` in it ends nothing outside
+/// itself. Real dead code inside the run stays live (a false negative only).
+fn unordered_run(items: Vec<BlockItem>, ir: &mut Ir) -> Vec<BlockItem> {
+    items
+        .into_iter()
+        .map(|item| {
+            let origin = match &item {
+                BlockItem::Stmt(s) => ir.stmt(*s).origin.clone(),
+                BlockItem::Preproc(g) => g.origin.clone(),
+            };
+            let branch = ir.add_block(Block {
+                items: vec![item],
+                origin: origin.clone(),
+            });
+            BlockItem::Preproc(PreprocGroup {
+                branches: vec![branch],
+                falls_through: true,
+                origin,
+            })
+        })
+        .collect()
 }
 
 fn lower_param(node: RawNode, source: &str) -> Param {
@@ -3260,12 +3394,10 @@ fn lower_code_block(
     source: &str,
     depth: u32,
 ) -> BlockId {
-    let mut items = Vec::new();
-    if let Some(body) = cb.field(FieldName::Body) {
-        for child in body.named_children() {
-            lower_block_child(child, ir, issues, source, &mut items, depth);
-        }
-    }
+    let mut items = match cb.field(FieldName::Body) {
+        Some(body) => lower_statement_list(body.named_children(), ir, issues, source, depth),
+        None => Vec::new(),
+    };
     if let Some(split_end) = cb.named_children().into_iter().find(|c| {
         matches!(
             c.kind(),
@@ -3282,6 +3414,10 @@ fn lower_code_block(
             }
             lower_block_child(c, ir, issues, source, &mut items, depth);
         }
+        // ENG-14 (§4.2 B): the closing's arm can hold `end else begin …` flat, so
+        // an else-arm statement lands after the then-arm's own `exit`. Nothing in
+        // this block may end anything else in it.
+        items = unordered_run(items, ir);
     }
     ir.add_block(Block {
         items,
@@ -3304,11 +3440,46 @@ fn lower_branch(
         _ => {
             let mut items = Vec::new();
             lower_block_child(node, ir, issues, source, &mut items, depth);
+            // ENG-14 (§4.2 S): a `#if` chain in a one-statement slot is well formed
+            // only when every build puts exactly one statement there. Otherwise the
+            // arms' statements are may-run items (`[exit, Foo]` kills nothing) and
+            // the nearest enclosing statement list becomes an unordered run.
+            if is_preproc_wrapper(node) && !slot_well_formed(&items, ir) {
+                let flat = items
+                    .into_iter()
+                    .flat_map(|item| match item {
+                        BlockItem::Preproc(g) => g
+                            .branches
+                            .iter()
+                            .flat_map(|b| ir.take_block_items(*b))
+                            .collect(),
+                        stmt => vec![stmt],
+                    })
+                    .collect();
+                items = unordered_run(flat, ir);
+                BROKEN_SLOT.with(|b| b.set(true));
+            }
             ir.add_block(Block {
                 items,
                 origin: origin_of(node),
             })
         }
+    }
+}
+
+/// Whether the items a slot's `#if` chain lowered to put exactly one statement in
+/// the slot in every build: one spliced statement, or a group that cannot fall
+/// through whose every arm is one statement.
+fn slot_well_formed(items: &[BlockItem], ir: &Ir) -> bool {
+    match items {
+        [BlockItem::Stmt(_)] => true,
+        [BlockItem::Preproc(g)] => {
+            !g.falls_through
+                && g.branches
+                    .iter()
+                    .all(|b| matches!(ir.block(*b).items.as_slice(), [BlockItem::Stmt(_)]))
+        }
+        _ => false,
     }
 }
 
@@ -3320,10 +3491,7 @@ fn lower_stmt_seq(
     source: &str,
     depth: u32,
 ) -> BlockId {
-    let mut items = Vec::new();
-    for child in container.named_children() {
-        lower_block_child(child, ir, issues, source, &mut items, depth);
-    }
+    let items = lower_statement_list(container.named_children(), ir, issues, source, depth);
     ir.add_block(Block { items, origin })
 }
 
@@ -3838,7 +4006,9 @@ fn lower_unmodelled_stmt(
             lower_block_child(ch, ir, issues, source, &mut items, depth);
         }
         // Union read: every arm's statements sit in the then-block, so each call
-        // keeps its site even though the arm structure is not preserved.
+        // keeps its site even though the arm structure is not preserved. ENG-14
+        // (§4.2 B): as an unordered run, so one arm's `exit` kills nothing.
+        let items = unordered_run(items, ir);
         let then_block = ir.add_block(Block {
             items,
             origin: origin.clone(),
@@ -3889,6 +4059,11 @@ fn lower_unmodelled_stmt(
         lower_block_child(c, ir, issues, source, &mut items, depth);
     }
 
+    // ENG-14 (§4.2 B): the leftover statements lost their arm boundaries, so they
+    // are an unordered run, the reconstructed `If` included. A shape with two heads
+    // (`#if A if C then … else #else if D then … else #endif …`) always lands here:
+    // only the first head's fields are consumed, so the second head's condition and
+    // branch are leftover items.
     match (reconstructed_if, items.is_empty()) {
         (Some(if_kind), true) => if_kind,
         (Some(if_kind), false) => {
@@ -3897,16 +4072,20 @@ fn lower_unmodelled_stmt(
                 origin: origin.clone(),
             });
             items.push(BlockItem::Stmt(if_id));
+            let items = unordered_run(items, ir);
             StmtKind::Block(ir.add_block(Block {
                 items,
                 origin: origin.clone(),
             }))
         }
         (None, true) => StmtKind::Unknown,
-        (None, false) => StmtKind::Block(ir.add_block(Block {
-            items,
-            origin: origin.clone(),
-        })),
+        (None, false) => {
+            let items = unordered_run(items, ir);
+            StmtKind::Block(ir.add_block(Block {
+                items,
+                origin: origin.clone(),
+            }))
+        }
     }
 }
 
