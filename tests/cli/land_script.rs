@@ -16,11 +16,14 @@ struct Repo {
 }
 
 impl Repo {
+    /// The stubs' calls, the temporary root cut out of each (`CDO_WS` is
+    /// `<root>/cdo-ws`, so cdo-gate's call reads `cdo-gate /cdo-ws`).
     fn calls(&self) -> Vec<String> {
+        let root = self.root.to_str().unwrap();
         std::fs::read_to_string(self.root.join("calls"))
             .unwrap_or_default()
             .lines()
-            .map(str::to_string)
+            .map(|l| l.replace(root, ""))
             .collect()
     }
     fn reset_calls(&self) {
@@ -69,7 +72,7 @@ impl Repo {
             .env("LAND_LOGS", self.root.join("logs"))
             .env("FLOW_LOG", self.root.join("flow.jsonl"))
             .env("LAND_MEM_MIN_GB", "0")
-            .env("CDO_WS", "/cdo-ws")
+            .env("CDO_WS", self.root.join("cdo-ws"))
             .env("STUB_LOG", self.root.join("calls"));
         for (k, v) in env {
             cmd.env(k, v);
@@ -110,6 +113,7 @@ fn repo() -> Repo {
     let main = root.join("main");
     let gate = root.join("gate");
     std::fs::create_dir_all(main.join("scripts")).unwrap();
+    std::fs::create_dir_all(root.join("cdo-ws")).unwrap();
     git::run(&main, &["init", "-q", "-b", "master"]);
     for (stub, var) in [
         ("ci-steps", "CI_STEPS"),
@@ -276,23 +280,75 @@ fn land_gates_in_order_and_pushes_only_on_request() {
 
     // merge-and-push leaves a background job behind (its speed-check warm-up);
     // the job must not hold the lock, or the next landing is refused (review
-    // r2, Fable).
+    // r2, Fable). The job lives until this test ends it (sol r1: no timer to
+    // beat). merge-and-push is told the master the gates saw.
+    struct Kill(PathBuf);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            if let Some(pid) = std::fs::read_to_string(&self.0)
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+            {
+                // SAFETY: SIGKILL to the stub's background sleep, by its PID.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+    let holder = Kill(r.root.join("holder.pid"));
+    let master = r.git(&r.main, &["rev-parse", "master"]);
     r.reset_calls();
+    let hook = format!(
+        "echo \"expect $MERGE_EXPECT_MASTER\" >> \"$STUB_LOG\"; \
+         sleep 600 >/dev/null 2>&1 & echo $! > '{}'",
+        holder.0.display()
+    );
     let (code, text) = r.land(
         &["--push", "tools/tls-59-x"],
-        &[("STUB_MERGE_AND_PUSH_HOOK", "sleep 10 >/dev/null 2>&1 &")],
+        &[("STUB_MERGE_AND_PUSH_HOOK", &hook)],
     );
     assert_eq!(code, Some(0), "{text}");
     assert_eq!(
         r.calls(),
         [
-            "ci-steps all",
-            "cdo-gate /cdo-ws",
-            "merge-and-push landing/tls59-2"
+            "ci-steps all".to_string(),
+            "cdo-gate /cdo-ws".to_string(),
+            "merge-and-push landing/tls59-2".to_string(),
+            format!("expect {master}"),
         ]
     );
     let (code, text) = r.land(&["tools/tls-58-x"], &[]);
     assert_eq!(code, Some(0), "the next landing right after: {text}");
+    drop(holder);
+
+    // Three lanes that each add a CHANGELOG entry at the same place: the dry
+    // run builds each prediction on the resolved CHANGELOG, so it agrees with
+    // the real run (sol r1).
+    let entry = changelog("### Added (TLS-57)\n\n- entry 57\n\n", "- old");
+    r.branch(
+        "tools/tls-57-x",
+        &[
+            ("CHANGELOG.md", entry.as_bytes()),
+            ("f57.txt", b"57".as_slice()),
+        ],
+    );
+    let three = ["tools/tls-57-x", "tools/tls-58-x", "tools/tls-59-x"];
+    let (code, text) = r.land(&[&["--dry-run"][..], &three].concat(), &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        text.matches("would keep both sides' entries").count(),
+        2,
+        "{text}"
+    );
+    let (code, text) = r.land(&three, &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(r.gate.join("CHANGELOG.md")).unwrap(),
+        changelog(
+            "### Added (TLS-57)\n\n- entry 57\n\n### Added (TLS-58)\n\n- entry 58\n\n\
+             ### Added (TLS-59)\n\n- entry 59\n\n",
+            "- old"
+        )
+    );
 
     let flow = std::fs::read_to_string(r.root.join("flow.jsonl")).unwrap();
     let mut open = std::collections::BTreeSet::new();
@@ -358,6 +414,14 @@ fn land_pushes_only_the_tree_its_gates_saw() {
     assert!(text.contains("another scripts/land run holds"), "{text}");
     assert!(r.calls().is_empty() && r.landing_branches().is_empty());
     drop(held);
+
+    // A tag with the landing name would win over the branch when
+    // merge-and-push merges the name unqualified: the name counts as taken
+    // (sol r1).
+    git::run(&r.main, &["tag", "landing/tls58", "tools/tls-60-bad"]);
+    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(r.landing_branches(), ["landing/tls58-2"]);
 }
 
 /// Every refusal leaves nothing behind. A conflict outside CHANGELOG.md: the
@@ -469,8 +533,18 @@ fn land_refuses_and_leaves_nothing_behind() {
 
     let (code, text) = r.land(&["--push", "--dry-run", "tools/tls-58-x"], &[]);
     assert_eq!(code, Some(2), "{text}");
-    let (code, text) = r.land(&["tools/tls-58-x"], &[("LAND_MEM_MIN_GB", "3.5")]);
-    assert_eq!(code, Some(2), "{text}");
+    // Not a number, octal-looking (`08` is no bash number, `035` is 29), or a
+    // CDO_WS cdo-gate would read as an option and exit 0 with nothing gated.
+    for env in [
+        ("LAND_MEM_MIN_GB", "3.5"),
+        ("LAND_MEM_MIN_GB", "08"),
+        ("LAND_MEM_TIMEOUT_S", "035"),
+        ("CDO_WS", "--help"),
+        ("CDO_WS", "relative/ws"),
+    ] {
+        let (code, text) = r.land(&["tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+    }
 
     git::run(&r.main, &["merge", "-q", "--no-edit", "tools/tls-58-x"]);
     let (code, text) = r.land(&["tools/tls-58-x"], &[]);
@@ -481,4 +555,82 @@ fn land_refuses_and_leaves_nothing_behind() {
         "no refusal gated anything: {:?}",
         r.calls()
     );
+}
+
+/// The real `scripts/merge-and-push`, with a bare origin: given
+/// `MERGE_EXPECT_MASTER` (scripts/land's master), it refuses when local master
+/// moved after the gates (sol r1: between land's last recheck and the merge),
+/// merging and pushing nothing; with the right master it merges and pushes.
+///
+/// Mutation: drop the MERGE_EXPECT_MASTER check -> the moved master is merged
+/// and pushed.
+#[test]
+fn merge_and_push_refuses_a_master_the_gates_did_not_see() {
+    let r = repo();
+    let origin = r.root.join("origin.git");
+    git::run(
+        &r.root,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            r.main.to_str().unwrap(),
+            origin.to_str().unwrap(),
+        ],
+    );
+    git::run(
+        &r.main,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git::run(&r.main, &["fetch", "-q", "origin"]);
+    let gated = r.git(&r.main, &["rev-parse", "master"]);
+    let tmp = r.root.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let push = |expect: &str| {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/scripts/merge-and-push"
+        ))
+        .arg("tools/tls-58-x")
+        .current_dir(&r.main);
+        for v in al_sem::git_env::LOCAL_ENV_VARS {
+            cmd.env_remove(v);
+        }
+        let out = cmd
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .env("STUB_LOG", r.root.join("calls"))
+            .env("TMPDIR", &tmp)
+            .env("MERGE_EXPECT_MASTER", expect)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    // A side commit lands on master after the gates saw `gated`.
+    git::run(&r.main, &["commit", "-q", "--allow-empty", "-m", "side"]);
+    let moved = r.git(&r.main, &["rev-parse", "master"]);
+    let (code, text) = push(&gated);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("as the gates expected; nothing merged"),
+        "{text}"
+    );
+    assert_eq!(r.git(&r.main, &["rev-parse", "master"]), moved);
+    assert_eq!(r.git(&origin, &["rev-parse", "master"]), gated);
+
+    let (code, text) = push(&moved);
+    assert_eq!(code, Some(0), "{text}");
+    let pushed = r.git(&origin, &["rev-parse", "master"]);
+    assert_eq!(pushed, r.git(&r.main, &["rev-parse", "master"]));
+    assert_eq!(r.git(&r.main, &["rev-parse", "master^1"]), moved);
 }

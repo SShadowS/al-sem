@@ -59,7 +59,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background speed-check warm-up held it, so the next landing was refused; pinned by
   a stub that leaves a background job, mutation: the push step keeps fd 9); a marker
   the CHANGELOG step does not recognise is refused; an interrupted merge reports on
-  the terminal.
+  the terminal. Review r1 (sol):
+  - `scripts/merge-and-push` takes `MERGE_EXPECT_MASTER=<sha>` (land sets it to the
+    master it gated) and refuses, merging and pushing nothing, when local master is
+    another commit: a master moved between land's last recheck and the merge would
+    otherwise land a tree no gate saw. Pinned with the real script and a bare origin.
+  - `CDO_WS` must be an absolute path to an existing folder (cdo-gate reads it as
+    an argument: `--help` there exits 0 with nothing gated); the memory settings
+    reject leading zeros (octal); a landing name counts as taken when any ref
+    resolves to it (a tag `landing/<x>` would win over the branch in merge-and-push).
+  - The dry run builds each later prediction on the resolved CHANGELOG, so three
+    lanes adding entries at one place agree with the real run.
+  - The landing branch is made with `git branch` + `symbolic-ref` after the merge
+    step's trap is gone (`switch -c` ran a post-checkout hook after making it).
+  - Mutations, each failing a test: the CDO_WS check, the any-ref name check, the
+    leading-zero check, the dry run's resolved tree, merge-and-push's master check.
 - Checked on real history (a shared scratch clone, its master set back): `--dry-run`
   of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
   equal the real landing's. Replaying b4 and b3 in full with the CHANGELOG

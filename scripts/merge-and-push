@@ -17,6 +17,9 @@
 #     is the usual case after the branch gate when master has not moved.
 # Then `git push origin master` (a plain fast-forward; never --force).
 #
+# With MERGE_EXPECT_MASTER=<sha> (scripts/land sets it), it refuses unless
+# local master is exactly that commit.
+#
 # Usage: scripts/merge-and-push <branch>
 # Exit: 0 pushed; 1 refused or failed (the message says which step).
 set -uo pipefail
@@ -40,6 +43,11 @@ git fetch --quiet origin master || die "git fetch origin master failed"
 git switch --quiet master || die "cannot switch to master"
 git merge-base --is-ancestor origin/master master \
     || die "local master is not a fast-forward of origin/master; resolve that by hand"
+# ⟨TLS-59⟩ scripts/land gated <branch> as built on one exact master and says
+# which; a master that moved since would merge into a tree no gate saw.
+if [ -n "${MERGE_EXPECT_MASTER:-}" ] && [ "$(git rev-parse master)" != "$MERGE_EXPECT_MASTER" ]; then
+    die "master is at $(git rev-parse --short master), not ${MERGE_EXPECT_MASTER:0:8} as the gates expected; nothing merged: land again"
+fi
 
 before=$(git rev-parse HEAD)
 if git merge-base --is-ancestor "$branch" master; then

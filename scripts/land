@@ -51,9 +51,8 @@
 # merge-tree`, the CHANGELOG rule included; it changes no ref and no file (the
 # predicted merges are loose objects only) and exits 1 when a real run would
 # refuse at the merge. It cannot predict a pre-commit hook's verdict. In a
-# batch, a later prediction builds on the earlier one's tree as git wrote it
-# (CHANGELOG markers included), so a CHANGELOG verdict after the first one is
-# approximate.
+# batch, a later prediction builds on the earlier one's tree with its CHANGELOG
+# resolved, as the real run does.
 #
 # Environment: LAND_WORKTREE (default /work/alsem-wt/orchestrator-gate), CDO_WS
 # (default /work/src/cdo-baseline/Cloud), LAND_LOGS, FLOW_LOG, LAND_MEM_MIN_GB
@@ -121,8 +120,14 @@ flow_log="${FLOW_LOG:-/work/.al-sem/flow-timings.jsonl}"
 mem_min_gb="${LAND_MEM_MIN_GB:-35}"
 mem_timeout="${LAND_MEM_TIMEOUT_S:-1800}"
 # A non-number would make `((...))` false with only a warning: no wait at all.
-[[ "$mem_min_gb" =~ ^[0-9]+$ ]] || bad_usage "LAND_MEM_MIN_GB '$mem_min_gb': whole GB only"
-[[ "$mem_timeout" =~ ^[0-9]+$ ]] || bad_usage "LAND_MEM_TIMEOUT_S '$mem_timeout': whole seconds only"
+# A leading zero would read as octal (`08` is no number, `035` is 29).
+[[ "$mem_min_gb" =~ ^(0|[1-9][0-9]{0,5})$ ]] || bad_usage "LAND_MEM_MIN_GB '$mem_min_gb': whole GB, no leading zero"
+[[ "$mem_timeout" =~ ^(0|[1-9][0-9]{0,6})$ ]] || bad_usage "LAND_MEM_TIMEOUT_S '$mem_timeout': whole seconds, no leading zero"
+# cdo-gate parses its workspace as an argument: `--help` or `--layout` there
+# would exit 0 with nothing gated.
+if ((!dry_run)); then
+    [[ "$cdo_ws" == /* && -d "$cdo_ws" ]] || bad_usage "CDO_WS '$cdo_ws': an absolute path to an existing folder"
+fi
 command -v jq >/dev/null || die "jq is needed for the timing log"
 command -v flock >/dev/null || die "flock is needed for the worktree lock"
 
@@ -225,7 +230,9 @@ git check-ref-format "refs/heads/landing/$name" || bad_usage "landing/$name is n
 [[ "$name" != */* ]] || bad_usage "--name '$name': no '/'"
 landing="landing/$name"
 n=2
-while G rev-parse -q --verify "refs/heads/$landing" >/dev/null; do
+# Taken when ANY ref resolves to the name: merge-and-push merges it unqualified,
+# and a tag `landing/<name>` would win over the branch.
+while G rev-parse -q --verify "$landing^{commit}" >/dev/null; do
     landing="landing/$name-$n"
     n=$((n + 1))
 done
@@ -263,6 +270,13 @@ if ((dry_run)); then
             done
             if why=$(union_changelog "$tmp/1" "$tmp/2" "$tmp/3" "$tmp/union"); then
                 echo "land:   ${ids[i]}: CHANGELOG.md conflicts: would keep both sides' entries"
+                # The next prediction builds on the resolved CHANGELOG, as the
+                # real run does (a temporary index; loose objects only).
+                mode=$(awk -F '[ \t]' '$3 == 2 && $4 == "CHANGELOG.md" { print $1 }' <<<"$stages")
+                blob=$(G hash-object -w "$tmp/union")
+                GIT_INDEX_FILE="$tmp/index" git -C "$worktree" read-tree "$tree"
+                GIT_INDEX_FILE="$tmp/index" git -C "$worktree" update-index --cacheinfo "$mode,$blob,CHANGELOG.md"
+                tree=$(GIT_INDEX_FILE="$tmp/index" git -C "$worktree" write-tree)
             else
                 echo "land:   ${ids[i]}: REFUSE: $why"
                 refuse=1
@@ -347,9 +361,13 @@ for ((i = 0; i < ${#branches[@]}; i++)); do
         || merge_failed "committing the '$b' merge failed (see $run/merge.log)"
     echo "land:   ${ids[i]}: merged (CHANGELOG.md: both sides' entries kept)"
 done
-G switch --quiet -c "$landing" >>"$run/merge.log" 2>&1 || merge_failed "cannot create $landing"
 trap - INT TERM
 landed=$(G rev-parse HEAD)
+# The branch only now, with no hook in between (`switch -c` runs post-checkout
+# after it made the branch): a refusal above leaves no branch.
+G branch "$landing" "$landed" >>"$run/merge.log" 2>&1 \
+    || { verdict merge 1 "$start"; die "cannot create $landing; the worktree is on the merged commit ${landed:0:8}"; }
+G symbolic-ref HEAD "refs/heads/$landing"
 verdict merge 0 "$start"
 
 # recheck <after>: the gated tree is still the one merge-and-push would land.
@@ -426,7 +444,10 @@ fi
 start=$SECONDS
 mark push start
 rc=0
-(cd "$main" && scripts/merge-and-push "$landing") >"$run/push.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
+# MERGE_EXPECT_MASTER: merge-and-push refuses if master moved after the last
+# recheck (it would merge into a tree no gate saw).
+(cd "$main" && MERGE_EXPECT_MASTER="$master" scripts/merge-and-push "$landing") \
+    >"$run/push.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict push "$rc" "$start"
 ((rc == 0)) || die "FAIL at push: see $run/push.log"
 echo "land: PASS: $landing landed on master"
