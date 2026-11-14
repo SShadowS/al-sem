@@ -816,7 +816,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
         // ENG-10 (2026-11-12): the same `not raised:` line: 136 lines.
-        ("RunReportID", "digest human") => (136, 46_300),
+        // ENG-19 (2026-11-14): `Report.RunRequestPage` with a run-time report id
+        // (CDOEMailTemplateManagement.Codeunit.al:1434) is an open run, one more
+        // workspace gap line: 137 lines, 35,898 B.
+        ("RunReportID", "digest human") => (137, 46_300),
         (_, "digest human") => (30, 2_500),
         _ => (150, 40 * 1024),
     };

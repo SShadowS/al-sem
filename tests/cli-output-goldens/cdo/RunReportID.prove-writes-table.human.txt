@@ -1,6 +1,6 @@
 prove Codeunit "CDO E-Mail Handler"::RunReportID writes-table:CDO E-Mail Log (table 6175273, this app)   [cross-app]
 answer: yes — DB_INSERT at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:392 (10 guards, 4 earlier exits on the route; 1 exit evaluated), and 2 more
-analysis partial (28 calls not resolved (9 in this workspace), 260 interface calls open world (7 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+analysis partial (29 calls not resolved (10 in this workspace), 260 interface calls open world (7 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 3 effects
     [DB_INSERT] at ws:src/Features/Logging/CDOLogManagement.Codeunit.al:392

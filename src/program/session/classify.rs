@@ -428,10 +428,12 @@ impl Classify for crate::program::node_extract::DatasetNode {
             items,
             may_import,
             may_export,
+            request_page_hidden,
         } = self;
         known.classify(h);
         may_import.classify(h);
         may_export.classify(h);
+        request_page_hidden.classify(h);
         h.u64(items.len() as u64);
         for item in items {
             let crate::program::node_extract::DatasetItemNode {

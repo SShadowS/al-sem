@@ -81,7 +81,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// read, as entries with empty parts (engine limits B2).
 /// 17: a validate event's field in no readable form is one of those.
 /// 18: `FieldNode::number` (ENG-06, `FieldRef` resolution).
-pub const PACK_SCHEMA: u32 = 18;
+/// 19: `DatasetNode::request_page_hidden` (ENG-19, a report's `UseRequestPage`).
+pub const PACK_SCHEMA: u32 = 19;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -545,11 +546,12 @@ mod tests {
     /// and so is an object's `Access = Internal` (schema 9) and a table's
     /// `LookupPageId` values (schema 11). (Schema 10 changed only
     /// `AbiParamRetained`, which no source routine in a pack carries.) A
-    /// publisher's `Isolated` flag is payload since schema 14.
+    /// publisher's `Isolated` flag is payload since schema 14, and a report's
+    /// `UseRequestPage = false` (`DatasetNode::request_page_hidden`) since 19.
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 18);
+        assert_eq!(PACK_SCHEMA, 19);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         pack.files[0].routines[0].publisher_isolated = true;
@@ -580,6 +582,7 @@ mod tests {
             }],
             may_import: true,
             may_export: false,
+            request_page_hidden: true,
         };
         pack.files[0].objects[0].dataset = dataset.clone();
         pack.self_hash = compute_self_hash(&pack);

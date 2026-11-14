@@ -244,6 +244,12 @@ pub struct SiteFacts {
     /// field to be this one, so a route to another field's trigger is never
     /// explained away. `None` for any other call.
     pub validate_field: Option<String>,
+    /// ENG-21 (merged into ENG-19): the call runs a report whose request page
+    /// may show, so the user may cancel it before `OnPreReport`
+    /// ([`crate::program::resolve::resolver::request_page_may_cancel`]): the
+    /// report's `OnPreReport`/`OnPostReport` may not run (the model's
+    /// `TriggerFires::Maybe`).
+    pub request_page_may_cancel: bool,
     /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
     /// validates ([`field_ref_validate`]). `None` for any other call.
     pub field_ref_validate: Option<FieldRefValidate>,
@@ -1274,6 +1280,15 @@ fn resolve_call_site_obligation(
                         );
                     facts_out.dataset_run =
                         member_dataset_run(*kind, &method_lc, target, facts_out.starts_object);
+                    // ENG-21: `Rep.Run()`/`Rep.RunModal()` may show the request
+                    // page (a variable's `UseRequestPage(false)` is not read:
+                    // the page may show, the safe side).
+                    facts_out.request_page_may_cancel = *kind == ObjectKind::Report
+                        && facts_out.starts_object
+                            != crate::program::resolve::dataset::ObjectStart::No
+                        && crate::program::resolve::resolver::request_page_may_cancel(
+                            &method_lc, target, None,
+                        );
                 }
                 // An empty `Multicast` from an object receiver is a run of an
                 // object that declares no entry trigger (`dispatch_entry_trigger`).
@@ -1457,7 +1472,7 @@ fn resolve_call_site_obligation(
                         effects: Vec::new(),
                     });
                 }
-                let (shape, completeness, routes) = resolve_object_run(
+                let (shape, completeness, mut routes) = resolve_object_run(
                     caller_app,
                     okind,
                     target_ref.as_deref(),
@@ -1466,6 +1481,35 @@ fn resolve_call_site_obligation(
                     index,
                     surface,
                 );
+                // ENG-19: `Report.RunRequestPage(…)` runs its request page only.
+                crate::program::resolve::resolver::retain_started_triggers(&mut routes, &method_lc);
+                // ENG-21: a request page shown may be cancelled before
+                // `OnPreReport`; the second argument is `RequestWindow`.
+                if okind == ObjectKind::Report
+                    && let Some(t) = target_ref
+                    && let Some(report) = crate::program::resolve::resolver::object_run_target(
+                        caller_app,
+                        okind,
+                        t,
+                        *target_is_name,
+                        graph,
+                        index,
+                    )
+                {
+                    let request_window =
+                        call_args.get(1).and_then(|&a| match &file.ir.expr(a).kind {
+                            al_syntax::ir::ExprKind::Literal(al_syntax::ir::Literal::Bool(b)) => {
+                                Some(*b)
+                            }
+                            _ => None,
+                        });
+                    facts_out.request_page_may_cancel =
+                        crate::program::resolve::resolver::request_page_may_cancel(
+                            &method_lc,
+                            report,
+                            request_window,
+                        );
+                }
                 if shape == DispatchShape::Multicast
                     && routes.is_empty()
                     && let Some(t) = target_ref

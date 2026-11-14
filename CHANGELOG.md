@@ -345,6 +345,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Linux)
   `an_ignored_non_utf8_folder_is_not_its_lossy_sibling`, with discrimination proofs.
 
+### Fixed (ENG-19, with ENG-21: a report's request page)
+
+- **`Report.RunRequestPage` runs the request page.** It resolved as a plain built-in, so a write
+  or `Commit()` in the request page's triggers answered `no` through it (re-probed on master
+  `1bd755fc`: `may-commit no`). It is now a start of the report, keyword and variable form, that
+  runs `OnInitReport` and the request page and stops: no `OnPreReport`, no data item, no
+  `OnPostReport`, no dataset (`dataset::starts_object`, `resolver::start_runs_trigger`; the
+  order was measured on the BC 28.4 Linux sidecar and confirmed on Windows, engine limits L20).
+- **A request page that may be cancelled makes `OnPreReport` and `OnPostReport` conditional.**
+  `Report.Run(X)` and `R.Run()`/`RunModal` show the request page unless the report says
+  `UseRequestPage = false` or the call passes a literal `false` `RequestWindow`; the user may
+  cancel it, which stops the run before `OnPreReport`. Master answered `commits-on-success-path
+  yes` for a `Commit()` there; it is now `unknown` (`SiteFacts::request_page_may_cancel`,
+  `TriggerFires::Maybe`). `Execute`, `Print` and `SaveAs*` are unchanged. The program graph keeps
+  a report's `UseRequestPage = false` (`DatasetNode::request_page_hidden`): **pack schema 19**,
+  so dependency packs rebuild once.
+- On CDO (`bc3ccb18`, base `1bd755fc`): findings and fingerprints do not move at either scope;
+  unknown edges stay 0. CDO's three `Report.RunRequestPage(<run-time id>, …)` calls (two pages and
+  `CDO E-Mail Template Management.GetReportParameters`) move from a built-in to an honest
+  dynamic run: `honestDynamic` 23 → 26 and `resolvedCatalog` 6,134 → 6,131 (whole program and
+  primary-scoped alike); `alsem fingerprint` reports them `dynamic-target` instead of `builtin`.
+  Routines that reach `GetReportParameters` (through `CreateReportsForRecord`) gain that open
+  run in prove/explain/digest. The L4 whole-program digest is re-frozen (`fde6e4f3…` →
+  `b2624796…`, reverse index unchanged): 1010 of 5479 routine summaries gain exactly one
+  `dynamic-dispatch` uncertainty on those three operations and nothing else
+  (`tests/l4-summary-baseline/README.md`).
+- `alsem impact`: `R.RunRequestPage()` is a `run` site now, no longer a `declaredRunnable` one.
+  Every dispatching built-in on a typed receiver now starts its object, so that rule has no source
+  shape left. Tests: `tests/cli/cli_eng19_request_page_runs.rs` (breaks recorded). Left (L20): a
+  variable's `UseRequestPage(false)` call is not read (the page may show); an XmlPort's request
+  page is not treated as cancellable.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
