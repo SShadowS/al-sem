@@ -348,6 +348,9 @@ impl Job for MainJob<'_> {
             "diagnosticsDetail": changed.diagnostics.iter().map(diagnostic_json).collect::<Vec<_>>(),
             "accounting": accounting.as_ref().map(accounting_json),
             "scope": scope_json(&scope),
+            // TLS-54: the roots.config overlay's entries, for the up part
+            // (which reads only the graph): [StableRoutineId, kind mask].
+            "configEntries": crate::program::impact_graph::reverse::config_entry_kinds(model),
         });
         let mut doc = doc;
         if self.summaries {
@@ -537,15 +540,20 @@ pub struct UpJob<'a> {
     /// is made (the read is the driver's once handed off): page-action
     /// captions are read from them.
     texts: HashMap<String, Arc<str>>,
+    /// TLS-54: see [`UpAsk::config_entries`].
+    config_entries: Vec<(String, u16)>,
 }
 
 /// What the up part is asked (`--root-id`, `--no-dependents`, `--detail`,
-/// `--single-app`).
+/// `--single-app`, `--config-entry`).
 pub struct UpAsk {
     pub roots: Vec<String>,
     pub assume_no_dependents: bool,
     pub detail: bool,
     pub single_app: bool,
+    /// TLS-54: the roots.config overlay's kinds per StableRoutineId (the
+    /// main part's `configEntries`).
+    pub config_entries: Vec<(String, u16)>,
 }
 
 impl<'a> UpJob<'a> {
@@ -556,6 +564,7 @@ impl<'a> UpJob<'a> {
             assume_no_dependents,
             detail,
             single_app,
+            config_entries,
         } = ask;
         let read = inputs.get();
         let texts = read
@@ -575,6 +584,7 @@ impl<'a> UpJob<'a> {
             detail,
             single_app,
             texts,
+            config_entries,
         }
     }
 }
@@ -625,6 +635,7 @@ impl Job for UpJob<'_> {
                 keep: super::up::Keep::new(self.detail),
                 cancel: None,
                 workers: workers.clone(),
+                config_entries: &self.config_entries,
             },
             &captions,
         );

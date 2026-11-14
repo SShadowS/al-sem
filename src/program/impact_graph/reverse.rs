@@ -70,7 +70,7 @@
 //! start whose codeunit is not a literal has no such site. A symbol-only
 //! routine has no source, so no entry kinds and no stable id.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::sited::{Boundary, SitedGraph, flag};
 use crate::engine::root_classification::{root_kind_bit, root_kinds_of_mask};
@@ -624,8 +624,18 @@ pub fn config_entries(
     g: &SitedGraph,
     model: &crate::program::model::workspace::Model,
 ) -> HashMap<NodeIx, u16> {
+    config_entries_of(g, &config_entry_kinds(model))
+}
+
+/// The roots.config overlay's kinds per StableRoutineId (a mask over
+/// `ROOT_KIND_VALUES`), from a model's root classifications (the `config`
+/// and `ast+config` ones): what [`config_entries`] joins onto a graph. Impact
+/// computes it in its main part (which has the model) and hands it to the up
+/// part (which reads only the graph), as it hands the changed roots.
+#[must_use]
+pub fn config_entry_kinds(model: &crate::program::model::workspace::Model) -> Vec<(String, u16)> {
     let stable = crate::engine::l4::summary::build_routine_stable_map(&model.workspace.routines);
-    let mut out: HashMap<NodeIx, u16> = HashMap::new();
+    let mut out: BTreeMap<String, u16> = BTreeMap::new();
     for rc in &model.root_classifications {
         if rc.source == "ast" {
             continue;
@@ -638,8 +648,18 @@ pub fn config_entries(
             .iter()
             .filter_map(|k| root_kind_bit(k))
             .fold(0u16, |m, b| m | b);
+        *out.entry(id.clone()).or_default() |= mask;
+    }
+    out.into_iter().filter(|(_, m)| *m != 0).collect()
+}
+
+/// [`config_entry_kinds`] joined onto `g`'s nodes on the StableRoutineId.
+#[must_use]
+pub fn config_entries_of(g: &SitedGraph, kinds: &[(String, u16)]) -> HashMap<NodeIx, u16> {
+    let mut out: HashMap<NodeIx, u16> = HashMap::new();
+    for (id, mask) in kinds {
         for n in g.nodes_with_stable_id(id) {
-            *out.entry(n).or_default() |= mask;
+            *out.entry(n).or_default() |= *mask;
         }
     }
     out

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-54: `alsem impact` applies the `roots.config.json` overlay)
+
+- `alsem impact` ignored `roots.config.json`, so a routine the config names as an entry point
+  (a job-queue entry, a published web service) was no entry in its answer, while `prove` and
+  `explain` counted it (engine limits L32). Probe: an `internal` routine named a
+  `job-queue-entrypoint` made `prove … callers-may-run-noninteractive` answer `yes` through it,
+  and `impact` said "no entry among them". Now impact counts the configured entries too: they
+  appear among a changed routine's entries, entry kinds, shares and nearest entries, as the
+  source-derived ones do. A workspace without a `roots.config.json` gets the same answer as
+  before.
+- The scope line's "the roots.config entry overlay is not applied" now reads "entries include
+  the roots.config overlay's" (human and JSON).
+- How: the main part (which has the model) computes the overlay's kinds per StableRoutineId
+  (`reverse::config_entry_kinds`, the same join `explain` uses) and hands them to the up part
+  (which reads only the graph) as it hands the changed routines (hidden
+  `--config-entry=<id>=<mask>`); the parts' main document gains `configEntries`.
+
 ### Changed (TLS-53: `alsem tests` expands every changed routine)
 
 - `alsem tests` gave only the first 128 changed routines a walk of their own (output

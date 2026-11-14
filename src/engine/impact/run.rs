@@ -79,12 +79,16 @@ impl ImpactRequest {
         a
     }
 
-    /// The up part's command line over `roots`.
+    /// The up part's command line over `roots`, with the main part's
+    /// roots.config entries (TLS-54).
     #[must_use]
-    pub fn up_argv(&self, roots: &[String]) -> Vec<String> {
+    pub fn up_argv(&self, roots: &[String], config_entries: &[(String, u16)]) -> Vec<String> {
         let mut a: Vec<String> = vec!["impact".into(), "--part".into(), "up".into()];
         for r in roots {
             a.push(format!("--root-id={r}"));
+        }
+        for (id, mask) in config_entries {
+            a.push(format!("--config-entry={id}={mask}"));
         }
         if self.assume_no_dependents {
             a.push("--no-dependents".into());
@@ -96,6 +100,25 @@ impl ImpactRequest {
         a.push(self.workspace.clone());
         a
     }
+}
+
+/// The main part's roots.config entries (TLS-54): `[StableRoutineId, mask]`.
+/// A malformed element is an error, never dropped: a dropped entry would
+/// give the old answer under a scope line saying the overlay is applied.
+fn config_entries(doc: &Value) -> Result<Vec<(String, u16)>, String> {
+    doc["configEntries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|e| {
+            let id = e[0].as_str();
+            let mask = e[1].as_u64().and_then(|m| u16::try_from(m).ok());
+            match (id, mask) {
+                (Some(id), Some(mask)) => Ok((id.to_string(), mask)),
+                _ => Err(format!("impact: the main part's configEntries holds {e}")),
+            }
+        })
+        .collect()
 }
 
 /// The ids of a part's roots.
@@ -153,10 +176,11 @@ pub fn orchestrate_with(
     let mut main = run(Target::Production, main_argv.clone())?;
     cmp.inputs_stamp = inputs_stamp();
     let ids = root_ids(&main);
+    let config = config_entries(&main)?;
     let up = if ids.is_empty() {
         Err("no changed routine resolved".to_string())
     } else {
-        run(Target::Production, req.up_argv(&ids))
+        run(Target::Production, req.up_argv(&ids, &config))
     };
     let tests = if !req.tests {
         Err("not asked (--no-tests; MCP `tests: false`)".to_string())

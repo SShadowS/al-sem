@@ -1927,8 +1927,8 @@ fn impact_header(
         .is_ok_and(|u| u["localSourceDependencies"] == json!(true));
     h.scope = format!(
         "callers and entries over the whole program, dependency code in its own tier; test code \
-         is not in these callers (tests: reports it); the roots.config entry overlay is not \
-         applied{}; effects through every resolved call with literal arguments",
+         is not in these callers (tests: reports it); entries include the roots.config \
+         overlay's{}; effects through every resolved call with literal arguments",
         if local_source {
             "; local includes dependencies loaded from source folders"
         } else {
