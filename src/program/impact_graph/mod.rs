@@ -55,10 +55,11 @@
 //!   fires: a test walk does not follow it, impact does);
 //! - `Run` `declaredRunnable` — a routine declaring a `TestPage`/
 //!   `TestRequestPage` variable (or whose object declares one) may run that
-//!   object; and a call site running a dispatching builtin on a receiver
-//!   typed as one `Page`/`Report`/`XmlPort`/`Query` (`ReportVar.SaveAsPdf()`)
-//!   runs it. A plain declaration of those four kinds runs nothing (a typed
-//!   `.Run()`/`.RunModal()` is a `run` edge);
+//!   object. A plain declaration of a `Page`/`Report`/`XmlPort`/`Query` runs
+//!   nothing: a typed `.Run()`/`.RunModal()` and every dispatching builtin on
+//!   a typed receiver (`ReportVar.SaveAsPdf()`) is a `run` edge (TLS-51
+//!   removed the call-site `declaredRunnable` rule once ENG-19 left it no
+//!   source shape);
 //! - `Event` `testHandler` — a test -> the handlers it lists; `Run` `testRunner`
 //!   — a test -> its codeunit (its `OnRun` runs first);
 //! - `Open` edges: `unresolved`, `dynamic`, `dispatchingBuiltin` (into a hub),

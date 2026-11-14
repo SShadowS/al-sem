@@ -1033,6 +1033,36 @@ mod tests {
         assert!(dispatching_builtin(&BuiltinId("Record::setrange".into())).is_none());
     }
 
+    /// TLS-51: every builtin that runs a `Page`/`Report`/`XmlPort`/`Query`
+    /// starts that object in the resolver (`dataset::starts_object`), so a call
+    /// on a typed receiver is a `run` route. `alsem graph` no longer adds a
+    /// run for a builtin route, so an entry added here and not there would
+    /// leave only the kind's hub edge. `impact::up`'s
+    /// `every_dispatching_builtin_on_a_typed_receiver_is_a_run_site` pins the
+    /// listed 20 end to end; this pins that the list is the whole catalog.
+    #[test]
+    fn every_object_running_builtin_starts_its_object() {
+        let mut n = 0;
+        for (id, d) in DISPATCHING_BUILTINS {
+            let DispatchingBuiltin::Run(
+                k @ (ObjectKind::Page
+                | ObjectKind::Report
+                | ObjectKind::XmlPort
+                | ObjectKind::Query),
+            ) = d
+            else {
+                continue;
+            };
+            let (_, method) = id.split_once("::").expect("Prefix::method");
+            assert!(
+                crate::program::resolve::dataset::starts_object(*k, method),
+                "{id} does not start its {k:?}"
+            );
+            n += 1;
+        }
+        assert_eq!(n, 20, "the impact::up end-to-end test lists 20 cases");
+    }
+
     #[test]
     fn coverage_guard_min_membership() {
         // Guard against accidentally empty/truncated sets after regen.

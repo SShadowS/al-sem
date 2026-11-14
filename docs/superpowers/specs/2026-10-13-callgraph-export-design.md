@@ -304,7 +304,7 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    not walk it (`alsem tests` refuses the site). **Consumer note (bc-dev-mcp):** a
    test-selection walk over the export should skip `clientEvent` edges too; one that
    treats it as any edge selects exactly what it selected before.
-2. **Declared test pages, and typed runnable receivers.** A routine that declares a
+2. **Declared test pages** (until TLS-51 also typed runnable receivers). A routine that declares a
    parameter or local of type `TestPage` or `TestRequestPage` X (or whose object
    declares such a global) gets a `Run` edge (`OverApprox`,
    `via: "declaredRunnable"`) to X's object node; a `TestRequestPage` maps to its
@@ -312,16 +312,21 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    `TestAction.Invoke()` resolve as catalog builtins, yet they run X's triggers.
    For a `Page`, `Report`, `XmlPort` or `Query` variable the run is a **site**, not
    the declaration: a typed `.Run()`/`.RunModal()` (XmlPort also `Import`/`Export`) is
-   already an engine `run` edge, and a call site whose route is a dispatching builtin
-   that runs an object of kind K (`member_catalog::DISPATCHING_BUILTINS`, e.g.
-   `ReportVar.SaveAsPdf()`, `QueryVar.Open()`) on a receiver the resolver typed as an
-   object X of kind K gets the same `declaredRunnable` edge to X, from that routine,
-   at that line. **Narrowed 2026-11-06 (round-1 c12):** before, every routine of an
+   already an engine `run` edge. **Removed 2026-11-14 (TLS-51):** a call site whose
+   route was a dispatching builtin that runs an object of kind K
+   (`member_catalog::DISPATCHING_BUILTINS`, e.g. `ReportVar.SaveAsPdf()`,
+   `QueryVar.Open()`) on a receiver typed as an object X of kind K used to get a
+   `declaredRunnable` edge to X at that line. Since ENG-19 the resolver makes every
+   such call a `run` route itself, so that edge had no source shape left (0 on CDO,
+   and none from a fixture of all 20 builtins); `declaredRunnable` now means a
+   `TestPage`/`TestRequestPage` declaration only, and never carries a `line`.
+   **Narrowed 2026-11-06 (round-1 c12):** before, every routine of an
    object whose globals declared `Page "Sales Invoice"` ran that page, so `Document
    Errors Mgt.`'s empty `OnRun` "ran" Page 43 because the codeunit calls
    `GlobalSalesInvoicePage.RunBackgroundCheck()`. **Consumer note (bc-dev-mcp):** no
-   schema change; the export has fewer `declaredRunnable` edges, each one now
-   witnessed by a site. Codeunit variables are excluded: the engine already models
+   schema change; the export has fewer `declaredRunnable` edges (from 2026-11-06 to
+   TLS-51 call-site edges were possible beside the declaration ones; now each is a
+   test page declaration). Codeunit variables are excluded: the engine already models
    `CuVar.Run()` precisely, and codeunit variables mostly serve procedure calls.
 3. **Test handlers.** A routine with `[HandlerFunctions('A,B')]` gets an `Event` edge
    (`OverApprox`, `via: "testHandler"`) to each named handler in the same codeunit

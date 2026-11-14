@@ -344,6 +344,10 @@ Also:
    `declaredRunnable` rules above. The two rows are told apart by the call-site anchor; a test
    pins both (a `SaveAsPdf` fixture is code, a `TestPage` declaration fixture is `RULE`) and a
    third pins that a plain `Page` variable declaration yields no site.
+   **Changed 2026-11-14 (TLS-51):** the call-site row is gone. Since ENG-19 the resolver makes
+   every dispatching builtin on a typed receiver a `run` route (an `EngineRun` site, code), so
+   `project.rs` rule 2 found nothing and was removed. Every `declaredRunnable` site is now a
+   declaration and classifies as `RULE`; the `SaveAsPdf` fixture checks a `run` site instead.
 2. **One class per node, with a total order** (Fable 3, astra). The class of a state is
    *(evidence, relation, tier)*:
    - **tier** comes from R0's `Tier`, read as it is: `OnlyOpen` → `via-hub`; else `CONFIGURED`
@@ -510,7 +514,8 @@ block), `src/engine/impact/cache.rs`.
   established `UI navigation, local` (break: treat a configured state as established);
 - the two `declaredRunnable` rules: a `SaveAsPdf` call site is code, a `TestPage` declaration is
   `RULE`, and a plain `Page` variable declaration yields no site (break: classify every
-  `declaredRunnable` site as `RULE`);
+  `declaredRunnable` site as `RULE`; since TLS-51 that is the production rule, and the
+  break is to classify a `declaredRunnable` site as code);
 - per app-owned node of the production fixture, `flag::LOCAL == !is_dependency_node` (break:
   mark a dependency node `LOCAL`); and every hub node classifies a path through it as
   `via-hub` (break: let a hub take the `local` tier);

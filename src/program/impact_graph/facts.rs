@@ -44,8 +44,8 @@ pub struct RoutineFacts {
     /// catalog builtins (`OpenEdit`, a field's `SetValue`, an action's
     /// `Invoke`), so the declaration stands for the run. A `Page`, `Report`,
     /// `XmlPort` or `Query` variable is not here: its run is a site (a typed
-    /// `.Run()`/`.RunModal()` is an engine run edge, `SaveAsPdf`/`Open`/… a
-    /// dispatching builtin on its receiver), and a routine that only declares
+    /// `.Run()`/`.RunModal()`, `SaveAsPdf`, `Open` or any other dispatching
+    /// builtin on it is an engine `run` edge), and a routine that only declares
     /// one and calls its procedures runs nothing.
     pub test_pages: Vec<RunTarget>,
     /// What the routine exits on first thing, as a table-event subscriber
@@ -432,9 +432,8 @@ pub(crate) fn property_object_ref(value: &str) -> ObjectRef {
 
 /// A variable's type as a may-run target (rule 2): a `TestPage` /
 /// `TestRequestPage` only. Every other runnable type's run is a site the
-/// projection reads (a typed `.Run()` is an engine run edge; a dispatching
-/// builtin on a typed receiver, `ReportVar.SaveAsPdf()`, is
-/// `project::Builder::receiver_runs`). Before 2026-11-06 a `Page`, `Report`,
+/// projection reads (a typed `.Run()` and a dispatching builtin on a typed
+/// receiver, `ReportVar.SaveAsPdf()`, are engine run edges). Before 2026-11-06 a `Page`, `Report`,
 /// `XmlPort` or `Query` declaration counted too, so a routine that only
 /// declared `Page "Sales Invoice"` and called a procedure on it ran the page
 /// (and its object's every routine did, for a global).
