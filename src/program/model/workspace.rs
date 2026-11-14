@@ -648,15 +648,6 @@ pub struct ModelRoutine {
     /// L2 `parseIncomplete` — the routine's subtree has a tree-sitter ERROR node.
     /// R2d projects parse-incomplete routines' StableRoutineIds.
     pub parse_incomplete: bool,
-    /// Whether this row's `unreachable` marks are sound enough to drop a coverage
-    /// gap or a cone edge (#288, `capability_cone::DeadSites`). FAILS CLOSED:
-    /// `false` (untrusted) is the default, and any constructor that cannot run
-    /// the checks must leave it `false`. Set at assembly by
-    /// [`source_dead_mark_trust`] (no preprocessor directive in the routine; every
-    /// `Error(...)` provably takes the Text overload), then narrowed after
-    /// resolution by [`settle_dead_mark_trust`] (every `Error(...)` binds to the
-    /// builtin, not to a procedure named `Error`).
-    pub dead_marks_trusted: bool,
     pub record_variables: Vec<ModelRecordVariable>,
     pub record_operations: Vec<ModelRecordOperation>,
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
@@ -1013,11 +1004,13 @@ impl ModelRoutine {
             .expect("site guards not built: declare ViewNeeds::site_guards")
     }
 
-    /// Whether this row believes a site of its own with `control_context`
-    /// never runs (#288): its dead marks are trusted and the site is marked
-    /// `unreachable`. The one test `capability_cone::DeadSites` and d35 share.
+    /// Whether this row marks a site of its own with `control_context` as never
+    /// running. The one test `capability_cone::DeadSites` and d35 share. The mark
+    /// is sound since ENG-14/ENG-80: lost `#if` boundaries fail closed (no marks on
+    /// an untrusted row) and only an `Error` proven to raise on every run ends a
+    /// path.
     pub(crate) fn site_is_dead_marked(&self, control_context: Option<&str>) -> bool {
-        self.dead_marks_trusted && control_context == Some("unreachable")
+        control_context == Some("unreachable")
     }
 }
 
@@ -1150,288 +1143,14 @@ pub(crate) fn declaration_start_line(r: &al_syntax::ir::RoutineDecl) -> u32 {
         .fold(r.origin.start.row, u32::min)
 }
 
-/// Whether `text` holds a line that starts with a preprocessor conditional
-/// directive (`#if`, `#elif`, `#else`, `#endif`; the spaced `# else` spelling
-/// too). A source-text test, so it covers every shape the lowerer splices
-/// (plain groups, split bodies, split closings, flat recoveries, nested groups)
-/// without knowing them. A directive inside a comment or string also counts,
-/// which only distrusts more (#288).
-pub(crate) fn has_preproc_directive(text: &str) -> bool {
-    // CR, LF and CRLF all end a line (`str::lines` splits on LF only).
-    text.split(['\r', '\n'])
-        .filter_map(|l| l.trim_start().strip_prefix('#'))
-        .map(|rest| {
-            rest.trim_start()
-                .split(|c: char| !c.is_ascii_alphabetic())
-                .next()
-                .unwrap_or("")
-        })
-        .any(|w| {
-            ["if", "elif", "else", "endif"]
-                .iter()
-                .any(|d| w.eq_fold_identifier(d))
-        })
-}
-
-/// `source[range]` scanned clean of preprocessor directives. Fails closed: a
-/// range that does not index `source` is not clean.
-pub(crate) fn source_clean(source: &str, range: &std::ops::Range<usize>) -> bool {
-    source
-        .get(range.clone())
-        .is_some_and(|t| !has_preproc_directive(t))
-}
-
-/// AL identifier equality of two canonical (already unquoted) names: exact
-/// apart from AL's Unicode-aware case folding. A quote inside a name is part
-/// of it (`"""X"""` is the name `"X"`), so nothing is trimmed here.
-fn same_identifier(a: &str, b: &str) -> bool {
-    a.eq_fold_identifier(b)
-}
-
-/// `t` without ONE pair of surrounding double quotes, as the lowerer stores a
-/// quoted identifier's name (`ident_text`); `t` itself when it is not quoted.
-fn unquote_once(t: &str) -> &str {
-    t.strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .unwrap_or(t)
-}
-
-/// A bare call to `Error` (any case, quoted or not).
-fn is_bare_error_call(cs: &crate::program::body::features::PCallSite) -> bool {
-    matches!(&cs.callee, crate::program::body::features::PCallee::Bare { name }
-        if same_identifier(unquote_once(name), "Error"))
-}
-
-/// The assembly half of [`ModelRoutine::dead_marks_trusted`] (#288). Today's
-/// `unreachable` mark is unsound in two known cases, so a row that could hit
-/// either trusts none of its marks:
-/// - a preprocessor directive in the routine's source: the lowerer splices
-///   every live `#if` branch into one statement run, so an exit in one branch
-///   marks the other branch dead;
-/// - an `Error(...)` whose argument is not proven Text: `Error(ErrorInfo)` goes
-///   on when the error is collectible and any method on the stack collects
-///   errors (BC 28.4 Linux sidecar, #288 O4), yet the mark treats every `Error`
-///   as a stop. Two or more arguments always select the Text overload (alc
-///   18.0.41: `Error(ErrInfo, 1)` is AL0133 "cannot convert from 'ErrorInfo' to
-///   'Text'"). One argument is proven by a string literal, or by a Text, Label
-///   or Code variable; a GLOBAL variable proves it only when the whole object is
-///   free of directives, because a `#if` around the global `var` section can give
-///   the name another type in another build, and the variable table keeps only
-///   the first declaration. The lookup follows AL's scope order — params, the
-///   named return value (`procedure P() Ret: ErrorInfo`, which `variables` does
-///   not list), locals, then globals — and compares names with AL identifier
-///   equality, which folds non-ASCII case too (`"StopVälue"` is `"STOPVÄLUE"`).
-///
-/// `object_clean` caches the object scan across the object's routines.
-///
-/// shortcut: distrusts whole routines, so their dead code still counts; upgrade
-/// when the reachability mark itself is sound (the split-off discovery D2).
-fn source_dead_mark_trust(
-    source: &str,
-    object: &al_syntax::ir::ObjectDecl,
-    object_clean: &mut Option<bool>,
-    routine: &al_syntax::ir::RoutineDecl,
-    call_sites: &[crate::program::body::features::PCallSite],
-    variables: &RoutineVariables,
-) -> bool {
-    if !source_clean(source, &routine.origin.byte) {
-        return false;
-    }
-    let mut object_clean =
-        || *object_clean.get_or_insert_with(|| source_clean(source, &object.origin.byte));
-    call_sites
-        .iter()
-        .filter(|cs| is_bare_error_call(cs))
-        .all(|cs| bare_error_proves_text(cs, routine, variables, &mut object_clean))
-}
-
-/// Whether bare `Error(...)` site `cs` provably takes the Text overload (#288):
-/// two or more arguments always do; one does when
-/// [`error_argument_proves_text`] proves it; none never does. The one decision
-/// [`source_dead_mark_trust`] and the rules pass (`stops`) share.
-pub(crate) fn bare_error_proves_text(
-    cs: &crate::program::body::features::PCallSite,
-    routine: &al_syntax::ir::RoutineDecl,
-    variables: &RoutineVariables,
-    object_clean: impl FnMut() -> bool,
-) -> bool {
-    match cs.argument_infos.as_slice() {
-        [] => false,
-        [arg] => error_argument_proves_text(
-            arg,
-            routine.return_name.as_deref(),
-            routine.return_type.as_deref(),
-            variables,
-            object_clean,
-        ),
-        _ => true,
-    }
-}
-
-/// Whether the one argument `arg` of a bare `Error(...)` provably selects the
-/// Text overload ([`source_dead_mark_trust`]): a string literal, or a name
-/// that resolves, in AL's scope order, to a Text, Label or Code variable.
-/// `object_clean` answers whether the enclosing object is directive-free; it
-/// is asked for every proof that does not rest on a local or a parameter
-/// (a global, or a variable whose scope is unknown).
-///
-/// Names are compared canonical (one outer quote pair off, as the lowerer and
-/// the variable table store them). The argument's `value` is NOT used: it
-/// strips every outer quote (`"""X"""` → `X`), so it can name another
-/// variable. Fails closed when the argument or any candidate name holds a
-/// quote, an escaped one (`""`) being the only way a name can.
-pub(crate) fn error_argument_proves_text(
-    arg: &crate::program::body::features::PExpressionInfo,
-    return_name: Option<&str>,
-    return_type: Option<&str>,
-    variables: &RoutineVariables,
-    mut object_clean: impl FnMut() -> bool,
-) -> bool {
-    use crate::program::body::scope::{ScopeTier, scope_tier};
-    let texty = |ty: &str| {
-        let head = ty.split(['[', ' ']).next().unwrap_or("");
-        // A `TextConst` is Text as well (intent-evidence step 3).
-        ["Text", "Label", "Code", "TextConst"]
-            .iter()
-            .any(|t| head.eq_fold_identifier(t))
-    };
-    match arg.kind.as_str() {
-        "string_literal" => true,
-        "identifier" | "quoted_identifier" => {
-            let name = unquote_once(arg.text.trim());
-            if name.contains('"')
-                || return_name.is_some_and(|r| r.contains('"'))
-                || variables.iter().any(|v| v.name.contains('"'))
-            {
-                return false;
-            }
-            let param = variables
-                .iter()
-                .find(|v| v.is_parameter && same_identifier(&v.name, name));
-            let is_global = |v: &ModelVariable| v.scope.as_deref() == Some("global");
-            let local = variables
-                .iter()
-                .find(|v| !v.is_parameter && !is_global(v) && same_identifier(&v.name, name));
-            let global = variables
-                .iter()
-                .find(|v| is_global(v) && same_identifier(&v.name, name));
-            let v = match scope_tier(
-                param.is_some(),
-                return_name.is_some_and(|r| same_identifier(r, name)),
-                local.is_some(),
-                global.is_some(),
-            ) {
-                Some(ScopeTier::Parameter) => param,
-                // A named return with no type proves nothing.
-                Some(ScopeTier::ReturnValue) => return return_type.is_some_and(texty),
-                Some(ScopeTier::Local) => local,
-                Some(ScopeTier::Global) => global,
-                None => None,
-            };
-            let Some(v) = v else {
-                return false;
-            };
-            texty(&v.declared_type)
-                && (matches!(v.scope.as_deref(), Some("local" | "parameter")) || object_clean())
-        }
-        _ => false,
-    }
-}
-
-/// The resolution half of [`ModelRoutine::dead_marks_trusted`] (#288): a row
-/// stays trusted only when every bare `Error(...)` call site binds to the
-/// builtin. An object may declare its own `procedure Error`, and a bare call
-/// then runs it and returns (BC 28.4 Linux sidecar: both `Error('x')` and
-/// `Error('x %1', 1)` called the own-object procedure and the next statement
-/// ran); the resolver also gives the extension base and the table scope
-/// precedence over the builtin. Fails closed: a site with no builtin edge, or
-/// with any other edge, is not proven.
-pub(crate) fn settle_dead_mark_trust(m: &mut Model) {
-    use crate::program::model::taxonomy::Resolution;
-    // The bare `Error` sites of trusted rows, then one pass over the edges
-    // that records, for those keys only, (seen a builtin edge, seen another).
-    let mut sites: HashMap<(usize, &str), (bool, bool)> = m
-        .workspace
-        .routines
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.dead_marks_trusted)
-        .flat_map(|(i, r)| {
-            r.call_sites
-                .iter()
-                .filter(|cs| is_bare_error_call(cs))
-                .map(move |cs| ((i, cs.id.as_str()), (false, false)))
-        })
-        .collect();
-    if sites.is_empty() {
-        return;
-    }
-    for e in &m.calls.edges {
-        if let Some((builtin, other)) = sites.get_mut(&(e.from_ix.get(), e.callsite_id.as_str())) {
-            if e.resolution == Resolution::Builtin {
-                *builtin = true;
-            } else {
-                *other = true;
-            }
-        }
-    }
-    let unproven: Vec<usize> = sites
-        .into_iter()
-        .filter(|(_, (builtin, other))| !builtin || *other)
-        .map(|((i, _), _)| i)
-        .collect();
-    for i in unproven {
-        m.workspace.routines[i].dead_marks_trusted = false;
-    }
-}
-
-/// The resolution half of the rules (intent-evidence spec §4.2): turn every
-/// row's `rule_drafts` into `rules`. A draft whose `stops` the assembly left
-/// open stops `Always` only when each of its call sites (the bare `Error`
-/// itself; an `Error(StrSubstNo(..))`'s `StrSubstNo`) binds to the builtin
-/// alone, by the same test as [`settle_dead_mark_trust`] (one builtin edge, no
-/// other edge): a procedure named `Error` in scope returns (#288). Runs after
-/// the calls are attached; a row with no drafts (rules not declared) keeps
-/// `rules: None`.
+/// The second half of the rules (intent-evidence spec §4.2): turn every row's
+/// `rule_drafts` into `rules`. Runs after the calls are attached; a row with no
+/// drafts (rules not declared) keeps `rules: None`.
 pub(crate) fn settle_rules(m: &mut Model) {
-    use crate::program::model::taxonomy::Resolution;
-    // (seen a builtin edge, seen another), for the call sites of drafts whose
-    // `stops` the assembly could not decide.
-    let mut sites: HashMap<usize, HashMap<String, (bool, bool)>> = HashMap::new();
-    for (i, r) in m.workspace.routines.iter().enumerate() {
-        for d in r.rule_drafts.iter().flatten() {
-            for cs in d.builtin_sites() {
-                sites
-                    .entry(i)
-                    .or_default()
-                    .insert(cs.to_string(), (false, false));
-            }
+    for r in &mut m.workspace.routines {
+        if let Some(drafts) = r.rule_drafts.take() {
+            r.rules = Some(crate::program::body::rules::settle_rules(&drafts));
         }
-    }
-    if !sites.is_empty() {
-        for e in &m.calls.edges {
-            if let Some((builtin, other)) = sites
-                .get_mut(&e.from_ix.get())
-                .and_then(|s| s.get_mut(e.callsite_id.as_str()))
-            {
-                if e.resolution == Resolution::Builtin {
-                    *builtin = true;
-                } else {
-                    *other = true;
-                }
-            }
-        }
-    }
-    for (i, r) in m.workspace.routines.iter_mut().enumerate() {
-        let Some(drafts) = r.rule_drafts.take() else {
-            continue;
-        };
-        r.rules = Some(crate::program::body::rules::settle_rules(&drafts, |cs| {
-            sites
-                .get(&i)
-                .and_then(|s| s.get(cs))
-                .is_some_and(|(builtin, other)| *builtin && !*other)
-        }));
     }
 }
 
@@ -1628,7 +1347,7 @@ fn project_ir(
     app_guid: &str,
     source_unit_id: &str,
     cols: &Utf16Cols,
-    parenless_calls: &std::collections::HashSet<al_syntax::ir::ExprId>,
+    parenless_calls: &crate::program::resolve::full::FileBindings,
     file: Option<crate::program::site_key::FileIx>,
     needs: AssemblyNeeds,
     workspace: &mut ModelEntities,
@@ -1911,8 +1630,6 @@ fn project_ir(
                 .collect::<Vec<_>>(),
         );
 
-        // #288: whether the object's source is free of directives, scanned once.
-        let mut object_clean: Option<bool> = None;
         for (rix, ir_routine) in routine_ixs.iter().map(|&ri| (ri, &o.routines[ri])) {
             let rname = ir_routine.name.clone();
             if rname.is_empty() {
@@ -2338,27 +2055,16 @@ fn project_ir(
                 "{routine_id}: one key per site"
             );
             positions.push((oi, rix));
-            let dead_marks_trusted = source_dead_mark_trust(
-                source,
-                o,
-                &mut object_clean,
-                ir_routine,
-                &call_sites,
-                &variables,
-            );
             // Intent-evidence §4.2: the rules' assembly half, from the IR still
-            // in hand. `stops` of a bare `Error` is settled after resolution
-            // (`settle_rules`, run by the attach).
+            // in hand. A bare `Error` stops by the body walk's own reading
+            // (ENG-80), so the rules and the unreachable marks agree.
             let rule_drafts = needs.rules.then(|| {
-                let clean =
-                    *object_clean.get_or_insert_with(|| source_clean(source, &o.origin.byte));
-                let error_text_proven: Vec<bool> = call_sites
-                    .iter()
-                    .map(|cs| {
-                        is_bare_error_call(cs)
-                            && bare_error_proves_text(cs, ir_routine, &variables, || clean)
-                    })
-                    .collect();
+                let error_readings = crate::program::body::ir_walk::error_readings(
+                    ir_file,
+                    oi,
+                    ir_routine,
+                    parenless_calls,
+                );
                 let record_vars: Vec<(String, Option<String>)> = record_variables
                     .iter()
                     .map(|rv| (rv.name.clone(), rv.table_name.clone()))
@@ -2371,11 +2077,8 @@ fn project_ir(
                         routine: ir_routine,
                         routine_id: &routine_id,
                         source,
-                        call_sites: &call_sites,
-                        call_exprs: &site_exprs.calls,
-                        error_text_proven: &error_text_proven,
+                        error_readings: &error_readings,
                         record_variables: &record_vars,
-                        object_clean: clean,
                         anchor: &|origin| anchor_from_origin(origin, source_unit_id, cols),
                         rule_base,
                     },
@@ -2439,7 +2142,6 @@ fn project_ir(
                 site_exprs,
                 source_anchor,
                 declaration_start_line: declaration_start_line(ir_routine),
-                dead_marks_trusted,
                 identifier_references,
                 unreachable_statements,
                 has_branching,
@@ -3345,7 +3047,8 @@ fn append_dependency_rows(
                             .kept_dependency_ids(app, pf.virtual_path, pf.text)
                             .is_some_and(|ids| {
                                 let population = demanded_population_from_ids(&ids, d);
-                                let no_calls = std::collections::HashSet::new();
+                                let no_calls =
+                                    crate::program::resolve::full::FileBindings::default();
                                 let source_unit_id =
                                     format!("dep:{}:{}", unit.id.guid, pf.virtual_path);
                                 let inputs = super::row_cache::ProjectionInputs {
@@ -3435,7 +3138,7 @@ fn append_dependency_rows(
                 (Some(d), Some(ids)) => demanded_population_from_ids(ids, d),
                 _ => whole_file_population(tree()),
             };
-            let no_calls = std::collections::HashSet::new();
+            let no_calls = crate::program::resolve::full::FileBindings::default();
             let calls = app
                 .and_then(|a| parenless.get(&(a, pf.virtual_path.clone())))
                 .unwrap_or(&no_calls);
@@ -3746,7 +3449,7 @@ fn assemble_l3_workspace_from_program(
         .map(|r| ((r.file.as_str(), r.object_ix, r.routine_ix), &r.node))
         .collect();
     let no_decls = FilePopulation::new();
-    let no_calls = std::collections::HashSet::new();
+    let no_calls = crate::program::resolve::full::FileBindings::default();
     // Deterministic order: files sorted by name (the `ws:<name>` unit id order),
     // projected in parallel into private fragments, folded back in that order.
     let mut sorted = files;

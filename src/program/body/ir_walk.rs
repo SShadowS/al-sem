@@ -100,6 +100,8 @@ pub struct IrSpine {
     pub condition_references: Vec<PConditionReference>,
     pub identifier_references: Vec<String>,
     pub unreachable_statements: Vec<PUnreachableStatement>,
+    /// ENG-80: how each bare `Error(...)` statement ends the path.
+    pub error_readings: HashMap<ExprId, ErrorReading>,
     /// record_operations BEFORE the temp_state/record_variable_id backfill (which
     /// `routine_features_partial` applies from `ir_record_variables`).
     pub record_operations: Vec<PRecordOperation>,
@@ -473,9 +475,10 @@ fn build_scope(
 /// Working state for the spine walk.
 struct SpineCtx<'a> {
     file: &'a AlFile,
-    /// Parens-less value reads the program resolver kept as calls
-    /// (`program::resolve::full::ParenlessCalls`): walked as zero-argument calls.
-    parenless_calls: &'a HashSet<ExprId>,
+    /// What the program resolver decided about the file's call sites
+    /// (`program::resolve::full::FileBindings`): the parens-less value reads it kept
+    /// as calls (walked as zero-argument calls), and (ENG-80) the bare-call verdicts.
+    parenless_calls: &'a crate::program::resolve::full::FileBindings,
     scope: &'a Scope,
     routine_id: &'a str,
     source: &'a str,
@@ -503,6 +506,8 @@ struct SpineCtx<'a> {
     identifier_ref_set: HashSet<String>,
     unreachable_statements: Vec<PUnreachableStatement>,
     unreachable_index: u32,
+    /// ENG-80: how each bare `Error(...)` statement ends the path ([`error_readings`]).
+    error_readings: HashMap<ExprId, ErrorReading>,
     record_operations: Vec<PRecordOperation>,
     operation_sites: Vec<POperationSite>,
     /// asserterror nesting depth (only error-call operation_sites carry under_asserterror).
@@ -1005,8 +1010,12 @@ impl<'a> SpineCtx<'a> {
                 let Call { function, .. } = &self.file.ir.expr(*e).kind else {
                     return None;
                 };
+                // ENG-80 (spec §4.1): an `Error(...)` ends the block only when it binds
+                // to the builtin with a proven Text argument (quoted `"Error"` too).
+                if self.error_readings.get(e) == Some(&ErrorReading::Terminates) {
+                    return Some("error");
+                }
                 match &self.file.ir.expr(*function).kind {
-                    Identifier(m) if m.eq_fold_identifier("error") => Some("error"),
                     Member { object, member, .. } => {
                         let obj_is = matches!(&self.file.ir.expr(*object).kind,
                             Identifier(o) | QuotedIdentifier(o) if o.eq_fold_identifier("currreport"));
@@ -1242,7 +1251,7 @@ impl<'a> SpineCtx<'a> {
         let call = match &e.kind {
             Call { function, args } => Some((*function, args.clone())),
             Identifier(_) | QuotedIdentifier(_) | Member { .. }
-                if self.parenless_calls.contains(&eid) =>
+                if self.parenless_calls.parenless.contains(&eid) =>
             {
                 Some((eid, Vec::new()))
             }
@@ -1643,7 +1652,7 @@ pub fn walk_spine(
     cols: &Utf16Cols,
     source_unit_id: &str,
     source_table_name: Option<&str>,
-    parenless_calls: &HashSet<ExprId>,
+    parenless_calls: &crate::program::resolve::full::FileBindings,
     base: SiteIdBase,
 ) -> IrSpine {
     let (scope, implicit_rec) = build_scope(file, object_idx, routine, source_table_name);
@@ -1679,6 +1688,7 @@ pub fn walk_spine(
         identifier_ref_set: HashSet::new(),
         unreachable_statements: Vec::new(),
         unreachable_index: base.unreachable,
+        error_readings: error_readings(file, object_idx, routine, parenless_calls),
         record_operations: Vec::new(),
         operation_sites: Vec::new(),
         assert_depth: 0,
@@ -1744,6 +1754,7 @@ pub fn walk_spine(
         condition_references,
         identifier_references,
         unreachable_statements: ctx.unreachable_statements,
+        error_readings: ctx.error_readings,
         record_operations: ctx.record_operations,
         operation_sites: ctx.operation_sites,
         call_sites: ctx.call_sites,
@@ -1846,7 +1857,7 @@ fn flow_text(raw: &str) -> Box<str> {
     text.into()
 }
 
-fn cfn_node(kind: &str) -> PCFNNode {
+pub(crate) fn cfn_node(kind: &str) -> PCFNNode {
     PCFNNode {
         kind: kind.to_string(),
         operation_id: None,
@@ -2050,9 +2061,10 @@ impl<'a> IrCfn<'a> {
         n
     }
 
-    fn is_error_fn(&self, function: ExprId) -> bool {
-        use ExprKind::*;
-        matches!(&self.ir().expr(function).kind, Identifier(m) | QuotedIdentifier(m) if m.eq_fold_identifier("error"))
+    /// ENG-80 (spec §4.1): whether call `call` is an `Error(...)` that raises on every
+    /// run ([`ErrorReading::Terminates`]); every other call, `Error` included, is a call.
+    fn terminates(&self, call: ExprId) -> bool {
+        self.spine.error_readings.get(&call) == Some(&ErrorReading::Terminates)
     }
 
     fn harvest_receiver(&self, function: ExprId, out: &mut Vec<PCFNNode>) {
@@ -2099,7 +2111,7 @@ impl<'a> IrCfn<'a> {
                         self.harvest(*a, &mut inner);
                     }
                     self.harvest_receiver(*function, out);
-                    let mut leaf = cfn_node(if self.is_error_fn(*function) {
+                    let mut leaf = cfn_node(if self.terminates(eid) {
                         "error"
                     } else {
                         "call"
@@ -2172,7 +2184,7 @@ impl<'a> IrCfn<'a> {
             l.operation_id = Some(op.clone());
             l
         } else if let Some(cs) = self.spine.cs_id_by_expr.get(&eid) {
-            let mut l = cfn_node(if self.is_error_fn(*function) {
+            let mut l = cfn_node(if self.terminates(eid) {
                 "error"
             } else {
                 "call"
@@ -2188,7 +2200,42 @@ impl<'a> IrCfn<'a> {
         if !pre.is_empty() {
             leaf.condition_leaves = Some(pre);
         }
+        if matches!(
+            self.spine.error_readings.get(&eid),
+            Some(ErrorReading::MayRaise(_))
+        ) {
+            return self.call_then_may_raise(leaf, &e.origin);
+        }
         leaf
+    }
+
+    /// ENG-80 (spec §4.1): an `Error(...)` not proven to raise on every run. The call
+    /// runs (its arguments are evaluated on every path), then the routine may raise or
+    /// go on: a one-branch `case` with no scrutinee and no `else` (the group encoding)
+    /// holding a bare `error` leaf with no site. Every walker then keeps the raising
+    /// exit state, reads `all_paths_error` false, and keeps the call on the success
+    /// path. The synthetic nodes take a zero-width range at the call's end, so a
+    /// source-order sort puts them after the call and before the next statement, and
+    /// they hold no field access.
+    fn call_then_may_raise(&self, mut call: PCFNNode, origin: &Origin) -> PCFNNode {
+        call.source_range = self.range_of(origin);
+        let end = call.source_range.map(|(_, _, el, ec)| (el, ec, el, ec));
+        let node = |kind: &str, children: Option<Vec<PCFNNode>>| {
+            let mut n = cfn_node(kind);
+            n.source_range = end;
+            n.children = children;
+            n
+        };
+        let raise = node(
+            "case",
+            Some(vec![node(
+                "case-branch",
+                Some(vec![node("block", Some(vec![node("error", None)]))]),
+            )]),
+        );
+        let mut both = cfn_node("block");
+        both.children = Some(vec![call, raise]);
+        both
     }
 
     /// r3 E2: a call's [`FlowFact::Args`]; `None` when no argument is one the
@@ -2741,6 +2788,268 @@ impl<'a> IrCfn<'a> {
     }
 }
 
+/// ENG-80 (spec §4.1): how a bare `Error(...)` statement ends the path. A statement
+/// with no reading is an ordinary call (the call binds to a user `procedure Error`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorReading {
+    /// The builtin, with an argument that selects the Text overload in every build:
+    /// it raises on every run.
+    Terminates,
+    /// Not proven, for the stated reason. The call runs; the routine may raise or
+    /// go on.
+    MayRaise(Unproven),
+}
+
+/// Why an [`ErrorReading::MayRaise`] is not proven to raise (the rules' reason).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unproven {
+    /// The resolver could not settle that the bare name binds the builtin alone.
+    Binding,
+    /// The callee or an argument varies by `#if` build (rule 1).
+    BuildVarying,
+    /// The argument is not proven Text: it may be an `ErrorInfo`, which under
+    /// `ErrorBehavior::Collect` continues when collectible (rule 2).
+    Text,
+}
+
+/// [`ErrorReading`] of every bare `Error(...)` statement of `routine` (spec §4.1:
+/// rule 1 untainted, rule 2 Text overload proven, rule 3 the resolver's verdict).
+pub(crate) fn error_readings(
+    file: &AlFile,
+    object_idx: usize,
+    routine: &RoutineDecl,
+    bindings: &crate::program::resolve::full::FileBindings,
+) -> HashMap<ExprId, ErrorReading> {
+    use crate::program::resolve::full::BareVerdict;
+    let mut out = HashMap::new();
+    let Some(body) = routine.body else {
+        return out;
+    };
+    let ir = &file.ir;
+    let proof = TextProof {
+        file,
+        object_idx,
+        routine,
+        bindings,
+        locals_complete: ir.locals_complete(body),
+        globals_complete: ir.globals_complete(body),
+    };
+    let mut stack = vec![body];
+    while let Some(bid) = stack.pop() {
+        for item in &ir.block(bid).items {
+            let s = match item {
+                BlockItem::Preproc(g) => {
+                    stack.extend(g.branches.iter().copied());
+                    continue;
+                }
+                BlockItem::Stmt(s) => *s,
+            };
+            stmt_child_blocks(ir, s, &mut stack);
+            let StmtKind::Call(e) = &ir.stmt(s).kind else {
+                continue;
+            };
+            let ExprKind::Call { function, args } = &ir.expr(*e).kind else {
+                continue;
+            };
+            if !is_bare_name(ir, *function, "error") {
+                continue;
+            }
+            let reading = match bindings
+                .bare
+                .get(e)
+                .copied()
+                .unwrap_or(BareVerdict::Unknown)
+            {
+                BareVerdict::User => continue,
+                BareVerdict::Unknown => ErrorReading::MayRaise(Unproven::Binding),
+                BareVerdict::Builtin if ir.call_is_tainted(*e) => {
+                    ErrorReading::MayRaise(Unproven::BuildVarying)
+                }
+                BareVerdict::Builtin => match args.as_slice() {
+                    [] => ErrorReading::MayRaise(Unproven::Text),
+                    [a] if !proof.proves_text(*a) => ErrorReading::MayRaise(Unproven::Text),
+                    _ => ErrorReading::Terminates,
+                },
+            };
+            out.insert(*e, reading);
+        }
+    }
+    out
+}
+
+/// Whether `e` is a bare identifier (quoted or not) named `name` (folded).
+fn is_bare_name(ir: &al_syntax::ir::Ir, e: ExprId, name: &str) -> bool {
+    matches!(&ir.expr(e).kind, ExprKind::Identifier(m) | ExprKind::QuotedIdentifier(m) if m.eq_fold_identifier(name))
+}
+
+/// The blocks a statement holds (an exhaustive match: a new statement kind must say).
+fn stmt_child_blocks(ir: &al_syntax::ir::Ir, s: al_syntax::ir::StmtId, out: &mut Vec<BlockId>) {
+    use StmtKind::*;
+    match &ir.stmt(s).kind {
+        If {
+            then_block,
+            else_block,
+            ..
+        } => out.extend(std::iter::once(*then_block).chain(*else_block)),
+        Case {
+            branches,
+            else_block,
+            ..
+        } => out.extend(branches.iter().map(|b| b.body).chain(*else_block)),
+        Try { body, catch_block } => out.extend(std::iter::once(*body).chain(*catch_block)),
+        While { body, .. }
+        | Repeat { body, .. }
+        | For { body, .. }
+        | Foreach { body, .. }
+        | With { body, .. }
+        | AssertError(body)
+        | Block(body) => out.push(*body),
+        Assignment { .. } | Call(_) | Exit(_) | Break | Continue | Unknown => {}
+    }
+}
+
+/// Spec §4.1 rule 2: does an `Error` argument select the Text overload in every build?
+struct TextProof<'a> {
+    file: &'a AlFile,
+    object_idx: usize,
+    routine: &'a RoutineDecl,
+    bindings: &'a crate::program::resolve::full::FileBindings,
+    locals_complete: bool,
+    globals_complete: bool,
+}
+
+impl TextProof<'_> {
+    fn proves_text(&self, a: ExprId) -> bool {
+        use crate::program::resolve::full::{BARE_VERDICT_NAMES, BareVerdict};
+        let ir = &self.file.ir;
+        match &ir.expr(a).kind {
+            ExprKind::Parenthesized(x) => self.proves_text(*x),
+            ExprKind::Literal(al_syntax::ir::Literal::Text(_)) => true,
+            ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+                // A name the resolver read as a parens-less call is a call, not a variable.
+                !self.bindings.parenless.contains(&a) && self.name_is_text(n)
+            }
+            ExprKind::Call { function, .. } => {
+                BARE_VERDICT_NAMES
+                    .iter()
+                    .filter(|n| **n != "error")
+                    .any(|n| is_bare_name(ir, *function, n))
+                    && !ir.call_is_tainted(a)
+                    && self.bindings.bare.get(&a) == Some(&BareVerdict::Builtin)
+            }
+            ExprKind::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+            } => self.proves_text(*lhs) && self.proves_text(*rhs),
+            _ => false,
+        }
+    }
+
+    /// Whether `name` means a Text-family declaration in every build. AL scope order
+    /// (parameters, the named return value, locals, globals): the innermost level that
+    /// declares the name decides, and every declaration of it there (all `#if` arms)
+    /// must be Text-family. A level the lowerer may not have read in full could hold
+    /// a hidden, shadowing declaration, so reaching it proves nothing. A name holding
+    /// a quote character proves nothing (#288).
+    fn name_is_text(&self, name: &str) -> bool {
+        if name.contains(['"', '\'']) {
+            return false;
+        }
+        let r = self.routine;
+        let ir = &self.file.ir;
+        let globals = self
+            .file
+            .objects
+            .get(self.object_idx)
+            .map_or(&[][..], |o| &o.globals[..]);
+        // The signature the lowerer read is one arm's when it varies by `#if` (sol review).
+        let signature_complete = r.body.is_some_and(|b| ir.signature_complete(b));
+        // Each level: the matching declarations (type, exists only in some builds), and
+        // whether the lowerer read the level in full.
+        // (type, start byte, every `#if` wrapper holding it).
+        type Decl<'a> = (Option<&'a str>, usize, Vec<&'a al_syntax::ir::VarWrapper>);
+        fn var<'a>(
+            ir: &'a al_syntax::ir::Ir,
+            routine: &'a al_syntax::ir::RoutineDecl,
+            v: &'a al_syntax::ir::VarDecl,
+        ) -> Decl<'a> {
+            (
+                v.ty.as_deref(),
+                v.origin.byte.start,
+                ir.var_wrappers_from(&v.origin, &routine.origin).collect(),
+            )
+        }
+        let levels: [(Vec<Decl<'_>>, bool); 4] = [
+            (
+                r.params
+                    .iter()
+                    .filter(|p| p.name.eq_fold_identifier(name))
+                    .map(|p| (p.ty.as_deref(), p.origin.byte.start, Vec::new()))
+                    .collect(),
+                signature_complete,
+            ),
+            (
+                r.return_name
+                    .as_deref()
+                    .filter(|n| n.eq_fold_identifier(name))
+                    .map(|_| (r.return_type.as_deref(), 0, Vec::new()))
+                    .into_iter()
+                    .collect(),
+                signature_complete,
+            ),
+            (
+                r.locals
+                    .iter()
+                    .filter(|v| v.name.eq_fold_identifier(name))
+                    .map(|v| var(ir, r, v))
+                    .collect(),
+                self.locals_complete,
+            ),
+            (
+                globals
+                    .iter()
+                    .filter(|v| v.name.eq_fold_identifier(name))
+                    .map(|v| var(ir, r, v))
+                    .collect(),
+                self.locals_complete && self.globals_complete,
+            ),
+        ];
+        for (decls, complete) in levels {
+            if !complete {
+                return false;
+            }
+            if !decls.is_empty() {
+                // A declaration under a `#if` is absent in the builds of the other arms,
+                // where the name means an outer one (or a parens-less call). It counts only
+                // when its wrapper has an `#else` and every arm declares the name (sol
+                // review): `#if CLEAN25 E: Label 'new'; #else E: Label 'old'; #endif`.
+                // Every wrapper holding a declaration must have an arm-by-arm cover: an
+                // `#else`, and a declaration of the name in each arm (Fable r5: an arm
+                // count alone can be met by two declarations in one arm).
+                let starts: Vec<usize> = decls.iter().map(|d| d.1).collect();
+                return decls.iter().all(|(t, _, wrappers)| {
+                    t.is_some_and(is_text_type) && wrappers.iter().all(|w| w.covered_by(&starts))
+                });
+            }
+        }
+        false
+    }
+}
+
+/// A Text-family type: its head word is `Text`, `Label`, `Code` or `TextConst`
+/// (`Codeunit` is not `Code`).
+fn is_text_type(ty: &str) -> bool {
+    let head = ty
+        .trim()
+        .split(|c: char| c == '[' || c.is_whitespace())
+        .next()
+        .unwrap_or_default();
+    ["text", "label", "code", "textconst"]
+        .iter()
+        .any(|t| head.eq_ignore_ascii_case(t))
+}
+
 /// ENG-14 (§4.2 D): whether a block holds, at any depth, a statement the lowerer
 /// could not lower (`StmtKind::Unknown`). The match is exhaustive on purpose: a new
 /// statement kind must say whether it holds blocks.
@@ -2815,7 +3124,7 @@ pub fn routine_features_partial(
     source: &str,
     source_unit_id: &str,
     source_table_name: Option<&str>,
-    parenless_calls: &HashSet<ExprId>,
+    parenless_calls: &crate::program::resolve::full::FileBindings,
     base: SiteIdBase,
 ) -> IrPartialFeatures {
     let cols = Utf16Cols::new(source);
@@ -3040,7 +3349,7 @@ pub fn project_routine_features_ir_at(
         source,
         source_unit_id,
         source_table_name,
-        &HashSet::new(),
+        &crate::program::resolve::full::FileBindings::default(),
         base,
     );
     (features, next)
@@ -3062,7 +3371,7 @@ pub fn project_routine_features_ir_with(
     source: &str,
     source_unit_id: &str,
     source_table_name: Option<&str>,
-    parenless_calls: &HashSet<ExprId>,
+    parenless_calls: &crate::program::resolve::full::FileBindings,
     base: SiteIdBase,
 ) -> (
     super::features::PFeatures,
@@ -4241,7 +4550,7 @@ codeunit 50101 C
                         SRC,
                         "u",
                         None,
-                        &std::collections::HashSet::new(),
+                        &crate::program::resolve::full::FileBindings::default(),
                         super::SiteIdBase::default(),
                     )
                     .2

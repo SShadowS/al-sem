@@ -42,6 +42,7 @@ use crate::engine::ids::{
     to_stable_routine_id_from_parts,
 };
 use crate::program::body::scope;
+use crate::program::resolve::full::FileBindings;
 use al_syntax::IdentifierFoldExt;
 use std::path::Path;
 
@@ -121,6 +122,7 @@ fn build_proutine(
     app_guid: &str,
     source: &str,
     source_unit_id: &str,
+    bindings: &FileBindings,
     next_base_by_id: &mut std::collections::HashMap<
         String,
         crate::program::body::ir_walk::SiteIdBase,
@@ -162,16 +164,18 @@ fn build_proutine(
         .get(&routine_id)
         .copied()
         .unwrap_or_default();
-    let (mut features, next): (PFeatures, _) = ir_walk::project_routine_features_ir_at(
-        ir_file,
-        oi,
-        ir_routine,
-        &routine_id,
-        source,
-        source_unit_id,
-        source_table_name,
-        base,
-    );
+    let (mut features, _, _, next): (PFeatures, _, _, _) =
+        ir_walk::project_routine_features_ir_with(
+            ir_file,
+            oi,
+            ir_routine,
+            &routine_id,
+            source,
+            source_unit_id,
+            source_table_name,
+            bindings,
+            base,
+        );
     next_base_by_id.insert(routine_id.clone(), next);
 
     // R1b: control-context lattice over the CFN skeleton (+ metadata). Populates
@@ -218,6 +222,65 @@ fn build_proutine(
     Some(routine)
 }
 
+/// ENG-80 (spec §4.1 rule 3, as built): the bare-call verdicts (`FileBindings::bare`) of each
+/// app file of `workspace`, by its workspace-relative path, from the program resolution of the
+/// same workspace, so the L2 projection reads a bare `Error` as the Model does. Only the
+/// verdicts: the parens-less set stays empty, as the L2 projection never read it. Empty when
+/// the program build fails (every bare `Error` then reads "may raise").
+fn workspace_bare_verdicts(workspace: &Path) -> std::collections::HashMap<String, FileBindings> {
+    use crate::program::resolved::{ProgramScope, ResolvedProgram};
+    let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
+    let p = match ResolvedProgram::build(&inputs, ProgramScope::Workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            // Stderr only: the projection is the stdout output (module doc).
+            eprintln!(
+                "warning: the program build failed ({e}); every bare Error in this L2 \
+                 projection reads \"may raise\" (no resolver verdict)"
+            );
+            return Default::default();
+        }
+    };
+    let app = p.body().ctx.primary_app_ref;
+    p.body()
+        .parenless_calls
+        .iter()
+        .filter(|((a, _), _)| *a == app)
+        .map(|((_, path), b)| {
+            (
+                path.clone(),
+                FileBindings {
+                    parenless: Default::default(),
+                    bare: b.bare.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// [`workspace_bare_verdicts`] of a one-file `source` (the single-routine entries below),
+/// resolved as the only file of a temporary workspace of app `app_guid`. Test-scale: it writes a
+/// temporary workspace and builds a program per call (the single-routine entries serve the
+/// vector tests; no production path calls them).
+fn one_file_bare_verdicts(source: &str, app_guid: &str) -> FileBindings {
+    const PATH: &str = "src/L2.al";
+    let Ok(dir) = tempfile::tempdir() else {
+        return FileBindings::default();
+    };
+    let app = serde_json::json!({
+        "id": app_guid, "name": "L2", "publisher": "L2", "version": "1.0.0.0",
+    });
+    let written = std::fs::write(dir.path().join("app.json"), app.to_string())
+        .and_then(|()| std::fs::create_dir_all(dir.path().join("src")))
+        .and_then(|()| std::fs::write(dir.path().join(PATH), source));
+    if written.is_err() {
+        return FileBindings::default();
+    }
+    workspace_bare_verdicts(dir.path())
+        .remove(PATH)
+        .unwrap_or_default()
+}
+
 /// Project the L2 `PFeatures` (+ parameters + lowercased attribute names) for a
 /// single NAMED routine in a one-file source, driven by the owned IR. Shared by the
 /// control-context / operation-order single-routine analyzers (and their vector
@@ -231,6 +294,7 @@ pub fn ir_features_for_named_routine(
 ) -> Option<(PFeatures, Vec<scope::ParameterSymbol>, Vec<String>)> {
     use crate::program::body::ir_walk;
     let ir_file = al_syntax::parse(source);
+    let bindings = one_file_bare_verdicts(source, app_guid);
     for (oi, o) in ir_file.objects.iter().enumerate() {
         let Some(object_type) = ir_walk::ir_object_type(&o.kind) else {
             continue;
@@ -255,7 +319,7 @@ pub fn ir_features_for_named_routine(
                 &parameters,
                 r.return_type.as_deref(),
             );
-            let features = ir_walk::project_routine_features_ir(
+            let features = ir_walk::project_routine_features_ir_with(
                 &ir_file,
                 oi,
                 r,
@@ -263,7 +327,10 @@ pub fn ir_features_for_named_routine(
                 source,
                 source_unit_id,
                 source_table_name.as_deref(),
-            );
+                &bindings,
+                Default::default(),
+            )
+            .0;
             // `RoutineDecl.attributes` is ALREADY lowercased by the lowerer, built from
             // the same `attributes_parsed` items — so this equals `build_proutine`'s
             // `attributes_parsed → name → to_lowercase()` set (drives the TryFunction guard).
@@ -286,6 +353,7 @@ fn project_file(
     source: &str,
     app_guid: &str,
     source_unit_id: &str,
+    bindings: &FileBindings,
     objects: &mut Vec<PObject>,
     routines: &mut Vec<PRoutine>,
 ) {
@@ -342,6 +410,7 @@ fn project_file(
                 app_guid,
                 source,
                 source_unit_id,
+                bindings,
                 &mut next_base_by_id,
             ) {
                 routines.push(routine);
@@ -419,6 +488,8 @@ pub fn project_workspace(workspace: &Path) -> anyhow::Result<L2Projection> {
         .map_err(|e| anyhow::anyhow!("failed to discover .al files: {e}"))?;
 
     let mut projection = empty();
+    let verdicts = workspace_bare_verdicts(workspace);
+    let no_bindings = FileBindings::default();
 
     // Sequential parse loop, run on a big-stack thread (T2.1): this CLI path
     // (`aldump`/`alsem`) runs on the process main thread, which has no
@@ -438,6 +509,7 @@ pub fn project_workspace(workspace: &Path) -> anyhow::Result<L2Projection> {
                 &source,
                 &app_guid,
                 &source_unit_id,
+                verdicts.get(&file.rel_posix).unwrap_or(&no_bindings),
                 &mut projection.objects,
                 &mut projection.routines,
             );
@@ -475,6 +547,7 @@ pub fn project_named_routine(
     source_unit_id: &str,
 ) -> Option<PRoutine> {
     let ir_file = al_syntax::parse(source);
+    let bindings = one_file_bare_verdicts(source, app_guid);
 
     for (oi, o) in ir_file.objects.iter().enumerate() {
         let Some(object_type) = crate::program::body::ir_walk::ir_object_type(&o.kind) else {
@@ -506,6 +579,7 @@ pub fn project_named_routine(
                 app_guid,
                 source,
                 source_unit_id,
+                &bindings,
                 &mut next_base_by_id,
             ) {
                 return Some(routine);
@@ -574,6 +648,44 @@ codeunit 50330 "L2A Work"
                 ("op1".to_string(), line_of("T.Modify();")),
             ],
             "each arm numbers its own op, the second after the first"
+        );
+    }
+
+    /// ENG-80 review F4: `project_workspace` looks a file's verdicts up by the discovered
+    /// `rel_posix`; the program keys them by its own `virtual_path`. The two must agree, or every
+    /// bare `Error` in that file silently reads "may raise". Fixture: a nested folder, a space and
+    /// a capital in the path. Break: key the map by the file name only -> the lookup misses.
+    #[test]
+    fn eng80_bare_verdict_keys_match_the_discovered_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"e8000000-0000-4000-8000-0000000000a4","name":"K","publisher":"K","version":"1.0.0.0"}"#,
+        )
+        .unwrap();
+        let rel = "src/Sub Dir/My Codeunit.al";
+        std::fs::create_dir_all(dir.path().join("src/Sub Dir")).unwrap();
+        std::fs::write(
+            dir.path().join(rel),
+            "codeunit 50398 \"K\"\n{\n    procedure P() begin Error('x'); end;\n}\n",
+        )
+        .unwrap();
+        let files = super::discover_al_files(dir.path()).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| f.rel_posix.as_str())
+                .collect::<Vec<_>>(),
+            [rel],
+            "precondition: one discovered file"
+        );
+        let verdicts = super::workspace_bare_verdicts(dir.path());
+        let b = verdicts
+            .get(&files[0].rel_posix)
+            .unwrap_or_else(|| panic!("no verdicts under {rel}: keys {:?}", verdicts.keys()));
+        assert_eq!(
+            b.bare.values().copied().collect::<Vec<_>>(),
+            [crate::program::resolve::full::BareVerdict::Builtin]
         );
     }
 }

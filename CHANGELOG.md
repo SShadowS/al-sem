@@ -196,6 +196,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fresh` check trusts. A persisted input descriptor gains an optional `statCtimeNs`; one written
   before it is checked by size and mtime alone until the next rebuild.
 
+### Fixed (ENG-80, ENG-14 part 2, #310: only an `Error` that raises on every run ends a path; #288's trust gate removed)
+
+- **Every bare `Error(...)` ended the path.** `Error(ErrInfo)` goes on when the error is collectible
+  and a caller collects errors; a bare `Error` bound to a user `procedure Error` (the object's own, the
+  extension base's, the table's from a page) runs it and returns; an argument or callee chosen across
+  `#if` arms may be an `ErrorInfo` in another build. Each marked the code after it dead. #288 hid the
+  damage with a per-routine trust gate: a routine holding any `#if` directive, or any `Error` it could
+  not prove, trusted none of its dead marks, so its real dead code counted as live. Now (spec
+  `docs/superpowers/specs/2026-11-14-eng14-310-remainder-design.md` §4.1, §4.5) one reading
+  (`ir_walk::error_readings`) decides each bare `Error` statement, and the unreachable marks, d20, the
+  control tree and the rules all read it:
+  - it **raises on every run** only when the resolver says the name binds the builtin (and could
+    search every scope that could shadow it: a `with`, an unloaded extension base, an out-of-closure
+    implicit `Rec` table say "unknown"), no callee or argument holds a `#if` node, and the argument
+    selects the Text overload: two or more arguments; a string literal; a name whose every visible
+    declaration is Text, Label, Code or TextConst, read only when the lowerer kept the routine's locals
+    and the object's globals in full; `StrSubstNo`, `Format` and the other Text catalog calls when
+    they bind the builtin; `+` of two such; parentheses;
+  - bound to a user procedure, it is a plain call;
+  - otherwise it is a call that **may raise**: the call runs, then the routine may raise or go on. The
+    code after it is live, `all_paths_error` is false, and `cfg_walker` keeps the raising exit state.
+- **The trust gate is gone.** With lost `#if` boundaries failing closed (part 1) and this rule, the
+  marks are sound, so `capability_cone::DeadSites` and d35 read them directly. Removed:
+  `ModelRoutine::dead_marks_trusted`, the source directive scan and its helpers, and the post-resolution
+  `settle_dead_mark_trust`. A routine with a well-formed `#if` group now drops its dead sites again (its
+  coverage gap, its cone edges, d35's "unresolved" list).
+- **Rules** (`alsem explain`/`prove`): a check's `stops` comes from the same reading, so a rule says it
+  may not stop exactly where the code after it is live. A new reason names an `#if`-varying call. A
+  global's message is used only when the routine's locals and the object's globals were read in full
+  (it was: when the object held no directive at all).
+- One summary walker (`return_summary::outcomes`) composes a block by how control leaves it
+  (falls through, returns, raises, leaves a loop); `dep_artifact_l4`'s copy is deleted. A `case` with
+  an `else` is exhaustive, `asserterror` traps the raise, a loop consumes its `break`/`continue`, a
+  `repeat` body runs at least once.
+- `aldump --l2` and the single-routine L2 entries read the same verdicts: they build the program for
+  the same inputs and pass each file its bare-call verdicts, so the L2 projection reads a bare `Error`
+  as the Model does (its hand-written vectors keep testing a terminating `Error`).
+- Goldens: `ws-explain-calls`'s `CheckCollectible` (`Error(ErrInfo)` in an `if`) reads `conditional`,
+  no longer `error-path`, in `calls.postorder.json`; the graph-less `ir-l2` snapshot moves for the 51
+  r0 routines holding a bare `Error` (no resolver there, so each may raise).
+- The impact cache schema goes 14 → 15. Tests: `src/program/body/eng80_error_tests.rs` (B1-B3, B5,
+  B6, C1, C4), `cfg_walker`'s B4 and zero-width tests, a session test that a table `procedure Error`
+  added and removed equals a cold build (both memory modes); the #288 tests
+  (`detector_context_288_tests.rs`) now assert the marks themselves, and a source scan pins that the
+  gate's names are gone. Each guard has a discrimination proof.
+- Found on the way (not fixed here): a CR-only source file with a `#if` parses as one error and loses
+  its objects (GRM-03).
+- Also closed in review (sol, Fable): a user `procedure Error` counts as the binding only when it
+  exists in every build of the call (a lone `#if` copy, an undecided `#if X or Y` condition kept
+  whole, collapsed copies that miss a build); a declaration or signature that varies by `#if` proves
+  nothing unless every arm declares the name and an `#else` exists (inside a `var` section, around
+  whole sections, split section tails, conditional name lists; a wrapper whose arm holds the routine
+  itself does not count, so obsolete `#if not CLEANxx` procedures keep their proofs); table scopes
+  read their extensions (`table_code_not_loaded`); a request page's `var` section fails its
+  routines' proofs closed.
+- On CDO (`bc3ccb18`, against master `630dd171`): `primary` findings 2308 → 2308, every fingerprint
+  kept; `all` 32580 → 32579, one d20 gone: `CTS-CDN Net. Profile Selector::GetReceiverRegistrationCache`
+  (a dependency), whose `Error(ErrorInfo); exit(false); //If the error was collected and not thrown,
+  exit here.` the author wrote for exactly the collectible case. `cdo-gate --only harness,l4,output`
+  passes (211 / 25 / 22 tests). The untrusted-routine census holds at 9 / 1 / 1 (its ratchet fails
+  when pinned to 8).
+
 ### Changed (TLS-55: a configured job-queue or web-service procedure is no "codeunit OnRun")
 
 - The entry-kind words (output validation §8.1) called every job-queue and web-service entry

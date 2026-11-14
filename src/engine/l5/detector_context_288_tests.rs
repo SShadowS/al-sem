@@ -1,7 +1,9 @@
 //! #288 acceptance tests (the `## Design` of `.agent/issue-288/ledger.md`,
 //! revision 5): a site that provably never runs adds no coverage gap and no
-//! cone edge, and a site counts as dead only where its row's `unreachable`
-//! marks are trusted (`ModelRoutine::dead_marks_trusted`).
+//! cone edge. ENG-80 removed #288's per-row trust gate: the `unreachable` marks
+//! are sound (lost `#if` boundaries fail closed, ENG-14; only an `Error` proven
+//! to raise on every run ends a path), so the G tests assert the marks
+//! themselves: a shape the gate used to distrust now leaves its call live.
 //!
 //! Every test builds its model with production assembly from inline AL
 //! ([`SRC`], or a small source of its own) and asserts its hand-stated
@@ -24,7 +26,6 @@ use crate::engine::l5::registry::substrate;
 use crate::engine::l5::test_support::{call_site, routine, write_fixture_dep_ambiguous_after};
 use crate::engine::session::{View, analyze_plan};
 use crate::program::model::program_calls::assemble_and_resolve_inline_program_default;
-use crate::program::model::workspace::{has_preproc_directive, source_clean};
 
 const APP: &str = "11111111-0000-0000-0000-000000028800";
 
@@ -737,18 +738,53 @@ fn line_of(text: &str) -> usize {
 }
 
 /// Precondition: `name`'s row holds a call site whose callee text contains
-/// `callee` and that is marked `unreachable` (the mark the gate trusts or not).
+/// `callee` and that is marked `unreachable`.
 fn assert_dead_site(m: &Model, name: &str, callee: &str) {
+    assert_site(m, name, callee, true);
+}
+
+/// ENG-80: `name`'s row holds a call to `callee` and no such call is marked
+/// `unreachable` (the shapes #288's gate distrusted now leave it live).
+fn assert_live_site(m: &Model, name: &str, callee: &str) {
+    assert_site(m, name, callee, false);
+}
+
+fn assert_site(m: &Model, name: &str, callee: &str, dead: bool) {
     let r = row(m, name);
+    let calls: Vec<_> = r
+        .call_sites
+        .iter()
+        .filter(|cs| cs.callee_text.contains(callee))
+        .map(|cs| (&cs.callee_text, &cs.control_context))
+        .collect();
+    let any_dead = calls
+        .iter()
+        .any(|(_, cc)| cc.as_deref() == Some("unreachable"));
     assert!(
-        r.call_sites.iter().any(|cs| cs.callee_text.contains(callee)
-            && cs.control_context.as_deref() == Some("unreachable")),
-        "precondition: {name} has an unreachable call to {callee}: {:?}",
-        r.call_sites
-            .iter()
-            .map(|cs| (&cs.callee_text, &cs.control_context))
-            .collect::<Vec<_>>()
+        !calls.is_empty() && any_dead == dead,
+        "{name}: a call to {callee} {}: {calls:?}",
+        if dead {
+            "marked unreachable"
+        } else {
+            "never marked unreachable"
+        }
     );
+}
+
+/// [`assert_live_site`] for each of `names`, every one checked, so one break
+/// shows which rows it moves.
+fn assert_all_live(m: &Model, names: &[&str], callee: &str) {
+    let failures: Vec<String> = names
+        .iter()
+        .filter(|name| {
+            row(m, name).call_sites.iter().any(|cs| {
+                cs.callee_text.contains(callee)
+                    && cs.control_context.as_deref() == Some("unreachable")
+            })
+        })
+        .map(|name| format!("{name}: its call to {callee} is marked unreachable"))
+        .collect();
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
 /// What the detector context says about one routine: its coverage, its
@@ -853,10 +889,6 @@ fn assert_d35_via_callee(s: &Seen, name: &str) {
 fn p1_detector_context_drops_a_trusted_dead_gap() {
     let m = build(SRC);
     assert_dead_site(&m, "OnAfterPostDead", "NextKm");
-    assert!(
-        row(&m, "OnAfterPostDead").dead_marks_trusted,
-        "precondition: the reproducer's row is trusted"
-    );
     assert_complete_no_d35(&seen1(&m, "OnAfterPostDead"), "OnAfterPostDead");
 }
 
@@ -934,12 +966,11 @@ fn p4_cross_app_base_drops_a_trusted_dead_dependency_gap() {
         "precondition: Inner is dependency code"
     );
     assert!(
-        inner[0].dead_marks_trusted
-            && inner[0]
-                .call_sites
-                .iter()
-                .any(|cs| cs.control_context.as_deref() == Some("unreachable")),
-        "precondition: Inner is a trusted row with a dead call site"
+        inner[0]
+            .call_sites
+            .iter()
+            .any(|cs| cs.control_context.as_deref() == Some("unreachable")),
+        "precondition: Inner has a dead call site"
     );
     assert!(
         base.rel()
@@ -1102,10 +1133,13 @@ fn c6_project_r3a3_uses_the_filtered_graph() {
 // M1-M7: deadness is per (routine id, site)
 // ---------------------------------------------------------------------------
 
+/// Precondition: `name`'s row is not untrusted (ENG-14: a row whose `#if`
+/// boundaries the lowerer lost has no statement tree and no marks).
 fn assert_trusted(m: &Model, name: &str) {
+    let r = row(m, name);
     assert!(
-        row(m, name).dead_marks_trusted,
-        "precondition: {name}'s row is trusted"
+        !r.parse_incomplete && r.statement_tree.is_some(),
+        "precondition: {name}'s row is not untrusted"
     );
 }
 
@@ -1240,8 +1274,8 @@ fn collided_work(arm_b: &str) -> (Vec<ModelRoutine>, CoverageRecordOwned) {
     assert_eq!(rows.len(), 2, "precondition: Work is two rows");
     assert_eq!(rows[0].id, rows[1].id, "precondition: one id");
     assert!(
-        rows.iter().all(|r| r.dead_marks_trusted),
-        "precondition: both rows are trusted"
+        rows.iter().all(|r| r.statement_tree.is_some()),
+        "precondition: neither row is untrusted"
     );
     assert!(
         rows[0]
@@ -1294,50 +1328,15 @@ fn m7_collided_dead_and_absent_drops_the_gap() {
 }
 
 // ---------------------------------------------------------------------------
-// G1-G12: the trust gate
+// G1-G12: the shapes #288's trust gate distrusted leave their call live
 // ---------------------------------------------------------------------------
 
-/// Engine limits B2: the lowerer keeps a `#if` chain's arms as alternatives, so
-/// an `exit` in one arm no longer marks the code after the group (or another
-/// arm) `unreachable`; production cannot make G1's dead marks any more. The
-/// trust gate still guards any other wrong mark in a row with a directive, so
-/// the precondition is stated by assignment: after checking that production
-/// leaves `name`'s calls to `callees` live, they are marked `unreachable`.
-fn b2_live_then_mark_dead(m: &mut Model, name: &str, callees: &[&str]) {
-    let i = m
-        .workspace
-        .routines
-        .iter()
-        .position(|r| r.name == name)
-        .unwrap_or_else(|| panic!("precondition: a routine {name}"));
-    let r = &mut m.workspace.routines[i];
-    let mut marked = 0;
-    for cs in &mut r.call_sites {
-        if callees.iter().any(|c| cs.callee_text.contains(c)) {
-            assert_ne!(
-                cs.control_context.as_deref(),
-                Some("unreachable"),
-                "B2: {name}'s call to {} is live in some build",
-                cs.callee_text
-            );
-            cs.control_context = Some("unreachable".to_string());
-            marked += 1;
-        }
-    }
-    assert!(marked > 0, "precondition: {name} calls {callees:?}");
-    assert!(
-        !r.dead_marks_trusted,
-        "precondition: {name}'s row has a directive, so its marks are not trusted"
-    );
-}
-
-/// G1: a preprocessor directive in the routine keeps the dead-marked gap AND
-/// the dead-marked edge to the committing `DoCommitP`, in each shape the
-/// lowerer used to splice (the marks are stated by assignment since B2,
-/// [`b2_live_then_mark_dead`]).
+/// G1: an `exit` in one `#if` arm leaves the code after the group (and the other
+/// arm) live, in each shape the lowerer used to splice, so the gap AND the edge
+/// to the committing `DoCommitP` are kept (engine limits B2, ENG-14).
 #[test]
 fn g1_directive_in_the_routine_keeps_gap_and_edge() {
-    let mut m = build(SRC);
+    let m = build(SRC);
     let names = [
         "OnIfExitThenCall",
         "OnIfExitElseCall",
@@ -1345,10 +1344,8 @@ fn g1_directive_in_the_routine_keeps_gap_and_edge() {
         "OnElifExit",
         "OnNestedExit",
     ];
-    for name in names {
-        b2_live_then_mark_dead(&mut m, name, &["NextKm", "DoCommitP"]);
-        assert_dead_site(&m, name, "DoCommitP");
-    }
+    assert_all_live(&m, &names, "NextKm");
+    assert_all_live(&m, &names, "DoCommitP");
     let mut failures = Vec::new();
     for (name, s) in names.iter().zip(seen(&m, &names)) {
         if s.direct_status != "partial" || !s.reasons.iter().any(|r| r == "interface-open-world") {
@@ -1367,41 +1364,21 @@ fn g1_directive_in_the_routine_keeps_gap_and_edge() {
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
-/// G2: directives spelled with a space after `#` are detected.
+/// G2: directives spelled with a space after `#` leave the call after the
+/// group live, and the gap is kept.
 #[test]
-fn g2_spaced_directives_are_detected() {
-    let spaced = "procedure P()\nbegin\n# if SPACED288\n    exit;\n# endif\nend;\n";
-    assert!(!spaced.contains("#if") && !spaced.contains("#endif"));
-    assert!(has_preproc_directive(spaced), "spaced `# if` / `# endif`");
-    assert!(has_preproc_directive("  #ELSE\n"), "indented, upper case");
-    assert!(
-        !has_preproc_directive("#pragma warning disable AL0432\n#region R\n"),
-        "#pragma and #region are not conditional directives"
-    );
-    let mut m = build(SRC);
-    b2_live_then_mark_dead(&mut m, "OnSpacedDirective", &["NextKm"]);
-    assert_dead_site(&m, "OnSpacedDirective", "NextKm");
+fn g2_spaced_directives_keep_the_gap() {
+    let m = build(SRC);
+    assert_live_site(&m, "OnSpacedDirective", "NextKm");
     assert_keeps_gap(&seen1(&m, "OnSpacedDirective"), "OnSpacedDirective");
 }
 
-/// G2 (FC6): a source with CR-only line ends (classic Mac files) is split
-/// into lines too, so its directives are seen.
-#[test]
-fn g2_cr_only_line_ends_are_split() {
-    let cr = "procedure P()\rbegin\r#if X288\r    exit;\r#endif\rend;\r";
-    assert!(!cr.contains('\n'), "precondition: no LF");
-    assert!(has_preproc_directive(cr), "CR-only `#if` / `#endif`");
-    assert!(
-        has_preproc_directive("begin\r\n  #else\r\nend;"),
-        "CRLF, indented"
-    );
-}
-
-/// G3: `Error(ErrInfo); Call();` keeps the gap (a collectible error goes on).
+/// G3: `Error(ErrInfo); Call();` leaves `Call` live and keeps the gap (a
+/// collectible error goes on).
 #[test]
 fn g3_error_errorinfo_keeps_the_gap() {
     let m = build(SRC);
-    assert_dead_site(&m, "OnCollectibleError", "NextKm");
+    assert_live_site(&m, "OnCollectibleError", "NextKm");
     assert_keeps_gap(&seen1(&m, "OnCollectibleError"), "OnCollectibleError");
 }
 
@@ -1416,9 +1393,7 @@ fn g4_unproven_one_argument_forms_keep_the_gap() {
         "OnFieldError",
         "OnArrayError",
     ];
-    for name in names {
-        assert_dead_site(&m, name, "NextKm");
-    }
+    assert_all_live(&m, &names, "NextKm");
     assert_all_keep_gap(&m, &names);
 }
 
@@ -1490,18 +1465,19 @@ fn g6_single_argument_label_and_code_drop_the_gap() {
     assert_all_complete(&m, &names);
 }
 
-/// G7: a directive elsewhere in the routine distrusts the whole row, so a
-/// plain `exit; Call();` keeps its gap.
+/// G7 (ENG-80): a well-formed `#if` group elsewhere in the routine no longer
+/// distrusts the whole row, so a plain `exit; Call();` drops its gap. (#288
+/// kept it: its gate distrusted every row holding a directive.)
 #[test]
-fn g7_directive_elsewhere_keeps_a_plain_exit_gap() {
+fn g7_directive_elsewhere_drops_a_plain_exit_gap() {
     let m = build(SRC);
     assert_dead_site(&m, "OnDirectiveElsewhere", "NextKm");
-    assert_keeps_gap(&seen1(&m, "OnDirectiveElsewhere"), "OnDirectiveElsewhere");
+    assert_complete_no_d35(&seen1(&m, "OnDirectiveElsewhere"), "OnDirectiveElsewhere");
 }
 
 /// G8: a global whose type is chosen by an `#if` around the object's `var`
 /// section proves nothing, in both declaration orders; an unconditional Text
-/// global in a directive-free object drops the gap.
+/// global drops the gap.
 #[test]
 fn g8_global_types_across_if_prove_nothing() {
     let m = build(SRC);
@@ -1510,9 +1486,8 @@ fn g8_global_types_across_if_prove_nothing() {
         "OnGlobalErrInfoFirst",
         "OnGlobalTextPlain",
     ];
-    for name in names {
-        assert_dead_site(&m, name, "NextKm");
-    }
+    assert_all_live(&m, &names[..2], "NextKm");
+    assert_dead_site(&m, names[2], "NextKm");
     let s = seen(&m, &names);
     assert_keeps_gap(&s[0], names[0]);
     assert_keeps_gap(&s[1], names[1]);
@@ -1525,45 +1500,80 @@ fn g8_global_types_across_if_prove_nothing() {
 fn g9_own_error_procedure_keeps_the_gap() {
     let m = build(SRC);
     let names = ["OnOwnErrorText", "OnOwnErrorFormat"];
-    for name in names {
-        assert_dead_site(&m, name, "NextKm");
-    }
+    assert_all_live(&m, &names, "NextKm");
     assert_all_keep_gap(&m, &names);
 }
 
-/// G10: fail closed. A row built without assembly (a test literal) is
-/// untrusted, so its dead site is not in the set; the same row marked trusted
-/// is. A range that does not index the source is not clean.
+/// G10 (ENG-80): `DeadSites` reads the mark itself: an `unreachable` site is
+/// dead, the same site `conditional` is not.
 #[test]
-fn g10_the_gate_fails_closed() {
-    let mut cs = call_site("r/cs0", "Strategy.NextKm", vec![]);
-    cs.control_context = Some("unreachable".to_string());
-    let mut r = routine("r", "procedure");
-    r.call_sites = vec![cs];
-    let rows = vec![r];
+fn g10_dead_sites_read_the_mark() {
+    let rows = |cc: &str| {
+        let mut cs = call_site("r/cs0", "Strategy.NextKm", vec![]);
+        cs.control_context = Some(cc.to_string());
+        let mut r = routine("r", "procedure");
+        r.call_sites = vec![cs];
+        vec![r]
+    };
+    assert!(DeadSites::of(&rows("unreachable")).contains("r", Some("r/cs0")));
     assert!(
-        !DeadSites::of(&rows).contains("r", Some("r/cs0")),
-        "a test-literal row is untrusted"
-    );
-    let mut trusted = rows.clone();
-    trusted[0].dead_marks_trusted = true;
-    assert!(
-        DeadSites::of(&trusted).contains("r", Some("r/cs0")),
-        "control: the same row, trusted, has the dead site"
-    );
-    let source = "begin end;";
-    assert!(source_clean(source, &(0..5)), "control: an indexing range");
-    assert!(
-        !source_clean(source, &(4..99)),
-        "a range past the source is not clean"
+        !DeadSites::of(&rows("conditional")).contains("r", Some("r/cs0")),
+        "control: a conditional site is live"
     );
 }
 
-/// The G11 assertions: `work` keeps its dead-marked interface gap, and its
-/// subscriber `sub` stays unknown with `work` partly analysed.
+/// E1 (ENG-80 spec §4.5): the trust gate's names are gone from the code under
+/// `src/` (comments excluded; this file names them to search for them).
+#[test]
+fn e1_the_trust_gate_names_are_gone() {
+    const NAMES: [&str; 8] = [
+        "dead_marks_trusted",
+        "has_preproc_directive",
+        "source_clean",
+        "source_dead_mark_trust",
+        "error_argument_proves_text",
+        "bare_error_proves_text",
+        "is_bare_error_call",
+        "settle_dead_mark_trust",
+    ];
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).expect("a readable src dir") {
+            let p = e.expect("a dir entry").path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    assert!(
+        files.len() > 100,
+        "precondition: the walk found the sources"
+    );
+    let mut hits = Vec::new();
+    for f in files
+        .iter()
+        .filter(|f| !f.ends_with(file!().rsplit('/').next().unwrap()))
+    {
+        let text = std::fs::read_to_string(f).expect("a readable source");
+        for (i, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            for n in NAMES.iter().filter(|n| code.contains(**n)) {
+                hits.push(format!("{}:{}: {n}", f.display(), i + 1));
+            }
+        }
+    }
+    assert!(hits.is_empty(), "\n{}", hits.join("\n"));
+}
+
+/// The G11 assertions: `work` leaves its interface call live and keeps the gap,
+/// and its subscriber `sub` stays unknown with `work` partly analysed.
 fn assert_named_return_gap(work: &str, sub: &str, object: &str) {
     let m = build(SRC);
-    assert_dead_site(&m, work, "NextKm");
+    assert_live_site(&m, work, "NextKm");
     let s = seen(&m, &[work, sub]);
     assert_keeps_gap(&s[0], work);
     assert_d35_reasons(
@@ -1590,12 +1600,12 @@ fn g11u_non_ascii_named_return_keeps_the_gap() {
     assert_named_return_gap("WorkErrU", "OnNamedReturnGapU", "50291");
 }
 
-/// G12 (ASCII): the same shadowing keeps the dead-marked edge to the
-/// committing callee; the Text named return (control) drops the dead call.
+/// G12 (ASCII): the same shadowing leaves the call to the committing callee
+/// live and keeps the edge; the Text named return (control) drops the dead call.
 #[test]
 fn g12_named_errorinfo_return_keeps_the_edge() {
     let m = build(SRC);
-    assert_dead_site(&m, "WorkCommit", "DoCommit5");
+    assert_live_site(&m, "WorkCommit", "DoCommit5");
     assert_dead_site(&m, "WorkText", "NextKm");
     let s = seen(&m, &["OnNamedReturnEdge", "OnNamedReturnText"]);
     assert_eq!(
@@ -1611,7 +1621,7 @@ fn g12_named_errorinfo_return_keeps_the_edge() {
 #[test]
 fn g12u_non_ascii_named_return_keeps_the_edge() {
     let m = build(SRC);
-    assert_dead_site(&m, "WorkCommitU", "DoCommitU");
+    assert_live_site(&m, "WorkCommitU", "DoCommitU");
     let s = seen1(&m, "OnNamedReturnEdgeU");
     assert_eq!(s.commits, EffectPresence::Yes, "OnNamedReturnEdgeU commits");
     assert_d35_via_callee(&s, "OnNamedReturnEdgeU");
@@ -1619,7 +1629,7 @@ fn g12u_non_ascii_named_return_keeps_the_edge() {
 
 /// G11u/G12u control (FO2): a Text named return `"StopVälue"` referenced as
 /// `"STOPVÄLUE"`, beside an ErrorInfo global `"STOPVÄLUE"`, proves the Text
-/// form, so the row is trusted and its dead call is dropped. ASCII-only
+/// form, so the `Error` raises and its dead call is dropped. ASCII-only
 /// equality would miss the return and read the ErrorInfo global instead.
 #[test]
 fn g11u_control_non_ascii_text_named_return_drops_the_gap() {
@@ -1632,12 +1642,12 @@ fn g11u_control_non_ascii_text_named_return_drops_the_gap() {
 
 /// FS1: a parameter `"""StopValue""": Text` is named `"StopValue"` WITH its
 /// quotes, so it does not shadow the ErrorInfo global `StopValue`, and
-/// `Error(StopValue)` takes the ErrorInfo form: `WorkQ` keeps its dead-marked
-/// interface gap.
+/// `Error(StopValue)` takes the ErrorInfo form: `WorkQ` leaves its interface
+/// call live and keeps the gap.
 #[test]
 fn fs1_escaped_quote_parameter_keeps_the_gap() {
     let m = build(SRC);
-    assert_dead_site(&m, "WorkQ", "NextKm");
+    assert_live_site(&m, "WorkQ", "NextKm");
     let s = seen(&m, &["WorkQ", "OnEscapedParamGap"]);
     assert_keeps_gap(&s[0], "WorkQ");
     assert_d35_reasons(
@@ -1647,12 +1657,12 @@ fn fs1_escaped_quote_parameter_keeps_the_gap() {
     );
 }
 
-/// FS1: the same shadowing keeps `WorkQCommit`'s dead-marked edge to the
+/// FS1: the same shadowing keeps `WorkQCommit`'s call (live) and edge to the
 /// committing `DoCommitQ`.
 #[test]
 fn fs1_escaped_quote_parameter_keeps_the_edge() {
     let m = build(SRC);
-    assert_dead_site(&m, "WorkQCommit", "DoCommitQ");
+    assert_live_site(&m, "WorkQCommit", "DoCommitQ");
     let s = seen1(&m, "OnEscapedParamEdge");
     assert_eq!(s.commits, EffectPresence::Yes, "OnEscapedParamEdge commits");
     assert_d35_via_callee(&s, "OnEscapedParamEdge");
@@ -1664,49 +1674,8 @@ fn fs1_escaped_quote_parameter_keeps_the_edge() {
 #[test]
 fn fs1_escaped_quote_argument_keeps_the_gap() {
     let m = build(SRC);
-    assert_dead_site(&m, "OnEscapedArg", "NextKm");
+    assert_live_site(&m, "OnEscapedArg", "NextKm");
     assert_keeps_gap(&seen1(&m, "OnEscapedArg"), "OnEscapedArg");
-}
-
-/// FC3: a variable whose scope is unknown (`None`) is treated like a global:
-/// its Text type proves the Text form only when the object is directive-free.
-/// Hand-stated: assembly always sets a scope today, so the row is built here.
-#[test]
-fn fc3_unknown_scope_needs_the_object_scan() {
-    use crate::program::body::features::PExpressionInfo;
-    use crate::program::model::workspace::{
-        ModelVariable, RoutineVariables, error_argument_proves_text,
-    };
-    let arg = PExpressionInfo {
-        kind: "identifier".to_string(),
-        text: "Msg".to_string(),
-        value: Some("Msg".to_string()),
-        qualifier: None,
-        member: None,
-    };
-    let vars = |scope: Option<&str>| {
-        RoutineVariables::from_own(vec![ModelVariable {
-            name: "msg".to_string(),
-            declared_type: "Text".to_string(),
-            is_parameter: false,
-            parameter_index: None,
-            initializer: None,
-            scope: scope.map(str::to_string),
-            fixed_local: None,
-        }])
-    };
-    let proves = |scope: Option<&str>, object_clean: bool| {
-        error_argument_proves_text(&arg, None, None, &vars(scope), || object_clean)
-    };
-    assert!(
-        proves(Some("local"), false),
-        "control: a local needs no scan"
-    );
-    assert!(proves(None, true), "control: unknown scope, clean object");
-    assert!(
-        !proves(None, false),
-        "unknown scope in an object with a directive proves nothing"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1730,11 +1699,12 @@ fn d1_mixed_live_dead_names_only_the_live_site() {
     );
 }
 
-/// D1': an untrusted row names its dead-marked site (the gap it keeps).
+/// D1': the call after an `Error` not proven to raise is live, so d35 names it
+/// (the gap it keeps).
 #[test]
-fn d1p_untrusted_row_names_its_dead_site() {
+fn d1p_may_raise_error_names_the_live_site() {
     let m = build(SRC);
-    assert_dead_site(&m, "OnCollectibleError", "NextKm");
+    assert_live_site(&m, "OnCollectibleError", "NextKm");
     let s = seen1(&m, "OnCollectibleError");
     assert_d35_reasons(
         &s,

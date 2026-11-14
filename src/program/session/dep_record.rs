@@ -386,9 +386,12 @@ impl Assembly {
             e
         }));
         self.facts(r.site_facts);
-        if !r.parenless.is_empty() {
-            self.parenless
-                .insert((app, path.to_string()), r.parenless.into_iter().collect());
+        let bindings = crate::program::resolve::full::FileBindings {
+            parenless: r.parenless.into_iter().collect(),
+            bare: r.bare_verdicts.into_iter().collect(),
+        };
+        if !bindings.is_empty() {
+            self.parenless.insert((app, path.to_string()), bindings);
         }
         let queries = log
             .into_iter()

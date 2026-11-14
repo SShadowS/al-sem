@@ -824,9 +824,132 @@ fn eng14_case_rows() {
     );
 }
 
+/// ENG-80 D1 (spec §4.3): the summary walkers compose a block by how control leaves each
+/// statement. Each routine's name says the expected `all_paths_error`.
+const SUMMARY_ROWS: &str = r#"table 50350 "Eng80 T"
+{
+    fields { field(1; "No."; Integer) { } }
+}
+
+codeunit 50350 "Eng80 Summary"
+{
+    procedure FalseExitThenError(C: Boolean)
+    begin
+        if C then
+            exit;
+        Error('x');
+    end;
+
+    procedure FalseBreakInRepeat()
+    begin
+        repeat
+            break;
+            Error('x');
+        until true;
+    end;
+
+    procedure FalseContinueInRepeat(C: Boolean)
+    begin
+        repeat
+            if C then
+                continue;
+            Error('x');
+        until true;
+    end;
+
+    procedure FalseWhileBody(C: Boolean)
+    begin
+        while C do
+            Error('x');
+    end;
+
+    procedure FalseAssertError()
+    begin
+        asserterror Error('x');
+    end;
+
+    // An `exit` inside `asserterror` still returns normally.
+    procedure FalseAssertExit()
+    begin
+        asserterror exit;
+        Error('x');
+    end;
+
+    procedure FalseWithExit(var R: Record "Eng80 T")
+    begin
+        with R do
+            exit;
+        Error('x');
+    end;
+
+    procedure TrueError()
+    begin
+        Error('x');
+    end;
+
+    procedure TrueBothArms(C: Boolean)
+    begin
+        if C then
+            Error('a')
+        else
+            Error('b');
+    end;
+
+    procedure TrueRepeatBody()
+    begin
+        repeat
+            Error('x');
+        until true;
+    end;
+
+    procedure TrueInnerBreak()
+    begin
+        repeat
+            repeat
+                break;
+            until true;
+            Error('x');
+        until true;
+    end;
+
+    procedure TrueCaseWithElse(I: Integer)
+    begin
+        case I of
+            1:
+                Error('a');
+            else
+                Error('b');
+        end;
+    end;
+}
+"#;
+
+#[test]
+fn eng80_d1_summary_composition() {
+    let m = assemble_and_resolve_inline_program_default(
+        &[("Summary.Codeunit.al".to_string(), SUMMARY_ROWS.to_string())],
+        "e8000000-0000-4000-8000-000000000080",
+    );
+    for r in m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.object_type == "Codeunit")
+    {
+        let want = r.name.starts_with("True");
+        let got = crate::engine::return_summary::compute_routine_return_summary(r).all_paths_error;
+        assert_eq!(
+            got,
+            serde_json::Value::Bool(want),
+            "{}: all_paths_error",
+            r.name
+        );
+    }
+}
+
 /// ENG-14 census on CDO (Fable's part-1 review, I1): how many routines lose their control tree,
-/// by cause and by app (workspace or dependency). A measurement, not a ratchet: it prints and
-/// asserts only that the model was built. Run with
+/// by cause and by app (workspace or dependency). A ratchet (ENG-80): the per-app counts are
+/// pinned and the test fails when they move. Run with
 /// `CDO_WS=… cargo test -p al-sem --lib eng14_cdo_untrusted_census -- --nocapture`.
 #[test]
 fn eng14_cdo_untrusted_census() {
@@ -892,6 +1015,22 @@ fn eng14_cdo_untrusted_census() {
         println!("ENG14-CENSUS example {e}");
     }
     assert!(bodies > 0, "the CDO model has bodies");
+    // ENG-80 ratchet (the orchestrator, mantra 7): the per-app untrusted counts, pinned on the
+    // pinned CDO baseline (bc3ccb18) at master 813fbcd5. A rise must be explained before the
+    // pin moves; a drop (ENG-77, ENG-79 landing) re-pins it with intent. Base App: one family
+    // of 6 (`#if` adds an `if` head, ENG-77) plus 3 case groups (ENG-79); System App: 1
+    // (ENG-77); the workspace: `CDO E-Mail::SetSendingMethodAndFromAddress` (ENG-79).
+    let pinned: std::collections::BTreeMap<&str, usize> = [
+        ("437dbf0e-84ff-417a-965d-ed2bb9650972", 9),
+        ("63ca2fa4-4f03-4f2b-a480-172fef340d3f", 1),
+        ("f4b69b55-c90d-4937-8f53-2742898fa948", 1),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        by_app, pinned,
+        "untrusted routines per app moved: explain the change, then re-pin"
+    );
 }
 
 /// A6 sources: two routines whose control tree cannot be trusted. `Broken` has a parse

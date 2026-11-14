@@ -463,7 +463,6 @@ mod tests {
                 syntax_kind: "procedure".to_string(),
             },
             declaration_start_line: 0,
-            dead_marks_trusted: false,
             identifier_references: Vec::new(),
             unreachable_statements: Vec::new(),
             has_branching: false,

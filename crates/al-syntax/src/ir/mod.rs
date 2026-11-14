@@ -69,8 +69,10 @@ id_type!(BlockId);
 /// Code inside `#if X` / `#else` / `#elif` branches, and a routine that exists only
 /// under such a branch, compiles only in builds where its conditions hold. The
 /// lowerer records the symbols those conditions decide (a condition true; every
-/// earlier arm's false; `A and B` true decides both, `A or B` false decides both,
-/// anything else decides nothing). Symbols are case-sensitive: alc 18.0.41.45789
+/// earlier arm's false; `A and B` true decides both, `A or B` false decides both).
+/// A condition that decides no symbol is recorded whole, named by its parenthesized
+/// text (`("(A or B)", true)`), so code under any condition never has an empty context
+/// (empty means "every build"). Symbols are case-sensitive: alc 18.0.41.45789
 /// with `CLEAN27` defined activates `#if CLEAN27` and not `#if clean27`.
 pub type PreprocSymbols = Vec<(String, bool)>;
 
@@ -93,6 +95,31 @@ pub fn exact_size<T>(v: &mut Vec<T>) {
     }
 }
 
+/// One `#if` wrapper around variable declarations ([`Ir::var_wrappers`]): inside a `var`
+/// section, around whole sections, a split section tail, or a conditional name list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VarWrapper {
+    pub byte: Range<usize>,
+    /// Each arm's byte range (between its directive and the next). Empty for a wrapper no
+    /// arm-by-arm reading applies to (a conditional name list): never covering.
+    pub arms: Vec<Range<usize>>,
+    /// Whether one arm is an `#else`, so the arms cover every build.
+    pub has_else: bool,
+}
+
+impl VarWrapper {
+    /// Whether every build declares a name here: an `#else` arm, and every arm holds one of
+    /// the declarations starting at `starts`.
+    pub fn covered_by(&self, starts: &[usize]) -> bool {
+        self.has_else
+            && !self.arms.is_empty()
+            && self
+                .arms
+                .iter()
+                .all(|a| starts.iter().any(|s| a.contains(s)))
+    }
+}
+
 /// Push-only arena holding the `Expr`/`Stmt`/`Block` pools an `AlFile` references.
 #[derive(Default)]
 pub struct Ir {
@@ -103,11 +130,98 @@ pub struct Ir {
     /// that whole context (enclosing branches and routine arm together). Ranges
     /// nest; [`Ir::preproc_context`] picks the innermost.
     preproc_ranges: Vec<(Range<u32>, PreprocSymbols)>,
+    /// ENG-80 (spec §4.2 C): call expressions whose callee or arguments hold a
+    /// build-varying `#if` node, or built from a split call statement. The lowerer
+    /// reads one arm there, so the call's arity and argument kinds may differ in
+    /// another build. Pushed in expression order (sorted).
+    tainted_calls: Vec<u32>,
+    /// ENG-80 (spec §4.2 C): routine bodies (by block id) whose routine's declared
+    /// locals, or whose object's globals, the lowerer did not collect in full (a
+    /// split body's arm `var` sections; a `var` `#if` nested deeper than one level).
+    locals_incomplete: Vec<u32>,
+    globals_incomplete: Vec<u32>,
+    /// ENG-80 (sol review): the `#if` wrappers whose declarations a `var` section lists
+    /// (every arm flattened), as [`VarWrapper`]s: a declaration inside one exists only in
+    /// the builds of its arm.
+    conditional_vars: Vec<VarWrapper>,
+    /// ENG-80 (sol review): routine bodies (by block id) whose signature (parameters or
+    /// return clause) varies by `#if`; the lowerer read one arm of it.
+    signature_varies: Vec<u32>,
 }
 
 impl Ir {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether call `e`'s callee or arguments vary by `#if` build (ENG-80): its
+    /// arity and argument kinds prove nothing about which overload every build calls.
+    pub fn call_is_tainted(&self, e: ExprId) -> bool {
+        self.tainted_calls.binary_search(&e.0).is_ok()
+    }
+
+    pub(crate) fn mark_tainted(&mut self, e: ExprId) {
+        if let Err(i) = self.tainted_calls.binary_search(&e.0) {
+            self.tainted_calls.insert(i, e.0);
+        }
+    }
+
+    /// Whether the routine with body `body` lists every local it declares in every
+    /// build (`RoutineDecl::locals`). ENG-80: a Text proof reads the list only when so.
+    pub fn locals_complete(&self, body: BlockId) -> bool {
+        !self.locals_incomplete.contains(&body.0)
+    }
+
+    /// Whether the object of the routine with body `body` lists every global it
+    /// declares in every build (`ObjectDecl::globals`).
+    pub fn globals_complete(&self, body: BlockId) -> bool {
+        !self.globals_incomplete.contains(&body.0)
+    }
+
+    pub(crate) fn mark_locals_incomplete(&mut self, body: BlockId) {
+        self.locals_incomplete.push(body.0);
+    }
+
+    pub(crate) fn mark_globals_incomplete(&mut self, body: BlockId) {
+        self.globals_incomplete.push(body.0);
+    }
+
+    /// Every `#if` wrapper that holds the variable declared at `origin` (it then exists only
+    /// in the builds of its arms, ENG-80).
+    pub fn var_wrappers<'a>(&'a self, origin: &'a Origin) -> impl Iterator<Item = &'a VarWrapper> {
+        self.conditional_vars
+            .iter()
+            .filter(|w| w.byte.contains(&origin.byte.start))
+    }
+
+    /// [`Ir::var_wrappers`] as seen from the routine declared at `routine`: a wrapper whose
+    /// same arm holds both the routine and the variable is left out, since the variable
+    /// exists in every build that has the routine (the usual `#if not CLEANxx` around an
+    /// obsolete procedure, Fable r6). A routine in another arm does not see the variable.
+    pub fn var_wrappers_from<'a>(
+        &'a self,
+        origin: &'a Origin,
+        routine: &'a Origin,
+    ) -> impl Iterator<Item = &'a VarWrapper> {
+        self.var_wrappers(origin).filter(move |w| {
+            !w.arms
+                .iter()
+                .any(|a| a.contains(&origin.byte.start) && a.contains(&routine.byte.start))
+        })
+    }
+
+    pub(crate) fn mark_conditional_vars(&mut self, wrappers: Vec<VarWrapper>) {
+        self.conditional_vars.extend(wrappers);
+    }
+
+    /// Whether the signature (parameters, return clause) of the routine with body `body` is
+    /// the same in every build. When not, the lowerer read one arm (ENG-80).
+    pub fn signature_complete(&self, body: BlockId) -> bool {
+        !self.signature_varies.contains(&body.0)
+    }
+
+    pub(crate) fn mark_signature_varies(&mut self, body: BlockId) {
+        self.signature_varies.push(body.0);
     }
 
     /// Drop the arenas' spare capacity (a finished lowering adds nothing).
@@ -116,6 +230,7 @@ impl Ir {
         exact_size(&mut self.stmts);
         exact_size(&mut self.blocks);
         exact_size(&mut self.preproc_ranges);
+        exact_size(&mut self.tainted_calls);
     }
 
     pub fn add_expr(&mut self, e: Expr) -> ExprId {

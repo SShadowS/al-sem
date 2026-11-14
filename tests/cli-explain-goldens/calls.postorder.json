@@ -105,7 +105,7 @@
               "role": "operation",
               "sourceKind": "source"
             },
-            "conditionality": "error-path",
+            "conditionality": "conditional",
             "type": "ERROR_THROW",
             "via": [
               "CheckCollectible"

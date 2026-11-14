@@ -30,10 +30,9 @@
 //! here means a call whose callee set is not closed for this proof (the
 //! call-site-local kinds: interface-open-world, ambiguous-overload,
 //! external-target, member-not-found), not the `unresolved-call` uncertainty
-//! kind, which is left out. #288 — a site in unreachable code whose row's dead
-//! marks are trusted (`ModelRoutine::dead_marks_trusted`) is no gap at all (the
-//! coverage fold leaves it out), so it is neither named nor counted missing; an
-//! untrusted row's dead-marked site is named like a live one. The
+//! kind, which is left out. #288 — a site in unreachable code is no gap at all
+//! (the coverage fold leaves it out), so it is neither named nor counted
+//! missing (ENG-80: the marks are sound, so no row distrusts them). The
 //! subscriber stays under "partly analysed" unless every own gap is accounted
 //! for: a site was named, every other own edge's site was found (in its own
 //! row, and reachable), and no other row with its id is opaque or
@@ -349,9 +348,8 @@ fn coverage_reasons(
             .callsite_id
             .as_deref()
             .and_then(|id| routine.call_sites.iter().find(|cs| cs.id == id))
-            // A trusted row's dead site that is live in another row of the id is
-            // that row's gap, not this one's. An untrusted row's marks are not
-            // believed, so its dead-marked site is named (#288 O24).
+            // A dead site that is live in another row of the id is that row's
+            // gap, not this one's.
             .filter(|cs| !routine.site_is_dead_marked(cs.control_context.as_deref()));
         let Some(cs) = cs else {
             every_site_found = false;
@@ -745,15 +743,13 @@ mod tests {
         );
     }
 
-    /// The finding for a subscriber with a live site `cs1` and an `unreachable`
-    /// site `cs-dead`, both with an own edge, in a row whose dead marks are
-    /// `trusted` or not.
-    fn live_and_dead_site_finding(trusted: bool) -> Finding {
+    /// The finding for a subscriber with a live site `cs1` and a site `cs-dead`
+    /// with control context `dead_cc`, both with an own edge.
+    fn live_and_dead_site_finding(dead_cc: &str) -> Finding {
         let mut dead = site_at("cs-dead", "Dead", 6, 0);
-        dead.control_context = Some("unreachable".to_string());
+        dead.control_context = Some(dead_cc.to_string());
         let mut sub = routine("sub", "event-subscriber");
         sub.call_sites = vec![site_at("cs1", "X", 4, 0), dead];
-        sub.dead_marks_trusted = trusted;
         let routines = vec![sub];
         finding_with_edges(
             &routines,
@@ -765,24 +761,22 @@ mod tests {
         )
     }
 
-    /// #265 CR4 + #288 D1: in a row whose dead marks are TRUSTED, a dead site
-    /// is no gap (the coverage fold leaves it out) and is not named, so the live
-    /// site accounts for the whole gap and the subscriber leaves "partly
-    /// analysed".
+    /// #265 CR4 + #288 D1: a dead site is no gap (the coverage fold leaves it
+    /// out) and is not named, so the live site accounts for the whole gap and
+    /// the subscriber leaves "partly analysed".
     #[test]
     fn unreachable_own_site_is_not_named() {
         assert_unknown_with(
-            &live_and_dead_site_finding(true),
+            &live_and_dead_site_finding("unreachable"),
             "interface-open-world; unresolved: X (line 5)",
         );
     }
 
-    /// #288 D1' (O24): in an UNTRUSTED row the dead mark is not believed: the
-    /// site stays a gap and is named like any live site.
+    /// The control: the same site, not marked dead, is a gap and is named.
     #[test]
-    fn untrusted_unreachable_own_site_is_named() {
+    fn conditional_own_site_is_named() {
         assert_unknown_with(
-            &live_and_dead_site_finding(false),
+            &live_and_dead_site_finding("conditional"),
             "interface-open-world; unresolved: X (line 5), Dead (line 7)",
         );
     }

@@ -81,7 +81,7 @@
 1 src/engine/test_select/universe_tests.rs
 7 src/program/abi_ingest.rs
 2 src/program/attributes.rs
-11 src/program/body/ir_walk.rs
+12 src/program/body/ir_walk.rs
 4 src/program/build.rs
 2 src/program/graph.rs
 2 src/program/graphify_export.rs
