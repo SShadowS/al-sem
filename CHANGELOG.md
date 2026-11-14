@@ -71,7 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Review r1 (Fable) found the first design unsafe (a concurrent stale takeover could
   delete the winner's status; a recorded PID was trusted; session sharing removed
   land's one-run guard; the hook missed most real shapes and refused commit messages);
-  the above is the redesign.
+  the above is the redesign. Review r2 (Fable, READY) notes, taken: the hook passes a
+  session's commands under its own bound hold too (its land or cdo-gate; mutation:
+  that check dropped -> refused), and also catches `bash -lc`, command substitutions
+  quoted or not (`"$(cargo test)"`, backticks), `#` inside a word (`$#`, `${#a}`),
+  a here-string before a newline, `<(...)`, `rustup run`, `watch` and `agentflow
+  run`; the slot folder is resolved once (`realpath`), and a held lock whose status
+  is gone for more than 5 s reads "held by an unknown holder", so the hook refuses
+  and the message says how to find it. Left as is: an unbound session hold with no
+  Claude PID is never stale (real sessions set both).
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 

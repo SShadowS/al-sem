@@ -48,7 +48,9 @@ die() {
     exit 1
 }
 
-dir="${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}"
+# One spelling of the folder (a trailing slash or a symlink must not make the
+# holder check, which compares the lock's path, fail).
+dir=$(realpath -m "${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}")
 lock="$dir/lock"
 meta="$dir/meta"
 status_file="$dir/status"
@@ -118,7 +120,14 @@ state() {
 }
 describe() {
     if [[ -z "$holder_pid" ]]; then
-        echo "held (its holder is still writing its status)"
+        # The holder truncates the lock file as it takes it: its mtime is when.
+        local taken
+        taken=$(stat -c %Y "$lock" 2>/dev/null || date +%s)
+        if (($(date +%s) - taken < 5)); then
+            echo "held (its holder is still writing its status)"
+        else
+            echo "held by an unknown holder (its status is gone) since $(date -u -d "@$taken" +%FT%TZ); find it with: fuser -v $lock"
+        fi
         return
     fi
     local since age who

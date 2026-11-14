@@ -63,11 +63,14 @@ WRAPPERS = {
     "xargs": ({"-I", "-n", "-P", "-d", "-a", "-E", "-L", "-s"}, 0),
     "time": ({"-o", "-f", "--output", "--format"}, 0),
     "chrt": (set(), 1),
+    "watch": ({"-n", "--interval"}, 0),
 }
 SHELLS = {"bash", "sh", "dash", "zsh"}
 PYTHONS = {"python", "python3"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# `<<WORD` / `<<-'WORD'`, not a here-string `<<<`.
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 
 
 def allow(why):
@@ -93,6 +96,9 @@ def tokens(line):
     lex = shlex.shlex(line, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
+    # A `#` inside a word (`$#`, `${#a}`, `a#b`) is no comment: comments are
+    # dropped in `segments`, only where a word starts with `#`.
+    lex.commenters = ""
     try:
         return list(lex)
     except ValueError:  # unbalanced quotes: read it word by word
@@ -106,7 +112,13 @@ def segments(line):
     i = 0
     while i < len(toks):
         t = toks[i]
-        if t in SEPARATORS or (t and set(t) <= set(";&|()\n")):
+        if t.startswith("#"):  # a comment: the rest of this line
+            while i < len(toks) and toks[i] != "\n":
+                i += 1
+            continue
+        if t in SEPARATORS or (t and set(t) <= set(";&|()\n")) or (
+            t and set(t) <= set(";&|()\n<>") and ("(" in t or ")" in t)
+        ):  # `<(cmd)` / `>(cmd)` run cmd like `(cmd)` does
             if seg:
                 yield seg
             seg = []
@@ -134,6 +146,9 @@ def guarded_segment(words, line):
     while i < len(words):
         w = words[i]
         base = os.path.basename(w)
+        if base == "rustup" and words[i + 1 : i + 2] == ["run"]:
+            i += 3  # rustup run <toolchain> <command>
+            continue
         if ASSIGNMENT.match(w) or w in KEYWORDS or w == "cd":
             if w == "cd":
                 return False  # `cd x` runs nothing (its && neighbour is its own segment)
@@ -159,7 +174,8 @@ def guarded_segment(words, line):
         if base in SHELLS:
             i += 1
             while i < len(words) and words[i].startswith("-"):
-                if words[i] == "-c":
+                # -c, or a cluster holding it (-lc, -ec)
+                if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", words[i]):
                     return i + 1 < len(words) and guarded_line(words[i + 1])
                 i += 1
             if i < len(words):
@@ -193,6 +209,8 @@ def guarded_segment(words, line):
 
 def script_guarded(path, args):
     base = os.path.basename(path)
+    if base == "agentflow":  # its `run` runs a gate (`-- bash scripts/ci-steps all`)
+        return args[:1] == ["run"]
     if base not in SCRIPTS:
         return False
     if any(a in INFO_FLAGS or a.startswith("--summary=") for a in args):
@@ -207,6 +225,13 @@ def guarded_line(line):
     for seg in segments(line):
         if guarded_segment(seg, line):
             return " ".join(seg)
+    # A command substitution runs too, quoted or not (`"$(cargo test)"`,
+    # `` x=`cargo test` ``); read from the raw text, heredoc bodies aside.
+    for m in SUBSTITUTION.finditer(strip_heredocs(line)):
+        inner = m.group(1) if m.group(1) is not None else m.group(2)
+        hit = guarded_line(inner)
+        if hit:
+            return hit
     return None
 
 
@@ -236,6 +261,11 @@ def main():
     except Exception as e:
         allow(f"scripts/cdo-slot status did not run: {e}")
     said = p.stdout.strip()
+    # This session's own hold, a bound one (its land or cdo-gate) included:
+    # only another session's hold stops it.
+    own = re.search(r", session (\S+?)(?:,|$)", said)
+    if own and own.group(1) == session:
+        return 0
     if p.returncode == 1 and said.startswith("held by") and not said.endswith("(yours)"):
         print(f"cdo-slot-guard: the CDO slot is {said}. Not run: {hit}", file=sys.stderr)
         print("Wait until it is free (scripts/cdo-slot status), or ask its holder.", file=sys.stderr)

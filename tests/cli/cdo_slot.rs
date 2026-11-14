@@ -279,6 +279,18 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "python3 scripts/cdo-speed --warm HEAD",
         "cd scripts && ./cdo-gate /ws",
         "cargo \\\n  test",
+        // Review r2 (Fable): option clusters, substitutions, `#` in words,
+        // here-strings, process substitution, rustup/watch, agentflow run.
+        "bash -lc \"cargo test\"",
+        "out=\"$(cargo test 2>&1)\"",
+        "x=`cargo test 2>&1`",
+        "if [ $# -gt 0 ]; then cargo test; fi",
+        "n=${#arr[@]}; cargo test",
+        "jq . <<< x\ncargo test",
+        "diff <(cargo test) expected",
+        "rustup run nightly cargo test",
+        "watch -n 5 cargo check",
+        "scripts/agentflow run --name ci -- true",
     ];
     let free = [
         "grep -n x scripts/cdo-gate",
@@ -324,6 +336,25 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     let no_session = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
     assert_eq!(s.guard_raw(no_session).0, Some(0), "it cannot tell: allow");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // A's own BOUND hold (its land or cdo-gate): A's commands still pass, B's
+    // do not (review r2: only another session's hold stops a session).
+    // Mutation: the hook's own-session check limited to unbound holds -> A
+    // is refused here.
+    let mut land = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    let pid = land.id().to_string();
+    let (code, text) = s.run("A", &["acquire", "land", "landing x", "--bind", &pid], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let a = s.guard("A", "cargo test --test cli");
+    let b = s.guard("B", "cargo test --test cli");
+    land.kill().unwrap();
+    land.wait().unwrap();
+    assert_eq!(a.0, Some(0), "A under its own bound hold: {}", a.1);
+    assert_eq!(b.0, Some(2), "B: {}", b.1);
+    assert!(s.wait_free());
 }
 
 /// Review r1 (Fable): the slot stays truthful under races and bad records.
