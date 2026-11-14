@@ -246,6 +246,7 @@ mod cli_eng24_pending_writes;
 mod cli_eng25_parenless_record_ops;
 mod cli_eng26_protected_var_record_ops;
 mod cli_eng27_d56_d14_arms;
+mod cli_eng80_error_scope;
 mod cli_envelope_detector_set;
 mod cli_error_boundary;
 mod cli_escaped_object_names;

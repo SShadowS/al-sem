@@ -209,14 +209,20 @@ pub enum BareVerdict {
 }
 
 impl BareVerdict {
+    /// `in_every_build(route)`: the route's target exists in every build the call site
+    /// runs in. A user routine declared only under a `#if` arm the call does not imply
+    /// binds in some builds and the builtin in the others, so it is `Unknown` (ENG-80
+    /// review F1).
     pub(crate) fn of(
         routes: &[crate::program::resolve::edge::Route],
         scope_complete: bool,
+        in_every_build: impl Fn(&crate::program::resolve::edge::Route) -> bool,
     ) -> Self {
         use crate::program::resolve::edge::Evidence;
         match routes {
             [r] if matches!(r.evidence, Evidence::Catalog) && scope_complete => Self::Builtin,
             [r] if scope_complete
+                && in_every_build(r)
                 && matches!(
                     r.evidence,
                     Evidence::Source | Evidence::Abi | Evidence::Opaque
@@ -2098,9 +2104,20 @@ pub(crate) fn resolve_file_obligations(
                 if let CalleeShape::Bare { name } = &site.shape
                     && BARE_VERDICT_NAMES.contains(&name.fold_identifier().as_str())
                 {
+                    // A target routine exists in every build of the call when some
+                    // copy of it carries no build condition the call's own context
+                    // does not already hold.
+                    let in_every_build = |r: &Route| match &r.target {
+                        RouteTarget::Routine(rid) => graph.routines_with_id(rid).any(|n| {
+                            n.preproc_context
+                                .iter()
+                                .all(|c| facts.build_context.contains(c))
+                        }),
+                        _ => true,
+                    };
                     bare_verdicts.push((
                         site.expr,
-                        BareVerdict::of(&routes, facts.bare_scope_complete),
+                        BareVerdict::of(&routes, facts.bare_scope_complete, in_every_build),
                     ));
                 }
                 if facts.open.is_empty() {

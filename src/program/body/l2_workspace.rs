@@ -230,8 +230,16 @@ fn build_proutine(
 fn workspace_bare_verdicts(workspace: &Path) -> std::collections::HashMap<String, FileBindings> {
     use crate::program::resolved::{ProgramScope, ResolvedProgram};
     let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
-    let Ok(p) = ResolvedProgram::build(&inputs, ProgramScope::Workspace) else {
-        return Default::default();
+    let p = match ResolvedProgram::build(&inputs, ProgramScope::Workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            // Stderr only: the projection is the stdout output (module doc).
+            eprintln!(
+                "warning: the program build failed ({e}); every bare Error in this L2 \
+                 projection reads \"may raise\" (no resolver verdict)"
+            );
+            return Default::default();
+        }
     };
     let app = p.body().ctx.primary_app_ref;
     p.body()
@@ -251,7 +259,9 @@ fn workspace_bare_verdicts(workspace: &Path) -> std::collections::HashMap<String
 }
 
 /// [`workspace_bare_verdicts`] of a one-file `source` (the single-routine entries below),
-/// resolved as the only file of a temporary workspace of app `app_guid`.
+/// resolved as the only file of a temporary workspace of app `app_guid`. Test-scale: it writes a
+/// temporary workspace and builds a program per call (the single-routine entries serve the
+/// vector tests; no production path calls them).
 fn one_file_bare_verdicts(source: &str, app_guid: &str) -> FileBindings {
     const PATH: &str = "src/L2.al";
     let Ok(dir) = tempfile::tempdir() else {
@@ -638,6 +648,44 @@ codeunit 50330 "L2A Work"
                 ("op1".to_string(), line_of("T.Modify();")),
             ],
             "each arm numbers its own op, the second after the first"
+        );
+    }
+
+    /// ENG-80 review F4: `project_workspace` looks a file's verdicts up by the discovered
+    /// `rel_posix`; the program keys them by its own `virtual_path`. The two must agree, or every
+    /// bare `Error` in that file silently reads "may raise". Fixture: a nested folder, a space and
+    /// a capital in the path. Break: key the map by the file name only -> the lookup misses.
+    #[test]
+    fn eng80_bare_verdict_keys_match_the_discovered_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"e8000000-0000-4000-8000-0000000000a4","name":"K","publisher":"K","version":"1.0.0.0"}"#,
+        )
+        .unwrap();
+        let rel = "src/Sub Dir/My Codeunit.al";
+        std::fs::create_dir_all(dir.path().join("src/Sub Dir")).unwrap();
+        std::fs::write(
+            dir.path().join(rel),
+            "codeunit 50398 \"K\"\n{\n    procedure P() begin Error('x'); end;\n}\n",
+        )
+        .unwrap();
+        let files = super::discover_al_files(dir.path()).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| f.rel_posix.as_str())
+                .collect::<Vec<_>>(),
+            [rel],
+            "precondition: one discovered file"
+        );
+        let verdicts = super::workspace_bare_verdicts(dir.path());
+        let b = verdicts
+            .get(&files[0].rel_posix)
+            .unwrap_or_else(|| panic!("no verdicts under {rel}: keys {:?}", verdicts.keys()));
+        assert_eq!(
+            b.bare.values().copied().collect::<Vec<_>>(),
+            [crate::program::resolve::full::BareVerdict::Builtin]
         );
     }
 }

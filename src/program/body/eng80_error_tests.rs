@@ -64,6 +64,13 @@ codeunit 50380 "Eng80 Error"
     procedure InfoNamedReturn() EI: ErrorInfo begin Error(EI); Next(); end;
     procedure InfoField() var R: Record "Eng80 T"; begin Error(R."No."); Next(); end;
 
+    // Review F5: no argument, and types whose head is not Text-family.
+    procedure NoArgs() begin Error(); Next(); end;
+    procedure InfoCodeunit() var C: Codeunit "Eng80 Error"; begin Error(C); Next(); end;
+    procedure InfoTextBuilder() var B: TextBuilder; begin Error(B); Next(); end;
+    procedure InfoVariant() var V: Variant; begin Error(V); Next(); end;
+    procedure InfoOption() var O: Option A,B; begin Error(O); Next(); end;
+
     // B2: an argument or callee that varies by build (taint).
     procedure P13()
     var
@@ -174,6 +181,27 @@ tableextension 50381 "Eng80 TabExt" extends "Eng80 T"
         Error(StrSubstNo('x'));
         Next();
     end;
+
+    local procedure Next() begin end;
+}
+
+// B3 / review F5: a `var` `#if` nested two deep, which the lowerer does not collect in full: the
+// object's globals are incomplete, so the visible Text `GN` proves nothing (another build may
+// declare it ErrorInfo).
+codeunit 50389 "Eng80 Nested Globals"
+{
+    var
+#if X
+#if Y
+        GN: ErrorInfo;
+#else
+        GN: Text;
+#endif
+#else
+        GN: Text;
+#endif
+
+    procedure NestedGlobal() begin Error(GN); Next(); end;
 
     local procedure Next() begin end;
 }
@@ -340,6 +368,11 @@ fn eng80_b2_unproven_forms_may_raise() {
         "InfoIndex",
         "InfoNamedReturn",
         "InfoField",
+        "NoArgs",
+        "InfoCodeunit",
+        "InfoTextBuilder",
+        "InfoVariant",
+        "InfoOption",
         "P13",
         "S1Operand",
         "S1OperandRev",
@@ -363,6 +396,7 @@ fn eng80_b3_declarations_that_prove_nothing() {
         "P15",
         "SplitArmLocal",
         "Undeclared",
+        "NestedGlobal",
     ];
     let bad = mismatches(&m, &names, false);
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -474,4 +508,122 @@ fn eng80_c4_rules_respect_incomplete_locals() {
     };
     assert_eq!(text("Plain").as_deref(), Some("global"), "control");
     assert_ne!(text("Split").as_deref(), Some("global"), "Split");
+}
+
+/// Review F1 (Fable r1): a binding that varies by build. A user `procedure Error` (or an inner
+/// `StrSubstNo`) declared only under `#if X` binds in X builds and leaves the builtin in the
+/// others, so a call outside that arm may raise: `Next` live AND the may-raise node kept (a
+/// plain call would lose the raising exit). The whole class: own object, base table from its
+/// extension, an object declared twice under `#if`/`#else`, the inner Text call; the mirror (a
+/// call only in builds where the procedure is absent) still terminates; the control (procedure
+/// and call in the same arm) is a plain call.
+#[test]
+fn eng80_f1_a_binding_that_varies_by_build() {
+    let src = r#"codeunit 50390 "Eng80 Cond Own"
+{
+    procedure CondOwn() begin Error('x'); Next(); end;
+
+    procedure SameArm()
+    begin
+#if X
+        Error('x');
+        Next();
+#endif
+    end;
+
+    procedure Mirror()
+    begin
+#if X
+        Next();
+#else
+        Error('x');
+        Next();
+#endif
+    end;
+
+    procedure CondInner() begin Error(StrSubstNo('x')); Next(); end;
+
+#if X
+    local procedure Error(Msg: Text) begin end;
+    local procedure StrSubstNo(Msg: Text): Text begin end;
+#endif
+    local procedure Next() begin end;
+}
+
+table 50391 "Eng80 Cond T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+#if X
+    procedure Error(Msg: Text) begin end;
+#endif
+}
+
+tableextension 50392 "Eng80 Cond TabExt" extends "Eng80 Cond T"
+{
+    procedure CondBase() begin Error('x'); Next(); end;
+
+    local procedure Next() begin end;
+}
+
+#if X
+codeunit 50393 "Eng80 Twice"
+{
+    procedure Twice() begin Error('x'); Next(); end;
+
+    local procedure Error(Msg: Text) begin end;
+    local procedure Next() begin end;
+}
+#else
+codeunit 50393 "Eng80 Twice"
+{
+    procedure Twice() begin Error('x'); Next(); end;
+
+    local procedure Next() begin end;
+}
+#endif
+"#;
+    let m = assemble_and_resolve_inline_program_default(
+        &[("Cond.al".to_string(), src.to_string())],
+        "e8000000-0000-4000-8000-000000000083",
+    );
+    for name in ["CondOwn", "CondBase", "CondInner"] {
+        assert!(!next_dead(&m, name, "Next"), "{name}: Next live");
+        assert!(
+            has_may_raise(&m, name),
+            "{name}: the may-raise node is kept"
+        );
+    }
+    // The `#else` arm's call runs only where the procedure is absent, so it is the builtin
+    // there. Stated limit (engine limits L38): the resolver narrows by build only among two or
+    // more candidates, so it binds the one conditional `Error` anyway; the verdict reads
+    // Unknown and the call may raise (safe, never a dead mark). Pinned as such.
+    let mirror = routine(&m, "Mirror");
+    let dead: Vec<_> = mirror
+        .call_sites
+        .iter()
+        .filter(|c| c.callee_text == "Next")
+        .map(|c| c.control_context.as_deref() == Some("unreachable"))
+        .collect();
+    assert_eq!(dead, [false, false], "Mirror: may raise, never dead");
+    assert!(
+        has_may_raise(&m, "Mirror"),
+        "Mirror: the may-raise node is kept"
+    );
+    assert!(!next_dead(&m, "SameArm", "Next"), "SameArm: Next live");
+    assert!(!has_may_raise(&m, "SameArm"), "SameArm: a plain call");
+    // The X copy of `Twice` calls its own `Error` and goes on; the other copy may terminate.
+    let twice: Vec<_> = m
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == "Twice")
+        .collect();
+    assert_eq!(twice.len(), 2, "precondition: one row per arm");
+    assert!(
+        twice.iter().any(|r| r.call_sites.iter().any(
+            |c| c.callee_text == "Next" && c.control_context.as_deref() != Some("unreachable")
+        )),
+        "Twice: the X copy's Next is live"
+    );
 }

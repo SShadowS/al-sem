@@ -1972,7 +1972,14 @@ pub(crate) fn resolve_bare_with_args(
             .extends_target
             .as_deref()
             .and_then(|t| graph.resolve_object(from_object.id.app, base_kind, t));
-        if base.is_none_or(|b| b.tier == crate::snapshot::identity::TrustTier::SymbolOnly) {
+        // A table base also reaches its other extensions' procedures (`table_code_not_loaded`).
+        if base.is_none_or(|b| {
+            if b.id.kind == ObjectKind::Table {
+                crate::program::resolve::full::table_code_not_loaded(b, graph, index)
+            } else {
+                b.tier == crate::snapshot::identity::TrustTier::SymbolOnly
+            }
+        }) {
             *scope_complete = false;
         }
     }
@@ -2070,10 +2077,11 @@ pub(crate) fn resolve_bare_with_args(
                 implicit_rec_table_id(from_object, graph, index)
             };
             if let Some(table_id) = table_id {
-                if graph
-                    .object(&table_id)
-                    .is_none_or(|t| t.tier == crate::snapshot::identity::TrustTier::SymbolOnly)
-                {
+                // The table or any of its extensions symbol-only: its symbols may
+                // not list an internal procedure (ENG-80 review F2).
+                if graph.object(&table_id).is_none_or(|t| {
+                    crate::program::resolve::full::table_code_not_loaded(t, graph, index)
+                }) {
                     *scope_complete = false;
                 }
                 // (3) Visibility-scoped table ∪ extensions search (Task 2):
