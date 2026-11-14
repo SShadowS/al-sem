@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-58: `cdo-gate --only <phases>`, a pre-submit CDO subset)
+
+- `scripts/cdo-gate --only harness,l4[,lsp,lib,output] <CDO_WS>` builds and runs only
+  the named CDO phases (`harness` = `program_resolve_harness`, `l4` =
+  `l4_summary_differential`, `lib` = `lib_cdo`, `output` = `output_cdo`), one after
+  another. It skips the speed check and the impact ratchets. It keeps
+  `ENFORCE_CDO_WS=1`, the memory sampler and the per-phase logs. Its summary judges
+  only the phases it ran (the run folder's `only` file) and says `SUBSET`, never a
+  plain PASS, so it cannot be mistaken for the landing gate.
+- An unknown phase (`impact`, `speed`, a typo), a repeated phase, an empty list
+  (`--only=`, `--only ""`), an empty field or a second line (`harness,`,
+  `harness<newline>speed`) or a second `--only` stops it with exit 2, so a mistyped
+  subset never runs the full gate or a smaller check than asked for. `--dry-run`
+  (with `--only`) prints the build and the phases without running anything and
+  without a workspace. `--help` now prints to stdout.
+- A run folder whose `only` file is empty or cut off FAILs its summary: its phase
+  lines must be exactly the phases its header names, so a cut part-way never passes
+  on fewer phases. A failed write of that file stops the run.
+- Measured on CDO (2026-11-14, kraken server1, `cdo` profile): `--only harness,l4`
+  took 213 s wall (build of the two targets 141 s, `program_resolve_harness` 51 s,
+  `l4_summary_differential` 20 s), peak 18.4 GB container memory, 8.1 GB the gate's
+  own processes; verdict `PASS (SUBSET --only harness,l4 ...)`. Warm (build fresh)
+  on the final head: 77 s wall (harness 55 s, l4 22 s), peak 16.1 GB container,
+  8.1 GB the gate's own.
+- Tests: `gate_scripts::cdo_gate_only_runs_and_judges_just_its_subset` (dry run,
+  refusals, subset summary, every phase's build selector) and
+  `cdo_gate_only_run_builds_and_runs_just_its_phases` (a real `harness,l4,lsp,output`
+  run with a stub `cargo`: the build line, each phase's full-gate command with
+  `ENFORCE_CDO_WS=1` and the memory sampler running, no speed, no impact). Mutations,
+  each failing a test: `summarize` ignoring the `only` file; no check of an empty or
+  part-cut `only` file; dropping `speed=0`; an empty `--only` value read as "not
+  given"; no list-shape check; the sampler started only outside a subset; `output`
+  building the wrong target.
+  CLAUDE.md's Test tiers gains the row "2b. Pre-submit CDO subset".
+
 ### Fixed (TLS-57: the LSP updater and test selection's scan cache see a rewrite that keeps size and mtime)
 
 - Two more file-freshness checks trusted a file whose length and modification time were
