@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# scripts/cdo-slot — the one CDO slot of this tentacle: who may run CDO-heavy or
+# timed work (a landing, cdo-gate, a CDO measurement) right now.
+#
+# ⟨TLS-60⟩ Replaces hold messages: 147 of the orchestrator's 316 messages were
+# about holds, and at least 9 times a lane's run had already started when the
+# hold arrived. A session (or script) acquires the slot; the PreToolUse hook
+# `scripts/claude-hooks/cdo-slot-guard` then refuses builds, tests and gates
+# from every OTHER session until it is released.
+#
+#   acquire <owner> <reason> [--wait] [--timeout S] [--bind PID]
+#       Take the slot. Free means: no live holder AND MemAvailable >= 35 GB
+#       (CDO_SLOT_MEM_MIN_GB). Without --wait it refuses at once (exit 1, naming
+#       the holder); with --wait it polls every 15 s, prints the holder about
+#       every 60 s, and gives up after --timeout seconds (default: never).
+#       Exit 0: taken. Exit 4: already held by this caller (same Claude session,
+#       or the holder's CDO_SLOT_TOKEN in the environment): nothing to release.
+#       --bind PID: the slot also ends when that process ends, even when it is
+#       killed outright (scripts bind their own PID; `run` binds itself).
+#   release
+#       Give the slot back. Only its holder may (same session or token); a STALE
+#       holder (its Claude process gone) may be released by anyone.
+#   status
+#       `free` (exit 0), `held by ...` (exit 1) or `held by ... STALE` (exit 3).
+#   run <owner> <reason> -- <command...>
+#       acquire --wait, run the command, release on any exit (only when this
+#       run took the slot: inside a holder's run it just runs).
+#
+# The lock is a flock on `$CDO_SLOT_DIR/lock` (default /work/.al-sem/cdo-slot),
+# held by a detached holder process that keeps the file open; its `status` file
+# names owner, reason, start, Claude session, Claude PID, holder PID and token.
+# A holder whose Claude process (CLAUDE_PID) is gone is STALE: the next acquire
+# ends it and takes over. Scripts export CDO_SLOT_TOKEN so the scripts they
+# start (land -> cdo-gate) share their hold.
+set -euo pipefail
+
+usage() {
+    sed -n '/^#   acquire/,/^#       run took the slot/p' "$0" | sed 's/^# \{0,1\}//'
+    echo "Environment: CDO_SLOT_DIR, CDO_SLOT_MEM_MIN_GB (35), CDO_SLOT_POLL_S (15)."
+}
+die() {
+    echo "cdo-slot: $*" >&2
+    exit 1
+}
+
+dir="${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}"
+lock="$dir/lock"
+status_file="$dir/status"
+mem_min="${CDO_SLOT_MEM_MIN_GB:-35}"
+poll="${CDO_SLOT_POLL_S:-15}"
+[[ "$mem_min" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CDO_SLOT_MEM_MIN_GB '$mem_min': whole GB, no leading zero"
+[[ "$poll" =~ ^[1-9][0-9]{0,3}$ ]] || die "CDO_SLOT_POLL_S '$poll': whole seconds"
+me_session="${CLAUDE_CODE_SESSION_ID:-}"
+me_pid="${CLAUDE_PID:-}"
+me_token="${CDO_SLOT_TOKEN:-}"
+
+# field <name>: one field of the status file ("" when absent).
+field() { { sed -n "s/^$1=//p" "$status_file" 2>/dev/null || true; } | head -n 1; }
+alive() { [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null; }
+# A Claude PID counts only while it is still a claude process (PID reuse).
+claude_alive() { alive "$1" && grep -q claude "/proc/$1/comm" "/proc/$1/cmdline" 2>/dev/null; }
+
+# state: sets st to free | mine | held | stale, and holder_pid (not in a
+# subshell: the caller needs both).
+state() {
+    holder_pid=$(field holder_pid)
+    if [[ ! -f "$status_file" ]] || ! alive "$holder_pid"; then
+        st=free
+        return
+    fi
+    local pid session token
+    pid=$(field claude_pid)
+    session=$(field session)
+    token=$(field token)
+    if [[ -n "$me_token" && "$token" == "$me_token" ]] \
+        || [[ -n "$me_session" && "$session" == "$me_session" ]]; then
+        st=mine
+    elif [[ -n "$pid" ]] && ! claude_alive "$pid"; then
+        st=stale
+    else
+        st=held
+    fi
+}
+describe() {
+    local since age
+    since=$(field since)
+    age=$(($(date +%s) - $(date -d "$since" +%s 2>/dev/null || date +%s)))
+    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), session $(field session)"
+}
+mem_ok() {
+    ((mem_min == 0)) && return 0
+    local kb
+    kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+    ((kb >= mem_min * 1048576))
+}
+end_holder() { # end_holder <pid>: the status first, so no new holder's status is lost
+    rm -f "$status_file"
+    kill "$1" 2>/dev/null || true
+    local n
+    for n in $(seq 50); do alive "$1" || return 0; sleep 0.1; done
+    kill -9 "$1" 2>/dev/null || true
+}
+
+# try_take <owner> <reason> <token>: start a holder; 0 when it holds the lock.
+try_take() {
+    local ready="$dir/ready.$$" n
+    rm -f "$ready"
+    CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_SESSION="$me_session" CS_PID="$me_pid" \
+        CS_LOCK="$lock" CS_STATUS="$status_file" CS_READY="$ready" \
+        setsid sh -c '
+            exec 9>"$CS_LOCK" || exit 70
+            flock -n 9 || exit 75
+            tmp="$CS_STATUS.$$"
+            {
+                echo "owner=$CS_OWNER"
+                echo "reason=$CS_REASON"
+                echo "since=$(date -u +%FT%TZ)"
+                echo "session=$CS_SESSION"
+                echo "claude_pid=$CS_PID"
+                echo "holder_pid=$$"
+                echo "token=$CS_TOKEN"
+            } >"$tmp" && mv "$tmp" "$CS_STATUS" || exit 71
+            echo ok >"$CS_READY"
+            if [ -n "$CS_BIND" ]; then
+                # Bound: the slot ends with the process it was taken for, even
+                # when that process is killed outright (no trap runs).
+                while kill -0 "$CS_BIND" 2>/dev/null; do sleep 2 9>&-; done
+                exit 0
+            fi
+            exec sleep 2147483647
+        ' </dev/null >/dev/null 2>&1 7>&- 8>&- 9>&- &
+    local holder=$!
+    for n in $(seq 100); do
+        if [[ -s "$ready" ]]; then
+            rm -f "$ready"
+            return 0
+        fi
+        alive "$holder" || { rm -f "$ready"; return 1; }
+        sleep 0.05
+    done
+    rm -f "$ready"
+    end_holder "$holder"
+    return 1
+}
+
+acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
+    local owner=$1 reason=$2 wait=$3 timeout=$4 start=$SECONDS last=-60 why
+    [[ "$owner" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "owner '$owner': a short name (letters, digits, . _ -)"
+    [[ -n "$reason" && "$reason" != *$'\n'* ]] || die "give a one-line reason"
+    mkdir -p "$dir"
+    local token=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
+    while :; do
+        state
+        case "$st" in
+            mine)
+                echo "cdo-slot: already yours ($(describe)); nothing to do"
+                return 4
+                ;;
+            stale)
+                echo "cdo-slot: $(describe) is STALE (its Claude process is gone): ending it"
+                end_holder "$holder_pid"
+                continue
+                ;;
+            free)
+                if mem_ok && try_take "$owner" "$reason" "$token"; then
+                    echo "cdo-slot: taken by $owner ($reason)"
+                    return 0
+                fi
+                ;;
+        esac
+        if [[ "$st" == held ]]; then why=$(describe); else why="MemAvailable below $mem_min GB"; fi
+        ((wait)) || die "not taken: $why (use --wait to wait for it)"
+        # Say what it waits for first (every ~60 s), then check the limit.
+        if ((SECONDS - last >= 60)); then
+            echo "cdo-slot: waiting: $why"
+            last=$SECONDS
+        fi
+        if [[ -n "$timeout" ]] && ((SECONDS - start >= timeout)); then
+            die "not taken after ${timeout} s: $why"
+        fi
+        sleep "$poll"
+    done
+}
+
+release() {
+    state
+    case "$st" in
+        free) echo "cdo-slot: free already" ;;
+        mine | stale)
+            end_holder "$holder_pid"
+            echo "cdo-slot: released"
+            ;;
+        held) die "not yours: $(describe)" ;;
+    esac
+}
+
+cmd=${1:-}
+[[ $# -gt 0 ]] && shift
+case "$cmd" in
+    acquire | run)
+        (($# >= 2)) || { usage >&2; exit 2; }
+        owner=$1 reason=$2
+        shift 2
+        wait=0 timeout="" bind=""
+        [[ "$cmd" == run ]] && wait=1
+        while (($#)); do
+            case "$1" in
+                --wait) wait=1 ;;
+                --bind)
+                    [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] && alive "$2" || { echo "cdo-slot: --bind needs a live PID" >&2; exit 2; }
+                    bind=$2
+                    shift
+                    ;;
+                --timeout)
+                    [[ "${2:-}" =~ ^(0|[1-9][0-9]{0,6})$ ]] || { echo "cdo-slot: --timeout needs whole seconds" >&2; exit 2; }
+                    timeout=$2
+                    shift
+                    ;;
+                --)
+                    shift
+                    break
+                    ;;
+                *)
+                    echo "cdo-slot: unknown argument: $1" >&2
+                    usage >&2
+                    exit 2
+                    ;;
+            esac
+            shift
+        done
+        if [[ "$cmd" == acquire ]]; then
+            (($# == 0)) || { echo "cdo-slot: acquire takes no command" >&2; exit 2; }
+            acquire "$owner" "$reason" "$wait" "$timeout"
+            exit $?
+        fi
+        (($#)) || { echo "cdo-slot: run needs -- <command>" >&2; exit 2; }
+        export CDO_SLOT_TOKEN=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
+        me_token=$CDO_SLOT_TOKEN
+        bind=$$
+        rc=0
+        acquire "$owner" "$reason" 1 "$timeout" || rc=$?
+        case "$rc" in
+            0) trap 'release >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
+            4) ;;
+            *) exit "$rc" ;;
+        esac
+        rc=0
+        "$@" || rc=$?
+        exit "$rc"
+        ;;
+    release)
+        (($# == 0)) || { usage >&2; exit 2; }
+        release
+        ;;
+    status)
+        (($# == 0)) || { usage >&2; exit 2; }
+        state
+        case "$st" in
+            free) echo free ;;
+            mine)
+                echo "$(describe) (yours)"
+                exit 1
+                ;;
+            held)
+                describe
+                exit 1
+                ;;
+            stale)
+                echo "$(describe) STALE"
+                exit 3
+                ;;
+        esac
+        ;;
+    -h | --help) usage ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

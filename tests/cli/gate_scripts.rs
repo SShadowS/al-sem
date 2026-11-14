@@ -315,8 +315,11 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
                  sleep 0.1; i=$((i + 1)); done; else s=''; fi ;;\n\
              esac\n\
              echo \"ENFORCE=$ENFORCE_CDO_WS$s $*\" >> '{}'\n\
+             CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash '{}' status >> '{}' 2>&1\n\
              echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
-            calls.display()
+            calls.display(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"),
+            stub.path().join("slot-seen").display(),
         ),
     )
     .unwrap();
@@ -336,6 +339,10 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
         .arg(ws.path())
         .env("PATH", path)
         .env("CARGO_TARGET_DIR", target.path())
+        // A slot of its own (TLS-60): never the tentacle's real one.
+        .env("CDO_SLOT_DIR", target.path().join("slot"))
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env_remove("CDO_SLOT_TOKEN")
         .env_remove("CDO_WS")
         .env_remove("CDO_GATE_SERIAL")
         .env_remove("CDO_GATE_LAYOUT")
@@ -385,6 +392,16 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     // A tree with no product change takes the TLS-20 speed skip instead, which
     // would hide a subset that tried the speed check (Fable r2).
     assert!(!runs[0].join("speed-skipped").exists());
+    // TLS-60: the gate held the CDO slot through every cargo call, as another
+    // session saw it (mutation: cdo-gate without its acquire -> `free`).
+    let seen = std::fs::read_to_string(stub.path().join("slot-seen")).unwrap();
+    assert_eq!(seen.lines().count(), 5, "{seen}");
+    for line in seen.lines() {
+        assert!(
+            line.starts_with("held by cdo-gate (cdo-gate --only harness,l4,lsp,output) since "),
+            "{seen}"
+        );
+    }
 }
 
 /// TLS-18: `cdo-speed --warm REV` (what `merge-and-push` runs after a landing)
@@ -670,6 +687,10 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         .arg(ws.path())
         .env("PATH", path)
         .env("CARGO_TARGET_DIR", target.path())
+        // A slot of its own (TLS-60): never the tentacle's real one.
+        .env("CDO_SLOT_DIR", target.path().join("slot"))
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env_remove("CDO_SLOT_TOKEN")
         .env_remove("CDO_GATE_SERIAL")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

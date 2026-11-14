@@ -61,6 +61,13 @@ scripts/land [--push] [--dry-run] <branch>...  # The landing chain (TLS-59): mer
                                # for 35 GB free, `cdo-gate`, a recheck that master and the worktree did not
                                # move, then `merge-and-push` only with --push. Logs and verdicts under
                                # /work/.al-sem/land/; timings in flow-timings.jsonl
+scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot (TLS-60): land and
+                               # cdo-gate hold it for their whole run; a lane's CDO measurement or timed run
+                               # (cdo-before-after, cdo-gate --only, an output_cdo re-mint) takes it too
+                               # (`run ... -- <cmd>`, or `acquire --wait` + `release`). While another session
+                               # holds it, the PreToolUse hook scripts/claude-hooks/cdo-slot-guard (wired by the
+                               # owner) refuses this session's cargo build/test/check, the gate scripts and
+                               # aldump/alsem on CDO, naming the holder. `scripts/cdo-slot status` says who.
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
                                # needs `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times

@@ -588,6 +588,23 @@ profile=(--profile cdo)
 # A zero RLIMIT_RTTIME makes the kernel SIGKILL test processes at random.
 "$(dirname "$0")/require-rttime" || exit 1
 
+# ⟨TLS-60⟩ The CDO slot (scripts/cdo-slot) for the whole run: it waits for any
+# other holder and for 35 GB free, and lanes' builds and tests stop under it
+# (the cdo-slot-guard hook). Inside a scripts/land run (its CDO_SLOT_TOKEN) or
+# a session that already holds it, it shares that hold. Bound to this process.
+export CDO_SLOT_TOKEN=${CDO_SLOT_TOKEN:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
+slot="$(dirname "$0")/cdo-slot"
+slot_rc=0
+bash "$slot" acquire "${CDO_SLOT_OWNER:-cdo-gate}" "cdo-gate${only:+ --only $only}" --wait --bind "$$" || slot_rc=$?
+case "$slot_rc" in
+    0) trap 'bash "$slot" release >/dev/null 2>&1 || true' EXIT ;;
+    4) ;;
+    *)
+        echo "cdo-gate: the CDO slot was not taken (scripts/cdo-slot status)" >&2
+        exit 1
+        ;;
+esac
+
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 logs_root="${CARGO_TARGET_DIR:-$repo/target}/cdo-gate-logs"
 mkdir -p "$logs_root" || exit 1

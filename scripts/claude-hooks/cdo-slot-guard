@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# scripts/claude-hooks/cdo-slot-guard — a Claude Code PreToolUse hook (Bash
+# tool): while another live session holds the CDO slot (scripts/cdo-slot), it
+# refuses this session's builds, tests, gates and CDO runs, naming the holder.
+#
+# ⟨TLS-60⟩ The owner wires it (e.g. .claude/settings.json `hooks.PreToolUse`
+# with matcher "Bash" and command `<repo>/scripts/claude-hooks/cdo-slot-guard`).
+# Guarded, as the first word of any command in the line (after `cd ... &&`,
+# `VAR=x`, `nice`, `env`, `time`, `timeout`, `nohup`, `setsid`, `bash -c`):
+#   cargo build|test|check|clippy|nextest|run|bench (also with +toolchain);
+#   scripts/ci-steps, cdo-gate, check-goldens, cdo-speed, land, cdo-before-after;
+#   aldump / alsem, only when the line names the CDO workspace
+#   (/work/src/cdo-baseline, $CDO_WS or its value).
+# Allowed: everything else; any command while the slot is free, stale or held by
+# this session. A hook that cannot read its input allows (and says so on
+# stderr), so a hook bug never stops every session.
+# Exit: 0 allow; 2 refuse (the message on stderr goes back to Claude).
+set -euo pipefail
+
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
+slot="$(dirname "$0")/../cdo-slot"
+allow() {
+    [[ -n "${1:-}" ]] && echo "cdo-slot-guard: $1 (allowed)" >&2
+    exit 0
+}
+command -v jq >/dev/null || allow "jq missing"
+input=$(cat) || allow "no input"
+tool=$(jq -r '.tool_name // empty' <<<"$input" 2>/dev/null) || allow "unreadable input"
+[[ "$tool" == Bash ]] || exit 0
+line=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || allow "unreadable input"
+session=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null) || allow "unreadable input"
+
+cdo_named() {
+    [[ "$1" == *"/work/src/cdo-baseline"* || "$1" == *'$CDO_WS'* || "$1" == *'${CDO_WS'* ]] && return 0
+    [[ -n "${CDO_WS:-}" && "$1" == *"$CDO_WS"* ]]
+}
+# guarded <segment>: 0 when the segment's command is one the slot guards.
+guarded() {
+    local seg=$1 w i=0 word base sub
+    read -r -a w <<<"$seg" || true
+    while ((i < ${#w[@]})); do
+        word=${w[i]#[\"\']}
+        if [[ "$word" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            i=$((i + 1))
+            continue
+        fi
+        case "$word" in
+            env | time | nohup | setsid | exec | command | sudo) i=$((i + 1)) ;;
+            nice)
+                i=$((i + 1))
+                if [[ "${w[i]:-}" == -n ]]; then i=$((i + 2)); elif [[ "${w[i]:-}" =~ ^-[0-9]+$ ]]; then i=$((i + 1)); fi
+                ;;
+            timeout)
+                i=$((i + 1))
+                while [[ "${w[i]:-}" == -* ]]; do i=$((i + 1)); done
+                i=$((i + 1))
+                ;;
+            bash | sh | */bash | */sh)
+                i=$((i + 1))
+                while [[ "${w[i]:-}" == -* ]]; do i=$((i + 1)); done
+                ;;
+            *) break ;;
+        esac
+    done
+    word=${w[i]:-}
+    word=${word#[\"\']}
+    word=${word%[\"\']}
+    base=${word##*/}
+    case "$base" in
+        cargo)
+            sub=${w[i + 1]:-}
+            [[ "$sub" == +* ]] && sub=${w[i + 2]:-}
+            sub=${sub%[\"\']}
+            case "$sub" in build | test | check | clippy | nextest | run | bench) return 0 ;; esac
+            ;;
+        ci-steps | cdo-gate | check-goldens | cdo-speed | land | cdo-before-after)
+            [[ "$word" == */scripts/"$base" || "$word" == scripts/"$base" ]] && return 0
+            ;;
+        aldump | alsem)
+            cdo_named "$seg" && return 0
+            ;;
+    esac
+    return 1
+}
+
+hit=""
+while IFS= read -r seg; do
+    [[ -n "${seg// /}" ]] || continue
+    if guarded "$seg"; then
+        hit=$seg
+        break
+    fi
+done < <(sed -E 's/(\|\||&&|[;|&()`]|\$\()/\n/g' <<<"$line")
+[[ -n "$hit" ]] || exit 0
+
+[[ -f "$slot" ]] || allow "no scripts/cdo-slot next to the hook"
+rc=0
+says=$(CLAUDE_CODE_SESSION_ID="$session" CDO_SLOT_TOKEN='' bash "$slot" status 2>&1) || rc=$?
+case "$rc" in
+    0 | 3) exit 0 ;; # free, or stale (the next acquire ends it)
+    1)
+        [[ "$says" == *"(yours)" ]] && exit 0
+        echo "cdo-slot-guard: the CDO slot is $says. Not run: ${hit# }" >&2
+        echo "Wait until it is free (scripts/cdo-slot status), or ask its holder." >&2
+        exit 2
+        ;;
+    *) allow "scripts/cdo-slot status failed: $says" ;;
+esac

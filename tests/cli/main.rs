@@ -167,6 +167,8 @@ pub(crate) fn fingerprint_needs() -> al_sem::program::inputs::WorkspaceNeeds {
 mod al2dump_smoke;
 mod aldump_smoke;
 mod batch_records;
+#[cfg(unix)]
+mod cdo_slot;
 mod cli_11b_policy_collision;
 mod cli_a_html_differential;
 mod cli_a_json_differential;
