@@ -148,6 +148,98 @@ fn cdo_gate_fails_a_phase_that_ran_no_test() {
     assert!(text.contains("cdo-gate: FAIL"), "{text}");
 }
 
+/// TLS-58: `cdo-gate --only <phases>`, the pre-submit subset.
+/// - `--dry-run` names exactly the subset's build targets and phases, and
+///   never the speed check or the impact ratchets;
+/// - an unknown phase (`impact`, `speed`, a typo) and a repeated one stop it
+///   with exit 2 (a typo must not run a smaller check than asked for);
+/// - the summary of a subset run judges only its phases (the run folder's
+///   `only` file): with statuses for those two alone it PASSes, and its
+///   verdict says SUBSET; the same folder without the `only` file FAILs on
+///   the full gate's missing phases (the precondition that the list decides).
+///
+/// Mutation: `summarize` ignoring the `only` file -> the subset run FAILs
+/// ("missing" for the phases it never ran).
+#[cfg(unix)]
+#[test]
+fn cdo_gate_only_runs_and_judges_just_its_subset() {
+    let gate = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate");
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("bash")
+            .arg(gate)
+            .args(args)
+            .env_remove("CDO_WS")
+            .output()
+            .expect("spawn bash scripts/cdo-gate");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    let (code, text) = run(&["--only", "harness,l4", "--dry-run"]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains(
+            "build: cargo test --profile cdo --no-run --test program_resolve_harness --test l4_summary_differential\n"
+        ),
+        "only the subset's targets: {text}"
+    );
+    assert!(
+        text.contains(
+            "phases, one after another: program_resolve_harness l4_summary_differential\n"
+        ),
+        "{text}"
+    );
+    for bad in [
+        &["--only", "harness,impact"][..],
+        &["--only", "speed"],
+        &["--only", "l4,l4"],
+        &["--only"],
+    ] {
+        let (code, text) = run(bad);
+        assert_eq!(code, Some(2), "{bad:?} refused: {text}");
+    }
+    let folder = |with_only: bool| {
+        let dir = tempfile::tempdir().unwrap();
+        if with_only {
+            std::fs::write(
+                dir.path().join("only"),
+                "harness,l4\nprogram_resolve_harness\nl4_summary_differential\n",
+            )
+            .unwrap();
+        }
+        for p in ["program_resolve_harness", "l4_summary_differential"] {
+            std::fs::write(dir.path().join(format!("{p}.status")), "0 1\n").unwrap();
+            std::fs::write(
+                dir.path().join(format!("{p}.log")),
+                "    1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s\n",
+            )
+            .unwrap();
+        }
+        dir
+    };
+    let full = folder(false);
+    let (code, text) = run(&[&format!("--summary={}", full.path().display())]);
+    assert_eq!(
+        code,
+        Some(1),
+        "precondition: the full gate's phases are missing: {text}"
+    );
+    let subset = folder(true);
+    let (code, text) = run(&[&format!("--summary={}", subset.path().display())]);
+    assert_eq!(code, Some(0), "the subset judges its own phases: {text}");
+    assert!(
+        text.contains("cdo-gate: PASS (SUBSET --only harness,l4: not a landing gate"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("SPEED AND MEMORY WERE NOT CHECKED"),
+        "{text}"
+    );
+}
+
 /// TLS-18: `cdo-speed --warm REV` (what `merge-and-push` runs after a landing)
 /// fills exactly the cache entry a gate reads for its base: with that entry
 /// present (a speed cache in a temporary folder, `ALSEM_SPEED_CACHE`, holding

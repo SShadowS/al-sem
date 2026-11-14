@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-58: `cdo-gate --only <phases>`, a pre-submit CDO subset)
+
+- `scripts/cdo-gate --only harness,l4[,lsp,lib,output] <CDO_WS>` builds and runs only
+  the named CDO phases (`harness` = `program_resolve_harness`, `l4` =
+  `l4_summary_differential`, `lib` = `lib_cdo`, `output` = `output_cdo`), one after
+  another. It skips the speed check and the impact ratchets. It keeps
+  `ENFORCE_CDO_WS=1`, the memory sampler and the per-phase logs. Its summary judges
+  only the phases it ran (the run folder's `only` file) and says `SUBSET`, never a
+  plain PASS, so it cannot be mistaken for the landing gate.
+- An unknown phase (`impact`, `speed`, a typo), a repeated one or an empty list stops
+  it with exit 2. `--dry-run` (with `--only`) prints the build and the phases without
+  running anything and without a workspace.
+- Test: `gate_scripts::cdo_gate_only_runs_and_judges_just_its_subset` (mutation:
+  `summarize` ignoring the `only` file fails it with the full gate's phases missing).
+  CLAUDE.md's Test tiers gains the row "2b. Pre-submit CDO subset".
+
 ### Fixed (TLS-57: the LSP updater and test selection's scan cache see a rewrite that keeps size and mtime)
 
 - Two more file-freshness checks trusted a file whose length and modification time were
