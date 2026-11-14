@@ -414,21 +414,195 @@ fn one_file_workspace(al: &str) -> tempfile::TempDir {
     t
 }
 
-/// Round-2 r2 §2.1 step 1, the two `declaredRunnable` rules: a dispatching
-/// builtin on a receiver typed as one object (`R.RunRequestPage`) is a call
-/// site and code; a `TestPage` declaration is a rule edge (`RULE`, no call
-/// site); a plain `Page` variable declaration yields no site at all.
-/// (`R.SaveAsPdf` was the example until B6 made it a run of the report's
-/// triggers, a `run` site; `RunRequestPage` was until ENG-19 made it a run of
-/// the request page. Every dispatching builtin on a typed receiver now starts
-/// its object, so the first rule has no source shape left; the test pins the
-/// `run` site instead.)
+/// TLS-51: with the call-site `declaredRunnable` rule removed, nothing backs
+/// up the resolver's start rule (`dataset::starts_object`): a dispatching
+/// builtin it missed would run no object at all. So every builtin in
+/// `DISPATCHING_BUILTINS` that runs a `Page`/`Report`/`XmlPort`/`Query`, on
+/// a typed local, and a report builtin on a parameter, a global, an array
+/// element and `this.`, must make a `run` site and no `declaredRunnable` one.
+/// (`with R do SaveAsPdf()` is a known gap, ENG-73, so it is not listed.)
 ///
-/// DISCRIMINATION (2026-11-07): `site_bits` classifying every
-/// `declaredRunnable` site as `RULE` (the anchor test dropped) fails "the
-/// RunRequestPage site is code".
+/// DISCRIMINATION (2026-11-14): `starts_object` without `"saveaspdf"` in the
+/// report output methods fails at "ReportSaveAsPdf" (no run site); restored,
+/// passes.
 #[test]
-fn the_two_declared_runnable_rules_are_code_and_a_rule_edge() {
+fn every_dispatching_builtin_on_a_typed_receiver_is_a_run_site() {
+    let mut al = String::from(
+        r#"table 50150 "B Row"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+
+page 50151 "B Page"
+{
+    SourceTable = "B Row";
+    trigger OnOpenPage()
+    begin
+        Message('p');
+    end;
+}
+
+report 50152 "B Report"
+{
+    dataset { dataitem(Row; "B Row") { } }
+    trigger OnInitReport()
+    begin
+        Message('r');
+    end;
+    trigger OnPreReport()
+    begin
+        Message('r');
+    end;
+}
+
+xmlport 50153 "B XmlPort"
+{
+    schema { textelement(Root) { } }
+    trigger OnPreXmlPort()
+    begin
+        Message('x');
+    end;
+}
+
+query 50154 "B Query"
+{
+    elements { dataitem(Row; "B Row") { column(Code; Code) { } } }
+    trigger OnBeforeOpen()
+    begin
+        Message('q');
+    end;
+}
+
+codeunit 50155 "B Probe"
+{
+    var
+        GR: Report "B Report";
+"#,
+    );
+    let cases: &[(&str, &str, &str)] = &[
+        ("PageRun", "V: Page \"B Page\";", "V.Run();"),
+        ("PageRunModal", "V: Page \"B Page\";", "V.RunModal();"),
+        ("ReportRun", "V: Report \"B Report\";", "V.Run();"),
+        ("ReportRunModal", "V: Report \"B Report\";", "V.RunModal();"),
+        ("ReportExecute", "V: Report \"B Report\";", "V.Execute('');"),
+        ("ReportPrint", "V: Report \"B Report\";", "V.Print('');"),
+        (
+            "ReportRunRequestPage",
+            "V: Report \"B Report\"; T: Text;",
+            "T := V.RunRequestPage();",
+        ),
+        (
+            "ReportSaveAs",
+            "V: Report \"B Report\"; O: OutStream;",
+            "V.SaveAs('', ReportFormat::Pdf, O);",
+        ),
+        (
+            "ReportSaveAsExcel",
+            "V: Report \"B Report\";",
+            "V.SaveAsExcel('f');",
+        ),
+        (
+            "ReportSaveAsHtml",
+            "V: Report \"B Report\";",
+            "V.SaveAsHtml('f');",
+        ),
+        (
+            "ReportSaveAsPdf",
+            "V: Report \"B Report\";",
+            "V.SaveAsPdf('f');",
+        ),
+        (
+            "ReportSaveAsWord",
+            "V: Report \"B Report\";",
+            "V.SaveAsWord('f');",
+        ),
+        (
+            "ReportSaveAsXml",
+            "V: Report \"B Report\";",
+            "V.SaveAsXml('f');",
+        ),
+        ("XmlPortRun", "V: XmlPort \"B XmlPort\";", "V.Run();"),
+        ("XmlPortImport", "V: XmlPort \"B XmlPort\";", "V.Import();"),
+        ("XmlPortExport", "V: XmlPort \"B XmlPort\";", "V.Export();"),
+        ("QueryOpen", "V: Query \"B Query\";", "V.Open();"),
+        (
+            "QuerySaveAsCsv",
+            "V: Query \"B Query\";",
+            "V.SaveAsCsv('f');",
+        ),
+        (
+            "QuerySaveAsJson",
+            "V: Query \"B Query\"; O: OutStream;",
+            "V.SaveAsJson(O);",
+        ),
+        (
+            "QuerySaveAsXml",
+            "V: Query \"B Query\";",
+            "V.SaveAsXml('f');",
+        ),
+        (
+            "ArrayReceiver",
+            "V: array[2] of Report \"B Report\";",
+            "V[1].SaveAsPdf('f');",
+        ),
+        ("GlobalReceiver", "", "GR.SaveAsPdf('f');"),
+        ("ThisGlobalReceiver", "", "this.GR.SaveAsPdf('f');"),
+    ];
+    for (name, vars, body) in cases {
+        let var = if vars.is_empty() {
+            String::new()
+        } else {
+            format!("    var\n        {}\n", vars.replace("; ", ";\n        "))
+        };
+        al.push_str(&format!(
+            "    procedure {name}()\n{var}    begin\n        {body}\n    end;\n\n"
+        ));
+    }
+    al.push_str(
+        "    procedure ParamReceiver(var V: Report \"B Report\")\n    begin\n        V.SaveAsPdf('f');\n    end;\n}\n",
+    );
+    let t = one_file_workspace(&al);
+    let ws = t.path().join("ws");
+    let inputs = Arc::new(crate::program::inputs::WorkspaceInputs::read(
+        &ws,
+        &Default::default(),
+    ));
+    let program = crate::program::resolved::ResolvedProgram::build(
+        &inputs,
+        crate::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("program");
+    let g = crate::program::impact_graph::sited_from_program(&program, &|| false)
+        .expect("not cancelled");
+    let names = cases
+        .iter()
+        .map(|c| c.0)
+        .chain(std::iter::once("ParamReceiver"));
+    for name in names {
+        let from = named(&g, &al_syntax::fold_identifier(name));
+        let via = |v: &str| {
+            g.sites()
+                .iter()
+                .filter(|s| s.from == from && s.via() == v)
+                .count()
+        };
+        assert!(via("run") >= 1, "{name}: no run site");
+        assert_eq!(via("declaredRunnable"), 0, "{name}");
+    }
+}
+
+/// Round-2 r2 §2.1 step 1: a dispatching builtin on a receiver typed as one
+/// object (`R.RunRequestPage`) is a `run` call site and code; a `TestPage`
+/// declaration is the one `declaredRunnable` rule left, a rule edge (`RULE`,
+/// no call site); a plain `Page` variable declaration yields no site at all.
+/// (The call-site `declaredRunnable` rule ran such builtins until ENG-19 made
+/// every one a run of its object; TLS-51 removed it.)
+///
+/// DISCRIMINATION (2026-11-14): `site_bits` classifying a `declaredRunnable`
+/// site as code (0) fails "the TestPage declaration is a rule edge".
+#[test]
+fn a_typed_run_is_code_and_a_test_page_declaration_is_a_rule_edge() {
     let t = one_file_workspace(
         r#"codeunit 50100 "Holder"
 {

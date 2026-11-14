@@ -538,24 +538,6 @@ impl<'a> Builder<'a> {
                     }
                 }
             }
-            // Rule 2: a dispatching builtin that runs an object, called on a
-            // receiver typed as one object (`ReportVar.SaveAsPdf()`,
-            // `QueryVar.Open()`), runs that object. The site's open bound
-            // below still names the kind's hub.
-            if let ObligationId::CallSite { .. } = ce.obligation_id
-                && let Some(t) = self.receiver_run(e, &ce.obligation_id)
-            {
-                let to = self.run_target_key(&t);
-                self.add(
-                    from.clone(),
-                    to,
-                    Kind::Run,
-                    Conf::OverApprox,
-                    "declaredRunnable",
-                    line,
-                    BTreeSet::new(),
-                );
-            }
             let bounds: &[OpenBound] = match ce.obligation_id {
                 ObligationId::CallSite { .. } => inp
                     .edges
@@ -656,46 +638,6 @@ impl<'a> Builder<'a> {
             }
             _ => 0,
         }
-    }
-
-    /// What a call site runs through a dispatching builtin on a typed
-    /// receiver (rule 2): the site resolved to a builtin that runs an object
-    /// of kind K ([`dispatching_builtin`], `Run(K)`, a `Page`, `Report`,
-    /// `XmlPort` or `Query` instance method) and the resolver typed its
-    /// receiver as an object of kind K; the receiver's name resolves from the
-    /// caller's object. `None` for every other site, and for a receiver the
-    /// caller's closure does not resolve (its open bound still names the hub).
-    fn receiver_run(
-        &self,
-        e: &crate::program::resolve::edge::Edge,
-        ob: &ObligationId,
-    ) -> Option<RunTarget> {
-        use crate::program::resolve::full::ReceiverFactType;
-        use crate::program::resolve::member_catalog::{DispatchingBuiltin, dispatching_builtin};
-        let kind = e.routes.iter().find_map(|r| match &r.target {
-            RouteTarget::Builtin(bid) => match dispatching_builtin(bid) {
-                Some(DispatchingBuiltin::Run(
-                    k @ (ObjectKind::Page
-                    | ObjectKind::Report
-                    | ObjectKind::XmlPort
-                    | ObjectKind::Query),
-                )) => Some(k),
-                _ => None,
-            },
-            _ => None,
-        })?;
-        let facts = self.inp.edges.site_facts.get(ob)?;
-        let ReceiverFactType::Object { kind: rk, name } = &facts.receiver.as_ref()?.ty else {
-            return None;
-        };
-        if *rk != kind {
-            return None;
-        }
-        self.resolve_ref(
-            &e.from.object,
-            kind,
-            &super::facts::property_object_ref(name),
-        )
     }
 
     fn engine_route(
@@ -1081,7 +1023,7 @@ impl<'a> Builder<'a> {
                 continue;
             }
             // The test pages it (or, for a global, its object) declares; the
-            // other runnable variables run at their sites (`receiver_run`).
+            // other runnable variables run at their sites (engine `run` routes).
             let mut runs: Vec<RunTarget> = Vec::new();
             if let Some(f) = inp.facts.routines.get(&r.id) {
                 runs.extend(f.test_pages.iter().cloned());
@@ -2231,20 +2173,21 @@ pub(crate) mod tests {
         assert_eq!(o.node("Tests.TestIt").test, Some(true));
     }
 
-    /// Rule 2 for a `Page`/`Report`/`XmlPort`/`Query` variable is a SITE, not a
+    /// A `Page`/`Report`/`XmlPort`/`Query` variable runs nothing by its
     /// declaration (round-1 c12): `Document Errors Mgt.` declares a global
     /// `Page "Sales Invoice"` and only calls `RunBackgroundCheck()` on it, so
-    /// neither that routine nor its empty `OnRun` runs the page. A dispatching
-    /// builtin that runs a report, called on a receiver the resolver typed as
-    /// that report, does run it; a builtin that runs nothing (`SetTableView`)
-    /// on the same receiver does not; a receiver the caller's closure does not
-    /// resolve gives no precise edge. Every site is stated by hand.
+    /// neither that routine nor its empty `OnRun` runs the page. And since
+    /// TLS-51 the projection adds no run for a builtin ROUTE either: the
+    /// resolver turns every dispatching builtin on a typed receiver into a
+    /// `run` route itself (ENG-19), so a site still left as a builtin route
+    /// (stated by hand here: `SaveAsPdf`, `SetTableView`, an unresolved
+    /// receiver) runs no object. Every site is stated by hand.
     ///
-    /// DISCRIMINATION (2026-11-06): `receiver_run` returning `None` fails
-    /// "Print runs Rep"; dropping its `dispatching_builtin` filter (any
-    /// builtin route counts) fails "SetTableView runs nothing". Restoring the
-    /// old declaration rule (an object's globals run from every routine) is
-    /// no longer expressible: the facts no longer carry a `Page` global.
+    /// DISCRIMINATION (2026-11-14): putting the removed call-site rule back
+    /// (a `declaredRunnable` edge for a typed-receiver builtin route) fails
+    /// "Print runs no object". The old declaration rule (an object's globals
+    /// run from every routine) is no longer expressible: the facts no longer
+    /// carry a `Page` global.
     #[test]
     fn a_runnable_variable_runs_only_where_a_site_runs_it() {
         use crate::program::resolve::edge::BuiltinId;
@@ -2298,11 +2241,6 @@ pub(crate) mod tests {
         }
         let o = w.project(a);
         assert_eq!(
-            o.edge("Errs.Print", "Rep"),
-            ("Run", "OverApprox", "declaredRunnable"),
-            "Print runs Rep"
-        );
-        assert_eq!(
             o.edge("Errs.Check", "Card.RunBackgroundCheck"),
             ("Direct", "Resolved", "call")
         );
@@ -2317,7 +2255,7 @@ pub(crate) mod tests {
             runs_from("Errs.Filter").is_empty(),
             "SetTableView runs nothing"
         );
-        for r in ["Errs.OnRun", "Errs.Check", "Errs.Lost"] {
+        for r in ["Errs.Print", "Errs.OnRun", "Errs.Check", "Errs.Lost"] {
             assert!(runs_from(r).is_empty(), "{r} runs no object");
         }
     }

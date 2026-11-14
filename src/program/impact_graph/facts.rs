@@ -432,9 +432,8 @@ pub(crate) fn property_object_ref(value: &str) -> ObjectRef {
 
 /// A variable's type as a may-run target (rule 2): a `TestPage` /
 /// `TestRequestPage` only. Every other runnable type's run is a site the
-/// projection reads (a typed `.Run()` is an engine run edge; a dispatching
-/// builtin on a typed receiver, `ReportVar.SaveAsPdf()`, is
-/// `project::Builder::receiver_runs`). Before 2026-11-06 a `Page`, `Report`,
+/// projection reads (a typed `.Run()` and a dispatching builtin on a typed
+/// receiver, `ReportVar.SaveAsPdf()`, are engine run edges). Before 2026-11-06 a `Page`, `Report`,
 /// `XmlPort` or `Query` declaration counted too, so a routine that only
 /// declared `Page "Sales Invoice"` and called a procedure on it ran the page
 /// (and its object's every routine did, for a global).

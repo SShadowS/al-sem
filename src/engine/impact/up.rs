@@ -102,9 +102,9 @@ pub mod bit {
 ///   (a deliberate superset of `is_code_call_site`, which takes `eventFlow`
 ///   only: running a publisher is code), an object node's lifecycle into a
 ///   trigger the run runs ([`object_run_reaches`]), a static background start
-///   (the context axis labels it), a test runner or handler, a dispatching
-///   builtin on a receiver typed as one object (`declaredRunnable` at a call
-///   site: the builtin runs the object);
+///   (the context axis labels it), a test runner or handler (a dispatching
+///   builtin on a typed receiver is a `run` site since ENG-19: TLS-51 removed
+///   the call-site `declaredRunnable` rule it had);
 /// - [`bit::NAV`]: every other lifecycle site, and an action-run site;
 /// - [`bit::RULE`]: `declaredRunnable` with no call site (a `TestPage`
 ///   declaration), and (with [`bit::NAV`]) a candidate page-lifecycle site
@@ -124,7 +124,9 @@ pub fn site_bits(g: &SitedGraph, s: SiteIx) -> u8 {
                 !g.is_routine(st.from) && !g.is_action_run(s) && object_run_reaches(g, st.to);
             if code { 0 } else { bit::NAV }
         }
-        Boundary::Run if st.via() == "declaredRunnable" && st.anchor.is_none() => bit::RULE,
+        // Every `declaredRunnable` site is a `TestPage`/`TestRequestPage`
+        // declaration (no call site) since TLS-51.
+        Boundary::Run if st.via() == "declaredRunnable" => bit::RULE,
         Boundary::Sync
         | Boundary::Run
         | Boundary::Background
