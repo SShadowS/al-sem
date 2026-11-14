@@ -1183,7 +1183,9 @@ fn status_checks_the_disk_against_the_published_revision() {
 /// (`fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server`), so
 /// here the engine child keys its check on size and mtime alone, as on a
 /// platform without ctime (test hook `stat-without-ctime`), on every
-/// platform.
+/// platform. The hook exists only in debug and `engine-test-hooks` builds;
+/// off Unix the check has no ctime anyway, so the test needs no hook there.
+#[cfg(any(feature = "engine-test-hooks", debug_assertions, not(unix)))]
 #[test]
 fn a_stale_verify_rebuilds_as_its_description_says() {
     let r = s_tools_freshness_description();
