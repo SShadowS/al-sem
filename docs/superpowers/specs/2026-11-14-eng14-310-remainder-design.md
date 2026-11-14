@@ -353,6 +353,19 @@ Two landings, one branch each:
   `#if` case group (`PreprocConditionalCase`, `PreprocSplitCaseExtended`, `PreprocSplitOpenStatement`)
   is among the branches, and case groups nested past the depth budget (whose deeper branches are
   dropped) add one too.
+- **Every place a `#if` can sit inside a `case`** (from the grammar's `node-types.json` for
+  `case_statement`, `case_body`, `case_branch`, `case_else_branch` and the case-group nodes; one test row
+  each in `eng14_case_rows`, plus `literal_flow_tests::eng14_case_labels_from_a_group_prune_nothing`):
+
+  | # | place | node kinds | reading |
+  |---|---|---|---|
+  | 1 | the header (`case <expr> of`) | `preproc_conditional_operand` (field `expression`), `preproc_conditional_expression_tail`, `preproc_operand_prefix` | fail closed (`RowHeader`) |
+  | 2 | between branches | `preproc_conditional_case`, `preproc_split_case_extended`, `preproc_split_open_statement` | fail closed (`RowGroup`, `RowExtended`, `RowOpen`; literal reach `CallGroup`) |
+  | 3 | a branch's labels | `preproc_split_case_branch`, `preproc_conditional_case_patterns`, `preproc_operand_prefix`, a nested `preproc_conditional_case`, any other `preproc_*` child of a `case_branch` but its body | fail closed (`RowLabelsSplit`, `RowLabelsTail`; literal reach `CallLabels`) |
+  | 4 | a branch's body (a one-statement slot) | the statement-level kinds | the statement rules: one statement in every build is precise (`RowBodyWellFormed`), otherwise fail closed (`RowBodyBroken`) |
+  | 5 | the `else` | none of its own (its body is statements); a second `else` only from another arm | the statement rules; a second `else` is kept as a pattern-less branch so its calls keep their sites (`RowTwoElses`), and row 2 has already failed the case closed |
+  | 6 | a nested `case` | any row above, inside a branch | the same rules per case (`RowNested`) |
+  | 7 | the whole case split across `#if` | `preproc_split_case_statement_end`, `preproc_split_case_end_branch` (statement level) | fail closed (`SplitCaseEnd`) |
 - **`has_branching`.** An untrusted routine reads `has_branching: true`: `record_types` (RecordRef
   temp state), `event_flow` (`exact`) and d61 (`unconditional`) treat `false` as a straight-line proof
   (Fable, part-1 review).

@@ -4139,16 +4139,36 @@ fn lower_case_body(
         );
         // ENG-14 (spec §8.1): a `#if` group among the branches makes the branch set,
         // and so the labels an `else` excludes, vary by build: fail closed.
-        if let Some(group) = body.named_children().into_iter().find(|c| {
+        // A branch's labels may vary by build too (`#if X 1, #endif 2: …` is a `case_branch`
+        // holding a `preproc_split_case_branch`): any `preproc_*` child of a branch other
+        // than its body (a statement `#if` there is read as alternatives) counts.
+        let varies = |c: &RawNode| {
             matches!(
                 c.kind(),
                 RawKind::PreprocConditionalCase
                     | RawKind::PreprocSplitCaseExtended
                     | RawKind::PreprocSplitOpenStatement
-            )
-        }) {
+            ) || (c.kind() == RawKind::CaseBranch && {
+                let body = c.field(FieldName::Body).map(|b| b.id());
+                c.named_children()
+                    .into_iter()
+                    .any(|k| Some(k.id()) != body && k.kind_str().starts_with("preproc_"))
+            })
+        };
+        if let Some(group) = body.named_children().into_iter().find(varies) {
             push_untrusted_case_branch(&origin_of(group), ir, &mut branches);
         }
+    }
+    // The header too: `case #if X I #else J #endif of` (a `preproc_conditional_operand`,
+    // or an expression tail or prefix across a directive) is read from one arm, so the
+    // labels would be matched against another build's scrutinee.
+    let body_id = case_node.field(FieldName::Body).map(|b| b.id());
+    if let Some(header) = case_node
+        .named_children()
+        .into_iter()
+        .find(|c| Some(c.id()) != body_id && c.kind_str().starts_with("preproc_"))
+    {
+        push_untrusted_case_branch(&origin_of(header), ir, &mut branches);
     }
     (branches, else_block)
 }
@@ -4230,8 +4250,18 @@ fn collect_case_branches_in(
         match child.kind() {
             RawKind::CaseBranch => push_case_branch(child, ir, issues, source, branches, depth),
             RawKind::CaseElseBranch => {
+                let block = lower_case_else_branch(child, ir, issues, source, depth);
                 if else_block.is_none() {
-                    *else_block = Some(lower_case_else_branch(child, ir, issues, source, depth));
+                    *else_block = Some(block);
+                } else {
+                    // ENG-14 (sol): a second `else` comes from another `#if` arm (only
+                    // there can two exist); its calls keep their sites as a pattern-less
+                    // branch. The case holds a `#if` group, so its routine is untrusted.
+                    branches.push(CaseBranch {
+                        patterns: Vec::new(),
+                        body: block,
+                        origin: origin_of(child),
+                    });
                 }
             }
             // `#if`-conditional case content: every arm's `case_branch`/`case_else_branch`
@@ -6756,7 +6786,12 @@ codeunit 50103 T
 "#;
         let af = parse(src);
         let (branches, _else) = first_case(&af);
-        assert_eq!(branches.len(), 2);
+        // ENG-14: labels that vary by build add a pattern-less marker branch (last).
+        assert_eq!(
+            branches.iter().filter(|b| !b.patterns.is_empty()).count(),
+            2
+        );
+        assert_eq!(branches.len(), 3, "and the ENG-14 marker branch");
         assert!(
             !branches[0].patterns.is_empty(),
             "the split branch's patterns must not be empty"

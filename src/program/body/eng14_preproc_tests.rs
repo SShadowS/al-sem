@@ -553,6 +553,220 @@ fn eng14_a4_a_conditional_case_else_may_not_run() {
     );
 }
 
+/// Every place a `#if` can sit inside a `case`, from the grammar's node types (spec §8.1's table):
+/// each row's routine either keeps its control tree (read precisely) or has none (fails closed).
+const CASE_ROWS: &str = r#"codeunit 50347 "Eng14 Case Rows"
+{
+    // Control: a plain case keeps its tree.
+    procedure RowPlain(I: Integer)
+    begin
+        case I of
+            1:
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
+    // Row 1, the header: `expression` is a preproc_conditional_operand.
+    procedure RowHeader(I: Integer; J: Integer)
+    begin
+        case
+#if X
+            I
+#else
+            J
+#endif
+        of
+            1:
+                Work();
+        end;
+    end;
+
+    // Row 2a, between branches: preproc_conditional_case.
+    procedure RowGroup(I: Integer)
+    begin
+        case I of
+            0:
+                Work();
+#if X
+            1:
+                Work();
+#else
+            else
+                Commit();
+#endif
+        end;
+    end;
+
+    // Row 2b, between branches: preproc_split_case_extended.
+    procedure RowExtended(I: Integer)
+    begin
+        case I of
+#if X
+            1:
+                Work();
+            2:
+#else
+            6:
+                Work();
+            2:
+#endif
+                Commit();
+        end;
+    end;
+
+    // Row 2c, between branches: preproc_split_open_statement (a split else).
+    procedure RowOpen(K: Integer)
+    begin
+        case K of
+            1:
+                Work()
+#if C28
+            else
+#else
+            else begin
+                Work();
+#endif
+                Commit();
+#if not C28
+            end;
+#endif
+        end;
+    end;
+
+    // Row 3a, labels: preproc_split_case_branch.
+    procedure RowLabelsSplit(I: Integer)
+    begin
+        case I of
+#if X
+            1,
+#endif
+            2:
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
+    // Row 3b, labels: preproc_conditional_case_patterns.
+    procedure RowLabelsTail(I: Integer)
+    begin
+        case I of
+            2
+#if X
+            , 1
+#endif
+            :
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
+    // Row 4a, a branch body that is one statement in every build: kept precise.
+    procedure RowBodyWellFormed(I: Integer)
+    begin
+        case I of
+            1:
+#if X
+                Work();
+#else
+                Commit();
+#endif
+        end;
+    end;
+
+    // Row 4b, a branch body that is not (a broken slot): fails closed.
+    procedure RowBodyBroken(I: Integer)
+    begin
+        case I of
+            1:
+#if X
+                exit;
+                Work();
+#endif
+        end;
+    end;
+
+    // Row 5, an else in each arm: both arms' calls keep their sites.
+    procedure RowTwoElses(I: Integer)
+    begin
+        case I of
+            0:
+                Work();
+#if X
+            else
+                Other();
+#else
+            else
+                Third();
+#endif
+        end;
+    end;
+
+    // Row 6, a nested case with a group: the routine fails closed.
+    procedure RowNested(I: Integer; K: Integer)
+    begin
+        case I of
+            1:
+                case K of
+                    0:
+                        Work();
+#if X
+                    1:
+                        Work();
+#else
+                    else
+                        Commit();
+#endif
+                end;
+        end;
+    end;
+
+    local procedure Work() begin end;
+    local procedure Other() begin end;
+    local procedure Third() begin end;
+}
+"#;
+
+#[test]
+fn eng14_case_rows() {
+    let m = assemble_and_resolve_inline_program_default(
+        &[("CaseRows.Codeunit.al".to_string(), CASE_ROWS.to_string())],
+        "e1400000-0000-4000-8000-000000000017",
+    );
+    let kept = |name: &str| routine(&m, name).statement_tree.is_some();
+    assert!(kept("RowPlain"), "control: a plain case keeps its tree");
+    assert!(
+        kept("RowBodyWellFormed"),
+        "row 4a: a well-formed branch body is read precisely"
+    );
+    for name in [
+        "RowHeader",
+        "RowGroup",
+        "RowExtended",
+        "RowOpen",
+        "RowLabelsSplit",
+        "RowLabelsTail",
+        "RowBodyBroken",
+        "RowTwoElses",
+        "RowNested",
+    ] {
+        assert!(!kept(name), "{name}: a #if inside the case fails closed");
+    }
+    // Row 5: the second arm's else is kept, with its call.
+    let callees: Vec<&str> = routine(&m, "RowTwoElses")
+        .call_sites
+        .iter()
+        .map(|c| c.callee_text.as_str())
+        .collect();
+    assert!(
+        callees.contains(&"Other") && callees.contains(&"Third"),
+        "RowTwoElses: both arms' else calls keep their sites: {callees:?}"
+    );
+}
+
 /// ENG-14 census on CDO (Fable's part-1 review, I1): how many routines lose their control tree,
 /// by cause and by app (workspace or dependency). A measurement, not a ratchet: it prints and
 /// asserts only that the model was built. Run with

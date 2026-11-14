@@ -509,6 +509,25 @@ fn eng14_case_labels_from_a_group_prune_nothing() {
         Group(1);
     end;
 
+    procedure CallLabels()
+    begin
+        Labels(1);
+    end;
+
+    // sol, round 3: labels that vary by build inside one branch.
+    local procedure Labels(I: Integer)
+    begin
+        case I of
+#if X
+            1,
+#endif
+            2:
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
     local procedure Plain(I: Integer)
     begin
         case I of
@@ -578,5 +597,9 @@ fn eng14_case_labels_from_a_group_prune_nothing() {
     assert!(
         !ruled_out("CallGroup"),
         "without X the case has no label 1 and P(1) commits"
+    );
+    assert!(
+        !ruled_out("CallLabels"),
+        "without X the branch has no label 1 and P(1) commits"
     );
 }
