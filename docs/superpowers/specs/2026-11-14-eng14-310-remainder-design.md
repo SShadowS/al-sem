@@ -344,6 +344,14 @@ Two landings, one branch each:
 - **§4.2 D, readers changed.** `cfg_walker::walk_param` (Unknown facts), `param_guard::frame_guards`
   (`None`), d43 `classify_subscriber` (`MaySetTrue`, before its no-branch fast path). Every other reader's
   no-tree path was checked safe: docs/superpowers/notes/2026-11-14-eng14-tree-readers.md.
+- **§4.6, caches (checked in the code).** Only the impact cache is a live on-disk cache that part 1
+  moves: its keys hold direct facts with unreachable sites removed, so `impact::keys::SUMMARY_SCHEMA`
+  goes 13 → 14 (the key hashes it, impact/cache.rs:96). `CACHE_VERSION_SUMMARY_SCHEMA` and
+  `CACHE_VERSION_DEP_CACHE` are read only by `cache_prune`'s classifier of old al-sem files; nothing
+  writes an artifact stamped with them, so bumping them protects nothing. The dependency artifacts and
+  their `DEP_ORDER_INDEX_SCHEMA_VERSION` stamp are built in memory per run and compared in the same
+  run, never against an older binary's file. C3 needs no new test: the key mechanism is unchanged, and a
+  version value needs no discrimination proof (owner decision 2026-11-04).
 - **§4.2 B, two heads.** The "one head" condition was dropped: a second head's fields are never consumed,
   so a two-head shape always has leftover items and is an unordered run anyway (its discrimination proof
   came back green, which showed the check was redundant).

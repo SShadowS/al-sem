@@ -89,6 +89,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every entry in the dispatching-builtin catalog that runs a page, report, XmlPort or
   query.
 
+### Fixed (ENG-14 part 1, #310: `#if` shapes and untrusted routines no longer prove code dead)
+
+- **A `#if` the lowerer could not keep as alternatives marked code dead that another build runs.**
+  Measured on master `a4072928` (probe sources in the spec): `if C then #if X exit; Foo(); #endif`
+  marked `Foo` unreachable (under X the code is `if C then exit; Foo();`), a split procedure body's
+  `#if X begin exit; #else begin #endif Call5();` marked `Call5` dead, and a split closing, a
+  cond-only head split, a two-head split if-else and a split `case` closing did the same; d20 reported
+  each. Now (spec `docs/superpowers/specs/2026-11-14-eng14-310-remainder-design.md` §4.2):
+  - a split body's arms are a group of alternatives and its shared tail follows them; the tail is
+    unordered when a live arm ends with an `if <cond> then` guard;
+  - where arm boundaries are lost (split closings, cond-only heads, the lowerer's leftovers), each
+    statement is its own "may run" item, so an `exit` in it ends nothing else;
+  - a `#if` chain in a one-statement slot (then, else, loop, `with`, `case` branch) that is not one
+    statement in every build makes its arms' statements "may run" and the enclosing statement list
+    unordered (so `Bar` after `if C then #if not X Foo(); #endif` no longer dominates the success
+    return).
+- **An untrusted routine has no control tree.** A parse-incomplete routine, or one holding a
+  statement the lowerer could not lower (the depth budget, an unmodelled wrapper), may have lost an
+  `exit`. It keeps no statement tree and no unreachable entries, so no dead mark, d20, dominance,
+  `all_paths_error` or literal pruning comes from it. `cfg_walker` gives it Unknown path facts (its
+  straight-line fallback claimed `dirty_at_exit: No`), `param_guard` no guard frame, and d43 reads
+  its `IsHandled := true` as "may set" (its no-branch fast path said "must set").
+- Goldens: only the r0 corpus's intentional parse error (`CSR Broken::Incomplete`) moves, in the
+  r1a L2 golden and the l2 snapshot: its call loses `top-level` and its dominance claim. The impact
+  cache schema goes 13 → 14. Schema 14 also covers ENG-19's summary change (`Report.RunRequestPage`
+  runs the request page), which did not bump it: an impact base cached between ENG-19's landing and
+  this one is rebuilt. Tests: `src/program/body/eng14_preproc_tests.rs` (A1-A6), plus unit tests in
+  `cfg_walker` and d43, each guard with a discrimination proof. Part 2 (the `Error` binding rule, the
+  summary composition, removing #288's trust gate) follows; `CurrReport.Skip`/`Break`/`Quit` is
+  ENG-74.
+
 ### Fixed (ENG-24: d50 misses a write the trap search counts)
 
 - **d50 (opt-in: a checked `Codeunit.Run` with a write pending) missed writes the trap search
