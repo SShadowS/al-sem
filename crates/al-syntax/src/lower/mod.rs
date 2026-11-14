@@ -58,6 +58,7 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     let mut objects = Vec::new();
     // No range from another file (an unwinding lowering) may reach this one.
     CONDITIONAL_VARS.with(|v| v.borrow_mut().clear());
+    PREPROC_STARTS.with(|s| *s.borrow_mut() = root.named_starts_where(is_varying_preproc));
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
     ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
     let comments = collect_comments(root, source);
@@ -2214,6 +2215,10 @@ thread_local! {
     /// ([`al_syntax::ir::Ir::var_wrapper`]).
     static CONDITIONAL_VARS: std::cell::RefCell<Vec<crate::ir::VarWrapper>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// ENG-81: the start bytes of the file being lowered's build-varying preproc nodes,
+    /// sorted ([`holds_preproc`]); set by `lower_file`.
+    static PREPROC_STARTS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Lower `children` as one statement list (a `statement_block` or a `code_block`
@@ -4327,23 +4332,31 @@ fn lower_case_body(
 /// `#define` and `#undef`, and a pragma-only wrapper, attach almost anywhere (inside a
 /// `case_branch`, between its label and `:`) and vary nothing: they do not count.
 fn holds_preproc(node: RawNode) -> bool {
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n.kind_str().starts_with("preproc_")
-            && !matches!(
-                n.kind(),
-                RawKind::PreprocRegion
-                    | RawKind::PreprocEndregion
-                    | RawKind::PreprocDefine
-                    | RawKind::PreprocUndef
-                    | RawKind::PreprocPragmaOnly
-            )
-        {
-            return true;
-        }
-        stack.extend(n.named_children());
-    }
-    false
+    // ENG-81: one sorted list of the file's build-varying preproc nodes (by start byte),
+    // filled once per file in `lower_file`, instead of a walk of the subtree per call (a
+    // call's arguments were rescanned by every enclosing call). Tree ranges nest, so the
+    // subtree holds such a node exactly when one starts inside its range.
+    let r = node.byte_range();
+    PREPROC_STARTS.with(|s| {
+        let s = s.borrow();
+        let i = s.partition_point(|&b| b < r.start);
+        s.get(i).is_some_and(|&b| b < r.end)
+    })
+}
+
+/// A preprocessor node that makes code vary by build: any `preproc_*` kind but the
+/// grammar extras that vary nothing (`#region`, `#endregion`, `#define`, `#undef`, a
+/// pragma-only wrapper).
+fn is_varying_preproc(n: RawNode) -> bool {
+    n.kind_str().starts_with("preproc_")
+        && !matches!(
+            n.kind(),
+            RawKind::PreprocRegion
+                | RawKind::PreprocEndregion
+                | RawKind::PreprocDefine
+                | RawKind::PreprocUndef
+                | RawKind::PreprocPragmaOnly
+        )
 }
 
 /// Recursive worker for [`lower_case_body`] (H-7, Tier-1.4 preproc plan): walks one
