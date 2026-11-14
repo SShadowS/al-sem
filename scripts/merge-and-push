@@ -78,7 +78,7 @@ elif [ -n "${MERGE_EXPECT_MASTER:-}" ]; then
     merged=$(git commit-tree "$gated_tree" -p "$before" -p "$src" -m "Merge branch '$branch'" \
         -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>") || die "cannot make the merge commit"
     git merge --ff-only --quiet "$merged" \
-        || die "master moved while merging '$branch'; nothing merged: land again"
+        || die "cannot fast-forward master to the merge of '$branch' (master moved, or a file in the checkout is in the way); nothing merged"
 else
     if ! git merge --no-ff --quiet "$src" -m "Merge branch '$branch'
 
@@ -89,7 +89,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; then
     merged=$(git rev-parse HEAD) || die "cannot read the merge"
 fi
 
-tree=$(git rev-parse 'HEAD^{tree}') || die "cannot read the merged tree"
+tree=$(git rev-parse "$merged^{tree}") || die "cannot read the merged tree"
 pass="$(git rev-parse --path-format=absolute --git-common-dir)/gate-passed/$tree"
 if [ -f "$pass" ]; then
     read -r pass_step pass_when <"$pass"

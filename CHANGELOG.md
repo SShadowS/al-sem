@@ -97,7 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal needs a real race and has no test. Review r4 (sol): master is read once,
   and every check and the merge use that commit; with `MERGE_EXPECT_MASTER`, a
   source already in master is refused (that path skipped the tree check). Mutation:
-  the refusal dropped -> it reports "nothing to merge" and pushes.
+  the refusal dropped -> it reports "nothing to merge" and pushes. Fable r3: READY on
+  the sol-round delta (plain path unchanged in shape, `merge-and-push <branch>`); a
+  test now pins the plain path too (it merges the branch's commit, not a same-named
+  tag, and pushes that merge; mutation: the bare name -> the tag's commit is
+  merged), and the gate record reads the pinned merge's tree.
 - Checked on real history (a shared scratch clone, its master set back): `--dry-run`
   of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
   equal the real landing's. Replaying b4 and b3 in full with the CHANGELOG

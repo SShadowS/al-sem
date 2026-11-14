@@ -230,8 +230,9 @@ git check-ref-format "refs/heads/landing/$name" || bad_usage "landing/$name is n
 [[ "$name" != */* ]] || bad_usage "--name '$name': no '/'"
 landing="landing/$name"
 n=2
-# Taken when ANY ref resolves to the name: merge-and-push merges it unqualified,
-# and a tag `landing/<name>` would win over the branch.
+# Taken when ANY ref resolves to the name (a tag `landing/<name>` would shadow
+# the branch for anyone using the bare name; merge-and-push itself reads
+# refs/heads/<name>).
 taken() { # a ref by that name, or under it (`landing/x/y` blocks `landing/x`)
     G rev-parse -q --verify "$1^{commit}" >/dev/null \
         || [[ -n "$(G for-each-ref --count=1 "refs/heads/$1/" "refs/tags/$1/")" ]]

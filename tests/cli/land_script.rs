@@ -684,4 +684,15 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
     assert_eq!(code, Some(1), "{text}");
     assert!(text.contains("which the gates did not expect"), "{text}");
     assert_eq!(rev(&r.main, "master"), m3);
+
+    // The plain path (no expect variables), as run by hand: it merges the
+    // branch's commit, not a same-named tag, and pushes that merge (Fable r3).
+    r.branch("tools/tls-65-plain", &[("f65.txt", b"65".as_slice())]);
+    let plain = rev(&r.main, "tools/tls-65-plain");
+    git::run(&r.main, &["tag", "tools/tls-65-plain", &m1]);
+    let (code, text) = push("tools/tls-65-plain", "", "");
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(rev(&r.main, "master^1"), m3);
+    assert_eq!(rev(&r.main, "master^2"), plain, "the branch, not the tag");
+    assert_eq!(rev(&origin, "master"), rev(&r.main, "master"));
 }
