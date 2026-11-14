@@ -12,13 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `gate_scripts::cdo_gate_stops_at_once_on_term_during_its_build` failed TLS-58's
   landing gate at host load ~500: "the gate did not stop within 20 s of a TERM". The
   gate's stop takes about a second when idle; the deadline, not the gate, was wrong.
-  Its waits (reaching the build, the gate's exit after the TERM, the build process's
-  death) are now 120 s each, and the stub build sleeps 600 s, so a gate that waits
-  for its build still fails it. The fixed 300 ms pause before the survivor check is
-  now a poll under the same limit.
+  It now allows 120 s to reach the build and 120 s from the TERM to both the gate's
+  exit and the build process's death, and the stub build sleeps 600 s, so a gate
+  that waits for its build still fails it. The fixed 300 ms pause before the
+  survivor check is now a poll. Review r1 (Fable): the gate runs in its own process
+  group, which a guard kills however the test ends (a panic used to leave it calling
+  the stub phase after phase); the PID file is polled until it parses (the shell
+  creates it before writing it); a gate that ends before its build fails at once.
 - Measured: 0.55 s from TERM to exit when idle, 0.56-0.65 s in three runs at load
-  ~235 beside a running task gate. Mutation (`run_phase` back to a foreground
-  pipeline): fails at 120 s, "the gate did not stop within 120s of a TERM".
+  ~235 beside a running task gate. Mutations: `run_phase` back to a foreground
+  pipeline fails at 120 s, "the gate did not stop within 120s of a TERM";
+  `stop_gate` without its `kill -TERM` fails at 120 s, "the build phase's process
+  was still alive 120s after the TERM". Neither left a stub `sleep` behind.
 
 ### Added (TLS-58: `cdo-gate --only <phases>`, a pre-submit CDO subset)
 

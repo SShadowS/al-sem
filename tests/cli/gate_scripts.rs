@@ -663,6 +663,7 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         stub.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    use std::os::unix::process::CommandExt;
     let mut gate = std::process::Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg("--no-speed")
@@ -672,25 +673,44 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         .env_remove("CDO_GATE_SERIAL")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        // Its own process group, so the guard below can end all of it.
+        .process_group(0)
         .spawn()
         .expect("spawn bash scripts/cdo-gate");
+    let gate_pid = gate.id() as i32;
+    // Whatever way this test ends, nothing of the gate outlives it (a panic
+    // would otherwise leave the gate calling the 600 s stub phase after phase,
+    // Fable r1). The TERM below still goes to the gate's PID alone.
+    struct KillGroup(i32);
+    impl Drop for KillGroup {
+        fn drop(&mut self) {
+            // SAFETY: SIGKILL to the process group this test created.
+            unsafe { libc::kill(-self.0, libc::SIGKILL) };
+        }
+    }
+    let _group = KillGroup(gate_pid);
     // Every wait below; far under the stub's 600 s build.
     let limit = std::time::Duration::from_secs(120);
-    // The build phase is running when the stub has written its PID.
+    // The build phase is running when the stub's PID file reads as a number
+    // (the shell creates the file before it writes it). A gate that ends
+    // before its build fails at once, with its exit.
     let started = std::time::Instant::now();
-    while !pid_file.exists() {
-        if started.elapsed() > limit {
-            let _ = gate.kill();
-            panic!("the gate never reached its build phase within {limit:?}");
+    let build_pid: i32 = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+        {
+            break pid;
         }
+        if let Some(s) = gate.try_wait().unwrap() {
+            panic!("the gate ended before its build phase: {s}");
+        }
+        assert!(
+            started.elapsed() < limit,
+            "the gate never reached its build phase within {limit:?}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let build_pid: i32 = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let gate_pid = gate.id() as i32;
+    };
     // SAFETY: plain kill(2) on a child process this test owns.
     assert_eq!(unsafe { libc::kill(gate_pid, libc::SIGTERM) }, 0);
     let termed = std::time::Instant::now();
@@ -699,12 +719,10 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         if let Some(s) = gate.try_wait().unwrap() {
             break s;
         }
-        if std::time::Instant::now() > deadline {
-            let _ = gate.kill();
-            // SAFETY: as above; clean up the stub's sleep.
-            unsafe { libc::kill(build_pid, libc::SIGKILL) };
-            panic!("the gate did not stop within {limit:?} of a TERM");
-        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the gate did not stop within {limit:?} of a TERM"
+        );
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
     assert_eq!(status.code(), Some(130));
@@ -718,11 +736,10 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
                 .is_ok_and(|s| !s.contains(") Z "))
     };
     while alive() {
-        if termed.elapsed() > limit {
-            // SAFETY: as above; clean up the stub's sleep.
-            unsafe { libc::kill(build_pid, libc::SIGKILL) };
-            panic!("the build phase's process survived the gate by {limit:?}");
-        }
+        assert!(
+            termed.elapsed() < limit,
+            "the build phase's process was still alive {limit:?} after the TERM"
+        );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     eprintln!("gate stopped {:?} after the TERM", termed.elapsed());
