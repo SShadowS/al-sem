@@ -1264,15 +1264,22 @@ fn table_extension_trigger_is_emitted_beyond_l3() {
 }
 
 /// Row "ImplicitTrigger to dependency": a record op on a dependency
-/// table → no edge, but (S3.6) the trigger it reaches keeps its identity
-/// and body state in `external_targets`, under the operation's id.
+/// table → no trigger edge, but (S3.6) the trigger it reaches keeps its
+/// identity and body state in `external_targets`, under the operation's id.
+/// ENG-16: the table is loaded from symbols only, whose listing is not
+/// exhaustive (an extension's trigger, one the symbols leave out), so the op
+/// also has the open record edge (`open_record_edge`): unknown, never `no`.
 #[test]
 fn implicit_trigger_to_dependency_has_no_edge() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        C: Record Customer;\n    begin\n        C.Insert(true);\n    end;\n}\n";
     let a = adapt(&[("src/w.al", cu)], Some(DEP_SYMBOLS));
-    let op = &a.routine("Caller").record_operations[0];
+    let caller = a.routine("Caller");
+    let op = &caller.record_operations[0];
     assert_eq!(op.op, "Insert");
-    assert_eq!(a.edges(&op.id), vec![]);
+    assert_eq!(
+        a.edges(&op.id),
+        vec![open_record_edge(RoutineIx::of(0), caller, op, &op.id)]
+    );
     assert_eq!(a.census.adapter_program_trigger_ops, 1, "{:#?}", a.census);
     assert_eq!(a.census.adapter_routes_dropped, 0, "{:#?}", a.census);
     assert_eq!(

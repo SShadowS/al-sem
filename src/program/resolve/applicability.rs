@@ -246,21 +246,15 @@ pub fn implicit_trigger_route_applicable(
     }
 
     // Trigger name + field specificity check.
+    // ENG-15: `On<Op>`, and a table extension's `OnBefore<Op>`/`OnAfter<Op>`.
+    let family = crate::program::resolve::edge::trigger_family(&target.name_lc);
     let trigger_name_ok = match &ctx.kind {
-        RecordOpKind::Insert => {
-            target.name_lc == "oninsert" && target.enclosing_member_lc.is_none()
-        }
-        RecordOpKind::Modify => {
-            target.name_lc == "onmodify" && target.enclosing_member_lc.is_none()
-        }
-        RecordOpKind::Delete => {
-            target.name_lc == "ondelete" && target.enclosing_member_lc.is_none()
-        }
-        RecordOpKind::Rename => {
-            target.name_lc == "onrename" && target.enclosing_member_lc.is_none()
-        }
+        RecordOpKind::Insert => family == Some("insert") && target.enclosing_member_lc.is_none(),
+        RecordOpKind::Modify => family == Some("modify") && target.enclosing_member_lc.is_none(),
+        RecordOpKind::Delete => family == Some("delete") && target.enclosing_member_lc.is_none(),
+        RecordOpKind::Rename => family == Some("rename") && target.enclosing_member_lc.is_none(),
         RecordOpKind::Validate => {
-            if target.name_lc != "onvalidate" {
+            if family != Some("validate") {
                 return false;
             }
             // Must target the SPECIFIC field's OnValidate.
@@ -727,6 +721,47 @@ mod tests {
         };
         assert!(implicit_trigger_route_applicable(
             &ctx, &target, &graph, &index
+        ));
+    }
+
+    /// ENG-15: a table extension's `OnBefore<Op>`/`OnAfter<Op>` is an
+    /// applicable route of its operation, as the fan-out now emits it; another
+    /// family's is not.
+    /// Break (2026-11-13): the old `name_lc == "oninsert"` check -> `false`
+    /// for `onafterinsert`. Fails; restored, it passes.
+    #[test]
+    fn trigger_applicable_extension_before_and_after_triggers() {
+        let (graph, index, table_id, ext_id) = trigger_fixture();
+        let ctx = RecordOpCtx {
+            kind: RecordOpKind::Insert,
+            table: table_id,
+            field: None,
+            run_trigger: RunTrigger::True,
+        };
+        let target = |name: &str| RoutineNodeId {
+            object: ext_id.clone(),
+            name_lc: name.into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+        };
+        assert!(implicit_trigger_route_applicable(
+            &ctx,
+            &target("onafterinsert"),
+            &graph,
+            &index
+        ));
+        assert!(implicit_trigger_route_applicable(
+            &ctx,
+            &target("onbeforeinsert"),
+            &graph,
+            &index
+        ));
+        assert!(!implicit_trigger_route_applicable(
+            &ctx,
+            &target("onaftermodify"),
+            &graph,
+            &index
         ));
     }
 

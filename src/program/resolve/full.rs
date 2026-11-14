@@ -237,6 +237,13 @@ pub struct SiteFacts {
     /// never a definite answer. The model carries it on the call's edges
     /// (`CallEdge::starts_object`).
     pub starts_object: crate::program::resolve::dataset::ObjectStart,
+    /// ENG-15 (sol round 3): the field a `Validate(Field, …)` site names,
+    /// folded and unquoted as `TriggerSiteRule::validate_field` reads it from
+    /// the call's own argument (a record operation's, a call result's). The
+    /// compiler audit's `ValidateTrigger` verdict requires a validate trigger's
+    /// field to be this one, so a route to another field's trigger is never
+    /// explained away. `None` for any other call.
+    pub validate_field: Option<String>,
     /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
     /// validates ([`field_ref_validate`]). `None` for any other call.
     pub field_ref_validate: Option<FieldRefValidate>,
@@ -273,6 +280,45 @@ pub enum UnresolvedTable {
     /// Entry"` without its app): that table's own triggers are code the engine
     /// cannot see, so a trigger-firing operation on it is always open.
     NotLoaded,
+    /// ENG-16: a known table whose code, or one of whose extensions' code, is
+    /// loaded from symbols only ([`table_code_not_loaded`]): its triggers are
+    /// unseen, so a trigger-firing operation on it is always open, as for
+    /// [`Self::NotLoaded`] (missing data is never absence).
+    CodeNotLoaded,
+}
+
+/// ENG-15/16 (ENG-69 folded in): THE opacity check every record-operation path
+/// asks (a plain record operation, an operation on a call's returned record
+/// or an inherited protected var, a decided `FieldRef.Validate`, a dataset's
+/// insert or modify): the operation `op_lc` (folded) fires triggers, which
+/// `rule` does not switch off (RunTrigger not false), on a table whose code is
+/// not loaded ([`table_code_not_loaded`]). Then the operation is open
+/// (`UnresolvedTable::CodeNotLoaded`): its triggers are unseen.
+pub(crate) fn trigger_op_opens_unseen_code(
+    op_lc: &str,
+    rule: &crate::program::resolve::applicability::TriggerSiteRule,
+    table: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> bool {
+    record_trigger_op(op_lc).is_some()
+        && rule.run_trigger != Some(false)
+        && table_code_not_loaded(table, graph, index)
+}
+
+/// ENG-16: whether `table`'s own triggers may be code the engine cannot see:
+/// the table, or a table extension of it, is loaded from symbols only.
+pub(crate) fn table_code_not_loaded(
+    table: &ObjectNode,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+) -> bool {
+    let symbol_only = |tier| tier == crate::snapshot::TrustTier::SymbolOnly;
+    symbol_only(table.tier)
+        || index
+            .table_extensions_of(&table.name.fold_identifier())
+            .iter()
+            .any(|e| graph.object_first(e).is_some_and(|o| symbol_only(o.tier)))
 }
 
 /// What a `FieldRef.Validate(…)` call validates (engine limits B9). The
@@ -294,6 +340,10 @@ pub struct CallResultRecord {
     pub triggers: Vec<Route>,
     /// Its platform table-event publishers.
     pub table_events: Vec<Route>,
+    /// ENG-15/16: the operation fires triggers on a table whose code is not
+    /// loaded ([`trigger_op_opens_unseen_code`]): the model adds the open
+    /// record edge.
+    pub code_not_loaded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,6 +358,10 @@ pub enum FieldRefValidate {
         /// The table's validate-event publishers
         /// ([`crate::program::resolve::resolver::resolve_table_events`]).
         table_events: Vec<Route>,
+        /// ENG-15/16: the table's code is not loaded
+        /// ([`trigger_op_opens_unseen_code`]; a `Validate` always fires its
+        /// field's triggers): the model adds the open record edge.
+        code_not_loaded: bool,
     },
     /// The table or the field is not provable here: why, and how the table
     /// failed (a RecordRef bound only to tables not loaded is
@@ -441,11 +495,23 @@ fn field_ref_validate(
     });
     let table_events =
         crate::program::resolve::resolver::resolve_table_events("validate", table, graph);
+    let code_not_loaded = trigger_op_opens_unseen_code(
+        "validate",
+        &crate::program::resolve::applicability::TriggerSiteRule {
+            is_validate: true,
+            run_trigger: None,
+            validate_field: None,
+        },
+        table,
+        graph,
+        index,
+    );
     FieldRefValidate::Decided {
         table: table.id.clone(),
         field,
         triggers,
         table_events,
+        code_not_loaded,
     }
 }
 
@@ -1124,6 +1190,7 @@ fn resolve_call_site_obligation(
                             if let Some(op) = crate::record_ops::record_op_type(&method_lc) =>
                         {
                             let mut triggers = Vec::new();
+                            let mut code_not_loaded = false;
                             if trigger_op.is_some() {
                                 let (_, _, mut trig) = resolve_implicit_trigger(
                                     &method_lc, table_node, graph, index, surface,
@@ -1137,6 +1204,11 @@ fn resolve_call_site_obligation(
                                     _ => true,
                                 });
                                 triggers = trig;
+                                facts_out.validate_field = rule.validate_field.clone();
+                                // ENG-15/16 (ENG-69 folded): the shared check.
+                                code_not_loaded = trigger_op_opens_unseen_code(
+                                    &method_lc, &rule, table_node, graph, index,
+                                );
                             }
                             facts_out.call_result_record = Some(CallResultRecord {
                                 op,
@@ -1155,6 +1227,7 @@ fn resolve_call_site_obligation(
                                     crate::program::resolve::resolver::resolve_table_events(
                                         &method_lc, table_node, graph,
                                     ),
+                                code_not_loaded,
                             });
                         }
                         // A RecordRef result: its table is runtime-typed, an
@@ -1510,6 +1583,7 @@ fn resolve_call_site_obligation(
                 let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
                     &op_lc, call_args, file, text,
                 );
+                facts_out.validate_field = rule.validate_field.clone();
                 if rule.run_trigger == Some(false) {
                     facts_out.run_trigger_excluded = routes
                         .iter()
@@ -1523,6 +1597,19 @@ fn resolve_call_site_obligation(
                     RouteTarget::Routine(id) => rule.admits(id),
                     _ => true,
                 });
+                // ENG-16: a known table whose code is loaded from symbols only
+                // has triggers the engine cannot see: a trigger-firing op on it
+                // is open, as on a table not loaded. A RunTrigger-false op runs
+                // no trigger, and its table events are this known table's,
+                // resolved exactly below: no gap (an open `RecordEvents` bound
+                // would open on ANY table's subscriber of the family, Fable
+                // round 2).
+                if let Some(op) = record_trigger_op(&op_lc)
+                    && trigger_op_opens_unseen_code(&op_lc, &rule, table_node, graph, index)
+                {
+                    facts_out.open.push(OpenBound::record(op, &rule));
+                    facts_out.record_table_unresolved = Some(UnresolvedTable::CodeNotLoaded);
+                }
                 // The platform table events: raised whatever the RunTrigger,
                 // so the site rule above never filters them.
                 *table_events_out = crate::program::resolve::resolver::resolve_table_events(

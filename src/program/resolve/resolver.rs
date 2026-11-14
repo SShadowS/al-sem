@@ -2961,6 +2961,10 @@ pub fn resolve_object_run(
 /// | `"validate"`| `"onvalidate"`  |
 /// | `"rename"`  | `"onrename"`    |
 ///
+/// On a table extension also `OnBefore<Op>` and `OnAfter<Op>` (`onbeforeinsert`,
+/// a field's `onaftervalidate`, …; ENG-15, the stem rule
+/// [`crate::program::resolve::edge::trigger_family`]).
+///
 /// # Validate-field approximation (Phase 2)
 ///
 /// `Rec.Validate(FieldName)` targets `OnValidate` on **one specific field**,
@@ -2980,23 +2984,26 @@ pub fn resolve_implicit_trigger(
     index: &dyn IndexReads,
     surface: &dyn SurfaceReads,
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
-    let trigger_name: &str = match op.fold_identifier().as_str() {
-        "insert" => "oninsert",
-        "modify" | "modifyall" => "onmodify",
-        "delete" | "deleteall" => "ondelete",
-        "validate" => "onvalidate",
-        "rename" => "onrename",
-        _ => {
-            // Unrecognised op: honest empty Multicast.
-            return (
-                DispatchShape::Multicast,
-                SetCompleteness::Partial {
-                    reason: OpenWorldReason::ReverseDependentExtensions,
-                },
-                vec![],
-            );
-        }
+    let Some(family) = crate::program::resolve::edge::record_trigger_op(&op.fold_identifier())
+    else {
+        // Unrecognised op: honest empty Multicast.
+        return (
+            DispatchShape::Multicast,
+            SetCompleteness::Partial {
+                reason: OpenWorldReason::ReverseDependentExtensions,
+            },
+            vec![],
+        );
     };
+    // The table's `On<Op>`; a table extension's `OnBefore<Op>`/`OnAfter<Op>`
+    // too (ENG-15: they were never looked up, so a field's `OnAfterValidate`
+    // in a table extension had no edge).
+    let trigger_name = format!("on{family}");
+    let ext_names = [
+        trigger_name.clone(),
+        format!("onbefore{family}"),
+        format!("onafter{family}"),
+    ];
 
     let mut routes: Vec<Route> = Vec::new();
 
@@ -3010,7 +3017,7 @@ pub fn resolve_implicit_trigger(
     // identity.
 
     // Triggers on the base table itself.
-    for rid in index.routines_in_object(graph, &table_object.id, trigger_name) {
+    for rid in index.routines_in_object(graph, &table_object.id, &trigger_name) {
         if routine_is_collapse_marked(rid, graph) {
             routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
             continue;
@@ -3025,12 +3032,14 @@ pub fn resolve_implicit_trigger(
             .object_first(ext_id)
             .map(|o| o.tier)
             .unwrap_or(TrustTier::Workspace);
-        for rid in index.routines_in_object(graph, ext_id, trigger_name) {
-            if routine_is_collapse_marked(rid, graph) {
-                routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
-                continue;
+        for name in &ext_names {
+            for rid in index.routines_in_object(graph, ext_id, name) {
+                if routine_is_collapse_marked(rid, graph) {
+                    routes.push(unresolved_route(UnknownReason::OverloadAmbiguous));
+                    continue;
+                }
+                routes.push(make_routine_route(rid, ext_tier, surface, graph));
             }
-            routes.push(make_routine_route(rid, ext_tier, surface, graph));
         }
     }
 

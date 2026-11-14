@@ -3414,6 +3414,110 @@ fn fixture_audit_checks_first_lines_and_refuses_repeated_pairs() {
     );
 }
 
+/// ENG-15 (gpt-6.1-sol rounds 3 and 4): the audit's `ValidateTrigger` verdict
+/// explains a program-only pair into a field's validate trigger only when every
+/// route of the pair goes to the field its own site validates
+/// (`SiteFacts::validate_field`). The compiler's pair erases the field, so one
+/// pair holds every validate trigger of the table a routine reaches. Stated by
+/// hand: a golden with no pairs makes every program pair program-only. `Q`
+/// validates A and then B (two sites, two right routes): explained. `P`
+/// validates A; its route redirected to B's `OnValidate`, or a second route to
+/// B's added beside A's (resolver bugs of the wrong-field kind): unexplained.
+/// Breaks (2026-11-13): `validate_trigger_explains` ignores the site's field
+/// -> both mutations are explained; it compares every site with the first
+/// route only (round 3's rule) -> `Q` is unexplained and the added route is
+/// explained. Each fails; restored, it passes.
+#[test]
+fn validate_trigger_verdict_requires_the_sites_field() {
+    use al_sem::program::resolve::compiler_golden::{
+        Side, Verdict, fixture_compiler_golden_path, load_compiler_golden, run_compiler_audit,
+    };
+    use al_sem::program::resolve::compiler_oracle::EdgeClass;
+    use al_sem::program::resolve::edge::RouteTarget;
+    fn no_drift(_: &str) {}
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e15e15e0-0000-4000-8000-0000000000cf","name":"E15 VT","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/a.al"),
+        "table 50900 \"VT\"\n{\n    fields\n    {\n        field(1; A; Integer)\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n        field(2; B; Integer)\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n    }\n}\ncodeunit 50901 \"VC\"\n{\n    procedure P()\n    var\n        R: Record \"VT\";\n    begin\n        R.Validate(A, 1);\n    end;\n\n    procedure Q()\n    var\n        R: Record \"VT\";\n    begin\n        R.Validate(A, 1);\n        R.Validate(B, 2);\n    end;\n}\n",
+    )
+    .unwrap();
+    let ctx = al_sem::program::resolve::full::build_context(t.path()).expect("context");
+    let fresh =
+        || al_sem::program::resolve::full::resolve_full_program_with(&ctx, AbiIntegrity::Skip);
+    let mut golden = load_compiler_golden(&fixture_compiler_golden_path()).expect("fixture golden");
+    golden.pairs.clear();
+    let key = (
+        Side::ProgramOnly,
+        EdgeClass::Trigger,
+        Some(Verdict::ValidateTrigger),
+    );
+    let report = fresh();
+    let audit = run_compiler_audit(&ctx, &report, t.path(), Some(&golden), no_drift, None);
+    assert_eq!(
+        audit.disagreements.get(&key),
+        Some(&2),
+        "precondition: P's and Q's pairs are explained: {audit:#?}"
+    );
+    assert!(audit.unexplained.is_empty(), "{audit:#?}");
+    // P's route into A's OnValidate (the one edge P has).
+    let p_route = |r: &al_sem::program::resolve::full::ProgramReport| -> (usize, usize) {
+        let mut found = Vec::new();
+        for (i, ce) in r.edges.iter().enumerate() {
+            if ce.edge.from.name_lc != "p" {
+                continue;
+            }
+            for (j, rt) in ce.edge.routes.iter().enumerate() {
+                if let RouteTarget::Routine(id) = &rt.target
+                    && id.name_lc == "onvalidate"
+                    && id.enclosing_member_lc.as_deref() == Some("a")
+                {
+                    found.push((i, j));
+                }
+            }
+        }
+        assert_eq!(
+            found.len(),
+            1,
+            "precondition: one route of P into A's OnValidate"
+        );
+        found[0]
+    };
+    // Mutation 1: P's route redirected to B's OnValidate.
+    let mut report = fresh();
+    let (i, j) = p_route(&report);
+    if let RouteTarget::Routine(id) = &mut report.edges[i].edge.routes[j].target {
+        id.enclosing_member_lc = Some("b".into());
+    }
+    let audit = run_compiler_audit(&ctx, &report, t.path(), Some(&golden), no_drift, None);
+    assert_eq!(
+        audit.disagreements.get(&key),
+        Some(&1),
+        "only Q's: {audit:#?}"
+    );
+    assert_eq!(audit.unexplained.len(), 1, "{audit:#?}");
+    // Mutation 2: a second route of P, to B's OnValidate, beside A's.
+    let mut report = fresh();
+    let (i, j) = p_route(&report);
+    let mut wrong = report.edges[i].edge.routes[j].clone();
+    if let RouteTarget::Routine(id) = &mut wrong.target {
+        id.enclosing_member_lc = Some("b".into());
+    }
+    report.edges[i].edge.routes.push(wrong);
+    let audit = run_compiler_audit(&ctx, &report, t.path(), Some(&golden), no_drift, None);
+    assert_eq!(
+        audit.disagreements.get(&key),
+        Some(&1),
+        "only Q's: {audit:#?}"
+    );
+    assert_eq!(audit.unexplained.len(), 1, "{audit:#?}");
+}
+
 // ---------------------------------------------------------------------------
 // Test 14b (1B.3b Task 1 Step 4): fixture — ImplicitTrigger target-set
 // ---------------------------------------------------------------------------
@@ -4034,13 +4138,19 @@ fn cdo_compiler_audit_explains_every_disagreement() {
         // a bare `Modify(true)` (Customer / Vendor `OnModify`, 2 pairs) and
         // `Validate("CDO Automatic statement", ..)` (the table extension field's
         // `OnValidate`, 1 pair).
+        // 41 -> 43 (2026-11-13, ENG-15: a table extension's OnBefore/OnAfter
+        // triggers run): CDO codeunit 6175338 `InitRecurringDailyJob` (line 426)
+        // and 6175405 `EnqueueOnHold` (line 246) validate Job Queue Entry
+        // fields whose Base App table extension 472 "Job Queue Entry Ext."
+        // declares a field `OnAfterValidate`; the compiler has no Validate
+        // trigger edges (A10/A11), so both pairs are program-only.
         (
             (
                 Side::ProgramOnly,
                 EdgeClass::Trigger,
                 Some(Verdict::ValidateTrigger),
             ),
-            41,
+            43,
         ),
         (
             (

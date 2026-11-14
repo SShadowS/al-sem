@@ -244,7 +244,9 @@ pub enum Verdict {
     RunTriggerFalse,
     /// Program-only `Trigger` into a field's `OnValidate`: the compiler graph has
     /// no `Validate` trigger edges (S12). Rule: the target is a field-level
-    /// `OnValidate`.
+    /// trigger of the validate family (`OnValidate`, and a table extension
+    /// field's `OnBeforeValidate`/`OnAfterValidate`, ENG-15) of the field every
+    /// site of the pair validates ([`validate_trigger_explains`]).
     ValidateTrigger,
     /// Program-only `Trigger` from a record operation written without a receiver
     /// (`Insert(true)` on the implicit `Rec`): the compiler graph has no trigger
@@ -420,6 +422,20 @@ fn first_line_disagreements(
         .collect()
 }
 
+/// [`Verdict::ValidateTrigger`]'s rule over `routes`: every route of the pair
+/// into its target, each with the field its own site names (`None` when it
+/// names none). Every route must be a field-level trigger of the validate
+/// family of exactly its site's field.
+fn validate_trigger_explains(routes: &[(&RoutineNodeId, Option<String>)]) -> bool {
+    !routes.is_empty()
+        && routes.iter().all(|(t, field)| {
+            crate::program::resolve::edge::trigger_family(&t.name_lc) == Some("validate")
+                && t.enclosing_member_lc
+                    .as_deref()
+                    .is_some_and(|m| field.as_deref() == Some(m))
+        })
+}
+
 /// The verdict for a program-only pair, or `None`.
 fn classify_program_only(
     class: EdgeClass,
@@ -437,25 +453,42 @@ fn classify_program_only(
             .unwrap_or_default()
     };
     let all_sites = |p: &dyn Fn(&SiteFacts) -> bool| pair.edges.iter().all(|&i| p(&facts(i)));
-    // The pair's target as a program routine id.
-    let target_id = || -> Option<&RoutineNodeId> {
-        pair.edges.iter().find_map(|&i| {
-            report.edges[i]
-                .edge
-                .routes
-                .iter()
-                .find_map(|r| match &r.target {
-                    RouteTarget::Routine(id) if target_of_node(id, apps) == pair.target => Some(id),
-                    _ => None,
-                })
-        })
-    };
     match class {
         EdgeClass::Run => Some(Verdict::ObjectRun),
         EdgeClass::Trigger => {
-            if target_id()
-                .is_some_and(|t| t.name_lc == "onvalidate" && t.enclosing_member_lc.is_some())
-            {
+            // A field's validate-family trigger: `OnValidate`, and (ENG-15) a
+            // table extension field's `OnBeforeValidate`/`OnAfterValidate`,
+            // which the program reaches since ENG-15; the compiler has no
+            // `Validate` trigger edges at all (A10, A11). Only when every site
+            // of the pair validates THAT field (sol round 3): a route to
+            // another field's trigger is a resolver bug, never this limit.
+            let site_field = |f: &SiteFacts| -> Option<String> {
+                f.validate_field
+                    .clone()
+                    .or_else(|| match &f.field_ref_validate {
+                        Some(crate::program::resolve::full::FieldRefValidate::Decided {
+                            field,
+                            ..
+                        }) => Some(field.clone()),
+                        _ => None,
+                    })
+            };
+            // Every route of the pair into its (field-erased) target, each
+            // with its OWN site's field (sol round 4): one pair can hold
+            // `Validate(A)` and `Validate(B)`, or a wrong route beside a right
+            // one.
+            let mut routes: Vec<(&RoutineNodeId, Option<String>)> = Vec::new();
+            for &i in &pair.edges {
+                let field = site_field(&facts(i));
+                for r in &report.edges[i].edge.routes {
+                    if let RouteTarget::Routine(id) = &r.target
+                        && target_of_node(id, apps) == pair.target
+                    {
+                        routes.push((id, field.clone()));
+                    }
+                }
+            }
+            if validate_trigger_explains(&routes) {
                 Some(Verdict::ValidateTrigger)
             } else if all_sites(&|f| f.unqualified_record_op) {
                 Some(Verdict::UnqualifiedRecordOp)

@@ -273,6 +273,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     length prefixes without the path fail at "rename".
   - Found by TLS-45's stale-claim pass (OUTSTANDING Track B, now marked fixed).
 
+### Fixed (ENG-15, with ENG-16: table-extension triggers, and tables loaded from symbols only)
+
+- **A table extension's `OnBefore<Op>`/`OnAfter<Op>` triggers now run.** The trigger fan-out of
+  a record operation (`resolver::resolve_implicit_trigger`) looked up only `On<Op>`, so a
+  tableextension's `OnAfterInsert`, `OnBeforeModify` or a field's `OnAfterValidate` got no edge
+  and every answer through them was a definite `no` (re-probed on master `3dbf23ed`: `may-commit
+  no` for `Insert(true)`, `Modify(true)` and `Validate(F, …)` with a `Commit()` in each). One stem
+  rule now serves the fan-out, its applicability contract and the open families
+  (`resolve::edge::trigger_family`).
+- **A trigger-firing operation on a known table loaded from symbols only is `unknown`.** Such a
+  table (or one with a symbol-only extension) has triggers the engine cannot see; its operation
+  read as running none (`no`). It now has the open record edge, as a table not loaded does
+  (`full::table_code_not_loaded`, `UnresolvedTable::CodeNotLoaded`); prove names the gap ("… or
+  whose code is loaded from symbols only …"). `RunTrigger` false still runs none.
+- On CDO (`bc3ccb18`, base `3dbf23ed`): the call-graph stats are identical (0 unknown edges,
+  whole program and primary-scoped); `--scope primary` moves nothing; `--scope all` gains 4
+  findings, all in Base App codeunit 9657 "Report Management Helper" (3 d3 in
+  `SelectedLayoutType`, 1 d14 on `ConvertLayoutType`), now demanded because CDO validates
+  `"Object ID to Run"`/`"Report Output Type"` on Job Queue Entry and Base App's tableextension 472
+  "Job Queue Entry Ext." has field `OnAfterValidate` triggers on both that call it. The d3 are
+  real by its rule; the d14 is the usual dependency-fragment d14 (it is called by
+  `SelectedLayoutType`).
+- **Every record-operation path opens on a symbol-only table** (ENG-69 folded in, gpt-6.1-sol
+  review): an operation on a function's returned record or an inherited protected var, a decided
+  `FieldRef.Validate` and an XmlPort's own insert or modify ask the same check as a plain record
+  operation (`full::trigger_op_opens_unseen_code`), and so does a source table with a symbol-only
+  extension. Each answered `no` before.
+- The CDO compiler audit's `Verdict::ValidateTrigger` covers a field's whole validate family
+  (`OnBeforeValidate`/`OnAfterValidate` too): the compiler has no `Validate` trigger edges, so the
+  two new program-only pairs into Base App tableextension 472's field `OnAfterValidate` (CDO
+  `InitRecurringDailyJob`, `EnqueueOnHold`) are that known limit (pinned count 41 -> 43; holes doc
+  A11). Found by the landing gate. The verdict now also requires every site of the pair to
+  validate that very field (`SiteFacts::validate_field`, from the call's own argument; a
+  decided FieldRef's field), so a route to another field's trigger stays unexplained
+  (gpt-6.1-sol; test `validate_trigger_verdict_requires_the_sites_field`).
+- Engine limits B11 (new), B9 and B10 updated. Tests:
+  `tests/cli/cli_eng15_ext_triggers.rs` (breaks recorded); the adapter test
+  `implicit_trigger_to_dependency_has_no_edge` now expects the open edge beside the dependency
+  trigger's external target.
+
+### Changed (ENG-15: `alsem graph` retires `unmodeledRecordTrigger`)
+
+- **The `hiddenCallers` flag `unmodeledRecordTrigger` is no longer emitted.** It marked a
+  table-extension `OnBefore<Op>`/`OnAfter<Op>` trigger (or field `OnBefore/OnAfterValidate`) no
+  record operation reached (callgraph export spec F5). ENG-15 closes F5: record operations now
+  reach them, as edges. No field is removed; bc-dev-mcp loses an over-select signal (it selected
+  more tests for such a trigger). The impact graph's trigger-name table reads the shared stem
+  rule (`resolve::edge::trigger_family`); `docs/al-compiler-callgraph-holes.md` A11 is now
+  "Better".
+
+### Changed (TLS-48: engine limits B8, the last two small-output items)
+
+- **`query effects` no longer claims a dependency depth when no dependency code is entered.**
+  Its `scope:` line (the human header) now reads "reads, locks, validate, writes: the whole
+  cone, no dependency code entered" (with "not searched: calls not resolved" when some are),
+  matching the `reads:`/`locks:` absence lines, instead of "one dependency routine deep, not
+  exhaustive beyond". The `--format json` header's `result.scope.scope` says the same. A cone
+  that enters dependency code prints the old text. Goldens moved: `d8.onafterpostsalesdoc` and
+  `r2a-record-types.declaredvars` (human and JSON), the batch `one-job` query golden, and the
+  CDO `UpdateLastUpload` query-effects golden (re-minted; only its scope clause moved). The
+  "not searched" variant has no fixture.
+- **Test-app auto-discovery skips folders git ignores** (`.gitignore`, `.git/info/exclude`,
+  the user's excludes file; one `git check-ignore` per folder read), unless the folder holds the
+  workspace or a `.git` of its own (a nested clone is still read as an app). Below an ignored
+  folder that holds the workspace, and when the search root itself is ignored, nothing is
+  skipped as ignored. When git cannot answer, every folder is read, as before. A skipped folder
+  is not listed in the scope. Git's answer is matched to the folders by their raw name bytes,
+  so an ignored folder whose name is not UTF-8 is never mistaken for a sibling (review sol r1).
+  Pinned by `discovery_skips_folders_git_ignores`,
+  `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Linux)
+  `an_ignored_non_utf8_folder_is_not_its_lossy_sibling`, with discrimination proofs.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
