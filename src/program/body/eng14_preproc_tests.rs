@@ -235,6 +235,20 @@ codeunit 50340 "Eng14 Split"
         R.Modify();
     end;
 
+    // Not a `#if` shape (CDO measure): a comment after a case `else` makes the lowerer read
+    // the else's `statement_block` through its recovery path; that is still a real
+    // sequence, so the exit kills Work, as on master.
+    procedure ElseComment(I: Integer)
+    begin
+        case I of
+            1:
+                Foo();
+            else // a comment
+                exit;
+                Work();
+        end;
+    end;
+
     // Control for the dominance helper: Bar runs on every success path.
     procedure Plain()
     begin
@@ -363,6 +377,11 @@ fn eng14_a4_unordered_runs() {
     let m = model();
     assert_live(&m, "CondOnlyHead", "Foo");
     assert_live(&m, "TwoHeads", "Bar");
+    // A non-`#if` node on the recovery path is not an unordered run.
+    assert!(
+        is_dead(site(&m, "ElseComment", "Work")),
+        "ElseComment: the exit in the else kills Work in every build"
+    );
     for cs in routine(&m, "SplitCaseEnd").call_sites.iter() {
         assert!(
             !is_dead(cs),

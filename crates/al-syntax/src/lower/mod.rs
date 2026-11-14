@@ -4086,7 +4086,12 @@ fn lower_unmodelled_stmt(
         }
         (None, true) => StmtKind::Unknown,
         (None, false) => {
-            let items = unordered_run(items, ir);
+            // Only a `#if` shape lost arm boundaries. Any other node reaching here
+            // (a `statement_block` after a comment in a case `else`, CDO's
+            // `CDOLogAttachment::DeleteAttachment`) is a real sequence.
+            if node.kind_str().starts_with("preproc_") {
+                items = unordered_run(items, ir);
+            }
             StmtKind::Block(ir.add_block(Block {
                 items,
                 origin: origin.clone(),
