@@ -4152,25 +4152,38 @@ fn lower_case_body(
                 let body = c.field(FieldName::Body).map(|b| b.id());
                 c.named_children()
                     .into_iter()
-                    .any(|k| Some(k.id()) != body && k.kind_str().starts_with("preproc_"))
+                    .any(|k| Some(k.id()) != body && holds_preproc(k))
             })
         };
         if let Some(group) = body.named_children().into_iter().find(varies) {
             push_untrusted_case_branch(&origin_of(group), ir, &mut branches);
         }
     }
-    // The header too: `case #if X I #else J #endif of` (a `preproc_conditional_operand`,
-    // or an expression tail or prefix across a directive) is read from one arm, so the
-    // labels would be matched against another build's scrutinee.
+    // The header too: `case #if X I #else J #endif of`, or one nested in it (`case (#if X
+    // I #else J #endif) of`), is read from one arm, so the labels would be matched
+    // against another build's scrutinee.
     let body_id = case_node.field(FieldName::Body).map(|b| b.id());
     if let Some(header) = case_node
         .named_children()
         .into_iter()
-        .find(|c| Some(c.id()) != body_id && c.kind_str().starts_with("preproc_"))
+        .find(|c| Some(c.id()) != body_id && holds_preproc(*c))
     {
         push_untrusted_case_branch(&origin_of(header), ir, &mut branches);
     }
     (branches, else_block)
+}
+
+/// Whether `node` is, or holds anywhere below it, a preprocessor node (a `preproc_*`
+/// kind). Iterative, so a pathologically deep expression cannot overflow the stack.
+fn holds_preproc(node: RawNode) -> bool {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind_str().starts_with("preproc_") {
+            return true;
+        }
+        stack.extend(n.named_children());
+    }
+    false
 }
 
 /// Recursive worker for [`lower_case_body`] (H-7, Tier-1.4 preproc plan): walks one

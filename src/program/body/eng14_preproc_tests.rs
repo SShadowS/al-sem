@@ -583,6 +583,38 @@ const CASE_ROWS: &str = r#"codeunit 50347 "Eng14 Case Rows"
         end;
     end;
 
+    // Row 1b, the header with the `#if` nested in an expression (sol, round 4).
+    procedure RowHeaderNested(I: Integer; J: Integer)
+    begin
+        case (
+#if X
+            I
+#else
+            J
+#endif
+        ) of
+            1:
+                Work();
+        end;
+    end;
+
+    // Row 3c, a label with the `#if` nested in an expression.
+    procedure RowLabelNested(I: Integer)
+    begin
+        case I of
+            (
+#if X
+            1
+#else
+            2
+#endif
+            ):
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
     // Row 2a, between branches: preproc_conditional_case.
     procedure RowGroup(I: Integer)
     begin
@@ -744,6 +776,8 @@ fn eng14_case_rows() {
     );
     for name in [
         "RowHeader",
+        "RowHeaderNested",
+        "RowLabelNested",
         "RowGroup",
         "RowExtended",
         "RowOpen",

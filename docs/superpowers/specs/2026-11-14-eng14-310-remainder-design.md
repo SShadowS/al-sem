@@ -360,8 +360,10 @@ Two landings, one branch each:
   | # | place | node kinds | reading |
   |---|---|---|---|
   | 1 | the header (`case <expr> of`) | `preproc_conditional_operand` (field `expression`), `preproc_conditional_expression_tail`, `preproc_operand_prefix` | fail closed (`RowHeader`) |
+  | 1b | nested in the header expression (round 4, sol and Fable) | any `preproc_*` below the header: `parenthesized_expression`, `unary_expression`, `additive_expression`, … hold `preproc_conditional_operand` and tails | fail closed: the whole header subtree is checked (`holds_preproc`; `RowHeaderNested`) |
   | 2 | between branches | `preproc_conditional_case`, `preproc_split_case_extended`, `preproc_split_open_statement` | fail closed (`RowGroup`, `RowExtended`, `RowOpen`; literal reach `CallGroup`) |
   | 3 | a branch's labels | `preproc_split_case_branch`, `preproc_conditional_case_patterns`, `preproc_operand_prefix`, a nested `preproc_conditional_case`, any other `preproc_*` child of a `case_branch` but its body | fail closed (`RowLabelsSplit`, `RowLabelsTail`; literal reach `CallLabels`) |
+  | 3b | nested in a label expression (round 4) | any `preproc_*` below a label (`(#if X 1 #else 2 #endif):`, a `range_expression`'s ends, a unary minus) | fail closed: every non-body child of a branch is checked as a subtree (`RowLabelNested`) |
   | 4 | a branch's body (a one-statement slot) | the statement-level kinds | the statement rules: one statement in every build is precise (`RowBodyWellFormed`), otherwise fail closed (`RowBodyBroken`) |
   | 5 | the `else` | none of its own (its body is statements); a second `else` only from another arm | the statement rules; a second `else` is kept as a pattern-less branch so its calls keep their sites (`RowTwoElses`), and row 2 has already failed the case closed |
   | 6 | a nested `case` | any row above, inside a branch | the same rules per case (`RowNested`) |
