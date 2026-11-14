@@ -1276,7 +1276,7 @@ fn parenless_calls_of_an_unchanged_file_change_under_s(mode: MemoryMode) {
             .parenless_calls
             .iter()
             .filter(|((_, path), _)| path == "src/Reader.Codeunit.al")
-            .map(|(_, ids)| ids.len())
+            .map(|(_, ids)| ids.parenless.len())
             .sum::<usize>()
     };
     assert_eq!(
@@ -1297,6 +1297,59 @@ fn parenless_calls_of_an_unchanged_file_change_under_s(mode: MemoryMode) {
     assert_eq!(rows(&r).workspace_projected, 2, "callee and reader");
     ws.edit("Val.Codeunit.al", "    procedure V2()", "    procedure V()");
     let r = refresh_and_compare(&mut s, &ws, "callee restored");
+    assert_eq!(rows(&r).workspace_projected, 2);
+}
+
+/// ENG-80 C2: a bare `Error` reads the resolver's verdict (`FileBindings::bare`), which a
+/// declaration elsewhere decides. Adding a `procedure Error` to the base table (S) leaves the
+/// extension's text and parse unchanged but makes its `Error('x')` a User call (`Next` live);
+/// removing it restores the builtin (`Next` dead). The extension's kept rows must not be reused
+/// either way, and each step equals a cold build. Break: leave the bindings out of
+/// `CachedFile::matches`.
+fn bare_error_verdict_of_an_unchanged_file_changes_under_s(mode: MemoryMode) {
+    let table = "table 50120 \"ErrT\"\n{\n    fields { field(1; \"No.\"; Code[20]) { } }\n}\n";
+    let ext = "tableextension 50121 \"ErrX\" extends \"ErrT\"\n{\n    procedure Go()\n    begin\n        Error('x');\n        Next();\n    end;\n\n    local procedure Next() begin end;\n}\n";
+    let ws = Ws::new(&[("ErrT.Table.al", table), ("ErrX.TableExt.al", ext)]);
+    let verdicts = |ws: &Ws| {
+        let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
+        p.body()
+            .parenless_calls
+            .iter()
+            .filter(|((_, path), _)| path == "src/ErrX.TableExt.al")
+            .flat_map(|(_, b)| b.bare.values().copied())
+            .collect::<Vec<_>>()
+    };
+    use crate::program::resolve::full::BareVerdict;
+    assert_eq!(
+        verdicts(&ws),
+        [BareVerdict::Builtin],
+        "precondition: the builtin"
+    );
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    ws.edit(
+        "ErrT.Table.al",
+        "    fields { field(1; \"No.\"; Code[20]) { } }\n",
+        "    fields { field(1; \"No.\"; Code[20]) { } }\n\n    procedure Error(Msg: Text) begin end;\n",
+    );
+    assert_eq!(
+        verdicts(&ws),
+        [BareVerdict::User],
+        "precondition: the table's Error"
+    );
+    let r = refresh_and_compare(&mut s, &ws, "table Error added");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert!(
+        !r.changed.contains(&"src/ErrX.TableExt.al".to_string()),
+        "precondition: the extension's text is unchanged"
+    );
+    assert_eq!(rows(&r).workspace_projected, 2, "table and extension");
+    ws.edit(
+        "ErrT.Table.al",
+        "\n    procedure Error(Msg: Text) begin end;\n",
+        "",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "table Error removed");
     assert_eq!(rows(&r).workspace_projected, 2);
 }
 
@@ -1562,6 +1615,7 @@ in_both_modes!(
     abi_block_is_reused_while_its_inputs_hold,
     symbol_only_package_change_rebuilds_the_abi_block,
     parenless_calls_of_an_unchanged_file_change_under_s,
+    bare_error_verdict_of_an_unchanged_file_changes_under_s,
     file_ix_shift_restamps_later_files,
     low_mem_retains_no_dependency_tree,
     dependency_text_is_extracted_once_per_package,

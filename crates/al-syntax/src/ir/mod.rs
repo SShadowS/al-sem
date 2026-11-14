@@ -103,11 +103,53 @@ pub struct Ir {
     /// that whole context (enclosing branches and routine arm together). Ranges
     /// nest; [`Ir::preproc_context`] picks the innermost.
     preproc_ranges: Vec<(Range<u32>, PreprocSymbols)>,
+    /// ENG-80 (spec §4.2 C): call expressions whose callee or arguments hold a
+    /// build-varying `#if` node, or built from a split call statement. The lowerer
+    /// reads one arm there, so the call's arity and argument kinds may differ in
+    /// another build. Pushed in expression order (sorted).
+    tainted_calls: Vec<u32>,
+    /// ENG-80 (spec §4.2 C): routine bodies (by block id) whose routine's declared
+    /// locals, or whose object's globals, the lowerer did not collect in full (a
+    /// split body's arm `var` sections; a `var` `#if` nested deeper than one level).
+    locals_incomplete: Vec<u32>,
+    globals_incomplete: Vec<u32>,
 }
 
 impl Ir {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether call `e`'s callee or arguments vary by `#if` build (ENG-80): its
+    /// arity and argument kinds prove nothing about which overload every build calls.
+    pub fn call_is_tainted(&self, e: ExprId) -> bool {
+        self.tainted_calls.binary_search(&e.0).is_ok()
+    }
+
+    pub(crate) fn mark_tainted(&mut self, e: ExprId) {
+        if let Err(i) = self.tainted_calls.binary_search(&e.0) {
+            self.tainted_calls.insert(i, e.0);
+        }
+    }
+
+    /// Whether the routine with body `body` lists every local it declares in every
+    /// build (`RoutineDecl::locals`). ENG-80: a Text proof reads the list only when so.
+    pub fn locals_complete(&self, body: BlockId) -> bool {
+        !self.locals_incomplete.contains(&body.0)
+    }
+
+    /// Whether the object of the routine with body `body` lists every global it
+    /// declares in every build (`ObjectDecl::globals`).
+    pub fn globals_complete(&self, body: BlockId) -> bool {
+        !self.globals_incomplete.contains(&body.0)
+    }
+
+    pub(crate) fn mark_locals_incomplete(&mut self, body: BlockId) {
+        self.locals_incomplete.push(body.0);
+    }
+
+    pub(crate) fn mark_globals_incomplete(&mut self, body: BlockId) {
+        self.globals_incomplete.push(body.0);
     }
 
     /// Drop the arenas' spare capacity (a finished lowering adds nothing).
@@ -116,6 +158,7 @@ impl Ir {
         exact_size(&mut self.stmts);
         exact_size(&mut self.blocks);
         exact_size(&mut self.preproc_ranges);
+        exact_size(&mut self.tainted_calls);
     }
 
     pub fn add_expr(&mut self, e: Expr) -> ExprId {

@@ -9,6 +9,8 @@ pub mod control_context;
 pub mod control_flow;
 #[cfg(test)]
 mod eng14_preproc_tests;
+#[cfg(test)]
+mod eng80_error_tests;
 pub mod features;
 pub mod ir_walk;
 pub mod l2_workspace;

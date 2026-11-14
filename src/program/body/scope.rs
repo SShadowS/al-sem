@@ -121,9 +121,8 @@ pub(crate) enum ScopeTier {
 }
 
 /// AL's scope order for a bare name: parameters, the named return value,
-/// locals, then the object's globals. The one ordering #288 (which overload a
-/// one-argument `Error` takes, `error_argument_proves_text`) and the rules
-/// pass (which label a message names, `rules::Walker::lookup`) share. Each
+/// locals, then the object's globals. The rules pass (which label a message
+/// names, `rules::Walker::lookup`) reads it. Each
 /// flag says whether that tier declares the name.
 pub(crate) fn scope_tier(
     is_parameter: bool,

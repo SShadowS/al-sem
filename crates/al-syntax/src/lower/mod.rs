@@ -456,6 +456,7 @@ fn lower_object(
     let mut properties = Vec::new();
     let mut protected_globals = Vec::new();
     let mut enum_values = Vec::new();
+    VARS_INCOMPLETE.with(|f| f.set(false));
     if let Some(body) = node.field(FieldName::Body) {
         for member in body.named_children() {
             collect_globals(member, source, &mut globals);
@@ -468,6 +469,13 @@ fn lower_object(
     }
     if kind == ObjectKind::XmlPort {
         collect_xmlport_text_nodes(node, source, &mut globals);
+    }
+    // ENG-80 (spec §4.2 C): globals the list misses make every routine's Text proof
+    // over a global fail closed.
+    if VARS_INCOMPLETE.with(|f| f.replace(false)) {
+        for b in routines.iter().filter_map(|r| r.body) {
+            ir.mark_globals_incomplete(b);
+        }
     }
     let mut run_objects = Vec::new();
     collect_run_objects(node, source, &mut run_objects);
@@ -2128,6 +2136,11 @@ thread_local! {
     /// one file on one thread, and `with_build_context` restores it on exit.
     static BUILD_CONTEXT: std::cell::RefCell<Vec<(String, bool)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// ENG-80 (spec §4.2 C): set by `extract_var_body` when a `var` section holds a
+    /// `#if` nested deeper than it reads. The routine and object lowering clear it
+    /// before collecting their declarations and read it after
+    /// ([`al_syntax::ir::Ir::locals_complete`], `globals_complete`).
+    static VARS_INCOMPLETE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lower `children` as one statement list (a `statement_block` or a `code_block`
@@ -2918,6 +2931,7 @@ fn lower_routine<'t>(
     // tail's. A nested group never lies inside an arm it holds, so it is not
     // descended whole (which would add every nested arm's `var` section).
     let mut locals = Vec::new();
+    VARS_INCOMPLETE.with(|f| f.set(false));
     for level in &levels {
         for child in level.named_children() {
             if in_arm(child) || (level.id() == node.id() && child.byte_range().start >= shared_from)
@@ -2926,6 +2940,15 @@ fn lower_routine<'t>(
             }
         }
     }
+    // ENG-80 (spec §4.2 C): a split body's arms declare `var` sections that never
+    // reach `locals`; a nested `var` `#if` is not read either.
+    let locals_incomplete = VARS_INCOMPLETE.with(|f| f.replace(false))
+        || node.named_children().into_iter().any(|c| {
+            matches!(
+                c.kind(),
+                RawKind::PreprocSplitProcedureBody | RawKind::PreprocSplitCompleteBody
+            )
+        });
 
     let body = with_build_context(&preproc_context, ir, |ir| {
         if let Some(cb) = node
@@ -2953,6 +2976,9 @@ fn lower_routine<'t>(
                 .map(|wrapper| lower_preproc_split_routine_body(wrapper, ir, issues, source, 0))
         }
     });
+    if locals_incomplete && let Some(b) = body {
+        ir.mark_locals_incomplete(b);
+    }
 
     RoutineDecl {
         kind,
@@ -3206,6 +3232,9 @@ fn extract_var_body(body: RawNode, source: &str, out: &mut Vec<VarDecl>) {
                     if c.kind() == RawKind::VariableDeclaration {
                         // shallow: flatten preproc-wrapped declarations (both branches)
                         extract_var_decl(c, source, out);
+                    } else if is_preproc_wrapper(c) {
+                        // A nested `#if` is not read: the list misses its names.
+                        VARS_INCOMPLETE.with(|f| f.set(true));
                     }
                 }
             }
@@ -3997,6 +4026,9 @@ fn lower_unmodelled_stmt(
                     kind: ExprKind::Call { function, args },
                     origin: origin.clone(),
                 });
+                // ENG-80: a split call statement keeps the first arm's callee; the
+                // other arm's callee became an argument.
+                ir.mark_tainted(call);
                 StmtKind::Call(call)
             }
             None => StmtKind::Unknown,
@@ -4643,7 +4675,16 @@ fn lower_expr(
             ExprKind::Unknown
         }
     };
-    ir.add_expr(Expr { kind, origin })
+    // ENG-80 (spec §4.2 C): a call whose callee or arguments hold a build-varying
+    // `#if` node is read from one arm (`Error(#if X ErrInfo #else 'txt' #endif)` lowers
+    // to two arguments, `#if X Error #else Work #endif ('x')` keeps one callee).
+    let tainted = matches!(kind, ExprKind::Call { .. })
+        && node.named_children().into_iter().any(holds_preproc);
+    let id = ir.add_expr(Expr { kind, origin });
+    if tainted {
+        ir.mark_tainted(id);
+    }
+    id
 }
 
 /// `preproc_conditional_operand` (grammar `main` 960ed312, B7b-2): an `#if` group in

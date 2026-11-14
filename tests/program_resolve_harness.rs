@@ -8241,6 +8241,13 @@ fn program_has_no_legacy_engine_imports() {
 // never a distinct resolution path. No `Ambiguous`/`OutOfClosure`
 // distinction is needed (identical rationale to the sibling wiring entry).
 //
+// ENG-80 ADDS one entry: `resolver.rs`'s `resolve_bare_with_args` looks up
+// the extension base to decide `scope_complete` (spec §4.1 rule 3: a bare
+// `Error` is the builtin only when every scope that could shadow it was
+// searched). `None` (unresolved, an ambiguous cross-app name, out of closure)
+// and a symbol-only base both clear `scope_complete`, so the distinction is
+// not needed: every case it would tell apart already fails closed.
+//
 // This guard locks that audited set in place: a NEW call site appearing in
 // `src/program/resolve/*.rs` PRODUCTION code (before each file's `#[cfg(test)]`
 // module marker — test fixtures directly exercising the API are expected and
@@ -8270,6 +8277,10 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
 
     // (file_name, expected trimmed production call-site line).
     let expected: Vec<(&str, &str)> = vec![
+        (
+            "resolver.rs",
+            ".and_then(|t| graph.resolve_object(from_object.id.app, base_kind, t));",
+        ),
         (
             "resolver.rs",
             "&& let Some(base_obj) = graph.resolve_object(from_object.id.app, base_kind, extends_target)",

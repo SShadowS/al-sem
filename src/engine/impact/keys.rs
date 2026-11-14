@@ -79,7 +79,11 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// that another build runs, and an untrusted routine (a parse error, or a
 /// statement the lowerer could not lower) has no unreachable sites at all, so
 /// keys that drop unreachable sites may hold more facts.
-pub const SUMMARY_SCHEMA: u32 = 14;
+/// 15 (ENG-80): only an `Error` proven to raise on every run ends a path; any
+/// other bare `Error` is a call that may raise, so the code after it is live.
+/// #288's per-routine trust gate is gone, so a routine with a well-formed `#if`
+/// group drops its dead sites again.
+pub const SUMMARY_SCHEMA: u32 = 15;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

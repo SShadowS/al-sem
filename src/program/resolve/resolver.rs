@@ -1853,6 +1853,7 @@ pub fn resolve_bare(
         &[],
         &[],
         None,
+        &mut true,
     )
 }
 
@@ -1944,7 +1945,14 @@ fn resolve_in_extension_base(
 /// table (`receiver::resolve_report_implicit_rec_table` of the calling
 /// routine). A bare call there falls back to that table's procedures, as a
 /// page's falls back to its SourceTable. `None` elsewhere.
-#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `report_rec_table`.
+///
+/// `scope_complete` (ENG-80, spec §4.1 rule 3): cleared when a scope before the
+/// catalog could not be searched in full, so a `Catalog` route then does NOT prove
+/// the builtin runs: the call sits inside a `with` (its frame's record may declare
+/// the name), the extension base is not resolved or is symbol-only, or the
+/// implicit-`Rec` table is out of closure, access-excluded or symbol-only (a
+/// symbol-only object's symbols may not list an internal procedure).
+#[allow(clippy::too_many_arguments)] // 7 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `report_rec_table` + `scope_complete`.
 pub(crate) fn resolve_bare_with_args(
     from_object: &ObjectNode,
     name_lc: &str,
@@ -1956,7 +1964,18 @@ pub(crate) fn resolve_bare_with_args(
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
     report_rec_table: Option<&ObjectNodeId>,
+    scope_complete: &mut bool,
 ) -> (DispatchShape, Vec<Route>) {
+    *scope_complete = with_state == WithState::NoWithProven;
+    if let Some(base_kind) = extension_base_kind(from_object.id.kind) {
+        let base = from_object
+            .extends_target
+            .as_deref()
+            .and_then(|t| graph.resolve_object(from_object.id.app, base_kind, t));
+        if base.is_none_or(|b| b.tier == crate::snapshot::identity::TrustTier::SymbolOnly) {
+            *scope_complete = false;
+        }
+    }
     // 1. Own object.
     if let Some((shape, routes)) = resolve_in_object(
         &from_object.id,
@@ -2005,7 +2024,10 @@ pub(crate) fn resolve_bare_with_args(
         build,
     ) {
         ExtensionBase::Resolved(shape, routes) => return (shape, routes),
-        ExtensionBase::Excluded(r) => reason = r,
+        ExtensionBase::Excluded(r) => {
+            reason = r;
+            *scope_complete = false;
+        }
         ExtensionBase::Miss => {}
     }
 
@@ -2048,6 +2070,12 @@ pub(crate) fn resolve_bare_with_args(
                 implicit_rec_table_id(from_object, graph, index)
             };
             if let Some(table_id) = table_id {
+                if graph
+                    .object(&table_id)
+                    .is_none_or(|t| t.tier == crate::snapshot::identity::TrustTier::SymbolOnly)
+                {
+                    *scope_complete = false;
+                }
                 // (3) Visibility-scoped table ∪ extensions search (Task 2):
                 // `NotVisible` falls through to Step 4/5 (tagging WHY when a
                 // candidate existed but was access-excluded); `Resolved` is a
@@ -2091,6 +2119,7 @@ pub(crate) fn resolve_bare_with_args(
                     TableScopeOutcome::NotVisible { access_excluded } => {
                         if let Some(r) = access_excluded {
                             reason = r;
+                            *scope_complete = false;
                         }
                     }
                 }
@@ -2100,6 +2129,7 @@ pub(crate) fn resolve_bare_with_args(
                 // no `SourceTable` at all has no implicit Rec to miss, so it
                 // keeps `MemberNotFound` and reaches Step 4a (S9.0e).
                 reason = UnknownReason::ReceiverOutOfClosure;
+                *scope_complete = false;
             }
         } else {
             // Lexically inside a `with` block (or with-freedom unproven).

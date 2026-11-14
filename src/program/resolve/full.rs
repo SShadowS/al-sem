@@ -150,12 +150,84 @@ pub(crate) struct FileResolution {
     pub site_facts: Vec<(ObligationId, SiteFacts)>,
     /// The parens-less value reads this file's resolution kept as calls.
     pub parenless: Vec<al_syntax::ir::ExprId>,
+    /// ENG-80: the bare calls to a [`BARE_VERDICT_NAMES`] name, with what they bind to.
+    pub bare_verdicts: Vec<(al_syntax::ir::ExprId, BareVerdict)>,
 }
 
-/// The parens-less value reads (`X.M` / `M` without `()`) the resolver kept as
-/// calls, by owning app and file (`ParsedFile::virtual_path`). The body walk
-/// takes these as calls too, so its call sites match the program's edges.
-pub type ParenlessCalls = HashMap<(AppRef, String), HashSet<al_syntax::ir::ExprId>>;
+/// What the resolver decided about one file's call sites that its body walk reads,
+/// by expression: the parens-less value reads (`X.M` / `M` without `()`) it kept as
+/// calls (the body walk takes these as calls too, so its call sites match the
+/// program's edges), and the binding of bare calls to the names the `Error` rule
+/// reads (ENG-80, spec §4.1 rule 3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileBindings {
+    pub parenless: HashSet<al_syntax::ir::ExprId>,
+    pub bare: HashMap<al_syntax::ir::ExprId, BareVerdict>,
+}
+
+impl FileBindings {
+    pub fn is_empty(&self) -> bool {
+        self.parenless.is_empty() && self.bare.is_empty()
+    }
+}
+
+/// [`FileBindings`] by owning app and file (`ParsedFile::virtual_path`).
+pub type ParenlessCalls = HashMap<(AppRef, String), FileBindings>;
+
+/// The bare-call names whose binding the `Error` rule reads: `Error` itself and the
+/// catalog functions rule 2 accepts as a Text argument.
+pub const BARE_VERDICT_NAMES: [&str; 12] = [
+    "error",
+    "strsubstno",
+    "format",
+    "getlasterrortext",
+    "copystr",
+    "uppercase",
+    "lowercase",
+    "delchr",
+    "convertstr",
+    "selectstr",
+    "padstr",
+    "incstr",
+];
+
+/// ENG-80 (spec §4.1 rule 3): what a bare call binds to, taken from the resolver's
+/// own routes for its site (no second lookup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BareVerdict {
+    /// Exactly one `Catalog` route, and every scope before the catalog searched in
+    /// full: the builtin runs.
+    Builtin,
+    /// Exactly one route to a user routine (source, ABI or opaque), every scope
+    /// searched in full (inside `with R do`, `R`'s members come first): an ordinary
+    /// call.
+    User,
+    /// Anything else: no route, several, an `Unresolved` one, or a `Catalog` route
+    /// after a scope that could not be searched (a `with`, an unloaded or
+    /// symbol-only base or table).
+    Unknown,
+}
+
+impl BareVerdict {
+    pub(crate) fn of(
+        routes: &[crate::program::resolve::edge::Route],
+        scope_complete: bool,
+    ) -> Self {
+        use crate::program::resolve::edge::Evidence;
+        match routes {
+            [r] if matches!(r.evidence, Evidence::Catalog) && scope_complete => Self::Builtin,
+            [r] if scope_complete
+                && matches!(
+                    r.evidence,
+                    Evidence::Source | Evidence::Abi | Evidence::Opaque
+                ) =>
+            {
+                Self::User
+            }
+            _ => Self::Unknown,
+        }
+    }
+}
 
 /// What the resolver knew about one call site beyond its edge, for the B3
 /// adapter (engine-switch S3.2 interfaces, S6.0 receivers). Only member call
@@ -250,6 +322,10 @@ pub struct SiteFacts {
     /// report's `OnPreReport`/`OnPostReport` may not run (the model's
     /// `TriggerFires::Maybe`).
     pub request_page_may_cancel: bool,
+    /// ENG-80: a bare call's lookup searched every scope before the catalog in full
+    /// ([`crate::program::resolve::resolver::resolve_bare_with_args`]'s
+    /// `scope_complete`); read into the call's [`BareVerdict`]. `false` elsewhere.
+    pub bare_scope_complete: bool,
     /// TLS-52: the start method (folded) of a call that starts an object (a
     /// keyword run, or a variable form that may start it), as its routes'
     /// trigger subset was cut by
@@ -1097,6 +1173,7 @@ fn resolve_call_site_obligation(
                     &args_info,
                     build,
                     report_rec_table.as_ref(),
+                    &mut facts_out.bare_scope_complete,
                 )
             } else {
                 (
@@ -1793,6 +1870,7 @@ pub(crate) fn resolve_file_obligations(
     let mut indeterminate: Vec<IndeterminateBuiltinDispatchSite> = Vec::new();
     let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
     let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
+    let mut bare_verdicts: Vec<(al_syntax::ir::ExprId, BareVerdict)> = Vec::new();
     // Each declaration's own node (a split subscriber's declarations have
     // one each, `program::split_decls`).
     let decl_nodes = crate::program::split_decls::file_declaration_nodes(
@@ -2016,6 +2094,15 @@ pub(crate) fn resolve_file_obligations(
                 if site.parenless {
                     parenless.push(site.expr);
                 }
+                // ENG-80: what a bare call to a name the `Error` rule reads binds to.
+                if let CalleeShape::Bare { name } = &site.shape
+                    && BARE_VERDICT_NAMES.contains(&name.fold_identifier().as_str())
+                {
+                    bare_verdicts.push((
+                        site.expr,
+                        BareVerdict::of(&routes, facts.bare_scope_complete),
+                    ));
+                }
                 if facts.open.is_empty() {
                     let rule = |method_lc: &str| {
                         crate::program::resolve::applicability::TriggerSiteRule::of(
@@ -2191,6 +2278,7 @@ pub(crate) fn resolve_file_obligations(
         indeterminate,
         site_facts,
         parenless,
+        bare_verdicts,
     }
 }
 
@@ -2589,11 +2677,12 @@ fn resolve_full_program_from_parts(
             k.files.push((path.clone(), r));
             k.rematerialize_failures += usize::from(failed);
         }
-        if !file_res.parenless.is_empty() {
-            parenless_calls.insert(
-                (primary_app_ref, path),
-                file_res.parenless.into_iter().collect(),
-            );
+        let bindings = FileBindings {
+            parenless: file_res.parenless.into_iter().collect(),
+            bare: file_res.bare_verdicts.into_iter().collect(),
+        };
+        if !bindings.is_empty() {
+            parenless_calls.insert((primary_app_ref, path), bindings);
         }
         // T3 Task 6: `resolve_file_obligations` no longer inserts into
         // `obligation_id_set` inline (it has no access to this whole-run
@@ -3175,11 +3264,12 @@ impl ProgramContext {
                 e
             }));
             site_facts.extend(r.site_facts);
-            if !r.parenless.is_empty() {
-                parenless_calls.insert(
-                    (*app, pf.virtual_path.clone()),
-                    r.parenless.into_iter().collect(),
-                );
+            let bindings = FileBindings {
+                parenless: r.parenless.into_iter().collect(),
+                bare: r.bare_verdicts.into_iter().collect(),
+            };
+            if !bindings.is_empty() {
+                parenless_calls.insert((*app, pf.virtual_path.clone()), bindings);
             }
         }
         DependencyBodyResolution {

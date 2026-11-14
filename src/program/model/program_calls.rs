@@ -655,14 +655,7 @@ fn attach_program_calls_with(
     };
     // The three whole-model final passes, each its own span (context-server
     // design r4 §12 stage 1: they gate stage 4's per-revision cost).
-    // #288: a row's dead marks stay trusted only if its `Error` calls bind to the
-    // builtin.
-    {
-        let _s = pt::span("attach", "attach.settle_dead_marks");
-        crate::program::model::workspace::settle_dead_mark_trust(&mut resolved);
-    }
-    // Intent evidence §4.2: rules built at assembly settle their `stops` here,
-    // by the same per-site test.
+    // Intent evidence §4.2: rules built at assembly settle here.
     {
         let _s = pt::span("attach", "attach.settle_rules");
         crate::program::model::workspace::settle_rules(&mut resolved);

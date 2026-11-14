@@ -1658,12 +1658,19 @@ fn collect_field_accesses_in_block<'a>(
     // the block sourceAnchor; we reconstruct from leaves). If the block has no
     // positioned leaves, it covers nothing — but then it also has no FAs to attribute.
     let block_range = node_range(block, idx);
+    // ENG-80: a zero-width range (the synthetic may-raise nodes after an unproven
+    // `Error`) covers no source, so it holds no field access and shadows none.
+    let empty = |r: &(u32, u32, u32, u32)| (r.0, r.1) == (r.2, r.3);
+    if block_range.as_ref().is_some_and(empty) {
+        return result;
+    }
 
     // Precompute recursive children's ranges once.
     let recursive_ranges: Vec<(u32, u32, u32, u32)> = children
         .iter()
         .filter(|c| child_recurses_into_fas(c))
         .filter_map(|c| node_range(c, idx))
+        .filter(|r| !empty(r))
         .collect();
 
     for fa in &param_field_accesses(idx, param) {
@@ -1915,7 +1922,6 @@ mod tests {
             site_exprs: Default::default(),
             source_anchor: dummy_anchor(),
             declaration_start_line: 0,
-            dead_marks_trusted: false,
             identifier_references: Vec::new(),
             unreachable_statements: Vec::new(),
             has_branching: false,
@@ -2062,5 +2068,144 @@ mod tests {
         assert_eq!(facts.dirty_at_exit, EffectPresence::Unknown);
         assert_eq!(facts.requires_loaded_at_entry, EffectPresence::Unknown);
         assert_eq!(facts.mutates_before_load, EffectPresence::Unknown);
+    }
+
+    /// The record-parameter facts of each routine named in `names`, from production assembly.
+    fn walked(src: &str, names: &[&str]) -> Vec<PathAwareFacts> {
+        let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+            &[("B4.al".to_string(), src.to_string())],
+            "e8000000-0000-4000-8000-000000000084",
+        );
+        let graph = PrimaryGraph {
+            nodes: Vec::new(),
+            edges_by_from: HashMap::new(),
+            edges_from_order: Vec::new(),
+            uncertainty_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
+        };
+        names
+            .iter()
+            .map(|name| {
+                let r = m
+                    .workspace
+                    .routines
+                    .iter()
+                    .find(|r| r.name == *name)
+                    .unwrap_or_else(|| panic!("a routine {name}"));
+                walk_param(
+                    r,
+                    "rec",
+                    None,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &graph,
+                    &HashMap::new(),
+                    &build_indexes(r),
+                    None,
+                )
+            })
+            .collect()
+    }
+
+    /// ENG-80 B4 (spec §4.1): `Get; Validate; Error(ErrInfo); Modify` on a record parameter. The
+    /// `Error` may go on (a collectible error under `ErrorBehavior::Collect`), so the routine may
+    /// leave with the record modified and not written: `dirty_at_exit` Yes, from the raise's own
+    /// exit state. Break: build the unproven `Error` as a plain call (no may-raise node), and the
+    /// only exit is after `Modify`: `No`. A certain raise (`Error('x')`) keeps its state too.
+    #[test]
+    fn eng80_b4_a_may_raise_error_keeps_its_exit_state() {
+        let src = r#"table 50390 "Eng80 B4 T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Name; Text[50]) { }
+    }
+}
+
+codeunit 50390 "Eng80 B4"
+{
+    procedure Unproven(var Rec: Record "Eng80 B4 T")
+    var
+        EI: ErrorInfo;
+    begin
+        Rec.Get('1');
+        Rec.Validate(Name, 'x');
+        Error(EI);
+        Rec.Modify();
+    end;
+
+    procedure Proven(var Rec: Record "Eng80 B4 T")
+    begin
+        Rec.Get('1');
+        Rec.Validate(Name, 'x');
+        Error('x');
+        Rec.Modify();
+    end;
+}
+"#;
+        let f = walked(src, &["Unproven", "Proven"]);
+        assert_eq!(f[0].dirty_at_exit, EffectPresence::Yes, "Unproven");
+        assert_eq!(f[1].dirty_at_exit, EffectPresence::Yes, "Proven");
+    }
+
+    /// ENG-80 (spec §4.1): the may-raise nodes after an unproven `Error` take a zero-width range
+    /// at the call's end. The containment test is inclusive, so without the explicit skip a field
+    /// access starting exactly there would be claimed by the may-raise branch and taken from the
+    /// enclosing block. Hand-stated (no valid source puts an access at a call's end): a block
+    /// holding only the may-raise `case`, and one access at that point. Break: drop the empty-range
+    /// skip in `collect_field_accesses_in_block`.
+    #[test]
+    fn eng80_zero_width_may_raise_nodes_hold_no_field_access() {
+        let node = |kind: &str, range, children| {
+            let mut n = crate::program::body::ir_walk::cfn_node(kind);
+            n.source_range = range;
+            n.children = children;
+            n
+        };
+        let at = Some((2, 10, 2, 10));
+        let inner = node("block", at, Some(vec![node("error", None, None)]));
+        let raise = node(
+            "case",
+            at,
+            Some(vec![node("case-branch", at, Some(vec![inner.clone()]))]),
+        );
+        let block = node("block", Some((1, 0, 3, 0)), Some(vec![raise]));
+        let mut r = minimal_routine(Some(block.clone()));
+        r.field_accesses = vec![PFieldAccess {
+            record_variable_name: "Rec".to_string(),
+            field_name: "Name".to_string(),
+            source_anchor: PAnchor {
+                start_line: 2,
+                start_column: 10,
+                end_line: 2,
+                end_column: 14,
+                ..dummy_anchor()
+            },
+            access: Default::default(),
+        }];
+        let idx = build_indexes(&r);
+        let param = ParamCtx {
+            name_lc: "rec",
+            rec_var_id: None,
+        };
+        let outer = collect_field_accesses_in_block(
+            &block,
+            block.children.as_deref().unwrap(),
+            &param,
+            &idx,
+        );
+        assert_eq!(outer.len(), 1, "the access stays with the enclosing block");
+        assert!(
+            collect_field_accesses_in_block(
+                &inner,
+                inner.children.as_deref().unwrap(),
+                &param,
+                &idx
+            )
+            .is_empty(),
+            "the zero-width block claims no access"
+        );
     }
 }
