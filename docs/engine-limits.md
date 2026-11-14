@@ -789,7 +789,8 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   cancellable (not measured). ~~`alsem impact` and `alsem graph` reach every report trigger from
   a `RunRequestPage`.~~ **Fixed by TLS-52** (2026-11-14) for a static target: the run goes to the
   report's start node (`ObjectStart` in the `al-sem.callgraph` export, additive in v1), whose
-  lifecycle keeps only the triggers `resolver::start_runs_trigger` says the start runs, so a
+  lifecycle drops the run's triggers `resolver::start_runs_trigger` says the start does not run
+  (and keeps the rest: request page field triggers, `OnPreRendering`, opened pages), so a
   change to `OnPreReport`, a data item or `OnPostReport` no longer selects the tests behind a
   `RunRequestPage`. Left: a dynamic `RunRequestPage` (a run-time report id, CDO's two calls)
   goes to the `h:run:report` hub, which expands to object nodes and reads the full trigger list

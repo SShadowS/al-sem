@@ -13,8 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose lifecycle reaches every trigger, so a change to `OnPreReport`, a data item or
   `OnPostReport` selected the tests behind each `RunRequestPage` caller, although that start
   runs only `OnInitReport` and the request page (ENG-19, engine limits L20). Such a run now
-  goes to a **start node** of the report, whose lifecycle keeps only the triggers the start
-  runs (`resolver::start_runs_trigger`, still the one home of the subset). Keyword and
+  goes to a **start node** of the report, whose lifecycle drops the run's triggers the
+  start does not run (`OnPreReport`, data items, `OnPostReport`;
+  `resolver::start_runs_trigger`, still the one home of the subset) and keeps the rest
+  (request page field and action triggers, `OnPreRendering`, opened pages). Keyword and
   variable forms both; a report extension's triggers too. A run-time report id still goes to
   the run hub and over-selects (L20).
 - **`al-sem.callgraph` export (additive, version stays 1):** a new node kind

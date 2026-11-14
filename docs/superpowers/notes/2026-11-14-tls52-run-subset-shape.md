@@ -125,6 +125,12 @@ shape matters for correctness and for any later partial start.
   method partial.
 - The CDO graph before and after: only the edges from the 7 `RunRequestPage` sites move,
   and each moved one points at a start node.
+  **As built (2026-11-14):** of the grep's 7 hits only one is a static run that reaches the
+  export, Base Application Report 25 from "Financial Report Schedule".`EditCustomFilters`.
+  Its run moved to a new start node with the same 11 exported lifecycle edges, because the
+  export prunes the report's `OnPreReport` and data items (they reach no workspace code).
+  The 4-line diff: edges 58,489 → 58,490, nodes 26,045 → 26,046, histogram unchanged.
+  The workspace's own two calls take a run-time id, so they go to the hub (L20).
 
 ## Decision asked
 

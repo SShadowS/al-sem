@@ -811,7 +811,13 @@ fn an_action_with_a_trigger_and_a_run_object_counts_once() {
 /// start is the object node"; filtering by `start_runs_trigger` alone, which
 /// rejects every member-level trigger (`Builder::starts_trigger` without its
 /// run-list check), fails "50110.onlookup is reached from every caller" (a
-/// request page field's `OnLookup`, which the user may start).
+/// request page field's `OnLookup`, which the user may start); the empty
+/// filtered run's `run_target` path sending to the object node fails "an
+/// empty filtered run is the start node".
+///
+/// LIMIT: the ABI-symbol fallback's `run_key` (a symbol-only base report
+/// whose loaded extension declares a dropped trigger) has no fixture here;
+/// it needs a dependency app.
 #[test]
 fn a_request_page_run_reaches_only_the_triggers_it_runs() {
     let t = one_file_workspace(
@@ -862,6 +868,10 @@ report 50110 "T52 Rep"
     trigger OnPostReport()
     begin
     end;
+
+    trigger OnPreRendering(var RenderingPayload: JsonObject)
+    begin
+    end;
 }
 reportextension 50111 "T52 Ext" extends "T52 Rep"
 {
@@ -874,6 +884,14 @@ report 50112 "T52 InitOnly"
     ProcessingOnly = true;
 
     trigger OnInitReport()
+    begin
+    end;
+}
+report 50114 "T52 PreOnly"
+{
+    ProcessingOnly = true;
+
+    trigger OnPreReport()
     begin
     end;
 }
@@ -901,6 +919,13 @@ codeunit 50113 "T52 Ops"
     procedure ViaInitOnly()
     var
         Rep: Report "T52 InitOnly";
+    begin
+        Rep.RunRequestPage();
+    end;
+
+    procedure ViaPreOnly()
+    var
+        Rep: Report "T52 PreOnly";
     begin
         Rep.RunRequestPage();
     end;
@@ -956,6 +981,8 @@ codeunit 50113 "T52 Ops"
         (50110, "onopenpage", None),
         // A request page field's: the user may start it on the shown page.
         (50110, "onlookup", Some("pickfilter")),
+        // Not on the run list: kept (it can only over-select).
+        (50110, "onprerendering", None),
     ] {
         assert_eq!(
             reached_from(trigger(object, name, member)),
@@ -987,5 +1014,20 @@ codeunit 50113 "T52 Ops"
     assert!(
         runs_all("viainitonly", &object),
         "a start that runs every trigger is the object node"
+    );
+    // A report that declares none of the triggers the start runs: the
+    // filtered run has no route, so the site's `run_target` carries it.
+    assert!(
+        runs_all("viapreonly", &start),
+        "an empty filtered run is the start node"
+    );
+    let shared = Shared::new(
+        &g,
+        &[trigger(50114, "onprereport", None)].into_iter().collect(),
+    );
+    let up = walk_up(&g, &[trigger(50114, "onprereport", None)], &shared);
+    assert!(
+        !up.best.contains_key(&named(&g, "viapreonly")),
+        "50114.onprereport is not reached from ViaPreOnly"
     );
 }

@@ -309,7 +309,8 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    platform events, the callbacks hub) is kept. A start is partial for an object when
    it drops at least one trigger of the object or its extensions, so there is no
    second list; a report whose triggers the start
-   all runs keeps the object node, as does a symbol-only one (no listed triggers). A
+   all runs keeps the object node, as does a symbol-only one (no listed triggers) unless
+   a loaded extension of it declares a dropped trigger (its callbacks hub edge stays). A
    start node exists only when some site uses it. A dynamic target still goes to the
    `h:run:<kind>` hub (object nodes, full lifecycle). Additive in v1 (4.2: an unknown
    node kind only carries the walk); a reader that ignores the kind gets the narrower,

@@ -299,15 +299,6 @@ fn a_declared_run_request_page_does_not_hide_the_builtin() {
     assert_ne!(answer(t.path(), "RrpOverloaded", "may-commit"), "no");
 }
 
-/// A request page shown by `Run` (keyword or variable) may be cancelled, so
-/// the `Commit()` in `OnPreReport` is not on every success path; with the page
-/// hidden (`RequestWindow` false, `UseRequestPage = false`) or a head-less
-/// `Execute`, it is.
-/// Breaks (2026-11-13): `request_page_cancel_skips` returns `false` ->
-/// `ViaRunQuiet` answers `yes` (master's answer); `request_page_may_cancel`
-/// ignores `UseRequestPage = false` -> `ViaRunNoPageProperty` answers
-/// `unknown`; it ignores a literal `RequestWindow` -> `ViaRunQuietNoPage`
-/// answers `unknown`. Each fails; restored, it passes.
 /// TLS-52, on the wire: `alsem graph` sends a `RunRequestPage` (keyword and
 /// variable form) to an `ObjectStart` node of the report (`start:
 /// "runrequestpage"`), whose `Trigger` edges reach the request page's
@@ -378,6 +369,15 @@ fn the_graph_sends_a_request_page_run_to_a_start_node() {
     );
 }
 
+/// A request page shown by `Run` (keyword or variable) may be cancelled, so
+/// the `Commit()` in `OnPreReport` is not on every success path; with the page
+/// hidden (`RequestWindow` false, `UseRequestPage = false`) or a head-less
+/// `Execute`, it is.
+/// Breaks (2026-11-13): `request_page_cancel_skips` returns `false` ->
+/// `ViaRunQuiet` answers `yes` (master's answer); `request_page_may_cancel`
+/// ignores `UseRequestPage = false` -> `ViaRunNoPageProperty` answers
+/// `unknown`; it ignores a literal `RequestWindow` -> `ViaRunQuietNoPage`
+/// answers `unknown`. Each fails; restored, it passes.
 #[test]
 fn a_cancellable_request_page_makes_on_pre_report_conditional() {
     let t = workspace();
