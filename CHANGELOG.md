@@ -367,7 +367,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dynamic run: `honestDynamic` 23 → 26 and `resolvedCatalog` 6,134 → 6,131 (whole program and
   primary-scoped alike); `alsem fingerprint` reports them `dynamic-target` instead of `builtin`.
   Routines that reach `GetReportParameters` (through `CreateReportsForRecord`) gain that open
-  run in prove/explain/digest.
+  run in prove/explain/digest. The L4 whole-program digest is re-frozen (`fde6e4f3…` →
+  `b2624796…`, reverse index unchanged): 1010 of 5479 routine summaries gain exactly one
+  `dynamic-dispatch` uncertainty on those three operations and nothing else
+  (`tests/l4-summary-baseline/README.md`).
 - `alsem impact`: `R.RunRequestPage()` is a `run` site now, no longer a `declaredRunnable` one.
   Every dispatching built-in on a typed receiver now starts its object, so that rule has no source
   shape left. Tests: `tests/cli/cli_eng19_request_page_runs.rs` (breaks recorded). Left (L20): a

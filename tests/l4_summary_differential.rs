@@ -250,7 +250,10 @@ fn sha256_hex(s: &str) -> String {
 /// existed, with the `v2 == old` cross-assert green — so `digest == old == v2`
 /// at capture (see this file's header + `tests/l4-summary-baseline/README.md`
 /// for the pre-deletion commit). The old solver and that regen-time cross-assert
-/// are now deleted; a re-freeze measures v2 alone.
+/// are now deleted; a re-freeze measures v2 alone. Every re-freeze and its cause is
+/// logged in `tests/l4-summary-baseline/README.md` (latest: ENG-19, 2026-11-14,
+/// `Report.RunRequestPage` with a run-time id adds one `dynamic-dispatch`
+/// uncertainty to 1010 routines).
 ///
 /// Assembly is the source-only detector-context substrate (`no_deps`, empty leaf
 /// map). Skips when `CDO_WS` is unset; panics under `ENFORCE_CDO_WS=1`. Run with:
