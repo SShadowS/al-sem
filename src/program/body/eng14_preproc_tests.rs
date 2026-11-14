@@ -535,6 +535,11 @@ fn eng14_a4_a_conditional_case_else_may_not_run() {
         crate::engine::l5::registry::substrate::ALL,
     );
     let ctx = owned.ctx();
+    // A case whose branch set varies by build fails closed (sol, round 2).
+    assert!(
+        routine(&m, "CaseCondElse").statement_tree.is_none(),
+        "CaseCondElse: a #if group among the case's branches, so no control tree"
+    );
     let id = &routine(&m, "CaseCondElse").id;
     let role = ctx
         .parameter_roles_by_routine
@@ -575,6 +580,7 @@ fn eng14_cdo_untrusted_census() {
     let mut by: std::collections::BTreeMap<(bool, bool), usize> = Default::default();
     let (mut bodies, mut ws_bodies) = (0usize, 0usize);
     let mut examples: Vec<String> = Vec::new();
+    let mut by_app: std::collections::BTreeMap<&str, usize> = Default::default();
     for r in &m.workspace.routines {
         if !r.body_available {
             continue;
@@ -584,7 +590,8 @@ fn eng14_cdo_untrusted_census() {
         ws_bodies += usize::from(in_ws);
         if r.statement_tree.is_none() {
             *by.entry((in_ws, r.parse_incomplete)).or_default() += 1;
-            if examples.len() < 20 {
+            *by_app.entry(r.app_guid.as_str()).or_default() += 1;
+            if examples.len() < 40 {
                 examples.push(format!(
                     "{} {}::{} parse_incomplete={}",
                     if in_ws { "ws " } else { "dep" },
@@ -607,6 +614,9 @@ fn eng14_cdo_untrusted_census() {
             }
         );
     }
+    for (app, n) in &by_app {
+        println!("ENG14-CENSUS untrusted in app {app}: {n}");
+    }
     for e in &examples {
         println!("ENG14-CENSUS example {e}");
     }
@@ -627,6 +637,13 @@ fn untrusted_source() -> String {
     for _ in 0..140 {
         deep.push_str("end; ");
     }
+    // sol (part-1 review, round 2): case groups nested past the depth budget drop their
+    // deeper branches, an `exit` among them.
+    let deep_case = format!(
+        "case I of\n{}1: exit;\n{}end;\n",
+        "#if A\n".repeat(140),
+        "#endif\n".repeat(140)
+    );
     format!(
         r#"codeunit 50341 "Eng14 Untrusted"
 {{
@@ -652,6 +669,13 @@ fn untrusted_source() -> String {
         Error('x');
     end;
 
+    procedure DeepCase(I: Integer)
+    begin
+        {deep_case}
+        Commit();
+        Bar();
+    end;
+
     // No branch in its source: only the untrusted rule makes it read as branching.
     procedure Straight()
     var
@@ -674,7 +698,7 @@ fn eng14_a6_untrusted_routines_claim_nothing() {
         &[("Untrusted.Codeunit.al".to_string(), untrusted_source())],
         "e1400000-0000-4000-8000-000000000015",
     );
-    for name in ["Broken", "Deep"] {
+    for name in ["Broken", "Deep", "DeepCase"] {
         let r = routine(&m, name);
         assert!(r.body_available, "{name}: the body is there");
         assert!(

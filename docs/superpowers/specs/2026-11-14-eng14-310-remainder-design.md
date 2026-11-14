@@ -343,9 +343,16 @@ Two landings, one branch each:
   cond-only head and a `preproc_*` leftover now push a `StmtKind::Unknown` marker next to their lowered
   items: the routine is untrusted (§4.2 D), its calls keep their sites, and no mark, guard or dominance
   comes from its tree. This replaces S's enclosing-list rewrite and B's runs on those paths. Kept precise,
-  because no false guard can arise there: statement groups (B2), split-body arms (A), a guarded split
-  body's tail (an unordered top-level run), and a `case` `else` inside a `#if` arm (may-run statements in
-  a real else). On CDO none of the failing-closed shapes occur (run 2: everything identical).
+  because no false guard can arise there: statement groups (B2), split-body arms (A), and a guarded
+  split body's tail (an unordered top-level run).
+- **A `case` with a `#if` group among its branches fails closed too** (sol, part-1 review round 2). Its
+  labels union across builds and its `else` is a real else, so `0: …; #if X 1: …; #else else Commit();
+  #endif` let literal reachability rule the commit out for `P(1)`, though without X it runs. An earlier
+  answer (the conditional `else`'s statements as may-run items) removed the false "always" but not that
+  false guard; it is withdrawn. `lower_case_body` adds a pattern-less branch holding the marker when a
+  `#if` case group (`PreprocConditionalCase`, `PreprocSplitCaseExtended`, `PreprocSplitOpenStatement`)
+  is among the branches, and case groups nested past the depth budget (whose deeper branches are
+  dropped) add one too.
 - **`has_branching`.** An untrusted routine reads `has_branching: true`: `record_types` (RecordRef
   temp state), `event_flow` (`exact`) and d61 (`unconditional`) treat `false` as a straight-line proof
   (Fable, part-1 review).

@@ -146,11 +146,6 @@ impl Ir {
     pub fn block(&self, id: BlockId) -> &Block {
         &self.blocks[id.index()]
     }
-    /// The lowerer re-homes a block's items (ENG-14, a broken one-statement slot):
-    /// the block is left empty and unreferenced.
-    pub(crate) fn take_block_items(&mut self, id: BlockId) -> Vec<BlockItem> {
-        std::mem::take(&mut self.blocks[id.index()].items)
-    }
 
     pub fn iter_exprs(&self) -> impl Iterator<Item = &Expr> {
         self.exprs.iter()

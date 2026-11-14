@@ -4137,6 +4137,18 @@ fn lower_case_body(
             &mut else_block,
             depth,
         );
+        // ENG-14 (spec §8.1): a `#if` group among the branches makes the branch set,
+        // and so the labels an `else` excludes, vary by build: fail closed.
+        if let Some(group) = body.named_children().into_iter().find(|c| {
+            matches!(
+                c.kind(),
+                RawKind::PreprocConditionalCase
+                    | RawKind::PreprocSplitCaseExtended
+                    | RawKind::PreprocSplitOpenStatement
+            )
+        }) {
+            push_untrusted_case_branch(&origin_of(group), ir, &mut branches);
+        }
     }
     (branches, else_block)
 }
@@ -4163,34 +4175,30 @@ fn collect_case_branches(
         source,
         branches,
         else_block,
-        false,
         depth,
     );
 }
 
-/// The case's `else` from `block`. ENG-14 (§4.2 B): an `else` reached inside a `#if`
-/// arm (`conditional`) exists in some builds only; in the others no `else` runs and
-/// the case falls through. Its statements are then may-run items, and an `else` from
-/// another arm is merged in, not dropped. Outside any arm the first `else` wins.
-fn set_case_else(block: BlockId, conditional: bool, ir: &mut Ir, else_block: &mut Option<BlockId>) {
-    if !conditional {
-        if else_block.is_none() {
-            *else_block = Some(block);
-        }
-        return;
-    }
-    let origin = ir.block(block).origin.clone();
-    let mut items = else_block
-        .map(|b| ir.take_block_items(b))
-        .unwrap_or_default();
-    let new = ir.take_block_items(block);
-    items.extend(unordered_run(new, ir));
-    *else_block = Some(ir.add_block(Block { items, origin }));
+/// ENG-14 (spec §8.1): a pattern-less branch whose body is the untrusted marker. A case
+/// whose branch set varies by build cannot be read as one case: its labels union across
+/// builds and its `else` is a real else, so `0: …; #if X 1: …; #else else Commit();
+/// #endif` would require `I ∉ {0, 1}` for a commit that runs, without X, for `I = 1`.
+fn push_untrusted_case_branch(origin: &Origin, ir: &mut Ir, branches: &mut Vec<CaseBranch>) {
+    let mut items = Vec::new();
+    push_untrusted_marker(origin, ir, &mut items);
+    let body = ir.add_block(Block {
+        items,
+        origin: origin.clone(),
+    });
+    branches.push(CaseBranch {
+        patterns: Vec::new(),
+        body,
+        origin: origin.clone(),
+    });
 }
 
 /// [`collect_case_branches`] over a list of children (one `#if` arm's, or a
-/// whole `case_body`'s). `conditional`: the children are a `#if` arm's.
-#[allow(clippy::too_many_arguments)]
+/// whole `case_body`'s).
 fn collect_case_branches_in(
     children: Vec<RawNode>,
     ir: &mut Ir,
@@ -4198,7 +4206,6 @@ fn collect_case_branches_in(
     source: &str,
     branches: &mut Vec<CaseBranch>,
     else_block: &mut Option<BlockId>,
-    conditional: bool,
     depth: u32,
 ) {
     // Depth budget (as in `lower_stmt`): nested `#if` case groups recurse here once
@@ -4214,6 +4221,8 @@ fn collect_case_branches_in(
                 ),
                 origin: origin_of(*first),
             });
+            // ENG-14: the dropped branches may hold an `exit`; fail closed.
+            push_untrusted_case_branch(&origin_of(*first), ir, branches);
         }
         return;
     }
@@ -4221,9 +4230,8 @@ fn collect_case_branches_in(
         match child.kind() {
             RawKind::CaseBranch => push_case_branch(child, ir, issues, source, branches, depth),
             RawKind::CaseElseBranch => {
-                if conditional || else_block.is_none() {
-                    let b = lower_case_else_branch(child, ir, issues, source, depth);
-                    set_case_else(b, conditional, ir, else_block);
+                if else_block.is_none() {
+                    *else_block = Some(lower_case_else_branch(child, ir, issues, source, depth));
                 }
             }
             // `#if`-conditional case content: every arm's `case_branch`/`case_else_branch`
@@ -4244,7 +4252,6 @@ fn collect_case_branches_in(
                                 source,
                                 branches,
                                 else_block,
-                                true,
                                 depth + 1,
                             );
                         });
@@ -4274,7 +4281,6 @@ fn collect_case_branches_in(
                                 source,
                                 branches,
                                 else_block,
-                                true,
                                 depth + 1,
                             );
                         });
@@ -4299,8 +4305,8 @@ fn collect_case_branches_in(
             // branch — rather than dropped with its calls.
             RawKind::PreprocSplitOpenStatement => {
                 let body = lower_branch(child, ir, issues, source, depth);
-                if conditional || else_block.is_none() {
-                    set_case_else(body, conditional, ir, else_block);
+                if else_block.is_none() {
+                    *else_block = Some(body);
                 } else {
                     branches.push(CaseBranch {
                         patterns: Vec::new(),
@@ -6714,11 +6720,14 @@ codeunit 50102 T
 "#;
         let af = parse(src);
         let (branches, _else) = first_case(&af);
+        // ENG-14: a `#if` group among the branches adds a pattern-less marker branch (the
+        // routine fails closed); the real branches are the ones with patterns.
         assert_eq!(
-            branches.len(),
+            branches.iter().filter(|b| !b.patterns.is_empty()).count(),
             2,
             "both the conditional branch and the plain branch must be present"
         );
+        assert_eq!(branches.len(), 3, "and the ENG-14 marker branch");
     }
 
     /// H-7: `preproc_split_case_branch` — the grammar's `case_branch` alternative
@@ -6793,7 +6802,13 @@ codeunit 50105 T
 "#;
         let af = parse(src);
         let (branches, else_block) = first_case(&af);
-        assert_eq!(branches.len(), 4, "1, 5, 6 and the shared 2");
+        // ENG-14: plus a pattern-less marker branch (a `#if` group among the branches).
+        assert_eq!(
+            branches.iter().filter(|b| !b.patterns.is_empty()).count(),
+            4,
+            "1, 5, 6 and the shared 2"
+        );
+        assert_eq!(branches.len(), 5, "and the ENG-14 marker branch");
         assert!(else_block.is_none());
         for name in ["DoOne", "DoFive", "DoSix", "DoTwo"] {
             assert!(

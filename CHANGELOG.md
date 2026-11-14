@@ -106,9 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and no mark, guard or dominance comes from it. Arranging the statements in some order is not
     enough: in `if Flag then #if X exit; Commit(); #endif` the `Commit` runs under X whatever `Flag`
     is, so a guard `Flag = true` would let a caller passing `false` prune a real commit;
-  - a `case` `else` inside a `#if` arm (`case I of 1: R.Get(); #if X else R.Get(); #endif end;`) was
-    an unconditional `else`, so the case read as exhaustive (every path loads `R`); its statements
-    are now "may run", and an `else` from another arm is merged, not dropped.
+  - a `case` with a `#if` group among its branches fails closed the same way: its labels unioned
+    across builds and its `else` was a real else, so in `0: …; #if X 1: …; #else else Commit();
+    #endif` literal reachability ruled the commit out for `P(1)`, though without X it runs (and
+    `case I of 1: R.Get(); #if X else R.Get(); #endif end;` read as "every path loads `R`"). Case
+    groups nested past the lowering depth budget, which drop their deeper branches, fail closed too.
 - **An untrusted routine has no control tree.** A parse-incomplete routine, or one holding a
   statement the lowerer could not lower (the depth budget, an unmodelled wrapper), may have lost an
   `exit`. It keeps no statement tree and no unreachable entries, so no dead mark, d20, dominance,
