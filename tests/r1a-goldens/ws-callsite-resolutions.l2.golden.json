@@ -460,13 +460,6 @@
               "endLine": 4,
               "endColumn": 23,
               "syntaxKind": "call_expression"
-            },
-            "controlContext": "top-level",
-            "order": {
-              "orderId": 0,
-              "frameId": 0,
-              "onSuccessPath": true,
-              "dominatesSuccessReturn": true
             }
           }
         ],
@@ -478,23 +471,7 @@
         "identifierReferences": [],
         "variables": [],
         "varAssignments": [],
-        "conditionReferences": [],
-        "statementTree": {
-          "kind": "block",
-          "children": [
-            {
-              "kind": "call",
-              "callsiteId": "666ff6ccaa5b3c07/accf77edfb07984129b261e98c32a8df38dadc04f77d0c6185894f8566aef5b3/cs0"
-            }
-          ]
-        },
-        "scopeFrames": [
-          {
-            "frameId": 0,
-            "parentFrameId": -1,
-            "kind": "block"
-          }
-        ]
+        "conditionReferences": []
       },
       "capabilityFactsDirect": [],
       "capabilityStatus": "unknown",

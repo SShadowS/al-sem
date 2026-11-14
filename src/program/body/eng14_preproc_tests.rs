@@ -364,3 +364,84 @@ fn eng14_a5_slots() {
         "SlotNoArm: in the build with no arm Bar is the then-body"
     );
 }
+
+/// A6 sources: two routines whose control tree cannot be trusted. `Broken` has a parse
+/// error inside an expression (every statement is still modelled, so only
+/// `parse_incomplete` makes it untrusted); `Deep` nests more `if` levels than the lowering
+/// depth budget, so its innermost statements are lowered as `Unknown`. Each would claim something if it kept its tree:
+/// a dead mark after `exit`, `all_paths_error` from the final `Error`, a `Flag` guard.
+fn untrusted_source() -> String {
+    let mut deep = String::new();
+    for _ in 0..140 {
+        deep.push_str("if Flag then begin ");
+    }
+    deep.push_str("Foo(); ");
+    for _ in 0..140 {
+        deep.push_str("end; ");
+    }
+    format!(
+        r#"codeunit 50341 "Eng14 Untrusted"
+{{
+    procedure Broken(Flag: Boolean)
+    var
+        X: Integer;
+    begin
+        if Flag then
+            exit;
+        X := (1 + );
+        exit;
+        Bar();
+        Error('x');
+    end;
+
+    procedure Deep(Flag: Boolean)
+    begin
+        if Flag then
+            exit;
+        {deep}
+        exit;
+        Bar();
+        Error('x');
+    end;
+
+    local procedure Foo() begin end;
+    local procedure Bar() begin end;
+}}
+"#
+    )
+}
+
+#[test]
+fn eng14_a6_untrusted_routines_claim_nothing() {
+    let m = assemble_and_resolve_inline_program_default(
+        &[("Untrusted.Codeunit.al".to_string(), untrusted_source())],
+        "e1400000-0000-4000-8000-000000000015",
+    );
+    for name in ["Broken", "Deep"] {
+        let r = routine(&m, name);
+        assert!(r.body_available, "{name}: the body is there");
+        assert!(
+            r.statement_tree.is_none(),
+            "{name}: an untrusted routine has no control tree"
+        );
+        assert!(
+            r.unreachable_statements.is_empty(),
+            "{name}: no d20 entry from an untrusted body"
+        );
+        let bar = site(&m, name, "Bar");
+        assert_eq!(
+            bar.control_context, None,
+            "{name}: Bar has no context, never `unreachable`"
+        );
+        let summary = crate::engine::return_summary::compute_routine_return_summary(r);
+        assert_eq!(
+            summary.all_paths_error,
+            serde_json::Value::Bool(false),
+            "{name}: no all-paths-error claim"
+        );
+        assert!(
+            crate::engine::l4::param_guard::frame_guards(r, |_, _| true).is_none(),
+            "{name}: no parameter guard frame"
+        );
+    }
+}

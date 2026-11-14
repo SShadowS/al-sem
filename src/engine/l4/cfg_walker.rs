@@ -249,6 +249,19 @@ pub(crate) fn walk_param(
         rec_var_id,
     };
 
+    // ENG-14 (§4.2 D): a body with no control tree is untrusted (a parse error or a
+    // statement the lowerer could not lower, which may have been an `exit`). A
+    // straight-line read of it (`walk_flat`) would claim exit facts; it gets none.
+    if routine.body_available && routine.statement_tree.is_none() {
+        return PathAwareFacts {
+            requires_loaded_at_entry: EffectPresence::Unknown,
+            mutates_before_load: EffectPresence::Unknown,
+            required_loaded_fields_at_entry: FieldList::Unknown,
+            dirty_at_exit: EffectPresence::Unknown,
+            current_loaded_fields_at_exit: FieldList::Unknown,
+        };
+    }
+
     let mut exit_states: Vec<PerParamState> = Vec::new();
     let mut loop_stack: Vec<LoopFrame> = Vec::new();
 
@@ -2015,5 +2028,39 @@ mod tests {
         });
         // No panic/abort is the assertion itself; the facts are uninteresting
         // for pathological input (everything degrades to Unknown/saturated).
+    }
+
+    /// ENG-14 (§4.2 D, A6): a body with no control tree is untrusted (the assembly
+    /// drops the tree of a parse-incomplete routine or one with a statement the
+    /// lowerer could not lower). The straight-line fallback would claim `dirty_at_exit:
+    /// No` for it; every path fact is Unknown instead. Precondition stated by hand:
+    /// `body_available` and no tree. Break: drop the early return in `walk_param`
+    /// (the facts come from `walk_flat`: `No`).
+    #[test]
+    fn an_untrusted_body_claims_no_path_fact() {
+        let routine = minimal_routine(None);
+        assert!(routine.body_available && routine.statement_tree.is_none());
+        let graph = PrimaryGraph {
+            nodes: Vec::new(),
+            edges_by_from: HashMap::new(),
+            edges_from_order: Vec::new(),
+            uncertainty_edges: Vec::new(),
+            collided_site_callee: HashMap::new(),
+        };
+        let facts = walk_param(
+            &routine,
+            "rec",
+            None,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &graph,
+            &HashMap::new(),
+            &build_indexes(&routine),
+            None,
+        );
+        assert_eq!(facts.dirty_at_exit, EffectPresence::Unknown);
+        assert_eq!(facts.requires_loaded_at_entry, EffectPresence::Unknown);
+        assert_eq!(facts.mutates_before_load, EffectPresence::Unknown);
     }
 }

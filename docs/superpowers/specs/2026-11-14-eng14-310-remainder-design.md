@@ -196,8 +196,11 @@ fail-closed, so the same place also sanitizes what does not come from the tree, 
 no-tree path makes a claim change:
 - `unreachable_statements` is cleared (the IR spine fills it before the tree is built,
   ir_walk.rs:953-990; d20 reads it directly);
-- every call and operation site gets control context `conditional` explicitly (the no-tree context
-  computation returns empty maps, control_context.rs:467-501);
+- every call and operation site keeps NO control context (`None`, the convention a `[TryFunction]`
+  routine already has: the no-tree computation returns empty maps, control_context.rs:467-501). As
+  built, this is safer than `conditional`: `context_to_conditionality(None)` is `unknown`
+  (conditionality.rs:47-56), no reader treats a missing context as `top-level`, and `ordering_inter`
+  needs an order entry, which a treeless routine has none of;
 - `cfg_walker`'s straight-line fallback (`walk_flat`, cfg_walker.rs:255-306, 1752-1856) is not used for
   an untrusted routine: its path facts are Unknown (`dirty_at_exit` Unknown, no exit-state claim);
 - `param_guard` returns no frame at all for it (not a frame with no requirements, param_guard.rs:102-115);
@@ -281,7 +284,7 @@ fixture.
 | A3 | P8: `Call8b` live | plain sequence for the split closing |
 | A4 | P9, I3, M8, each with a statement after an `exit` inside the run: none dead | one break per shape: plain sequence |
 | A5 | C1Then/C1Else/C1Loop, a `with` slot, an `asserterror` slot, a case-branch slot, P1oSpliced, N2Nested: `Foo` live, `Bar` not dominating; P1pNoArm: `Bar` not dominating | skip the slot rule (per slot kind) |
-| A6 | an untrusted routine (a real default-path shape from the Task 1 audit, a depth-budget degradation, a parse-incomplete routine) has no `statement_tree` in the Model, in the graph-less L2 projection and in the dependency-order reconstruction; no `unreachable_statements` and no d20; every context `conditional`; `all_paths_error` false; no op dominating; `cfg_walker`'s `dirty_at_exit` Unknown for `Get; Validate; Error(EI); Modify`; no `param_guard` frame; no literal-flow pruning | one break per item: keep the tree; keep the vector; leave contexts empty; use `walk_flat`; return an empty frame |
+| A6 | an untrusted routine (a real default-path shape from the Task 1 audit, a depth-budget degradation, a parse-incomplete routine) has no `statement_tree` in the Model, in the graph-less L2 projection and in the dependency-order reconstruction; no `unreachable_statements` and no d20; every context `None` (unknown); `all_paths_error` false; no op dominating; `cfg_walker`'s `dirty_at_exit` Unknown for `Get; Validate; Error(EI); Modify`; no `param_guard` frame; no literal-flow pruning | one break per item: keep the tree; keep the vector; leave contexts empty; use `walk_flat`; return an empty frame |
 | B1 | Text forms terminate (dead + d20): literal, parenthesized, Text/Label/Code/TextConst var, Code param, `Error(Lbl, 1)`, `StrSubstNo(...)`, `Format(...)`, `'a' + T`, quoted `"Error"('x')` | drop each accepted form in turn |
 | B2 | not terminating (next call live, no d20): ErrorInfo var, `(EI)`, `GetErrInfo()`, parens-less `GetErrInfo`, `Errs[i]`, named ErrorInfo return, `Rec.Field`, P13, S1Operand, S1OperandRev, S2Callee, I1SplitCall | per form: accept any one-argument call; ignore the taint |
 | B3 | declarations: conditional global in both orders, P15, split-body arm local, nested conditional `var`, a name with no declaration: not terminating; plain Text global: terminating | read the first declaration only; ignore completeness; accept zero declarations |
@@ -319,13 +322,31 @@ routine moves. All regenerated together (`scripts/check-goldens --regen`), every
 Two landings, one branch each:
 - **ENG-14 part 1 (lowerer):** Task 1 (probe audit: complete-body probe, every statement-position
   `Preproc*` kind against parse output, the `lower_branch` callers, every reader of `statement_tree`
-  with its no-tree path), Task 2 (§4.2 S, A, B, C, D with A1-A6), the cache bumps of §4.6 that its
-  changes need (C3), `lowerer-reviewer`, CDO measure, CHANGELOG. Measurable alone.
-- **ENG-14 part 2 (Error and gate):** §4.1 (B1-B6, C1, C2, C4), §4.3 (D1), §4.4, §4.5 (E1), §4.6 (its
-  own bumps, C3), CDO measure and triage, engine-limits.md and CHANGELOG.
+  with its no-tree path), Task 2 (§4.2 S, A, B, D with A1-A6), the cache bumps of §4.6 that its
+  changes need (C3), `lowerer-reviewer`, CDO measure, CHANGELOG. Measurable alone. (As built: §4.2 C
+  moved to part 2, the first change that reads it, so part 1 adds no unread IR field.)
+- **ENG-14 part 2 (Error and gate):** §4.2 C, §4.1 (B1-B6, C1, C2, C4), §4.3 (D1), §4.4, §4.5 (E1),
+  §4.6 (its own bumps, C3), CDO measure and triage, engine-limits.md and CHANGELOG.
 - **ENG-74 (filed separately):** `CurrReport.Skip`/`Break`/`Quit` (and `currXMLport.*`), after a BC
   sidecar measurement per method, trigger and helper call: what runs after it in the trigger, in the
   caller, and of `OnPostReport`. Until then the engine keeps today's reading, and the limit is stated.
+
+## 8.1 As built (part 1), where it differs from the text above
+
+- **§4.2 C moved to part 2.** Taint and completeness are read only by §4.1's `Error` rule; adding the IR
+  fields in part 1 would land fields nothing reads (mantra 13). Part 2 adds them with their first reader.
+- **§4.2 D, the trigger.** "Untrusted" is `parse_incomplete`, or a body that holds a `StmtKind::Unknown`
+  at any depth (`ir_walk::block_has_unknown`, an exhaustive match over statement kinds). That covers the
+  depth budget, an unmodelled wrapper that lowers to nothing, and a split call with no callee, with no new
+  lowerer flag. The unordered runs of §4.2 B never produce `Unknown`, so they do not trigger it.
+- **§4.2 D, contexts.** An untrusted routine's sites keep no context (`None`), not `conditional` (see
+  §4.2 D's bullet).
+- **§4.2 D, readers changed.** `cfg_walker::walk_param` (Unknown facts), `param_guard::frame_guards`
+  (`None`), d43 `classify_subscriber` (`MaySetTrue`, before its no-branch fast path). Every other reader's
+  no-tree path was checked safe: docs/superpowers/notes/2026-11-14-eng14-tree-readers.md.
+- **§4.2 B, two heads.** The "one head" condition was dropped: a second head's fields are never consumed,
+  so a two-head shape always has leftover items and is an unordered run anyway (its discrimination proof
+  came back green, which showed the check was redundant).
 
 ## 9. r0 review: how each finding is answered
 

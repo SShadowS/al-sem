@@ -74,6 +74,11 @@ pub(crate) fn frame_guards(
     r: &ModelRoutine,
     passes_by_value: impl Fn(&str, u32) -> bool,
 ) -> Option<FrameGuards> {
+    // ENG-14 (§4.2 D): a body with no control tree is untrusted; its guards (and the
+    // `Error` aliases below) would rest on a tree that may have lost an `exit`.
+    if r.body_available && r.statement_tree.is_none() {
+        return None;
+    }
     let mut usable: Vec<(String, u32)> = Vec::new();
     for p in &r.parameters {
         if p.is_var || !p.type_text.trim().eq_fold_identifier("boolean") {
