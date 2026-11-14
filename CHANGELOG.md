@@ -323,6 +323,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule (`resolve::edge::trigger_family`); `docs/al-compiler-callgraph-holes.md` A11 is now
   "Better".
 
+### Changed (TLS-49: one scope fact for the human and JSON query headers)
+
+- **`query effects` and `query touches` now state the same scope in `--format json` as in the
+  human header, in every case.** The body's scope lines are the one home. The JSON header
+  (`payload.result.scope.scope`) joins them with the dependencies clause, as the human header
+  does. What moved in JSON:
+  - a routine-scoped `query touches` now states its real scope ("dependency code: none
+    reached", or the full-cone text when the cone enters dependency code). Before, it said "per
+    operation, one routine into dependency code" whatever the answer;
+  - failed answers, which state no scope in human form, state no depth in JSON either
+    ("dependencies: N apps" only);
+  - the effects header carries the literal-arguments sentence the human one has;
+  - `query effects`' `payload.summary.scope` has a new value, `whole-cone`, when the cone
+    enters no dependency code (was `operations-one-routine-deep; …`). `QUERY_SCHEMA_VERSION`
+    is unchanged; the schema 4 and 5 mappings pass the new value through.
+- **`query effects` and `query touches` decide "the cone enters dependency code" with one
+  check** (`cone_enters`): a visited dependency routine, a dependency entry point or a
+  crossing site. Effects now also counts the last two, as touches did. In effects that moves
+  the families' depth and limits, `summary.scopes` and the absence lines to the
+  one-routine-deep wording, never the reverse. The task asked for a probe first; none was run.
+  The two counts were taken because explain's own "none reached" rule reads them, and a
+  crossing with no known target counts there with no routine visited (`routine_rollup.rs`).
+  Whether real code shows that shape is not measured. The rule is pinned by the hand-stated
+  `the_cone_enters_dependency_code_on_any_dependency_count`; its wiring for those two counts is
+  not (no fixture produces the shape).
+- **A cone search cut short at its limit is its own fact, not dependency entry** (review sol
+  r1). Effects used to count it as entry. In effects, a cut-short cone that enters no
+  dependency keeps the whole-cone scope and says "(not searched: beyond the cone's search
+  limit)". Its four operation families become `notExhaustive`, with a reason and the blocker
+  `searchCutShort: 1`; that key is present only when it happened. The header then reads
+  "analysis partial". The `beyondDependencyCalls` family, the cone's own read, gets the same
+  reason and key whenever the search was cut short, whether or not the cone enters dependency
+  code (review Fable r4). In touches the scope reads "dependency code: none reached (search cut
+  short)", and a miss past the cut is `unknown` with the reason `search-cut-short`, no longer
+  "no (every candidate decided)". Pinned by `query_cut_short_without_dependency_says_so`, a
+  70-routine workspace chain past the 64-hop limit, in both formats, with one discrimination
+  proof per rule (five).
+- **Fixed with it: a touches miss answered `unknown` now reads "analysis partial" in JSON too.**
+  The JSON header looked for `down.answer`, which no answer carries; the verdict lives at
+  `down.absence.answer`. So every `unknown` miss, including those on calls not resolved, said
+  "complete" in JSON while the human header said "partial" (review sol r3). No corpus golden
+  has such a miss.
+- **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
+  scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
+  when no test app is found.
+- Pinned, each with a discrimination proof, by:
+  - `query_scope_is_one_fact_in_both_formats`: the whole query corpus, plus the output
+    fixture's effects and touches whose cone enters a dependency, human against JSON;
+  - the cone-not-read check in `digest_db_effects_carry_query_effects_temp_state`;
+  - `query_effects_whole_cone_with_an_unresolved_call_says_not_searched`, the "not searched"
+    variant, now with a fixture;
+  - `discovery_skips_folders_git_ignores`.
+- Goldens moved, against TLS-48:
+  - 21 query and batch JSON goldens;
+  - `ignoredByGit` in the impact `diff.json` and the tests `universe.post.json`;
+  - 4 human goldens, the workspace-wide touches answers (below). Their JSON is back at its old
+    text.
+
+  The CDO goldens were not run on this branch. The union, the touches miss line and the
+  workspace-wide scope line can move their human text.
+- **`query touches`' machine tokens follow the same fact.** `down.absence.index` is
+  `whole-cone` when the cone enters no dependency code (was always
+  `operations-one-routine-deep`), and the human miss line then drops "(per operation, one
+  routine into dependency code)". Pinned by `query_touches_miss_index_states_the_scope_fact`,
+  with a discrimination proof. The workspace-wide list reads no cone and stands on the
+  per-operation index, so it now prints "scope: per operation, one routine into dependency
+  code" in both headers, as its `note` and `index` say (the four `*.global` human goldens;
+  their JSON header states it as before). `down.absence.index` has a new value, `whole-cone`.
+
 ### Changed (TLS-48: engine limits B8, the last two small-output items)
 
 - **`query effects` no longer claims a dependency depth when no dependency code is entered.**

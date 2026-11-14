@@ -94,7 +94,7 @@
         },
         "limits": [],
         "reasons": [],
-        "scope": "reads, locks, validate, writes: the whole cone, no dependency code entered; dependencies: 0 apps",
+        "scope": "reads, locks, validate, writes: the whole cone, no dependency code entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 0 apps",
         "universe": "cross-app"
       }
     },
@@ -178,7 +178,7 @@
         "operations": 0,
         "tables": 0
       },
-      "scope": "operations-one-routine-deep; writes-beyond-dependency-calls-full-cone",
+      "scope": "whole-cone",
       "tableNotResolved": {
         "operations": 0,
         "recordRef": {

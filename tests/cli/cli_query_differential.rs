@@ -1347,3 +1347,304 @@ fn query_effects_event_raise_decides_the_subscribers_temp_state() {
         assert_eq!(effects[0]["tempState"], want, "{decl}");
     }
 }
+
+/// The scope text of `alsem <argv>`'s human header (after " · scope: ";
+/// `None` when a failed answer prints no analysis line) and of its JSON
+/// header (`payload.result.scope.scope`).
+fn scope_both_ways(argv: &[&str]) -> (Option<String>, String) {
+    let (human, _) = run_alsem(argv, "human");
+    let (json, _) = run_alsem(argv, "json");
+    let h = human
+        .lines()
+        .find_map(|l| l.split(" · scope: ").nth(1))
+        .map(str::to_string);
+    let v: serde_json::Value = serde_json::from_str(&json).expect("JSON");
+    let j = v["payload"]["result"]["scope"]["scope"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no payload.result.scope.scope:\n{json}"))
+        .to_string();
+    (h, j)
+}
+
+/// TLS-49: the human and JSON headers state one scope, in every answer the
+/// query corpus holds (no dependency loaded: effects whole cone, touches from
+/// a routine, `up`, workspace-wide, and the failures: absent table, `down`
+/// without `--from`) and on the output fixture, whose cone enters a
+/// dependency (effects and touches entering dependency code). Both come from
+/// one home, the lines the body prints (`push_scope`). Not covered: effects
+/// whose cone was not read (no CLI path gives one).
+///
+/// DISCRIMINATION (2026-11-13): making `query_scope_json` ignore the recorded
+/// lines fails here at the first case
+/// (`d1-multi-caller.modifyhelper.mc-customer.both`: human "dependency code:
+/// none reached; dependencies: 0 apps", JSON "dependencies: 0 apps");
+/// restored, passes.
+#[test]
+fn query_scope_is_one_fact_in_both_formats() {
+    let fixture = crate::output_fixture::workspace()
+        .to_string_lossy()
+        .into_owned();
+    let q = crate::output_fixture::ISSUE_DOC_Q;
+    let entering: [(&str, Vec<&str>); 2] = [
+        (
+            "issuedoc.effects",
+            vec!["query", "effects", &fixture, "--routine", q],
+        ),
+        (
+            "issuedoc.base-register.touches",
+            vec![
+                "query",
+                "touches",
+                &fixture,
+                "--table",
+                "Base Register",
+                "--from",
+                q,
+            ],
+        ),
+    ];
+    for (slug, argv) in &entering {
+        let (h, j) = scope_both_ways(argv);
+        assert_eq!(h.as_deref(), Some(j.as_str()), "[{slug}] headers differ");
+        assert!(
+            !j.contains("no dependency code entered") && !j.contains("none reached"),
+            "[{slug}] the fixture's cone enters a dependency: {j}"
+        );
+    }
+    for c in CORPUS {
+        let ws = fixtures_dir().join(c.workspace);
+        let ws_str = ws.to_string_lossy().to_string();
+        let mut argv: Vec<&str> = vec!["query", c.sub, &ws_str];
+        argv.extend_from_slice(c.args);
+        let (h, j) = scope_both_ways(&argv);
+        match h {
+            Some(h) => assert_eq!(h, j, "[{}] human and JSON headers differ", c.slug),
+            // A failed answer states no scope in human form; the JSON then
+            // states no depth either, only what was loaded.
+            None => assert!(
+                j.starts_with("dependencies: ") && !j.contains(';'),
+                "[{}] the JSON states a scope the human answer does not: {j}",
+                c.slug
+            ),
+        }
+    }
+}
+
+/// TLS-49 (e): a cone that enters no dependency code but holds a call the
+/// engine could not resolve says what it did not search, in both headers.
+///
+/// DISCRIMINATION (2026-11-13): dropping the clause's condition
+/// (`if false && call_not_resolved + open_world > 0`) fails here (no "not
+/// searched"); restored, passes.
+#[test]
+fn query_effects_whole_cone_with_an_unresolved_call_says_not_searched() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"aaaa1111-0000-0000-0000-0000000000b9","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50300,"to":50399}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/All.al"),
+        "table 50300 \"Q Row\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50301 \"Q Caller\"\n{\n    procedure Run()\n    var\n        R: Record \"Q Row\";\n        C: Codeunit \"No Such Codeunit\";\n    begin\n        R.Insert();\n        C.DoIt();\n    end;\n}\n",
+    )
+    .unwrap();
+    let ws = dir.path().to_string_lossy().to_string();
+    let (h, j) = scope_both_ways(&["query", "effects", &ws, "--routine", "Run"]);
+    assert_eq!(
+        h.as_deref(),
+        Some(j.as_str()),
+        "human and JSON headers differ"
+    );
+    assert!(
+        j.starts_with(
+            "reads, locks, validate, writes: the whole cone, no dependency code entered (not \
+             searched: calls not resolved);"
+        ),
+        "{j}"
+    );
+}
+
+/// TLS-49: touches' machine token for a miss (`down.absence.index`) states
+/// the scope line's fact. A routine whose cone enters no dependency code,
+/// asked about a table it does not touch, with one call not resolved (so the
+/// miss is `unknown`): the header says "dependency code: none reached", the
+/// token `whole-cone`, and the human miss line names no depth.
+///
+/// DISCRIMINATION (2026-11-13): `index_depth` answering the one-routine-deep
+/// pair for both arms fails here at the token (asserted first); restored,
+/// passes.
+#[test]
+fn query_touches_miss_index_states_the_scope_fact() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"aaaa1111-0000-0000-0000-0000000000ba","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50400,"to":50499}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/All.al"),
+        "table 50400 \"Q One\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ntable 50401 \"Q Two\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50402 \"Q Writer\"\n{\n    procedure Run()\n    var\n        R: Record \"Q One\";\n        C: Codeunit \"No Such Codeunit\";\n    begin\n        R.Insert();\n        C.DoIt();\n    end;\n}\n",
+    )
+    .unwrap();
+    let ws = dir.path().to_string_lossy().to_string();
+    let argv = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "Q Two",
+        "--from",
+        "Q Writer.Run",
+        "--direction",
+        "down",
+    ];
+    let (h, j) = scope_both_ways(&argv);
+    assert_eq!(h.as_deref(), Some(j.as_str()));
+    assert!(j.starts_with("dependency code: none reached;"), "{j}");
+    let (json, _) = run_alsem(&argv, "json");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        v["payload"]["down"]["absence"]["index"], "whole-cone",
+        "{}",
+        v["payload"]["down"]
+    );
+    let (human, _) = run_alsem(&argv, "human");
+    // The unresolved call makes the miss `unknown`, the arm that named a depth.
+    assert!(
+        human.contains("down: unknown — no indexed touch observed, which is not proof"),
+        "{human}"
+    );
+    assert!(
+        !human.contains("one routine into dependency code"),
+        "{human}"
+    );
+}
+
+/// TLS-49 review sol r1: a cone search cut short at its limit is its own
+/// fact, not "dependency code entered". A workspace-only call chain longer
+/// than the cone's depth limit (64): effects keeps the whole-cone scope and
+/// says what it did not search; touches says none reached, cut short; neither
+/// claims a dependency depth, and both formats agree.
+///
+/// DISCRIMINATION (2026-11-13), each restored after and passing:
+/// - `cone_enters` counting `truncated` again (the union before this fix)
+///   gives the dependency-depth wording;
+/// - `of_families` not reading `searchCutShort` leaves `analysis: complete`;
+/// - `beyondDependencyCalls` without its cut-short reason stays `exhaustive`;
+/// - `absence_reasons` without `search-cut-short` answers the miss `no`;
+/// - `query_scope_json` reading `/down/answer` (never written; sol r3) leaves
+///   the miss's JSON `analysis: complete`.
+#[test]
+fn query_cut_short_without_dependency_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"aaaa1111-0000-0000-0000-0000000000bb","name":"Q","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{"from":50500,"to":50599}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let mut al = String::from(
+        "table 50500 \"Q Deep\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ntable 50502 \"Q Untouched\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50501 \"Q Chain\"\n{\n",
+    );
+    for i in 0..70 {
+        al.push_str(&format!(
+            "    procedure P{i}()\n    begin\n        P{}();\n    end;\n\n",
+            i + 1
+        ));
+    }
+    al.push_str(
+        "    procedure P70()\n    var\n        R: Record \"Q Deep\";\n    begin\n        R.Insert();\n    end;\n}\n",
+    );
+    std::fs::write(dir.path().join("src/All.al"), al).unwrap();
+    let ws = dir.path().to_string_lossy().to_string();
+
+    let effects = ["query", "effects", &ws, "--routine", "Q Chain.P0"];
+    let (h, j) = scope_both_ways(&effects);
+    assert_eq!(h.as_deref(), Some(j.as_str()), "effects headers differ");
+    assert!(
+        j.starts_with(
+            "reads, locks, validate, writes: the whole cone, no dependency code entered (not \
+             searched: beyond the cone's search limit);"
+        ),
+        "{j}"
+    );
+    let (json, _) = run_alsem(&effects, "json");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let reads = &v["payload"]["result"]["scope"]["families"]["reads"];
+    assert_eq!(reads["blockers"]["searchCutShort"], 1, "{reads}");
+    assert_eq!(reads["inventory"], "notExhaustive", "{reads}");
+    // The blocker reaches the header in both formats (sol r2).
+    assert_eq!(
+        v["payload"]["result"]["scope"]["analysis"], "partial",
+        "{}",
+        v["payload"]["result"]["scope"]
+    );
+    let (human, _) = run_alsem(&effects, "human");
+    assert!(
+        human.contains("analysis partial") && human.contains("the cone search was cut short"),
+        "{human}"
+    );
+
+    let touches = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "Q Deep",
+        "--from",
+        "Q Chain.P0",
+        "--direction",
+        "down",
+    ];
+    let (h, j) = scope_both_ways(&touches);
+    assert_eq!(h.as_deref(), Some(j.as_str()), "touches headers differ");
+    assert!(
+        j.starts_with("dependency code: none reached (search cut short);"),
+        "{j}"
+    );
+
+    // Fable r4: the cone's own family is limited too, and a miss past a cut
+    // is not "every candidate decided".
+    let beyond = &v["payload"]["result"]["scope"]["families"]["beyondDependencyCalls"];
+    assert_eq!(beyond["blockers"]["searchCutShort"], 1, "{beyond}");
+    assert_eq!(beyond["inventory"], "notExhaustive", "{beyond}");
+    let miss = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "Q Untouched",
+        "--from",
+        "Q Chain.P0",
+        "--direction",
+        "down",
+    ];
+    let (json, _) = run_alsem(&miss, "json");
+    let m: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let absence = &m["payload"]["down"]["absence"];
+    assert_eq!(absence["answer"], "unknown", "{absence}");
+    // sol r3: the JSON header agrees with the human one on a partial miss.
+    assert_eq!(
+        m["payload"]["result"]["scope"]["analysis"], "partial",
+        "{}",
+        m["payload"]["result"]["scope"]
+    );
+    assert!(
+        absence["reasons"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|x| x["kind"] == "search-cut-short")),
+        "{absence}"
+    );
+    let (human, _) = run_alsem(&miss, "human");
+    assert!(
+        !human.contains("every candidate decided")
+            && human.contains("analysis partial")
+            && human.contains(
+                "the cone search was cut short at its limit; code past it was not checked"
+            ),
+        "{human}"
+    );
+}

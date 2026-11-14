@@ -1,6 +1,6 @@
 query touches Table "MC Customer" (11111111-0000-0000-0000-00000000d01a/table/50101)   [cross-app]
 answer: workspace sites: 4 in 4 routines — by op: FindSet 3, Modify 1
-analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: per operation, one routine into dependency code; dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
   dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
   by object: Codeunit "D1 Multi Caller" 4 sites

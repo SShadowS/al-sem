@@ -1605,6 +1605,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 "discovery": roots["scope"]["origin"],
                 "discoveryComplete": roots["scope"]["complete"],
                 "searched": roots["scope"]["searched"],
+                "ignoredByGit": roots["scope"]["ignoredByGit"],
                 "apps": roots["scope"]["apps"].as_array().cloned().unwrap_or_default().iter().map(|a| {
                     let part = parts.iter().find(|p| p.app["root"] == a["root"]).and_then(|p| p.result.as_ref().ok());
                     json!({"name": a["name"], "root": a["root"], "appId": a["appId"], "files": a["files"],

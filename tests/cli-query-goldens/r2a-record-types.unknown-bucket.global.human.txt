@@ -1,6 +1,6 @@
 query touches unknown — the UNRESOLVED-TABLE bucket, not a table   [cross-app]
 answer: workspace sites: 1 in 1 routine — by op: Get 1
-analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: per operation, one routine into dependency code; dependencies: 0 apps
 more: --all lists every witness, no fold; --format json for every row
   dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
   table not resolved: each site's table is decided by a value the analysis does not resolve, and an unresolved write can be any table

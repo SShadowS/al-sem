@@ -194,9 +194,15 @@ fn cdo_query_effects_writes_agree_with_the_cone() {
     for (label, ..) in ROUTINES {
         let explain = doc(label, "explain json");
         let query = doc(label, "query effects json");
+        // TLS-49: the token states the scope line's fact; UpdateLastUpload
+        // enters no dependency code (its reads/locks lines say "the whole cone").
+        let want = if *label == "UpdateLastUpload" {
+            "whole-cone"
+        } else {
+            "operations-one-routine-deep; writes-beyond-entry-points-full-cone"
+        };
         assert_eq!(
-            query["payload"]["summary"]["scope"],
-            "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+            query["payload"]["summary"]["scope"], want,
             "{label}: the cone was read"
         );
         let (e_own, e_beyond) =

@@ -772,10 +772,14 @@ impl<'c> Beyond<'c> {
 
 /// Whether the root's cone enters dependency code (engine limits B8), so
 /// that `query effects`' one-dependency-routine-deep inventory is a limit of
-/// the answer: true when the cone was not read (not known), when its search
-/// was cut short, when it visits a dependency routine (the tree's boundary
-/// rule, as explain's `dependency code: none reached`), or when an operation
-/// is dependency code's (`in_dependency`).
+/// the answer: true when the cone was not read (not known), when it visits a
+/// dependency routine (the tree's boundary rule, as explain's `dependency
+/// code: none reached`), or when an operation is dependency code's
+/// (`in_dependency`). TLS-49: also when the cone's rollup counts a dependency
+/// entry point or crossing site; `query touches` read those and effects did
+/// not, so the two answered the same cone differently. One check now serves
+/// both. A search cut short at its limit is NOT entry (review sol r1): it is
+/// its own fact, [`cone_cut_short`].
 fn enters_dependency_code(
     cone: Option<&Beyond<'_>>,
     effects: &[TableTouch<'_>],
@@ -784,10 +788,44 @@ fn enters_dependency_code(
     let Some(b) = cone else {
         return true;
     };
-    let t = &b.entry.unresolved_traversal;
-    t.dependency_routines > 0
-        || t.truncated
-        || effects.iter().any(|e| in_dependency(e.operation_id))
+    cone_enters(
+        b.entry.unresolved_traversal.dependency_routines,
+        b.rollup.totals.entry_points,
+        b.rollup.totals.crossing_sites,
+    ) || effects.iter().any(|e| in_dependency(e.operation_id))
+}
+
+/// Whether the cone's search was cut short (its depth or routine limit),
+/// a fact of its own (TLS-49 review sol r1): it makes the whole-cone search
+/// not exhaustive; it does not mean dependency code was entered. `false` when
+/// no cone was read (the depth clause already says that answer is limited).
+fn cone_cut_short(cone: Option<&Beyond<'_>>) -> bool {
+    cone.is_some_and(|b| b.entry.unresolved_traversal.truncated)
+}
+
+/// TLS-49: the depth the per-operation touches index stands on, from the same
+/// fact as the scope line ([`enters_dependency_code`]): the machine token and
+/// the body's parenthetical. With no dependency code entered the index covers
+/// the whole cone, so neither states a depth.
+fn index_depth(enters_dependency: bool) -> (&'static str, &'static str) {
+    if enters_dependency {
+        (
+            "operations-one-routine-deep",
+            " (per operation, one routine into dependency code)",
+        )
+    } else {
+        ("whole-cone", "")
+    }
+}
+
+/// [`enters_dependency_code`]'s rule over a read cone: any visited
+/// dependency routine, or a dependency entry point or crossing site in the
+/// rollup. Not probed on a real shape (TLS-49): the last two can be counted
+/// with no routine visited (a crossing with no known target), as explain's own
+/// "none reached" rule allows for. A cut-short search is not entry
+/// ([`cone_cut_short`]).
+fn cone_enters(dependency_routines: usize, entry_points: usize, crossing_sites: usize) -> bool {
+    dependency_routines > 0 || entry_points > 0 || crossing_sites > 0
 }
 
 /// Step 1b (astra top 5): how the root's cone, after the literal pass,
@@ -971,11 +1009,12 @@ fn beyond_of_table(
 }
 
 /// The summary scope, by whether the cone was read.
-fn scope_value(cone_read: bool) -> &'static str {
-    if cone_read {
-        "operations-one-routine-deep; writes-beyond-entry-points-full-cone"
-    } else {
-        "operations-one-routine-deep"
+fn scope_value(cone_read: bool, enters_dependency: bool) -> &'static str {
+    match (cone_read, enters_dependency) {
+        // TLS-49: no dependency code entered, so no depth applies.
+        (true, false) => "whole-cone",
+        (true, true) => "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+        (false, _) => "operations-one-routine-deep",
     }
 }
 
@@ -1773,7 +1812,7 @@ fn envelope(
 ) -> String {
     // Output validation V4 (F76, 3.9.0, additive): `payload.result.scope`, the
     // header's facts as fields, beside query effects' `families` (V2).
-    let scope = query_scope_json(kind, &payload, deps);
+    let scope = query_scope_json(&payload, deps);
     if let Value::Object(m) = &mut payload {
         m.insert("dependencies".into(), deps.to_json());
         m.insert("lineBase".into(), LINE_BASE.into());
@@ -1785,6 +1824,8 @@ fn envelope(
         if let Some(Value::Object(s)) = result
             && let Value::Object(add) = scope
         {
+            // The recorded lines are the header's `scope` now; no second copy.
+            s.remove(SCOPE_LINES);
             for (k, v) in add {
                 s.insert(k, v);
             }
@@ -1810,7 +1851,7 @@ fn envelope(
 /// (`notAnalyzed` for a selector failure or a refused question, `partial`
 /// for a `down` answer of `unknown`), `reasons`, `assumptions`, `limits`,
 /// `universe` and the `scope` clause the human header prints.
-fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> Value {
+fn query_scope_json(payload: &Value, deps: &LoadedDependencies) -> Value {
     use crate::engine::result_header::{Analysis, Header, dependencies_clause};
     let failed = payload.get("error").is_some()
         || payload.as_object().is_some_and(|m| {
@@ -1823,37 +1864,38 @@ fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> V
     let mut h = Header::new("query", String::new(), !deps.cross_app);
     if failed {
         h.analysis = Analysis::NotAnalyzed("the input did not resolve".to_string());
-    } else if payload.pointer("/down/answer").and_then(Value::as_str) == Some("unknown") {
+    } else if payload
+        .pointer("/down/absence/answer")
+        .and_then(Value::as_str)
+        == Some("unknown")
+    {
+        // TLS-49 review sol r3: the miss's verdict lives at `down.absence`;
+        // `/down/answer` was never written, so the JSON said "complete" where
+        // the human header (reading "down: unknown") said "partial".
         h.analysis = Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
     } else if payload.get("unreadableEventSubscribers").is_some() {
         h.analysis = Analysis::Partial(vec![
             "an [EventSubscriber] the engine could not read may also run for these routines".into(),
         ]);
     }
-    // Engine limits B8 (TLS-48): the families say `wholeCone` when the cone
-    // enters no dependency code (`family_scope`); the human scope line agrees.
-    // ENG-40 (L1) builds on this text. Discrimination (2026-11-13): forcing
-    // the whole-cone arm off fails the two `cli_query_differential` effects
-    // goldens; restored, passes. The "not searched" variant has no fixture.
-    let reads = |k: &str| {
-        payload
-            .pointer(&format!("/result/scope/families/reads/{k}"))
-            .and_then(Value::as_str)
-    };
-    let depth = if kind == "query.effects" && reads("depth") == Some("wholeCone") {
-        if reads("inventory") == Some("notExhaustive") {
-            "reads, locks, validate, writes: the whole cone, no dependency code entered (not \
-             searched: calls not resolved)"
-        } else {
-            "reads, locks, validate, writes: the whole cone, no dependency code entered"
-        }
-    } else if kind == "query.effects" {
-        "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
-         beyond dependency calls: whole cone with literal arguments"
-    } else {
-        "per operation, one routine into dependency code"
-    };
-    h.scope = format!("{depth}; {}", dependencies_clause(deps.apps.len()));
+    // TLS-49: one home for the scope text. The body records each `  scope:`
+    // line it prints (`push_scope`, `result.scope.lines`); the header joins
+    // them with the dependencies clause exactly as the human header does
+    // (`query_with_header`), so the two cannot state different facts. ENG-40
+    // (L1) builds on this. A failed answer prints no scope line, so neither
+    // header states a depth.
+    let mut scope: Vec<String> = payload
+        .pointer(&format!("/result/scope/{SCOPE_LINES}"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    scope.push(dependencies_clause(deps.apps.len()));
+    h.scope = scope.join("; ");
     // The families' blockers decide `analysis` too (`Header::scope_json`).
     let mut extra = Map::new();
     if let Some(f) = payload.pointer("/result/scope/families") {
@@ -2590,11 +2632,16 @@ fn render_query_touches_body(
                          code). A routine whose only touch is deeper in dependency code{unseen} \
                          is not listed. Scope it with --from <routine> --direction up."
                     ),
-                    // 3.2.0, additive.
-                    "index": "operations-one-routine-deep",
+                    // 3.2.0, additive. TLS-49: no cone is read here.
+                    "index": index_depth(true).0,
                 }),
             );
             human.push_str(&format!("--- touches {table_label} ---\n"));
+            // TLS-49: the list stands on the per-operation index with no cone
+            // read, so both headers state that depth (as `note` and `index` do).
+            let mut lines = Vec::new();
+            push_scope(&mut human, &mut lines, TOUCHES_SCOPE);
+            payload.insert("result".into(), json!({"scope": {SCOPE_LINES: lines}}));
             // Output validation V2 (§4.6, F23): the routine count is
             // transitive; the sites that touch the table directly are counted
             // apart, workspace and dependency sites apart, and listed (a listed
@@ -3079,17 +3126,21 @@ fn render_query_touches_body(
             human.push_str(&format!("  defined at {}:{}\n", rr.file, shown(rr.line)));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
             // Round-2 G27: the dependency-write clause only when the cone
-            // enters dependency code.
-            let enters = beyond.as_ref().is_none_or(|b| {
-                b.entry.unresolved_traversal.dependency_routines > 0
-                    || b.rollup.totals.entry_points > 0
-                    || b.rollup.totals.crossing_sites > 0
-            });
-            human.push_str(match (&beyond, enters) {
-                (Some(_), true) => TOUCHES_SCOPE_LINE_CONE,
-                (Some(_), false) => "  scope: dependency code: none reached\n",
-                (None, _) => TOUCHES_SCOPE_LINE,
-            });
+            // enters dependency code (TLS-49: the one check effects uses too).
+            let enters = enters_dependency_code(beyond.as_ref(), &[], |_| false);
+            let mut lines = Vec::new();
+            push_scope(
+                &mut human,
+                &mut lines,
+                match (&beyond, enters, cone_cut_short(beyond.as_ref())) {
+                    (Some(_), true, _) => TOUCHES_SCOPE_CONE,
+                    // TLS-49 review sol r1: cut short is not "entered".
+                    (Some(_), false, true) => "dependency code: none reached (search cut short)",
+                    (Some(_), false, false) => "dependency code: none reached",
+                    (None, _, _) => TOUCHES_SCOPE,
+                },
+            );
+            payload.insert("result".into(), json!({"scope": {SCOPE_LINES: lines}}));
 
             let cx = TouchCx {
                 query: &query,
@@ -3521,17 +3572,31 @@ fn key_relevance(
     }
 }
 
+/// The `result.scope` key that carries the body's scope lines to the JSON
+/// header (TLS-49; removed from the document once the header has them).
+const SCOPE_LINES: &str = "lines";
+
+/// TLS-49: the one way a query body states its scope. It prints the
+/// `  scope:` line, which the human header gathers (`query_with_header`), and
+/// records the same text for the JSON header (`query_scope_json`).
+fn push_scope(human: &mut String, lines: &mut Vec<String>, clause: &str) {
+    human.push_str(&format!("  scope: {clause}\n"));
+    lines.push(clause.to_string());
+}
+
 /// Round 2 G62: what a query effects answer with no operation is about.
 const ZERO_OPS_SCOPE: &str =
     "record operations only; not page-context restrictions or non-record effects";
 
-/// The scope line every routine-scoped touches answer prints after its title.
-const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code\n";
+/// The scope a routine-scoped touches answer states when the capability cone
+/// was not read.
+const TOUCHES_SCOPE: &str = "per operation, one routine into dependency code";
 
-/// [`TOUCHES_SCOPE_LINE`] when the capability cone was read (wave 3a): the
-/// writes beyond each dependency entry point follow the whole cone.
-const TOUCHES_SCOPE_LINE_CONE: &str = "  scope: dependency code: full cone for physical writes, \
-     grouped per dependency routine entered; per-operation detail one routine deep\n";
+/// [`TOUCHES_SCOPE`] when the capability cone was read and enters dependency
+/// code (wave 3a): the writes beyond each dependency entry point follow the
+/// whole cone.
+const TOUCHES_SCOPE_CONE: &str = "dependency code: full cone for physical writes, grouped per \
+     dependency routine entered; per-operation detail one routine deep";
 
 /// The default human list cap for touches (spec §3.8 rule 4's shape: the cap,
 /// or every item when there are at most a quarter more). `--all` lists all.
@@ -4046,6 +4111,15 @@ fn absence_reasons(
                     ),
                 ));
             }
+            // TLS-49 review Fable r4: a search cut short at its limit decides
+            // nothing past it, so a miss is not "every candidate decided".
+            if b.entry.unresolved_traversal.truncated {
+                out.push((
+                    json!({"kind": "search-cut-short"}),
+                    "the cone search was cut short at its limit; code past it was not checked"
+                        .to_string(),
+                ));
+            }
             if unresolved == 0 && b.entry.coverage_status != "complete" {
                 out.push((
                     json!({"kind": "coverage-incomplete", "status": b.entry.coverage_status,
@@ -4082,6 +4156,8 @@ fn render_touches_down(
 ) {
     let beyond_writes = cone.map(Beyond::writes).unwrap_or_default();
     let beyond = beyond_of_table(&beyond_writes, table_id);
+    // TLS-49: the scope line's fact (the caller decides it the same way).
+    let (index_token, index_depth_text) = index_depth(enters_dependency_code(cone, &[], |_| false));
     let query = cx.query;
     let touches_down = query.touches_table(rix, table_id);
     let witnesses = query.touches(rix, table_id);
@@ -4151,7 +4227,7 @@ fn render_touches_down(
         // `beyond` when the whole cone may write it past an entry point.
         down["absence"] = json!({
             "answer": if beyond_n > 0 { "beyond" } else if reasons.is_empty() { "no" } else { "unknown" },
-            "index": "operations-one-routine-deep",
+            "index": index_token,
             "reasons": reasons.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
         });
     }
@@ -4159,18 +4235,20 @@ fn render_touches_down(
 
     if !touches_down {
         human.push_str(&if beyond_n > 0 {
-            "  down: no indexed touch (per operation, one routine into dependency code); the \
-             whole cone may write it beyond dependency calls (below)\n"
-                .to_string()
+            format!(
+                "  down: no indexed touch{index_depth_text}; the whole cone may write it beyond \
+                 dependency calls (below)\n"
+            )
         } else if reasons.is_empty() {
             "  down: no (every candidate decided) — no operation in this routine's cone touches \
              the table (the cone stays in workspace code, every call resolved, no table left \
              unresolved)\n"
                 .to_string()
         } else {
-            "  down: unknown — no indexed touch observed (per operation, one routine into \
-             dependency code), which is not proof of absence:\n"
-                .to_string()
+            format!(
+                "  down: unknown — no indexed touch observed{index_depth_text}, which is not \
+                 proof of absence:\n"
+            )
         });
         if beyond_n == 0 {
             for (_, text) in &reasons {
@@ -5341,7 +5419,7 @@ fn render_query_effects_body(
             "tablesOnlyBeyond": beyond_tables.difference(&own_write_tables).count(),
         },
         "beyondEntryPoints": beyond_entry_points,
-        "scope": scope_value(beyond.is_some()),
+        "scope": Value::Null,
     });
     // Step 1b, additive: how many rows each route judgement marks.
     let mut summary = summary;
@@ -5378,13 +5456,17 @@ fn render_query_effects_body(
     });
     // Engine limits B8: the operations are inventoried one dependency
     // routine deep, which limits them only when the cone enters dependency
-    // code. When it enters none (the cone was read, its search was not cut
-    // short, and no operation is dependency code's), every family is the
-    // whole cone, and only the calls not resolved and open-world dispatches
-    // block it.
+    // code. When it enters none (the cone was read and no operation is
+    // dependency code's), every family is the whole cone, and only the calls
+    // not resolved, open-world dispatches and a search cut short at its limit
+    // (TLS-49: its own fact, not entry) block it.
     let enters_dependency = enters_dependency_code(beyond.as_ref(), &effects, |op| {
         ops.in_dependency(op, substrate.resolved())
     });
+    // TLS-49: the summary's scope token states the same fact as the scope line.
+    summary["scope"] = scope_value(beyond.is_some(), enters_dependency).into();
+    // TLS-49 review sol r1: a search cut short is its own fact (not "entered").
+    let cut_short = cone_cut_short(beyond.as_ref());
     let family_scope = |what: &str| {
         if enters_dependency {
             json!({
@@ -5394,16 +5476,23 @@ fn render_query_effects_body(
                 "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
             })
         } else {
-            let blocked = call_not_resolved + open_world > 0;
+            let mut reasons = Vec::new();
+            if call_not_resolved + open_world > 0 {
+                reasons.push(format!("calls not resolved and open-world interface dispatches may reach {what} the cone does not list"));
+            }
+            if cut_short {
+                reasons.push(format!("the cone search was cut short at its limit, so whether code past it enters dependency code (where {what} are indexed one routine deep) is not known"));
+            }
+            let mut blockers = json!({"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world});
+            // Only when it happened, so no existing answer gains a key.
+            if cut_short {
+                blockers["searchCutShort"] = 1.into();
+            }
             json!({
                 "depth": "wholeCone",
-                "inventory": if blocked { "notExhaustive" } else { "exhaustive" },
-                "reasons": if blocked {
-                    json!([format!("calls not resolved and open-world interface dispatches may reach {what} the cone does not list")])
-                } else {
-                    json!([])
-                },
-                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
+                "inventory": if reasons.is_empty() { "exhaustive" } else { "notExhaustive" },
+                "reasons": reasons,
+                "blockers": blockers,
             })
         }
     };
@@ -5415,16 +5504,28 @@ fn render_query_effects_body(
     if beyond.is_some() {
         families.insert(
             "beyondDependencyCalls".into(),
-            json!({
-                "depth": "wholeCone",
-                "inventory": if call_not_resolved + open_world == 0 { "exhaustive" } else { "notExhaustive" },
-                "reasons": if call_not_resolved + open_world == 0 {
-                    json!([])
-                } else {
-                    json!(["calls not resolved and open-world interface dispatches may reach writes the cone does not list"])
-                },
-                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
-            }),
+            {
+                let mut reasons = Vec::new();
+                if call_not_resolved + open_world > 0 {
+                    reasons.push("calls not resolved and open-world interface dispatches may reach writes the cone does not list");
+                }
+                // TLS-49 review Fable r4: this family is the cone's own read,
+                // so a cut-short search limits it whether or not the cone
+                // enters dependency code.
+                if cut_short {
+                    reasons.push("the cone search was cut short at its limit; writes past it are not listed");
+                }
+                let mut blockers = json!({"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world});
+                if cut_short {
+                    blockers["searchCutShort"] = 1.into();
+                }
+                json!({
+                    "depth": "wholeCone",
+                    "inventory": if reasons.is_empty() { "exhaustive" } else { "notExhaustive" },
+                    "reasons": reasons,
+                    "blockers": blockers,
+                })
+            },
         );
     }
     let payload = json!({
@@ -5523,14 +5624,18 @@ fn render_query_effects_body(
         .collect();
     // Engine limits B8: a cone that enters no dependency code was searched
     // whole; only the calls it could not follow are left out.
-    let whole_cone_search = crate::engine::vocab::none_observed(
-        "the whole cone",
-        if call_not_resolved + open_world > 0 {
-            "calls not resolved"
-        } else {
-            ""
-        },
-    );
+    // What a whole-cone search did not reach: one text for the absence lines
+    // and the scope line (TLS-49: a cut-short search is named here, not as
+    // dependency entry).
+    let not_searched = [
+        (call_not_resolved + open_world > 0).then_some("calls not resolved"),
+        cut_short.then_some("beyond the cone's search limit"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    let whole_cone_search = crate::engine::vocab::none_observed("the whole cone", &not_searched);
     let write_search = if !enters_dependency {
         whole_cone_search.clone()
     } else if beyond.is_some() {
@@ -5619,47 +5724,46 @@ fn render_query_effects_body(
             }
         }
     }
-    if !enters_dependency {
+    // TLS-49: every scope line goes through `push_scope`, so the JSON header
+    // states exactly what the human one does. ENG-40 (L1) builds on this text.
+    let mut scope_lines = Vec::new();
+    let depth_scope = if !enters_dependency {
         // Engine limits B8 (TLS-48): no dependency code entered, so no depth
         // clause; the search is the whole cone, as the absence lines above say.
-        // ENG-40 (L1) builds on this text; keep it aligned with
-        // `query_scope_json`'s header scope.
         // Pinned by the `cli_query_differential` goldens (discrimination
         // 2026-11-13: `if false` here fails `query_effects_event_subscriber_via`
         // and `query_effects_full_down_list_with_via`; restored, passes).
-        human.push_str(&format!(
-            "  scope: reads, locks, validate, writes: the whole cone, no dependency code \
-             entered{}; operations and routes the literal arguments rule out are listed and \
-             marked (explain and prove drop them)\n",
-            if call_not_resolved + open_world > 0 {
-                " (not searched: calls not resolved)"
+        format!(
+            "reads, locks, validate, writes: the whole cone, no dependency code entered{}; \
+             operations and routes the literal arguments rule out are listed and marked \
+             (explain and prove drop them)",
+            if not_searched.is_empty() {
+                String::new()
             } else {
-                ""
+                format!(" (not searched: {not_searched})")
             }
-        ));
+        )
     } else if beyond.is_some() {
         // Wave 3a: the writes beyond each entry point are the cone's, read
         // as explain reads them; the per-operation rows keep L4's depth.
-        // §5.2 (F61): the depth and inventory of each operation family; the
-        // header's scope clause (§5.3: the static prose is in the tool
-        // description).
-        human.push_str(
-            "  scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; \
-             writes beyond dependency calls: whole cone with literal arguments, grouped per \
-             dependency routine entered; operations and routes the literal arguments rule out \
-             are listed and marked (explain and prove drop them)\n",
-        );
+        // §5.2 (F61): the depth and inventory of each operation family.
+        "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
+         beyond dependency calls: whole cone with literal arguments, grouped per dependency \
+         routine entered; operations and routes the literal arguments rule out are listed and \
+         marked (explain and prove drop them)"
+            .to_string()
     } else {
-        human.push_str(
-            "  scope: reads, locks, validate, writes: one dependency routine deep, not exhaustive \
-             beyond (explain and prove follow the whole cone); operations ruled out by literal \
-             arguments are listed (explain and prove drop them)\n",
-        );
-    }
+        "reads, locks, validate, writes: one dependency routine deep, not exhaustive beyond \
+         (explain and prove follow the whole cone); operations ruled out by literal arguments \
+         are listed (explain and prove drop them)"
+            .to_string()
+    };
+    push_scope(&mut human, &mut scope_lines, &depth_scope);
     // Round 2 G62: a zero-operation answer says what it is about.
     if effects.is_empty() {
-        human.push_str(&format!("  scope: {ZERO_OPS_SCOPE}\n"));
+        push_scope(&mut human, &mut scope_lines, ZERO_OPS_SCOPE);
     }
+    payload["result"]["scope"][SCOPE_LINES] = json!(scope_lines);
     let ops_text = |m: &BTreeMap<&str, usize>| -> String {
         let mut v: Vec<(&&str, &usize)> = m.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
@@ -6005,7 +6109,7 @@ fn render_query_effects_body(
     // r3 §5.1 (A P1): the envelope's summary and its index row carry the
     // analysis status, its reasons and the two scopes apart: the operations
     // (one dependency routine deep) and the deep writes (the whole cone).
-    let status = effects_status(&query_scope_json("query.effects", &payload, deps));
+    let status = effects_status(&query_scope_json(&payload, deps));
     if let (Value::Object(m), Value::Object(s)) = (&mut summary, &status) {
         for (k, v) in s {
             m.insert(k.clone(), v.clone());
@@ -7058,6 +7162,22 @@ fn render_field_touches(
 mod tests {
     use super::*;
     use crate::program::model::workspace::{ModelDeclarationOnlyRoutine, ModelObject, ModelTable};
+
+    /// TLS-49 (d): one "enters dependency code" rule for query effects and
+    /// query touches. Hand-stated: nothing counted reads as not entered; each
+    /// dependency count alone reads as entered. A cut-short search is not an
+    /// input (review sol r1; `cone_cut_short`, pinned by
+    /// `query_cut_short_without_dependency_says_so` in the cli tests).
+    ///
+    /// DISCRIMINATION (2026-11-13): dropping the `crossing_sites` term fails
+    /// at "a crossing site alone"; restored, passes.
+    #[test]
+    fn the_cone_enters_dependency_code_on_any_dependency_count() {
+        assert!(!cone_enters(0, 0, 0), "nothing counted");
+        assert!(cone_enters(1, 0, 0), "a routine visited");
+        assert!(cone_enters(0, 1, 0), "an entry point alone");
+        assert!(cone_enters(0, 0, 1), "a crossing site alone");
+    }
 
     fn site(op: &str, line: u32, key: Option<&'static str>) -> TableSite {
         TableSite {

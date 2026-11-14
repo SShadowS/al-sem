@@ -209,6 +209,9 @@ pub struct Scope {
     pub search_root: Option<(PathBuf, bool)>,
     /// The `app.json` files auto-discovery read (the workspace's excluded).
     pub searched: usize,
+    /// The folders auto-discovery did not enter because git ignores them
+    /// (TLS-49), so "no test app found" can say a test app may sit there.
+    pub ignored: usize,
     /// The `.al-sem.json` `testApps` this discovery read
     /// ([`test_config_identity`]), also when the call named its own test
     /// apps: `alsem_status` compares it with the disk (the `test-config`
@@ -282,6 +285,7 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         incomplete: Vec::new(),
         search_root: None,
         searched: 0,
+        ignored: 0,
         test_config: test_config_identity(configured.as_deref()),
     };
     let named = match &req.test_apps {
@@ -568,7 +572,9 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
     // Kept although ignored: a folder holding the workspace, and a repository
     // of its own (a nested clone is usually ignored by the outer repository;
     // it is read as an app, else `other_project` stops there).
+    let before = subdirs.len();
     subdirs.retain(|d| !ignored.contains(d) || workspace.starts_with(d) || d.join(".git").exists());
+    scope.ignored += before - subdirs.len();
     subdirs.sort();
     for d in subdirs {
         let honor = honor_ignore && !ignored.contains(&d);
@@ -702,14 +708,21 @@ impl Scope {
                 self.incomplete.join("; ")
             ),
             (None, Origin::Auto) => format!(
-                "no app under the {} depends on this one with a test codeunit (searched {} app.json {})",
+                "no app under the {} depends on this one with a test codeunit (searched {} app.json {}{})",
                 if self.search_root.as_ref().is_none_or(|r| r.1) {
                     "git top level"
                 } else {
                     "project folder (its parent holds .al-sem-projects)"
                 },
                 self.searched,
-                if self.searched == 1 { "file" } else { "files" }
+                if self.searched == 1 { "file" } else { "files" },
+                // TLS-49: a test app in an ignored folder is not found;
+                // say so, so this reads apart from "none exists".
+                match self.ignored {
+                    0 => String::new(),
+                    1 => "; 1 folder git ignores was not searched".to_string(),
+                    n => format!("; {n} folders git ignores were not searched"),
+                }
             ),
         }
     }

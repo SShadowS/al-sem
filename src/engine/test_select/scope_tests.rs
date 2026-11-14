@@ -334,7 +334,8 @@ fn test_app(dir: &Path, id: &str, name: &str) {
 /// DISCRIMINATION (2026-11-13): `walk` without the `retain` on `ignored`
 /// fails at the first `names` ("Copy Tests" and "Out Tests" found); passing
 /// `honor_ignore = true` to every child fails at the second (no "Scratch
-/// Tests"); restored, passes.
+/// Tests"); restored, passes. TLS-49: not counting the skipped folders
+/// (`scope.ignored += 0 * …`) fails at `ignored` (0, not 2); restored, passes.
 #[test]
 fn discovery_skips_folders_git_ignores() {
     let t = git_repo();
@@ -361,6 +362,27 @@ fn discovery_skips_folders_git_ignores() {
     let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["Prod Tests"]);
     assert_eq!(s.searched, 1, "Test only");
+    assert_eq!(s.ignored, 2, "build and Out (TLS-49)");
+
+    // TLS-49 (a): with no test app found, the answer names the folders it
+    // skipped, so "none exists" reads apart from "yours is ignored".
+    let t2 = git_repo();
+    let r2 = t2.path();
+    std::fs::write(r2.join(".gitignore"), "build/\n").unwrap();
+    app(&r2.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r2.join("build/Copy"),
+        "66666666-6666-6666-6666-666666666666",
+        "Copy Tests",
+    );
+    let s2 = discover(&r2.join("App"), &ScopeRequest::default());
+    assert!(s2.apps.is_empty());
+    assert!(
+        s2.sibling_summary()
+            .ends_with("(searched 0 app.json files; 1 folder git ignores was not searched)"),
+        "{}",
+        s2.sibling_summary()
+    );
 
     // A workspace in an ignored folder still finds its sibling there.
     app(&r.join("scratch/App"), PROD, "Prod", &[]);

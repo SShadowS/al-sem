@@ -182,6 +182,7 @@ pub fn scope_json(s: &Scope) -> Value {
         "searchRoot": s.search_root.as_ref().map(|r| r.0.to_string_lossy().to_string()),
         "searchRootIsGitTop": s.search_root.as_ref().map(|r| r.1),
         "searched": s.searched,
+        "ignoredByGit": s.ignored,
         "apps": s.apps.iter().map(|a| json!({
             "name": a.name, "root": a.root.to_string_lossy(), "appId": a.app_id,
             "files": a.files, "testCodeunits": a.test_codeunits,
