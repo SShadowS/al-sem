@@ -351,13 +351,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A cone search cut short at its limit is its own fact, not dependency entry** (review sol
   r1). Effects used to count it as entry. In effects, a cut-short cone that enters no
   dependency keeps the whole-cone scope and says "(not searched: beyond the cone's search
-  limit)". Its families become `notExhaustive`, with a reason and the blocker
+  limit)". Its four operation families become `notExhaustive`, with a reason and the blocker
   `searchCutShort: 1`; that key is present only when it happened. The header then reads
-  "analysis partial". In touches it reads "dependency code: none reached (search cut short)".
-  Pinned by `query_cut_short_without_dependency_says_so`, a 70-routine workspace chain past
-  the 64-hop limit, in both formats, with a discrimination proof. A cone that enters
-  dependency code and is also cut short is unchanged; its depth already says it is not
-  exhaustive.
+  "analysis partial". The `beyondDependencyCalls` family, the cone's own read, gets the same
+  reason and key whenever the search was cut short, whether or not the cone enters dependency
+  code (review Fable r4). In touches the scope reads "dependency code: none reached (search cut
+  short)", and a miss past the cut is `unknown` with the reason `search-cut-short`, no longer
+  "no (every candidate decided)". Pinned by `query_cut_short_without_dependency_says_so`, a
+  70-routine workspace chain past the 64-hop limit, in both formats, with one discrimination
+  proof per rule (four).
 - **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
   scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
   when no test app is found.

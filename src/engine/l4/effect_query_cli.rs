@@ -772,14 +772,14 @@ impl<'c> Beyond<'c> {
 
 /// Whether the root's cone enters dependency code (engine limits B8), so
 /// that `query effects`' one-dependency-routine-deep inventory is a limit of
-/// the answer: true when the cone was not read (not known), when its search
-/// was cut short, when it visits a dependency routine (the tree's boundary
-/// rule, as explain's `dependency code: none reached`), or when an operation
-/// is dependency code's (`in_dependency`). TLS-49: also when the cone's
-/// rollup counts a dependency entry point or crossing site; `query touches`
-/// read those and effects did not, so the two answered the same cone
-/// differently. One check now serves both, the union of the two (the safe
-/// side: an answer that says less).
+/// the answer: true when the cone was not read (not known), when it visits a
+/// dependency routine (the tree's boundary rule, as explain's `dependency
+/// code: none reached`), or when an operation is dependency code's
+/// (`in_dependency`). TLS-49: also when the cone's rollup counts a dependency
+/// entry point or crossing site; `query touches` read those and effects did
+/// not, so the two answered the same cone differently. One check now serves
+/// both. A search cut short at its limit is NOT entry (review sol r1): it is
+/// its own fact, [`cone_cut_short`].
 fn enters_dependency_code(
     cone: Option<&Beyond<'_>>,
     effects: &[TableTouch<'_>],
@@ -4104,6 +4104,15 @@ fn absence_reasons(
                     ),
                 ));
             }
+            // TLS-49 review Fable r4: a search cut short at its limit decides
+            // nothing past it, so a miss is not "every candidate decided".
+            if b.entry.unresolved_traversal.truncated {
+                out.push((
+                    json!({"kind": "search-cut-short"}),
+                    "the cone search was cut short at its limit; code past it was not checked"
+                        .to_string(),
+                ));
+            }
             if unresolved == 0 && b.entry.coverage_status != "complete" {
                 out.push((
                     json!({"kind": "coverage-incomplete", "status": b.entry.coverage_status,
@@ -5440,10 +5449,10 @@ fn render_query_effects_body(
     });
     // Engine limits B8: the operations are inventoried one dependency
     // routine deep, which limits them only when the cone enters dependency
-    // code. When it enters none (the cone was read, its search was not cut
-    // short, and no operation is dependency code's), every family is the
-    // whole cone, and only the calls not resolved and open-world dispatches
-    // block it.
+    // code. When it enters none (the cone was read and no operation is
+    // dependency code's), every family is the whole cone, and only the calls
+    // not resolved, open-world dispatches and a search cut short at its limit
+    // (TLS-49: its own fact, not entry) block it.
     let enters_dependency = enters_dependency_code(beyond.as_ref(), &effects, |op| {
         ops.in_dependency(op, substrate.resolved())
     });
@@ -5465,7 +5474,7 @@ fn render_query_effects_body(
                 reasons.push(format!("calls not resolved and open-world interface dispatches may reach {what} the cone does not list"));
             }
             if cut_short {
-                reasons.push(format!("the cone search was cut short at its limit, so {what} deeper in the cone are not listed"));
+                reasons.push(format!("the cone search was cut short at its limit, so whether code past it enters dependency code (where {what} are indexed one routine deep) is not known"));
             }
             let mut blockers = json!({"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world});
             // Only when it happened, so no existing answer gains a key.
@@ -5488,16 +5497,28 @@ fn render_query_effects_body(
     if beyond.is_some() {
         families.insert(
             "beyondDependencyCalls".into(),
-            json!({
-                "depth": "wholeCone",
-                "inventory": if call_not_resolved + open_world == 0 { "exhaustive" } else { "notExhaustive" },
-                "reasons": if call_not_resolved + open_world == 0 {
-                    json!([])
-                } else {
-                    json!(["calls not resolved and open-world interface dispatches may reach writes the cone does not list"])
-                },
-                "blockers": {"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world},
-            }),
+            {
+                let mut reasons = Vec::new();
+                if call_not_resolved + open_world > 0 {
+                    reasons.push("calls not resolved and open-world interface dispatches may reach writes the cone does not list");
+                }
+                // TLS-49 review Fable r4: this family is the cone's own read,
+                // so a cut-short search limits it whether or not the cone
+                // enters dependency code.
+                if cut_short {
+                    reasons.push("the cone search was cut short at its limit; writes past it are not listed");
+                }
+                let mut blockers = json!({"callNotResolved": call_not_resolved, "interfaceDispatchOpenWorld": open_world});
+                if cut_short {
+                    blockers["searchCutShort"] = 1.into();
+                }
+                json!({
+                    "depth": "wholeCone",
+                    "inventory": if reasons.is_empty() { "exhaustive" } else { "notExhaustive" },
+                    "reasons": reasons,
+                    "blockers": blockers,
+                })
+            },
         );
     }
     let payload = json!({

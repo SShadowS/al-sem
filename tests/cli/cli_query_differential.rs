@@ -1529,9 +1529,12 @@ fn query_touches_miss_index_states_the_scope_fact() {
 /// says what it did not search; touches says none reached, cut short; neither
 /// claims a dependency depth, and both formats agree.
 ///
-/// DISCRIMINATION (2026-11-13): `cone_enters` counting `truncated` again (the
-/// union before this fix) gives the dependency-depth wording here; restored,
-/// passes.
+/// DISCRIMINATION (2026-11-13), each restored after and passing:
+/// - `cone_enters` counting `truncated` again (the union before this fix)
+///   gives the dependency-depth wording;
+/// - `of_families` not reading `searchCutShort` leaves `analysis: complete`;
+/// - `beyondDependencyCalls` without its cut-short reason stays `exhaustive`;
+/// - `absence_reasons` without `search-cut-short` answers the miss `no`.
 #[test]
 fn query_cut_short_without_dependency_says_so() {
     let dir = tempfile::tempdir().unwrap();
@@ -1542,7 +1545,7 @@ fn query_cut_short_without_dependency_says_so() {
     .unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     let mut al = String::from(
-        "table 50500 \"Q Deep\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50501 \"Q Chain\"\n{\n",
+        "table 50500 \"Q Deep\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ntable 50502 \"Q Untouched\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { Clustered = true; } }\n}\ncodeunit 50501 \"Q Chain\"\n{\n",
     );
     for i in 0..70 {
         al.push_str(&format!(
@@ -1571,6 +1574,17 @@ fn query_cut_short_without_dependency_says_so() {
     let reads = &v["payload"]["result"]["scope"]["families"]["reads"];
     assert_eq!(reads["blockers"]["searchCutShort"], 1, "{reads}");
     assert_eq!(reads["inventory"], "notExhaustive", "{reads}");
+    // The blocker reaches the header in both formats (sol r2).
+    assert_eq!(
+        v["payload"]["result"]["scope"]["analysis"], "partial",
+        "{}",
+        v["payload"]["result"]["scope"]
+    );
+    let (human, _) = run_alsem(&effects, "human");
+    assert!(
+        human.contains("analysis partial") && human.contains("the cone search was cut short"),
+        "{human}"
+    );
 
     let touches = [
         "query",
@@ -1589,4 +1603,33 @@ fn query_cut_short_without_dependency_says_so() {
         j.starts_with("dependency code: none reached (search cut short);"),
         "{j}"
     );
+
+    // Fable r4: the cone's own family is limited too, and a miss past a cut
+    // is not "every candidate decided".
+    let beyond = &v["payload"]["result"]["scope"]["families"]["beyondDependencyCalls"];
+    assert_eq!(beyond["blockers"]["searchCutShort"], 1, "{beyond}");
+    assert_eq!(beyond["inventory"], "notExhaustive", "{beyond}");
+    let miss = [
+        "query",
+        "touches",
+        &ws,
+        "--table",
+        "Q Untouched",
+        "--from",
+        "Q Chain.P0",
+        "--direction",
+        "down",
+    ];
+    let (json, _) = run_alsem(&miss, "json");
+    let m: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let absence = &m["payload"]["down"]["absence"];
+    assert_eq!(absence["answer"], "unknown", "{absence}");
+    assert!(
+        absence["reasons"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|x| x["kind"] == "search-cut-short")),
+        "{absence}"
+    );
+    let (human, _) = run_alsem(&miss, "human");
+    assert!(!human.contains("every candidate decided"), "{human}");
 }
