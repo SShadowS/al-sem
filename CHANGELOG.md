@@ -122,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its `IsHandled := true` as "may set" (its no-branch fast path said "must set"). It also reads
   `has_branching: true`, which RecordRef temp-state derivation, `event_flow` and d61 took as a
   straight-line proof when `false`.
-- On CDO (`bc3ccb18`, against master `492b1864`): findings at both scopes and the call-graph
+- On CDO (`bc3ccb18`, against master `e86d73fd`): findings at both scopes and the call-graph
   histogram (0 unknown edges) do not move. Of 34,205 routines with a body (5,479 in the workspace),
   11 are untrusted, none parse-incomplete (`eng14_cdo_untrusted_census`):
   - 7 (6 in Base Application, among them `Sales-Post::PostSalesLine`; 1 in System Application) are
