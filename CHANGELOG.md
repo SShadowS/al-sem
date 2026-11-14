@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Measured on CDO (2026-11-14, kraken server1, `cdo` profile): `--only harness,l4`
   took 213 s wall (build of the two targets 141 s, `program_resolve_harness` 51 s,
   `l4_summary_differential` 20 s), peak 18.4 GB container memory, 8.1 GB the gate's
-  own processes; verdict `PASS (SUBSET --only harness,l4 ...)`.
+  own processes; verdict `PASS (SUBSET --only harness,l4 ...)`. Warm (build fresh)
+  on the final head: 77 s wall (harness 55 s, l4 22 s), peak 16.1 GB container,
+  8.1 GB the gate's own.
 - Tests: `gate_scripts::cdo_gate_only_runs_and_judges_just_its_subset` (dry run,
   refusals, subset summary, every phase's build selector) and
   `cdo_gate_only_run_builds_and_runs_just_its_phases` (a real `harness,l4,lsp,output`
