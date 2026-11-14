@@ -184,8 +184,9 @@ landing change 3.
    their count and the human line says so. They are not silently folded into canonical totals.
 3. **The scope line says what is not counted.** In human and JSON scope, once per answer:
    test code is not in these callers (it is reported under `tests:`); the `roots.config` entry
-   overlay is not applied; `local` includes dependencies loaded from source folders when there
-   are any. `direct code callers: none found` carries the test-code qualifier.
+   overlay is not applied (since TLS-54, 2026-11-14, it is, and the line says "entries include
+   the roots.config overlay's"); `local` includes dependencies loaded from source folders when
+   there are any. `direct code callers: none found` carries the test-code qualifier.
 4. **The "event publishers among its ancestors" human block** is either rendered from
    classified states (with `[tier, relation]`) or dropped. The direct `raised by:` line stays.
 5. **One program total in JSON.** `programEntries` becomes the canonical count (the same one as

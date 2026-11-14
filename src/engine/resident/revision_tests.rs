@@ -1342,6 +1342,7 @@ fn the_resident_up_walk_runs_on_the_revisions_count() {
         assume_no_dependents: false,
         detail: false,
         single_app: false,
+        config_entries: Vec::new(),
     };
     let held = |rev: &Revision, n: usize, timeout: u64| {
         *rev.reach_probe().first_wave.lock().unwrap() =

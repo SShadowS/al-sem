@@ -35,6 +35,7 @@ fn up_part(ws: &std::path::Path, single_app: bool) -> serde_json::Value {
             assume_no_dependents: false,
             detail: true,
             single_app,
+            config_entries: Vec::new(),
         },
     );
     let out = crate::engine::batch::standalone_output(&job);

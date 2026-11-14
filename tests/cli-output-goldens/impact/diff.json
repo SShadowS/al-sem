@@ -377,7 +377,7 @@
       ],
       "limits": [],
       "reasons": [],
-      "scope": "callers and entries over the whole program, dependency code in its own tier; test code is not in these callers (tests: reports it); the roots.config entry overlay is not applied; effects through every resolved call with literal arguments",
+      "scope": "callers and entries over the whole program, dependency code in its own tier; test code is not in these callers (tests: reports it); entries include the roots.config overlay's; effects through every resolved call with literal arguments",
       "universe": "cross-app"
     },
     "selection": {

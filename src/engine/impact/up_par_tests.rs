@@ -109,6 +109,7 @@ fn run(f: &Fx, roots: &[String], workers: ReachWorkers, captions: &Captions) -> 
             keep: Keep::new(false),
             cancel: None,
             workers,
+            config_entries: &[],
         },
         captions,
     )

@@ -89,6 +89,14 @@ impl EntryInventory {
     /// sites.
     #[must_use]
     pub fn of(g: &SitedGraph) -> EntryInventory {
+        Self::of_with(g, &HashMap::new())
+    }
+
+    /// [`Self::of`] with the roots.config overlay's kinds per node
+    /// (`reverse::config_entries_of`) added to each node's own root kinds
+    /// (TLS-54: impact's up part, which has no model).
+    #[must_use]
+    pub fn of_with(g: &SitedGraph, extra: &HashMap<NodeIx, u16>) -> EntryInventory {
         let mut inv = EntryInventory::default();
         let mut ids: HashMap<EntryKey, u32> = HashMap::new();
         let mut intern = |inv: &mut EntryInventory, key: EntryKey, witness: NodeIx| -> u32 {
@@ -127,7 +135,8 @@ impl EntryInventory {
             _ => g.stable_id(n).map_or(EntryKey::Node(n), EntryKey::Stable),
         };
         for n in 0..g.node_count() as u32 {
-            let mut mask = EntryKind::of_root_kinds(g.root_kinds(n))
+            let own = g.root_kinds(n) | extra.get(&n).copied().unwrap_or(0);
+            let mut mask = EntryKind::of_root_kinds(own)
                 .into_iter()
                 .fold(0u16, |m, k| m | kind_bit(k));
             let background = g.is_background_target(n);

@@ -559,6 +559,11 @@ struct ImpactCli {
     #[arg(long = "root-id", hide = true)]
     root_id: Vec<String>,
 
+    /// Internal (`--part up`, TLS-54): a roots.config entry as
+    /// `<StableRoutineId>=<kind mask>`, from the main part's `configEntries`.
+    #[arg(long = "config-entry", hide = true)]
+    config_entry: Vec<String>,
+
     /// Internal (`--part main`): print each root's semantic summary, the
     /// contract snapshot and the packages read (a side of a before/after).
     #[arg(long = "summaries", hide = true, default_value_t = false)]
@@ -2560,11 +2565,29 @@ fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
             }
         }
         Some("up") => {
+            let mut config_entries: Vec<(String, u16)> = Vec::new();
+            for e in &t.config_entry {
+                match e.rsplit_once('=').map(|(id, m)| (id, m.parse::<u16>())) {
+                    Some((id, Ok(mask))) if !id.is_empty() => {
+                        config_entries.push((id.to_string(), mask));
+                    }
+                    _ => {
+                        return failed(
+                            format!(
+                                "al-sem: impact: --config-entry '{e}' is not <StableRoutineId>=<kind mask>"
+                            ),
+                            exit::CONFIG_ERROR,
+                            1,
+                        );
+                    }
+                }
+            }
             let ask = UpAsk {
                 roots: t.root_id.clone(),
                 assume_no_dependents: t.no_dependents,
                 detail: t.detail,
                 single_app: t.single_app,
+                config_entries,
             };
             ready(
                 &t.workspace.clone(),

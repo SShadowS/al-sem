@@ -400,6 +400,9 @@ struct NodeBest {
 struct Shared<'g> {
     inv: &'g EntryInventory,
     changed: HashSet<u32>,
+    /// TLS-54: the roots.config overlay's kinds per node (empty without a
+    /// config), every walk's `extra_entries`.
+    extra: &'g HashMap<NodeIx, u16>,
 }
 
 /// One walk's visitor (one root, or the union).
@@ -442,11 +445,23 @@ struct Up<'g> {
 impl<'g> Shared<'g> {
     /// The answer's shared state: `changed` holds every changed routine's
     /// nodes (each `#if` arm, symbol-only copies too).
+    #[cfg(test)]
     fn new(g: &'g SitedGraph, changed: &BTreeSet<NodeIx>) -> Shared<'g> {
-        let inv = g.entry_inventory();
+        static NONE: std::sync::OnceLock<HashMap<NodeIx, u16>> = std::sync::OnceLock::new();
+        Self::with(g.entry_inventory(), NONE.get_or_init(HashMap::new), changed)
+    }
+
+    /// [`Self::new`] over an inventory and overlay kinds the caller holds
+    /// (TLS-54: the up part's own, when a roots.config names entries).
+    fn with(
+        inv: &'g EntryInventory,
+        extra: &'g HashMap<NodeIx, u16>,
+        changed: &BTreeSet<NodeIx>,
+    ) -> Shared<'g> {
         Shared {
             inv,
             changed: changed.iter().filter_map(|&n| inv.of_node(n)).collect(),
+            extra,
         }
     }
 
@@ -1241,6 +1256,11 @@ pub struct UpArgs<'a> {
     pub cancel: Option<&'a (dyn Fn() -> bool + Sync)>,
     /// How many roots walk at once (TLS-21), stated by the route.
     pub workers: crate::engine::l5::digest_cli::ReachWorkers,
+    /// TLS-54: the roots.config overlay's kinds per StableRoutineId
+    /// (`reverse::config_entry_kinds`, from the main part's model): added to
+    /// the graph's own root kinds, so a configured routine is an entry here
+    /// as it is to `prove`/`explain`.
+    pub config_entries: &'a [(String, u16)],
 }
 
 /// One root's result (TLS-21): its row and what its walk cost.
@@ -1278,10 +1298,11 @@ impl Scratches {
 
 /// A walk's options from the up part's arguments. Each task builds its own:
 /// `WalkOptions` holds a plain `&dyn Fn` and is not `Sync`.
-fn walk_options<'a>(args: &UpArgs<'a>) -> WalkOptions<'a> {
+fn walk_options<'a>(args: &UpArgs<'a>, extra: &'a HashMap<NodeIx, u16>) -> WalkOptions<'a> {
     WalkOptions {
         assume_no_dependents: args.assume_no_dependents,
         cancel: args.cancel.map(|c| c as &dyn Fn() -> bool),
+        extra_entries: (!extra.is_empty()).then_some(extra),
         ..Default::default()
     }
 }
@@ -1296,7 +1317,7 @@ fn walk_root(
     id: &str,
     nodes: &[NodeIx],
 ) -> RootOut {
-    let opts = walk_options(args);
+    let opts = walk_options(args, shared.extra);
     let mut v = Up::new(g, args.keep, nodes, shared);
     let mut scratch = scratches.take(&args.workers);
     let t = std::time::Instant::now();
@@ -1372,14 +1393,22 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
     let started = std::time::Instant::now();
     // Every changed routine's nodes (each `#if` arm, symbol-only copies
     // too): their entries are left out of both sides of every walk's share.
-    let shared = Shared::new(
-        g,
-        &args
-            .roots
-            .iter()
-            .flat_map(|id| g.nodes_with_stable_id(id))
-            .collect(),
-    );
+    let changed: BTreeSet<NodeIx> = args
+        .roots
+        .iter()
+        .flat_map(|id| g.nodes_with_stable_id(id))
+        .collect();
+    // TLS-54: the roots.config overlay's entries (the graph's own root kinds
+    // are the source's only). With any, this answer's inventory counts them.
+    let extra = crate::program::impact_graph::reverse::config_entries_of(g, args.config_entries);
+    let own_inv;
+    let inv = if extra.is_empty() {
+        g.entry_inventory()
+    } else {
+        own_inv = EntryInventory::of_with(g, &extra);
+        &own_inv
+    };
+    let shared = Shared::with(inv, &extra, &changed);
     // After the entry inventory's first build: the window holds the walks.
     let window = walk_window_start(&args.workers);
     // Each root's nodes, in root order; empty: not in the graph.
@@ -1491,7 +1520,13 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
     let t = std::time::Instant::now();
     let ustats = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.union_walk");
-        walk_multi(g, &all_nodes, &walk_options(args), &mut scratch, &mut u)
+        walk_multi(
+            g,
+            &all_nodes,
+            &walk_options(args, shared.extra),
+            &mut scratch,
+            &mut u,
+        )
     };
     walks_us += t.elapsed().as_micros() as u64;
     // Every scratch's capacity: the scratch memory the pass held.
