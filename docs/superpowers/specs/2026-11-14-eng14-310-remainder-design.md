@@ -424,6 +424,10 @@ Two landings, one branch each:
   carries no build condition the call site's own context lacks; otherwise `Unknown` (may raise). The
   same holds for the inner Text calls (`StrSubstNo` …). The mirror (a call only in builds where the
   procedure is absent) also reads `Unknown`: safe, a precision limit (engine limits L38).
+- **An undecided condition is kept whole (review r2).** A `#if` condition that decides no symbol
+  (`X or Y` true, `X and Y` false) used to leave the context empty, which reads as "every build", so
+  a lone `procedure Error` under it read `User` everywhere. `assume_preproc` now records it as one
+  entry named by its text (`("(X or Y)", true)`), which contradicts only its own opposite.
 - **Table scopes read their extensions (review F2).** The implicit-`Rec` table, and a table extension's
   base, count as searched only when neither the table nor any extension of it is symbol-only
   (`full::table_code_not_loaded`, ENG-16's rule): a symbol-only extension's symbols may not list a
