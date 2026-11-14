@@ -304,7 +304,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`OnBeforeValidate`/`OnAfterValidate` too): the compiler has no `Validate` trigger edges, so the
   two new program-only pairs into Base App tableextension 472's field `OnAfterValidate` (CDO
   `InitRecurringDailyJob`, `EnqueueOnHold`) are that known limit (pinned count 41 -> 43; holes doc
-  A11). Found by the landing gate.
+  A11). Found by the landing gate. The verdict now also requires every site of the pair to
+  validate that very field (`SiteFacts::validate_field`, from the call's own argument; a
+  decided FieldRef's field), so a route to another field's trigger stays unexplained
+  (gpt-6.1-sol; test `validate_trigger_verdict_requires_the_sites_field`).
 - Engine limits B11 (new), B9 and B10 updated. Tests:
   `tests/cli/cli_eng15_ext_triggers.rs` (breaks recorded); the adapter test
   `implicit_trigger_to_dependency_has_no_edge` now expects the open edge beside the dependency

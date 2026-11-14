@@ -245,7 +245,8 @@ pub enum Verdict {
     /// Program-only `Trigger` into a field's `OnValidate`: the compiler graph has
     /// no `Validate` trigger edges (S12). Rule: the target is a field-level
     /// trigger of the validate family (`OnValidate`, and a table extension
-    /// field's `OnBeforeValidate`/`OnAfterValidate`, ENG-15).
+    /// field's `OnBeforeValidate`/`OnAfterValidate`, ENG-15) of the field every
+    /// site of the pair validates ([`validate_trigger_explains`]).
     ValidateTrigger,
     /// Program-only `Trigger` from a record operation written without a receiver
     /// (`Insert(true)` on the implicit `Rec`): the compiler graph has no trigger
@@ -422,6 +423,18 @@ fn first_line_disagreements(
 }
 
 /// The verdict for a program-only pair, or `None`.
+/// [`Verdict::ValidateTrigger`]'s rule: `target` is a field-level trigger of the
+/// validate family, and every site of the pair names that field
+/// (`site_fields`, one per program edge; `None` when the site names none).
+fn validate_trigger_explains(target: &RoutineNodeId, site_fields: &[Option<String>]) -> bool {
+    let Some(member) = target.enclosing_member_lc.as_deref() else {
+        return false;
+    };
+    crate::program::resolve::edge::trigger_family(&target.name_lc) == Some("validate")
+        && !site_fields.is_empty()
+        && site_fields.iter().all(|f| f.as_deref() == Some(member))
+}
+
 fn classify_program_only(
     class: EdgeClass,
     pair: &ProgramPair,
@@ -457,11 +470,23 @@ fn classify_program_only(
             // A field's validate-family trigger: `OnValidate`, and (ENG-15) a
             // table extension field's `OnBeforeValidate`/`OnAfterValidate`,
             // which the program reaches since ENG-15; the compiler has no
-            // `Validate` trigger edges at all (A10, A11).
-            if target_id().is_some_and(|t| {
-                crate::program::resolve::edge::trigger_family(&t.name_lc) == Some("validate")
-                    && t.enclosing_member_lc.is_some()
-            }) {
+            // `Validate` trigger edges at all (A10, A11). Only when every site
+            // of the pair validates THAT field (sol round 3): a route to
+            // another field's trigger is a resolver bug, never this limit.
+            let site_field = |f: &SiteFacts| -> Option<String> {
+                f.validate_field
+                    .clone()
+                    .or_else(|| match &f.field_ref_validate {
+                        Some(crate::program::resolve::full::FieldRefValidate::Decided {
+                            field,
+                            ..
+                        }) => Some(field.clone()),
+                        _ => None,
+                    })
+            };
+            let site_fields: Vec<Option<String>> =
+                pair.edges.iter().map(|&i| site_field(&facts(i))).collect();
+            if target_id().is_some_and(|t| validate_trigger_explains(t, &site_fields)) {
                 Some(Verdict::ValidateTrigger)
             } else if all_sites(&|f| f.unqualified_record_op) {
                 Some(Verdict::UnqualifiedRecordOp)

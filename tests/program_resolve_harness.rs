@@ -3414,6 +3414,69 @@ fn fixture_audit_checks_first_lines_and_refuses_repeated_pairs() {
     );
 }
 
+/// ENG-15 (gpt-6.1-sol round 3): the audit's `ValidateTrigger` verdict explains
+/// a program-only pair into a field's validate trigger only when every site of
+/// the pair validates THAT field (`SiteFacts::validate_field`). Stated by hand:
+/// a golden with no pairs makes every program pair program-only; then the
+/// report's `Validate(A, …)` route is redirected to field B's `OnValidate` (a
+/// resolver bug of the wrong-field kind), which must stay unexplained.
+/// Break (2026-11-13): `validate_trigger_explains` ignores `site_fields` ->
+/// the redirected pair is explained as `ValidateTrigger`. Fails; restored, it
+/// passes.
+#[test]
+fn validate_trigger_verdict_requires_the_sites_field() {
+    use al_sem::program::resolve::compiler_golden::{
+        Side, Verdict, fixture_compiler_golden_path, load_compiler_golden, run_compiler_audit,
+    };
+    use al_sem::program::resolve::compiler_oracle::EdgeClass;
+    use al_sem::program::resolve::edge::RouteTarget;
+    fn no_drift(_: &str) {}
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e15e15e0-0000-4000-8000-0000000000cf","name":"E15 VT","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/a.al"),
+        "table 50900 \"VT\"\n{\n    fields\n    {\n        field(1; A; Integer)\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n        field(2; B; Integer)\n        {\n            trigger OnValidate()\n            begin\n            end;\n        }\n    }\n}\ncodeunit 50901 \"VC\"\n{\n    procedure P()\n    var\n        R: Record \"VT\";\n    begin\n        R.Validate(A, 1);\n    end;\n}\n",
+    )
+    .unwrap();
+    let ctx = al_sem::program::resolve::full::build_context(t.path()).expect("context");
+    let mut report =
+        al_sem::program::resolve::full::resolve_full_program_with(&ctx, AbiIntegrity::Skip);
+    let mut golden = load_compiler_golden(&fixture_compiler_golden_path()).expect("fixture golden");
+    golden.pairs.clear();
+    let key = (
+        Side::ProgramOnly,
+        EdgeClass::Trigger,
+        Some(Verdict::ValidateTrigger),
+    );
+    let audit = run_compiler_audit(&ctx, &report, t.path(), Some(&golden), no_drift, None);
+    assert_eq!(
+        audit.disagreements.get(&key),
+        Some(&1),
+        "precondition: Validate(A) into A's OnValidate is explained: {audit:#?}"
+    );
+    let mut redirected = 0;
+    for ce in report.edges.iter_mut() {
+        for r in ce.edge.routes.iter_mut() {
+            if let RouteTarget::Routine(id) = &mut r.target
+                && id.name_lc == "onvalidate"
+                && id.enclosing_member_lc.as_deref() == Some("a")
+            {
+                id.enclosing_member_lc = Some("b".into());
+                redirected += 1;
+            }
+        }
+    }
+    assert_eq!(redirected, 1, "precondition: one route redirected");
+    let audit = run_compiler_audit(&ctx, &report, t.path(), Some(&golden), no_drift, None);
+    assert_eq!(audit.disagreements.get(&key), None, "{audit:#?}");
+    assert!(!audit.unexplained.is_empty(), "{audit:#?}");
+}
+
 // ---------------------------------------------------------------------------
 // Test 14b (1B.3b Task 1 Step 4): fixture — ImplicitTrigger target-set
 // ---------------------------------------------------------------------------

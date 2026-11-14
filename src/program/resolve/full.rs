@@ -237,6 +237,13 @@ pub struct SiteFacts {
     /// never a definite answer. The model carries it on the call's edges
     /// (`CallEdge::starts_object`).
     pub starts_object: crate::program::resolve::dataset::ObjectStart,
+    /// ENG-15 (sol round 3): the field a `Validate(Field, …)` site names,
+    /// folded and unquoted as `TriggerSiteRule::validate_field` reads it from
+    /// the call's own argument (a record operation's, a call result's). The
+    /// compiler audit's `ValidateTrigger` verdict requires a validate trigger's
+    /// field to be this one, so a route to another field's trigger is never
+    /// explained away. `None` for any other call.
+    pub validate_field: Option<String>,
     /// ENG-06 (engine limits B9): what a `FieldRef.Validate(…)` call
     /// validates ([`field_ref_validate`]). `None` for any other call.
     pub field_ref_validate: Option<FieldRefValidate>,
@@ -1197,6 +1204,7 @@ fn resolve_call_site_obligation(
                                     _ => true,
                                 });
                                 triggers = trig;
+                                facts_out.validate_field = rule.validate_field.clone();
                                 // ENG-15/16 (ENG-69 folded): the shared check.
                                 code_not_loaded = trigger_op_opens_unseen_code(
                                     &method_lc, &rule, table_node, graph, index,
@@ -1575,6 +1583,7 @@ fn resolve_call_site_obligation(
                 let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
                     &op_lc, call_args, file, text,
                 );
+                facts_out.validate_field = rule.validate_field.clone();
                 if rule.run_trigger == Some(false) {
                     facts_out.run_trigger_excluded = routes
                         .iter()
