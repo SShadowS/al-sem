@@ -1406,7 +1406,7 @@ impl Walker<'_, '_> {
                         .cx
                         .file
                         .ir
-                        .var_wrappers(&locals[0].origin)
+                        .var_wrappers_from(&locals[0].origin, &self.cx.routine.origin)
                         .next()
                         .is_none()
                 {
@@ -1425,7 +1425,7 @@ impl Walker<'_, '_> {
                         .cx
                         .file
                         .ir
-                        .var_wrappers(&globals[0].origin)
+                        .var_wrappers_from(&globals[0].origin, &self.cx.routine.origin)
                         .next()
                         .is_none()
                 {

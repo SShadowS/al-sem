@@ -194,6 +194,22 @@ impl Ir {
             .filter(|w| w.byte.contains(&origin.byte.start))
     }
 
+    /// [`Ir::var_wrappers`] as seen from the routine declared at `routine`: a wrapper whose
+    /// same arm holds both the routine and the variable is left out, since the variable
+    /// exists in every build that has the routine (the usual `#if not CLEANxx` around an
+    /// obsolete procedure, Fable r6). A routine in another arm does not see the variable.
+    pub fn var_wrappers_from<'a>(
+        &'a self,
+        origin: &'a Origin,
+        routine: &'a Origin,
+    ) -> impl Iterator<Item = &'a VarWrapper> {
+        self.var_wrappers(origin).filter(move |w| {
+            !w.arms
+                .iter()
+                .any(|a| a.contains(&origin.byte.start) && a.contains(&routine.byte.start))
+        })
+    }
+
     pub(crate) fn mark_conditional_vars(&mut self, wrappers: Vec<VarWrapper>) {
         self.conditional_vars.extend(wrappers);
     }

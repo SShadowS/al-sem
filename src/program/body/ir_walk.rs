@@ -2969,11 +2969,15 @@ impl TextProof<'_> {
         // whether the lowerer read the level in full.
         // (type, start byte, every `#if` wrapper holding it).
         type Decl<'a> = (Option<&'a str>, usize, Vec<&'a al_syntax::ir::VarWrapper>);
-        fn var<'a>(ir: &'a al_syntax::ir::Ir, v: &'a al_syntax::ir::VarDecl) -> Decl<'a> {
+        fn var<'a>(
+            ir: &'a al_syntax::ir::Ir,
+            routine: &'a al_syntax::ir::RoutineDecl,
+            v: &'a al_syntax::ir::VarDecl,
+        ) -> Decl<'a> {
             (
                 v.ty.as_deref(),
                 v.origin.byte.start,
-                ir.var_wrappers(&v.origin).collect(),
+                ir.var_wrappers_from(&v.origin, &routine.origin).collect(),
             )
         }
         let levels: [(Vec<Decl<'_>>, bool); 4] = [
@@ -2998,7 +3002,7 @@ impl TextProof<'_> {
                 r.locals
                     .iter()
                     .filter(|v| v.name.eq_fold_identifier(name))
-                    .map(|v| var(ir, v))
+                    .map(|v| var(ir, r, v))
                     .collect(),
                 self.locals_complete,
             ),
@@ -3006,7 +3010,7 @@ impl TextProof<'_> {
                 globals
                     .iter()
                     .filter(|v| v.name.eq_fold_identifier(name))
-                    .map(|v| var(ir, v))
+                    .map(|v| var(ir, r, v))
                     .collect(),
                 self.locals_complete && self.globals_complete,
             ),

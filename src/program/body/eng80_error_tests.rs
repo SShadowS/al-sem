@@ -311,6 +311,32 @@ codeunit 50379 "Eng80 Cond Decls"
 
     procedure CondGlobalSection() begin Error(CondS); Next(); end;
 
+    // Fable r6: an obsolete procedure under `#if not CLEAN25` with its own Text local: the
+    // local exists in every build that has the procedure (terminates).
+#if not CLEAN25
+    procedure ObsoleteLocal()
+    var
+        T: Text;
+    begin
+        Error(T);
+        Next();
+    end;
+#endif
+
+    // Fable r6: a global in the same `#if` arm as the procedure (terminates), and one in
+    // the other arm (may raise: not declared in the procedure's builds).
+#if Z
+    var
+        ArmH: Text;
+
+    procedure SameArmGlobal() begin Error(ArmH); Next(); end;
+
+    procedure OtherArmGlobal() begin Error(ArmK); Next(); end;
+#else
+    var
+        ArmK: Text;
+#endif
+
     // No `#else`: a build with neither X nor Y sees the ErrorInfo global (may raise).
     procedure CondLocalNoElse()
     var
@@ -508,6 +534,8 @@ fn eng80_b1_text_forms_terminate() {
         "ShadowText",
         "CondLocalBoth",
         "SectionWrapBoth",
+        "ObsoleteLocal",
+        "SameArmGlobal",
     ];
     let bad = mismatches(&m, &names, true);
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -561,6 +589,7 @@ fn eng80_b3_declarations_that_prove_nothing() {
         "CondLocal",
         "CondLocalNoElse",
         "SectionWrap",
+        "OtherArmGlobal",
         "NestedFalseCover",
         "NameList",
         "CondGlobalSection",
