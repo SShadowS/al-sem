@@ -47,7 +47,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::program::inputs::{Injected, WorkspaceInputs};
 
@@ -73,52 +72,16 @@ impl Ident {
     }
 }
 
-/// A file's length, modification time and (TLS-56) status-change time when
-/// it was observed: the cache key of its hash, never part of its identity.
-/// A rewrite can keep length and mtime (`File::set_modified`, `touch -r`)
-/// but not ctime, which no user call sets: a write moves it to the current
-/// timestamp tick (the module doc's residual: a write in the same tick, a
-/// file system without a real ctime).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stat {
-    len: u64,
-    mtime: Option<SystemTime>,
-    /// Nanoseconds since the Unix epoch; `None` where the platform's std
-    /// gives none (Windows: the stated residual stays there).
-    ctime_ns: Option<i128>,
-}
+/// A file's stamp when it was observed: the cache key of its hash, never
+/// part of its identity. The shared rule (TLS-57, `crate::file_stamp`):
+/// length, mtime, and ctime when the stamp recorded one (a stamp without
+/// one, from a platform with none, a descriptor written before TLS-56, or a
+/// session that forgot them, [`Manifest::forget_ctime`], is checked by
+/// length and mtime alone).
+type Stat = crate::file_stamp::FileStamp;
 
 fn stat(path: &Path) -> Option<Stat> {
-    let m = std::fs::metadata(path).ok()?;
-    Some(Stat {
-        len: m.len(),
-        mtime: m.modified().ok(),
-        ctime_ns: ctime_ns(&m),
-    })
-}
-
-#[cfg(unix)]
-fn ctime_ns(m: &std::fs::Metadata) -> Option<i128> {
-    use std::os::unix::fs::MetadataExt;
-    Some(i128::from(m.ctime()) * 1_000_000_000 + i128::from(m.ctime_nsec()))
-}
-
-#[cfg(not(unix))]
-fn ctime_ns(_: &std::fs::Metadata) -> Option<i128> {
-    None
-}
-
-impl Stat {
-    /// Whether `now` may reuse the hash this stat keyed: the same length and
-    /// mtime, and the same ctime when this stat recorded one (a stat without
-    /// one, from a platform with none, a descriptor written before TLS-56, or
-    /// a session that forgot them, [`Manifest::forget_ctime`], is checked by
-    /// length and mtime alone).
-    fn same_file(&self, now: &Stat) -> bool {
-        self.len == now.len
-            && self.mtime == now.mtime
-            && (self.ctime_ns.is_none() || self.ctime_ns == now.ctime_ns)
-    }
+    Stat::at(path)
 }
 
 /// One manifest (see the module doc).
@@ -363,13 +326,13 @@ impl Manifest {
                     }
                 }
                 if let Some(s) = self.stats.get(k) {
-                    e.stat_len = Some(s.len);
-                    e.stat_mtime_ns = s.mtime.and_then(|t| {
+                    e.stat_len = Some(s.file_len());
+                    e.stat_mtime_ns = s.mtime().and_then(|t| {
                         t.duration_since(std::time::UNIX_EPOCH)
                             .ok()
                             .map(|d| d.as_nanos())
                     });
-                    e.stat_ctime_ns = s.ctime_ns;
+                    e.stat_ctime_ns = s.ctime_ns();
                 }
                 e
             })
@@ -406,14 +369,8 @@ impl Manifest {
                             (ns % 1_000_000_000) as u32,
                         )
                 });
-                m.stats.insert(
-                    e.key.clone(),
-                    Stat {
-                        len,
-                        mtime,
-                        ctime_ns: e.stat_ctime_ns,
-                    },
-                );
+                m.stats
+                    .insert(e.key.clone(), Stat::from_parts(len, mtime, e.stat_ctime_ns));
             }
         }
         Ok(m)
@@ -789,7 +746,7 @@ impl Manifest {
     /// (`ResidentSession::without_stat_ctime`, test hook `stat-without-ctime`).
     pub fn forget_ctime(&mut self) {
         for s in self.stats.values_mut() {
-            s.ctime_ns = None;
+            *s = s.without_ctime();
         }
     }
 

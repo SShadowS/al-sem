@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-57: the LSP updater and test selection's scan cache see a rewrite that keeps size and mtime)
+
+- Two more file-freshness checks trusted a file whose length and modification time were
+  unchanged, so a rewrite that kept both (`touch -r`, a tool restoring mtime) was missed:
+  - the LSP updater, during a folder reconcile (after the watcher lost the file's own event), kept
+    serving the old text of a known file;
+  - test selection's scan cache, in a resident engine asking again, kept the old `[Test]` and
+    test-codeunit counts of a test app.
+- All three checks (with TLS-56's resident manifest) now share one rule, `crate::file_stamp`:
+  length, mtime, and the file's status-change time (ctime) when the earlier stamp recorded one.
+  The same residual applies to all three: a same-size rewrite within one timestamp tick, a file
+  system without a real change time (FAT, some network mounts), and Windows, where Rust's std
+  gives no change time. The LSP updater still also checks the file's identity (device, inode).
+
 ### Fixed (TLS-56: the resident engine sees a rewrite that keeps a file's size and mtime)
 
 - The context server (`alsem mcp`) and the LSP's engine child reused a file's previous hash when

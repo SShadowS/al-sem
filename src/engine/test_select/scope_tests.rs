@@ -473,3 +473,55 @@ fn an_ignored_non_utf8_folder_is_not_its_lossy_sibling() {
     let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["Real Tests"]);
 }
+
+/// TLS-57: the scan cache (a resident engine asking again) sees a rewrite
+/// that keeps a test file's length and mtime: its stamp's ctime moved, so
+/// the file is scanned again and the `[Test]` count follows the new text.
+///
+/// DISCRIMINATION (2026-11-14): the cache key's stamps without ctime
+/// (`FileStamp::at(..).map(FileStamp::without_ctime)` in `scan`) fails "the
+/// rewrite is scanned" (the cached count 1 is served).
+#[cfg(unix)]
+#[test]
+fn the_scan_cache_sees_a_rewrite_that_keeps_size_and_mtime() {
+    use std::os::unix::fs::MetadataExt;
+    let t = repo();
+    let ws = t.path().join("App");
+    let lines = |s: &Scope| {
+        s.apps
+            .iter()
+            .find(|a| a.name == "Prod Tests")
+            .map(|a| a.test_attribute_lines)
+    };
+    let first = discover(&ws, &ScopeRequest::default());
+    assert_eq!(lines(&first), Some(1), "precondition: one [Test] line");
+    let file = t.path().join("Test/src/T.Codeunit.al");
+    let before = std::fs::metadata(&file).unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(text.matches("[Test]").count(), 1, "precondition: edit");
+    let edited = text.replace("[Test]", "[Tezt]");
+    let ctime = |m: &std::fs::Metadata| (m.ctime(), m.ctime_nsec());
+    let mut after = std::fs::metadata(&file).unwrap();
+    for _ in 0..200 {
+        std::fs::write(&file, &edited).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+        after = std::fs::metadata(&file).unwrap();
+        if ctime(&after) != ctime(&before) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_ne!(ctime(&after), ctime(&before), "precondition: ctime moved");
+    assert_eq!(
+        (after.len(), after.modified().unwrap()),
+        (before.len(), before.modified().unwrap()),
+        "precondition: length and mtime kept"
+    );
+    let again = discover(&ws, &ScopeRequest::default());
+    assert_eq!(lines(&again), Some(0), "the rewrite is scanned");
+}

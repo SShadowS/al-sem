@@ -65,14 +65,16 @@
 //! this one". An unreadable folder or `app.json` is incomplete too.
 //!
 //! The test-codeunit scan (reading `.al` files) is cached per app, keyed by
-//! the `app.json`'s and every `.al` file's path, length and modification time,
-//! so a resident engine asking again reads only stats.
+//! the `app.json`'s and every `.al` file's path and stamp (TLS-57, the shared
+//! rule `crate::file_stamp`: length, mtime and ctime), so a resident engine
+//! asking again reads only stats, and a rewrite that keeps a file's length
+//! and mtime is still seen (the stamp's residual aside).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
 
+use crate::file_stamp::FileStamp;
 use crate::source_text::{NestedApps, discover_al_files, parse_app_json, read_al_source};
 
 /// How deep under the search root auto-discovery looks for an `app.json`
@@ -374,30 +376,41 @@ struct Scan {
     test_lines: usize,
 }
 
-type ScanKey = Vec<(PathBuf, u64, Option<SystemTime>)>;
+/// Each scanned file and its stamp (`None`: it could not be stat'ed).
+type ScanKey = Vec<(PathBuf, Option<FileStamp>)>;
 
 static SCAN_CACHE: Mutex<Option<HashMap<PathBuf, (ScanKey, Scan)>>> = Mutex::new(None);
 
-fn stat(p: &Path) -> (u64, Option<SystemTime>) {
-    std::fs::metadata(p).map_or((0, None), |m| (m.len(), m.modified().ok()))
+/// Whether a cached scan keyed `prev` still holds for the files `now` names:
+/// the same files, each the same file by the shared stamp rule (TLS-57,
+/// `crate::file_stamp`: length, mtime, and ctime when recorded).
+fn same_key(prev: &ScanKey, now: &ScanKey) -> bool {
+    prev.len() == now.len()
+        && prev.iter().zip(now).all(|((pp, ps), (np, ns))| {
+            pp == np
+                && match (ps, ns) {
+                    (Some(p), Some(n)) => p.same_file(n),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
 }
 
 /// Scan an app's `.al` files (cached, see the module doc).
 fn scan(root: &Path) -> Result<Scan, String> {
     let found = discover_al_files(root, NestedApps::Walk).map_err(|e| e.to_string())?;
     let mut key: ScanKey = Vec::with_capacity(found.len() + 1);
-    let (n, t) = stat(&root.join("app.json"));
-    key.push((root.join("app.json"), n, t));
+    let app_json = root.join("app.json");
+    key.push((app_json.clone(), FileStamp::at(&app_json)));
     for f in &found {
-        let (n, t) = stat(&f.abs_path);
-        key.push((f.abs_path.clone(), n, t));
+        key.push((f.abs_path.clone(), FileStamp::at(&f.abs_path)));
     }
     if let Some((k, s)) = SCAN_CACHE
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .as_ref()
         .and_then(|m| m.get(root))
-        && *k == key
+        && same_key(k, &key)
     {
         return Ok(*s);
     }

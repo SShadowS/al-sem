@@ -43,6 +43,9 @@ pub mod census_hook;
 pub mod config;
 pub mod dependencies;
 pub mod engine;
+/// The one file-stamp rule (length, mtime, ctime) the freshness checks share
+/// (TLS-57) — see the module doc.
+pub mod file_stamp;
 /// The one-fold guard: case-fold calls in `src/engine` / `src/program` against
 /// `tests/fold-allowlist.txt` (TLS-43) — see the module doc.
 #[cfg(test)]
