@@ -425,8 +425,9 @@ fn an_ignored_root_and_an_ignored_clone_are_still_searched() {
 ///
 /// DISCRIMINATION (2026-11-13): decoding git's output with
 /// `String::from_utf8_lossy` (the old code) finds "Ignored Tests" instead of
-/// "Real Tests"; restored, passes.
-#[cfg(unix)]
+/// "Real Tests"; restored, passes. Linux only: macOS (APFS) refuses a
+/// non-UTF-8 folder name.
+#[cfg(target_os = "linux")]
 #[test]
 fn an_ignored_non_utf8_folder_is_not_its_lossy_sibling() {
     use std::os::unix::ffi::OsStrExt;

@@ -292,7 +292,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not listed in the scope. Git's answer is matched to the folders by their raw name bytes,
   so an ignored folder whose name is not UTF-8 is never mistaken for a sibling (review sol r1).
   Pinned by `discovery_skips_folders_git_ignores`,
-  `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Unix)
+  `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Linux)
   `an_ignored_non_utf8_folder_is_not_its_lossy_sibling`, with discrimination proofs.
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
