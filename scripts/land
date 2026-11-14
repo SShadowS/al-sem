@@ -340,6 +340,11 @@ verdict() { # verdict <step> <exit> <start>
         echo "land: [$1] ok ($secs s)"
     else
         echo "land: [$1] FAILED, exit $2 ($secs s; log $run/$1.log)"
+        # The failing step's own verdict lines, so nobody needs to open its log
+        # (e.g. cdo-gate's "speed ... FAIL" summary line). At most the last 8.
+        if [[ -f "$run/$1.log" ]]; then
+            grep -E 'FAIL|error[:[]' "$run/$1.log" | tail -n 8 | sed 's/^/land:   | /' || true
+        fi
     fi
 }
 

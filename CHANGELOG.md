@@ -98,6 +98,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Mutations, each failing a test: the zombie check in the holder's watch, the probe
     reading any failure as held, land accepting a shared hold, the mem-wait's process
     check restored, single quotes not tracked, heredoc-body substitutions dropped.
+- Review r2 (sol): the hook's reading is now one small shell lexer instead of
+  `shlex` plus a pre-scan, so it keeps whether a character was quoted: an operator
+  counts only outside quotes (`echo '>' && cargo test` is caught, `printf ';' ...`
+  passes); `$(...)` is matched with the quotes, escapes, nested substitutions and
+  heredoc bodies inside it skipped (a commit message with `don't (really)` in a
+  heredoc inside `$(...)` passes, `"$(printf ')'; cargo test)"` is caught); a heredoc
+  ends at its whole delimiter (`EOF-TEXT`); `watch` and `env -S` read their command
+  strings. The broken-probe test injects a failing `flock` on PATH (file permissions
+  do not stop a privileged user), and the queued-gate test keeps the bash process
+  whose command line names the gate.
+- From land's first real run (ENG-80's landing, which stopped correctly on a cdo-gate
+  speed failure): a failed step now prints that step's own FAIL and `error:` lines
+  (at most 8) under land's `[step] FAILED` line, so the reader need not open its log
+  (e.g. `land:   | cdo-gate:   speed ... FAIL ...`).
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 

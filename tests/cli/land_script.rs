@@ -307,12 +307,30 @@ fn land_gates_in_order_and_pushes_only_on_request() {
     assert_eq!(r.calls(), ["ci-steps all"], "no memory, no cdo-gate");
 
     r.reset_calls();
-    let (code, text) = r.land(&["--push", "tools/tls-58-x"], &[("STUB_CDO_GATE_RC", "1")]);
+    // The gate's own verdict lines are shown under land's (the orchestrator's
+    // wish after land's first real run): no need to open cdo.log.
+    let (code, text) = r.land(
+        &["--push", "tools/tls-58-x"],
+        &[
+            ("STUB_CDO_GATE_RC", "1"),
+            (
+                "STUB_CDO_GATE_HOOK",
+                "echo 'cdo-gate:   speed   FAIL   build CPU x1.36'; echo 'noise'; echo 'cdo-gate: FAIL'",
+            ),
+        ],
+    );
     assert_eq!(code, Some(1), "{text}");
     assert_eq!(
         r.calls(),
         ["ci-steps all", "cdo-gate /cdo-ws"],
         "a red cdo-gate never pushes"
+    );
+    assert!(text.contains("land: [cdo] FAILED, exit 1 ("), "{text}");
+    assert!(
+        text.contains(
+            "land:   | cdo-gate:   speed   FAIL   build CPU x1.36\nland:   | cdo-gate: FAIL\n"
+        ),
+        "the gate's FAIL lines, in order, without its noise: {text}"
     );
 
     r.reset_calls();
@@ -574,24 +592,39 @@ fn land_needs_the_slot_to_itself_and_waits_only_for_memory() {
     // A process whose command line is `bash <dir>/scripts/cdo-gate`.
     let fake = r.root.join("other/scripts");
     std::fs::create_dir_all(&fake).unwrap();
-    // `exec`: one process, which the guard below ends (no orphaned `sleep`).
-    std::fs::write(fake.join("cdo-gate"), "exec sleep 60\n").unwrap();
-    struct Owned(std::process::Child);
-    impl Drop for Owned {
+    // No `exec`: the bash process keeps the command line `bash <dir>/scripts/
+    // cdo-gate` (review r2, sol). Its own process group, which the guard ends
+    // whole (bash and its `sleep`), with no output shared with the test.
+    std::fs::write(fake.join("cdo-gate"), "sleep 60\n").unwrap();
+    struct Group(std::process::Child);
+    impl Drop for Group {
         fn drop(&mut self) {
-            let _ = self.0.kill();
+            // SAFETY: SIGKILL to the process group this test created.
+            unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
             let _ = self.0.wait();
         }
     }
-    let _gate = Owned(
+    use std::os::unix::process::CommandExt;
+    let gate = Group(
         std::process::Command::new("bash")
             .arg(fake.join("cdo-gate"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap(),
     );
+    // Ready: the process's command line names the gate.
+    let cmdline = format!("/proc/{}/cmdline", gate.0.id());
+    let start = std::time::Instant::now();
+    while !std::fs::read_to_string(&cmdline).is_ok_and(|s| s.contains("scripts/cdo-gate")) {
+        assert!(
+            start.elapsed().as_secs() < 10,
+            "the fake gate never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     let (code, text) = r.land(
         &["tools/tls-58-x"],
         &[("LAND_MEM_MIN_GB", "1"), ("LAND_MEM_TIMEOUT_S", "0")],

@@ -51,8 +51,15 @@ impl Slot {
         self.guard_raw(&input.to_string())
     }
     fn guard_raw(&self, input: &str) -> (Option<i32>, String) {
+        self.guard_raw_env(input, &[])
+    }
+    fn guard_raw_env(&self, input: &str, env: &[(&str, &str)]) -> (Option<i32>, String) {
         use std::io::Write;
-        let mut child = std::process::Command::new(GUARD)
+        let mut cmd = std::process::Command::new(GUARD);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
             .env("CDO_SLOT_DIR", self.dir())
             .env_remove("CDO_WS")
             .env_remove("CDO_SLOT_TOKEN")
@@ -298,6 +305,13 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "rg '# TODO' src && cargo test",
         "cat <<EOF\n$(cargo test)\nEOF",
         "echo '<<EOF'; cargo test",
+        // Review r2 (sol): quoted operators are words; `$(...)` is matched
+        // with its quotes; a whole heredoc delimiter; command-string wrappers.
+        "echo '>' && cargo test",
+        "out=\"$(printf ')'; cargo test)\"",
+        "cat <<EOF-TEXT\ndoc\nEOF-TEXT\ncargo test",
+        "watch -n 5 'cargo check'",
+        "env -S 'cargo test'",
     ];
     let free = [
         "grep -n x scripts/cdo-gate",
@@ -321,6 +335,10 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "git commit -m 'document $(cargo test)'",
         "printf '%s\\n' '$(cargo test)'",
         "cat <<'EOF'\n$(cargo test)\nEOF",
+        // Review r2 (sol): a quoted `;` is a word; a commit message with an
+        // apostrophe and parentheses in a heredoc inside `$(...)`.
+        "printf '%s\\n' ';' cargo test",
+        "git commit -m \"$(cat <<'EOF'\nfix: don't (really) run cargo test\n\nCo-Authored-By: x\nEOF\n)\"",
     ];
     for c in guarded.iter().chain(&free) {
         assert_eq!(s.guard("B", c).0, Some(0), "slot free: {c}");
@@ -348,16 +366,28 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     assert_eq!(s.guard_raw(no_session).0, Some(0), "it cannot tell: allow");
     // A lock the probe cannot open is no holder: allow (review r1, sol).
     // Mutation: any probe failure read as held -> refused.
+    // A probe that fails (a `flock` that errors, first on PATH; not file
+    // permissions, which a privileged user ignores: review r2, sol).
     let broken = Slot::new();
     std::fs::create_dir_all(broken.dir()).unwrap();
     std::fs::write(broken.dir().join("lock"), "").unwrap();
+    let bin = broken.0.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("flock"), "#!/bin/sh\nexit 64\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(
-        broken.dir().join("lock"),
-        std::fs::Permissions::from_mode(0o000),
-    )
-    .unwrap();
-    let (code, text) = broken.guard("B", "cargo test");
+    std::fs::set_permissions(bin.join("flock"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let input = serde_json::json!({
+        "tool_name": "Bash",
+        "session_id": "B",
+        "tool_input": { "command": "cargo test" },
+    })
+    .to_string();
+    let (code, text) = broken.guard_raw_env(&input, &[("PATH", &path)]);
     assert_eq!(code, Some(0), "{text}");
     assert!(text.contains("(allowed)"), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));

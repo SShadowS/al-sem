@@ -30,7 +30,6 @@ Exit: 0 allow; 2 refuse (the message on stderr goes back to Claude).
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 
@@ -68,11 +67,10 @@ WRAPPERS = {
 SHELLS = {"bash", "sh", "dash", "zsh"}
 PYTHONS = {"python", "python3"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# `<<WORD` / `<<-'WORD'` at the scanner's position (a here-string `<<<` is
-# excluded by the scanner).
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-# A substitution in an unquoted heredoc body (no quoting applies there).
-BODY_SUBSTITUTION = re.compile(r"(?<!\\)\$\(([^()]*)\)|(?<!\\)`([^`]*)`")
+REDIRECT_OPS = {"<", ">", ">>", "<<<", "&>", "&>>", ">&", "<&", ">|", "<>"}
+# Longest first, so `&&` is not read as `&` `&`.
+OPERATORS = sorted(SEPARATORS | REDIRECT_OPS, key=len, reverse=True)
+WORD_END = " \t\r\n;&|()<>"
 
 
 def allow(why):
@@ -80,129 +78,226 @@ def allow(why):
     sys.exit(0)
 
 
-def scan(line):
-    """Read a command line the way the shell does, before tokenizing it.
+# --- A small shell lexer. It keeps what `shlex` loses: whether a character
+# was quoted. An operator counts only outside quotes; `$(...)` is matched with
+# quotes, escapes, nested substitutions and heredoc bodies inside it skipped.
 
-    Returns (code, substitutions): `code` is the line without comments (a `#`
-    that starts a word outside quotes, up to the end of its line), without
-    heredoc bodies and without backslash-newlines; `substitutions` is the
-    text of every `$(...)` and `` `...` `` the shell would run: outside single
-    quotes and unescaped, and in the body of a heredoc whose delimiter is not
-    quoted.
-    """
-    code, subs, pending = [], [], []
+
+def skip_quoted(line, i):
+    """line[i] is a quote; the index after the quote that closes it."""
+    q, j, n = line[i], i + 1, len(line)
+    while j < n:
+        c = line[j]
+        if c == q:
+            return j + 1
+        if q == '"':
+            if c == "\\":
+                j += 2
+                continue
+            if line.startswith("$(", j) and not line.startswith("$((", j):
+                j = close_paren(line, j + 1) + 1
+                continue
+            if c == "`":
+                k = line.find("`", j + 1)
+                j = n if k < 0 else k + 1
+                continue
+        j += 1
+    return n
+
+
+def heredoc_delim(line, i):
+    """line[i:] starts `<<` (not `<<<`): (delimiter, quoted, strip_tabs, end)."""
+    p, n = i + 2, len(line)
+    strip = p < n and line[p] == "-"
+    p += strip
+    while p < n and line[p] in " \t":
+        p += 1
+    start = p
+    while p < n and line[p] not in WORD_END:
+        p = skip_quoted(line, p) if line[p] in "'\"" else p + 1
+    raw = line[start:p]
+    if not raw:
+        return None
+    quoted = any(ch in raw for ch in "'\"\\")
+    return re.sub(r"['\"\\]", "", raw), quoted, strip, p
+
+
+def skip_body(line, i, delim, strip):
+    """Heredoc body lines from i up to the delimiter line: (index after, body)."""
+    body, n = [], len(line)
+    while i < n:
+        end = line.find("\n", i)
+        end = n if end < 0 else end
+        row = line[i:end]
+        i = end + 1
+        if (row.lstrip("\t") if strip else row) == delim:
+            break
+        body.append(row)
+    return i, "\n".join(body)
+
+
+def close_paren(line, k):
+    """line[k] == '('; the index of the ')' closing it, or len(line)."""
+    depth, j, n, pending = 1, k + 1, len(line), []
+    while j < n:
+        c = line[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c in "'\"":
+            j = skip_quoted(line, j)
+            continue
+        if line.startswith("<<", j) and not line.startswith("<<<", j):
+            d = heredoc_delim(line, j)
+            if d:
+                pending.append(d)
+                j = d[3]
+                continue
+        if c == "\n" and pending:
+            j += 1
+            for delim, _, strip, _ in pending:
+                j, _ = skip_body(line, j, delim, strip)
+            pending = []
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return n
+
+
+def substitutions(text, quoting=True):
+    """The `$(...)` and `` `...` `` texts in `text` (double-quoted or heredoc
+    text: single quotes are literal there; with `quoting`, backslash escapes)."""
+    found, j, n = [], 0, len(text)
+    while j < n:
+        if quoting and text[j] == "\\":
+            j += 2
+            continue
+        if text.startswith("$(", j) and not text.startswith("$((", j):
+            k = close_paren(text, j + 1)
+            found.append(text[j + 2 : k])
+            j = k + 1
+            continue
+        if text[j] == "`":
+            k = text.find("`", j + 1)
+            k = n if k < 0 else k
+            found.append(text[j + 1 : k])
+            j = k + 1
+            continue
+        j += 1
+    return found
+
+
+def lex(line):
+    """The shell's reading of a command line: tokens ("word", text without its
+    quotes) or ("op", operator outside quotes), and the command substitutions
+    it runs. Comments, heredoc bodies and backslash-newlines are gone; an
+    unquoted heredoc's body still yields its substitutions."""
+    toks, subs, pending = [], [], []
+    word, in_word = [], False
     i, n = 0, len(line)
-    single = double = False
+
+    def end_word():
+        nonlocal word, in_word
+        if in_word:
+            toks.append(("word", "".join(word)))
+        word, in_word = [], False
+
     while i < n:
         c = line[i]
-        if single:
-            code.append(c)
-            single = c != "'"
-            i += 1
-            continue
-        if c == "\\" and i + 1 < n:
-            if line[i + 1] == "\n":  # a continuation joins the lines
+        if c == "\\":
+            if line.startswith("\\\n", i):
                 i += 2
                 continue
-            code.append(line[i : i + 2])
+            word.append(line[i + 1 : i + 2])
+            in_word = True
             i += 2
             continue
-        if c == "'" and not double:
-            single = True
-            code.append(c)
-            i += 1
+        if c == "'":
+            j = line.find("'", i + 1)
+            j = n if j < 0 else j
+            word.append(line[i + 1 : j])
+            in_word = True
+            i = j + 1
             continue
         if c == '"':
-            double = not double
-            code.append(c)
-            i += 1
+            j = skip_quoted(line, i)
+            inner = line[i + 1 : j - 1] if line[j - 1 : j] == '"' and j > i + 1 else line[i + 1 : j]
+            subs.extend(substitutions(inner))
+            word.append(re.sub(r'\\([$`"\\])', r"\1", inner))
+            in_word = True
+            i = j
             continue
         if line.startswith("$(", i) and not line.startswith("$((", i):
-            j, depth = i + 2, 1
-            while j < n and depth:
-                depth += {"(": 1, ")": -1}.get(line[j], 0)
-                j += 1
-            subs.append(line[i + 2 : j - 1] if depth == 0 else line[i + 2 :])
-            code.append(line[i:j])
-            i = j
+            j = close_paren(line, i + 1)
+            subs.append(line[i + 2 : j])
+            word.append(line[i : j + 1])
+            in_word = True
+            i = j + 1
             continue
         if c == "`":
             j = line.find("`", i + 1)
             j = n if j < 0 else j
             subs.append(line[i + 1 : j])
-            code.append(line[i : j + 1])
+            word.append(line[i : j + 1])
+            in_word = True
             i = j + 1
             continue
-        if double:
-            code.append(c)
+        if c in " \t\r":
+            end_word()
             i += 1
             continue
-        if c == "#" and (not code or code[-1][-1:] in " \t\n;&|()"):
+        if c == "#" and not in_word:
             while i < n and line[i] != "\n":
                 i += 1
             continue
-        if line.startswith("<<<", i):  # a here-string: no body follows
-            code.append("<<<")
-            i += 3
-            continue
-        if line.startswith("<<", i):
-            m = HEREDOC.match(line, i)
-            if m:
-                pending.append((m.group(2), bool(m.group(1))))
-                code.append(m.group(0))
-                i = m.end()
+        if line.startswith("<<", i) and not line.startswith("<<<", i):
+            d = heredoc_delim(line, i)
+            if d:
+                end_word()
+                pending.append(d)
+                toks.append(("op", "<<"))
+                toks.append(("word", d[0]))
+                i = d[3]
                 continue
-        if c == "\n" and pending:
-            code.append(c)
-            i += 1
-            for delim, quoted in pending:
-                body = []
-                while i < n:
-                    end = line.find("\n", i)
-                    end = n if end < 0 else end
-                    row = line[i:end]
-                    i = end + 1
-                    if row.strip() == delim:
-                        break
-                    body.append(row)
-                if not quoted:
-                    for m in BODY_SUBSTITUTION.finditer("\n".join(body)):
-                        subs.append(m.group(1) if m.group(1) is not None else m.group(2))
-            pending = []
+        op = next((o for o in OPERATORS if line.startswith(o, i)), None)
+        if op:
+            if op in REDIRECT_OPS and in_word and "".join(word).isdigit():
+                word, in_word = [], False  # the fd number of `2>&1`
+            end_word()
+            toks.append(("op", op))
+            i += len(op)
+            if op == "\n" and pending:
+                for delim, quoted, strip, _ in pending:
+                    i, body = skip_body(line, i, delim, strip)
+                    if not quoted:
+                        subs.extend(substitutions(body))
+                pending = []
             continue
-        code.append(c)
+        word.append(c)
+        in_word = True
         i += 1
-    return "".join(code), subs
+    end_word()
+    return toks, subs
 
 
-def tokens(line):
-    """Shell tokens; separators (newline included) as their own tokens."""
-    lex = shlex.shlex(line, posix=True, punctuation_chars=";&|()<>\n")
-    lex.whitespace = " \t\r"
-    lex.whitespace_split = True
-    lex.commenters = ""  # `scan` already dropped the comments
-    try:
-        return list(lex)
-    except ValueError:  # unbalanced quotes: read it word by word
-        return re.findall(r"[;&|()\n]+|[^\s;&|()]+", line)
-
-
-def segments(code):
-    seg = []
-    toks = tokens(code)
-    i = 0
+def segments(toks):
+    """The commands of a token list: word lists, split at separators, without
+    redirections and their targets."""
+    seg, i = [], 0
     while i < len(toks):
-        t = toks[i]
-        if t in SEPARATORS or (t and set(t) <= set(";&|()\n")) or (
-            t and set(t) <= set(";&|()\n<>") and ("(" in t or ")" in t)
-        ):  # `<(cmd)` / `>(cmd)` run cmd like `(cmd)` does
-            if seg:
+        kind, t = toks[i]
+        if kind == "op":
+            if t in REDIRECT_OPS or t == "<<":
+                if i + 1 < len(toks) and toks[i + 1][0] == "word":
+                    i += 1
+            elif seg:
                 yield seg
-            seg = []
-        elif t and set(t) <= set("<>&"):  # a redirection: skip its target too
-            i += 1
-        elif re.fullmatch(r"\d+", t) and i + 1 < len(toks) and toks[i + 1] and set(toks[i + 1]) <= set("<>&"):
-            pass  # the fd number of `2>&1`
+                seg = []
         else:
             seg.append(t)
         i += 1
@@ -241,12 +336,20 @@ def guarded_segment(words, line):
                 flag = words[i].split("=", 1)[0]
                 if flag in ("-c", "--cpu-list") and base == "taskset":
                     seen_list = True
+                # `env -S 'cmd args'`: the value is a command line.
+                if base == "env" and flag in ("-S", "--split-string"):
+                    value = words[i].split("=", 1)[1] if "=" in words[i] else (
+                        words[i + 1] if i + 1 < len(words) else ""
+                    )
+                    return bool(guarded_line(value))
                 if flag in value_flags and "=" not in words[i] and not re.fullmatch(r"-[a-zA-Z]\S+", words[i]):
                     i += 1
                 i += 1
             if base == "taskset" and seen_list:
                 positional = 0
             i += positional
+            if base == "watch":  # watch runs its arguments as a command line
+                return bool(guarded_line(" ".join(words[i:])))
             continue
         if base in SHELLS:
             i += 1
@@ -299,9 +402,9 @@ def script_guarded(path, args):
 
 def guarded_line(line):
     """The first guarded command of a command line, or None."""
-    code, subs = scan(line)
-    for seg in segments(code):
-        if guarded_segment(seg, code):
+    toks, subs = lex(line)
+    for seg in segments(toks):
+        if guarded_segment(seg, line):
             return " ".join(seg)
     # A command substitution runs too (`"$(cargo test)"`, `` x=`cargo t` ``,
     # one in an unquoted heredoc body), but not one in single quotes.
