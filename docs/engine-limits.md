@@ -786,12 +786,15 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   `unknown`. `Execute`, `Print` and `SaveAs*` show no page and keep it unconditional. Left: a
   variable's `UseRequestPage(false)` call before `R.Run()` is not read (the page may show: the
   safe side; batch code often does this, ENG-72); an XmlPort's request page is not treated as
-  cancellable (not measured); `alsem impact` and `alsem graph` (the sited graph) still reach
-  every report trigger from a `RunRequestPage`, static or dynamic: a run is an edge to the
-  report's object node, whose lifecycle reaches all its triggers, and the run hubs
-  (`reverse::run_reaches_trigger`) read the full list too. It over-selects tests and never hides
-  one; keeping the subset needs a new edge shape in the `al-sem.callgraph` export, done with
-  bc-dev-mcp's parser (TLS-52, gpt-6.1-sol round 1).
+  cancellable (not measured). ~~`alsem impact` and `alsem graph` reach every report trigger from
+  a `RunRequestPage`.~~ **Fixed by TLS-52** (2026-11-14) for a static target: the run goes to the
+  report's start node (`ObjectStart` in the `al-sem.callgraph` export, additive in v1), whose
+  lifecycle drops the run's triggers `resolver::start_runs_trigger` says the start does not run
+  (and keeps the rest: request page field triggers, `OnPreRendering`, opened pages), so a
+  change to `OnPreReport`, a data item or `OnPostReport` no longer selects the tests behind a
+  `RunRequestPage`. Left: a dynamic `RunRequestPage` (a run-time report id, CDO's two calls)
+  goes to the `h:run:report` hub, which expands to object nodes and reads the full trigger list
+  (`reverse::run_reaches_trigger`): it still over-selects, never hides.
 - Which request-page triggers one call runs is not read from the call: `RunModal(X, false)` (and a
   report with `UseRequestPage = false`) reaches `OnOpenPage`/`OnClosePage`, and `Execute` reaches
   `OnQueryClosePage`, all `conditional` (safe, imprecise).

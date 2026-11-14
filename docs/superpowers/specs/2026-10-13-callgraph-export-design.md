@@ -177,7 +177,8 @@ pass found.
 **Node `id`** is al-sem's own opaque, stable string: a 96-bit blake3 hash (24 hex
 characters) over the length-prefixed identity tuple, with a type prefix. Routines:
 `r:` over `(app guid, object kind, object key, enclosing member, name, params_count,
-sig_fp)`. Run objects: `o:` over `(app guid, object kind, object key)`. Hubs: a
+sig_fp)`. Run objects: `o:` over `(app guid, object kind, object key)`. Start nodes
+(TLS-52): `s:` over the object's tuple and the folded start method. Hubs: a
 readable `h:` id (section 4.5). Ids are unique within a file and stable for the same
 input and engine version. They are not a persistence key. Hashing avoids escaping
 problems (`"G/L Account"`-style names contain `/`); every node row carries readable
@@ -279,7 +280,8 @@ are engine facts; re-deriving them in TypeScript would duplicate the engine. All
 are exact derivations from parsed declarations, not new dispatch resolution.
 
 1. **Object runs reach the whole object (lifecycle).** Every `Run` edge targets the run
-   object's node (`kind: "Object"`), never the entry trigger directly. The object node
+   object's node (`kind: "Object"`), or its start node for a partial start (below),
+   never the entry trigger directly. The object node
    has `Trigger` edges (`via: "lifecycle"`) to: every trigger of the object and of each
    extension of it in the program; for a page, the object nodes of its parts
    (`ObjectNode::page_controls`), every trigger of its `SourceTable` and of that
@@ -293,6 +295,26 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    and action triggers and its record's triggers; a report run fires its dataitem and
    request-page triggers. Targeting only the entry trigger would report changes to
    those triggers as uncoverable.
+
+   **Partial starts (2026-11-14, TLS-52; owner-approved, coord
+   `q-20261114T103029-2c027eca`).** A start method that runs only part of the object
+   (today only `Report.RunRequestPage`: `OnInitReport` and the request page, no
+   `OnPreReport`, data item or `OnPostReport`, engine limits L20) sends its `Run` edge
+   to the object's **start node** (`kind: "ObjectStart"`, `start`: the folded method)
+   instead of the object node; kind, `via`, confidence, `line` and conditions are
+   unchanged. The start node has the object node's lifecycle edges less the triggers a
+   run runs (`reverse::run_reaches_trigger`, the run list) that
+   `resolver::start_runs_trigger` (the one home of the subset) says the start does not
+   run; the rest (UI triggers such as a request page field's `OnLookup`, opened pages,
+   platform events, the callbacks hub) is kept. A start is partial for an object when
+   it drops at least one trigger of the object or its extensions, so there is no
+   second list; a report whose triggers the start
+   all runs keeps the object node, as does a symbol-only one (no listed triggers) unless
+   a loaded extension of it declares a dropped trigger (its callbacks hub edge stays). A
+   start node exists only when some site uses it. A dynamic target still goes to the
+   `h:run:<kind>` hub (object nodes, full lifecycle). Additive in v1 (4.2: an unknown
+   node kind only carries the walk); a reader that ignores the kind gets the narrower,
+   correct selection. Design: `docs/superpowers/notes/2026-11-14-tls52-run-subset-shape.md`.
 
    **Control add-in events (2026-11-06, round-1 c21).** A page trigger whose
    enclosing member is a `usercontrol` of the page or of an extension of it (an
@@ -494,7 +516,8 @@ arrives with Stage C.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | opaque (4.1) |
-| `kind` | `Method` \| `Trigger` \| `Object` \| `Hub` | |
+| `kind` | `Method` \| `Trigger` \| `Object` \| `ObjectStart` \| `Hub` | `ObjectStart` added 2026-11-14 (TLS-52, additive): a partial start of an object (rule 1); it carries the object's fields |
+| `start` | string | `ObjectStart` only: the folded start method (`runrequestpage`) |
 | `appId` | string | app guid, lower case (not on hubs) |
 | `objectType` | string | `Codeunit`, `Table`, `PageExtension`, ... (`object_kind_str`) |
 | `objectId` | number | omitted for objects without a number (interfaces, ...) |
