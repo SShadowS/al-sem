@@ -185,7 +185,8 @@ landing change 3.
 3. **The scope line says what is not counted.** In human and JSON scope, once per answer:
    test code is not in these callers (it is reported under `tests:`); the `roots.config` entry
    overlay is not applied; `local` includes dependencies loaded from source folders when there
-   are any. `direct code callers: none found` carries the test-code qualifier.
+   are any. **Changed 2026-11-14 (TLS-54):** impact now applies the overlay, so that clause
+   reads "entries include the roots.config overlay's" (a statement of method, not a count). `direct code callers: none found` carries the test-code qualifier.
 4. **The "event publishers among its ancestors" human block** is either rendered from
    classified states (with `[tier, relation]`) or dropped. The direct `raised by:` line stays.
 5. **One program total in JSON.** `programEntries` becomes the canonical count (the same one as

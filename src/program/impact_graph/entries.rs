@@ -20,11 +20,13 @@
 //! - **What counts.** A node whose root kinds hold an entry kind, a static
 //!   background target ([`super::sited::Boundary::Background`]), and the
 //!   actions of every action-run site: what R0's reverse walk reports as
-//!   entries ([`super::reverse`]'s `report`), with no roots.config overlay
-//!   (impact walks without one). Public procedures are not entries (a walk
-//!   reports them as external callers).
+//!   entries ([`super::reverse`]'s `report`). Public procedures are not
+//!   entries (a walk reports them as external callers).
 //!
-//! The inventory is built once per graph ([`SitedGraph::entry_inventory`]).
+//! The inventory is built once per graph ([`SitedGraph::entry_inventory`]),
+//! from the graph's own (source) root kinds. TLS-54: impact's up part, given
+//! the roots.config overlay's kinds, builds its own
+//! ([`EntryInventory::of_with`]) so configured entries count too.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -89,6 +91,14 @@ impl EntryInventory {
     /// sites.
     #[must_use]
     pub fn of(g: &SitedGraph) -> EntryInventory {
+        Self::of_with(g, &HashMap::new())
+    }
+
+    /// [`Self::of`] with the roots.config overlay's kinds per node
+    /// (`reverse::config_entries_of`) added to each node's own root kinds
+    /// (TLS-54: impact's up part, which has no model).
+    #[must_use]
+    pub fn of_with(g: &SitedGraph, extra: &HashMap<NodeIx, u16>) -> EntryInventory {
         let mut inv = EntryInventory::default();
         let mut ids: HashMap<EntryKey, u32> = HashMap::new();
         let mut intern = |inv: &mut EntryInventory, key: EntryKey, witness: NodeIx| -> u32 {
@@ -127,7 +137,8 @@ impl EntryInventory {
             _ => g.stable_id(n).map_or(EntryKey::Node(n), EntryKey::Stable),
         };
         for n in 0..g.node_count() as u32 {
-            let mut mask = EntryKind::of_root_kinds(g.root_kinds(n))
+            let own = g.root_kinds(n) | extra.get(&n).copied().unwrap_or(0);
+            let mut mask = EntryKind::of_root_kinds(own)
                 .into_iter()
                 .fold(0u16, |m, k| m | kind_bit(k));
             let background = g.is_background_target(n);

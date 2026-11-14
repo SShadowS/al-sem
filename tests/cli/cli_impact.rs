@@ -389,6 +389,90 @@ fn up_callers_equal_explains_callers() {
     }
 }
 
+/// TLS-54 (engine limits L32): `alsem impact` applies the roots.config
+/// overlay as `prove`/`explain` do. `RunJob` is `internal`, so no source
+/// signal makes it an entry; `roots.config.json` names it a job-queue entry
+/// point. With the config, `Post`'s ancestor `RunJob` is a
+/// `job-queue-entrypoint` entry; without it, there is none (master gave none
+/// either way).
+///
+/// DISCRIMINATION (2026-11-14): dropping the hand-off (`run.rs`'s
+/// `up_argv(&ids, &[])`) fails "the configured job-queue entry"; the up
+/// part using the graph's cached inventory (no overlay) fails at
+/// `programEntries`; the union walk without `extra_entries` fails "the union
+/// counts the configured entry".
+#[test]
+fn impact_applies_the_roots_config_overlay() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id": "54545454-0000-4000-8000-000000000054", "name": "T54", "publisher": "probe",
+            "version": "1.0.0.0", "runtime": "13.0", "idRanges": [{"from": 50540, "to": 50549}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/Jobs.al"),
+        "codeunit 50540 \"T54 Core\"\n{\n    internal procedure Post()\n    begin\n    end;\n}\n\n\
+         codeunit 50541 \"T54 Jobs\"\n{\n    internal procedure RunJob()\n    var\n        \
+         Core: Codeunit \"T54 Core\";\n    begin\n        Core.Post();\n    end;\n}\n",
+    )
+    .unwrap();
+    let doc = |ws: &Path| -> Value {
+        json(
+            ws,
+            &["--routine", "Codeunit \"T54 Core\"::Post", "--no-tests"],
+            None,
+        )
+    };
+    let up = |ws: &Path| -> Value { doc(ws)["roots"][0]["up"].clone() };
+    let entries =
+        |up: &Value| -> Vec<Value> { up["entries"].as_array().cloned().unwrap_or_default() };
+    // Without a config: no entry (the precondition).
+    let without = up(ws);
+    assert!(
+        entries(&without).is_empty(),
+        "precondition: no source entry"
+    );
+    assert_eq!(without["programEntries"], 0, "{without:#}");
+    std::fs::write(
+        ws.join("roots.config.json"),
+        r#"{"version": 1, "roots": [{"id": "run-job",
+            "target": {"objectId": "54545454-0000-4000-8000-000000000054/Codeunit/50541",
+                       "routineName": "RunJob"},
+            "kinds": ["job-queue-entrypoint"]}]}"#,
+    )
+    .unwrap();
+    let with_up = up(ws);
+    let with = entries(&with_up);
+    assert!(
+        with.iter()
+            .any(|e| e.to_string().contains("RunJob")
+                && e.to_string().contains("job-queue-entrypoint")),
+        "the configured job-queue entry: {with:#?}"
+    );
+    // The canonical totals count it too (sol r1): the program's entries,
+    // the context and the nearest code entry.
+    assert_eq!(with_up["programEntries"], 1, "{with_up:#}");
+    assert_eq!(
+        with_up["entriesByContext"]["code"]["background session or task (job queue)"], 1,
+        "{with_up:#}"
+    );
+    assert_eq!(
+        with_up["nearest"]["code"]["display"], "Codeunit \"T54 Jobs\"::RunJob",
+        "{with_up:#}"
+    );
+    // The union walk over every changed routine counts it too (Fable r1).
+    let union = &doc(ws)["union"];
+    assert!(
+        entries(union)
+            .iter()
+            .any(|e| e.to_string().contains("RunJob")),
+        "the union counts the configured entry: {union:#}"
+    );
+}
+
 /// Round-2 n09: "raised by" is the events that raise the routine itself; a
 /// publisher anywhere among the ancestors is counted apart, under its own
 /// words. `OnItemModified` subscribes to `TU Item`'s `OnAfterModifyEvent`
