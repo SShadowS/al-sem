@@ -9,33 +9,38 @@
 # from every OTHER session until it is released.
 #
 #   acquire <owner> <reason> [--wait] [--timeout S] [--bind PID]
-#       Take the slot. Free means: no live holder AND MemAvailable >= 35 GB
-#       (CDO_SLOT_MEM_MIN_GB). Without --wait it refuses at once (exit 1, naming
-#       the holder); with --wait it polls every 15 s, prints the holder about
-#       every 60 s, and gives up after --timeout seconds (default: never).
-#       Exit 0: taken. Exit 4: already held by this caller (same Claude session,
-#       or the holder's CDO_SLOT_TOKEN in the environment): nothing to release.
-#       --bind PID: the slot also ends when that process ends, even when it is
-#       killed outright (scripts bind their own PID; `run` binds itself).
+#       Take the slot. Free means: nobody holds the lock AND MemAvailable >=
+#       35 GB (CDO_SLOT_MEM_MIN_GB). Without --wait it refuses at once (exit 1,
+#       naming the holder); with --wait it polls every 15 s, prints the holder
+#       about every 60 s, and gives up after --timeout seconds (default: never)
+#       or when the bound process ends.
+#       --bind PID: the hold ends with that process, even when it is killed
+#       outright (scripts bind their own PID; `run` binds itself). Outside a
+#       Claude session an acquire must be bound (or come from `run`).
+#       Exit 0: taken. Exit 4: already yours, nothing to release: the holder's
+#       CDO_SLOT_TOKEN is in the environment (a script's hold, shared with what
+#       it starts), or this Claude session holds it unbound (by hand).
 #   release
-#       Give the slot back. Only its holder may (same session or token); a STALE
-#       holder (its Claude process gone) may be released by anyone.
+#       Give the slot back. Only its holder may (its session or token); a STALE
+#       holder may be released by anyone.
 #   status
 #       `free` (exit 0), `held by ...` (exit 1) or `held by ... STALE` (exit 3).
 #   run <owner> <reason> -- <command...>
-#       acquire --wait, run the command, release on any exit (only when this
-#       run took the slot: inside a holder's run it just runs).
+#       acquire --wait (bound to itself), run the command, release on any exit
+#       (only when this run took the slot: inside a holder's run it just runs).
 #
-# The lock is a flock on `$CDO_SLOT_DIR/lock` (default /work/.al-sem/cdo-slot),
-# held by a detached holder process that keeps the file open; its `status` file
-# names owner, reason, start, Claude session, Claude PID, holder PID and token.
-# A holder whose Claude process (CLAUDE_PID) is gone is STALE: the next acquire
-# ends it and takes over. Scripts export CDO_SLOT_TOKEN so the scripts they
-# start (land -> cdo-gate) share their hold.
+# Whether the slot is held is the flock on `$CDO_SLOT_DIR/lock` alone (default
+# /work/.al-sem/cdo-slot); a detached holder process keeps it. The `status` file
+# only describes the holder (owner, reason, start, Claude session and PID, bound
+# PID, holder PID, token); it is written and removed under a second lock (`meta`)
+# and only for a PID that is provably this slot's holder (its environment names
+# this lock), so no race or reused PID makes it lie or kills a stranger. A hold
+# is STALE when its Claude process is gone and it is bound to no live process:
+# the next acquire ends it and takes over.
 set -euo pipefail
 
 usage() {
-    sed -n '/^#   acquire/,/^#       run took the slot/p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '/^#   acquire/,/^#       (only when this run/p' "$0" | sed 's/^# \{0,1\}//'
     echo "Environment: CDO_SLOT_DIR, CDO_SLOT_MEM_MIN_GB (35), CDO_SLOT_POLL_S (15)."
 }
 die() {
@@ -45,6 +50,7 @@ die() {
 
 dir="${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}"
 lock="$dir/lock"
+meta="$dir/meta"
 status_file="$dir/status"
 mem_min="${CDO_SLOT_MEM_MIN_GB:-35}"
 poll="${CDO_SLOT_POLL_S:-15}"
@@ -53,39 +59,74 @@ poll="${CDO_SLOT_POLL_S:-15}"
 me_session="${CLAUDE_CODE_SESSION_ID:-}"
 me_pid="${CLAUDE_PID:-}"
 me_token="${CDO_SLOT_TOKEN:-}"
+bind=""
 
 # field <name>: one field of the status file ("" when absent).
 field() { { sed -n "s/^$1=//p" "$status_file" 2>/dev/null || true; } | head -n 1; }
-alive() { [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null; }
+alive() { [[ "$1" =~ ^[1-9][0-9]*$ ]] && kill -0 "$1" 2>/dev/null; }
 # A Claude PID counts only while it is still a claude process (PID reuse).
 claude_alive() { alive "$1" && grep -q claude "/proc/$1/comm" "/proc/$1/cmdline" 2>/dev/null; }
+# The lock is held by somebody (not by this process: it never keeps it).
+# (A short wait, not -n: another prober or a starting holder has it for an
+# instant, and that must not read as a held slot.)
+lock_held() { [[ -e "$lock" ]] && ! flock -w 0.1 "$lock" true 2>/dev/null; }
+# is_holder <pid>: that process is a holder of THIS slot (its environment says so).
+is_holder() {
+    alive "$1" && tr '\0' '\n' <"/proc/$1/environ" 2>/dev/null | grep -qxF "CS_LOCK=$lock"
+}
+# with_meta <command...>: run it under the meta lock (status changes only).
+with_meta() {
+    local fd
+    exec {fd}>"$meta"
+    flock -x "$fd"
+    local rc=0
+    "$@" || rc=$?
+    exec {fd}>&-
+    return "$rc"
+}
 
-# state: sets st to free | mine | held | stale, and holder_pid (not in a
-# subshell: the caller needs both).
+# state: sets st to free | mine | held | stale, and holder_pid / bound.
+#   mine: our token, or our Claude session holding unbound (shareable);
+#   a hold of our own session that is bound to a process is NOT shareable (it
+#   ends with that process): a second land of the same session waits for it.
 state() {
-    holder_pid=$(field holder_pid)
-    if [[ ! -f "$status_file" ]] || ! alive "$holder_pid"; then
+    holder_pid="" bound=""
+    if ! lock_held; then
         st=free
+        return
+    fi
+    holder_pid=$(field holder_pid)
+    if ! is_holder "$holder_pid"; then
+        # Held, but its status is not written yet (or was lost): somebody's.
+        holder_pid=""
+        st=held
         return
     fi
     local pid session token
     pid=$(field claude_pid)
     session=$(field session)
     token=$(field token)
+    bound=$(field bound)
     if [[ -n "$me_token" && "$token" == "$me_token" ]] \
-        || [[ -n "$me_session" && "$session" == "$me_session" ]]; then
+        || [[ -n "$me_session" && "$session" == "$me_session" && -z "$bound" ]]; then
         st=mine
-    elif [[ -n "$pid" ]] && ! claude_alive "$pid"; then
+    elif [[ -n "$pid" ]] && ! claude_alive "$pid" && ! alive "$bound"; then
         st=stale
     else
         st=held
     fi
 }
 describe() {
-    local since age
+    if [[ -z "$holder_pid" ]]; then
+        echo "held (its holder is still writing its status)"
+        return
+    fi
+    local since age who
     since=$(field since)
     age=$(($(date +%s) - $(date -d "$since" +%s 2>/dev/null || date +%s)))
-    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), session $(field session)"
+    who="session $(field session)"
+    [[ -n "$bound" ]] && who+=", for PID $bound"
+    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
 }
 mem_ok() {
     ((mem_min == 0)) && return 0
@@ -93,12 +134,18 @@ mem_ok() {
     kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
     ((kb >= mem_min * 1048576))
 }
-end_holder() { # end_holder <pid>: the status first, so no new holder's status is lost
-    rm -f "$status_file"
+# end_holder <pid>: under the meta lock, and only while <pid> is still this
+# slot's holder named by the status: remove the status, then end the process.
+end_holder_locked() {
+    is_holder "$1" || return 0
+    [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file"
     kill "$1" 2>/dev/null || true
+}
+end_holder() {
+    with_meta end_holder_locked "$1"
     local n
     for n in $(seq 50); do alive "$1" || return 0; sleep 0.1; done
-    kill -9 "$1" 2>/dev/null || true
+    is_holder "$1" && kill -9 "$1" 2>/dev/null || true
 }
 
 # try_take <owner> <reason> <token>: start a holder; 0 when it holds the lock.
@@ -106,29 +153,40 @@ try_take() {
     local ready="$dir/ready.$$" n
     rm -f "$ready"
     CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_SESSION="$me_session" CS_PID="$me_pid" \
-        CS_LOCK="$lock" CS_STATUS="$status_file" CS_READY="$ready" \
-        setsid sh -c '
+        CS_LOCK="$lock" CS_META="$meta" CS_STATUS="$status_file" CS_READY="$ready" \
+        setsid bash -c '
+            # Keep no descriptor of the caller (a pipe it waits on, a lock).
+            for fd in /proc/$$/fd/*; do
+                fd=${fd##*/}
+                [ "$fd" -gt 2 ] && eval "exec $fd>&-"
+            done 2>/dev/null
             exec 9>"$CS_LOCK" || exit 70
-            flock -n 9 || exit 75
+            # Up to 1 s: a status probe holds the lock for an instant.
+            flock -w 1 9 || exit 75
+            exec 8>"$CS_META" && flock -x 8 || exit 72
             tmp="$CS_STATUS.$$"
             {
-                echo "owner=$CS_OWNER"
-                echo "reason=$CS_REASON"
-                echo "since=$(date -u +%FT%TZ)"
-                echo "session=$CS_SESSION"
-                echo "claude_pid=$CS_PID"
-                echo "holder_pid=$$"
-                echo "token=$CS_TOKEN"
+                printf "owner=%s\n" "$CS_OWNER"
+                printf "reason=%s\n" "$CS_REASON"
+                printf "since=%s\n" "$(date -u +%FT%TZ)"
+                printf "session=%s\n" "$CS_SESSION"
+                printf "claude_pid=%s\n" "$CS_PID"
+                printf "bound=%s\n" "$CS_BIND"
+                printf "holder_pid=%s\n" "$$"
+                printf "token=%s\n" "$CS_TOKEN"
             } >"$tmp" && mv "$tmp" "$CS_STATUS" || exit 71
-            echo ok >"$CS_READY"
+            exec 8>&-
+            printf "ok\n" >"$CS_READY"
             if [ -n "$CS_BIND" ]; then
-                # Bound: the slot ends with the process it was taken for, even
+                # Bound: the hold ends with the process it was taken for, even
                 # when that process is killed outright (no trap runs).
                 while kill -0 "$CS_BIND" 2>/dev/null; do sleep 2 9>&-; done
+                exec 8>"$CS_META" && flock -x 8
+                grep -qx "holder_pid=$$" "$CS_STATUS" 2>/dev/null && rm -f "$CS_STATUS"
                 exit 0
             fi
             exec sleep 2147483647
-        ' </dev/null >/dev/null 2>&1 7>&- 8>&- 9>&- &
+        ' </dev/null >/dev/null 2>&1 &
     local holder=$!
     for n in $(seq 100); do
         if [[ -s "$ready" ]]; then
@@ -139,14 +197,16 @@ try_take() {
         sleep 0.05
     done
     rm -f "$ready"
-    end_holder "$holder"
+    kill "$holder" 2>/dev/null || true
     return 1
 }
 
 acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
     local owner=$1 reason=$2 wait=$3 timeout=$4 start=$SECONDS last=-60 why
     [[ "$owner" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "owner '$owner': a short name (letters, digits, . _ -)"
-    [[ -n "$reason" && "$reason" != *$'\n'* ]] || die "give a one-line reason"
+    [[ -n "$reason" && "$reason" != *$'\n'* && ${#reason} -le 200 ]] || die "give a one-line reason (at most 200 characters)"
+    [[ -n "$me_session" || -n "$me_token" || -n "$bind" ]] \
+        || die "outside a Claude session, bind the hold (--bind PID) or use 'run'; nobody could release it otherwise"
     mkdir -p "$dir"
     local token=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
     while :; do
@@ -162,18 +222,26 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
                 continue
                 ;;
             free)
-                if mem_ok && try_take "$owner" "$reason" "$token"; then
+                if ! mem_ok; then
+                    why="MemAvailable below $mem_min GB"
+                elif try_take "$owner" "$reason" "$token"; then
                     echo "cdo-slot: taken by $owner ($reason)"
                     return 0
+                else
+                    state
+                    why=$( ((${#holder_pid})) && describe || echo "taken by another acquirer just now")
                 fi
                 ;;
+            held) why=$(describe) ;;
         esac
-        if [[ "$st" == held ]]; then why=$(describe); else why="MemAvailable below $mem_min GB"; fi
         ((wait)) || die "not taken: $why (use --wait to wait for it)"
-        # Say what it waits for first (every ~60 s), then check the limit.
+        # Say what it waits for first (every ~60 s), then check the limits.
         if ((SECONDS - last >= 60)); then
             echo "cdo-slot: waiting: $why"
             last=$SECONDS
+        fi
+        if [[ -n "$bind" ]] && ! alive "$bind"; then
+            die "the process to bind ($bind) ended while waiting: $why"
         fi
         if [[ -n "$timeout" ]] && ((SECONDS - start >= timeout)); then
             die "not taken after ${timeout} s: $why"
@@ -190,7 +258,15 @@ release() {
             end_holder "$holder_pid"
             echo "cdo-slot: released"
             ;;
-        held) die "not yours: $(describe)" ;;
+        held)
+            # Our own session's bound hold (a script of ours) is ours to end too.
+            if [[ -n "$holder_pid" && -n "$me_session" && "$(field session)" == "$me_session" ]]; then
+                end_holder "$holder_pid"
+                echo "cdo-slot: released (it was bound to PID $bound)"
+            else
+                die "not yours: $(describe)"
+            fi
+            ;;
     esac
 }
 
@@ -201,7 +277,7 @@ case "$cmd" in
         (($# >= 2)) || { usage >&2; exit 2; }
         owner=$1 reason=$2
         shift 2
-        wait=0 timeout="" bind=""
+        wait=0 timeout=""
         [[ "$cmd" == run ]] && wait=1
         while (($#)); do
             case "$1" in

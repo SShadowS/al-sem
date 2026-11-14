@@ -518,7 +518,7 @@ fn land_holds_the_cdo_slot_from_start_to_end() {
         "CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash {slot} status >> \"$STUB_LOG\" 2>&1; \
          printf '%s' '{{\"tool_name\":\"Bash\",\"session_id\":\"other\",\
          \"tool_input\":{{\"command\":\"cargo test\"}}}}' \
-         | bash {guard} 2>/dev/null; echo \"guard $?\" >> \"$STUB_LOG\""
+         | {guard} 2>/dev/null; echo \"guard $?\" >> \"$STUB_LOG\""
     );
     let cdo = format!(
         // No session id: only land's exported token can make it "yours" (a
@@ -538,7 +538,10 @@ fn land_holds_the_cdo_slot_from_start_to_end() {
         calls[1].starts_with("held by land (landing tools/tls-58-x) since "),
         "{calls:?}"
     );
-    assert!(calls[1].ends_with("session land-test"), "{calls:?}");
+    assert!(
+        calls[1].contains("session land-test, for PID "),
+        "bound to the land run: {calls:?}"
+    );
     assert_eq!(calls[2], "guard 2", "the hook refuses the other session");
     assert_eq!(calls[3], "cdo-gate /cdo-ws");
     assert_eq!(

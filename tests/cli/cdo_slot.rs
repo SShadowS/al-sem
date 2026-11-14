@@ -52,8 +52,7 @@ impl Slot {
     }
     fn guard_raw(&self, input: &str) -> (Option<i32>, String) {
         use std::io::Write;
-        let mut child = std::process::Command::new("bash")
-            .arg(GUARD)
+        let mut child = std::process::Command::new(GUARD)
             .env("CDO_SLOT_DIR", self.dir())
             .env_remove("CDO_WS")
             .env_remove("CDO_SLOT_TOKEN")
@@ -240,9 +239,13 @@ fn cdo_slot_frees_itself() {
 /// commands pass; with the slot free everything passes; input it cannot read
 /// passes (a hook bug must not stop every session).
 ///
-/// Mutations: the wrapper skipping dropped (`nice`, `cd &&`) -> those shapes
-/// pass; the `scripts/` path rule dropped -> `grep ... scripts/cdo-gate` is
-/// refused; the own-session check dropped -> A is refused.
+/// Mutations: the wrapper skipping dropped -> `nice`, `timeout -k`, `taskset`
+/// shapes pass; the first-word rule dropped (every word checked) -> `grep ...
+/// scripts/cdo-gate` is refused; the quote-aware reading dropped (word by
+/// word) -> commit messages and greps naming `cargo test` are refused; the
+/// heredoc skip dropped -> a heredoc line `cargo test` is refused; the
+/// information modes dropped -> `land --dry-run` is refused; the own-session
+/// check dropped -> A is refused.
 #[test]
 fn cdo_slot_guard_refuses_other_sessions_while_held() {
     let s = Slot::new();
@@ -260,6 +263,22 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "alsem analyze \"$CDO_WS\"",
         "bash scripts/land --push tools/x",
         "echo hi; cargo run --bin aldump",
+        // Review r1 (Fable): aliases, cargo's flags, shell keywords, wrappers.
+        "cargo t --test cli",
+        "cargo -q test",
+        "cargo --locked build",
+        "if ! cargo build; then echo no; fi",
+        "for t in r3 r4; do cargo test --test $t; done",
+        "{ cargo test; } > log 2>&1",
+        "RUSTFLAGS=\"-C a -C b\" cargo build",
+        "timeout -k 5 600 cargo test",
+        "nice -n10 cargo build",
+        "taskset -c 0-5 cargo build",
+        "/usr/bin/time -v target/release-fast/aldump --snapshot-memory /work/src/cdo-baseline/Cloud",
+        "cd /work/src/cdo-baseline/Cloud && aldump --stats .",
+        "python3 scripts/cdo-speed --warm HEAD",
+        "cd scripts && ./cdo-gate /ws",
+        "cargo \\\n  test",
     ];
     let free = [
         "grep -n x scripts/cdo-gate",
@@ -269,6 +288,16 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "echo cargo test",
         "cargo --version",
         "ls target",
+        // Review r1 (Fable): text that names a build is not a build.
+        "git commit -m \"fix: slot; cargo test green\"",
+        "git commit -m \"$(cat <<'EOF'\nfix\n\ncargo test --test cli\nEOF\n)\"",
+        "rg \"(cargo build|cargo test)\" docs",
+        "echo \"(scripts/cdo-gate --only x)\"",
+        "scripts/land --dry-run tools/x",
+        "scripts/cdo-gate --layout",
+        "bash scripts/ci-steps fmt",
+        "# cargo test later",
+        "cat > notes.md <<'EOF'\ncargo test --test cli\nEOF",
     ];
     for c in guarded.iter().chain(&free) {
         assert_eq!(s.guard("B", c).0, Some(0), "slot free: {c}");
@@ -292,5 +321,172 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     assert!(text.contains("(allowed)"), "{text}");
     let other_tool = r#"{"tool_name":"Read","session_id":"B","tool_input":{"file_path":"x"}}"#;
     assert_eq!(s.guard_raw(other_tool).0, Some(0));
+    let no_session = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
+    assert_eq!(s.guard_raw(no_session).0, Some(0), "it cannot tell: allow");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// Review r1 (Fable): the slot stays truthful under races and bad records.
+/// - 8 acquirers at once on a free slot, and 8 at once on a STALE one: exactly
+///   one wins, and the status names a live holder.
+/// - A status left behind that names an unrelated live process (a reused PID):
+///   the slot reads free, is taken, and that process is never killed.
+/// - A second acquire by the same session while its own hold is bound to a
+///   process (a second `land`) does not share it: refused.
+/// - A hold whose Claude process is gone but whose bound process lives is not
+///   stale.
+/// - An acquire with no session, no token and no --bind is refused (nobody
+///   could release it).
+/// - A reason with backslashes is stored as written.
+///
+/// Mutations: the flock dropped from the holder -> several winners; the
+/// is-holder check dropped -> the unrelated process is killed; bound holds
+/// shared by session -> the second acquire gets 4; the bound check dropped
+/// from STALE -> the live bound hold reads STALE; the no-session refusal
+/// dropped -> acquired; `echo` for `printf` in the holder -> the reason's `\n`
+/// writes a second line.
+#[test]
+fn cdo_slot_is_truthful_under_races_and_bad_records() {
+    let spawn = |s: &Slot, session: &str, extra: &[(&str, &str)]| {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.args([SLOT, "acquire", "o", "race"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        cmd.spawn().unwrap()
+    };
+    let mut gone = std::process::Command::new("true").spawn().unwrap();
+    gone.wait().unwrap();
+    let dead = gone.id().to_string();
+    for stale_first in [false, true] {
+        let s = Slot::new();
+        if stale_first {
+            let (code, text) = s.run("old", &["acquire", "old", "gone"], &[("CLAUDE_PID", &dead)]);
+            assert_eq!(code, Some(0), "{text}");
+        }
+        let racers: Vec<_> = (0..8).map(|i| spawn(&s, &format!("S{i}"), &[])).collect();
+        let wins = racers
+            .into_iter()
+            .map(|mut c| c.wait().unwrap().code())
+            .filter(|c| *c == Some(0))
+            .count();
+        assert_eq!(wins, 1, "stale first: {stale_first}");
+        let holder = s.holder().expect("a status names the winner");
+        // SAFETY: signal 0 only probes the process.
+        assert_eq!(
+            unsafe { libc::kill(holder, 0) },
+            0,
+            "the named holder lives"
+        );
+    }
+
+    // A status left behind naming a live stranger.
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    let mut stranger = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    std::fs::write(
+        s.dir().join("status"),
+        format!(
+            "owner=old\nreason=x\nsince=2026-01-01T00:00:00Z\nsession=old\nclaude_pid={dead}\n\
+             bound=\nholder_pid={}\ntoken=t\n",
+            stranger.id()
+        ),
+    )
+    .unwrap();
+    assert_eq!(s.run("B", &["status"], &[]), (Some(0), "free\n".into()));
+    let (code, text) = s.run("B", &["acquire", "engine", "y"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        stranger.try_wait().unwrap().is_none(),
+        "the stranger was killed"
+    );
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+    // The lock really held (a stale holder), its status rewritten to name the
+    // stranger: still nobody kills the stranger; B is refused.
+    let (code, text) = s.run("old", &["acquire", "old", "gone"], &[("CLAUDE_PID", &dead)]);
+    assert_eq!(code, Some(0), "{text}");
+    let real = s.holder().unwrap();
+    let status = std::fs::read_to_string(s.dir().join("status")).unwrap();
+    std::fs::write(
+        s.dir().join("status"),
+        status.replace(
+            &format!("holder_pid={real}"),
+            &format!("holder_pid={}", stranger.id()),
+        ),
+    )
+    .unwrap();
+    let (code, text) = s.run("B", &["acquire", "engine", "z"], &[]);
+    let stranger_lives = stranger.try_wait().unwrap().is_none();
+    // SAFETY: SIGKILL to the real holder this test started (before any assert,
+    // so a failing run leaves no holder behind).
+    unsafe { libc::kill(real, libc::SIGKILL) };
+    assert_eq!(code, Some(1), "{text}");
+    assert!(stranger_lives, "the stranger was killed");
+    stranger.kill().unwrap();
+    stranger.wait().unwrap();
+    assert!(s.wait_free());
+
+    // The same session, its hold bound to a running process; and a bound hold
+    // whose Claude process is gone.
+    let mut first = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    let pid = first.id().to_string();
+    let (code, text) = s.run("A", &["acquire", "land", "one", "--bind", &pid], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let (code, text) = s.run("A", &["acquire", "land", "two"], &[]);
+    assert_eq!(
+        code,
+        Some(1),
+        "a bound hold is not shared by session: {text}"
+    );
+    first.kill().unwrap();
+    first.wait().unwrap();
+    assert!(s.wait_free());
+    let mut bound = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    let pid = bound.id().to_string();
+    let (code, text) = s.run(
+        "C",
+        &["acquire", "land", "cron", "--bind", &pid],
+        &[("CLAUDE_PID", &dead)],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        s.run("B", &["status"], &[]).0,
+        Some(1),
+        "live bound hold: not stale"
+    );
+    bound.kill().unwrap();
+    bound.wait().unwrap();
+    assert!(s.wait_free());
+
+    // No session, no token, no bind.
+    let (code, text) = s.run("", &["acquire", "x", "y"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("outside a Claude session"), "{text}");
+    assert_eq!(s.run("B", &["status"], &[]).0, Some(0));
+
+    // A reason with backslashes.
+    let reason = r"measure\nsession=B\cx";
+    let (code, text) = s.run("A", &["acquire", "tools", reason], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let (code, text) = s.run("B", &["status"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains(&format!("({reason})")), "{text}");
+    assert!(!text.contains("(yours)"), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }

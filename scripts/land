@@ -196,7 +196,9 @@ if ((!dry_run)); then
     slot_args=(acquire "${CDO_SLOT_OWNER:-land}" "landing ${branches[*]}" --wait --bind "$$")
     [[ -z "${LAND_SLOT_TIMEOUT_S:-}" ]] || slot_args+=(--timeout "$LAND_SLOT_TIMEOUT_S")
     rc=0
-    bash "$slot" "${slot_args[@]}" 7>&- 8>&- || rc=$?
+    # No memory wait here (ci-steps all needs none; the mem-wait step before
+    # cdo-gate does it, under the slot, so nothing can take the memory meanwhile).
+    CDO_SLOT_MEM_MIN_GB=0 bash "$slot" "${slot_args[@]}" 7>&- 8>&- || rc=$?
     case "$rc" in
         0) trap 'bash "$slot" release >/dev/null 2>&1 || true' EXIT ;;
         4) ;; # the caller's own hold (a script that took it first)

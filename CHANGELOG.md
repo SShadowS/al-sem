@@ -12,41 +12,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/cdo-slot acquire|release|status|run <owner> <reason>`: the one CDO slot of
   the tentacle (147 of the orchestrator's 316 messages were about holds; at least 9
   times a lane's run had started before the hold arrived).
-  - A flock on `/work/.al-sem/cdo-slot/lock` (`CDO_SLOT_DIR`), held by a detached
-    holder process; a `status` file names owner, reason, start, Claude session,
-    Claude PID, holder PID and token.
-  - `acquire` takes it when no live holder has it and MemAvailable >= 35 GB; without
+  - Held or free is the flock on `/work/.al-sem/cdo-slot/lock` (`CDO_SLOT_DIR`)
+    alone, kept by a detached holder process (bash, holding no descriptor of its
+    caller). A `status` file only describes the holder (owner, reason, start, Claude
+    session and PID, bound PID, holder PID, token); it is written and removed under a
+    second lock, and only for a PID whose environment proves it is this slot's
+    holder, so a race or a reused PID never makes it lie or kills a stranger.
+  - `acquire` takes it when nobody holds the lock and MemAvailable >= 35 GB; without
     `--wait` it refuses at once naming the holder, with `--wait` it polls and prints
-    the holder about every 60 s (`--timeout S` gives up). Exit 4: already yours.
-  - Re-entrant: the same Claude session, or the holder's `CDO_SLOT_TOKEN` (which
-    scripts export to what they start), shares the hold.
-  - It frees itself: a holder whose Claude process is gone is STALE and the next
-    acquire takes over; `--bind PID` (which land and cdo-gate use) ends the hold
-    with that process even when it is killed outright; `run ... -- <cmd>` releases on
-    any exit.
-- `scripts/land` takes the slot at its check step and holds it to the end, its
-  `ci-steps all` included (it replaces land's per-worktree lock: one lock, not two);
-  `scripts/cdo-gate` takes it for its whole run, sharing land's hold inside a
-  landing. `LAND_SLOT_TIMEOUT_S` limits land's wait.
-- `scripts/claude-hooks/cdo-slot-guard`, a PreToolUse hook for the Bash tool (the
-  owner wires it): while another live session holds the slot it refuses this
-  session's `cargo build|test|check|clippy|nextest|run|bench`, the gate scripts
-  (`ci-steps`, `cdo-gate`, `check-goldens`, `cdo-speed`, `land`, `cdo-before-after`)
-  and `aldump`/`alsem` runs that name the CDO workspace, as the first word of any
-  command in the line (after `cd &&`, `VAR=x`, `nice`, `env`, `timeout`, `bash -c`
-  ...), with a message naming the holder. Reading a script, git, fixture runs and the
-  holder's own commands pass; input it cannot read passes.
-- Tests: `cli` members `cdo_slot` (one holder at a time, re-entrancy by session and
-  token, stale takeover, `--bind`, `run` on success, failure and SIGKILL, the memory
-  gate; the hook on 13 guarded and 7 free command lines) and `land_script`
+    the holder about every 60 s (`--timeout S` gives up; so does the death of the
+    process it binds to). Exit 4: already yours.
+  - Shared ("already yours") only by the holder's `CDO_SLOT_TOKEN` (which scripts
+    export to what they start: land -> cdo-gate), or by the same Claude session when
+    that session holds it unbound (by hand). A hold bound to a process is never
+    shared by session, so a second land from the same session waits.
+  - `--bind PID` (land, cdo-gate, `run`) ends the hold with that process even when it
+    is killed outright. An unbound hold whose Claude process is gone is STALE and the
+    next acquire takes over; a hold whose bound process lives is never stale. Outside
+    a Claude session an acquire must be bound (or come from `run`): nobody could
+    release it otherwise.
+- `scripts/land` takes the slot at its check step (no memory wait there: its
+  mem-wait step before cdo-gate does that, under the slot) and holds it to the end,
+  its `ci-steps all` included (it replaces land's per-worktree lock: one lock, not
+  two); `scripts/cdo-gate` takes it for its whole run, sharing land's hold inside a
+  landing. `LAND_SLOT_TIMEOUT_S` limits land's wait. TLS-61's `cdo-before-after` (to
+  come) takes it with `run`; `cdo-speed` times inside cdo-gate's hold.
+- `scripts/claude-hooks/cdo-slot-guard` (Python), a PreToolUse hook for the Bash
+  tool (the owner wires it): while another live session holds the slot it refuses
+  this session's cargo builds and tests (`build/test/check/clippy/nextest/run/bench/
+  install/rustc/doc/llvm-cov/miri` and the aliases), the gate scripts (`ci-steps`,
+  `cdo-gate`, `check-goldens`, `cdo-speed`, `land`, `merge-and-push`,
+  `intent-cdo-check`, `cdo-before-after`; not their `--help`/`--dry-run`/
+  `--layout`/`--summary=`/`--product-paths`/`ci-steps fmt`) and `aldump`/`alsem` runs
+  when the line names the CDO workspace, naming the holder. It reads the line as the
+  shell does (`shlex`: quotes, heredoc bodies, comments and line continuations), and
+  checks every command after `cd &&`, `VAR=x`, shell keywords and wrappers (`nice`,
+  `env`, `time`, `timeout`, `taskset`, `stdbuf`, `xargs`, `bash -c`, `eval` ...). Text
+  that names a build (a commit message, a grep pattern) is not a build. It fails open:
+  unreadable input, no session id or a failing `cdo-slot status` allows. Limits: it
+  sees Bash calls only (an `alsem_*` MCP call on CDO is not guarded).
+- Tests: `cli` members `cdo_slot` (one holder at a time; sharing by session and
+  token; stale takeover; `--bind`; `run` on success, failure and SIGKILL; the memory
+  gate; races: 8 acquirers at once, free and stale, give one winner whose status names
+  a live holder; a status naming a live stranger, with the lock free or held, never
+  kills it; a bound hold not shared by session and not stale while its process lives;
+  no-session acquire refused; a reason with backslashes kept as written; the hook on
+  28 guarded and 16 free command lines) and `land_script`
   (`land_holds_the_cdo_slot_from_start_to_end`: another session sees land's hold
   during its ci and the hook refuses its `cargo test`; the nested cdo-gate shares the
-  hold through the token; free afterwards), and `gate_scripts` (cdo-gate holds the
-  slot through every cargo call). Tests that run the real cdo-gate or land use a
-  slot folder of their own. Mutations, each failing a test: the session match, the
-  holder check in release, the stale check, the bound watch, `run`'s release, the
-  hook's wrapper skipping, its first-word rule, its own-session check, land's
-  acquire, land's token export, cdo-gate's acquire.
+  hold through the token alone; free afterwards), and `gate_scripts` (cdo-gate holds
+  the slot through every cargo call). Tests that run the real cdo-gate or land use a
+  slot folder of their own, and end any holder they leave. Mutations, each failing a
+  test: the session match, release's holder check, the stale check, the bound watch,
+  `run`'s release, the holder's flock, the is-holder check, session sharing of a bound
+  hold, the bound check in STALE, the no-session refusal, the hook's quote-aware
+  reading, heredoc skip, information modes, wrapper skipping, first-word rule and
+  own-session check, land's acquire and token export, cdo-gate's acquire.
+- Review r1 (Fable) found the first design unsafe (a concurrent stale takeover could
+  delete the winner's status; a recorded PID was trusted; session sharing removed
+  land's one-run guard; the hook missed most real shapes and refused commit messages);
+  the above is the redesign.
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
