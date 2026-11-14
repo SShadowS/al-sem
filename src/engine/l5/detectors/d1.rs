@@ -52,7 +52,7 @@ use crate::program::model::workspace::ModelTable;
 use crate::program::model::workspace::{Model, ModelEntities, ModelRecordOperation, ModelRoutine};
 // Only the `search_loops`/`WalkResult` shadow oracle still handles OWNED
 // uncertainties; the production cohort path carries `UncertaintyId`s and resolves
-// them through the run-level `UncertaintyTable`.
+// them through the context's `UncertaintyIndex`.
 #[cfg(test)]
 use crate::engine::l4::summary::Uncertainty;
 use crate::engine::l5::actionable_anchor::pick_actionable_anchor;
@@ -426,11 +426,11 @@ fn uncertainty_lites(uncertainties: &[Uncertainty]) -> Vec<UncertaintyLite> {
 }
 
 /// Convert a cohort's INTERNED uncertainty union to `UncertaintyLite`s, resolving
-/// each id through the run-level `table`. Order is the id sequence's order, which
-/// is the de-duped, key-sorted order `UncertaintyTable::dedupe` produced — the
+/// each id through the context's `index`. Order is the id sequence's order, which
+/// is the de-duped, key-sorted order `UncertaintyIndex::dedupe` produced — the
 /// same sequence the owned-value form produced before the ids existed.
 ///
-/// The clone is a pair of refcount bumps, not text: the table materialised each
+/// The clone is a pair of refcount bumps, not text: the index materialised each
 /// distinct uncertainty's `kind` and evidence note once, and every
 /// `Evidence` this produces shares those allocations (see
 /// [`crate::engine::l5::finding::Evidence`]).
@@ -3785,9 +3785,9 @@ mod assembly_tests {
     }
 
     /// Run the PRODUCTION cohort pipeline over a fixture and return the assembled
-    /// findings — `search_loops_cohorts` (which interns each cohort's uncertainty
-    /// union into the run's [`UncertaintyTable`]) + `assemble_cohort_findings`
-    /// (which resolves the winner's ids back through it). Distinct from
+    /// findings — `search_loops_cohorts` (which stores each cohort's uncertainty
+    /// union as ids into the context's `UncertaintyIndex`) +
+    /// `assemble_cohort_findings` (which resolves the winner's ids back through it). Distinct from
     /// [`assemble`] above, which drives the `#[cfg(test)]` `search_loops` oracle.
     fn assemble_cohorts(
         routines: &[ModelRoutine],
@@ -3906,8 +3906,8 @@ mod assembly_tests {
     }
 
     /// **Pins the interned-uncertainty USE, end to end.** The cohort's uncertainty
-    /// union is stored in `CohortRep` as `UncertaintyId`s into the run-level
-    /// `UncertaintyTable`; `assemble_cohort_findings` resolves them back at
+    /// union is stored in `CohortRep` as `UncertaintyId`s into the context's
+    /// `UncertaintyIndex`; `assemble_cohort_findings` resolves them back at
     /// `to_confidence`. This asserts the resolved `Finding.confidence` EXACTLY —
     /// level, `cappedBy`, and every evidence note in order — so a wrong id, a
     /// wrong table, a lost dedupe or a lost sort all fail here.
@@ -4135,7 +4135,7 @@ mod assembly_tests {
 
     /// **Pins the SHARED-note representation at the use site.** Every
     /// `Finding.confidence.evidence` record is a `ConfidenceEvidence` whose
-    /// `note` is an `Arc<str>` cloned from the run-level `UncertaintyTable` — one
+    /// `note` is an `Arc<str>` cloned from the context's `UncertaintyIndex` — one
     /// allocation per DISTINCT uncertainty rather than one per record. That is the entire
     /// memory claim of this change (7,418,849 records, 3,073 distinct notes on
     /// Base App 8020), and equality alone cannot see it: a version that rebuilt

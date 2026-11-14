@@ -32,7 +32,7 @@ const VALID_CAPPED_BY: &[&str] = &[
 /// **Both fields are `Arc<str>`, and the note is materialised HERE rather than
 /// in the mapper.** `d1`'s cohort path turns ~3.1k distinct uncertainties into
 /// 7.4M evidence records on Base App 8020; interning the note at the *value*
-/// means [`crate::engine::l5::d1_cohort::UncertaintyTable`] can hold one
+/// means [`crate::engine::l5::detector_context::UncertaintyIndex`] can hold one
 /// `UncertaintyLite` per distinct uncertainty and hand out clones, so a record
 /// costs two refcount bumps and no allocation. The four low-volume producers
 /// (d2/d3/d46/d48) call [`Self::new`] per record, which is one allocation

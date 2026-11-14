@@ -79,6 +79,14 @@ pub struct ProgramGraph {
     /// 2b; empty on every successful ingest (the overwhelmingly common
     /// case) and in every in-memory test fixture that doesn't explicitly
     /// wire it.
+    ///
+    /// A package whose symbols the loader cannot parse at all is dropped before
+    /// the graph build (`dependencies::load_all_apps`, Phase 3) and never
+    /// appears here; `FreshCoverage` reports it. A package the loader's typed
+    /// parse accepts but the ABI reader's stricter whole-value check rejects (a
+    /// `1e400` or a lone surrogate in a member the loader skips) is loaded and
+    /// lands here (TLS-47; the two rules differ, ENG-68). Printed by
+    /// `aldump --program-call-graph-stats` and the dependency ledger.
     pub abi_ingest_errors: Vec<AbiIngestError>,
     /// The WORKSPACE's declarations as they occur in source, before the sort and
     /// dedup above (engine-switch S2b.3): one row per occurrence, with the node it

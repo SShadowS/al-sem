@@ -49,15 +49,32 @@ pub(crate) fn walk_al_source(
     Ok(source_root(files, tier))
 }
 
-/// The files as one root, content-hashed over their texts in order (the walk
-/// sorts) for determinism; `None` if there are none (symbol-only).
+/// The files as one root, content-hashed over each file's path and text in
+/// order (the walk sorts) for determinism; `None` if there are none
+/// (symbol-only). Each part is length-prefixed (TLS-46): hashing the texts
+/// alone gave a renamed file, or the same bytes split differently across
+/// files, the same hash. Latent: no production code reads this hash today (the
+/// workspace root's copy in `Provenance` is never read, and the session
+/// identity skips the workspace app; a `LocalRepoProvider` dependency would
+/// reach it, but `SnapshotBuilder.local_providers` is always empty in
+/// production), so the fix protects a future reader.
+/// Length-prefixed parts as in `source_deps`' content hash. Never persisted, so
+/// no cache version moves. Limit: the hash sees the virtual path, which the
+/// walk builds with a lossy conversion, so two non-UTF-8 file names that
+/// convert alike hash alike (older than TLS-46; review sol r1).
 fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
     if files.is_empty() {
         return None;
     }
     let mut hasher = blake3::Hasher::new();
+    hasher.update(b"al-sem-source-root-v2");
+    let mut put = |b: &[u8]| {
+        hasher.update(&(b.len() as u64).to_le_bytes());
+        hasher.update(b);
+    };
     for f in &files {
-        hasher.update(f.text.as_bytes());
+        put(f.virtual_path.as_bytes());
+        put(f.text.as_bytes());
     }
     let content_hash = hasher.finalize().to_hex().to_string();
     Some(SourceRoot {
@@ -70,7 +87,8 @@ fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
 /// The workspace app's source from the frozen [`WorkspaceInputs`] (#160 step 1, spec
 /// §4.2.3 row 1): [`walk_al_source`]'s rules over the set's `.al` list instead
 /// of the disk. Every `al_files` entry in `rel_posix` order (nested apps
-/// included), the SAME `Arc<str>` texts, blake3 over the texts in that order;
+/// included), the SAME `Arc<str>` texts, hashed by [`source_root`] (each
+/// path and text, length-prefixed, in that order);
 /// no file is `Ok(None)` (symbol-only). A failed walk or an unreadable file
 /// fails with `walk_al_source`'s text, the walk's stored `io::Error` keeping
 /// its whole `source()` chain.
@@ -271,6 +289,54 @@ mod tests {
         assert_eq!(root.files.len(), 1);
         assert_eq!(root.files[0].virtual_path, "Foo.al");
         assert_eq!(root.content_hash.len(), 64);
+    }
+
+    /// TLS-46: the workspace provider's content hash tells apart a renamed file
+    /// and the same bytes split differently across files, and is stable for
+    /// the same files.
+    ///
+    /// Discrimination (2026-11-13): `source_root` hashing the texts alone with no
+    /// length prefix (the old scheme) fails at "split"; length prefixes kept but
+    /// the path left out fails at "rename"; path and text hashed with no length
+    /// prefix fails at "framing" (review sol r1). Restored, it passes.
+    #[test]
+    fn workspace_root_hash_sees_paths_and_file_boundaries() {
+        let hash_of = |files: &[(&str, &str)]| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            for (name, text) in files {
+                std::fs::write(dir.path().join(name), text).unwrap();
+            }
+            let p = WorkspaceProvider {
+                root: dir.path().to_path_buf(),
+            };
+            p.try_provide(&dummy_app())
+                .unwrap()
+                .expect("source")
+                .content_hash
+        };
+        let base = hash_of(&[("a.al", "codeunit 1 A { }"), ("b.al", "codeunit 2 B { }")]);
+        assert_eq!(
+            base,
+            hash_of(&[("a.al", "codeunit 1 A { }"), ("b.al", "codeunit 2 B { }")]),
+            "the same files hash alike"
+        );
+        assert_ne!(
+            base,
+            hash_of(&[("a.al", "codeunit 1 A { }codeunit 2"), ("b.al", " B { }")]),
+            "split: the same bytes cut at another file boundary"
+        );
+        assert_ne!(
+            base,
+            hash_of(&[("a.al", "codeunit 1 A { }"), ("c.al", "codeunit 2 B { }")]),
+            "rename: b.al renamed c.al"
+        );
+        // Review sol r1: path and text concatenated with no length prefix read
+        // `a.alb.alc.al` for both sets; only the framing tells them apart.
+        assert_ne!(
+            hash_of(&[("a.al", "b.al"), ("c.al", "")]),
+            hash_of(&[("a.al", ""), ("b.alc.al", "")]),
+            "framing: path and text bytes that concatenate alike"
+        );
     }
 
     #[test]
