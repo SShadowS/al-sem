@@ -548,6 +548,71 @@ fn eng14_a4_a_conditional_case_else_may_not_run() {
     );
 }
 
+/// ENG-14 census on CDO (Fable's part-1 review, I1): how many routines lose their control tree,
+/// by cause and by app (workspace or dependency). A measurement, not a ratchet: it prints and
+/// asserts only that the model was built. Run with
+/// `CDO_WS=… cargo test -p al-sem --lib eng14_cdo_untrusted_census -- --nocapture`.
+#[test]
+fn eng14_cdo_untrusted_census() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
+    let x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
+        &inputs,
+        false,
+        crate::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap_or_else(|_| panic!("no cross-app model for {}", ws.display()));
+    let m = &x.resolved;
+    let primary = m
+        .primary_app
+        .as_ref()
+        .expect("a primary app")
+        .app_guid
+        .clone();
+    // (workspace?, parse_incomplete?) -> rows with a body and no tree
+    let mut by: std::collections::BTreeMap<(bool, bool), usize> = Default::default();
+    let (mut bodies, mut ws_bodies) = (0usize, 0usize);
+    let mut examples: Vec<String> = Vec::new();
+    for r in &m.workspace.routines {
+        if !r.body_available {
+            continue;
+        }
+        let in_ws = r.app_guid == primary;
+        bodies += 1;
+        ws_bodies += usize::from(in_ws);
+        if r.statement_tree.is_none() {
+            *by.entry((in_ws, r.parse_incomplete)).or_default() += 1;
+            if examples.len() < 20 {
+                examples.push(format!(
+                    "{} {}::{} parse_incomplete={}",
+                    if in_ws { "ws " } else { "dep" },
+                    r.object_id,
+                    r.name,
+                    r.parse_incomplete
+                ));
+            }
+        }
+    }
+    println!("ENG14-CENSUS rows with a body: {bodies} (workspace {ws_bodies})");
+    for ((in_ws, pi), n) in &by {
+        println!(
+            "ENG14-CENSUS untrusted {} {}: {n}",
+            if *in_ws { "workspace" } else { "dependency" },
+            if *pi {
+                "parse-incomplete"
+            } else {
+                "unlowered statement"
+            }
+        );
+    }
+    for e in &examples {
+        println!("ENG14-CENSUS example {e}");
+    }
+    assert!(bodies > 0, "the CDO model has bodies");
+}
+
 /// A6 sources: two routines whose control tree cannot be trusted. `Broken` has a parse
 /// error inside an expression (every statement is still modelled, so only
 /// `parse_incomplete` makes it untrusted); `Deep` nests more `if` levels than the lowering
