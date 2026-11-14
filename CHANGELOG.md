@@ -13,34 +13,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the chain the orchestrator typed by hand 31 times (once it ran on into `cdo-gate`
   after `ci-steps` had failed). Steps, each with a one-line verdict; the first
   failure stops the run:
-  - **check**: the gate worktree (default `/work/alsem-wt/orchestrator-gate`) is
-    clean with no merge in progress; local master is not behind origin/master as of
-    the last fetch; every branch exists, is not master, is not yet in master and is
-    given once. It prints master's sha and the merge order.
+  - **check**: one run per gate worktree at a time (a `flock`, held to the end); the
+    gate worktree (default `/work/alsem-wt/orchestrator-gate`) is clean with no
+    merge in progress; local master is not behind origin/master as of the last
+    fetch; every branch exists, is not master, is not yet in master and is given
+    once; with `--push`, the main checkout is clean. It prints master's sha and the
+    merge order.
   - **merge**: on a detached master, each branch in the order given, `merge --no-ff
     -m "landing: <ID>"` (with `core.commentChar=';'`). A conflict in CHANGELOG.md
-    alone is resolved as a union, master's lines first, with a blank line put back
-    before each heading; any other conflict aborts the merge and stops. Only then is
-    `landing/<ids>` created (`-2`, `-3` when taken), so a refused run leaves no
-    branch.
+    alone is resolved by keeping both sides' added lines, master's first, with a
+    blank line between an entry and a heading that meet, but only when every
+    conflict there is additions on both sides (a line both sides changed, a deleted
+    file or content git cannot merge is refused); any other conflict aborts the merge
+    and stops. Only then is `landing/<ids>` created (`-2`, `-3` when taken), so a
+    refused or interrupted merge leaves nothing behind.
   - **ci** (`ci-steps all`), **mem-wait** (MemAvailable >= 35 GB and no other
     `cdo-gate`, up to 30 min), **cdo** (`cdo-gate /work/src/cdo-baseline/Cloud`).
+  - **recheck**, after ci and after cdo: the worktree is still on the gated landing
+    commit and clean, the branch still points there, and master has not moved; a
+    side merge or a second checkout during the gates stops the run before it pushes.
   - **push**: `merge-and-push landing/<ids>` from the main checkout, only with
-    `--push`; otherwise it prints that command. It never force-pushes, resets or
-    deletes a branch.
-- Logs per step and a `verdict` file in `/work/.al-sem/land/<time>-<ids>/`; a start
-  and an end line per step in `/work/.al-sem/flow-timings.jsonl` (step `land`).
-  `--dry-run` predicts every merge with `git merge-tree`, changes no ref and exits 1
-  when a real run would refuse.
-- Tests (`cli` member `land_script`, on a repository of their own with stub gate
-  scripts): the order and stops of the gates, push only on request, the CHANGELOG
-  union, a taken name, the timing lines, and every refusal before anything changes.
-  Mutations, each failing a test: ci's stop on a failure dropped; `--push` ignored;
-  the landing branch created before the merges; the CHANGELOG-only condition dropped.
+    `--push`; otherwise it prints that command. It never force-pushes, and never
+    resets or deletes a branch itself (merge-and-push resets master back when its
+    own task gate fails).
+- Logs per step and a `verdict` file in `/work/.al-sem/land/<time>-<ids>-<pid>/`; a
+  start and an end line per step in `/work/.al-sem/flow-timings.jsonl` (step `land`).
+  `--dry-run` predicts every merge with `git merge-tree`, the CHANGELOG rule
+  included, changes no ref and exits 1 when a real run would refuse at the merge (it
+  cannot predict a pre-commit hook's verdict).
+- Tests (`cli` member `land_script`, Unix only, on a repository of their own with
+  stub gate scripts): the order and stops of the gates, push only on request, the
+  CHANGELOG resolution, a taken name, the verdict lines and file, the timing lines,
+  the mem-wait timeout, the recheck after a moved master or worktree, the lock, and
+  every refusal (dry and real) leaving nothing behind. Mutations, each failing a test:
+  ci's stop on a failure dropped; `--push` ignored; the mem-wait skipped; the
+  recheck's master check or HEAD check dropped; the lock dropped; the landing branch
+  created before the merges; the additions-only rule dropped; the dry run's
+  missing-side check dropped; the CHANGELOG-only condition dropped.
+- Review r1 (Fable): the lock and the recheck close two ways a `--push` could land a
+  tree cdo-gate never saw (a second run swapping the worktree, a side merge moving
+  master); the additions-only rule, the dry run's parity on a deleted CHANGELOG, the
+  number checks on `LAND_MEM_MIN_GB` / `LAND_MEM_TIMEOUT_S`, `git check-ref-format`
+  on the name, error checks and an INT/TERM cleanup in the merge step came from the
+  same review.
 - Checked on real history (a shared scratch clone, its master set back): `--dry-run`
   of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
-  equal the real landing's, and the CHANGELOG union for b4 and b3 equals the
-  orchestrator's hand resolution byte for byte. With today's origin/master present,
+  equal the real landing's. Replaying b4 and b3 in full with the CHANGELOG
+  resolution ends on exactly the real landing's tree (fb74a82f, 843b3976), so it
+  equals the orchestrator's hand resolutions. With today's origin/master present,
   the old master is refused as behind.
 
 ### Fixed (TLS-64: the cdo-gate TERM test no longer fails under load)
