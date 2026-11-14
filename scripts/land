@@ -1,0 +1,312 @@
+#!/usr/bin/env bash
+# scripts/land — build a landing branch from one or more lane branches, gate it,
+# and (only with --push) land it on master through scripts/merge-and-push.
+#
+# ⟨TLS-59⟩ One command for the chain the orchestrator typed by hand 31 times
+# (once it ran on into cdo-gate after ci-steps had failed). Steps, each with a
+# one-line verdict; the first failure stops the run:
+#   check     the gate worktree is clean (untracked `.agent/` aside) with no merge
+#             in progress; local master is not behind origin/master (as of the
+#             last fetch: no fetch here, merge-and-push fetches and checks again);
+#             every branch exists, is not master, is not yet in master and is
+#             given once. Prints master's sha and the merge order.
+#   merge     in the gate worktree, on a DETACHED master: each branch in the
+#             order given, `merge --no-ff -m "landing: <ID>"`. A conflict in
+#             CHANGELOG.md alone is resolved as a union (master's lines first,
+#             then the branch's); any other conflict aborts and stops. Only when
+#             every merge is in does it create `landing/<name>` (`-2`, `-3`, ...
+#             when taken), so a refused run leaves no branch behind (the
+#             worktree is then on a detached master).
+#   ci        `bash scripts/ci-steps all` (stops here on a failure: cdo-gate
+#             never runs after a red ci).
+#   mem-wait  MemAvailable >= 35 GB and no other cdo-gate running (polls 15 s,
+#             gives up after 30 min).
+#   cdo       `bash scripts/cdo-gate <CDO_WS>`.
+#   push      only with --push: `scripts/merge-and-push landing/<name>` from the
+#             main checkout (it finds ci's gate-passed record, so it does not run
+#             the task gate again). Without --push it prints that command.
+# It never force-pushes, never resets a branch and never deletes one.
+#
+# Logs: one per step in `${LAND_LOGS:-/work/.al-sem/land}/<UTC time>-<name>/`
+# (outside the worktree, so the gate records see a clean tree), plus `verdict`
+# (one `<step> <exit> <seconds>` line per step). Timings: a start and an end
+# line per step in `${FLOW_LOG:-/work/.al-sem/flow-timings.jsonl}` (step
+# "land", issue = the ids, e.g. "TLS-58,ENG-30"). A conflict-resolving commit
+# runs the repo's pre-commit hook when core.hooksPath enables it, as a
+# hand-made one does.
+#
+# --dry-run runs `check` and predicts each merge with `git merge-tree`; it
+# changes no ref and no file (the predicted merges are loose objects only) and
+# exits 1 when a real run would refuse. In a batch, a later prediction builds on
+# the earlier one's tree as git wrote it (CHANGELOG markers included), so a
+# CHANGELOG verdict after the first one is approximate.
+#
+# Environment: LAND_WORKTREE (default /work/alsem-wt/orchestrator-gate), CDO_WS
+# (default /work/src/cdo-baseline/Cloud), LAND_LOGS, FLOW_LOG, LAND_MEM_MIN_GB
+# (default 35; 0 skips the whole wait, for tests), LAND_MEM_TIMEOUT_S (1800).
+# Exit: 0 PASS (or a clean dry run); 1 refused or failed; 2 usage.
+set -euo pipefail
+
+usage() {
+    echo "usage: scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>..."
+    echo "  Merges the branches (in that order) into landing/<name> in the gate worktree,"
+    echo "  runs ci-steps all, then cdo-gate; lands it via merge-and-push only with --push."
+    echo "  --name     landing name (default: the task ids in the branch names, e.g. tls58+eng30)"
+    echo "  --worktree gate worktree (default \$LAND_WORKTREE or /work/alsem-wt/orchestrator-gate)"
+    echo "  --dry-run  check and predict the merges; change nothing"
+    echo "  --push     land it on master with scripts/merge-and-push after a PASS"
+}
+die() {
+    echo "land: $*" >&2
+    exit 1
+}
+bad_usage() {
+    echo "land: error: $*" >&2
+    usage >&2
+    exit 2
+}
+
+# A git hook exports GIT_DIR and friends, which beat `git -C` (src/git_env.rs).
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
+push=0 dry_run=0 name=""
+worktree="${LAND_WORKTREE:-/work/alsem-wt/orchestrator-gate}"
+branches=()
+while (($#)); do
+    case "$1" in
+        --push) push=1 ;;
+        --dry-run) dry_run=1 ;;
+        --name)
+            (($# >= 2)) || bad_usage "--name needs a value"
+            name=$2
+            shift
+            ;;
+        --name=*) name=${1#--name=} ;;
+        --worktree)
+            (($# >= 2)) || bad_usage "--worktree needs a value"
+            worktree=$2
+            shift
+            ;;
+        --worktree=*) worktree=${1#--worktree=} ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        -*) bad_usage "unknown option: $1" ;;
+        *) branches+=("$1") ;;
+    esac
+    shift
+done
+((${#branches[@]})) || bad_usage "no branch given"
+((push && dry_run)) && bad_usage "--push and --dry-run exclude each other"
+[[ -z "$name" || "$name" =~ ^[A-Za-z0-9._+-]+$ ]] || bad_usage "--name '$name': letters, digits and . _ + - only"
+
+cdo_ws="${CDO_WS:-/work/src/cdo-baseline/Cloud}"
+logs_root="${LAND_LOGS:-/work/.al-sem/land}"
+flow_log="${FLOW_LOG:-/work/.al-sem/flow-timings.jsonl}"
+mem_min_gb="${LAND_MEM_MIN_GB:-35}"
+mem_timeout="${LAND_MEM_TIMEOUT_S:-1800}"
+command -v jq >/dev/null || die "jq is needed for the timing log"
+
+G() { git -C "$worktree" "$@"; }
+
+# ---- check ---------------------------------------------------------------
+[[ -d "$worktree" ]] || die "no gate worktree at $worktree"
+G rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$worktree is not a git worktree"
+G rev-parse -q --verify MERGE_HEAD >/dev/null && die "a merge is in progress in $worktree"
+dirty=$(G status --porcelain | grep -v '^?? \.agent/' || true)
+[[ -z "$dirty" ]] || die "the gate worktree $worktree is not clean:
+$dirty"
+master=$(G rev-parse -q --verify refs/heads/master) || die "no local master"
+if origin=$(G rev-parse -q --verify refs/remotes/origin/master); then
+    G merge-base --is-ancestor "$origin" "$master" \
+        || die "local master ${master:0:8} is behind (or off) origin/master ${origin:0:8} as of the last fetch: update it first"
+    echo "land: master ${master:0:8} (origin/master ${origin:0:8} as of the last fetch)"
+else
+    echo "land: master ${master:0:8} (no origin/master ref)"
+fi
+
+ids=() parts=()
+for ((i = 0; i < ${#branches[@]}; i++)); do
+    b=${branches[i]}
+    [[ "$b" != master ]] || die "master is not a branch to land"
+    for ((j = 0; j < i; j++)); do
+        [[ "$b" != "${branches[j]}" ]] || die "'$b' given twice"
+    done
+    G rev-parse -q --verify "refs/heads/$b" >/dev/null || die "no local branch '$b'"
+    G merge-base --is-ancestor "refs/heads/$b" "$master" && die "'$b' is already in master"
+    if [[ "$b" =~ (^|/)([A-Za-z]+)-([0-9]+) ]]; then
+        ids+=("${BASH_REMATCH[2]^^}-${BASH_REMATCH[3]}")
+        parts+=("${BASH_REMATCH[2],,}${BASH_REMATCH[3]}")
+    else
+        [[ -n "$name" ]] || die "'$b' names no task id (like tls-58): give --name"
+        ids+=("$b")
+    fi
+done
+if [[ -z "$name" ]]; then
+    name=$(IFS=+; echo "${parts[*]}")
+fi
+landing="landing/$name"
+n=2
+while G rev-parse -q --verify "refs/heads/$landing" >/dev/null; do
+    landing="landing/$name-$n"
+    n=$((n + 1))
+done
+echo "land: merge order:"
+for ((i = 0; i < ${#branches[@]}; i++)); do
+    echo "land:   $((i + 1)). ${branches[i]} ($(G rev-parse --short "refs/heads/${branches[i]}"), ${ids[i]})"
+done
+echo "land: landing branch: $landing"
+
+# ---- dry run -----------------------------------------------------------
+if ((dry_run)); then
+    prev=$master refuse=0
+    for ((i = 0; i < ${#branches[@]}; i++)); do
+        b=${branches[i]}
+        rc=0
+        out=$(G merge-tree --write-tree --name-only --no-messages "$prev" "refs/heads/$b") || rc=$?
+        ((rc <= 1)) || die "git merge-tree failed on '$b' (exit $rc)"
+        tree=$(head -n 1 <<<"$out")
+        conflicts=$(tail -n +2 <<<"$out")
+        if [[ -z "$conflicts" ]]; then
+            echo "land:   ${ids[i]}: merges clean"
+        elif [[ "$conflicts" == CHANGELOG.md ]]; then
+            echo "land:   ${ids[i]}: CHANGELOG.md conflicts: would union it"
+        else
+            echo "land:   ${ids[i]}: REFUSE: conflicts in" $conflicts
+            refuse=1
+        fi
+        prev=$(G commit-tree "$tree" -p "$prev" -p "refs/heads/$b" -m "land dry run")
+    done
+    echo "land: then: ci-steps all; wait for ${mem_min_gb} GB free; cdo-gate $cdo_ws; merge-and-push $landing only with --push"
+    if ((refuse)); then
+        echo "land: DRY RUN: a real run would refuse"
+        exit 1
+    fi
+    echo "land: DRY RUN: a real run would merge every branch"
+    exit 0
+fi
+
+# ---- run ---------------------------------------------------------------
+run="$logs_root/$(date -u +%Y%m%dT%H%M%SZ)-$name"
+mkdir -p "$run" "$(dirname "$flow_log")"
+run_id=$(basename "$run")
+issue=$(IFS=,; echo "${ids[*]}")
+echo "land: logs in $run"
+mark() { # mark <step> start|end [exit]
+    jq -nc --arg ts "$(date -u +%FT%TZ)" --arg issue "$issue" --arg run "$run_id" \
+        --arg phase "$1" --arg event "$2" --arg rc "${3:-}" \
+        '{ts: $ts, issue: $issue, step: "land", run_id: $run, phase: $phase, event: $event}
+         + (if $rc == "" then {} else {rc: ($rc | tonumber)} end)' >>"$flow_log"
+}
+verdict() { # verdict <step> <exit> <start>
+    local secs=$((SECONDS - $3))
+    mark "$1" end "$2"
+    echo "$1 $2 $secs" >>"$run/verdict"
+    if (($2 == 0)); then
+        echo "land: [$1] ok ($secs s)"
+    else
+        echo "land: [$1] FAILED, exit $2 ($secs s; log $run/$1.log)"
+    fi
+}
+
+# merge
+start=$SECONDS
+mark merge start
+merge_failed() { # back to a clean, detached master, then stop
+    G merge --abort >/dev/null 2>&1 || true
+    G switch --quiet --detach "$master" >/dev/null 2>&1 || true
+    verdict merge 1 "$start"
+    die "$1; no landing branch was made"
+}
+G switch --quiet --detach "$master" >>"$run/merge.log" 2>&1 \
+    || merge_failed "cannot check out master in $worktree"
+for ((i = 0; i < ${#branches[@]}; i++)); do
+    b=${branches[i]} msg="landing: ${ids[i]}"
+    if G -c core.commentChar=';' merge --no-ff --no-edit -m "$msg" "refs/heads/$b" >>"$run/merge.log" 2>&1; then
+        echo "land:   ${ids[i]}: merged"
+        continue
+    fi
+    conflicts=$(G diff --name-only --diff-filter=U)
+    [[ -n "$conflicts" ]] || merge_failed "merging '$b' failed without a conflict (see $run/merge.log)"
+    [[ "$conflicts" == CHANGELOG.md ]] || merge_failed "merging '$b' conflicts in: $(echo $conflicts)"
+    for stage in 1 2 3; do
+        G show ":$stage:CHANGELOG.md" >"$run/CHANGELOG.$stage" 2>>"$run/merge.log" \
+            || merge_failed "CHANGELOG.md has no stage $stage in the '$b' merge"
+    done
+    # Its exit is the conflict count; --union leaves none, the check below is the
+    # guard. Two entries added at the same place share their blank line, so the
+    # second heading would follow the first entry's last line: put the blank
+    # line back (CHANGELOG.md has a blank line before every heading).
+    git merge-file --union -p "$run/CHANGELOG.2" "$run/CHANGELOG.1" "$run/CHANGELOG.3" \
+        >"$run/CHANGELOG.union" || true
+    awk 'NR > 1 && prev != "" && /^#/ { print "" } { print; prev = $0 }' \
+        "$run/CHANGELOG.union" >"$worktree/CHANGELOG.md"
+    if grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$worktree/CHANGELOG.md"; then
+        merge_failed "the union of CHANGELOG.md still holds conflict markers"
+    fi
+    G add CHANGELOG.md
+    G -c core.commentChar=';' commit --quiet -m "$msg" >>"$run/merge.log" 2>&1 \
+        || merge_failed "committing the '$b' merge failed (see $run/merge.log)"
+    echo "land:   ${ids[i]}: merged (CHANGELOG.md as a union)"
+done
+G switch --quiet -c "$landing" >>"$run/merge.log" 2>&1 || merge_failed "cannot create $landing"
+verdict merge 0 "$start"
+
+# ci
+start=$SECONDS
+mark ci start
+rc=0
+(cd "$worktree" && bash scripts/ci-steps all) >"$run/ci.log" 2>&1 || rc=$?
+verdict ci "$rc" "$start"
+((rc == 0)) || die "FAIL at ci: cdo-gate not run, nothing pushed ($landing kept)"
+
+# mem-wait
+start=$SECONDS
+mark mem-wait start
+rc=0
+if ((mem_min_gb > 0)); then
+    deadline=$((SECONDS + mem_timeout))
+    while :; do
+        avail_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+        # A running gate is `bash <path>/cdo-gate ...` (its shebang), not any
+        # command line that merely mentions it.
+        other=$(pgrep -f '^(/usr)?(/bin/)?bash [^ ]*scripts/cdo-gate( |$)' || true)
+        if ((avail_kb >= mem_min_gb * 1048576)) && [[ -z "$other" ]]; then
+            echo "MemAvailable $((avail_kb >> 20)) GB, no other cdo-gate" >"$run/mem-wait.log"
+            break
+        fi
+        if ((SECONDS >= deadline)); then
+            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb), other cdo-gate: ${other:-none}" >"$run/mem-wait.log"
+            rc=1
+            break
+        fi
+        sleep 15
+    done
+fi
+verdict mem-wait "$rc" "$start"
+((rc == 0)) || die "FAIL at mem-wait: cdo-gate not run, nothing pushed ($landing kept)"
+
+# cdo
+start=$SECONDS
+mark cdo start
+rc=0
+(cd "$worktree" && bash scripts/cdo-gate "$cdo_ws") >"$run/cdo.log" 2>&1 || rc=$?
+verdict cdo "$rc" "$start"
+((rc == 0)) || die "FAIL at cdo: nothing pushed ($landing kept)"
+
+main=$(G worktree list --porcelain | sed -n '1s/^worktree //p')
+if ((!push)); then
+    echo "land: PASS: $landing is gated; to land it: cd $main && scripts/merge-and-push $landing"
+    exit 0
+fi
+
+# push
+start=$SECONDS
+mark push start
+rc=0
+(cd "$main" && scripts/merge-and-push "$landing") >"$run/push.log" 2>&1 || rc=$?
+verdict push "$rc" "$start"
+((rc == 0)) || die "FAIL at push: see $run/push.log"
+echo "land: PASS: $landing landed on master"

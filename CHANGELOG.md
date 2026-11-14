@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-59: `scripts/land`, the landing chain as one command)
+
+- `scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>...` runs
+  the chain the orchestrator typed by hand 31 times (once it ran on into `cdo-gate`
+  after `ci-steps` had failed). Steps, each with a one-line verdict; the first
+  failure stops the run:
+  - **check**: the gate worktree (default `/work/alsem-wt/orchestrator-gate`) is
+    clean with no merge in progress; local master is not behind origin/master as of
+    the last fetch; every branch exists, is not master, is not yet in master and is
+    given once. It prints master's sha and the merge order.
+  - **merge**: on a detached master, each branch in the order given, `merge --no-ff
+    -m "landing: <ID>"` (with `core.commentChar=';'`). A conflict in CHANGELOG.md
+    alone is resolved as a union, master's lines first, with a blank line put back
+    before each heading; any other conflict aborts the merge and stops. Only then is
+    `landing/<ids>` created (`-2`, `-3` when taken), so a refused run leaves no
+    branch.
+  - **ci** (`ci-steps all`), **mem-wait** (MemAvailable >= 35 GB and no other
+    `cdo-gate`, up to 30 min), **cdo** (`cdo-gate /work/src/cdo-baseline/Cloud`).
+  - **push**: `merge-and-push landing/<ids>` from the main checkout, only with
+    `--push`; otherwise it prints that command. It never force-pushes, resets or
+    deletes a branch.
+- Logs per step and a `verdict` file in `/work/.al-sem/land/<time>-<ids>/`; a start
+  and an end line per step in `/work/.al-sem/flow-timings.jsonl` (step `land`).
+  `--dry-run` predicts every merge with `git merge-tree`, changes no ref and exits 1
+  when a real run would refuse.
+- Tests (`cli` member `land_script`, on a repository of their own with stub gate
+  scripts): the order and stops of the gates, push only on request, the CHANGELOG
+  union, a taken name, the timing lines, and every refusal before anything changes.
+
 ### Fixed (TLS-64: the cdo-gate TERM test no longer fails under load)
 
 - `gate_scripts::cdo_gate_stops_at_once_on_term_during_its_build` failed TLS-58's
