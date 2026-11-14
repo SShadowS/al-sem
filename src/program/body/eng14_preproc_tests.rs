@@ -825,8 +825,8 @@ fn eng14_case_rows() {
 }
 
 /// ENG-14 census on CDO (Fable's part-1 review, I1): how many routines lose their control tree,
-/// by cause and by app (workspace or dependency). A measurement, not a ratchet: it prints and
-/// asserts only that the model was built. Run with
+/// by cause and by app (workspace or dependency). A ratchet (ENG-80): the per-app counts are
+/// pinned and the test fails when they move. Run with
 /// `CDO_WS=… cargo test -p al-sem --lib eng14_cdo_untrusted_census -- --nocapture`.
 #[test]
 fn eng14_cdo_untrusted_census() {
@@ -892,6 +892,22 @@ fn eng14_cdo_untrusted_census() {
         println!("ENG14-CENSUS example {e}");
     }
     assert!(bodies > 0, "the CDO model has bodies");
+    // ENG-80 ratchet (the orchestrator, mantra 7): the per-app untrusted counts, pinned on the
+    // pinned CDO baseline (bc3ccb18) at master 813fbcd5. A rise must be explained before the
+    // pin moves; a drop (ENG-77, ENG-79 landing) re-pins it with intent. Base App: one family
+    // of 6 (`#if` adds an `if` head, ENG-77) plus 3 case groups (ENG-79); System App: 1
+    // (ENG-77); the workspace: `CDO E-Mail::SetSendingMethodAndFromAddress` (ENG-79).
+    let pinned: std::collections::BTreeMap<&str, usize> = [
+        ("437dbf0e-84ff-417a-965d-ed2bb9650972", 9),
+        ("63ca2fa4-4f03-4f2b-a480-172fef340d3f", 1),
+        ("f4b69b55-c90d-4937-8f53-2742898fa948", 1),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        by_app, pinned,
+        "untrusted routines per app moved: explain the change, then re-pin"
+    );
 }
 
 /// A6 sources: two routines whose control tree cannot be trusted. `Broken` has a parse
