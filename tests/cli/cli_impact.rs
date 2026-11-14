@@ -397,7 +397,10 @@ fn up_callers_equal_explains_callers() {
 /// either way).
 ///
 /// DISCRIMINATION (2026-11-14): dropping the hand-off (`run.rs`'s
-/// `up_argv(&ids, &[])`) fails "the configured job-queue entry".
+/// `up_argv(&ids, &[])`) fails "the configured job-queue entry"; the up
+/// part using the graph's cached inventory (no overlay) fails at
+/// `programEntries`; the union walk without `extra_entries` fails "the union
+/// counts the configured entry".
 #[test]
 fn impact_applies_the_roots_config_overlay() {
     let t = tempfile::tempdir().unwrap();
@@ -416,19 +419,23 @@ fn impact_applies_the_roots_config_overlay() {
          Core: Codeunit \"T54 Core\";\n    begin\n        Core.Post();\n    end;\n}\n",
     )
     .unwrap();
-    let entries = |ws: &Path| -> Vec<Value> {
-        let v = json(
+    let doc = |ws: &Path| -> Value {
+        json(
             ws,
             &["--routine", "Codeunit \"T54 Core\"::Post", "--no-tests"],
             None,
-        );
-        v["roots"][0]["up"]["entries"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        )
     };
+    let up = |ws: &Path| -> Value { doc(ws)["roots"][0]["up"].clone() };
+    let entries =
+        |up: &Value| -> Vec<Value> { up["entries"].as_array().cloned().unwrap_or_default() };
     // Without a config: no entry (the precondition).
-    assert!(entries(ws).is_empty(), "precondition: no source entry");
+    let without = up(ws);
+    assert!(
+        entries(&without).is_empty(),
+        "precondition: no source entry"
+    );
+    assert_eq!(without["programEntries"], 0, "{without:#}");
     std::fs::write(
         ws.join("roots.config.json"),
         r#"{"version": 1, "roots": [{"id": "run-job",
@@ -437,12 +444,32 @@ fn impact_applies_the_roots_config_overlay() {
             "kinds": ["job-queue-entrypoint"]}]}"#,
     )
     .unwrap();
-    let with = entries(ws);
+    let with_up = up(ws);
+    let with = entries(&with_up);
     assert!(
         with.iter()
             .any(|e| e.to_string().contains("RunJob")
                 && e.to_string().contains("job-queue-entrypoint")),
         "the configured job-queue entry: {with:#?}"
+    );
+    // The canonical totals count it too (sol r1): the program's entries,
+    // the context and the nearest code entry.
+    assert_eq!(with_up["programEntries"], 1, "{with_up:#}");
+    assert_eq!(
+        with_up["entriesByContext"]["code"]["background session or task (job queue)"], 1,
+        "{with_up:#}"
+    );
+    assert_eq!(
+        with_up["nearest"]["code"]["display"], "Codeunit \"T54 Jobs\"::RunJob",
+        "{with_up:#}"
+    );
+    // The union walk over every changed routine counts it too (Fable r1).
+    let union = &doc(ws)["union"];
+    assert!(
+        entries(union)
+            .iter()
+            .any(|e| e.to_string().contains("RunJob")),
+        "the union counts the configured entry: {union:#}"
     );
 }
 

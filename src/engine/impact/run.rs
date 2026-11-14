@@ -103,15 +103,20 @@ impl ImpactRequest {
 }
 
 /// The main part's roots.config entries (TLS-54): `[StableRoutineId, mask]`.
-fn config_entries(doc: &Value) -> Vec<(String, u16)> {
+/// A malformed element is an error, never dropped: a dropped entry would
+/// give the old answer under a scope line saying the overlay is applied.
+fn config_entries(doc: &Value) -> Result<Vec<(String, u16)>, String> {
     doc["configEntries"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|e| {
-            let id = e[0].as_str()?;
-            let mask = u16::try_from(e[1].as_u64()?).ok()?;
-            Some((id.to_string(), mask))
+        .map(|e| {
+            let id = e[0].as_str();
+            let mask = e[1].as_u64().and_then(|m| u16::try_from(m).ok());
+            match (id, mask) {
+                (Some(id), Some(mask)) => Ok((id.to_string(), mask)),
+                _ => Err(format!("impact: the main part's configEntries holds {e}")),
+            }
         })
         .collect()
 }
@@ -171,13 +176,11 @@ pub fn orchestrate_with(
     let mut main = run(Target::Production, main_argv.clone())?;
     cmp.inputs_stamp = inputs_stamp();
     let ids = root_ids(&main);
+    let config = config_entries(&main)?;
     let up = if ids.is_empty() {
         Err("no changed routine resolved".to_string())
     } else {
-        run(
-            Target::Production,
-            req.up_argv(&ids, &config_entries(&main)),
-        )
+        run(Target::Production, req.up_argv(&ids, &config))
     };
     let tests = if !req.tests {
         Err("not asked (--no-tests; MCP `tests: false`)".to_string())

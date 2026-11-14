@@ -20,11 +20,13 @@
 //! - **What counts.** A node whose root kinds hold an entry kind, a static
 //!   background target ([`super::sited::Boundary::Background`]), and the
 //!   actions of every action-run site: what R0's reverse walk reports as
-//!   entries ([`super::reverse`]'s `report`), with no roots.config overlay
-//!   (impact walks without one). Public procedures are not entries (a walk
-//!   reports them as external callers).
+//!   entries ([`super::reverse`]'s `report`). Public procedures are not
+//!   entries (a walk reports them as external callers).
 //!
-//! The inventory is built once per graph ([`SitedGraph::entry_inventory`]).
+//! The inventory is built once per graph ([`SitedGraph::entry_inventory`]),
+//! from the graph's own (source) root kinds. TLS-54: impact's up part, given
+//! the roots.config overlay's kinds, builds its own
+//! ([`EntryInventory::of_with`]) so configured entries count too.
 
 use std::collections::{BTreeMap, HashMap};
 
