@@ -238,6 +238,7 @@ mod cli_eng08_xmlport_import_error;
 mod cli_eng09_checked_run_commit;
 mod cli_eng10_write_in_try;
 mod cli_eng12_record_ops;
+mod cli_eng15_ext_triggers;
 mod cli_eng22_checked_run_pending_write;
 mod cli_eng23_commit_arms;
 mod cli_eng24_pending_writes;

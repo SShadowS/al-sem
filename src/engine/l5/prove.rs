@@ -671,8 +671,9 @@ fn build_obligation_blockers(
                     ),
                     (
                         RECORD_TABLE_UNRESOLVED,
-                        "a record operation or FieldRef.Validate on a table not known here may \
-                         run any table's triggers and table events",
+                        "a record operation or FieldRef.Validate on a table not known here (or \
+                         whose code is loaded from symbols only) may run triggers and table \
+                         events the engine cannot see",
                     ),
                 ]
                 .into_iter()

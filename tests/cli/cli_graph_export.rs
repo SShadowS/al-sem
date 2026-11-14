@@ -693,8 +693,9 @@ fn graph_export_covers_dependencies() {
         "opaqueBody"
     );
 
-    // The dependency table's trigger fires on the workspace test's insert; the
-    // workspace extension's OnAfterInsert does not yet (F5) and says so.
+    // The dependency table's trigger fires on the workspace test's insert, and
+    // so does the workspace extension's OnAfterInsert (ENG-15 closed F5: an
+    // edge, and no `unmodeledRecordTrigger` flag).
     let on_insert = g.node("Dep Item.OnInsert");
     assert_eq!(
         (
@@ -707,9 +708,16 @@ fn graph_export_covers_dependencies() {
         !g.edges_between("Ws Tests.InsertItem", "Dep Item.OnInsert")
             .is_empty()
     );
-    assert_eq!(
-        g.node("Dep Item Ext.OnAfterInsert")["hiddenCallers"],
-        serde_json::json!(["unmodeledRecordTrigger"])
+    assert!(
+        !g.edges_between("Ws Tests.InsertItem", "Dep Item Ext.OnAfterInsert")
+            .is_empty()
+    );
+    assert!(
+        g.node("Dep Item Ext.OnAfterInsert")
+            .get("hiddenCallers")
+            .is_none_or(|h| h.as_array().is_some_and(Vec::is_empty)),
+        "{}",
+        g.node("Dep Item Ext.OnAfterInsert")
     );
 
     // A subscriber to a DEPENDENCY table's platform event: the synthetic
