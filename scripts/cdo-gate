@@ -346,9 +346,16 @@ summarize() {
     if [[ -f "$logs/only" ]]; then
         subset=$(head -n 1 "$logs/only")
         read -r -a phases < <(tail -n +2 "$logs/only" | paste -sd ' ' -)
-        # An empty or cut-off list judges nothing: never a PASS.
-        if [[ -z "$subset" || ${#phases[@]} -eq 0 ]]; then
-            echo "cdo-gate: $logs/only is empty or cut off: no phase to judge" >&2
+        # The phase lines must be exactly the header's phases: an empty or
+        # cut-off list would judge fewer phases than the verdict names.
+        local want=() names=() n p
+        IFS=',' read -r -a names <<< "$subset"
+        for n in "${names[@]}"; do
+            p=$(only_phase_of "$n") || p="?$n"
+            want+=("$p")
+        done
+        if [[ -z "$subset" || ${#phases[@]} -eq 0 || "${want[*]}" != "${phases[*]}" ]]; then
+            echo "cdo-gate: $logs/only is empty or cut off (header '$subset', phases '${phases[*]}'): not judged" >&2
             subset="${subset:-?}"
             status=1
         fi
@@ -480,6 +487,12 @@ if [[ "$only_given" == 1 ]]; then
     # An empty list (`--only=`, `--only "$UNSET"`) must not run the full gate.
     if [[ -z "$only" ]]; then
         echo "cdo-gate: error: --only: no phase named (phases: harness, lsp, l4, lib, output)" >&2
+        exit 2
+    fi
+    # `read` below would drop a trailing empty field and every line after the
+    # first (`harness,`, `harness<newline>speed`): only plain names and commas.
+    if ! [[ "$only" =~ ^[a-z0-9]+(,[a-z0-9]+)*$ ]]; then
+        echo "cdo-gate: error: --only: '$only' is not a comma list of phase names (phases: harness, lsp, l4, lib, output)" >&2
         exit 2
     fi
     IFS=',' read -r -a only_names <<< "$only"

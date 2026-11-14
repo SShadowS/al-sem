@@ -192,8 +192,22 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
         ),
         "{text}"
     );
+    // Every phase name builds the target its phase runs (sol r1): `lib` the
+    // lib (`-p al-sem --lib`, as `lib_tests`' cargo calls), `output` the cli.
+    let (code, text) = run(&["--only", "output,lib,lsp,l4,harness", "--dry-run"]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains(
+            "build: cargo test --profile cdo --no-run --test cli -p al-sem --lib --test lsp \
+             --test l4_summary_differential --test program_resolve_harness\n"
+        ),
+        "{text}"
+    );
     for bad in [
-        &["--only", "harness,impact"][..],
+        // `read` would drop a trailing empty field or a second line (sol r1).
+        &["--only", "harness,"][..],
+        &["--only", "harness\nspeed"],
+        &["--only", "harness,impact"],
         &["--only", "speed"],
         &["--only", "l4,l4"],
         &["--only"],
@@ -246,7 +260,12 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
         "{text}"
     );
     // An empty or cut-off list judges nothing, so it never passes (review r1).
-    for cut in ["", "harness,l4\n"] {
+    for cut in [
+        "",
+        "harness,l4\n",
+        // Cut part-way: one of the two phases (sol r1).
+        "harness,l4\nprogram_resolve_harness\n",
+    ] {
         std::fs::write(subset.path().join("only"), cut).unwrap();
         let (code, text) = run(&[&format!("--summary={}", subset.path().display())]);
         assert_eq!(code, Some(1), "only file {cut:?}: {text}");
@@ -263,13 +282,17 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
     );
 }
 
-/// TLS-58 review r1: a real `--only harness,l4` run, with a stub `cargo`
-/// that logs each call. It builds just those two targets, runs just those two
-/// phases (with `ENFORCE_CDO_WS=1`), never the speed check or the impact
-/// ratchets, writes `only` (not `split-impact`), and its verdict is SUBSET.
+/// TLS-58 review r1: a real `--only harness,l4,lsp,output` run, with a stub
+/// `cargo` that logs each call. It builds just those targets, runs just those
+/// phases, each with the full gate's command and `ENFORCE_CDO_WS=1` and with
+/// the memory sampler running (where the container's cgroup is readable),
+/// never the speed check or the impact ratchets, writes `only` (not
+/// `split-impact`), and its verdict is SUBSET. (`lib`'s run needs a libtest
+/// listing a stub cannot fake; its build selector is pinned by the dry run.)
 ///
-/// Mutation: drop `speed=0` from the `--only` branch -> the speed phase runs
-/// and the run is no longer the subset it claims.
+/// Mutations: drop `speed=0` from the `--only` branch -> the speed phase runs
+/// and the run is no longer the subset it claims; start `memory_sampler` only
+/// outside a subset -> `SAMPLED=no`.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
@@ -278,10 +301,20 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     let target = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let calls = stub.path().join("calls");
+    // The sampler starts once the build is done, and writes its first sample
+    // at once; each phase call waits (up to 10 s) to see it.
+    let sampler = std::fs::read_to_string("/sys/fs/cgroup/memory.stat").is_ok();
     std::fs::write(
         stub.path().join("cargo"),
         format!(
-            "#!/bin/sh\necho \"ENFORCE=$ENFORCE_CDO_WS $*\" >> '{}'\n\
+            "#!/bin/sh\ns=''\n\
+             case \" $* \" in *' --no-run '*) ;; *)\n\
+               s=' SAMPLED=no'\n\
+               if [ '{sampler}' = true ]; then i=0; while [ $i -lt 100 ]; do\n\
+                 if ls \"$CARGO_TARGET_DIR\"/cdo-gate-logs/*/memory.timeline >/dev/null 2>&1; then s=' SAMPLED=yes'; break; fi\n\
+                 sleep 0.1; i=$((i + 1)); done; else s=''; fi ;;\n\
+             esac\n\
+             echo \"ENFORCE=$ENFORCE_CDO_WS$s $*\" >> '{}'\n\
              echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
             calls.display()
         ),
@@ -299,7 +332,7 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     );
     let out = std::process::Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
-        .args(["--only", "harness,l4"])
+        .args(["--only", "harness,l4,lsp,output"])
         .arg(ws.path())
         .env("PATH", path)
         .env("CARGO_TARGET_DIR", target.path())
@@ -316,17 +349,28 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     );
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(
-        text.contains("cdo-gate: PASS (SUBSET --only harness,l4: not a landing gate"),
+        text.contains("cdo-gate: PASS (SUBSET --only harness,l4,lsp,output: not a landing gate"),
         "{text}"
     );
     let calls = std::fs::read_to_string(&calls).unwrap();
     let lines: Vec<&str> = calls.lines().collect();
+    let s = if sampler { " SAMPLED=yes" } else { "" };
     assert_eq!(
         lines,
         [
-            "ENFORCE=1 test --profile cdo --no-run --test program_resolve_harness --test l4_summary_differential",
-            "ENFORCE=1 test --profile cdo --test program_resolve_harness -- --test-threads=4",
-            "ENFORCE=1 test --profile cdo --test l4_summary_differential",
+            "ENFORCE=1 test --profile cdo --no-run --test program_resolve_harness \
+             --test l4_summary_differential --test lsp --test cli"
+                .to_string(),
+            format!(
+                "ENFORCE=1{s} test --profile cdo --test program_resolve_harness -- --test-threads=4"
+            ),
+            format!("ENFORCE=1{s} test --profile cdo --test l4_summary_differential"),
+            format!(
+                "ENFORCE=1{s} test --profile cdo --test lsp -- program_graph:: snapshot_robustness::"
+            ),
+            format!(
+                "ENFORCE=1{s} test --profile cdo --test cli output_cdo:: -- --skip output_cdo::cdo_impact"
+            ),
         ],
         "{text}"
     );
@@ -338,6 +382,9 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     assert!(runs[0].join("only").is_file());
     assert!(!runs[0].join("split-impact").exists());
     assert!(!runs[0].join("speed.status").exists());
+    // A tree with no product change takes the TLS-20 speed skip instead, which
+    // would hide a subset that tried the speed check (Fable r2).
+    assert!(!runs[0].join("speed-skipped").exists());
 }
 
 /// TLS-18: `cdo-speed --warm REV` (what `merge-and-push` runs after a landing)
