@@ -1631,5 +1631,11 @@ fn query_cut_short_without_dependency_says_so() {
         "{absence}"
     );
     let (human, _) = run_alsem(&miss, "human");
-    assert!(!human.contains("every candidate decided"), "{human}");
+    assert!(
+        !human.contains("every candidate decided")
+            && human.contains(
+                "the cone search was cut short at its limit; code past it was not checked"
+            ),
+        "{human}"
+    );
 }

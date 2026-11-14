@@ -53,7 +53,10 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
   dependency code" check (a visited dependency routine, entry point or crossing site). It was
   not probed on real code (see CHANGELOG TLS-49); its rule is pinned by a hand-stated test, its
   wiring is not. A cone search cut short at its limit is its own fact, not entry: the whole-cone
-  answer says "not searched: beyond the cone's search limit" (`query_cut_short_without_dependency_says_so`). Pinned by
+  answer says "not searched: beyond the cone's search limit", the cone's own
+  `beyondDependencyCalls` family is not exhaustive, and a touches miss past the cut is `unknown`
+  (`query_cut_short_without_dependency_says_so`). Left: an entering cone that is also cut short
+  names the cut only in its header's "analysis partial" reason, not in its body lines. Pinned by
   `query_scope_is_one_fact_in_both_formats` (the query corpus and the output fixture's cone
   entering a dependency) and, for a cone not read, by `digest_db_effects_carry_query_effects_temp_state`.
   Touches' `down.absence.index` token and the depth phrase of the human miss line come from the
