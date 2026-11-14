@@ -514,6 +514,11 @@ pub mod test_hooks {
         /// an ask (then answer it normally): the protocol stream must not
         /// see it ([`super::child::protocol_stdout`]).
         StrayStdoutOnAsk,
+        /// TLS-56: the child's session keys its freshness check on length
+        /// and mtime alone, as on a platform with no ctime
+        /// (`ResidentSession::without_stat_ctime`): a test can make a rewrite
+        /// a `fresh` ask misses, to pin what `verify` does.
+        StatWithoutCtime,
         /// Take the path of a platform with no handle-relative creation
         /// (Windows, design §10): the child makes no output directory and
         /// answers inline-only, and `alsem mcp`'s output folder writes
@@ -560,6 +565,7 @@ pub mod test_hooks {
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,
             "exit-after-open" => Hook::ExitAfterOpen,
+            "stat-without-ctime" => Hook::StatWithoutCtime,
             "stray-stdout-on-ask" => Hook::StrayStdoutOnAsk,
             "no-output-dir" => Hook::NoOutputDir,
             "flood-after-open" => {

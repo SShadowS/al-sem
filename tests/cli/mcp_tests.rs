@@ -302,6 +302,9 @@ fn a_composite_answer_says_how_fresh_its_parts_were() {
     assert!(
         env["freshness"]["residual"]
             .as_str()
+            // TLS-56: the stat check's residual on every platform (Unix:
+            // a rewrite within one timestamp tick; Windows: any keeping
+            // size and mtime); `verified` and `latest-built` never say it.
             .is_some_and(|r| r.contains("seen only with freshness: verify")),
         "{env}"
     );

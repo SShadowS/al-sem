@@ -4283,6 +4283,16 @@ mod engine {
                 .with_low_mem(self.low_mem)
                 .with_sited(self.graph)
                 .with_budget(Arc::clone(&budget));
+            // TLS-56: a test that needs a rewrite `fresh` misses (debug and
+            // `engine-test-hooks` builds only).
+            #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+            let session = if al_sem::engine::host::test_hooks::from_env()
+                == Some(al_sem::engine::host::test_hooks::Hook::StatWithoutCtime)
+            {
+                session.without_stat_ctime()
+            } else {
+                session
+            };
             *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
                 workspace: params.workspace.clone(),
                 absolute,

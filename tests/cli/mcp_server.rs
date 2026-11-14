@@ -1094,7 +1094,7 @@ fn status_checks_the_disk_against_the_published_revision() {
     assert_eq!(e["check"]["strength"], "size-and-time", "{st}");
     assert!(
         st["headline"].as_str().unwrap().starts_with(&format!(
-            "cross-app engine for {w}: FRESH: no change seen since generation 1 (size and modification time, just now; verify: true hashes every input)."
+            "cross-app engine for {w}: FRESH: no change seen since generation 1 (size and timestamps, just now; verify: true hashes every input)."
         )),
         "{st}"
     );
@@ -1178,18 +1178,26 @@ fn status_checks_the_disk_against_the_published_revision() {
 /// session's `Fresh` in `run_command` (the old description's "answer from
 /// the built revision and report whether it is stale": no hash of every
 /// input) fails at "verify rebuilds"; restored, it passes.
+///
+/// TLS-56: on Unix such a rewrite moves ctime and `fresh` sees it
+/// (`fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server`), so
+/// here the engine child keys its check on size and mtime alone, as on a
+/// platform without ctime (test hook `stat-without-ctime`), on every
+/// platform. The hook exists only in debug and `engine-test-hooks` builds;
+/// off Unix the check has no ctime anyway, so the test needs no hook there.
+#[cfg(any(feature = "engine-test-hooks", debug_assertions, not(unix)))]
 #[test]
 fn a_stale_verify_rebuilds_as_its_description_says() {
     let r = s_tools_freshness_description();
     assert_eq!(r, al_sem::mcp::tools::FRESHNESS_DESCRIPTION);
     assert!(
-        r.contains("verify: like fresh, but hashes every input instead of trusting size and modification time; rebuilds first when anything changed."),
+        r.contains("verify: like fresh, but hashes every input instead of trusting size and timestamps; rebuilds first when anything changed."),
         "{r}"
     );
 
     let dir = ws_explain_copy();
     let ws = std::fs::canonicalize(dir.path()).unwrap();
-    let mut s = Server::ready(&ws, None);
+    let mut s = Server::ready(&ws, Some("stat-without-ctime"));
     let q = json!({"routine": "Archive", "format": "json"});
     let env = envelope(&s.call(1, "alsem_query_effects", q.clone()));
     assert_eq!(env["revision"]["generation"], 1, "{env}");
@@ -1228,14 +1236,15 @@ fn a_stale_verify_rebuilds_as_its_description_says() {
     // `fresh`. DISCRIMINATION (2026-11-09): `answer_freshness` serving
     // `fresh` for a stat check (the old header) fails here; restored,
     // passes.
+    assert_eq!(env["freshness"]["requested"], "fresh", "{env}");
     assert_eq!(
-        env["freshness"],
-        json!({
-            "requested": "fresh",
-            "served": "fresh-by-size-and-time",
-            "residual": "a rewrite that keeps a file's size and modification time is seen only \
-                         with freshness: verify; unsaved editor buffers are not inputs",
-        }),
+        env["freshness"]["served"], "fresh-by-size-and-time",
+        "{env}"
+    );
+    assert!(
+        env["freshness"]["residual"]
+            .as_str()
+            .is_some_and(|r| r.contains("seen only with freshness: verify")),
         "the header names the residual: {env}"
     );
     let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
@@ -1252,6 +1261,89 @@ fn a_stale_verify_rebuilds_as_its_description_says() {
     let env = envelope(&s.call(5, "alsem_query_effects", v));
     assert_eq!(env["revision"]["generation"], 2, "verify rebuilds: {env}");
     assert_eq!(env["freshness"]["served"], "verified", "{env}");
+    assert!(
+        env["stdoutText"].as_str().unwrap().contains("Insert"),
+        "the new text answers: {env}"
+    );
+    assert!(s.finish().success());
+}
+
+/// TLS-56, through the real server: a rewrite that keeps a file's size and
+/// modification time moves its ctime, so a plain `fresh` command rebuilds
+/// first (generation 2) and answers the new text, and its header's residual
+/// names only unsaved editor buffers. The tool description says what is
+/// trusted (size and timestamps).
+///
+/// DISCRIMINATION (2026-11-14): `manifest::ctime_ns` returning `None` fails
+/// "fresh sees it" (the answer stays at generation 1).
+#[cfg(unix)]
+#[test]
+fn fresh_sees_a_rewrite_that_keeps_size_and_mtime_through_the_server() {
+    let r = s_tools_freshness_description();
+    assert_eq!(r, al_sem::mcp::tools::FRESHNESS_DESCRIPTION);
+    assert!(
+        r.contains("verify: like fresh, but hashes every input instead of trusting size and timestamps; rebuilds first when anything changed."),
+        "{r}"
+    );
+    let dir = ws_explain_copy();
+    let ws = std::fs::canonicalize(dir.path()).unwrap();
+    let mut s = Server::ready(&ws, None);
+    let q = json!({"routine": "Archive", "format": "json"});
+    let env = envelope(&s.call(1, "alsem_query_effects", q.clone()));
+    assert_eq!(env["revision"]["generation"], 1, "{env}");
+    let post = ws.join("src/post.al");
+    let before = std::fs::metadata(&post).unwrap();
+    let text = std::fs::read_to_string(&post).unwrap();
+    let (old, new) = (
+        "        Order.Modify();\n        Commit();",
+        "        Order.Insert();\n        Commit();",
+    );
+    assert_eq!(
+        text.matches(old).count(),
+        1,
+        "precondition: the edit applies"
+    );
+    // ctime moves to the file system's current timestamp tick: rewrite (mtime
+    // restored) until it has moved (a rewrite in the same tick is the stated
+    // residual).
+    use std::os::unix::fs::MetadataExt;
+    let ctime = |m: &std::fs::Metadata| (m.ctime(), m.ctime_nsec());
+    let edited = text.replace(old, new);
+    let mut after = std::fs::metadata(&post).unwrap();
+    for _ in 0..200 {
+        std::fs::write(&post, &edited).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&post)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+        after = std::fs::metadata(&post).unwrap();
+        if ctime(&after) != ctime(&before) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_ne!(ctime(&after), ctime(&before), "precondition: ctime moved");
+    assert_eq!(
+        (after.len(), after.modified().unwrap()),
+        (before.len(), before.modified().unwrap()),
+        "precondition: size and modification time kept"
+    );
+    let env = envelope(&s.call(2, "alsem_query_effects", q));
+    assert_eq!(env["revision"]["generation"], 2, "fresh sees it: {env}");
+    assert_eq!(
+        env["freshness"],
+        json!({
+            "requested": "fresh",
+            "served": "fresh-by-size-and-time",
+            "residual": "a same-size rewrite within one file-system timestamp tick of the last \
+                         check, or on a file system without a real change time (FAT, some \
+                         network mounts), is seen only with freshness: verify; unsaved editor \
+                         buffers are not inputs",
+        }),
+        "{env}"
+    );
     assert!(
         env["stdoutText"].as_str().unwrap().contains("Insert"),
         "the new text answers: {env}"

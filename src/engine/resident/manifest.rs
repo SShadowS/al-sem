@@ -28,10 +28,17 @@
 //! `M_before` and `M_after` are observations of the disk
 //! ([`Manifest::observe`]), which re-run the same discovery the reader runs
 //! and hash what they find. An observation may reuse the previous
-//! observation's hash for a file whose length and modification time are
-//! unchanged (the per-request freshness check, 1-2 ms on CDO); `verify`
-//! hashes everything. Stated residual (§5.3): a rewrite that keeps length
-//! and mtime, with no change notification, is missed until `verify`.
+//! observation's hash for a file whose length, modification time and (TLS-56)
+//! status-change time are unchanged (the per-request freshness check, 1-2 ms
+//! on CDO); `verify` hashes everything. A rewrite can keep length and mtime
+//! but not ctime, so it is usually seen. Stated residual (§5.3), missed
+//! until `verify` or a change notification: a same-size rewrite within one
+//! timestamp tick of the last check (ctime and mtime unmoved); a rewrite on
+//! a file system without a real change time (FAT, some network mounts);
+//! where the platform's std gives no ctime (Windows), any rewrite that keeps
+//! length and mtime; a stat recorded without a ctime (a descriptor written
+//! before TLS-56) until the next build. Unsaved editor text is never an
+//! input.
 //!
 //! The package-discovery probes that found nothing (an absent ancestor
 //! `.alpackages`, the `.git` probes) are not listed one by one: their
@@ -66,12 +73,19 @@ impl Ident {
     }
 }
 
-/// A file's length and modification time when it was observed: the cache
-/// key of its hash, never part of its identity.
+/// A file's length, modification time and (TLS-56) status-change time when
+/// it was observed: the cache key of its hash, never part of its identity.
+/// A rewrite can keep length and mtime (`File::set_modified`, `touch -r`)
+/// but not ctime, which no user call sets: a write moves it to the current
+/// timestamp tick (the module doc's residual: a write in the same tick, a
+/// file system without a real ctime).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stat {
     len: u64,
     mtime: Option<SystemTime>,
+    /// Nanoseconds since the Unix epoch; `None` where the platform's std
+    /// gives none (Windows: the stated residual stays there).
+    ctime_ns: Option<i128>,
 }
 
 fn stat(path: &Path) -> Option<Stat> {
@@ -79,7 +93,32 @@ fn stat(path: &Path) -> Option<Stat> {
     Some(Stat {
         len: m.len(),
         mtime: m.modified().ok(),
+        ctime_ns: ctime_ns(&m),
     })
+}
+
+#[cfg(unix)]
+fn ctime_ns(m: &std::fs::Metadata) -> Option<i128> {
+    use std::os::unix::fs::MetadataExt;
+    Some(i128::from(m.ctime()) * 1_000_000_000 + i128::from(m.ctime_nsec()))
+}
+
+#[cfg(not(unix))]
+fn ctime_ns(_: &std::fs::Metadata) -> Option<i128> {
+    None
+}
+
+impl Stat {
+    /// Whether `now` may reuse the hash this stat keyed: the same length and
+    /// mtime, and the same ctime when this stat recorded one (a stat without
+    /// one, from a platform with none, a descriptor written before TLS-56, or
+    /// a session that forgot them, [`Manifest::forget_ctime`], is checked by
+    /// length and mtime alone).
+    fn same_file(&self, now: &Stat) -> bool {
+        self.len == now.len
+            && self.mtime == now.mtime
+            && (self.ctime_ns.is_none() || self.ctime_ns == now.ctime_ns)
+    }
 }
 
 /// One manifest (see the module doc).
@@ -278,6 +317,12 @@ pub struct ManifestEntry {
     pub stat_len: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stat_mtime_ns: Option<u128>,
+    /// TLS-56: the stat's status-change time (nanoseconds since the Unix
+    /// epoch), where the platform gives one. A descriptor written before it
+    /// has none, so its files are checked by length and mtime alone
+    /// ([`Stat::same_file`]) until the next build writes a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stat_ctime_ns: Option<i128>,
 }
 
 impl Manifest {
@@ -295,6 +340,7 @@ impl Manifest {
                     list: None,
                     stat_len: None,
                     stat_mtime_ns: None,
+                    stat_ctime_ns: None,
                 };
                 match id {
                     Ident::Absent => e.kind = "absent".into(),
@@ -323,6 +369,7 @@ impl Manifest {
                             .ok()
                             .map(|d| d.as_nanos())
                     });
+                    e.stat_ctime_ns = s.ctime_ns;
                 }
                 e
             })
@@ -359,7 +406,14 @@ impl Manifest {
                             (ns % 1_000_000_000) as u32,
                         )
                 });
-                m.stats.insert(e.key.clone(), Stat { len, mtime });
+                m.stats.insert(
+                    e.key.clone(),
+                    Stat {
+                        len,
+                        mtime,
+                        ctime_ns: e.stat_ctime_ns,
+                    },
+                );
             }
         }
         Ok(m)
@@ -519,7 +573,7 @@ impl Manifest {
                 (Hashing::Cached { prev, dirty }, Some(now)) if !dirty.contains(path) => prev
                     .stats
                     .get(key)
-                    .filter(|s| **s == now)
+                    .filter(|s| s.same_file(&now))
                     .and_then(|_| prev.entries.get(key).cloned()),
                 _ => None,
             };
@@ -727,6 +781,25 @@ impl Manifest {
     #[must_use]
     pub fn hashed(&self) -> &[String] {
         &self.hashed
+    }
+
+    /// Drop every stat's ctime, so a later cached check keys these files on
+    /// length and mtime alone ([`Stat::same_file`]): the platform-without-ctime
+    /// behaviour, for a session built to test it
+    /// (`ResidentSession::without_stat_ctime`, test hook `stat-without-ctime`).
+    pub fn forget_ctime(&mut self) {
+        for s in self.stats.values_mut() {
+            s.ctime_ns = None;
+        }
+    }
+
+    /// This observation's stats in place of `self`'s, when both name the same
+    /// inputs (TLS-56: a fresh hit whose check hashed a file again, say after
+    /// a chmod moved its ctime, keeps the new stats, so the next check does
+    /// not hash it again).
+    pub fn adopt_stats(&mut self, observed: &Manifest) {
+        debug_assert!(*self == *observed, "the same inputs");
+        self.stats.clone_from(&observed.stats);
     }
 
     /// The inputs stamp (§4.7): `al-sem-manifest-v1:` + blake3 over the

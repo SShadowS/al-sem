@@ -119,7 +119,7 @@ pub struct EngineCall {
     /// Refresh: wait for the refresh to finish before answering.
     pub wait: bool,
     /// Status: hash every input in the freshness check, not only those
-    /// whose size or modification time moved.
+    /// whose size or timestamps moved.
     pub verify: bool,
 }
 
@@ -200,7 +200,7 @@ pub const TOOL_NAMES: &[&str] = &[
 /// The `freshness` argument's description (agent-tasks design §2.3: what
 /// `pin` does for each mode; `verify` rebuilds when stale, it does not
 /// merely report it).
-pub const FRESHNESS_DESCRIPTION: &str = "fresh (default): the answer reflects the files as they are now (a file whose size and modification time are unchanged is trusted). latest-built: the newest built revision may answer, even if files changed since. verify: like fresh, but hashes every input instead of trusting size and modification time; rebuilds first when anything changed.";
+pub const FRESHNESS_DESCRIPTION: &str = "fresh (default): the answer reflects the files as they are now (a file whose size and timestamps are unchanged is trusted). latest-built: the newest built revision may answer, even if files changed since. verify: like fresh, but hashes every input instead of trusting size and timestamps; rebuilds first when anything changed.";
 
 /// The properties every command tool takes (design r7 §8.2).
 fn common_properties() -> Map<String, Value> {
@@ -630,7 +630,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_status",
-            "Is the engine current with the files on disk, and what is it doing? Read `headline` first: per engine, FRESH (no input changed since the revision that answers), STALE (what changed, the refresh class, what to do next), not checked (no engine yet, and why), or the check did not finish. It checks the disk now, against the inputs of the last published revision, without waiting for a busy engine and without building anything. Per engine: `check` (`checkedRevision` with `generation` and `inputsStamp`, the same `revision` every answer's envelope carries; `fresh`; `complete` and `incompleteReasons`; `changes`, each input with its `category` (al-file, al-walk, app-json, app-json-paths, roots-config, coverage-config, source-dependency, package, package-list, unreadable-package-folder) and `path`; `refreshClass`: Package, Declaration, BodyOnly, or BodyOnly|Declaration when only .al contents changed (known after parsing them)); `refresh` (the last alsem_refresh: idle, queued, running, completed or failed, with what it did); `details` (the last build, `activity`, the child's memory, pid and counters, its last failure and stderr tail). The default check trusts a file's size and modification time; `verify: true` hashes every input. Starts nothing; answers at once, even while a call runs.",
+            "Is the engine current with the files on disk, and what is it doing? Read `headline` first: per engine, FRESH (no input changed since the revision that answers), STALE (what changed, the refresh class, what to do next), not checked (no engine yet, and why), or the check did not finish. It checks the disk now, against the inputs of the last published revision, without waiting for a busy engine and without building anything. Per engine: `check` (`checkedRevision` with `generation` and `inputsStamp`, the same `revision` every answer's envelope carries; `fresh`; `complete` and `incompleteReasons`; `changes`, each input with its `category` (al-file, al-walk, app-json, app-json-paths, roots-config, coverage-config, source-dependency, package, package-list, unreadable-package-folder) and `path`; `refreshClass`: Package, Declaration, BodyOnly, or BodyOnly|Declaration when only .al contents changed (known after parsing them)); `refresh` (the last alsem_refresh: idle, queued, running, completed or failed, with what it did); `details` (the last build, `activity`, the child's memory, pid and counters, its last failure and stderr tail). The default check trusts a file's size and timestamps; `verify: true` hashes every input. Starts nothing; answers at once, even while a call runs.",
             schema(
                 vec![
                     (
@@ -643,7 +643,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "verify",
-                        json!({"type": "boolean", "description": "Hash every input instead of trusting size and modification time (slower; default false)."}),
+                        json!({"type": "boolean", "description": "Hash every input instead of trusting size and timestamps (slower; default false)."}),
                     ),
                 ],
                 &[],
