@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests (`cli` member `land_script`, on a repository of their own with stub gate
   scripts): the order and stops of the gates, push only on request, the CHANGELOG
   union, a taken name, the timing lines, and every refusal before anything changes.
+  Mutations, each failing a test: ci's stop on a failure dropped; `--push` ignored;
+  the landing branch created before the merges; the CHANGELOG-only condition dropped.
+- Checked on real history (a shared scratch clone, its master set back): `--dry-run`
+  of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
+  equal the real landing's, and the CHANGELOG union for b4 and b3 equals the
+  orchestrator's hand resolution byte for byte. With today's origin/master present,
+  the old master is refused as behind.
 
 ### Fixed (TLS-64: the cdo-gate TERM test no longer fails under load)
 
