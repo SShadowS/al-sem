@@ -39,8 +39,8 @@
 //! Nodes (`kind`): `Method` and `Trigger` (routines), `Object` (a runnable object:
 //! a run reaches all of its triggers), `ObjectStart` (TLS-52: a start that runs
 //! only part of an object, `start` = the folded method, e.g. `runrequestpage`; its
-//! lifecycle drops the run's triggers that start does not run), `Hub` (a bounded stand-in for the targets of
-//! open call sites: `name` = any procedure with that name and parameter count,
+//! lifecycle drops the run's triggers that start does not run), `Hub` (a bounded
+//! stand-in for the targets of open call sites: `name` = any procedure with that name and parameter count,
 //! `run` = any object of a kind, `record` = any trigger of a record operation,
 //! `callbacks` = everything a symbol-only app can call back into, `any`).
 //!
